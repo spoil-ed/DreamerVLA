@@ -1,0 +1,10 @@
+project: dreamer-vla
+
+paths:
+  rynnvla_root: /home/yuxinglei/workspace/2026nips/RynnVLA-001
+  dreamerv3_root: /home/yuxinglei/workspace/2026nips/dreamerv3-main
+
+model:
+  latent_dim: 1024
+  bottleneck_dim: 128
+  action_dim: 6

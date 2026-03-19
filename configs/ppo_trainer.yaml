@@ -1,0 +1,67 @@
+# WMPO-style PPO trainer scaffold for Dreamer-VLA.
+# This file is intentionally incomplete and exists only as a placeholder.
+
+defaults: []
+
+data:
+  task_name: "todo"
+  train_batch_size: 1
+  val_batch_size: 1
+  rollout_batch_size: 1
+  n_samples: 1
+  oversample_factor: 1
+  max_response_length: 1
+  filter_accuracy: false
+  filter_truncated: false
+
+algorithm:
+  adv_estimator: "grpo"
+  gamma: 1.0
+  lam: 1.0
+  kl_penalty: "kl"
+  kl_ctrl:
+    type: "fixed"
+    kl_coef: 0.0
+    target_kl: 0.0
+    horizon: 1
+
+actor_rollout_ref:
+  hybrid_engine: true
+  rollout:
+    tensor_model_parallel_size: 1
+  wm:
+    enable: false
+    update_wm: false
+  model:
+    path: "TODO"
+    action_token_len: 1
+    action_chunks_len: 1
+
+critic:
+  strategy: "TODO"
+
+reward_model:
+  enable: false
+  rm_coef: 0.0
+  rm_type: "normal"
+  strategy: "TODO"
+
+verifier:
+  reward_coef: 1.0
+
+trainer:
+  project_name: "dreamer-vla"
+  experiment_name: "ppo-placeholder"
+  logger: "console"
+  wandb_mode: "disabled"
+  default_local_dir: "./outputs"
+  total_epochs: 1
+  test_freq: 1
+  save_freq: 0
+  critic_warmup: 0
+  rollout_before_train: false
+  val_before_train: false
+  val_only: false
+  debug: true
+  nnodes: 1
+  n_gpus_per_node: 1
