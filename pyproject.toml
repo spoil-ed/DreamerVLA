@@ -7,6 +7,9 @@ name = "dreamer-vla"
 version = "0.1.0"
 description = "Minimal scaffold for a Dreamer-VLA research codebase."
 requires-python = ">=3.10"
+dependencies = [
+    "omegaconf>=2.3.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

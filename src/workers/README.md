@@ -1,1 +1,0 @@
-The workers folder contains the specific model architecture.

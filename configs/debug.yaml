@@ -1,0 +1,44 @@
+trainer:
+  device: auto
+  seed: 7
+  num_epochs: 1
+  log_every: 1
+  print_config: true
+
+data:
+  batch_size: 4
+  num_samples: 16
+  shuffle: true
+  num_workers: 0
+  pin_memory: false
+  drop_last: false
+  min_language_tokens: 4
+
+model:
+  image_size: 224
+  patch_size: 16
+  image_channels: 3
+  vocab_size: 32000
+  max_language_length: 32
+  proprio_dim: 16
+  embed_dim: 128
+  fused_dim: 64
+  image_depth: 2
+  language_depth: 2
+  num_heads: 8
+  mlp_ratio: 4.0
+  proprio_hidden_dim: 256
+  dropout: 0.0
+  pad_token_id: 0
+
+optim:
+  name: adam
+  learning_rate: 1.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  zero_grad_set_to_none: true
+
+loss:
+  name: mse
+  reduction: mean
+  target_value: 0.0
