@@ -59,6 +59,11 @@ class SimpleTrainer:
         optim_cfg = self.config.optim
         loss_cfg = self.config.loss
         self.target_value = float(loss_cfg.target_value)
+        encoder_configs = None
+        if "vla_encoder" in self.config:
+            encoder_configs = OmegaConf.to_container(self.config.vla_encoder, resolve=True)
+        elif "encoder_configs" in model_cfg:
+            encoder_configs = OmegaConf.to_container(model_cfg.encoder_configs, resolve=True)
 
         self.model = DreamerVLA(
             image_size=model_cfg.image_size,
@@ -76,27 +81,48 @@ class SimpleTrainer:
             proprio_hidden_dim=model_cfg.proprio_hidden_dim,
             dropout=model_cfg.dropout,
             pad_token_id=model_cfg.pad_token_id,
+            encoder_type=model_cfg.get("encoder_type", "multimodal"),
+            pretrained_policy_ckpt=model_cfg.get("pretrained_policy_ckpt"),
+            precision=model_cfg.get("precision", "bf16"),
+            device=str(self.device),
+            encoder_configs=encoder_configs,
+            condition_frame_num=int(model_cfg.get("condition_frame_num", 1)),
         ).to(self.device)
 
         self.optimizer = build_optimizer(self.model, optim_cfg=optim_cfg)
         self.criterion = build_loss(loss_cfg=loss_cfg)
-        self.dataloader = create_random_dataloader(data_config=data_cfg, model_config=model_cfg)
+        dataloader_model_cfg = model_cfg
+        if self.model.encoder_type == "rynn_vla":
+            dataloader_model_cfg = OmegaConf.merge(
+                model_cfg,
+                {
+                    "state_dim": int(self.model.encoder.model.config.state_dim),
+                    "image_size": int(self.model.encoder.image_size),
+                },
+            )
+        self.dataloader = create_random_dataloader(data_config=data_cfg, model_config=dataloader_model_cfg)
 
     def train(self) -> None:
         self.model.train()
         for epoch in range(self.config.trainer.num_epochs):
             for step, batch in enumerate(self.dataloader):
-                batch = {
-                    key: value.to(self.device)
-                    for key, value in batch.items()
-                }
+                if self.model.encoder_type == "rynn_vla":
+                    output = self.model(
+                        obs=batch["obs"],
+                        text=batch["text"],
+                    )
+                else:
+                    batch = {
+                        key: value.to(self.device)
+                        for key, value in batch.items()
+                    }
 
-                output = self.model(
-                    image=batch["image"],
-                    language=batch["language"],
-                    proprio=batch["proprio"],
-                    language_attention_mask=batch["language_attention_mask"],
-                )
+                    output = self.model(
+                        image=batch["image"],
+                        language=batch["language"],
+                        proprio=batch["proprio"],
+                        language_attention_mask=batch["language_attention_mask"],
+                    )
 
                 target = torch.full_like(output["latent"], fill_value=self.target_value)
                 loss = self.criterion(output["latent"], target)
@@ -128,7 +154,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    if bool(config.trainer.print_config):
+    debug_enabled = bool(config.trainer.get("debug", config.trainer.get("print_config", False)))
+    if debug_enabled:
         print(OmegaConf.to_yaml(config, resolve=True))
     trainer = SimpleTrainer(config=config)
     trainer.train()

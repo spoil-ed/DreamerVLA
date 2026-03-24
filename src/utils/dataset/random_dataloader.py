@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 from omegaconf import DictConfig
 from torch import Tensor
@@ -57,8 +58,62 @@ class RandomMultimodalDataset(Dataset):
         }
 
 
+class RandomRynnVLADataset(Dataset):
+    def __init__(self, data_config: DictConfig, model_config: DictConfig) -> None:
+        self.data_config = data_config
+        self.model_config = model_config
+
+    def __len__(self) -> int:
+        return int(self.data_config.num_samples)
+
+    def __getitem__(self, index: int) -> dict[str, object]:
+        image_size = int(self.data_config.get("image_size", self.model_config.get("image_size", 224)))
+        state_dim = int(self.model_config.get("state_dim", self.model_config.get("proprio_dim", 16)))
+
+        rgb_static = np.random.randint(
+            low=0,
+            high=256,
+            size=(image_size, image_size, 3),
+            dtype=np.uint8,
+        )
+        wrist_static = np.random.randint(
+            low=0,
+            high=256,
+            size=(image_size, image_size, 3),
+            dtype=np.uint8,
+        )
+        state = np.random.randn(state_dim).astype(np.float32)
+        text = f"synthetic task instruction {index}"
+
+        return {
+            "obs": {
+                "rgb_obs": {
+                    "rgb_static": rgb_static,
+                    "wrist_static": wrist_static,
+                },
+                "state": state,
+            },
+            "text": text,
+        }
+
+
+def _collate_rynn_vla_batch(batch: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "obs": [sample["obs"] for sample in batch],
+        "text": [sample["text"] for sample in batch],
+    }
+
+
 def create_random_dataloader(data_config: DictConfig, model_config: DictConfig) -> DataLoader:
-    dataset = RandomMultimodalDataset(data_config=data_config, model_config=model_config)
+    encoder_type = str(model_config.get("encoder_type", "multimodal"))
+
+    if encoder_type == "rynn_vla":
+        dataset: Dataset = RandomRynnVLADataset(data_config=data_config, model_config=model_config)
+        collate_fn = _collate_rynn_vla_batch
+    else:
+        dataset = RandomMultimodalDataset(data_config=data_config, model_config=model_config)
+        collate_fn = None
+
     return DataLoader(
         dataset=dataset,
         batch_size=int(data_config.batch_size),
@@ -66,4 +121,5 @@ def create_random_dataloader(data_config: DictConfig, model_config: DictConfig) 
         num_workers=int(data_config.num_workers),
         pin_memory=bool(data_config.pin_memory),
         drop_last=bool(data_config.drop_last),
+        collate_fn=collate_fn,
     )
