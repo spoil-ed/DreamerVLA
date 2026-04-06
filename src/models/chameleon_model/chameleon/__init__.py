@@ -13,8 +13,7 @@
 # limitations under the License.
 from typing import TYPE_CHECKING
 
-from transformers.utils import (OptionalDependencyNotAvailable, _LazyModule,
-                                is_torch_available, is_vision_available)
+from transformers.utils import OptionalDependencyNotAvailable, _LazyModule, is_torch_available, is_vision_available
 
 _import_structure = {
     "configuration_chameleon": ["ChameleonConfig", "ChameleonVQVAEConfig"],
@@ -29,14 +28,11 @@ except OptionalDependencyNotAvailable:
     pass
 else:
     _import_structure["modeling_chameleon"] = [
-        "RynnVLAForImg2VidGen",
+        "ChameleonForConditionalGeneration",
+        "ChameleonForConditionalGeneration_ContinuousHead",
         "ChameleonModel",
         "ChameleonPreTrainedModel",
         "ChameleonVQVAE",
-        "RynnVLAForActionPrediction",
-    ]
-    _import_structure["modeling_qwen"] = [
-        "RynnVLAForActionPredictionQwen",
     ]
 
 try:
@@ -58,11 +54,13 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         pass
     else:
-        from .modeling_chameleon import (ChameleonModel,
-                                         ChameleonPreTrainedModel,
-                                         ChameleonVQVAE, RynnVLAForActionPrediction,
-                                         RynnVLAForImg2VidGen)
-        from .modeling_qwen import RynnVLAForActionPredictionQwen
+        from .modeling_chameleon import (
+            ChameleonForConditionalGeneration,
+            ChameleonForConditionalGeneration_ContinuousHead,
+            ChameleonModel,
+            ChameleonPreTrainedModel,
+            ChameleonVQVAE,
+        )
 
     try:
         if not is_vision_available():

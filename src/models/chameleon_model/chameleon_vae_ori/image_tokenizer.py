@@ -3,11 +3,11 @@
 # This source code is licensed under the Chameleon License found in the
 # LICENSE file in the root directory of this source tree.
 
-import numpy as np
 import PIL
+from PIL import Image
+import numpy as np
 import torch
 import yaml
-from PIL import Image
 
 from .vqgan import VQModel
 
@@ -15,11 +15,10 @@ from .vqgan import VQModel
 class ImageTokenizer:
     def __init__(
         self,
-        cfg_path,
-        ckpt_path,
-        device=None,
+        cfg_path: str,
+        ckpt_path: str,
+        device: str | torch.device | None = None,
     ):
-
         with open(cfg_path) as f:
             config = yaml.safe_load(f)
 
@@ -37,14 +36,13 @@ class ImageTokenizer:
             device = devices.pop()
         else:
             self._vq_model.to(device)
-
         self._device = device
 
         dtypes = {p.dtype for p in self._vq_model.parameters()}
         assert len(dtypes) == 1
         self._dtype = dtypes.pop()
 
-    def _whiten_transparency(self, img):
+    def _whiten_transparency(self, img: PIL.Image) -> PIL.Image:
         # Check if it's already in RGB format.
         if img.mode == "RGB":
             return img
@@ -83,12 +81,7 @@ class ImageTokenizer:
     #     # Add batch dimension.
     #     return tensor_img.unsqueeze(0)
 
-    def img_tokens_from_tensor(self, img_tensor):
-        _, _, img_toks = self._vq_model.encode(img_tensor)
-
-        return img_toks
-
-    def img_tokens_from_pil(self, img):
+    def img_tokens_from_pil(self, img: PIL.Image) -> list[int]:
         img = self._whiten_transparency(img)
         # Convert to tensor.
         np_img = np.array(img) / 255.0  # Normalize to [0, 1]
@@ -99,7 +92,7 @@ class ImageTokenizer:
         _, _, [_, _, img_toks] = self._vq_model.encode(img)
         return img_toks
 
-    def _pil_from_chw_tensor(self, chw_tensor: torch.Tensor):
+    def _pil_from_chw_tensor(self, chw_tensor: torch.Tensor) -> PIL.Image:
         # Ensure detachment and move tensor to CPU.
         detached_chw_tensor = chw_tensor.detach().cpu()
 
@@ -121,17 +114,11 @@ class ImageTokenizer:
 
         return pil_image
 
-    def pil_from_img_toks(self, tokens: torch.Tensor, h_latent_dim=32, w_latent_dim=32):
+    def pil_from_img_toks(self, tokens: torch.Tensor, h_latent_dim=32, w_latent_dim=32) -> PIL.Image:
         emb_dim = self._vq_model.quantize.embedding.weight.shape[-1]
         codebook_entry = self._vq_model.quantize.get_codebook_entry(tokens, (1, h_latent_dim, w_latent_dim, emb_dim))
         pixels = self._vq_model.decode(codebook_entry)
         return self._pil_from_chw_tensor(pixels[0])
-
-    def image_tensor_from_img_toks(self, tokens: torch.Tensor, h_latent_dim=32, w_latent_dim=32):
-        emb_dim = self._vq_model.quantize.embedding.weight.shape[-1]
-        codebook_entry = self._vq_model.quantize.get_codebook_entry(tokens, (1, h_latent_dim, w_latent_dim, emb_dim))
-        pixels = self._vq_model.decode(codebook_entry)
-        return pixels
 
     def latent_embedding_from_pil(self, img: PIL.Image):
         img = self._whiten_transparency(img)

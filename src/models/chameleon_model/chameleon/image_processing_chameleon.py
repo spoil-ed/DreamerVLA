@@ -17,17 +17,20 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-from transformers.image_processing_utils import (BaseImageProcessor,
-                                                 BatchFeature, get_size_dict)
-from transformers.image_transforms import (get_resize_output_image_size,
-                                           resize, to_channel_dimension_format)
-from transformers.image_utils import (ChannelDimension, ImageInput,
-                                      PILImageResampling,
-                                      infer_channel_dimension_format,
-                                      is_scaled_image, is_valid_image,
-                                      to_numpy_array, valid_images,
-                                      validate_kwargs,
-                                      validate_preprocess_arguments)
+from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
+from transformers.image_transforms import get_resize_output_image_size, resize, to_channel_dimension_format
+from transformers.image_utils import (
+    ChannelDimension,
+    ImageInput,
+    PILImageResampling,
+    infer_channel_dimension_format,
+    is_scaled_image,
+    is_valid_image,
+    to_numpy_array,
+    valid_images,
+    validate_kwargs,
+    validate_preprocess_arguments,
+)
 from transformers.utils import TensorType, is_vision_available, logging
 
 logger = logging.get_logger(__name__)

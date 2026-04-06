@@ -1,6 +1,6 @@
 # Dreamer-VLA
 
-Research scaffold for combining:
+DreamerVLA prototype for combining:
 
 - `RynnVLA-001` as the VLA encoder / action prior
 - a bottleneck module for extracting compact physical state
@@ -9,9 +9,14 @@ Research scaffold for combining:
 
 ## Current Status
 
-This repository is still a scaffold. The main goal of the current layout is to
-separate configuration, architecture notes, training entrypoints, and model
-submodules before the full implementation is filled in.
+The repository now contains a working prototype that closes the main
+training loop:
+
+- multimodal encoder -> hidden state
+- Gaussian policy with `ref / old / new` views
+- simple latent dynamics world model
+- PPO-style actor update with grouped normalized advantages
+- a runnable training entrypoint
 
 The codebase currently references two external roots in
 [`configs/base.yaml`](configs/base.yaml):
@@ -29,43 +34,40 @@ Dreamer-VLA/
 ├── docs/
 │   └── architecture.md
 ├── scripts/
+│   └── train.py
 ├── src/
+│   ├── algorithms/
+│   │   └── ppo_grpo.py
 │   ├── models/
-│   │   ├── actor_critic/
-│   │   ├── bottleneck/
-│   │   ├── vla_encoder/
-│   │   └── world_model/
-│   ├── single_controller/
-│   ├── trainer/
-│   │   ├── main.py
-│   │   └── main_ray.py
-│   └── utils/
-└── tests/
-    └── test_smoke.py
+│   │   ├── critic.py
+│   │   ├── vla_policy.py
+│   │   ├── world_model/
+│   │   └── vla_encoder/
+│   └── workspace/
+│       ├── base_workspace.py
+│       └── dreamer_vla_workspace.py
+└── pretrained_models/
 ```
 
 ## Directory Roles
 
 - `configs/`: experiment, model, trainer, and external dependency paths
 - `docs/`: high-level design notes for the Dreamer-VLA pipeline
-- `scripts/`: helper scripts for training, evaluation, or data preparation
-- `src/models/`: model-side components, split by responsibility
-- `src/single_controller/`: controller or planner logic that uses imagined rollouts
-- `src/trainer/`: local and Ray-based training entrypoints
-- `src/utils/`: shared utility code
-- `tests/`: smoke tests for the intended end-to-end pipeline
+- `scripts/`: runnable demo entrypoints
+- `src/algorithms/`: PPO / GRPO-style loss utilities
+- `src/models/`: policy, world model, critic, and the existing encoder code
+- `src/workspace/`: workspace entry logic, training state, and top-level training loop
+- `pretrained_models/`: local placeholder for downloaded checkpoints
 
 ## Planned Pipeline
 
-1. Encode `(image, proprio, text)` into a latent state.
-2. Compress that latent into a bottleneck representation.
-3. Run imagined rollouts with the world model.
-4. Score candidate behaviors with actor / critic style modules.
-5. Select or refine the final action with the controller.
+1. Encode `(image, proprio, text)` into a hidden state.
+2. Project the hidden state into a latent `z_t`.
+3. Predict `z_{t+1}` with a simple dynamics model.
+4. Score grouped candidate actions with the reward head.
+5. Update the actor with PPO loss plus ref-policy KL regularization.
 
 ## Notes
 
-- Several directories are placeholders and do not yet contain the full
-  implementation.
-- The README reflects the current on-disk structure under `src/`, rather than a
-  future package layout.
+- The encoder implementation under `src/models/vla_encoder/` is kept intact.
+- The current demo target is `python scripts/train.py`.

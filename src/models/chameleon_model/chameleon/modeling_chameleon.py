@@ -14,77 +14,36 @@
 # limitations under the License.
 """PyTorch Chameleon model."""
 
-import json
-import inspect
-import math
-from pathlib import Path
-from dataclasses import dataclass
 from functools import cached_property
-from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple,
-                    Union)
+import math
+from typing import Optional, Tuple, Union
 
 import torch
-import torch.distributed as dist
+from torch import nn
+from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, L1Loss, SmoothL1Loss
 from transformers.activations import ACT2FN
-try:
-    from transformers.cache_utils import (
-        Cache,
-        DynamicCache,
-        EncoderDecoderCache,
-        StaticCache,
-    )
-except ImportError:
-    from transformers.cache_utils import Cache, DynamicCache, StaticCache
-
-    EncoderDecoderCache = None
-from transformers.generation.beam_constraints import (DisjunctiveConstraint,
-                                                      PhrasalConstraint)
-from transformers.generation.beam_search import (BeamSearchScorer,
-                                                 ConstrainedBeamSearchScorer)
-from transformers.generation.configuration_utils import (GenerationConfig,
-                                                         GenerationMode)
-from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import StoppingCriteriaList
-from transformers.generation.utils import (GenerateDecoderOnlyOutput,
-                                           GenerateEncoderDecoderOutput,
-                                           GenerationMixin,
-                                           GenerateNonBeamOutput,
-                                           GenerateOutput)
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-
-try:
-    from transformers.integrations.fsdp import is_fsdp_managed_module
-except:
-    pass
-import transformers
-from packaging import version
+from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-try:
-    from transformers.modeling_flash_attention_utils import _flash_attention_forward
-except ImportError:
-    def _flash_attention_forward(*args, **kwargs):
-        raise ImportError("Flash attention utilities are unavailable in this transformers build.")
-from transformers.modeling_outputs import (BaseModelOutputWithPast,
-                                           CausalLMOutputWithPast, ModelOutput)
-from transformers.modeling_utils import PreTrainedModel, load_state_dict
+from transformers.modeling_flash_attention_utils import _flash_attention_forward
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-from transformers.utils import (add_code_sample_docstrings,
-                                add_start_docstrings,
-                                add_start_docstrings_to_model_forward,
-                                is_flash_attn_2_available,
-                                is_flash_attn_greater_or_equal_2_10,
-                                is_torchdynamo_compiling, logging,
-                                replace_return_docstrings)
+from transformers.utils import (
+    add_code_sample_docstrings,
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    is_flash_attn_2_available,
+    is_flash_attn_greater_or_equal_2_10,
+    logging,
+    replace_return_docstrings,
+)
 
 from .configuration_chameleon import ChameleonConfig, ChameleonVQVAEConfig
 
 if is_flash_attn_2_available():
-    from flash_attn.bert_padding import (index_first_axis, pad_input,  # noqa
-                                         unpad_input)
+    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
 
 logger = logging.get_logger(__name__)
@@ -94,44 +53,6 @@ _CHECKPOINT_FOR_DOC = "meta/chameleon-7b"
 _EXPECTED_OUTPUT_SHAPE = [1, 7, 4096]
 _SEQ_CLASS_EXPECTED_LOSS = 1.03
 _SEQ_CLASS_EXPECTED_OUTPUT = "'LABEL_0'"
-
-
-@dataclass
-class CausalLMOutputWithPastAction(ModelOutput):
-    """
-    Base class for causal language model (or autoregressive) outputs.
-
-    Args:
-        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
-            Language modeling loss (for next-token prediction).
-        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
-            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
-        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
-
-            Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
-            `past_key_values` input) to speed up sequential decoding.
-        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
-            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
-
-            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
-        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-    """
-
-    loss: Optional[torch.FloatTensor] = None
-    action_loss: Optional[torch.FloatTensor] = None
-    logits: torch.FloatTensor = None
-    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
-    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
-    action_pred: Optional[torch.FloatTensor] = None
 
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Chameleon
@@ -546,33 +467,17 @@ class ChameleonFlashAttention2(ChameleonAttention):
             key_states = key_states.to(target_dtype)
             value_states = value_states.to(target_dtype)
 
-        # assert version.parse(transformers.__version__) >= version.parse("4.44.0")
-        if version.parse(transformers.__version__) >= version.parse("4.44.0"):
-            attn_output = _flash_attention_forward(
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                q_len,
-                dropout=dropout_rate,
-                position_ids=position_ids,
-                sliding_window=getattr(self, "sliding_window", None),
-                use_top_left_mask=self._flash_attn_uses_top_left_mask,
-                is_causal=self.is_causal,
-            )
-        else:
-            attn_output = _flash_attention_forward(
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                q_len,
-                dropout=dropout_rate,
-                # position_ids=position_ids,
-                sliding_window=getattr(self, "sliding_window", None),
-                use_top_left_mask=self._flash_attn_uses_top_left_mask,
-                is_causal=self.is_causal,
-            )
+        attn_output = _flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            q_len,
+            dropout=dropout_rate,
+            sliding_window=getattr(self, "sliding_window", None),
+            use_top_left_mask=self._flash_attn_uses_top_left_mask,
+            is_causal=self.is_causal,
+        )
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -635,7 +540,7 @@ class ChameleonSdpaAttention(ChameleonAttention):
 
         cos, sin = self.rotary_emb(value_states, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, None)
-
+        
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; position_ids needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
@@ -647,7 +552,10 @@ class ChameleonSdpaAttention(ChameleonAttention):
         causal_mask = attention_mask
         if attention_mask is not None and cache_position is not None:
             causal_mask = causal_mask[:, :, :, : key_states.shape[-2]]
-
+        
+        # if attention_mask is not None:
+        #     import pdb; pdb.set_trace()
+        
         # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
         # Reference: https://github.com/pytorch/pytorch/issues/112577.
         if query_states.device.type == "cuda" and causal_mask is not None:
@@ -667,6 +575,7 @@ class ChameleonSdpaAttention(ChameleonAttention):
             dropout_p=self.attention_dropout if self.training else 0.0,
             is_causal=is_causal,
         )
+
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
 
@@ -689,14 +598,7 @@ class ChameleonDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        # import pdb
-        # pdb.set_trace()
-
         self.self_attn = CHAMELEON_ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
-
-
-        # self.self_attn = CHAMELEON_ATTENTION_CLASSES['flash_attention_2'](config=config, layer_idx=layer_idx)
-
 
         self.mlp = ChameleonMLP(config)
         self.input_layernorm = ChameleonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -1052,8 +954,6 @@ class ChameleonVQVAEEncoder(nn.Module):
         )
 
     def forward(self, pixel_values: torch.LongTensor):
-        pixel_values = pixel_values.to(self.conv_in.weight.dtype)
-
         # downsampling
         hidden_states = [self.conv_in(pixel_values)]
         for i_level in range(self.num_resolutions):
@@ -1132,7 +1032,6 @@ class ChameleonVQVAE(PreTrainedModel):
     def encode(self, pixel_values: torch.LongTensor):
         hidden_states = self.encoder(pixel_values)
         hidden_states = self.quant_conv(hidden_states)
-
         quant, emb_loss, indices = self.quantize(hidden_states)
         return quant, emb_loss, indices
 
@@ -1231,9 +1130,17 @@ class ChameleonPreTrainedModel(PreTrainedModel):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
-            nn.init.ones_(module.weight.data)
+            # Initialize LayerNorm weights to 1 and biases to 0
+            if module.weight is not None:
+                module.weight.data.fill_(1.0)
             if module.bias is not None:
                 module.bias.data.zero_()
+        elif isinstance(module, nn.MultiheadAttention):
+            # Initialize in_proj_weight (which includes q, k, v projections)
+            # if module.in_proj_bias is not None:
+            #     module.in_proj_bias.data.zero_()
+            module._reset_parameters()
+        
 
 
 CHAMELEON_INPUTS_DOCSTRING = r"""
@@ -1327,22 +1234,11 @@ class ChameleonModel(ChameleonPreTrainedModel):
         decoder_layer = ChameleonDecoderLayer if not self.config.swin_norm else ChameleonSwinDecoderLayer
         self.layers = nn.ModuleList([decoder_layer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = ChameleonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        try:
-            self.vqmodel = ChameleonVQVAE(config.vq_config)
-        except:
-            self.vqmodel = None
-
+        self.vqmodel = ChameleonVQVAE(config.vq_config)
         self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
         self.post_init()
-
-        try:
-            # fix vqmodel
-            for param in self.vqmodel.parameters():
-                param.requires_grad = False
-        except:
-            pass
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -1508,7 +1404,6 @@ class ChameleonModel(ChameleonPreTrainedModel):
         # (`recording cudagraph tree for symint key 13`, etc.), which is VERY slow. A workaround is `@torch.compiler.disable`, but this prevents using
         # `fullgraph=True`. See more context in https://github.com/huggingface/transformers/pull/29114
 
-        # assert self.config._attn_implementation == "flash_attention_2"
         if self.config._attn_implementation == "flash_attention_2":
             if attention_mask is not None and 0.0 in attention_mask:
                 return attention_mask
@@ -1541,7 +1436,7 @@ class ChameleonModel(ChameleonPreTrainedModel):
                 if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
-
+        
         if attention_mask is not None and attention_mask.dim() == 4:
             # in this case we assume that the mask comes already in inverted form and requires no inversion or slicing
             if attention_mask.max() != 0:
@@ -1553,14 +1448,23 @@ class ChameleonModel(ChameleonPreTrainedModel):
                 causal_mask = torch.triu(causal_mask, diagonal=1)
             causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
             causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
+            # import pdb; pdb.set_trace()
             if attention_mask is not None:
                 causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
                 mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+                # padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+                
+                if attention_mask.dim() == 3:
+                    padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, :]
+                elif attention_mask.dim() == 2:
+                    padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[None, None, :, :]
+                else:
+                    padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
                 padding_mask = padding_mask == 0
                 causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
                     padding_mask, min_dtype
                 )
+                # import pdb; pdb.set_trace()
         if (
             self.config._attn_implementation == "sdpa"
             and attention_mask is not None
@@ -1579,937 +1483,18 @@ class ChameleonModel(ChameleonPreTrainedModel):
     "Chameleon Model with a head on top used for outputting logits for next token prediction.",
     CHAMELEON_START_DOCSTRING,
 )
-class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
+class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
-    _keys_to_ignore_on_load_missing = [
-        r"^state_projection\.",
-        r"^action_head\.",
-        r"^model\.vqmodel\.",
-    ]
-    _keys_to_ignore_on_load_unexpected = [
-        r"^state_projection_egodex\.",
-        r"^action_head_egodex\.",
-    ]
 
     def __init__(self, config):
         super().__init__(config)
         self.model = ChameleonModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.replace_inputs_with_action = getattr(config, 'replace_inputs_with_action', True)
 
-        self.state_projection = nn.Linear(config.state_dim, config.hidden_size)
-        
-        if self.replace_inputs_with_action:
-            self.action_projection = nn.Linear(64, config.hidden_size)
-        
-        action_head_type = getattr(config, "action_head_type", "one_layer")
-        if action_head_type == 'one_layer':
-            self.action_head = nn.Linear(config.hidden_size, 64)
-        elif action_head_type == 'MLP':
-            self.action_head = nn.Sequential(
-                    nn.Linear(config.hidden_size, 2048),
-                    nn.ReLU(),
-                    nn.Linear(2048, 1024),
-                    nn.ReLU(),
-                    nn.Linear(1024, 512),
-                    nn.ReLU(),
-                    nn.Linear(512, 256),
-                    nn.ReLU(),
-                    nn.Linear(256, 64)
-                )
-        else:
-            raise NotImplementedError
-        
-        self.action_idx = 65536
-
-        self.state_idx = 65539
-        
         # Initialize weights and apply final processing
         self.post_init()
 
-    @staticmethod
-    def _load_weight_map(checkpoint_dir: Path) -> Dict[str, str]:
-        for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
-            index_path = checkpoint_dir / index_name
-            if index_path.exists():
-                with open(index_path, "r", encoding="utf-8") as f:
-                    return json.load(f)["weight_map"]
-        return {}
-
-    @classmethod
-    def _load_named_tensors(
-        cls, checkpoint_dir: Path, key_mapping: Dict[str, str]
-    ) -> Dict[str, torch.Tensor]:
-        if not key_mapping:
-            return {}
-
-        weight_map = cls._load_weight_map(checkpoint_dir)
-        shard_to_keys: Dict[Path, Dict[str, str]] = {}
-        for source_key, target_key in key_mapping.items():
-            shard_name = weight_map.get(source_key)
-            if shard_name is None:
-                continue
-            shard_to_keys.setdefault(checkpoint_dir / shard_name, {})[source_key] = target_key
-
-        remapped_state_dict: Dict[str, torch.Tensor] = {}
-        for shard_path, shard_mapping in shard_to_keys.items():
-            shard_state_dict = load_state_dict(str(shard_path))
-            for source_key, target_key in shard_mapping.items():
-                if source_key in shard_state_dict:
-                    remapped_state_dict[target_key] = shard_state_dict[source_key]
-        return remapped_state_dict
-
-    def _apply_supplemental_state_dict(
-        self,
-        state_dict: Dict[str, torch.Tensor],
-        expected_target_keys: List[str],
-        source_label: str,
-    ) -> List[str]:
-        expected_target_keys = sorted(expected_target_keys)
-        if not expected_target_keys:
-            return []
-
-        if not state_dict:
-            logger.warning(
-                "No supplemental %s weights were found for target keys: %s",
-                source_label,
-                expected_target_keys,
-            )
-            return []
-
-        load_state_dict_kwargs = {"strict": False}
-        if "assign" in inspect.signature(self.load_state_dict).parameters:
-            load_state_dict_kwargs["assign"] = True
-        incompatible = self.load_state_dict(state_dict, **load_state_dict_kwargs)
-        loaded_target_keys = sorted(state_dict.keys())
-        missing_target_keys = sorted(set(expected_target_keys) - set(loaded_target_keys))
-
-        if missing_target_keys:
-            logger.warning(
-                "Supplemental %s checkpoint is missing target keys: %s",
-                source_label,
-                missing_target_keys,
-            )
-        if incompatible.unexpected_keys:
-            logger.warning(
-                "Supplemental %s load produced unexpected keys: %s",
-                source_label,
-                incompatible.unexpected_keys,
-            )
-
-        logger.info(
-            "Loaded supplemental %s weights: %d tensors",
-            source_label,
-            len(loaded_target_keys),
-        )
-        return loaded_target_keys
-
-    def _load_supplemental_weights(self, pretrained_model_name_or_path: Union[str, Path]) -> Dict[str, List[str]]:
-        checkpoint_dir = Path(pretrained_model_name_or_path)
-        summary = {"loaded_target_keys": [], "consumed_source_keys": []}
-        if not checkpoint_dir.exists():
-            return summary
-
-        trajectory_key_mapping = {
-            "state_projection_egodex.weight": "state_projection.weight",
-            "state_projection_egodex.bias": "state_projection.bias",
-            "action_head_egodex.weight": "action_head.weight",
-            "action_head_egodex.bias": "action_head.bias",
-        }
-        trajectory_state_dict = self._load_named_tensors(checkpoint_dir, trajectory_key_mapping)
-        loaded_trajectory_keys = self._apply_supplemental_state_dict(
-            trajectory_state_dict,
-            list(trajectory_key_mapping.values()),
-            "trajectory",
-        )
-        summary["loaded_target_keys"].extend(loaded_trajectory_keys)
-        summary["consumed_source_keys"].extend(
-            sorted(
-                source_key
-                for source_key, target_key in trajectory_key_mapping.items()
-                if target_key in trajectory_state_dict
-            )
-        )
-
-        chameleon_dir = checkpoint_dir.parent / "Chameleon"
-        chameleon_weight_map = self._load_weight_map(chameleon_dir)
-        vq_key_mapping = {
-            key: key for key in chameleon_weight_map if key.startswith("model.vqmodel.")
-        }
-        vq_state_dict = self._load_named_tensors(chameleon_dir, vq_key_mapping)
-        loaded_vq_keys = self._apply_supplemental_state_dict(
-            vq_state_dict,
-            list(vq_key_mapping.values()),
-            "VQ",
-        )
-        summary["loaded_target_keys"].extend(loaded_vq_keys)
-        summary["consumed_source_keys"].extend(loaded_vq_keys)
-        return summary
-
-    @staticmethod
-    def _extract_manual_device(kwargs: Dict[str, Any]) -> Optional[torch.device]:
-        device_map = kwargs.pop("device_map", None)
-        if device_map is None:
-            return None
-
-        if isinstance(device_map, dict):
-            if set(device_map.keys()) != {""}:
-                kwargs["device_map"] = device_map
-                return None
-            device_map = device_map[""]
-
-        if isinstance(device_map, str):
-            if device_map in {"auto", "balanced", "balanced_low_0", "sequential"}:
-                kwargs["device_map"] = device_map
-                return None
-            return torch.device(device_map)
-
-        if isinstance(device_map, int):
-            return torch.device(f"cuda:{device_map}")
-
-        if isinstance(device_map, torch.device):
-            return device_map
-
-        kwargs["device_map"] = device_map
-        return None
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        output_loading_info = kwargs.get("output_loading_info", False)
-        manual_device = cls._extract_manual_device(kwargs)
-        kwargs.setdefault("low_cpu_mem_usage", False)
-        original_ignore_missing = cls._keys_to_ignore_on_load_missing
-        should_suppress_missing_warning = manual_device is not None or not kwargs.get("low_cpu_mem_usage", False)
-        if should_suppress_missing_warning:
-            cls._keys_to_ignore_on_load_missing = list(original_ignore_missing)
-        try:
-            result = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
-        finally:
-            cls._keys_to_ignore_on_load_missing = original_ignore_missing
-        if output_loading_info:
-            model, loading_info = result
-        else:
-            model = result
-        summary = model._load_supplemental_weights(pretrained_model_name_or_path)
-        if manual_device is not None:
-            model.to(manual_device)
-        if output_loading_info:
-            loaded_target_keys = set(summary["loaded_target_keys"])
-            consumed_source_keys = set(summary["consumed_source_keys"])
-            loading_info["missing_keys"] = [
-                key for key in loading_info.get("missing_keys", []) if key not in loaded_target_keys
-            ]
-            loading_info["unexpected_keys"] = [
-                key for key in loading_info.get("unexpected_keys", []) if key not in consumed_source_keys
-            ]
-            return model, loading_info
-        return model
-
-    def _sample(
-        self,
-        input_ids: torch.LongTensor,
-        state_embeds: torch.Tensor,
-        logits_processor: LogitsProcessorList,
-        stopping_criteria: StoppingCriteriaList,
-        generation_config: GenerationConfig,
-        synced_gpus: bool,
-        streamer: Optional["BaseStreamer"],
-        **model_kwargs,
-    ) -> Union[GenerateNonBeamOutput, torch.LongTensor]:
-        r"""
-        Generates sequences of token ids for models with a language modeling head using **multinomial sampling** and
-        can be used for text-decoder, text-to-text, speech-to-text, and vision-to-text models.
-
-        Parameters:
-            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-                The sequence used as a prompt for the generation.
-            logits_processor (`LogitsProcessorList`):
-                An instance of [`LogitsProcessorList`]. List of instances of class derived from [`LogitsProcessor`]
-                used to modify the prediction scores of the language modeling head applied at each generation step.
-            stopping_criteria (`StoppingCriteriaList`):
-                An instance of [`StoppingCriteriaList`]. List of instances of class derived from [`StoppingCriteria`]
-                used to tell if the generation loop should stop.
-            generation_config ([`~generation.GenerationConfig`]):
-                The generation configuration to be used as parametrization of the decoding method.
-            synced_gpus (`bool`):
-                Whether to continue running the while loop until max_length (needed to avoid deadlocking with
-                `FullyShardedDataParallel` and DeepSpeed ZeRO Stage 3).
-            streamer (`BaseStreamer`, *optional*):
-                Streamer object that will be used to stream the generated sequences. Generated tokens are passed
-                through `streamer.put(token_ids)` and the streamer is responsible for any further processing.
-            model_kwargs:
-                Additional model specific kwargs will be forwarded to the `forward` function of the model. If model is
-                an encoder-decoder model the kwargs should include `encoder_outputs`.
-
-        Return:
-            [`~generation.GenerateDecoderOnlyOutput`], [`~generation.GenerateEncoderDecoderOutput`] or `torch.LongTensor`:
-            A `torch.LongTensor` containing the generated tokens (default behaviour) or a
-            [`~generation.GenerateDecoderOnlyOutput`] if `model.config.is_encoder_decoder=False` and
-            `return_dict_in_generate=True` or a [`~generation.GenerateEncoderDecoderOutput`] if
-            `model.config.is_encoder_decoder=True`.
-        """
-        # init values
-        pad_token_id = generation_config._pad_token_tensor
-        output_attentions = generation_config.output_attentions
-        output_hidden_states = generation_config.output_hidden_states
-        output_scores = generation_config.output_scores
-        output_logits = generation_config.output_logits
-        return_dict_in_generate = generation_config.return_dict_in_generate
-        max_length = generation_config.max_length
-        has_eos_stopping_criteria = any(hasattr(criteria, "eos_token_id") for criteria in stopping_criteria)
-        do_sample = generation_config.do_sample
-
-        # init attention / hidden states / scores tuples
-        scores = () if (return_dict_in_generate and output_scores) else None
-        raw_logits = () if (return_dict_in_generate and output_logits) else None
-        decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
-        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
-        decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
-
-        # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
-        if return_dict_in_generate and self.config.is_encoder_decoder:
-            encoder_attentions = model_kwargs["encoder_outputs"].get("attentions") if output_attentions else None
-            encoder_hidden_states = (
-                model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
-            )
-
-        # keep track of which sequences are already finished
-        batch_size, cur_len = input_ids.shape
-        this_peer_finished = False
-        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
-        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
-
-        while self._has_unfinished_sequences(
-            this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
-        ):
-            # prepare model inputs
-            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
-            
-            # prepare variable output controls (note: some models won't accept all output controls)
-            model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
-            model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
-            model_inputs.update({"state_embeds": state_embeds})
-
-            # forward pass to get next token
-            outputs = self(**model_inputs, return_dict=True)
-            
-            action_pred = outputs['action_pred']
-            
-            # synced_gpus: don't waste resources running the code we don't need; kwargs must be updated before skipping
-            model_kwargs = self._update_model_kwargs_for_generation(
-                outputs,
-                model_kwargs,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-            )
-            if synced_gpus and this_peer_finished:
-                continue
-
-            # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
-            # (the clone itself is always small)
-            next_token_logits = outputs.logits.clone()[:, -1, :].float()
-            next_token_logits = next_token_logits.to(input_ids.device)
-
-            # pre-process distribution
-            next_token_scores = logits_processor(input_ids, next_token_logits)
-
-            # Store scores, attentions and hidden_states when required
-            if return_dict_in_generate:
-                if output_scores:
-                    scores += (next_token_scores,)
-                if output_logits:
-                    raw_logits += (next_token_logits,)
-                if output_attentions:
-                    decoder_attentions += (
-                        (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
-                    )
-                    if self.config.is_encoder_decoder:
-                        cross_attentions += (outputs.cross_attentions,)
-
-                if output_hidden_states:
-                    decoder_hidden_states += (
-                        (outputs.decoder_hidden_states,)
-                        if self.config.is_encoder_decoder
-                        else (outputs.hidden_states,)
-                    )
-
-            # token selection
-            if do_sample:
-                probs = nn.functional.softmax(next_token_scores, dim=-1)
-                # TODO (joao): this OP throws "skipping cudagraphs due to ['incompatible ops']", find solution
-                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
-            else:
-                next_tokens = torch.argmax(next_token_scores, dim=-1)
-
-            # finished sentences should have their next token be a padding token
-            if has_eos_stopping_criteria:
-                next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
-
-            # update generated ids, model inputs, and length for next step
-            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-            if streamer is not None:
-                streamer.put(next_tokens.cpu())
-
-            unfinished_sequences = unfinished_sequences & ~stopping_criteria(input_ids, scores)
-            this_peer_finished = unfinished_sequences.max() == 0
-            cur_len += 1
-
-            # This is needed to properly delete outputs.logits which may be very large for first iteration
-            # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
-            del outputs
-
-        if streamer is not None:
-            streamer.end()
-        
-        if return_dict_in_generate:
-            if self.config.is_encoder_decoder:
-                return GenerateEncoderDecoderOutput(
-                    sequences=input_ids,
-                    scores=scores,
-                    logits=raw_logits,
-                    encoder_attentions=encoder_attentions,                    
-                    encoder_hidden_states=encoder_hidden_states,
-                    decoder_attentions=decoder_attentions,
-                    cross_attentions=cross_attentions,
-                    decoder_hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
-                )
-            else:
-                return GenerateDecoderOnlyOutput(
-                    sequences=input_ids,
-                    scores=scores,
-                    logits=raw_logits,
-                    attentions=decoder_attentions,
-                    hidden_states=decoder_hidden_states,
-                    past_key_values=model_kwargs.get("past_key_values"),
-                )
-        else:
-            return input_ids, action_pred
-    
-    @torch.no_grad()
-    def generate(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        state_embeds: Optional[torch.Tensor] = None,
-        generation_config: Optional[GenerationConfig] = None,
-        logits_processor: Optional[LogitsProcessorList] = None,
-        stopping_criteria: Optional[StoppingCriteriaList] = None,
-        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
-        synced_gpus: Optional[bool] = None,
-        assistant_model: Optional["PreTrainedModel"] = None,
-        streamer: Optional["BaseStreamer"] = None,
-        negative_prompt_ids: Optional[torch.Tensor] = None,
-        negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> Union[GenerateOutput, torch.LongTensor]:
-        r"""
-
-        Generates sequences of token ids for models with a language modeling head.
-
-        <Tip warning={true}>
-
-        Most generation-controlling parameters are set in `generation_config` which, if not passed, will be set to the
-        model's default generation configuration. You can override any `generation_config` by passing the corresponding
-        parameters to generate(), e.g. `.generate(inputs, num_beams=4, do_sample=True)`.
-
-        For an overview of generation strategies and code examples, check out the [following
-        guide](../generation_strategies).
-
-        </Tip>
-
-        Parameters:
-            inputs (`torch.Tensor` of varying shape depending on the modality, *optional*):
-                The sequence used as a prompt for the generation or as model inputs to the encoder. If `None` the
-                method initializes it with `bos_token_id` and a batch size of 1. For decoder-only models `inputs`
-                should be in the format of `input_ids`. For encoder-decoder models *inputs* can represent any of
-                `input_ids`, `input_values`, `input_features`, or `pixel_values`.
-            generation_config ([`~generation.GenerationConfig`], *optional*):
-                The generation configuration to be used as base parametrization for the generation call. `**kwargs`
-                passed to generate matching the attributes of `generation_config` will override them. If
-                `generation_config` is not provided, the default will be used, which has the following loading
-                priority: 1) from the `generation_config.json` model file, if it exists; 2) from the model
-                configuration. Please note that unspecified parameters will inherit [`~generation.GenerationConfig`]'s
-                default values, whose documentation should be checked to parameterize generation.
-            logits_processor (`LogitsProcessorList`, *optional*):
-                Custom logits processors that complement the default logits processors built from arguments and
-                generation config. If a logit processor is passed that is already created with the arguments or a
-                generation config an error is thrown. This feature is intended for advanced users.
-            stopping_criteria (`StoppingCriteriaList`, *optional*):
-                Custom stopping criteria that complements the default stopping criteria built from arguments and a
-                generation config. If a stopping criteria is passed that is already created with the arguments or a
-                generation config an error is thrown. If your stopping criteria depends on the `scores` input, make
-                sure you pass `return_dict_in_generate=True, output_scores=True` to `generate`. This feature is
-                intended for advanced users.
-            prefix_allowed_tokens_fn (`Callable[[int, torch.Tensor], List[int]]`, *optional*):
-                If provided, this function constraints the beam search to allowed tokens only at each step. If not
-                provided no constraint is applied. This function takes 2 arguments: the batch ID `batch_id` and
-                `input_ids`. It has to return a list with the allowed tokens for the next generation step conditioned
-                on the batch ID `batch_id` and the previously generated tokens `inputs_ids`. This argument is useful
-                for constrained generation conditioned on the prefix, as described in [Autoregressive Entity
-                Retrieval](https://arxiv.org/abs/2010.00904).
-            synced_gpus (`bool`, *optional*):
-                Whether to continue running the while loop until max_length. Unless overridden, this flag will be set
-                to `True` if using `FullyShardedDataParallel` or DeepSpeed ZeRO Stage 3 with multiple GPUs to avoid
-                deadlocking if one GPU finishes generating before other GPUs. Otherwise, defaults to `False`.
-            assistant_model (`PreTrainedModel`, *optional*):
-                An assistant model that can be used to accelerate generation. The assistant model must have the exact
-                same tokenizer. The acceleration is achieved when forecasting candidate tokens with the assistant model
-                is much faster than running generation with the model you're calling generate from. As such, the
-                assistant model should be much smaller.
-            streamer (`BaseStreamer`, *optional*):
-                Streamer object that will be used to stream the generated sequences. Generated tokens are passed
-                through `streamer.put(token_ids)` and the streamer is responsible for any further processing.
-            negative_prompt_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                The negative prompt needed for some processors such as CFG. The batch size must match the input batch
-                size. This is an experimental feature, subject to breaking API changes in future versions.
-            negative_prompt_attention_mask (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Attention_mask for `negative_prompt_ids`.
-            kwargs (`Dict[str, Any]`, *optional*):
-                Ad hoc parametrization of `generation_config` and/or additional model-specific kwargs that will be
-                forwarded to the `forward` function of the model. If the model is an encoder-decoder model, encoder
-                specific kwargs should not be prefixed and decoder specific kwargs should be prefixed with *decoder_*.
-
-        Return:
-            [`~utils.ModelOutput`] or `torch.LongTensor`: A [`~utils.ModelOutput`] (if `return_dict_in_generate=True`
-            or when `config.return_dict_in_generate=True`) or a `torch.LongTensor`.
-
-                If the model is *not* an encoder-decoder model (`model.config.is_encoder_decoder=False`), the possible
-                [`~utils.ModelOutput`] types are:
-
-                    - [`~generation.GenerateDecoderOnlyOutput`],
-                    - [`~generation.GenerateBeamDecoderOnlyOutput`]
-
-                If the model is an encoder-decoder model (`model.config.is_encoder_decoder=True`), the possible
-                [`~utils.ModelOutput`] types are:
-
-                    - [`~generation.GenerateEncoderDecoderOutput`],
-                    - [`~generation.GenerateBeamEncoderDecoderOutput`]
-        """
-
-        # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
-        self._validate_model_class()
-        tokenizer = kwargs.pop("tokenizer", None)  # Pull this out first, we only use it for stopping criteria
-        assistant_tokenizer = kwargs.pop("assistant_tokenizer", None)  # only used for assisted generation
-
-        generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
-        self._validate_model_kwargs(model_kwargs.copy())
-        self._validate_assistant(assistant_model, tokenizer, assistant_tokenizer)
-
-        # 2. Set generation parameters if not already defined
-        if synced_gpus is None:
-            synced_gpus = (is_deepspeed_zero3_enabled() or is_fsdp_managed_module(self)) and dist.get_world_size() > 1
-
-        logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
-        stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
-
-        accepts_attention_mask = "attention_mask" in set(inspect.signature(self.forward).parameters.keys())
-        requires_attention_mask = "encoder_outputs" not in model_kwargs
-        kwargs_has_attention_mask = model_kwargs.get("attention_mask", None) is not None
-
-        # 3. Define model inputs
-        inputs_tensor, model_input_name, model_kwargs = self._prepare_model_inputs(
-            inputs, generation_config.bos_token_id, model_kwargs
-        )
-        batch_size = inputs_tensor.shape[0]
-
-        device = inputs_tensor.device
-        self._prepare_special_tokens(generation_config, kwargs_has_attention_mask, device=device)
-
-        # decoder-only models must use left-padding for batched generation.
-        if not self.config.is_encoder_decoder and not is_torchdynamo_compiling():
-            # If `input_ids` was given, check if the last id in any sequence is `pad_token_id`
-            # Note: If using, `inputs_embeds` this check does not work, because we want to be more hands-off.
-            if (
-                generation_config._pad_token_tensor is not None
-                and batch_size > 1
-                and len(inputs_tensor.shape) == 2
-                and torch.sum(inputs_tensor[:, -1] == generation_config._pad_token_tensor) > 0
-            ):
-                logger.warning(
-                    "A decoder-only architecture is being used, but right-padding was detected! For correct "
-                    "generation results, please set `padding_side='left'` when initializing the tokenizer."
-                )
-
-        # 4. Define other model kwargs
-        # decoder-only models with inputs_embeds forwarding must use caching (otherwise we can't detect whether we are
-        # generating the first new token or not, and we only want to use the embeddings for the first new token)
-        if not self.config.is_encoder_decoder and model_input_name == "inputs_embeds":
-            generation_config.use_cache = True
-
-        if not kwargs_has_attention_mask and requires_attention_mask and accepts_attention_mask:
-            model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
-                inputs_tensor, generation_config._pad_token_tensor, generation_config._eos_token_tensor
-            )
-        elif kwargs_has_attention_mask:
-            # TODO (joao): generalize this check with other types of inputs
-            if model_input_name == "input_ids" and len(model_kwargs["attention_mask"].shape) > 2:
-                raise ValueError("`attention_mask` passed to `generate` must be 2D.")
-
-        if self.config.is_encoder_decoder and "encoder_outputs" not in model_kwargs:
-            # if model is encoder decoder encoder_outputs are created and added to `model_kwargs`
-            model_kwargs = self._prepare_encoder_decoder_kwargs_for_generation(
-                inputs_tensor, model_kwargs, model_input_name, generation_config
-            )
-
-        # 5. Prepare `input_ids` which will be used for auto-regressive generation
-        if self.config.is_encoder_decoder:
-            input_ids, model_kwargs = self._prepare_decoder_input_ids_for_generation(
-                batch_size=batch_size,
-                model_input_name=model_input_name,
-                model_kwargs=model_kwargs,
-                decoder_start_token_id=generation_config._decoder_start_token_tensor,
-                device=inputs_tensor.device,
-            )
-        else:
-            input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
-
-        if generation_config.token_healing:
-            input_ids = self.heal_tokens(input_ids, tokenizer)
-
-        if streamer is not None:
-            streamer.put(input_ids.cpu())
-
-        # 6. Prepare `max_length` depending on other stopping criteria.
-        input_ids_length = input_ids.shape[-1]
-        has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
-        has_default_min_length = kwargs.get("min_length") is None and generation_config.min_length is not None
-        generation_config = self._prepare_generated_length(
-            generation_config=generation_config,
-            has_default_max_length=has_default_max_length,
-            has_default_min_length=has_default_min_length,
-            model_input_name=model_input_name,
-            inputs_tensor=inputs_tensor,
-            input_ids_length=input_ids_length,
-        )
-
-        # If the model supports `num_logits_to_keep` in forward(), set it to 1 to avoid computing the whole
-        # logit matrix. This can save a lot of memory during the first forward pass. Note that assisted decoding
-        # dynamically overrides this value as it can need more than the last token logits
-        if self._supports_num_logits_to_keep() and "num_logits_to_keep" not in model_kwargs:
-            model_kwargs["num_logits_to_keep"] = 1
-
-        self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
-
-        # 7. Prepare the cache.
-        # - `model_kwargs` may be updated in place with a cache as defined by the parameters in `generation_config`.
-        # - different models have a different cache name expected by the model (default = "past_key_values")
-        # - `max_length`, prepared above, is used to determine the maximum cache length
-        # TODO (joao): remove `user_defined_cache` after v4.47 (remove default conversion to legacy format)
-        cache_name = "past_key_values" if "mamba" not in self.__class__.__name__.lower() else "cache_params"
-        user_defined_cache = model_kwargs.get(cache_name)
-        max_cache_length = generation_config.max_length
-        if (
-            inputs_tensor.shape[1] != input_ids_length
-            and model_input_name == "inputs_embeds"
-            and not self.config.is_encoder_decoder
-        ):
-            max_cache_length += inputs_tensor.shape[1]
-        self._prepare_cache_for_generation(
-            generation_config, model_kwargs, assistant_model, batch_size, max_cache_length, device
-        )
-
-        # 8. determine generation mode
-        generation_mode = generation_config.get_generation_mode(assistant_model)
-
-        if streamer is not None and (generation_config.num_beams > 1):
-            raise ValueError(
-                "`streamer` cannot be used with beam search (yet!). Make sure that `num_beams` is set to 1."
-            )
-
-        if not is_torchdynamo_compiling() and self.device.type != input_ids.device.type:
-            warnings.warn(
-                "You are calling .generate() with the `input_ids` being on a device type different"
-                f" than your model's device. `input_ids` is on {input_ids.device.type}, whereas the model"
-                f" is on {self.device.type}. You may experience unexpected behaviors or slower generation."
-                " Please make sure that you have put `input_ids` to the"
-                f" correct device by calling for example input_ids = input_ids.to('{self.device.type}') before"
-                " running `.generate()`.",
-                UserWarning,
-            )
-
-        # 9. prepare logits processors and stopping criteria
-        prepared_logits_processor = self._get_logits_processor(
-            generation_config=generation_config,
-            input_ids_seq_length=input_ids_length,
-            encoder_input_ids=inputs_tensor,
-            prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
-            logits_processor=logits_processor,
-            device=inputs_tensor.device,
-            model_kwargs=model_kwargs,
-            negative_prompt_ids=negative_prompt_ids,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-        )
-        prepared_stopping_criteria = self._get_stopping_criteria(
-            generation_config=generation_config, stopping_criteria=stopping_criteria, tokenizer=tokenizer, **kwargs
-        )
-
-        # Set model_kwargs `use_cache` so we can use it later in forward runs
-        model_kwargs["use_cache"] = generation_config.use_cache
-
-        
-        # 10. go into different generation modes
-        if generation_mode == GenerationMode.ASSISTED_GENERATION:
-            if generation_config.num_return_sequences > 1:
-                raise ValueError(
-                    "num_return_sequences has to be 1 when doing assisted generate, "
-                    f"but is {generation_config.num_return_sequences}."
-                )
-            if batch_size > 1:
-                raise ValueError("assisted generate is only supported for batch_size = 1")
-            if not model_kwargs["use_cache"]:
-                raise ValueError("assisted generate requires `use_cache=True`")
-            if generation_config.cache_implementation in ["static", "hybrid", "sliding_window"]:
-                raise ValueError("assisted generate is not supported with Static cache classes`")
-            if self._is_stateful:
-                # In assisted generation we need the ability to confirm whether the model would pick certain tokens,
-                # which is not possible with stateful models (they can't reset to a previous subset of generated text)
-                raise ValueError(
-                    f"assisted generation is not supported with stateful models, such as {self.__class__.__name__}"
-                )
-
-            # 11. Get the candidate generator, given the parameterization
-            candidate_generator = self._get_candidate_generator(
-                generation_config=generation_config,
-                input_ids=input_ids,
-                inputs_tensor=inputs_tensor,
-                assistant_model=assistant_model,
-                logits_processor=logits_processor,
-                target_tokenizer=tokenizer,
-                assistant_tokenizer=assistant_tokenizer,
-                model_kwargs=model_kwargs,
-            )
-
-            # 12. run assisted generate
-            result = self._assisted_decoding(
-                input_ids,
-                candidate_generator=candidate_generator,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                streamer=streamer,
-                **model_kwargs,
-            )
-        elif generation_mode == GenerationMode.DOLA_GENERATION:
-            if self._is_stateful:
-                # DoLa decoding was not designed for stateful models, and would require some changes
-                raise ValueError(
-                    f"dola decoding is not supported with stateful models, such as {self.__class__.__name__}"
-                )
-            result = self._dola_decoding(
-                input_ids,
-                dola_layers=generation_config.dola_layers,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                streamer=streamer,
-                **model_kwargs,
-            )
-
-        elif generation_mode == GenerationMode.CONTRASTIVE_SEARCH:
-            if not model_kwargs["use_cache"]:
-                raise ValueError("Contrastive search requires `use_cache=True`")
-            if self._is_stateful:
-                # Just like assisted generation, we need to be able to rollback to a previous state (see comment above)
-                raise ValueError(
-                    f"contrastive search is not supported with stateful models, such as {self.__class__.__name__}"
-                )
-
-            result = self._contrastive_search(
-                input_ids,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                streamer=streamer,
-                **model_kwargs,
-            )
-
-        elif generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
-            # 11. expand input_ids with `num_return_sequences` additional sequences per batch
-            input_ids, model_kwargs = self._expand_inputs_for_generation(
-                input_ids=input_ids,
-                expand_size=generation_config.num_return_sequences,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs,
-            )
-            
-            # 12. run sample (it degenerates to greedy search when `generation_config.do_sample=False`)
-            result, action_pred = self._sample(
-                input_ids,
-                state_embeds,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                streamer=streamer,
-                **model_kwargs,
-            )    
-
-        elif generation_mode in (GenerationMode.BEAM_SAMPLE, GenerationMode.BEAM_SEARCH):
-            # 11. prepare beam search scorer
-            beam_scorer = BeamSearchScorer(
-                batch_size=batch_size,
-                num_beams=generation_config.num_beams,
-                device=inputs_tensor.device,
-                length_penalty=generation_config.length_penalty,
-                do_early_stopping=generation_config.early_stopping,
-                num_beam_hyps_to_keep=generation_config.num_return_sequences,
-                max_length=generation_config.max_length,
-            )
-
-            # 12. interleave input_ids with `num_beams` additional sequences per batch
-            input_ids, model_kwargs = self._expand_inputs_for_generation(
-                input_ids=input_ids,
-                expand_size=generation_config.num_beams,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs,
-            )
-
-            # 13. run beam sample
-            result = self._beam_search(
-                input_ids,
-                beam_scorer,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                **model_kwargs,
-            )
-
-        elif generation_mode == GenerationMode.GROUP_BEAM_SEARCH:
-            # 11. prepare beam search scorer
-            beam_scorer = BeamSearchScorer(
-                batch_size=batch_size,
-                num_beams=generation_config.num_beams,
-                device=inputs_tensor.device,
-                length_penalty=generation_config.length_penalty,
-                do_early_stopping=generation_config.early_stopping,
-                num_beam_hyps_to_keep=generation_config.num_return_sequences,
-                num_beam_groups=generation_config.num_beam_groups,
-                max_length=generation_config.max_length,
-            )
-            # 12. interleave input_ids with `num_beams` additional sequences per batch
-            input_ids, model_kwargs = self._expand_inputs_for_generation(
-                input_ids=input_ids,
-                expand_size=generation_config.num_beams,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs,
-            )
-            # 13. run beam search
-            result = self._group_beam_search(
-                input_ids,
-                beam_scorer,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                **model_kwargs,
-            )
-
-        elif generation_mode == GenerationMode.CONSTRAINED_BEAM_SEARCH:
-            final_constraints = []
-            if generation_config.constraints is not None:
-                final_constraints = generation_config.constraints
-
-            if generation_config.force_words_ids is not None:
-
-                def typeerror():
-                    raise ValueError(
-                        "`force_words_ids` has to either be a `List[List[List[int]]]` or `List[List[int]]` "
-                        f"of positive integers, but is {generation_config.force_words_ids}."
-                    )
-
-                if (
-                    not isinstance(generation_config.force_words_ids, list)
-                    or len(generation_config.force_words_ids) == 0
-                ):
-                    typeerror()
-
-                for word_ids in generation_config.force_words_ids:
-                    if isinstance(word_ids[0], list):
-                        if not isinstance(word_ids, list) or len(word_ids) == 0:
-                            typeerror()
-                        if any(not isinstance(token_ids, list) for token_ids in word_ids):
-                            typeerror()
-                        if any(
-                            any((not isinstance(token_id, int) or token_id < 0) for token_id in token_ids)
-                            for token_ids in word_ids
-                        ):
-                            typeerror()
-
-                        constraint = DisjunctiveConstraint(word_ids)
-                    else:
-                        if not isinstance(word_ids, list) or len(word_ids) == 0:
-                            typeerror()
-                        if any((not isinstance(token_id, int) or token_id < 0) for token_id in word_ids):
-                            typeerror()
-
-                        constraint = PhrasalConstraint(word_ids)
-                    final_constraints.append(constraint)
-
-            # 11. prepare beam search scorer
-            constrained_beam_scorer = ConstrainedBeamSearchScorer(
-                constraints=final_constraints,
-                batch_size=batch_size,
-                num_beams=generation_config.num_beams,
-                device=inputs_tensor.device,
-                length_penalty=generation_config.length_penalty,
-                do_early_stopping=generation_config.early_stopping,
-                num_beam_hyps_to_keep=generation_config.num_return_sequences,
-                max_length=generation_config.max_length,
-            )
-            # 12. interleave input_ids with `num_beams` additional sequences per batch
-            input_ids, model_kwargs = self._expand_inputs_for_generation(
-                input_ids=input_ids,
-                expand_size=generation_config.num_beams,
-                is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs,
-            )
-            # 13. run beam search
-            result = self._constrained_beam_search(
-                input_ids,
-                constrained_beam_scorer=constrained_beam_scorer,
-                logits_processor=prepared_logits_processor,
-                stopping_criteria=prepared_stopping_criteria,
-                generation_config=generation_config,
-                synced_gpus=synced_gpus,
-                **model_kwargs,
-            )
-
-        # Convert to legacy cache format if requested
-        if (
-            generation_config.return_legacy_cache is not False  # Should check for `True` after v4.47
-            and not is_torchdynamo_compiling()
-            and hasattr(result, "past_key_values")
-            and hasattr(result.past_key_values, "to_legacy_cache")
-            and result.past_key_values.to_legacy_cache is not None
-        ):
-            # handle BC (convert by default if he user hasn't passed a cache AND the cache is of the default type)
-            should_convert_cache = generation_config.return_legacy_cache
-            is_user_defined_cache = user_defined_cache is not None
-            is_default_cache_type = (
-                type(result.past_key_values) == DynamicCache  # noqa E721
-                or (
-                    EncoderDecoderCache is not None
-                    and isinstance(result.past_key_values, EncoderDecoderCache)
-                    and type(result.past_key_values.self_attention_cache) == DynamicCache  # noqa E721
-                    and type(result.past_key_values.cross_attention_cache) == DynamicCache  # noqa E721
-                )
-            )
-            if not is_user_defined_cache and is_default_cache_type:
-                logger.warning_once(
-                    "From v4.47 onwards, when a model cache is to be returned, `generate` will return a `Cache` "
-                    "instance instead by default (as opposed to the legacy tuple of tuples format). If you want to "
-                    "keep returning the legacy format, please set `return_legacy_cache=True`."
-                )
-                should_convert_cache = True
-            if should_convert_cache:
-                result.past_key_values = result.past_key_values.to_legacy_cache()
-        return result, action_pred
-
-        
     def get_input_embeddings(self):
         return self.model.embed_tokens
 
@@ -2528,22 +1513,8 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
     
-    def prepare_inputs_for_transformer_model(self, input_ids, state_embeds):
-
-        state_selected = (input_ids == self.state_idx)
-        
-        input_ids[state_selected] = 0
-        
-        inputs_embeds = self.model.embed_tokens(input_ids)
-        
-        if state_embeds is not None:
-            inputs_embeds[state_selected] = inputs_embeds[state_selected] * 0.0 + state_embeds
-        
-        return inputs_embeds
-        
-
     @add_start_docstrings_to_model_forward(CHAMELEON_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=CausalLMOutputWithPastAction, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -2558,9 +1529,8 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        action_embeds: Optional[torch.Tensor] = None,
-        state_embeds: Optional[torch.Tensor] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPastAction]:
+        loss_weights: Optional[torch.LongTensor] = None,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -2573,12 +1543,12 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
         Example:
 
         ```python
-        >>> from transformers import ChameleonProcessor, RynnVLAForImg2VidGen
+        >>> from transformers import ChameleonProcessor, ChameleonForConditionalGeneration
         >>> import torch
         >>> import requests
         >>> from PIL import Image
 
-        >>> model = RynnVLAForImg2VidGen.from_pretrained("facebook/chameleon-7b", torch_dtype=torch.bfloat16)
+        >>> model = ChameleonForConditionalGeneration.from_pretrained("facebook/chameleon-7b", torch_dtype=torch.bfloat16)
         >>> processor = ChameleonProcessor.from_pretrained("facebook/chameleon-7b")
 
         >>> prompt = "I used to know a lot about constellations when I was younger, but as I grew older, I forgot most of what I knew. These are the only two constellations that I really remember now.<image><image>I would like for you to tell me about 3 more constellations and give me a little bit of history about the constellation."
@@ -2596,38 +1566,25 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.replace_inputs_with_action:
-            raise NotImplementedError
-        else:
-            state_embeds = torch.stack(state_embeds, dim=0)
-            projected_state_embeds = self.state_projection(state_embeds)
-
-            inputs_embeds = self.prepare_inputs_for_transformer_model(input_ids, projected_state_embeds)
-
-            if action_embeds is not None:
-                action_embeds = torch.stack(action_embeds, dim=0)
-            action_selected = (input_ids == self.action_idx)
-            
-            outputs = self.model(
-                input_ids=None,
-                pixel_values=pixel_values,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                cache_position=cache_position,
-            )
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs = self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
 
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
-    
-        action_pred = self.action_head(hidden_states)
-        
+
         if self.config.mask_image_logits:
             # Disallow image tokens which does not include special begin-image and end-image tokens
             image_tokens = self.model.vocabulary_mapping.image_tokens
@@ -2639,34 +1596,235 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
-            loss_fct = CrossEntropyLoss()
+            if loss_weights is not None:
+                loss_fct = CrossEntropyLoss(weight=loss_weights)
+            else:
+                loss_fct = CrossEntropyLoss()
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1)
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
 
-        if action_embeds is not None:
-            shift_action_pred = action_pred[..., :-1, :].contiguous()
-            shift_action_selected = action_selected[..., 1:].contiguous()
-            action_loss_cls = L1Loss()
-            action_loss = action_loss_cls(shift_action_pred[shift_action_selected], action_embeds)
-        else:
-            action_loss = 0
-        
         if not return_dict:
             output = (logits,) + outputs[1:]
-            return (loss, ) + (action_loss, ) + output if loss is not None else output
+            return (loss,) + output if loss is not None else output
 
-        return CausalLMOutputWithPastAction(
+        return CausalLMOutputWithPast(
             loss=loss,
-            action_loss=action_loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            action_pred=action_pred
         )
+    
+    def generate_batch_1(self, input_ids, labels, generation_config, logits_processor, streamer):
+        generation_result_list = []
+        gt_result_list = []
+        for b in range(len(input_ids)):
+            input_ids_b_o = torch.tensor(input_ids[b], dtype=torch.int64, device=self.device).unsqueeze(0)
+            # indices = [i for i, x in enumerate(input_ids[b]) if x == 8710]
+            # end_positions = indices[0]
+            # input_ids_b = input_ids_b_o[:, :end_positions+1]
+            end_positions = torch.where(input_ids_b_o == 8710)
+            input_ids_b = input_ids_b_o[:, :end_positions[1][0]+1]
+            prompt_len = input_ids_b.shape[-1]
+            generation_result = ChameleonForConditionalGeneration.generate(
+                self, input_ids_b, generation_config, logits_processor=logits_processor, streamer=streamer
+            )[0][prompt_len:]
+            gt_result = input_ids_b_o[:, prompt_len:]
+            generation_result_list.append(generation_result)
+            gt_result_list.append(gt_result)
+        return generation_result_list, gt_result_list
+
+    def generate_batch_2(self, input_ids, labels, generation_config, logits_processor, streamer):
+        
+        max_tokens = max([len(_) for _ in input_ids])
+        max_tokens = min(max_tokens, self.config.max_position_embeddings)
+        input_ids = [_[:max_tokens] for _ in input_ids]
+
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+        
+        labels = [_[:max_tokens] for _ in labels]
+        labels = [[-100] * (max_tokens - len(label)) + label for label in labels]
+        labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
+        
+        input_ids_g, gt_list = self.process_tensor(input_ids)
+        # generation_result = self.generate(
+        #     input_ids_g, pad_token_id=0, generation_config=generation_config, logits_processor=logits_processor, streamer=streamer
+        # )
+        import time
+        start = time.time()
+        generation_result = self.generate(
+            input_ids_g, pad_token_id=0, generation_config=generation_config
+        )
+        _, generation_result_g = self.process_tensor(generation_result)        
+        
+        return generation_result_g, gt_list
+    
+    def generate_batch_awm(self, input_ids, labels, generation_config, logits_processor, streamer):
+        
+        max_tokens = max([len(_) for _ in input_ids])
+        max_tokens = min(max_tokens, self.config.max_position_embeddings)
+        input_ids = [_[:max_tokens] for _ in input_ids]
+
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+        
+        labels = [_[:max_tokens] for _ in labels]
+        labels = [[-100] * (max_tokens - len(label)) + label for label in labels]
+        labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
+        
+        input_ids_g, gt_list = self.process_tensor_awm(input_ids)
+        generation_result = self.generate(
+            input_ids_g, pad_token_id=0, generation_config=generation_config
+        )
+        generation_result_g = self.post_process_tensor_awm(input_ids_g, generation_result)
+        return generation_result_g, gt_list
+    
+    def generate_batch_awm_2(self, input_ids, labels, generation_config, logits_processor, streamer):
+        
+        max_tokens = max([len(_) for _ in input_ids])
+        max_tokens = min(max_tokens, self.config.max_position_embeddings)
+        input_ids = [_[:max_tokens] for _ in input_ids]
+
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+        
+        labels = [_[:max_tokens] for _ in labels]
+        labels = [[-100] * (max_tokens - len(label)) + label for label in labels]
+        labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
+        
+        input_ids_g, gt_list = self.process_tensor_awm_2(input_ids)
+        generation_result = self.generate(
+            input_ids_g, pad_token_id=0, generation_config=generation_config
+        )
+        generation_result_g = self.post_process_tensor_awm_2(input_ids_g, generation_result)
+        # print(generation_result_g, gt_list)
+        return generation_result_g, gt_list
+    
+    def generate_batch_awm_f(self, input_ids, labels, generation_config, logits_processor, streamer):
+        
+        max_tokens = max([len(_) for _ in input_ids])
+        max_tokens = min(max_tokens, self.config.max_position_embeddings)
+        input_ids = [_[:max_tokens] for _ in input_ids]
+
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+        
+        labels = [_[:max_tokens] for _ in labels]
+        labels = [[-100] * (max_tokens - len(label)) + label for label in labels]
+        labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
+        
+        input_ids_g, gt_list = self.process_tensor(input_ids)
+        import time
+        start = time.time()
+        generation_result = self.generate(
+            input_ids_g, pad_token_id=0, generation_config=generation_config
+        )
+        print(time.time()-start)
+        generation_result_g = self.post_process_tensor_awm_f(input_ids_g, generation_result)
+        # print(generation_result_g, gt_list)
+        return generation_result_g, gt_list
+        
+        
+    
+    def process_tensor(self, input_ids):
+        # 找到每一行中第一个等于8710的位置
+        mask = input_ids == 8710
+        first_occurrence = mask.to(torch.float).argmax(dim=1)
+        
+        # 创建一个与 input_ids 相同形状的 mask
+        row_indices = torch.arange(input_ids.size(0)).unsqueeze(1).to(self.device)
+        col_indices = torch.arange(input_ids.size(1)).unsqueeze(0).to(self.device)
+        
+        # 将第一次出现8710之后的位置全部设为True
+        mask = col_indices > first_occurrence.unsqueeze(1)
+        
+        # 使用这个mask将对应位置的值存储起来
+        input_values = [row[~mask[i]].unsqueeze(0) for i, row in enumerate(input_ids)]
+        gt_values = [row[mask[i]] for i, row in enumerate(input_ids)]
+        input_values = torch.cat(input_values, dim=0)
+        
+        
+        # 使用这个mask将对应位置设为0
+        # result = input_ids.clone()
+        # # result[mask] = 0
+        # result = result[~mask]
+    
+        return input_values, gt_values
+    
+    def process_tensor_awm(self, input_ids):
+        # 找到每一行中最后一个等于8710的位置
+        mask = input_ids == 10004
+        last_occurrence = torch.fliplr(mask).to(torch.float).argmax(dim=1)
+        last_occurrence = input_ids.size(1) - 1 - last_occurrence
+        
+        # 创建一个与 input_ids 相同形状的 mask
+        row_indices = torch.arange(input_ids.size(0)).unsqueeze(1).to(self.device)
+        col_indices = torch.arange(input_ids.size(1)).unsqueeze(0).to(self.device)
+        
+        # 将第一次出现8710之后的位置全部设为True
+        mask = col_indices >= last_occurrence.unsqueeze(1)
+        
+        # 使用这个mask将对应位置的值存储起来
+        input_values = [row[~mask[i]].unsqueeze(0) for i, row in enumerate(input_ids)]
+        gt_values = [row[mask[i]] for i, row in enumerate(input_ids)]
+        input_values = torch.cat(input_values, dim=0)
+        
+        
+        # 使用这个mask将对应位置设为0
+        # result = input_ids.clone()
+        # # result[mask] = 0
+        # result = result[~mask]
+    
+        return input_values, gt_values
+    
+    def post_process_tensor_awm(self, input_ids_g, generation_result):
+        res = []
+        for i in range(input_ids_g.shape[0]):
+            res.append(generation_result[i][input_ids_g[i].shape[0]:input_ids_g[i].shape[0]+10])
+        return res
+    
+    def process_tensor_awm_2(self, input_ids):
+        # 找到每一行中最后一个等于8710的位置
+        mask = input_ids == 8197
+        last_occurrence = torch.fliplr(mask).to(torch.float).argmax(dim=1)
+        last_occurrence = input_ids.size(1) - 1 - last_occurrence
+        
+        # 创建一个与 input_ids 相同形状的 mask
+        row_indices = torch.arange(input_ids.size(0)).unsqueeze(1).to(self.device)
+        col_indices = torch.arange(input_ids.size(1)).unsqueeze(0).to(self.device)
+        
+        # 将第一次出现8710之后的位置全部设为True
+        mask = col_indices >= last_occurrence.unsqueeze(1)
+        
+        # 使用这个mask将对应位置的值存储起来
+        input_values = [row[~mask[i]].unsqueeze(0) for i, row in enumerate(input_ids)]
+        gt_values = [row[mask[i]] for i, row in enumerate(input_ids)]
+        input_values = torch.cat(input_values, dim=0)
+        
+        
+        # 使用这个mask将对应位置设为0
+        # result = input_ids.clone()
+        # # result[mask] = 0
+        # result = result[~mask]
+    
+        return input_values, gt_values
+    
+    def post_process_tensor_awm_2(self, input_ids_g, generation_result):
+        res = []
+        for i in range(input_ids_g.shape[0]):
+            res.append(generation_result[i][input_ids_g[i].shape[0]:input_ids_g[i].shape[0]+308])
+        return res
+    
+    def post_process_tensor_awm_f(self, input_ids_g, generation_result):
+        res = []
+        for i in range(input_ids_g.shape[0]):
+            res.append(generation_result[i][input_ids_g[i].shape[0]:input_ids_g[i].shape[0]+904])
+        return res
+    
 
     def prepare_inputs_for_generation(
         self,
@@ -2683,7 +1841,12 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
         # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
         # Exception 1: when passing input_embeds, input_ids may be missing entries
         # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
+        # print(input_ids.shape, cache_position)
+        # import pdb; pdb.set_trace()
         if past_key_values is not None:
+            # if len(past_key_values):
+            #     if input_ids.shape[1] - cache_position[0] != 1:
+            #         cache_position = torch.tensor([i+cache_position[0] for i in range(input_ids.shape[1] - cache_position[0])], device=self.device)
             if inputs_embeds is not None:  # Exception 1
                 input_ids = input_ids[:, -cache_position.shape[0] :]
             elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
@@ -2718,53 +1881,14 @@ class RynnVLAForActionPrediction(ChameleonPreTrainedModel, GenerationMixin):
         )
         return model_inputs
 
-
-
-
-class MLPResNetBlock(nn.Module):
-    """One MLP ResNet block with a residual connection."""
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-        self.ffn = nn.Sequential(  # feedforward network, similar to the ones in Transformers
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
-            nn.ReLU(),
-        )
-
-    def forward(self, x):
-        # x: (batch_size, hidden_dim)
-        # We follow the module ordering of "Pre-Layer Normalization" feedforward networks in Transformers as
-        # described here: https://arxiv.org/pdf/2002.04745.pdf
-        identity = x
-        x = self.ffn(x)
-        x = x + identity
-        return x
-
-
-class MLPResNet(nn.Module):
-    """MLP with residual connection blocks."""
-    def __init__(self, num_blocks, input_dim, hidden_dim, output_dim):
-        super().__init__()
-        self.layer_norm1 = nn.LayerNorm(input_dim)
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.relu = nn.ReLU()
-        self.mlp_resnet_blocks = nn.ModuleList()
-        for _ in range(num_blocks):
-            self.mlp_resnet_blocks.append(MLPResNetBlock(dim=hidden_dim))
-        self.layer_norm2 = nn.LayerNorm(hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, x):
-        # x: (batch_size, input_dim)
-        x = self.layer_norm1(x)  # shape: (batch_size, input_dim)
-        x = self.fc1(x)  # shape: (batch_size, hidden_dim)
-        x = self.relu(x)  # shape: (batch_size, hidden_dim)
-
-        for block in self.mlp_resnet_blocks:
-            x = block(x)  # shape: (batch_size, hidden_dim)
-
-        x = self.layer_norm2(x)  # shape: (batch_size, hidden_dim)
-        x = self.fc2(x)  # shape: (batch_size, output_dim)
-
-        return x
+    def get_fsdp_wrap_module_list(self):
+        modules = [*list(self.model.layers), self.lm_head, self.model.embed_tokens]
+        if hasattr(self.model, "vqmodel"):  # may be deleted
+            modules.append(self.model.vqmodel)
+        return modules
+    
+    def get_checkpointing_wrap_module_list(self):
+        modules = [
+            *list(self.model.layers),
+        ]
+        return modules

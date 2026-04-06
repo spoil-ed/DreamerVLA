@@ -10,3 +10,26 @@ dist/
 *.egg-info/
 logs/
 outputs/
+
+# Large local assets and third-party dependencies
+data/
+dependencies/
+LIBERO/
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.npy
+*.npz
+*.h5
+
+# Training/runtime artifacts
+*.log
+wandb/
+tensorboard/
+runs/
+checkpoints/

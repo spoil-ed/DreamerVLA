@@ -9,7 +9,7 @@ import torch
 
 
 class VocabInfo:
-    def __init__(self, vocab_map):
+    def __init__(self, vocab_map: dict[str, int]):
         self.name2val = vocab_map
 
         self.bos_id = vocab_map.get("<s>")
@@ -20,76 +20,76 @@ class VocabInfo:
         self.eot_id = vocab_map.get("<reserved08706>")
 
     @property
-    def begin_sequence(self):
+    def begin_sequence(self) -> int:
         return self.bos_id
 
     @property
-    def end_sequence(self):
+    def end_sequence(self) -> int:
         return self.eos_id
 
     @property
-    def begin_image(self):
+    def begin_image(self) -> int:
         return self.boi_id
 
     @property
-    def end_image(self):
+    def end_image(self) -> int:
         return self.eoi_id
 
     @property
-    def padding(self):
+    def padding(self) -> int:
         return self.pad_id
 
     @property
-    def end_turn(self):
+    def end_turn(self) -> int:
         return self.eot_id
 
     @cached_property
-    def val2name(self):
+    def val2name(self) -> dict[int, str]:
         return {v: k for k, v in self.name2val.items()}
 
     @cached_property
-    def all_tokens(self):
+    def all_tokens(self) -> list[int]:
         return sorted(self.name2val.values())
 
     @cached_property
-    def image_tokens(self):
+    def image_tokens(self) -> list[int]:
         return sorted([val for name, val in self.name2val.items() if name.startswith("IMGIMG")])
 
     @cached_property
-    def special_tokens(self):
+    def special_tokens(self) -> list[int]:
         return sorted([val for name, val in self.name2val.items() if name.startswith("<") and name != "<"])
 
     @cached_property
-    def text_tokens(self):
+    def text_tokens(self) -> list[int]:
         return sorted(set(self.all_tokens) - set(self.image_tokens) - set(self.special_tokens))
 
 
 class VocabTranslation:
-    def __init__(self, vocab_info: VocabInfo, device = None):
+    def __init__(self, vocab_info: VocabInfo, device: str | None = None):
         self._vocab = vocab_info
         self._device = device
 
     @cached_property
-    def bpe2img(self):
+    def bpe2img(self) -> dict[int, int]:
         img_tkn_chr_mapping = {chr(ord("A") + i): str(i) for i in range(10)}
 
-        def remap(old_name):
+        def remap(old_name: str) -> str:
             return "".join(img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1])
 
         return {tok: int(remap(self._vocab.val2name[tok])) for tok in self._vocab.image_tokens}
 
     @cached_property
-    def img2bpe(self):
+    def img2bpe(self) -> dict[int, int]:
         return {v: k for k, v in self.bpe2img.items()}
 
     @cached_property
-    def bpe2img_search_tensors(self):
+    def bpe2img_search_tensors(self) -> tuple[torch.Tensor, torch.Tensor]:
         sorted_bpe = torch.tensor(sorted(self.bpe2img.keys()), device=self._device)
         sorted_img = torch.tensor(sorted(self.bpe2img.values()), device=self._device)
         return sorted_bpe, sorted_img
 
     @cached_property
-    def img2bpe_mapping_tensor(self):
+    def img2bpe_mapping_tensor(self) -> torch.LongTensor:
         mapping = torch.zeros(
             max(self.img2bpe.keys()) + 1,
             dtype=torch.int,
@@ -99,9 +99,9 @@ class VocabTranslation:
             mapping[k] = v
         return mapping
 
-    def convert_bpe2img(self, bpe_batch):
+    def convert_bpe2img(self, bpe_batch: torch.Tensor) -> torch.Tensor:
         bpe_tok, img_tok = self.bpe2img_search_tensors
         return img_tok[torch.searchsorted(bpe_tok, bpe_batch)]
 
-    def convert_img2bp2(self, img_batch):
+    def convert_img2bp2(self, img_batch: torch.Tensor) -> torch.Tensor:
         return self.img2bpe_mapping_tensor[img_batch]
