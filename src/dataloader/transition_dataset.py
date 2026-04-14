@@ -13,21 +13,6 @@ import torch.nn.functional as F
 
 from src.dataloader.base_dataset import BaseDataset
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _resolve_project_path(path: str | Path) -> Path:
-    path = Path(path)
-    if path.is_absolute():
-        return path
-    direct_candidate = (PROJECT_ROOT / path).resolve()
-    if direct_candidate.exists():
-        return direct_candidate
-    data_candidate = (PROJECT_ROOT / "data" / path).resolve()
-    if data_candidate.exists():
-        return data_candidate
-    return direct_candidate
-
 
 def _load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
@@ -117,7 +102,7 @@ class TransitionDataset(BaseDataset):
         max_transitions: int | None = None,
     ) -> None:
         super().__init__()
-        self.train_config_path = _resolve_project_path(train_config_path)
+        self.train_config_path = self.resolve_project_path(train_config_path)
         train_config = _load_json(self.train_config_path)
 
         train_section = train_config["train"]
@@ -126,7 +111,7 @@ class TransitionDataset(BaseDataset):
         default_wrist_key = str(obs_modalities["rgb"][1]) if len(obs_modalities["rgb"]) > 1 else None
         default_low_dim_keys = tuple(str(key) for key in obs_modalities["low_dim"])
 
-        self.hdf5_path = _resolve_project_path(train_section["data"])
+        self.hdf5_path = self.resolve_project_path(train_section["data"])
         self.image_size = int(image_size)
         self.terminal_reward = float(terminal_reward)
         self.default_reward = float(default_reward)

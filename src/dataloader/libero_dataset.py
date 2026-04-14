@@ -13,15 +13,7 @@ import torch.nn.functional as F
 from src.dataloader.base_dataset import BaseDataset
 from src.dataloader.transition_dataset import SimpleWordTokenizer
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LIBERO_ROOT = Path("/home/yuxinglei/workspace/2026nips/RynnVLA-002/LIBERO")
-
-
-def _resolve_project_path(path: str | Path) -> Path:
-    path = Path(path)
-    if path.is_absolute():
-        return path
-    return (PROJECT_ROOT / path).resolve()
 
 
 def _resolve_libero_paths(
@@ -29,16 +21,16 @@ def _resolve_libero_paths(
     datasets_root: str | Path | None,
 ) -> tuple[Path, Path]:
     if datasets_root is not None:
-        resolved_datasets_root = _resolve_project_path(datasets_root)
+        resolved_datasets_root = BaseDataset.resolve_project_path(datasets_root)
         resolved_libero_root = (
-            _resolve_project_path(libero_root) if libero_root is not None else resolved_datasets_root.parents[1]
+            BaseDataset.resolve_project_path(libero_root) if libero_root is not None else resolved_datasets_root.parents[1]
         )
         return resolved_libero_root, resolved_datasets_root
 
     if libero_root is None:
         libero_root = DEFAULT_LIBERO_ROOT
 
-    resolved_libero_root = _resolve_project_path(libero_root)
+    resolved_libero_root = BaseDataset.resolve_project_path(libero_root)
     return resolved_libero_root, (resolved_libero_root / "libero" / "datasets").resolve()
 
 

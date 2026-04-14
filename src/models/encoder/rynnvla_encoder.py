@@ -16,8 +16,30 @@ from .protocol import EncoderInputBatch
 from .rynnvla_runtime import FlexARItemProcessorActionState
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
 def _resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
+
+
+def _default_ckpt_path(*parts: str) -> str:
+    return str((PROJECT_ROOT / "data" / "ckpts" / Path(*parts)).resolve())
+
+
+def _resolve_pretrained_model_dir(path: str | Path) -> Path:
+    candidate = _resolve_path(path)
+    if candidate.is_file():
+        return candidate.parent
+    if candidate.is_dir():
+        if (candidate / "config.json").is_file():
+            return candidate
+        for subdir in sorted(item for item in candidate.iterdir() if item.is_dir()):
+            if (subdir / "config.json").is_file():
+                return subdir.resolve()
+    raise FileNotFoundError(
+        f"Unable to locate a Hugging Face checkpoint directory under: {candidate}"
+    )
 
 
 @dataclass
@@ -31,11 +53,11 @@ class RynnVLAEncoderOutput:
 class RynnVLAEncoder(BaseEncoder):
     def __init__(
         self,
-        model_path: str = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/ckpts/starting_point",
-        tokenizer_path: str = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/ckpts/chameleon/base_model",
-        text_tokenizer_path: str = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json",
-        chameleon_vqgan_config: str = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
-        chameleon_vqgan_ckpt: str = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+        model_path: str = _default_ckpt_path("VLA_model_256", "libero_10"),
+        tokenizer_path: str = _default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"),
+        text_tokenizer_path: str = _default_ckpt_path("chameleon", "tokenizer", "text_tokenizer.json"),
+        chameleon_vqgan_config: str = _default_ckpt_path("chameleon", "tokenizer", "vqgan.yaml"),
+        chameleon_vqgan_ckpt: str = _default_ckpt_path("chameleon", "tokenizer", "vqgan.ckpt"),
         resolution: int = 256,
         action_dim: int = 7,
         time_horizon: int = 5,
@@ -43,11 +65,23 @@ class RynnVLAEncoder(BaseEncoder):
         freeze_backbone: bool = True,
     ) -> None:
         super().__init__()
-        self.model_path = str(_resolve_path(model_path))
+        self.model_path = str(_resolve_pretrained_model_dir(model_path))
         self.tokenizer_path = str(_resolve_path(tokenizer_path))
         self.text_tokenizer_path = str(_resolve_path(text_tokenizer_path))
         self.chameleon_vqgan_config = str(_resolve_path(chameleon_vqgan_config))
         self.chameleon_vqgan_ckpt = str(_resolve_path(chameleon_vqgan_ckpt))
+        for required_path in (
+            self.model_path,
+            self.tokenizer_path,
+            self.text_tokenizer_path,
+            self.chameleon_vqgan_config,
+            self.chameleon_vqgan_ckpt,
+        ):
+            if not Path(required_path).exists():
+                raise FileNotFoundError(
+                    f"Required encoder asset not found: {required_path}. "
+                    "Please check the local checkpoint layout under data/ckpts/."
+                )
         self.resolution = int(resolution)
         self.action_dim = int(action_dim)
         self.time_horizon = int(time_horizon)
@@ -58,8 +92,10 @@ class RynnVLAEncoder(BaseEncoder):
             self.model_path,
             action_dim=self.action_dim,
             time_horizon=self.time_horizon,
+            attn_implementation="sdpa",
             torch_dtype=torch.bfloat16,
-            device_map="cpu",
+            ignore_mismatched_sizes=False,
+            low_cpu_mem_usage=False,
         )
         if hasattr(self.backbone.model, "vqmodel"):
             del self.backbone.model.vqmodel
@@ -90,18 +126,27 @@ class RynnVLAEncoder(BaseEncoder):
         task_type: str | None,
         num_images: int,
         has_state: bool,
+        num_actions: int | None = None,
     ) -> list[dict[str, Any]]:
         state_placeholder = "<|state|>" if has_state else ""
         image_placeholders = "<|image|>" * num_images
         if task_type == "action":
-            human_value = f"What action should the robot take to {prompt_text}?" + state_placeholder + image_placeholders
+            human_value = prompt_text + state_placeholder + image_placeholders
+            assistant_value = "<|action|>" * max(int(num_actions or 0), 1)
         elif task_type == "world":
-            human_value = f"Observe the current scene for {prompt_text}." + state_placeholder + image_placeholders
+            num_actions = max(int(num_actions or 0), 1)
+            if num_images == num_actions * 2:
+                human_value = prompt_text + "<|image|><|image|><|action|>" * num_actions
+                assistant_value = "<|image|><|image|>"
+            else:
+                human_value = prompt_text + "<|image|><|action|>" * num_actions
+                assistant_value = "<|image|>"
         else:
             human_value = prompt_text + state_placeholder + image_placeholders
+            assistant_value = None
         return [
             {"from": "human", "value": human_value},
-            {"from": "gpt", "value": None},
+            {"from": "gpt", "value": assistant_value},
         ]
 
     def _to_data_item(self, batch: EncoderInputBatch, idx: int) -> dict[str, Any]:
@@ -118,12 +163,30 @@ class RynnVLAEncoder(BaseEncoder):
         task_type = None
         if batch.task_type is not None and idx < len(batch.task_type):
             task_type = batch.task_type[idx]
-        conversations = self._build_observation_conversation(
-            prompt_text=prompt_text,
-            task_type=task_type,
-            num_images=len(images),
-            has_state=state is not None,
-        )
+        conversations: list[dict[str, Any]] = []
+        if idx < len(batch.conversations):
+            raw_conversations = batch.conversations[idx]
+            if raw_conversations:
+                conversations = [dict(message) for message in raw_conversations]
+
+        num_actions = None
+        if batch.action_mask is not None:
+            num_actions = int(batch.action_mask[idx].sum().item())
+        elif batch.action is not None:
+            num_actions = int(batch.action[idx].shape[0])
+        elif batch.meta is not None and idx < len(batch.meta):
+            action_indices = batch.meta[idx].get("action_indices")
+            if action_indices is not None:
+                num_actions = len(action_indices)
+
+        if not conversations:
+            conversations = self._build_observation_conversation(
+                prompt_text=prompt_text,
+                task_type=task_type,
+                num_images=len(images),
+                has_state=state is not None,
+                num_actions=num_actions,
+            )
         data_item = {
             "conversations": conversations,
             "image": images,
@@ -131,6 +194,115 @@ class RynnVLAEncoder(BaseEncoder):
         if state is not None:
             data_item["state"] = state
         return data_item
+
+    @staticmethod
+    def _record_to_data_item(record: dict[str, Any]) -> dict[str, Any]:
+        data_item = {
+            "conversations": list(record.get("conversations", [])),
+            "image": list(record.get("image", [])),
+            "action": list(record.get("action", [])),
+        }
+        state = record.get("state", [])
+        if state:
+            data_item["state"] = list(state)
+        return data_item
+
+    def compute_action_sft_loss(
+        self,
+        records: list[dict[str, Any]],
+        token_loss_coef: float = 1.0,
+        action_loss_coef: float = 1.0,
+    ) -> dict[str, torch.Tensor]:
+        if not records:
+            raise ValueError("compute_action_sft_loss requires at least one action record.")
+
+        device = self.device
+        processor = self._build_processor(device)
+        input_ids_list: list[list[int]] = []
+        labels_list: list[list[int]] = []
+        for record in records:
+            data_item = self._record_to_data_item(record)
+            input_ids, labels = processor.process_item(data_item, training_mode=True)
+            input_ids_list.append(input_ids)
+            labels_list.append(labels)
+
+        (
+            token_loss,
+            additional_loss_dict,
+            _logits,
+            _hidden_states,
+            _labels_tensor,
+            predicted_actions,
+            action_loss,
+        ) = self.backbone(
+            input_ids=input_ids_list,
+            labels=labels_list,
+            training=True,
+            output_hidden_states=True,
+            att_mask=False,
+        )
+
+        total_loss = token_loss_coef * token_loss + action_loss_coef * action_loss
+        z_loss = token_loss.new_zeros(())
+        for key, value in additional_loss_dict.items():
+            if not isinstance(value, tuple) or len(value) != 2:
+                continue
+            extra_loss, weight = value
+            total_loss = total_loss + float(weight) * extra_loss
+            if key == "z_loss":
+                z_loss = extra_loss
+
+        return {
+            "loss": total_loss,
+            "token_loss": token_loss,
+            "action_loss": action_loss,
+            "z_loss": z_loss,
+            "predicted_action_mean": predicted_actions.float().mean(),
+        }
+
+    def compute_action_sft_loss_from_tokenized(
+        self,
+        input_ids_list: list[list[int]],
+        labels_list: list[list[int]],
+        token_loss_coef: float = 1.0,
+        action_loss_coef: float = 1.0,
+    ) -> dict[str, torch.Tensor]:
+        if not input_ids_list or not labels_list:
+            raise ValueError("compute_action_sft_loss_from_tokenized requires non-empty tokenized samples.")
+
+        (
+            token_loss,
+            additional_loss_dict,
+            _logits,
+            _hidden_states,
+            _labels_tensor,
+            predicted_actions,
+            action_loss,
+        ) = self.backbone(
+            input_ids=input_ids_list,
+            labels=labels_list,
+            training=True,
+            output_hidden_states=True,
+            att_mask=False,
+        )
+
+        total_loss = token_loss_coef * token_loss + action_loss_coef * action_loss
+        z_loss = token_loss.new_zeros(())
+        for key, value in additional_loss_dict.items():
+            if not isinstance(value, tuple) or len(value) != 2:
+                continue
+            extra_loss, weight = value
+            total_loss = total_loss + float(weight) * extra_loss
+            if key == "z_loss":
+                z_loss = extra_loss
+
+        return {
+            "loss": total_loss,
+            "token_loss": token_loss,
+            "action_loss": action_loss,
+            "z_loss": z_loss,
+            "predicted_action_mean": predicted_actions.float().mean(),
+        }
 
     def encode_inputs(self, batch: EncoderInputBatch) -> RynnVLAEncoderOutput:
         device = self.device
@@ -151,6 +323,7 @@ class RynnVLAEncoder(BaseEncoder):
                 labels=labels_list,
                 training=True,
                 output_hidden_states=True,
+                att_mask=False,
             )
 
         attention_mask = torch.zeros(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)

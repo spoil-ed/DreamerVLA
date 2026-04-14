@@ -17,7 +17,7 @@ from src.workspace.base_workspace import BaseWorkspace
 # Hydra entry
 @hydra.main(
     config_path="../configs",
-    config_name="debug",
+    config_name="nopretokenize_sft_cotrain_libero_10",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:

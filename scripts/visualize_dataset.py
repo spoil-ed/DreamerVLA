@@ -38,7 +38,7 @@ def _save_preview(sample: dict, output_path: Path) -> None:
 
 @hydra.main(
     config_path="../configs",
-    config_name="debug",
+    config_name="nopretokenize_sft_cotrain_libero_10",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:

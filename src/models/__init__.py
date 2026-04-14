@@ -9,8 +9,8 @@ except Exception:
     VLAPolicy = None
 
 try:
-    from .world_model import RSSMWorldModel
+    from .world_model import TSSMWorldModel
 except Exception:
-    RSSMWorldModel = None
+    TSSMWorldModel = None
 
-__all__ = ["Critic", "RSSMWorldModel", "VLAPolicy"]
+__all__ = ["Critic", "TSSMWorldModel", "VLAPolicy"]

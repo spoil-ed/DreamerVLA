@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import torch
@@ -15,6 +16,17 @@ from src.utils.torch_utils import (
     move_mapping_to_device,
     repeat_tensor_mapping,
 )
+
+
+@dataclass
+class PreparedPPOBatch:
+    grouped_obs: Mapping[str, Any]
+    embedded_obs: Any | None
+    sampled_action: torch.Tensor
+    scores: torch.Tensor
+    advantages: torch.Tensor
+    log_prob_old: torch.Tensor
+    log_prob_ref: torch.Tensor
 
 
 def _print_once(obj: object, attr: str, message: str) -> None:
@@ -103,7 +115,7 @@ def world_model_pretrain_step(
         _print_once(
             world_model,
             "_trace_pretrain_bridge",
-            "[Trace] world_model_pretrain_step received encoder outputs; entering RSSM pretrain_loss.",
+            "[Trace] world_model_pretrain_step received encoder outputs; entering pretrain_loss.",
         )
 
     # Model loss
@@ -144,17 +156,46 @@ def actor_update_step(
     algorithm_cfg: DictConfig,
     optim_cfg: DictConfig,
 ) -> dict[str, float]:
+    prepared = prepare_ppo_batch(
+        new_policy=new_policy,
+        old_policy=old_policy,
+        ref_policy=ref_policy,
+        world_model=world_model,
+        batch=batch,
+        device=device,
+        algorithm_cfg=algorithm_cfg,
+    )
+    return ppo_update_step(
+        new_policy=new_policy,
+        optimizer=optimizer,
+        prepared=prepared,
+        algorithm_cfg=algorithm_cfg,
+        optim_cfg=optim_cfg,
+    )
+
+
+def prepare_ppo_batch(
+    new_policy: nn.Module,
+    old_policy: nn.Module,
+    ref_policy: nn.Module,
+    world_model: nn.Module,
+    batch: Mapping[str, Any],
+    device: torch.device,
+    algorithm_cfg: DictConfig,
+) -> PreparedPPOBatch:
     # Grouped batch
     obs = move_mapping_to_device(batch["obs"], device)
     group_size = int(algorithm_cfg.group_size)
     grouped_obs = repeat_tensor_mapping(obs, group_size)
 
-    # Policy sync
+    # Snapshot the rollout policy once. This frozen copy defines old_log_prob for
+    # all subsequent PPO updates on the same sampled batch.
     sync_policy_snapshot(new_policy, old_policy)
+    if ref_policy is not old_policy:
+        freeze_module(ref_policy)
     new_policy.train()
     world_model.eval()
 
-    # Candidate actions
     with torch.no_grad():
         embedded_grouped_obs = embed_observation(new_policy, grouped_obs)
         _print_once(
@@ -172,6 +213,7 @@ def actor_update_step(
                 embedded_grouped_obs,
                 deterministic=False,
             )
+
         scores = score_candidate_actions(
             policy=new_policy,
             world_model=world_model,
@@ -198,22 +240,40 @@ def actor_update_step(
                 sampled_action,
             )
 
+    return PreparedPPOBatch(
+        grouped_obs=grouped_obs,
+        embedded_obs=embedded_grouped_obs,
+        sampled_action=sampled_action,
+        scores=scores.detach(),
+        advantages=advantages.detach(),
+        log_prob_old=log_prob_old.detach(),
+        log_prob_ref=log_prob_ref.detach(),
+    )
+
+
+def ppo_update_step(
+    new_policy: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    prepared: PreparedPPOBatch,
+    algorithm_cfg: DictConfig,
+    optim_cfg: DictConfig,
+) -> dict[str, float]:
     # PPO loss
     if getattr(new_policy, "embedding", None) is None:
-        log_prob_new, entropy, _ = new_policy.evaluate_action(grouped_obs, sampled_action)
+        log_prob_new, entropy, _ = new_policy.evaluate_action(prepared.grouped_obs, prepared.sampled_action)
     else:
         log_prob_new, entropy, _ = new_policy.evaluate_action_from_embedding(
-            embedded_grouped_obs,
-            sampled_action,
+            prepared.embedded_obs,
+            prepared.sampled_action,
         )
     losses = compute_ppo_actor_loss(
         log_prob_new=log_prob_new,
-        log_prob_old=log_prob_old,
-        advantages=advantages,
+        log_prob_old=prepared.log_prob_old,
+        advantages=prepared.advantages,
         clip_ratio=float(algorithm_cfg.clip_ratio),
         entropy=entropy,
         entropy_coef=float(algorithm_cfg.entropy_coef),
-        log_prob_ref=log_prob_ref,
+        log_prob_ref=prepared.log_prob_ref,
         kl_coef=float(algorithm_cfg.kl_coef),
     )
 
@@ -236,9 +296,44 @@ def actor_update_step(
         "ratio_mean": float(losses["ratio_mean"].detach().cpu()),
         "advantage_mean": float(losses["advantage_mean"].detach().cpu()),
         "advantage_std": float(losses["advantage_std"].detach().cpu()),
-        "score_mean": float(scores.mean().detach().cpu()),
+        "score_mean": float(prepared.scores.mean().detach().cpu()),
         "log_prob_new_mean": float(log_prob_new.mean().detach().cpu()),
-        "log_prob_old_mean": float(log_prob_old.mean().detach().cpu()),
-        "log_prob_ref_mean": float(log_prob_ref.mean().detach().cpu()),
+        "log_prob_old_mean": float(prepared.log_prob_old.mean().detach().cpu()),
+        "log_prob_ref_mean": float(prepared.log_prob_ref.mean().detach().cpu()),
         "grad_norm": float(torch.as_tensor(grad_norm).detach().cpu()),
     }
+
+
+def run_actor_ppo_updates(
+    new_policy: nn.Module,
+    old_policy: nn.Module,
+    ref_policy: nn.Module,
+    world_model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    batch: Mapping[str, Any],
+    device: torch.device,
+    algorithm_cfg: DictConfig,
+    optim_cfg: DictConfig,
+    num_updates: int,
+) -> list[dict[str, float]]:
+    prepared = prepare_ppo_batch(
+        new_policy=new_policy,
+        old_policy=old_policy,
+        ref_policy=ref_policy,
+        world_model=world_model,
+        batch=batch,
+        device=device,
+        algorithm_cfg=algorithm_cfg,
+    )
+    metrics: list[dict[str, float]] = []
+    for update_idx in range(int(num_updates)):
+        step_metrics = ppo_update_step(
+            new_policy=new_policy,
+            optimizer=optimizer,
+            prepared=prepared,
+            algorithm_cfg=algorithm_cfg,
+            optim_cfg=optim_cfg,
+        )
+        step_metrics["update_idx"] = float(update_idx)
+        metrics.append(step_metrics)
+    return metrics

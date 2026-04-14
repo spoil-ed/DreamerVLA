@@ -26,7 +26,6 @@ import torch.utils.checkpoint
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
@@ -39,6 +38,11 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
+
+try:
+    from transformers.modeling_flash_attention_utils import _flash_attention_forward
+except ImportError:
+    _flash_attention_forward = None
 
 from .configuration_chameleon import ChameleonConfig, ChameleonVQVAEConfig
 
@@ -278,15 +282,19 @@ class ChameleonAttention(nn.Module):
     # copied from transformers.models.llama.modeling_llama.LlamaAttention._init_rope with Llama->Chameleon
     # TODO(joao): add me back asap :)
     def _init_rope(self):
-        if self.config.rope_scaling is None:
+        rope_scaling = self.config.rope_scaling
+        if isinstance(rope_scaling, dict) and rope_scaling.get("rope_type") == "default":
+            rope_scaling = None
+
+        if rope_scaling is None:
             self.rotary_emb = ChameleonRotaryEmbedding(
                 self.head_dim,
                 max_position_embeddings=self.max_position_embeddings,
                 base=self.rope_theta,
             )
         else:
-            scaling_type = self.config.rope_scaling["type"]
-            scaling_factor = self.config.rope_scaling["factor"]
+            scaling_type = rope_scaling["type"]
+            scaling_factor = rope_scaling["factor"]
             if scaling_type == "linear":
                 self.rotary_emb = ChameleonLinearScalingRotaryEmbedding(
                     self.head_dim,
@@ -402,6 +410,12 @@ class ChameleonFlashAttention2(ChameleonAttention):
             raise ValueError(
                 "`static` cache implementation is not compatible with `attn_implementation==flash_attention_2` "
                 "make sure to use `sdpa` in the mean time, and open an issue at https://github.com/huggingface/transformers"
+            )
+        if _flash_attention_forward is None:
+            raise ImportError(
+                "flash_attention_2 requires a newer transformers version that provides "
+                "`transformers.modeling_flash_attention_utils`. "
+                "Please use attn_implementation='sdpa' or upgrade transformers."
             )
 
         output_attentions = False
