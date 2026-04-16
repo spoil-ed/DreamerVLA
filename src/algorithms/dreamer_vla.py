@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 import torch
+import torch.nn.functional as F
 from omegaconf import DictConfig
 from torch import nn
+from torch.distributions import Normal
 
 from src.algorithms.ppo_grpo import (
     compute_group_relative_advantages,
@@ -337,3 +339,152 @@ def run_actor_ppo_updates(
         step_metrics["update_idx"] = float(update_idx)
         metrics.append(step_metrics)
     return metrics
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dreamer-style actor-critic with imagined rollouts
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_lambda_returns(
+    rewards: list[torch.Tensor],  # H tensors, each [B]
+    values: list[torch.Tensor],   # H+1 tensors (includes bootstrap at H), each [B]
+    gamma: float,
+    lam: float,
+) -> torch.Tensor:                # [H, B]
+    """λ-return: G_t = r_t + γ[(1-λ)V(s_{t+1}) + λ G_{t+1}].
+
+    Setting λ=1 recovers a pure discounted Monte-Carlo return bootstrapped by
+    the last value estimate; setting λ=0 gives a 1-step TD return.
+    """
+    H = len(rewards)
+    ret = values[H]           # bootstrap from the last critic estimate [B]
+    returns: list[torch.Tensor] = []
+    for t in reversed(range(H)):
+        ret = rewards[t] + gamma * ((1.0 - lam) * values[t + 1] + lam * ret)
+        returns.append(ret)
+    returns.reverse()
+    return torch.stack(returns, dim=0)  # [H, B]
+
+
+def imagine_actor_critic_step(
+    policy: nn.Module,
+    world_model: nn.Module,
+    critic: nn.Module,
+    actor_optimizer: torch.optim.Optimizer,
+    critic_optimizer: torch.optim.Optimizer,
+    obs: Mapping[str, Any],
+    device: torch.device,
+    algorithm_cfg: DictConfig,
+    optim_cfg: DictConfig,
+) -> dict[str, float]:
+    """One Dreamer-style actor-critic update using WM imagination.
+
+    Training flow
+    ─────────────
+    1. Encode real obs → WM latent state (detached; no grad back to encoder).
+    2. Imagine H steps:
+         policy samples action from latent feature (reparameterised → grad)
+         WM dynamics predict next latent (detached; no grad through backbone)
+         WM reward head scores (state, action, next_state) → grad through action
+    3. Critic estimates V(s_t) for each imagined state → bootstrap λ-returns.
+    4. Actor loss  = −E[γᵗ · G_t^λ] + entropy bonus.
+    5. Critic loss =  MSE(V(s_t), stop_grad(G_t^λ)).
+
+    Note: gradients flow through the WM *reward head* only (not the transition
+    backbone). This keeps memory bounded and avoids back-propagating through
+    the large causal transformer for H steps.
+    """
+    horizon = int(algorithm_cfg.imagination_horizon)
+    gamma = float(algorithm_cfg.gamma)
+    lam = float(algorithm_cfg.lam)
+    entropy_coef = float(algorithm_cfg.get("entropy_coef", 0.0))
+    grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
+    zero_grad = bool(optim_cfg.get("zero_grad_set_to_none", True))
+
+    # ── 1. Initial latent state (no gradient back to encoder / WM encoder) ─
+    world_model.eval()
+    policy.train()
+    critic.train()
+
+    with torch.no_grad():
+        hidden = embed_observation(policy, move_mapping_to_device(obs, device))
+        if isinstance(hidden, torch.Tensor):
+            hidden = hidden.detach()
+        initial_latent = world_model.encode_latent(hidden)
+
+    current_feat = initial_latent.feature().detach()  # [B, latent_dim+deter_dim]
+
+    # ── 2. H-step imagination ─────────────────────────────────────────────
+    feats: list[torch.Tensor] = [current_feat]
+    rewards: list[torch.Tensor] = []
+    entropies: list[torch.Tensor] = []
+
+    for _ in range(horizon):
+        # Actor: sample action with reparameterisation (grad flows here)
+        action, _, extra = policy.sample_action_from_embedding(current_feat, deterministic=False)
+
+        if entropy_coef > 0.0 and extra.get("std") is not None:
+            dist = Normal(extra["mean"], extra["std"])
+            entropies.append(dist.entropy().sum(dim=-1))   # [B]
+
+        # Dynamics: predict next state — detach action to avoid backprop
+        # through the large transition backbone
+        with torch.no_grad():
+            current_latent = world_model.encode_latent(current_feat)
+            next_latent = world_model.predict_next(current_latent, action.detach())
+            next_feat = next_latent.feature().detach()     # [B, D]
+
+        # Reward: gradient CAN flow action → reward_head → actor_loss
+        # cat([current_feat (detached), action (grad), next_feat (detached)])
+        reward = world_model.reward(current_latent, action, next_latent)  # [B]
+
+        rewards.append(reward)
+        feats.append(next_feat)
+        current_feat = next_feat
+
+    # ── 3. Critic values for bootstrap (stop_gradient from actor's perspective) ─
+    with torch.no_grad():
+        feat_stack_all = torch.stack(feats, dim=0)           # [H+1, B, D]
+        Hp1, B, D = feat_stack_all.shape
+        values_flat = critic(feat_stack_all.view(Hp1 * B, D)).view(Hp1, B)
+        values = [values_flat[t] for t in range(Hp1)]        # list of H+1 tensors [B]
+
+    # ── 4. λ-returns (gradient through rewards → action → policy) ─────────
+    returns = compute_lambda_returns(rewards, values, gamma, lam)  # [H, B]
+
+    # ── 5. Actor loss ─────────────────────────────────────────────────────
+    discount = torch.tensor(
+        [gamma ** t for t in range(horizon)],
+        device=device, dtype=returns.dtype,
+    ).unsqueeze(-1)                              # [H, 1]
+    actor_loss = -(discount * returns).mean()
+    if entropies and entropy_coef > 0.0:
+        actor_loss = actor_loss - entropy_coef * torch.stack(entropies).mean()
+
+    actor_optimizer.zero_grad(set_to_none=zero_grad)
+    actor_loss.backward()
+    actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
+    actor_optimizer.step()
+
+    # ── 6. Critic loss: fit stop_grad(λ-returns) ──────────────────────────
+    # Re-run the critic forward *with* gradient (fresh graph, no dependency on actor)
+    feat_stack_h = feat_stack_all[:-1]          # [H, B, D]  (H states)
+    H, B2, D2 = feat_stack_h.shape
+    value_preds = critic(feat_stack_h.view(H * B2, D2)).view(H, B2)  # [H, B]
+    critic_loss = F.mse_loss(value_preds, returns.detach())
+
+    critic_optimizer.zero_grad(set_to_none=zero_grad)
+    critic_loss.backward()
+    critic_grad_norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=grad_clip)
+    critic_optimizer.step()
+
+    return {
+        "actor_loss": float(actor_loss.detach().cpu()),
+        "critic_loss": float(critic_loss.detach().cpu()),
+        "returns_mean": float(returns.detach().mean().cpu()),
+        "returns_std": float(returns.detach().std().cpu()),
+        "reward_mean": float(torch.stack(rewards).detach().mean().cpu()),
+        "value_mean": float(values_flat[:-1].mean().cpu()),
+        "actor_grad_norm": float(torch.as_tensor(actor_grad_norm).detach().cpu()),
+        "critic_grad_norm": float(torch.as_tensor(critic_grad_norm).detach().cpu()),
+    }

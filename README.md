@@ -1,73 +1,132 @@
 # Dreamer-VLA
 
-test
+Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 风格 World Model 的机器人操控研究框架。核心思路：
 
-DreamerVLA is a research prototype that combines:
+- 使用 **RynnVLA** 作为多模态编码器 / 动作先验（frozen）
+- 在语义表征空间训练紧凑的 **latent world model**（TSSM）
+- 通过 **PPO 风格** Actor-Critic 在 imagination rollouts 中优化策略
+- 基于 **LIBERO** 基准的离线数据和预处理管线
 
-- `RynnVLA` as the multimodal encoder / action prior
-- a compact latent world model
-- PPO-style actor updates on imagined rollouts
-- LIBERO-based offline data and pre-encoding utilities
+> **注意**：本仓库的环境基于 [WMPO](https://github.com/WM-PO/WMPO) 和 [RynnVLA-002](https://github.com/alibaba-damo-academy/RynnVLA-002) 修改而来，数据集也沿用 RynnVLA-002 的数据处理流程。下面的安装文档会完整覆盖从零搭建环境的全部步骤。
 
-## Status
+---
 
-The repository currently includes:
+## 目录
 
-- a runnable training scaffold
-- a `RynnVLAEncoder` wrapper
-- LIBERO dataset loaders
-- pre-encoding scripts for single-GPU and multi-GPU preprocessing
-- a preencode world-model training path
+- [项目结构](#项目结构)
+- [环境配置](#环境配置)
+  - [1. 创建 Conda 环境](#1-创建-conda-环境)
+  - [2. 安装 PyTorch](#2-安装-pytorch)
+  - [3. 安装本仓库](#3-安装本仓库)
+  - [4. 安装 requirements.txt 依赖](#4-安装-requirementstxt-依赖)
+  - [5. 安装 egl_probe（从源码）](#5-安装-egl_probe从源码)
+  - [6. 安装 flash-attn（从 wheel）](#6-安装-flash-attn从-wheel)
+  - [7. 安装 ColossalAI / TensorNVMe / APEX](#7-安装-colossalai--tensornvme--apex)
+  - [8. 安装 LIBERO](#8-安装-libero)
+  - [9. 环境验证](#9-环境验证)
+- [模型权重下载](#模型权重下载)
+  - [1. 下载 Chameleon 基础权重](#1-下载-chameleon-基础权重)
+  - [2. 下载 RynnVLA-002 VLA / World Model 权重](#2-下载-rynnvla-002-vla--world-model-权重)
+  - [3. 验证权重文件](#3-验证权重文件)
+- [数据集下载与预处理](#数据集下载与预处理)
+  - [1. 下载 LIBERO 数据集](#1-下载-libero-数据集)
+  - [2. 数据预处理管线](#2-数据预处理管线)
+  - [3. 一键预处理](#3-一键预处理)
+- [路径配置](#路径配置)
+- [Preencode vs Pretokenize 说明](#preencode-vs-pretokenize-说明)
+- [训练](#训练)
+  - [VLA SFT 训练](#vla-sft-训练)
+  - [World Model 训练](#world-model-训练)
+  - [VLA + World Model 联合训练](#vla--world-model-联合训练)
+  - [Dreamer-VLA 完整训练](#dreamer-vla-完整训练)
+- [评估](#评估)
+- [已知问题与排错](#已知问题与排错)
 
-The codebase still assumes several local external assets, so the main setup work is making the paths, datasets, and checkpoints line up on your machine.
+---
 
-## Repository Layout
+## 项目结构
 
 ```text
 DreamerVLA/
-├── configs/
-├── data/
-├── docs/
-├── LIBERO/
-├── scripts/
-├── src/
-├── download.sh
-├── install.md
-└── pyproject.toml
+├── configs/                        # 实验配置 (Hydra YAML)
+│   ├── pretokenize_sft_libero_10.yaml
+│   ├── pretokenize_wm_libero_10.yaml
+│   ├── pretokenize_vla_libero_10.yaml
+│   ├── dreamer_vla_libero_10.yaml
+│   └── ...
+├── data/                           # 运行时数据（不入 git）
+│   ├── ckpts/                      # 模型权重
+│   ├── configs/                    # 预处理生成的训练配置
+│   ├── libero/                     # LIBERO 原始数据集
+│   ├── processed_data/             # 预处理中间产物
+│   └── outputs/                    # 训练输出（checkpoint, log）
+├── docs/                           # 技术文档
+├── LIBERO/                         # LIBERO 基准本地 checkout
+├── scripts/                        # 训练 / 预处理 / 评估脚本
+│   ├── train.py                    # 训练入口
+│   ├── eval_libero.py              # LIBERO 评估
+│   ├── prepare_data.sh             # 一键数据预处理
+│   ├── pretokenize_train_vla.sh    # VLA 训练
+│   ├── pretokenize_train_wm.sh     # World Model 训练
+│   ├── pretokenize_train_vla_wm.sh # 联合训练
+│   └── preprocess/                 # 各步骤预处理脚本
+├── src/                            # 源代码
+│   ├── algorithms/                 # Dreamer-VLA, PPO/GRPO
+│   ├── dataloader/                 # 数据集加载器
+│   ├── env/                        # LIBERO 环境封装
+│   ├── models/                     # 模型定义
+│   │   ├── chameleon_model/        # Chameleon 视觉语言模型
+│   │   ├── encoder/                # RynnVLA 编码器封装
+│   │   ├── world_model/            # TSSM World Model
+│   │   ├── critic/                 # Critic 网络
+│   │   └── vla_policy.py           # Actor 策略网络
+│   ├── preprocess/                 # 数据预处理逻辑
+│   ├── trainer/                    # 分布式训练器
+│   ├── utils/                      # 工具函数
+│   ├── workspace/                  # 实验 Workspace
+│   └── xllmx/                      # 外部 LLM 集成模块
+├── download.sh                     # 权重下载脚本
+├── pyproject.toml                  # 包配置
+├── requirements.txt                # Python 依赖
+└── README.md                       # 本文件
 ```
 
-Key directories:
+---
 
-- `configs/`: experiment configs and machine-specific external paths
-- `data/`: local outputs such as downloaded checkpoints and preencode shards
-- `LIBERO/`: local LIBERO checkout used by the dataloaders
-- `scripts/`: runnable entrypoints such as pre-encoding
-- `src/`: models, dataloaders, workspaces, and training logic
+## 环境配置
 
-## Installation
+### 系统要求
 
-This repo is light on pinned dependencies, so the safest path is to create a dedicated conda environment first and then install the missing runtime packages explicitly.
+- Linux（推荐 Ubuntu 20.04+）
+- NVIDIA GPU（CUDA 12.x，推荐 H100 / H800 / A100）
+- Python 3.11.x
+- Conda（用于管理虚拟环境）
 
-### 1. Create the environment
+### 1. 创建 Conda 环境
 
 ```bash
-conda create -n wmpo python=3.11 -y
-conda activate wmpo
+conda create -n dreamervla python=3.11 -y
+conda activate dreamervla
 ```
 
-### 2. Install PyTorch
+### 2. 安装 PyTorch
 
-For CUDA 12.4:
+针对 CUDA 12.4：
 
 ```bash
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
 ```
 
-If your cluster image already provides a matching PyTorch build, keep that instead, but make sure `torch.cuda.is_available()` is `True` inside the target environment.
+安装后验证：
 
-### 3. Install this repository
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+```
 
-From the project root:
+确保输出 `2.5.1 True N`（N 为 GPU 数量）。
+
+### 3. 安装本仓库
 
 ```bash
 cd /home/user01/yuxinglei/workspace/DreamerVLA
@@ -75,214 +134,477 @@ pip install --upgrade pip setuptools wheel
 pip install -e .
 ```
 
-`pyproject.toml` currently only declares the minimal package dependencies:
+`pyproject.toml` 仅声明了 `hydra-core` 和 `omegaconf` 两个最小依赖，完整运行时依赖在下一步安装。
 
-- `hydra-core`
-- `omegaconf`
-
-You will still need extra runtime packages used by the actual training and preprocessing code.
-
-### 4. Install runtime dependencies
-
-At minimum, install:
+### 4. 安装 requirements.txt 依赖
 
 ```bash
-pip install h5py numpy tqdm transformers==4.40.1 sentencepiece huggingface_hub
+pip install -r requirements.txt
 ```
 
-If you use image or dataset utilities, you may also need:
+此文件中包含了绝大部分运行时依赖，包括但不限于：
+
+| 类别 | 关键包 |
+|------|--------|
+| 深度学习 | `xformers==v0.0.28.post3`, `diffusers==0.33.0`, `timm==0.9.10`, `peft==0.11.0` |
+| 数据处理 | `h5py`, `numpy==1.26.4`, `opencv-python`, `tensorflow==2.19.0` |
+| 分布式 | `ray[default]`, `tensordict` |
+| 仿真 | `mujoco`, `PyOpenGL==3.1.9` |
+| 日志 | `wandb` |
+| Tokenizer | `tokenizers==0.19.1`, `transformers`（另需单独指定版本，见下） |
+
+> **注意**：本仓库中 Chameleon 模型代码已 patch 为使用 `sdpa` 替代 flash-attention 的新版 import，因此与 `transformers==4.40.1` 兼容。如需指定 transformers 版本：
+> ```bash
+> pip install transformers==4.40.1
+> ```
+> 如果升级 transformers 版本，务必在长时间多 GPU 训练之前重新测试编码器加载。
+
+### 5. 安装 egl_probe（从源码）
+
+`egl_probe` 在 `pip install` 时经常失败，推荐从 WMPO 仓库的本地源码安装。
+
+**问题**：`egl_probe/CMakeLists.txt` 使用了 `cmake_minimum_required(VERSION 2.8.12)`，新版 cmake 已不再兼容 `< 3.5`。
+
+**解决方法**：
 
 ```bash
-pip install pillow opencv-python einops
+# 如果 WMPO 仓库中有 dependencies/egl_probe 目录，则从那里安装
+cd /home/user01/yuxinglei/workspace/WMPO/dependencies/egl_probe
+
+# 修复 cmake 版本要求
+sed -i 's/cmake_minimum_required(VERSION 2.8.12)/cmake_minimum_required(VERSION 3.5)/' \
+    egl_probe/CMakeLists.txt
+
+# 安装
+python -m pip install --no-build-isolation .
+
+# 验证
+python -c "import egl_probe; print(egl_probe.__file__)"
 ```
 
-Notes:
+如果输出 `site-packages/egl_probe` 下的路径，说明安装成功。
 
-- The local Chameleon code in this repo has been patched to work with `transformers==4.40.1` by falling back to `sdpa` instead of requiring the newer flash-attention utility import.
-- If you choose to upgrade `transformers`, re-test encoder loading before launching a long multi-GPU run.
+### 6. 安装 flash-attn（从 wheel）
 
-## LIBERO Setup
+**不推荐**直接 `pip install flash-attn`（编译极慢且容易失败）。推荐从 [flash-attention GitHub Releases](https://github.com/Dao-AILab/flash-attention/releases?page=1) 下载匹配的预编译 wheel。
 
-This repository expects LIBERO data in HDF5 format and also includes a local `LIBERO/` checkout.
+首先确认环境信息：
 
-### 1. Install LIBERO in editable mode
+```bash
+python -c "import torch; print(torch.__version__); print(torch.compiled_with_cxx11_abi())"
+```
+
+根据输出选择对应的 wheel。例如 `torch==2.5.1 + CUDA 12 + cxx11_abi=False + Python 3.11`：
+
+```bash
+wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post1/flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+pip install flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+```
+
+> **提示**：如果不安装 flash-attn，本仓库的 Chameleon 代码会自动 fallback 到 `sdpa`，不影响功能但可能影响速度。
+
+### 7. 安装 ColossalAI / TensorNVMe / APEX
+
+如果你需要使用这些组件（WMPO 的某些训练路径需要）：
+
+```bash
+# ColossalAI
+pip install colossalai
+
+# TensorNVMe（如果 WMPO 仓库中有 dependencies/TensorNVMe）
+cd /home/user01/yuxinglei/workspace/WMPO/dependencies/TensorNVMe
+pip install -e .
+
+# NVIDIA APEX（从源码编译）
+cd /home/user01/yuxinglei/workspace/WMPO/dependencies
+git clone https://github.com/NVIDIA/apex.git
+cd apex
+pip install -v --no-build-isolation .
+```
+
+### 8. 安装 LIBERO
+
+本仓库自带一个 LIBERO 的本地 checkout（位于 `LIBERO/` 目录），已修复了上游的 editable-install 问题（[Issue #31](https://github.com/Lifelong-Robot-Learning/LIBERO/issues/31)）。
+
+#### 安装
 
 ```bash
 cd /home/user01/yuxinglei/workspace/DreamerVLA/LIBERO
 python -m pip install --no-build-isolation -e .
 ```
 
-This repo includes the packaging fix for the common editable-install issue where `pip install -e .` appears to succeed but `import libero` fails outside the repository root.
+#### 验证
 
-### 2. Verify the install
+在非仓库目录下测试 import：
 
 ```bash
 cd /tmp
 python -c "import libero; print(libero.__path__)"
 ```
 
-### 3. Confirm dataset location
+如果输出正常路径（而非 `ModuleNotFoundError`），则安装成功。
 
-The current dataset config file is [rynnvla_libero_object.yaml](/home/user01/yuxinglei/workspace/DreamerVLA/configs/rynnvla_libero_object.yaml), which points to:
+#### 系统级依赖
+
+LIBERO 的仿真渲染需要 OpenGL 相关系统库：
 
 ```bash
-/home/yuxinglei/workspace/2026nips/RynnVLA-002/LIBERO/libero/datasets
+sudo apt install libgl1 libopengl0 libgl1-mesa-dri libgl1-mesa-glx libosmesa6-dev libosmesa6 ffmpeg
 ```
 
-On a new machine, this path will usually be wrong. Update `META.raw_data_dir` in that config to your real LIBERO dataset directory before running preprocessing.
+#### LIBERO 配置文件
 
-## Downloading Weights
+LIBERO 使用全局配置文件指定数据集路径：
 
-The encoder code expects local checkpoint files under `data/ckpts/`. In particular, [rynnvla_encoder.py](/home/user01/yuxinglei/workspace/DreamerVLA/src/models/encoder/rynnvla_encoder.py) defaults to:
+```bash
+cat ~/.libero/config.yaml
+```
 
-- `data/ckpts/starting_point`
-- `data/ckpts/chameleon/base_model`
-- `data/ckpts/chameleon/tokenizer/text_tokenizer.json`
-- `data/ckpts/chameleon/tokenizer/vqgan.yaml`
-- `data/ckpts/chameleon/tokenizer/vqgan.ckpt`
+确保其中 `datasets:` 字段指向你实际的数据集目录。
 
-### 1. Log in to Hugging Face
+### 9. 环境验证
+
+完成上述所有步骤后，运行以下检查：
+
+```bash
+cd /home/user01/yuxinglei/workspace/DreamerVLA
+
+# 基础环境
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+
+# Python 依赖
+python -c "import h5py, hydra, omegaconf, transformers; print('python deps ok')"
+
+# 编码器 import
+python -c "from src.models.encoder.rynnvla_encoder import RynnVLAEncoder; print('encoder import ok')"
+
+# LIBERO
+python -c "import libero; print('libero ok')"
+
+# （可选）flash-attn
+python -c "import flash_attn; print(flash_attn.__version__)"
+```
+
+如果前四项全部通过，说明环境已就绪。
+
+---
+
+## 模型权重下载
+
+### 前置：登录 Hugging Face
 
 ```bash
 huggingface-cli login
-```
-
-Or, if you prefer:
-
-```bash
+# 或
 hf auth login
 ```
 
-### 2. Download model assets
+### 1. 下载 Chameleon 基础权重
 
-The repository contains a helper script at [download.sh](/home/user01/yuxinglei/workspace/DreamerVLA/download.sh). It currently downloads from:
+这些权重来自 `Alibaba-DAMO-Academy/WorldVLA`，包括 tokenizer、base model 和 starting point：
 
-- `Alibaba-DAMO-Academy/RynnVLA-002`
+```bash
+CKPT_DIR=/home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts
 
-Run it from the repo root:
+# Chameleon Tokenizer（text_tokenizer.json, vqgan.yaml, vqgan.ckpt）
+hf download Alibaba-DAMO-Academy/WorldVLA \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/chameleon/tokenizer" \
+  --include "chameleon/tokenizer/*"
+
+# Chameleon Base Model
+hf download Alibaba-DAMO-Academy/WorldVLA \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/chameleon/base_model" \
+  --include "base_model/*"
+
+# Starting Point Checkpoint
+hf download Alibaba-DAMO-Academy/WorldVLA \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/starting_point" \
+  --include "chameleon/starting_point/*"
+
+# Lumina-mGPT-7B-768 Tokenizer
+hf download Alpha-VLLM/Lumina-mGPT-7B-768 \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/models--Alpha-VLLM--Lumina-mGPT-7B-768"
+```
+
+### 2. 下载 RynnVLA-002 VLA / World Model 权重
+
+```bash
+CKPT_DIR=/home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts
+
+# VLA 模型权重（256 分辨率，libero_10）
+hf download Alibaba-DAMO-Academy/RynnVLA-002 \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/VLA_model_256/libero_10" \
+  --include "VLA_model_256/libero_10/*"
+
+# Action World Model 权重（512 分辨率，libero_10）
+hf download Alibaba-DAMO-Academy/RynnVLA-002 \
+  --repo-type model \
+  --local-dir "${CKPT_DIR}/Action_World_model_512/libero_10" \
+  --include "Action_World_model_512/libero_10/*"
+```
+
+也可以直接使用仓库自带脚本（需要先确认路径正确）：
 
 ```bash
 cd /home/user01/yuxinglei/workspace/DreamerVLA
 bash download.sh
 ```
 
-Before running it, double-check the target directories inside `download.sh`. The script currently mixes `data/ckpts/` and `data/ckpt/`, so you may want to standardize those paths if your downstream code expects everything under `data/ckpts/`.
+### 3. 验证权重文件
 
-### 3. Verify expected files exist
+确保以下目录结构存在：
 
-At minimum, verify that the paths referenced by the encoder are present:
-
-```bash
-ls data/ckpts
-ls data/ckpts/chameleon
+```text
+data/ckpts/
+├── chameleon/
+│   ├── base_model/
+│   └── tokenizer/
+│       ├── text_tokenizer.json
+│       ├── vqgan.yaml
+│       └── vqgan.ckpt
+├── starting_point/
+├── models--Alpha-VLLM--Lumina-mGPT-7B-768/
+├── VLA_model_256/
+│   └── libero_10/
+└── Action_World_model_512/
+    └── libero_10/
 ```
 
-If your downloaded checkpoints live somewhere else, either:
+快速检查：
 
-- move or symlink them into `data/ckpts/`, or
-- update the defaults in [rynnvla_encoder.py](/home/user01/yuxinglei/workspace/DreamerVLA/src/models/encoder/rynnvla_encoder.py)
+```bash
+ls data/ckpts/chameleon/tokenizer/
+ls data/ckpts/VLA_model_256/libero_10/
+ls data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/
+```
 
-## Machine-Specific Paths
+如果权重下载到了其他位置，可以创建软链接或修改 `configs/` 下 YAML 中的路径。
 
-Two configs contain absolute paths that usually need editing on a fresh machine:
+---
 
-- [base.yaml](/home/user01/yuxinglei/workspace/DreamerVLA/configs/base.yaml)
-- [rynnvla_libero_object.yaml](/home/user01/yuxinglei/workspace/DreamerVLA/configs/rynnvla_libero_object.yaml)
+## 数据集下载与预处理
 
-Check and update:
+### 1. 下载 LIBERO 数据集
 
-- `paths.rynnvla_root`
-- `paths.dreamerv3_root`
-- `META.raw_data_dir`
+LIBERO 数据集为 HDF5 格式。推荐使用 Hugging Face 源下载：
 
-If these still point to `/home/yuxinglei/...`, preprocessing or training will fail even if the Python environment is correct.
+```bash
+cd /home/user01/yuxinglei/workspace/DreamerVLA/LIBERO/benchmark_scripts
 
-## Preencode vs Pretokenize (Important)
+# 下载全部数据集（libero_goal, libero_spatial, libero_object, libero_100）
+python download_libero_datasets.py --datasets all --use-huggingface
 
-`preencode` 和 `pretokenize` 是两个完全不同的流程，不要混用：
+# 或只下载特定子集
+python download_libero_datasets.py --datasets libero_goal --use-huggingface
+```
 
-- `preencode`：先跑视觉语言编码器，离线保存连续特征（`obs_embedding / next_obs_embedding / action / action_mask / reward`），主要给 world model 训练使用。
-- `pretokenize`：离线保存离散 token 序列（`input_ids / labels`），主要给 VLA 的 token-level SFT 使用。
+默认下载到 `LIBERO/libero/datasets/` 目录下。也可以通过 `--download-dir` 指定其他路径。
 
-对应的数据与训练入口也不同：
+> **提示**：如果已经在 RynnVLA-002 仓库中下载过 LIBERO 数据集，可以直接创建软链接而无需重复下载：
+> ```bash
+> ln -s /home/user01/yuxinglei/workspace/RynnVLA-002/LIBERO/libero/datasets \
+>       /home/user01/yuxinglei/workspace/DreamerVLA/data/libero/datasets
+> ```
 
-- `preencode` 数据集与训练：`src/dataloader/preencode_sft_dataset.py` + `src/workspace/preencode_sft_workspace.py`（或启用 world model 的 `pretokenize_sft_workspace.py` 分支）。
-- `pretokenize` 数据集与训练：`src/dataloader/pretokenize_dataset.py` + `src/workspace/pretokenize_sft_workspace.py`（tokenized SFT 分支）。
+### 2. 数据预处理管线
 
-判断规则（最实用）：
+DreamerVLA 沿用 RynnVLA-002 的数据预处理流程，分为以下五步：
 
-- batch 里是 `obs_embedding/...` 这类连续特征，就是 `preencode` 路径。
-- batch 里是 `input_ids/labels`，就是 `pretokenize` 路径。
+**Step 1 — 过滤 no-op 动作**
 
-TSSM world model（pretokenize 命名）推荐入口：
+从原始 HDF5 中移除无操作帧：
 
-- 配置：`configs/pretokenize_tssm_world_model_libero_10.yaml`
-- 脚本：`scripts/pretokenize_tssm_world_model_fsdp.sh`
-- 测试脚本：`scripts/pretokenize_tssm_world_model_fsdp_test.sh`
+```bash
+LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 \
+  bash scripts/preprocess/processed_data_no_op.sh
+```
 
-## Pre-encoding Workflow
+输出目录：`data/processed_data/libero_goal_no_noops_t_256/`
 
-The pre-encoding step computes encoder embeddings in advance for world-model training.
+**Step 2 — 提取图像 / 动作 / 状态**
 
-### Quick test
+将 HDF5 数据拆分为独立的图像、动作和机器人状态文件：
 
-Use the small test script first:
+```bash
+LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 \
+  bash scripts/preprocess/processed_data_save_img_action_state_wrist.sh
+```
+
+输出目录：`data/processed_data/libero_goal_image_state_action_t_256/`
+
+**Step 3 — 生成对话 JSON**
+
+将图像/动作/状态组织为训练所需的对话格式（包含 `<|state|>`, `<|image|>`, `<|action|>` 等特殊 token）：
+
+```bash
+LIBERO_TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+  bash scripts/preprocess/processed_data_generate_convs.sh
+```
+
+输出目录：`data/processed_data/convs/`
+
+**Step 4 — Pretokenize + 合并 manifest**
+
+将对话 JSON 预先编码为 token 序列，并合并为单一 manifest 文件：
+
+```bash
+TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+  bash scripts/preprocess/processed_data_pretokenize.sh
+```
+
+输出目录：`data/processed_data/tokens/` 和 `data/processed_data/concate_tokens/`
+
+**Step 5 — 生成训练配置 YAML**
+
+自动生成 pretokenize 和 nopretokenize 两种训练配置：
+
+```bash
+LIBERO_TASK_SUITE=libero_goal TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+  bash scripts/preprocess/prepare_train_configs.sh
+```
+
+输出目录：`data/configs/libero_goal/`
+
+### 3. 一键预处理
+
+上述五步可以用一条命令完成：
 
 ```bash
 cd /home/user01/yuxinglei/workspace/DreamerVLA
-GPU_ID=0 MAX_SAMPLES=64 ./scripts/preencode_test.sh
+bash scripts/prepare_data.sh
 ```
 
-### Full run on one GPU
+通过环境变量覆盖默认参数：
 
 ```bash
+LIBERO_TASK_SUITE=libero_10 IMAGE_RESOLUTION=256 ACTION_HORIZON=10 TASK_NAME=10 \
+  bash scripts/prepare_data.sh
+```
+
+---
+
+## 路径配置
+
+本仓库在配置文件中使用了绝对路径，在新机器上**必须手动修改**。需要检查和更新的文件：
+
+| 文件 | 需更新的字段 |
+|------|-------------|
+| `configs/pretokenize_sft_libero_10.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.config_path` |
+| `configs/pretokenize_wm_libero_10.yaml` | 同上，外加 `world_model.pretrained_model_path` |
+| `configs/dreamer_vla_libero_10.yaml` | 同上 |
+
+通用规则：将所有 `/home/user01/yuxinglei/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
+
+---
+
+## Preencode vs Pretokenize 说明
+
+这是两个**完全不同**的数据流程，不要混用：
+
+| | Preencode | Pretokenize |
+|---|-----------|-------------|
+| **含义** | 预先跑 VLA 编码器，保存连续特征 | 预先保存离散 token 序列 |
+| **输出** | `obs_embedding`, `action`, `reward` 等连续张量 | `input_ids`, `labels` 等 token ID |
+| **用途** | World Model 训练 | VLA token-level SFT 训练 |
+| **数据集** | `preencode_sft_dataset.py` | `pretokenize_dataset.py` |
+| **Workspace** | `preencode_sft_workspace.py` | `pretokenize_sft_workspace.py` |
+
+**判断规则**：batch 里是 `obs_embedding` 等连续特征 → preencode；是 `input_ids/labels` → pretokenize。
+
+---
+
+## 训练
+
+所有训练脚本使用 `torchrun` 进行分布式训练，配合 Hydra 读取 YAML 配置。
+
+### VLA SFT 训练
+
+基于 pretokenize 数据的 VLA 监督微调：
+
+```bash
+conda activate dreamervla
 cd /home/user01/yuxinglei/workspace/DreamerVLA
-GPU_ID=0 ./scripts/preencode.sh
+
+# 默认 8 GPU
+bash scripts/pretokenize_train_vla.sh
+
+# 自定义 GPU 数量和配置
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=pretokenize_sft_libero_10 \
+  bash scripts/pretokenize_train_vla.sh
 ```
 
-### Full run on 8 GPUs
+### World Model 训练
+
+TSSM World Model 单独训练：
 
 ```bash
+# 默认 4 GPU
+bash scripts/pretokenize_train_wm.sh
+
+# 自定义
+NUM_GPUS=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 CONFIG_NAME=pretokenize_wm_libero_10 \
+  bash scripts/pretokenize_train_wm.sh
+```
+
+### VLA + World Model 联合训练
+
+```bash
+bash scripts/pretokenize_train_vla_wm.sh
+```
+
+### Dreamer-VLA 完整训练
+
+包含 World Model 训练阶段和 Actor-Critic imagination 训练阶段：
+
+```bash
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=dreamer_vla_libero_10 \
+  bash scripts/pretokenize_train_wm.sh
+```
+
+配置中可通过 `training.run_wm_phase` 和 `training.run_actor_critic_phase` 控制单阶段或双阶段运行。
+
+---
+
+## 评估
+
+在 LIBERO 环境中对训练好的 VLA checkpoint 进行 rollout 评估：
+
+```bash
+conda activate dreamervla
 cd /home/user01/yuxinglei/workspace/DreamerVLA
-NUM_GPUS=8 ./scripts/preencode.sh
+
+python scripts/eval_libero.py \
+    --ckpt_path data/outputs/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \
+    --task_suite libero_goal \
+    --num_episodes 10 \
+    --device cuda:0
 ```
 
-Or specify exact GPU IDs:
+---
 
-```bash
-cd /home/user01/yuxinglei/workspace/DreamerVLA
-GPU_IDS="0 1 2 3 4 5 6 7" ./scripts/preencode.sh
-```
+## 已知问题与排错
 
-How the multi-GPU script works:
+### 常见问题
 
-- it splits the dataset into `N` partitions
-- launches one process per GPU
-- writes outputs into `part_00`, `part_01`, ...
-- merges them into a single top-level `manifest.pt`
+| 问题 | 解决方案 |
+|------|---------|
+| `ModuleNotFoundError: No module named 'h5py'` | `pip install h5py` |
+| `ModuleNotFoundError: No module named 'libero'` | 重新按 [安装 LIBERO](#8-安装-libero) 步骤执行 editable install |
+| LIBERO import 成功但数据集找不到 | 检查 `~/.libero/config.yaml` 中的 `datasets:` 路径 |
+| flash-attn 编译失败 | 按 [第 6 步](#6-安装-flash-attn从-wheel) 使用预编译 wheel，或直接跳过（代码会 fallback 到 sdpa） |
+| 训练启动时路径报错 | 检查 `configs/` 中的绝对路径是否已更新为当前机器路径 |
+| `cmake_minimum_required` 版本报错 | 按 [第 5 步](#5-安装-egl_probe从源码) 修复 CMakeLists.txt |
+| `egl_probe` 安装失败 | 确保系统已安装 `libgl1`, `libosmesa6-dev` 等 OpenGL 依赖 |
+| `import torch` 报 CUDA 不可用 | 检查 NVIDIA 驱动和 CUDA 版本是否与 PyTorch build 匹配 |
 
-If one rank fails, inspect:
+### 环境兼容性说明
 
-```bash
-data/preencode/.../part_00.log
-```
-
-## Known Issues
-
-- `h5py` is required for dataset loading. If it is missing, preprocessing will fail with `ModuleNotFoundError: No module named 'h5py'`.
-- The machine may expose `H100` rather than `H800`; the current scripts are fine for either as long as CUDA is visible.
-- The project contains several historical absolute paths from another machine. Expect to update configs before the first successful run.
-- Weight layout is not fully standardized yet. The downloader and the encoder defaults should be kept consistent.
-
-## Minimal Sanity Checks
-
-After setup, these are the most useful quick checks:
-
-```bash
-cd /home/user01/yuxinglei/workspace/DreamerVLA
-python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
-python -c "import h5py, hydra, omegaconf, transformers; print('python deps ok')"
-python -c "from src.models.encoder.rynnvla_encoder import RynnVLAEncoder; print('encoder import ok')"
-```
-
-If all three pass, your environment is usually in good shape to start debugging data paths and checkpoint paths rather than Python packaging.
+- 本仓库在 H100 / H800 上均测试通过，只要 `nvidia-smi` 和 `torch.cuda.is_available()` 正常即可。
+- `transformers` 版本推荐 `4.40.1`，更高版本可能导致 Chameleon 模型加载异常。
+- `numpy` 推荐 `1.26.4`，2.x 版本与部分依赖不兼容。
+- 如果安装 `xformers` 时报版本冲突，确保 PyTorch 版本严格为 `2.5.1`。
