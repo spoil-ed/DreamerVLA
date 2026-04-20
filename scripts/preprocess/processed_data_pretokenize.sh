@@ -13,6 +13,8 @@ IMG_NAMES=(${IMG_NAMES:-imgs_third_view imgs_wrist})
 
 cd "$ROOT_DIR/src/preprocess"
 
+PREPROCESS_GPU_DEVICES="${PREPROCESS_GPU_DEVICES:-0,1,2,3}"
+
 python pretoken_state_action_model.py \
     --task "$TASK_NAME" \
     --resolution "$IMAGE_RESOLUTION" \
@@ -23,7 +25,8 @@ python pretoken_state_action_model.py \
     --num_procs "$PRETOKENIZE_PROCS" \
     --tokenizer_path "$TOKENIZER_PATH" \
     --in_filename_dir "$PROCESSED_DATA_ROOT/convs" \
-    --out_root "$PROCESSED_DATA_ROOT/tokens"
+    --out_root "$PROCESSED_DATA_ROOT/tokens" \
+    --gpu_devices "$PREPROCESS_GPU_DEVICES"
 
 bash concate_record_libero.sh "$PROCESSED_DATA_ROOT/tokens"
 

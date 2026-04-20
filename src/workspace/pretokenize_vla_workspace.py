@@ -12,6 +12,7 @@ import hydra
 import numpy as np
 import torch
 import tqdm
+from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from torch.utils.data import DataLoader
@@ -20,6 +21,7 @@ from transformers import GenerationConfig
 from src.dataloader import BaseDataset
 from src.trainer import NopretokenizeSFTDistributedHelper
 from src.utils.checkpoint_util import TopKCheckpointManager
+from src.utils.ema import EMAHelper
 from src.utils.optim import build_optimizer
 from src.utils.seed import set_seed
 from src.workspace.base_workspace import BaseWorkspace
@@ -52,6 +54,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         set_seed(int(self.config.seed) + self.rank)
         self.encoder = None
         self.vla_optimizer = None
+        self.vla_ema: EMAHelper | None = None
 
     # ---- path helpers ----
 
@@ -467,7 +470,27 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             raise ValueError("`optim.vla` must be configured.")
         self.vla_optimizer = build_optimizer(self.encoder, vla_optim_cfg)
 
+        # configure ema
+        if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.vla_ema is None:
+            self.vla_ema = EMAHelper(
+                self.encoder,
+                decay=float(OmegaConf.select(cfg, "ema.decay", default=0.9999)),
+                update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
+            )
+
+        # resume training
         self.resume(cfg)
+
+        # configure lr scheduler
+        lr_scheduler = get_scheduler(
+            str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant")),
+            optimizer=self.vla_optimizer,
+            num_warmup_steps=int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)),
+            num_training_steps=(
+                len(train_dataloader) * int(cfg.training.num_epochs)
+            ) // int(cfg.training.gradient_accumulate_every),
+            last_epoch=self.global_step - 1,
+        )
 
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, "checkpoints"),
@@ -537,6 +560,12 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                             self.vla_optimizer.zero_grad(
                                 set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
                             )
+                            lr_scheduler.step()
+
+                            # update ema
+                            if self.vla_ema is not None:
+                                self.vla_ema.step(self.encoder)
+
                             train_vla_losses.append(float(vla_raw_loss.item()))
                             train_vla_token_losses.append(float(vla_loss_dict["token_loss"].item()))
                             train_vla_action_losses.append(float(vla_loss_dict["action_loss"].item()))
@@ -545,6 +574,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                                 "train_vla_loss": float(vla_raw_loss.item()),
                                 "train_vla_token_loss": float(vla_loss_dict["token_loss"].item()),
                                 "train_vla_action_loss": float(vla_loss_dict["action_loss"].item()),
+                                "lr": float(lr_scheduler.get_last_lr()[0]),
                             }
                             reduced = self.distributed.reduce_mean_dict(local_step_metrics)
                             step_log = {**reduced, "global_step": self.global_step, "epoch": self.epoch}

@@ -359,8 +359,29 @@ class TSSMWorldModel(nn.Module):
         """
         return self.compute_loss_dict(batch)
 
+    @torch.no_grad()
+    def predict_next_hidden(
+        self,
+        hidden: torch.Tensor,
+        action: torch.Tensor,
+    ) -> torch.Tensor:
+        """Single-step inference helper (for eval/visualisation).
 
-from .causal_transformer import CausalTransformerCell
+        Composes encode_latent -> predict_next -> transition_head so callers can
+        stay agnostic to which TSSM variant they hold.
+        """
+        first_param = next(self.parameters())
+        device, dtype = first_param.device, first_param.dtype
+        hidden = hidden.to(device=device, dtype=dtype)
+        action = action.to(device=device, dtype=dtype)
+        if action.ndim == 2:
+            action = action.unsqueeze(1)
+        latent = self.encode_latent(hidden)
+        prior_next = self.predict_next(latent, action)
+        return self.transition_head(prior_next.feature())
+
+
+from .causal_transformer import CausalTransformerCell, LLMBackboneCell
 
 __all__ = ["TSSMState", "TSSMWorldModel", "CausalTransformerCell", "TSSMWorldModelTransDreamer"]
 
@@ -428,6 +449,15 @@ class TSSMWorldModelTransDreamer(nn.Module):
         kl_loss_coef: float = 1.0,
         transition_loss_coef: float = 1.0,
         reward_loss_coef: float = 0.0,
+        use_pretrained_backbone: bool = False,
+        pretrained_model_path: str | None = None,
+        freeze_transition_backbone: bool = True,
+        backbone_dtype: str = "bfloat16",
+        transition_time_horizon: int | None = None,
+        image_decoder_enabled: bool = False,
+        n_image_tokens: int = 256,
+        image_decoder_hidden_dim: int = 1024,
+        image_decoder_loss_coef: float = 0.0,
     ) -> None:
         super().__init__()
         self.obs_dim = int(hidden_dim)
@@ -440,6 +470,9 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self.kl_loss_coef = float(kl_loss_coef)
         self.transition_loss_coef = float(transition_loss_coef)
         self.reward_loss_coef = float(reward_loss_coef)
+        self.image_decoder_enabled = bool(image_decoder_enabled)
+        self.n_image_tokens = int(n_image_tokens)
+        self.image_decoder_loss_coef = float(image_decoder_loss_coef)
 
         # ── Posterior encoder: q(z_t | o_t), each frame independently ──────
         # TransDreamer: post_stoch_mlp  (modules_transformer.py:290)
@@ -460,13 +493,30 @@ class TSSMWorldModelTransDreamer(nn.Module):
 
         # ── Causal Transformer: h_t = Transformer(z_{0:t-1}, a_{0:t-1}) ────
         # TransDreamer: self.cell = Transformer(cfg)  (modules_transformer.py:259)
-        self.causal_transformer = CausalTransformerCell(
-            d_model=d_model,
-            n_heads=n_heads,
-            n_layers=n_layers,
-            d_ff=d_ff,
-            dropout=dropout,
-        )
+        # Two backends with identical [B,T,d_model]->[B,T,d_model] interface:
+        #   use_pretrained_backbone=False : CausalTransformerCell (random init)
+        #   use_pretrained_backbone=True  : LLMBackboneCell wrapping a Chameleon ckpt
+        if use_pretrained_backbone:
+            if not pretrained_model_path:
+                raise ValueError(
+                    "use_pretrained_backbone=True requires pretrained_model_path to be set."
+                )
+            self.causal_transformer = LLMBackboneCell(
+                pretrained_model_path=pretrained_model_path,
+                d_model=d_model,
+                action_dim=action_dim,
+                time_horizon=transition_time_horizon,
+                backbone_dtype=backbone_dtype,
+                freeze=freeze_transition_backbone,
+            )
+        else:
+            self.causal_transformer = CausalTransformerCell(
+                d_model=d_model,
+                n_heads=n_heads,
+                n_layers=n_layers,
+                d_ff=d_ff,
+                dropout=dropout,
+            )
 
         # ── Prior head: p(z_t | h_t) ────────────────────────────────────────
         # TransDreamer: prior_stoch_mlp  (modules_transformer.py:299)
@@ -493,6 +543,21 @@ class TSSMWorldModelTransDreamer(nn.Module):
             nn.GELU(),
             nn.Linear(reward_hidden_dim, 1),
         )
+
+        # ── Image decoder head (optional) ───────────────────────────────────
+        # Maps predicted next pooled hidden [obs_dim] → per-image-token hiddens
+        # [n_image_tokens, obs_dim]. Pure latent path: NO current-frame shortcut.
+        # Output will be projected through the frozen LLM lm_head by the viz
+        # code to produce image-token logits → VQGAN pixels.
+        if self.image_decoder_enabled:
+            self.image_decoder = nn.Sequential(
+                nn.LayerNorm(self.obs_dim),
+                nn.Linear(self.obs_dim, image_decoder_hidden_dim),
+                nn.GELU(),
+                nn.Linear(image_decoder_hidden_dim, self.n_image_tokens * self.obs_dim),
+            )
+        else:
+            self.image_decoder = None
 
     # ── Distribution helpers ─────────────────────────────────────────────────
 
@@ -587,6 +652,7 @@ class TSSMWorldModelTransDreamer(nn.Module):
         action_seq: torch.Tensor,          # [B, T, action_dim]
         reward_seq: torch.Tensor | None = None,  # [B, T]
         done_seq:   torch.Tensor | None = None,  # [B, T]
+        next_image_hiddens_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok, obs_dim]
     ) -> dict[str, torch.Tensor]:
         """
         TransDreamer-style sequence loss.
@@ -670,6 +736,24 @@ class TSSMWorldModelTransDreamer(nn.Module):
             reward_target = torch.zeros_like(predicted_reward)
         reward_loss = F.mse_loss(predicted_reward, reward_target)
 
+        # ── Step 6: image-decoder loss (optional, pure-latent) ───────────────
+        # Decode predicted next pooled hidden into per-image-token hiddens
+        # and MSE against the ground-truth next frame's image-token hiddens.
+        # No current-frame tokens are fed in — everything flows through the
+        # WM latent, so viz quality directly measures WM capacity.
+        image_decoder_loss = predicted_next_hidden.new_zeros(())
+        if (
+            self.image_decoder is not None
+            and next_image_hiddens_target is not None
+        ):
+            Bp, Tm1, _ = predicted_next_hidden.shape
+            decoded = self.image_decoder(predicted_next_hidden)            # [B, T-1, n_img_tok*obs_dim]
+            decoded = decoded.view(Bp, Tm1, self.n_image_tokens, self.obs_dim)
+            target = next_image_hiddens_target.to(
+                device=decoded.device, dtype=decoded.dtype
+            ).detach()
+            image_decoder_loss = F.mse_loss(decoded, target)
+
         # ── Total loss ───────────────────────────────────────────────────────
         loss = (
             self.transition_loss_coef * transition_loss
@@ -677,34 +761,156 @@ class TSSMWorldModelTransDreamer(nn.Module):
         )
         if self.reward_loss_coef > 0:
             loss = loss + self.reward_loss_coef * reward_loss
+        if self.image_decoder is not None and self.image_decoder_loss_coef > 0:
+            loss = loss + self.image_decoder_loss_coef * image_decoder_loss
 
         return {
-            "loss":              loss,
-            "kl_loss":           kl_loss,
-            "dyn_kl":            dyn_kl,
-            "rep_kl":            rep_kl,
-            "transition_loss":   transition_loss,
-            "reward_loss":       reward_loss,
+            "loss":                loss,
+            "kl_loss":             kl_loss,
+            "dyn_kl":              dyn_kl,
+            "rep_kl":              rep_kl,
+            "transition_loss":     transition_loss,
+            "reward_loss":         reward_loss,
+            "image_decoder_loss":  image_decoder_loss,
         }
 
     def compute_loss_dict(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        """FSDP entry point. Expects batch keys: obs_embedding_seq, action_seq."""
-        hidden_seq = batch["obs_embedding_seq"]
-        action_seq = batch["action_seq"]
-        reward_seq = batch.get("reward_seq")
-        done_seq   = batch.get("done_seq")
+        """FSDP entry point.
 
+        Accepts either native sequence inputs
+            obs_embedding_seq: [B, T, obs_dim]
+            action_seq:        [B, T, action_dim]
+        or the current pretokenize single-transition format
+            obs_embedding:      [B, obs_dim]
+            next_obs_embedding: [B, obs_dim]
+            action:             [B, H, action_dim]  (action chunk of length H)
+
+        When the single-transition format is supplied, a T=2 pseudo-sequence
+        is constructed: hidden = [obs, next_obs], action = [0, mean_H(action)].
+        This matches the minimal A1 adapter: the causal Transformer still runs,
+        but on a 1-step history; upgrading to real multi-step sequences is the
+        A3 direction (dataset rework).
+        """
         first_param = next(self.parameters())
         device, dtype = first_param.device, first_param.dtype
 
-        hidden_seq = hidden_seq.to(device=device, dtype=dtype)
-        action_seq = action_seq.to(device=device, dtype=dtype)
-        if reward_seq is not None:
-            reward_seq = reward_seq.to(device=device, dtype=dtype)
-        if done_seq is not None:
-            done_seq = done_seq.to(device=device, dtype=dtype)
+        if "obs_embedding_seq" in batch and "action_seq" in batch:
+            hidden_seq = batch["obs_embedding_seq"].to(device=device, dtype=dtype)
+            action_seq = batch["action_seq"].to(device=device, dtype=dtype)
+            reward_seq = batch.get("reward_seq")
+            done_seq   = batch.get("done_seq")
+            if reward_seq is not None:
+                reward_seq = reward_seq.to(device=device, dtype=dtype)
+            if done_seq is not None:
+                done_seq = done_seq.to(device=device, dtype=dtype)
+            next_image_hiddens_target = batch.get("next_image_hiddens_seq")
+            if next_image_hiddens_target is not None:
+                next_image_hiddens_target = next_image_hiddens_target.to(device=device, dtype=dtype)
+            return self.pretrain_loss(
+                hidden_seq, action_seq, reward_seq, done_seq,
+                next_image_hiddens_target=next_image_hiddens_target,
+            )
 
-        return self.pretrain_loss(hidden_seq, action_seq, reward_seq, done_seq)
+        if "obs_embedding" not in batch or "next_obs_embedding" not in batch:
+            raise ValueError(
+                "TSSMWorldModelTransDreamer expects either "
+                "(obs_embedding_seq, action_seq) or "
+                "(obs_embedding, next_obs_embedding, action) in the batch."
+            )
+
+        obs = batch["obs_embedding"].to(device=device, dtype=dtype)
+        next_obs = batch["next_obs_embedding"].to(device=device, dtype=dtype)
+        action = batch["action"].to(device=device, dtype=dtype)
+
+        # action may be [B, H, A] chunk or [B, A] single step
+        if action.ndim == 3:
+            action_mask = batch.get("action_mask")
+            if action_mask is not None:
+                mask = action_mask.to(device=device, dtype=action.dtype).unsqueeze(-1)
+                action = action * mask
+                denom = mask.sum(dim=1).clamp_min(1.0)
+                action_step = action.sum(dim=1) / denom
+            else:
+                action_step = action.mean(dim=1)
+        else:
+            action_step = action
+
+        hidden_seq = torch.stack([obs, next_obs], dim=1)                # [B, 2, obs_dim]
+        action_seq = torch.stack(
+            [torch.zeros_like(action_step), action_step], dim=1
+        )                                                                # [B, 2, action_dim]
+
+        reward = batch.get("reward")
+        reward_seq = None
+        if reward is not None:
+            reward = reward.to(device=device, dtype=dtype)
+            if reward.ndim == 1:
+                reward = reward.unsqueeze(-1)
+            reward_zero = torch.zeros_like(reward)
+            reward_seq = torch.stack([reward_zero, reward], dim=1).squeeze(-1)
+
+        # Optional per-image-token target for the image_decoder head.
+        # Shape [B, n_img_tok, obs_dim] → [B, T-1=1, n_img_tok, obs_dim].
+        next_image_hiddens_target = None
+        raw_img = batch.get("next_obs_image_hiddens")
+        if raw_img is not None:
+            next_image_hiddens_target = raw_img.to(device=device, dtype=dtype).unsqueeze(1)
+
+        return self.pretrain_loss(
+            hidden_seq, action_seq, reward_seq, None,
+            next_image_hiddens_target=next_image_hiddens_target,
+        )
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         return self.compute_loss_dict(batch)
+
+    @torch.no_grad()
+    def predict_next_hidden(
+        self,
+        hidden: torch.Tensor,
+        action: torch.Tensor,
+    ) -> torch.Tensor:
+        """Single-step inference helper used for eval/visualisation.
+
+        Mirrors the forward path through one step of the TransDreamer pipeline:
+        posterior on the current frame -> causal Transformer with one token ->
+        prior -> transition_head producing the predicted next LLM hidden.
+
+        Args:
+            hidden: [B, obs_dim]            current frame pooled hidden
+            action: [B, action_dim] or [B, H, action_dim] chunk (averaged)
+
+        Returns:
+            [B, obs_dim]  predicted next pooled hidden.
+        """
+        first_param = next(self.parameters())
+        device, dtype = first_param.device, first_param.dtype
+        hidden = hidden.to(device=device, dtype=dtype)
+        action = action.to(device=device, dtype=dtype)
+        if action.ndim == 3:
+            action = action.mean(dim=1)
+
+        stats = self.obs_to_stoch(hidden)                             # [B, 2*latent]
+        _, _, post_stoch = self._stats_to_dist(stats)                  # [B, latent]
+
+        token_input = torch.cat([post_stoch, action], dim=-1).unsqueeze(1)  # [B, 1, L+A]
+        token_seq = self.act_stoch_emb(token_input)                    # [B, 1, d_model]
+        h_seq = self.causal_transformer(token_seq)                     # [B, 1, d_model]
+
+        prior_stats = self.prior_head(h_seq)
+        _, _, prior_stoch = self._stats_to_dist(prior_stats)           # [B, 1, latent]
+
+        post_feature = torch.cat([h_seq, prior_stoch], dim=-1)         # [B, 1, d_model+latent]
+        return self.transition_head(post_feature).squeeze(1)           # [B, obs_dim]
+
+    @torch.no_grad()
+    def decode_pooled_to_image_hiddens(self, pooled: torch.Tensor) -> torch.Tensor:
+        """Project a predicted pooled hidden [B, obs_dim] to per-image-token
+        hiddens [B, n_image_tokens, obs_dim]. Only valid when image_decoder_enabled.
+        """
+        if self.image_decoder is None:
+            raise RuntimeError("image_decoder is not enabled on this WM.")
+        first_param = next(self.image_decoder.parameters())
+        x = pooled.to(device=first_param.device, dtype=first_param.dtype)
+        decoded = self.image_decoder(x)
+        return decoded.view(-1, self.n_image_tokens, self.obs_dim)

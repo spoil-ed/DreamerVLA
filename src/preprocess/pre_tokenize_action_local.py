@@ -15,6 +15,7 @@ import copy
 from src.preprocess.convertsation import Conversation
 from src.preprocess.item_processor import FlexARItemProcessor_Action
 from src.preprocess.paths import DEFAULT_TOKENIZER_PATH
+from src.preprocess.pre_tokenize_action_state_local import build_wm_action_mask, ensure_next_obs
 
 
 class ItemProcessor(FlexARItemProcessor_Action):
@@ -123,13 +124,23 @@ if __name__ == "__main__":
         default=str(DEFAULT_TOKENIZER_PATH),
     )
     parser.add_argument("--target_size", type=int, default=512)
+    parser.add_argument(
+        "--image_views_per_frame",
+        type=int,
+        default=2,
+        help=(
+            "Number of image views per frame (e.g. third_view + wrist = 2). "
+            "Used to pick the *current* frame's view paths out of a history "
+            "observation when deriving next_obs."
+        ),
+    )
     args = parser.parse_args()
 
     item_processor = ItemProcessor(target_size=args.target_size, tokenizer=args.tokenizer)
 
     with open(args.in_filename) as f:
         ori_contents = json.load(f)
-    
+
     num = len(ori_contents)
 
     splits = args.splits
@@ -144,43 +155,78 @@ if __name__ == "__main__":
         with open(os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "r") as f:
             start_idx = int(f.read()) + 1
         print(f"resume from {start_idx}")
-    except:
+    except Exception:
         start_idx = num_per_rank * rank
         print(f"start from {start_idx}")
 
     end_idx = min(num_per_rank * (rank + 1), len(ori_contents))
+    derived_count = 0
     for i in range(start_idx, end_idx):
         if i % 10 == 0:
-            print(f"{i}/{end_idx}")
+            print(f"{i}/{end_idx}  (next_obs derived so far: {derived_count})")
 
         record = None
         pkl_path = os.path.join(save_dir, f"{i}.pkl")
         try:
-            tokens, labels = item_processor.process_item(ori_contents[i], training_mode=True)
-            wm_obs_input_ids, wm_next_obs_input_ids = _build_wm_token_sequences(ori_contents[i], item_processor)
+            raw_item = ori_contents[i]
+
+            original_next_obs = raw_item.get("next_obs")
+            patched_next_obs = ensure_next_obs(
+                raw_item,
+                image_views_per_frame=args.image_views_per_frame,
+            )
+            if (not isinstance(original_next_obs, dict)
+                or not (list((original_next_obs or {}).get("image", []) or [])
+                        or list((original_next_obs or {}).get("state", []) or []))):
+                if patched_next_obs.get("image") or patched_next_obs.get("state"):
+                    derived_count += 1
+            raw_item["next_obs"] = patched_next_obs
+
+            full_horizon = int(patched_next_obs.get("full_horizon", len(raw_item.get("action", []) or [])))
+            effective_horizon = int(patched_next_obs.get("effective_horizon", full_horizon))
+            if effective_horizon <= 0:
+                with open(os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "w") as f:
+                    if i == end_idx - 1:
+                        f.write("finished")
+                    else:
+                        f.write(f"{i}")
+                continue
+            wm_action_mask = build_wm_action_mask(effective_horizon, full_horizon)
+
+            tokens, labels = item_processor.process_item(raw_item, training_mode=True)
+            wm_obs_input_ids, wm_next_obs_input_ids = _build_wm_token_sequences(raw_item, item_processor)
             meta = {
-                "task_name": ori_contents[i].get("task_name"),
-                "task_text": ori_contents[i].get("task_text"),
-                "prompt_text": ori_contents[i].get("prompt_text"),
-                "num_images": len(ori_contents[i].get("image", [])),
-                "num_actions": len(ori_contents[i].get("action", [])),
-                "num_states": len(ori_contents[i].get("state", [])),
-                "reward": ori_contents[i].get("reward"),
-                "next_obs": ori_contents[i].get("next_obs"),
+                "task_name": raw_item.get("task_name"),
+                "task_text": raw_item.get("task_text"),
+                "prompt_text": raw_item.get("prompt_text"),
+                "num_images": len(raw_item.get("image", [])),
+                "num_actions": len(raw_item.get("action", [])),
+                "num_states": len(raw_item.get("state", [])),
+                "num_next_images": len(patched_next_obs.get("image", [])),
+                "num_next_states": len(patched_next_obs.get("state", [])),
+                "reward": raw_item.get("reward"),
+                "next_obs": patched_next_obs,
+                "next_obs_derived": original_next_obs != patched_next_obs,
+                "effective_horizon": effective_horizon,
+                "full_horizon": full_horizon,
+                "is_eot_padded": effective_horizon < full_horizon,
             }
             new_item = {
                 "token": tokens,
                 "label": labels,
                 "id": i,
                 "meta": meta,
-                "task_name": ori_contents[i].get("task_name"),
-                "image": ori_contents[i].get("image", []),
-                "action": ori_contents[i].get("action", []),
-                "state": ori_contents[i].get("state", []),
-                "reward": ori_contents[i].get("reward"),
-                "next_obs": ori_contents[i].get("next_obs"),
+                "task_name": raw_item.get("task_name"),
+                "image": raw_item.get("image", []),
+                "action": raw_item.get("action", []),
+                "state": raw_item.get("state", []),
+                "reward": raw_item.get("reward"),
+                "next_obs": patched_next_obs,
                 "wm_obs_input_ids": wm_obs_input_ids,
                 "wm_next_obs_input_ids": wm_next_obs_input_ids,
+                "wm_action_mask": wm_action_mask,
+                "effective_horizon": effective_horizon,
+                "full_horizon": full_horizon,
             }
             with open(pkl_path, "wb") as f:
                 pickle.dump(new_item, f)
@@ -190,11 +236,11 @@ if __name__ == "__main__":
                 "len": len(tokens),
                 "id": i,
                 "meta": meta,
-                "reward": ori_contents[i].get("reward"),
-                "next_obs": ori_contents[i].get("next_obs"),
+                "reward": raw_item.get("reward"),
+                "next_obs": patched_next_obs,
             }
 
-        except Exception as e:
+        except Exception:
             from traceback import format_exc
 
             print(f"item {i} error: \n{ori_contents[i]}")
@@ -210,3 +256,5 @@ if __name__ == "__main__":
                 f.write("finished")
             else:
                 f.write(f"{i}")
+
+    print(f"rank {rank}: done. derived next_obs for {derived_count} samples out of {end_idx - start_idx}.")

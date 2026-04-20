@@ -14,33 +14,25 @@ from src.preprocess.paths import DEFAULT_CONVS_DIR, DEFAULT_TOKENIZER_PATH, DEFA
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def run_script(rank, all_ranks, resolution, in_filename_path, out_dir, with_state, tokenizer_path): # 添加 task 参数
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % 4)
-    print(f"Starting running on {rank}.")
+def run_script(rank, all_ranks, resolution, in_filename_path, out_dir, with_state, tokenizer_path, image_views_per_frame, gpu_pool): # 添加 task 参数
+    # gpu_pool is the list of *physical* GPU indices the launcher was told to
+    # use (defaults to [0,1,2,3] for backwards compatibility). Each worker
+    # pins itself to one GPU via round-robin over that pool.
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_pool[rank % len(gpu_pool)])
+    print(f"Starting running on rank={rank}, CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}.")
 
     script_name = "pre_tokenize_action_state_local.py" if with_state else "pre_tokenize_action_local.py"
     script_path = SCRIPT_DIR / script_name
-    if with_state:
-        os.system(
-            f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script_path))} "
-            f"--splits={all_ranks} "
-            f"--rank={rank} "
-            f"--in_filename {shlex.quote(str(in_filename_path))} "
-            f"--out_dir {shlex.quote(str(out_dir))} "
-            f"--tokenizer {shlex.quote(str(tokenizer_path))} "
-            f"--target_size {resolution}"
-        )
-
-    else:
-        os.system(
-            f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script_path))} "
-            f"--splits={all_ranks} "
-            f"--rank={rank} "
-            f"--in_filename {shlex.quote(str(in_filename_path))} "
-            f"--out_dir {shlex.quote(str(out_dir))} "
-            f"--tokenizer {shlex.quote(str(tokenizer_path))} "
-            f"--target_size {resolution}"
-        )
+    os.system(
+        f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script_path))} "
+        f"--splits={all_ranks} "
+        f"--rank={rank} "
+        f"--in_filename {shlex.quote(str(in_filename_path))} "
+        f"--out_dir {shlex.quote(str(out_dir))} "
+        f"--tokenizer {shlex.quote(str(tokenizer_path))} "
+        f"--target_size {resolution} "
+        f"--image_views_per_frame {int(image_views_per_frame)}"
+    )
     
 
 
@@ -78,6 +70,16 @@ if __name__ == "__main__":
         '--num_procs', type=int, default=32,
         help='Number of worker processes for tokenization.'
     )
+    parser.add_argument(
+        '--gpu_devices',
+        type=str,
+        default=os.environ.get("PREPROCESS_GPU_DEVICES", "0,1,2,3"),
+        help=(
+            "Comma-separated physical GPU indices to pin workers to, round-robin. "
+            "Defaults to env var PREPROCESS_GPU_DEVICES, else '0,1,2,3'. "
+            "Use e.g. '4,5,6,7' when GPUs 0-3 are busy with training."
+        ),
+    )
 
     # 3. 解析命令行参数
     args = parser.parse_args()
@@ -91,6 +93,16 @@ if __name__ == "__main__":
     in_filename_dir = Path(args.in_filename_dir)
     out_root = Path(args.out_root)
 
+    # Each frame contributes one image path per view (e.g. third_view + wrist = 2).
+    # The launcher forwards this count to the workers so they can slice the
+    # *current* frame out of a history observation when deriving next_obs.
+    image_views_per_frame = max(len(args.img_names), 1)
+
+    gpu_pool = [int(x) for x in str(args.gpu_devices).split(",") if x.strip() != ""]
+    if not gpu_pool:
+        gpu_pool = [0, 1, 2, 3]
+    print(f"Worker GPU pool: {gpu_pool}")
+
     for data_t in data_type:
 
         in_filename_path = in_filename_dir / f'libero_{args.task}_his_{args.his}_{data_t}_{img_item}_{state_item}_{args.len_action}_{args.resolution}.json'
@@ -100,7 +112,20 @@ if __name__ == "__main__":
         all_ranks = args.num_procs
         for i in range(all_ranks):
             # 将解析到的 task 传递给 run_script 函数
-            p = Process(target=run_script, args=(i, all_ranks, args.resolution, in_filename_path, out_dir, args.with_state, args.tokenizer_path))
+            p = Process(
+                target=run_script,
+                args=(
+                    i,
+                    all_ranks,
+                    args.resolution,
+                    in_filename_path,
+                    out_dir,
+                    args.with_state,
+                    args.tokenizer_path,
+                    image_views_per_frame,
+                    gpu_pool,
+                ),
+            )
             p.start()
             processes.append(p)
 

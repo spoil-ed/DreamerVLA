@@ -26,6 +26,7 @@ from typing import Any
 import hydra
 import torch
 import tqdm
+from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
@@ -36,6 +37,7 @@ from src.algorithms.dreamer_vla import (
 from src.dataloader import BaseDataset
 from src.trainer import NopretokenizeSFTDistributedHelper
 from src.utils.checkpoint_util import TopKCheckpointManager
+from src.utils.ema import EMAHelper
 from src.utils.optim import build_optimizer
 from src.utils.seed import set_seed
 from src.utils.torch_utils import freeze_module
@@ -82,6 +84,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.policy_optimizer = None
         self.critic_optimizer = None
         self.world_model_optimizer = None
+        self.world_model_ema: EMAHelper | None = None
 
     # ──────────────────────────────────────────────────────────────────────
     # Path helpers
@@ -295,13 +298,41 @@ class DreamerVLAWorkspace(BaseWorkspace):
     # Main training loop
     # ──────────────────────────────────────────────────────────────────────
 
+    @torch.no_grad()
+    def evaluate_val_loss(self, val_dataloader: DataLoader, split_name: str) -> dict[str, float]:
+        if self.world_model is None:
+            return {}
+        self.world_model.eval()
+        val_losses: list[float] = []
+        val_transition_losses: list[float] = []
+        for batch in val_dataloader:
+            wm_batch = self._build_wm_pretrain_batch(batch)
+            if wm_batch is None:
+                continue
+            wm_batch = {
+                k: (v.to(self.device) if isinstance(v, torch.Tensor) else v)
+                for k, v in wm_batch.items()
+            }
+            loss_dict = self.world_model.compute_loss_dict(wm_batch)
+            val_losses.append(float(loss_dict["loss"].item()))
+            val_transition_losses.append(float(loss_dict["transition_loss"].item()))
+        self.world_model.train()
+        if not val_losses:
+            return {}
+        count = max(self.distributed.reduce_sum(len(val_losses)), 1.0)
+        metrics = {
+            f"val_{split_name}_wm_loss": self.distributed.reduce_sum(sum(val_losses)) / count,
+            f"val_{split_name}_wm_transition_loss": self.distributed.reduce_sum(sum(val_transition_losses)) / count,
+        }
+        if self.distributed.is_main_process:
+            print(f"  [Val {split_name}] " + " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+        return metrics
+
     def run(self) -> list[dict[str, float | str | int]]:  # noqa: C901
         history: list[dict[str, float | str | int]] = []
         if self.distributed.is_main_process:
             print("DreamerVLA Workspace begin.")
         cfg = copy.deepcopy(self.cfg)
-
-        self.resume(cfg)
 
         # ── dataset & dataloader ────────────────────────────────────────
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
@@ -320,6 +351,24 @@ class DreamerVLAWorkspace(BaseWorkspace):
         if callable(collate_fn):
             dataloader_kwargs["collate_fn"] = collate_fn
         train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+
+        # configure validation dataset
+        val_dataloaders: dict[str, DataLoader] = {}
+        for split_name in ("val_ind", "val_ood"):
+            val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
+            if val_ds_cfg is None:
+                continue
+            val_ds = hydra.utils.instantiate(val_ds_cfg)
+            val_dl_kwargs = dict(cfg.dataloader)
+            val_dl_kwargs["shuffle"] = False
+            val_dl_kwargs["drop_last"] = False
+            val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
+            if val_sampler is not None:
+                val_dl_kwargs["sampler"] = val_sampler
+            val_collate = getattr(val_ds, "collate_fn", None)
+            if callable(val_collate):
+                val_dl_kwargs["collate_fn"] = val_collate
+            val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
 
         # ── encoder (frozen) ────────────────────────────────────────────
         encoder_cfg = self._build_frozen_encoder_cfg(cfg)
@@ -376,6 +425,45 @@ class DreamerVLAWorkspace(BaseWorkspace):
         if critic_optim_cfg is None:
             raise ValueError("`optim.critic` must be configured.")
         self.critic_optimizer = build_optimizer(self.critic, critic_optim_cfg)
+
+        # configure ema
+        if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.world_model_ema is None:
+            self.world_model_ema = EMAHelper(
+                self.world_model,
+                decay=float(OmegaConf.select(cfg, "ema.decay", default=0.9999)),
+                update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
+            )
+
+        # resume training
+        self.resume(cfg)
+
+        # configure lr scheduler
+        lr_scheduler_name = str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant"))
+        lr_warmup_steps = int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0))
+        total_training_steps = (
+            len(train_dataloader) * int(cfg.training.num_epochs)
+        ) // int(cfg.training.gradient_accumulate_every)
+        wm_lr_scheduler = get_scheduler(
+            lr_scheduler_name,
+            optimizer=self.world_model_optimizer,
+            num_warmup_steps=lr_warmup_steps,
+            num_training_steps=total_training_steps,
+            last_epoch=self.global_step - 1,
+        )
+        policy_lr_scheduler = get_scheduler(
+            lr_scheduler_name,
+            optimizer=self.policy_optimizer,
+            num_warmup_steps=lr_warmup_steps,
+            num_training_steps=total_training_steps,
+            last_epoch=self.global_step - 1,
+        )
+        critic_lr_scheduler = get_scheduler(
+            lr_scheduler_name,
+            optimizer=self.critic_optimizer,
+            num_warmup_steps=lr_warmup_steps,
+            num_training_steps=total_training_steps,
+            last_epoch=self.global_step - 1,
+        )
 
         # ── training hyper-params ────────────────────────────────────────
         run_wm_phase = bool(OmegaConf.select(cfg, "training.run_wm_phase", default=True))
@@ -443,11 +531,18 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         device=self.device,
                                         optim_cfg=optim_cfg,
                                     )
+                                    wm_lr_scheduler.step()
+
+                                    # update ema
+                                    if self.world_model_ema is not None:
+                                        self.world_model_ema.step(self.world_model)
+
                                     epoch_wm_losses.append(wm_metrics["loss"])
                                     local_metrics["train_wm_loss"] = wm_metrics["loss"]
                                     local_metrics["train_wm_transition_loss"] = wm_metrics["transition_loss"]
                                     local_metrics["train_wm_reward_loss"] = wm_metrics["reward_loss"]
                                     local_metrics["train_wm_grad_norm"] = wm_metrics["grad_norm"]
+                                    local_metrics["wm_lr"] = float(wm_lr_scheduler.get_last_lr()[0])
                                     step_had_update = True
 
                             # ── Phase 2: Dreamer actor-critic update ───────
@@ -478,6 +573,10 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                     local_metrics["train_value_mean"] = ac_metrics["value_mean"]
                                     local_metrics["train_actor_grad_norm"] = ac_metrics["actor_grad_norm"]
                                     local_metrics["train_critic_grad_norm"] = ac_metrics["critic_grad_norm"]
+                                    policy_lr_scheduler.step()
+                                    critic_lr_scheduler.step()
+                                    local_metrics["policy_lr"] = float(policy_lr_scheduler.get_last_lr()[0])
+                                    local_metrics["critic_lr"] = float(critic_lr_scheduler.get_last_lr()[0])
                                     step_had_update = True
 
                             if not step_had_update:
@@ -530,6 +629,13 @@ class DreamerVLAWorkspace(BaseWorkspace):
                     step_log.setdefault("epoch_wm_loss", float("inf"))
                     step_log.setdefault("epoch_actor_loss", float("inf"))
                     step_log.setdefault("epoch_critic_loss", float("inf"))
+
+                    # run validation
+                    eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
+                    if val_dataloaders and (self.epoch % eval_every) == 0:
+                        for split_name, val_dl in val_dataloaders.items():
+                            step_log.update(self.evaluate_val_loss(val_dl, split_name))
+
                     train_json_logger.log(step_log)
                     history.append(dict(step_log))
 

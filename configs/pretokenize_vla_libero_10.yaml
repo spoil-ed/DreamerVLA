@@ -25,6 +25,12 @@ training:
   max_train_steps: null
   use_ema: false
   checkpoint_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+
+ema:
+  decay: 0.9999
+  update_after_step: 0
 
 init:
   vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10

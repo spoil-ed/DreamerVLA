@@ -98,6 +98,16 @@ class PretokenizeDataset(BaseDataset):
 
         wm_action = self._load_action_sequence(action)
 
+        # EOT padding mask produced by pretokenize: first `effective_horizon`
+        # action steps are real, the rest are padded (action tensor still has
+        # values there, but WM should treat them as no-op).  Older pkls without
+        # this field fall back to "all real".
+        raw_mask = payload.get("wm_action_mask") if isinstance(payload, dict) else None
+        if isinstance(raw_mask, list) and raw_mask:
+            wm_action_mask = torch.tensor([bool(x) for x in raw_mask], dtype=torch.bool)
+        else:
+            wm_action_mask = torch.ones(int(wm_action.shape[0]) if wm_action.ndim >= 1 else 0, dtype=torch.bool)
+
         return {
             "input_ids": input_ids,
             "labels": labels,
@@ -111,6 +121,7 @@ class PretokenizeDataset(BaseDataset):
             "wm_obs_input_ids": [int(x) for x in wm_obs_input_ids],
             "wm_next_obs_input_ids": [int(x) for x in wm_next_obs_input_ids],
             "wm_action": wm_action,
+            "wm_action_mask": wm_action_mask,
             "meta": meta,
             "file": str(file_path),
             "id": int(payload.get("id", record.get("id", index))),
@@ -155,6 +166,18 @@ class PretokenizeDataset(BaseDataset):
     @staticmethod
     def collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         padded_action, action_mask = PretokenizeDataset._pad_action_batch([item["wm_action"] for item in batch])
+        # AND in the per-sample EOT padding mask so WM's _apply_action_mask
+        # zeroes positions past each sample's effective_horizon.
+        if action_mask is not None:
+            max_steps = int(action_mask.shape[1])
+            for idx, item in enumerate(batch):
+                sample_mask = item.get("wm_action_mask")
+                if not isinstance(sample_mask, torch.Tensor) or sample_mask.numel() == 0:
+                    continue
+                n = min(int(sample_mask.shape[0]), max_steps)
+                action_mask[idx, :n] &= sample_mask[:n].to(action_mask.device)
+                if n < max_steps:
+                    action_mask[idx, n:] = False
         return {
             "input_ids": [list(item["input_ids"]) for item in batch],
             "labels": [list(item["labels"]) for item in batch],

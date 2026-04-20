@@ -9,12 +9,14 @@ from typing import Any
 import hydra
 import torch
 import tqdm
+from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from src.dataloader import BaseDataset
 from src.trainer import NopretokenizeSFTDistributedHelper
 from src.utils.checkpoint_util import TopKCheckpointManager
+from src.utils.ema import EMAHelper
 from src.utils.optim import build_optimizer
 from src.utils.seed import set_seed
 from src.workspace.base_workspace import BaseWorkspace
@@ -47,8 +49,10 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
         set_seed(int(self.config.seed) + self.rank)
         self.encoder = None
         self.vla_optimizer = None
+        self.vla_ema: EMAHelper | None = None
         self.world_model = None
         self.world_model_optimizer = None
+        self.world_model_ema: EMAHelper | None = None
 
     def _resolve_vla_init_path(self) -> str:
         configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
@@ -258,13 +262,49 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
         pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
         return pooled.float().detach()
 
+    @torch.no_grad()
+    def evaluate_val_loss(self, val_dataloader: DataLoader, split_name: str) -> dict[str, float]:
+        if self.encoder is not None:
+            self.encoder.eval()
+        if self.world_model is not None:
+            self.world_model.eval()
+
+        vla_losses: list[float] = []
+        wm_losses: list[float] = []
+        for batch in val_dataloader:
+            has_tokenized = isinstance(batch.get("input_ids"), list) and isinstance(batch.get("labels"), list)
+            if has_tokenized and self.encoder is not None:
+                vla_loss_dict = self.encoder.compute_action_sft_loss_from_tokenized(
+                    input_ids_list=batch["input_ids"],
+                    labels_list=batch["labels"],
+                )
+                vla_losses.append(float(vla_loss_dict["loss"].item()))
+            wm_batch = self._build_world_model_batch(batch)
+            if wm_batch is not None and self.world_model is not None:
+                wm_loss_dict = self.world_model.compute_loss_dict(wm_batch)
+                wm_losses.append(float(wm_loss_dict["loss"].item()))
+
+        if self.encoder is not None:
+            self.encoder.train()
+        if self.world_model is not None:
+            self.world_model.train()
+
+        metrics: dict[str, float] = {}
+        if vla_losses:
+            count = max(self.distributed.reduce_sum(len(vla_losses)), 1.0)
+            metrics[f"val_{split_name}_vla_loss"] = self.distributed.reduce_sum(sum(vla_losses)) / count
+        if wm_losses:
+            count = max(self.distributed.reduce_sum(len(wm_losses)), 1.0)
+            metrics[f"val_{split_name}_wm_loss"] = self.distributed.reduce_sum(sum(wm_losses)) / count
+        if metrics and self.distributed.is_main_process:
+            print(f"  [Val {split_name}] " + " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+        return metrics
+
     def run(self) -> list[dict[str, float | str | int]]:
         history: list[dict[str, float | str | int]] = []
         if self.distributed.is_main_process:
             print("Workspace begin.")
         cfg = copy.deepcopy(self.cfg)
-
-        self.resume(cfg)
 
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset), "Dataset must be an instance of BaseDataset"
@@ -282,6 +322,24 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
         if callable(collate_fn):
             dataloader_kwargs["collate_fn"] = collate_fn
         train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+
+        # configure validation dataset
+        val_dataloaders: dict[str, DataLoader] = {}
+        for split_name in ("val_ind", "val_ood"):
+            val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
+            if val_ds_cfg is None:
+                continue
+            val_ds = hydra.utils.instantiate(val_ds_cfg)
+            val_dl_kwargs = dict(cfg.dataloader)
+            val_dl_kwargs["shuffle"] = False
+            val_dl_kwargs["drop_last"] = False
+            val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
+            if val_sampler is not None:
+                val_dl_kwargs["sampler"] = val_sampler
+            val_collate = getattr(val_ds, "collate_fn", None)
+            if callable(val_collate):
+                val_dl_kwargs["collate_fn"] = val_collate
+            val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
 
         encoder_cfg = OmegaConf.select(cfg, "encoder")
         if encoder_cfg is not None:
@@ -317,6 +375,45 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
 
         if self.encoder is None and self.world_model is None:
             raise ValueError("No trainable module configured. Set at least one of `encoder` or `world_model`.")
+
+        # configure ema
+        if bool(OmegaConf.select(cfg, "training.use_ema", default=False)):
+            ema_decay = float(OmegaConf.select(cfg, "ema.decay", default=0.9999))
+            ema_update_after = int(OmegaConf.select(cfg, "ema.update_after_step", default=0))
+            if self.encoder is not None and self.vla_ema is None:
+                self.vla_ema = EMAHelper(self.encoder, decay=ema_decay, update_after_step=ema_update_after)
+            if self.world_model is not None and self.world_model_ema is None:
+                self.world_model_ema = EMAHelper(
+                    self.world_model, decay=ema_decay, update_after_step=ema_update_after
+                )
+
+        # resume training
+        self.resume(cfg)
+
+        # configure lr scheduler
+        total_training_steps = (
+            len(train_dataloader) * int(cfg.training.num_epochs)
+        ) // int(cfg.training.gradient_accumulate_every)
+        lr_scheduler_name = str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant"))
+        lr_warmup_steps = int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0))
+        vla_lr_scheduler = None
+        if self.vla_optimizer is not None:
+            vla_lr_scheduler = get_scheduler(
+                lr_scheduler_name,
+                optimizer=self.vla_optimizer,
+                num_warmup_steps=lr_warmup_steps,
+                num_training_steps=total_training_steps,
+                last_epoch=self.global_step - 1,
+            )
+        wm_lr_scheduler = None
+        if self.world_model_optimizer is not None:
+            wm_lr_scheduler = get_scheduler(
+                lr_scheduler_name,
+                optimizer=self.world_model_optimizer,
+                num_warmup_steps=lr_warmup_steps,
+                num_training_steps=total_training_steps,
+                last_epoch=self.global_step - 1,
+            )
 
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, "checkpoints"),
@@ -385,12 +482,21 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
                                 self.vla_optimizer.zero_grad(
                                     set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
                                 )
+                                if vla_lr_scheduler is not None:
+                                    vla_lr_scheduler.step()
+
+                                # update ema
+                                if self.vla_ema is not None:
+                                    self.vla_ema.step(self.encoder)
+
                                 train_vla_losses.append(float(vla_raw_loss.item()))
                                 train_vla_token_losses.append(float(vla_loss_dict["token_loss"].item()))
                                 train_vla_action_losses.append(float(vla_loss_dict["action_loss"].item()))
                                 local_step_metrics["train_vla_loss"] = float(vla_raw_loss.item())
                                 local_step_metrics["train_vla_token_loss"] = float(vla_loss_dict["token_loss"].item())
                                 local_step_metrics["train_vla_action_loss"] = float(vla_loss_dict["action_loss"].item())
+                                if vla_lr_scheduler is not None:
+                                    local_step_metrics["vla_lr"] = float(vla_lr_scheduler.get_last_lr()[0])
                                 step_had_update = True
 
                             wm_batch = self._build_world_model_batch(batch)
@@ -409,6 +515,13 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
                                 self.world_model_optimizer.zero_grad(
                                     set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
                                 )
+                                if wm_lr_scheduler is not None:
+                                    wm_lr_scheduler.step()
+
+                                # update ema
+                                if self.world_model_ema is not None:
+                                    self.world_model_ema.step(self.world_model)
+
                                 train_wm_losses.append(float(wm_raw_loss.item()))
                                 train_wm_transition_losses.append(float(wm_loss_dict["transition_loss"].item()))
                                 train_wm_kl_losses.append(float(wm_loss_dict["kl_loss"].item()))
@@ -417,6 +530,8 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
                                     wm_loss_dict["transition_loss"].item()
                                 )
                                 local_step_metrics["train_wm_kl_loss"] = float(wm_loss_dict["kl_loss"].item())
+                                if wm_lr_scheduler is not None:
+                                    local_step_metrics["wm_lr"] = float(wm_lr_scheduler.get_last_lr()[0])
                                 step_had_update = True
 
                             if not step_had_update:
@@ -473,6 +588,13 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
                         )
                     step_log.setdefault("train_vla_loss", float("inf"))
                     step_log.setdefault("train_wm_loss", float("inf"))
+
+                    # run validation
+                    eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
+                    if val_dataloaders and (self.epoch % eval_every) == 0:
+                        for split_name, val_dl in val_dataloaders.items():
+                            step_log.update(self.evaluate_val_loss(val_dl, split_name))
+
                     train_json_logger.log(step_log)
 
                     if (self.epoch % cfg.training.checkpoint_every) == 0:
