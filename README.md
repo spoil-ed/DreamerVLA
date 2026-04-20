@@ -459,6 +459,14 @@ TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
 
 输出目录：`data/processed_data/tokens/` 和 `data/processed_data/concate_tokens/`
 
+> **EOT 补全（自动发生于 Step 4）**：当 `current_frame + ACTION_HORIZON` 越过 trajectory 末尾时，管线不会丢弃该样本，而是退化到仍可达的 `effective_horizon ∈ [1, ACTION_HORIZON]`，并生成 padding 掩码。每条 pkl 新增字段：
+>
+> - `wm_action_mask`：长度为 `full_horizon` 的 `list[bool]`，前 `effective_horizon` 位为 `True`，其余 `False`
+> - `effective_horizon` / `full_horizon`：真实步数 / 期望步数
+> - `is_eot_padded`：`effective_horizon < full_horizon` 时为 `True`
+>
+> 下游消费：`PretokenizeDataset.collate_fn` 把 `wm_action_mask` 合进 batch 的 `action_mask`；World Model 在 `compute_loss_dict` 里用 `action_mask` 对 action chunk 做加权平均，**padding 位不参与训练**。源码：`src/preprocess/pre_tokenize_action_state_local.py::build_wm_action_mask / derive_next_obs_from_paths`。
+
 **Step 5 — 生成训练配置 YAML**
 
 自动生成 pretokenize 和 nopretokenize 两种训练配置：

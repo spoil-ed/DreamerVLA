@@ -12,7 +12,8 @@ logs/
 outputs/
 
 # Large local assets and third-party dependencies
-data/
+/data/
+!src/xllmx/data/
 dependencies/
 LIBERO/
 
