@@ -1,36 +1,25 @@
+# Python bytecode / build artefacts
 __pycache__/
 *.pyc
-.pytest_cache/
-.mypy_cache/
-.DS_Store
-.venv/
-venv/
+*.egg-info/
 build/
 dist/
-*.egg-info/
-logs/
-outputs/
+.pytest_cache/
+.mypy_cache/
 
-# Large local assets and third-party dependencies
-/data/
-!src/xllmx/data/
-dependencies/
+# Virtual envs / OS
+.venv/
+venv/
+.DS_Store
+
+# Third-party local checkout (installed in editable mode)
 LIBERO/
 
-# Model weights and checkpoints
-*.pt
-*.pth
-*.ckpt
-*.bin
-*.safetensors
-*.onnx
-*.npy
-*.npz
-*.h5
+# Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
+# Everything under data/ is generated or downloaded per README; nothing here is source.
+data/
 
-# Training/runtime artifacts
+# Local training / experiment logs
+train.log
 *.log
 wandb/
-tensorboard/
-runs/
-checkpoints/
