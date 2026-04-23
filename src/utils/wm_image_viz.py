@@ -231,6 +231,40 @@ class WorldModelImageVisualizer:
         return cur_pil, pred_pil
 
     @torch.no_grad()
+    def _encode_per_image_token(
+        self, input_ids_list: list[list[int]],
+    ) -> tuple[torch.Tensor, list[list[int]]]:
+        """Run VLA backbone, then index the image-block's per-token hiddens.
+        Returns ([B, N_img, C], list_of_block_ids).
+        """
+        labels_list = [[-100] * len(seq) for seq in input_ids_list]
+        _, _, _, hidden_states, _, _, _ = self.encoder.backbone(
+            input_ids=input_ids_list,
+            labels=labels_list,
+            training=True,
+            output_hidden_states=True,
+            att_mask=False,
+        )
+        per_sample: list[torch.Tensor] = []
+        block_ids_list: list[list[int]] = []
+        for idx, seq in enumerate(input_ids_list):
+            blocks = extract_image_blocks(list(seq))
+            if not blocks:
+                raise ValueError(f"viz: sample {idx} has no image block")
+            bidx = self.which_block if self.which_block >= 0 else len(blocks) + self.which_block
+            if not (0 <= bidx < len(blocks)):
+                raise ValueError(f"viz: which_block={self.which_block} out of range")
+            start, _end, block_ids = blocks[bidx]
+            pos = [
+                start + off for off, tok in enumerate(block_ids)
+                if int(tok) in self._image_bpe_set
+            ]
+            pos_t = torch.tensor(pos, device=hidden_states.device)
+            per_sample.append(hidden_states[idx].index_select(0, pos_t))
+            block_ids_list.append(block_ids)
+        return torch.stack(per_sample, dim=0).float(), block_ids_list
+
+    @torch.no_grad()
     def visualize_batch(
         self,
         world_model: Any,
@@ -243,7 +277,12 @@ class WorldModelImageVisualizer:
     ) -> list[Path]:
         """Decode up to ``num_samples`` frames from the batch and save panel strips.
 
-        Returns the list of written PNG paths so the workspace can surface them.
+        Two rendering modes depending on the WM:
+          - Route-B (spatial_codec=True): per-image-token hidden → conv stem
+            → RSSM → conv deconv → lm_head → VQGAN.  Panels: cur / gt_next /
+            pred_latent.
+          - Route-0: mean-pooled hidden path with broadcast-delta fallback
+            and optional MLP image_decoder panel.
         """
         out_dir = Path(out_dir)
         n = min(int(num_samples), len(wm_obs_input_ids), len(wm_next_obs_input_ids))
@@ -253,18 +292,134 @@ class WorldModelImageVisualizer:
         cur_ids = wm_obs_input_ids[:n]
         nxt_ids = wm_next_obs_input_ids[:n]
 
+        wm_dtype = next(world_model.parameters()).dtype
+        wm_device = next(world_model.parameters()).device
+        action_b = action[:n].to(device=wm_device, dtype=wm_dtype)
+        spatial_codec = bool(getattr(world_model, "spatial_codec", False))
+        io_mode = str(getattr(world_model, "io_mode", "hidden"))
+
+        if io_mode == "token":
+            # Token-mode viz: WM predicts image BPE ids directly.  No
+            # Chameleon forward, no lm_head — just decode gt current / gt
+            # next / pred-next token ids via VQGAN.
+            cur_block_ids = []
+            for seq in cur_ids:
+                blocks = extract_image_blocks(list(seq))
+                bidx = self.which_block if self.which_block >= 0 else len(blocks) + self.which_block
+                cur_block_ids.append(blocks[bidx][2])
+            cur_bpe = torch.tensor(
+                [
+                    [int(t) for t in block if int(t) in self._image_bpe_set]
+                    for block in cur_block_ids
+                ],
+                dtype=torch.long, device=wm_device,
+            )
+            pred_bpe = world_model.predict_next_image_token_ids(cur_bpe, action_b)  # [B, N_img]
+
+            saved: list[Path] = []
+            for i in range(n):
+                try:
+                    cur_pil = _decode_bpe_block_to_pil(
+                        cur_block_ids[i], self.bpe2vq, self.vq_model,
+                    )
+                except Exception as exc:
+                    print(f"[viz] gt_cur decode failed for sample {i}: {exc}")
+                    cur_pil = None
+                gt_next_pil = None
+                try:
+                    nxt_blocks = extract_image_blocks(nxt_ids[i])
+                    if nxt_blocks:
+                        bidx = self.which_block if self.which_block >= 0 else len(nxt_blocks) + self.which_block
+                        if 0 <= bidx < len(nxt_blocks):
+                            gt_next_pil = _decode_bpe_block_to_pil(
+                                nxt_blocks[bidx][2], self.bpe2vq, self.vq_model,
+                            )
+                except Exception as exc:
+                    print(f"[viz] gt_next decode failed for sample {i}: {exc}")
+                pred_next_pil = None
+                try:
+                    pred_ids_i = pred_bpe[i].tolist()
+                    pred_next_pil = _decode_bpe_block_to_pil(
+                        pred_ids_i, self.bpe2vq, self.vq_model,
+                    )
+                except Exception as exc:
+                    print(f"[viz] pred_next decode failed for sample {i}: {exc}")
+
+                path = out_dir / f"{tag}_sample{i:02d}.png"
+                _save_panel_strip(
+                    path,
+                    panels=[
+                        ("gt current (vq)",       cur_pil),
+                        ("gt next (vq)",          gt_next_pil),
+                        ("pred next (token)",     pred_next_pil),
+                    ],
+                )
+                saved.append(path)
+            return saved
+
+        if spatial_codec:
+            cur_img_hiddens, cur_block_ids = self._encode_per_image_token(cur_ids)
+            cur_img_hiddens_wm = cur_img_hiddens.to(device=wm_device, dtype=wm_dtype)
+            # predict_next_hidden accepts [B, N_img, C_in] under spatial_codec
+            pred_pooled_b = world_model.predict_next_hidden(cur_img_hiddens_wm, action_b)
+            pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(pred_pooled_b)
+            # Keep on lm_head's device — _decode_image_hiddens_to_pil needs
+            # to run lm_head which lives on GPU.
+            lm_device = next(self.lm_head.parameters()).device
+            pred_image_hiddens = pred_image_hiddens_b.to(device=lm_device)
+
+            saved: list[Path] = []
+            for i in range(n):
+                # gt current (from raw block ids of current frame)
+                try:
+                    cur_pil = _decode_bpe_block_to_pil(
+                        cur_block_ids[i], self.bpe2vq, self.vq_model,
+                    )
+                except Exception as exc:
+                    print(f"[viz] gt_cur decode failed for sample {i}: {exc}")
+                    cur_pil = None
+                # gt next (from raw block ids of next frame, if any)
+                gt_next_pil = None
+                try:
+                    nxt_blocks = extract_image_blocks(nxt_ids[i])
+                    if nxt_blocks:
+                        bidx = self.which_block if self.which_block >= 0 else len(nxt_blocks) + self.which_block
+                        if 0 <= bidx < len(nxt_blocks):
+                            gt_next_pil = _decode_bpe_block_to_pil(
+                                nxt_blocks[bidx][2], self.bpe2vq, self.vq_model,
+                            )
+                except Exception as exc:
+                    print(f"[viz] gt_next decode failed for sample {i}: {exc}")
+                    gt_next_pil = None
+                # predicted next from WM conv deconv
+                try:
+                    pred_latent_pil = self._decode_image_hiddens_to_pil(
+                        pred_image_hiddens[i]
+                    )
+                except Exception as exc:
+                    print(f"[viz] pred_latent decode failed for sample {i}: {exc}")
+                    pred_latent_pil = None
+
+                path = out_dir / f"{tag}_sample{i:02d}.png"
+                _save_panel_strip(
+                    path,
+                    panels=[
+                        ("gt current (vq)",    cur_pil),
+                        ("gt next (vq)",       gt_next_pil),
+                        ("pred next (latent)", pred_latent_pil),
+                    ],
+                )
+                saved.append(path)
+            return saved
+
+        # ── Route-0 legacy path ────────────────────────────────────────────
         cur_pooled, cur_full = self._encode_pooled_and_full(cur_ids)
         nxt_pooled, _ = self._encode_pooled_and_full(nxt_ids)
 
-        wm_dtype = next(world_model.parameters()).dtype
-        wm_device = next(world_model.parameters()).device
         pooled_b = cur_pooled.to(device=wm_device, dtype=wm_dtype)
-        action_b = action[:n].to(device=wm_device, dtype=wm_dtype)
         pred_pooled_b = world_model.predict_next_hidden(pooled_b, action_b)
         pred_pooled = pred_pooled_b.float().to(cur_pooled.device)
 
-        # Pure-latent decoder path (no current-frame anchor). Only available
-        # if the WM has an image_decoder head.
         pred_image_hiddens_b = None
         if getattr(world_model, "image_decoder", None) is not None:
             pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(pred_pooled_b)
@@ -277,10 +432,6 @@ class WorldModelImageVisualizer:
                 current_full_hidden=cur_full[i],
                 current_input_ids=cur_ids[i],
             )
-            # Also decode the ground-truth next frame block if it exists -- gives
-            # something for pred to be compared against on the panel. In the
-            # pretokenize data the next_obs tokens are often just a prompt with
-            # no image, in which case this panel will be None.
             gt_next_pil = None
             try:
                 nxt_blocks = extract_image_blocks(nxt_ids[i])
@@ -293,8 +444,6 @@ class WorldModelImageVisualizer:
             except Exception:
                 gt_next_pil = None
 
-            # Pure-latent decoder panel (no current-frame anchor): decode
-            # predicted per-image-token hiddens directly through lm_head.
             pred_latent_pil = None
             if pred_image_hiddens_b is not None:
                 try:

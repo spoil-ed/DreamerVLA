@@ -13,15 +13,14 @@ trainer:
 
 training:
   device: cuda:0
-  # Route-B: strided-conv encoder stem + DreamerV3 bspace deconv decoder.
-  # WM state is 1D obs_dim=1024 (learnable pool replaces mean pool).
-  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/pretokenize_wm_transdreamer_routeB
+  # Token-mode WM: input/output both operate on discrete image BPE ids.
+  # No frozen Chameleon forward per step; no lm_head borrow; CE only.
+  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/pretokenize_wm_transdreamer_token
   debug: false
   resume: false
   distributed_strategy: fsdp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: true
-  # shorter run for fast iteration on the codec + KL-floor fix
   num_epochs: 50
   gradient_accumulate_every: 1
   tqdm_interval_sec: 1.0
@@ -38,6 +37,10 @@ ema:
 init:
   vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
+# Encoder is still instantiated so we can (a) read the image-vocab mapping
+# for num_image_tokens_vocab auto-injection and _bpe_to_img_idx buffer, and
+# (b) hand VQGAN + bpe2vq to the visualiser.  In token mode it is NOT called
+# during the training forward pass.
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
@@ -52,10 +55,15 @@ encoder:
 
 world_model:
   _target_: src.models.world_model.TSSMWorldModelTransDreamer
-  # Raw VLA hidden size (what `in_channels` of the conv stem sees).
+  # ── I/O: discrete image BPE tokens ───────────────────────────────────
+  io_mode: token
+  token_embed_dim: 512
+  num_image_tokens_vocab: null     # auto-filled from encoder.vocabulary_mapping.bpe2img
+
+  # hidden_dim kept so the signature still accepts it; not used on the
+  # input side in token mode (Chameleon is bypassed).
   hidden_dim: 4096
-  in_channels: 4096
-  # WM state size after the learnable strided-conv stem (DreamerV3 / TransDreamer style).
+  in_channels: 512                # ConvEncoderStem input channels = token_embed_dim
   obs_dim: 1024
   action_dim: 7
   latent_dim: 256
@@ -64,8 +72,13 @@ world_model:
   n_layers: 4
   d_ff: 2048
   dropout: 0.1
-  # Remove the KL floor so post collapse / dyn mismatch can be observed directly.
-  free_nats: 0.0
+
+  # ── KL with proper free-bits floor (canonical TransDreamer default) ──
+  # NOTE: 1.0 is too loose for our 256-d continuous Gaussian latent — KL was
+  # pinned at the floor after ~100 steps, so prior_head / posterior got zero
+  # KL gradient for the remainder of training.  Dropped to 0.1 so the KL
+  # signal stays alive.
+  free_nats: 0.1
   kl_balance: 0.8
   kl_loss_coef: 1.0
   transition_loss_coef: 1.0
@@ -73,14 +86,15 @@ world_model:
   mapper_hidden_dim: 512
   reward_hidden_dim: 256
   min_std: 0.1
+
+  # ── Causal Transformer: reuse pretrained Chameleon WM weights ────────
   use_pretrained_backbone: true
   pretrained_model_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
   freeze_transition_backbone: false
   backbone_dtype: bfloat16
   transition_time_horizon: null
-  # ── Route-B spatial codec ─────────────────────────────────────────────
-  # Strided-conv encoder stem (TransDreamer ImgEncoder style): 16×16 → 4×4
-  # with K=4 S=2 pad=1, ELU, no norm, xavier init.
+
+  # ── Spatial codec scaffolding (stem / decoder) — shared with hidden mode
   spatial_codec: true
   spatial_grid: [16, 16]
   n_image_tokens: 256
@@ -89,9 +103,6 @@ world_model:
   stem_kernel: 4
   stem_stride: 2
   stem_padding: 1
-  # bspace conv decoder (DreamerV3 rssm.py:314-327 style).  BlockLinear
-  # unfolds the 1D deter to 4×4×mid_channels, stoch branch adds a parallel
-  # projection, then ConvTranspose 4→8→16 + 1×1 conv lifting to in_channels.
   decoder_mid_channels: 192
   decoder_bspace_groups: 8
   decoder_minres: [4, 4]
@@ -100,10 +111,12 @@ world_model:
   decoder_stride: 2
   decoder_padding: 1
   decoder_stoch_hidden: 512
-  image_decoder_enabled: true          # turned on automatically under spatial_codec
-  image_decoder_loss_coef: 1.0         # global scale on (CE + MSE) combined image-recon
-  image_recon_ce_coef: 1.0             # cross-entropy on next-frame image token ids
-  image_recon_mse_coef: 0.1            # MSE on per-image-token 4096-d hiddens
+
+  image_decoder_enabled: true
+  image_decoder_loss_coef: 1.0
+  image_recon_ce_coef: 1.0
+  # MSE is force-disabled by the WM in token mode; keep the key for symmetry.
+  image_recon_mse_coef: 0.0
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
@@ -149,6 +162,6 @@ checkpoint:
 
 viz:
   enabled: true
-  every_n_steps: 500
+  every_n_steps: 5000
   num_samples: 4
   which_block: -2

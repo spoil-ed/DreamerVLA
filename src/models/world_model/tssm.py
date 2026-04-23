@@ -12,6 +12,11 @@ from torch import nn
 from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     ChameleonXLLMXForConditionalGeneration_ck_action_head,
 )
+from src.models.world_model.image_codec import (
+    BspaceConvDecoderHead,
+    ConvEncoderStem,
+)
+from src.models.world_model.token_io import ImageTokenEmbedder
 
 
 @dataclass
@@ -458,9 +463,49 @@ class TSSMWorldModelTransDreamer(nn.Module):
         n_image_tokens: int = 256,
         image_decoder_hidden_dim: int = 1024,
         image_decoder_loss_coef: float = 0.0,
+        # ── Route-B spatial codec (strided-conv encoder + bspace deconv) ─────
+        spatial_codec: bool = False,
+        obs_dim: int | None = None,
+        in_channels: int = 4096,              # raw per-token hidden size
+        spatial_grid: tuple[int, int] = (16, 16),
+        stem_init_proj_channels: int = 384,
+        stem_stage_channels: tuple[int, ...] = (96, 192),
+        stem_kernel: int = 4,
+        stem_stride: int = 2,
+        stem_padding: int = 1,
+        decoder_mid_channels: int = 192,
+        decoder_bspace_groups: int = 8,
+        decoder_minres: tuple[int, int] = (4, 4),
+        decoder_stage_channels: tuple[int, ...] = (96, 48),
+        decoder_kernel: int = 4,
+        decoder_stride: int = 2,
+        decoder_padding: int = 1,
+        decoder_stoch_hidden: int = 512,
+        image_recon_ce_coef: float = 1.0,    # cross-entropy on token ids
+        image_recon_mse_coef: float = 0.1,   # MSE on per-token 4096-d hiddens
+        # ── Discrete-token I/O (io_mode="token") ─────────────────────────────
+        # Replaces the frozen-Chameleon-hidden I/O with a learnable image-
+        # token embedder on the input side and a direct logits head on the
+        # output side.  Share the same spatial_codec scaffolding (conv stem
+        # + bspace conv decoder) but swap the channel dims:
+        #   stem.in_channels     = token_embed_dim          (instead of 4096)
+        #   decoder.out_channels = num_image_tokens_vocab   (instead of 4096)
+        # No frozen lm_head needed; decoder output IS the image-vocab logits.
+        io_mode: str = "hidden",
+        token_embed_dim: int = 512,
+        num_image_tokens_vocab: int | None = None,
     ) -> None:
         super().__init__()
-        self.obs_dim = int(hidden_dim)
+        self.spatial_codec = bool(spatial_codec)
+        self.in_channels = int(in_channels)
+        self.spatial_grid = (int(spatial_grid[0]), int(spatial_grid[1]))
+        # `obs_dim`: WM's scalar hidden size.  Under spatial_codec it defaults
+        # to 1024 (post-stem); without the codec it equals `hidden_dim` to
+        # preserve the pre-refactor behaviour.
+        if obs_dim is None:
+            self.obs_dim = 1024 if self.spatial_codec else int(hidden_dim)
+        else:
+            self.obs_dim = int(obs_dim)
         self.action_dim = int(action_dim)
         self.latent_dim = int(latent_dim)
         self.d_model = int(d_model)
@@ -470,9 +515,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self.kl_loss_coef = float(kl_loss_coef)
         self.transition_loss_coef = float(transition_loss_coef)
         self.reward_loss_coef = float(reward_loss_coef)
-        self.image_decoder_enabled = bool(image_decoder_enabled)
+        self.image_decoder_enabled = bool(image_decoder_enabled) or self.spatial_codec
         self.n_image_tokens = int(n_image_tokens)
         self.image_decoder_loss_coef = float(image_decoder_loss_coef)
+        self.image_recon_ce_coef = float(image_recon_ce_coef)
+        self.image_recon_mse_coef = float(image_recon_mse_coef)
 
         # ── Posterior encoder: q(z_t | o_t), each frame independently ──────
         # TransDreamer: post_stoch_mlp  (modules_transformer.py:290)
@@ -544,20 +591,178 @@ class TSSMWorldModelTransDreamer(nn.Module):
             nn.Linear(reward_hidden_dim, 1),
         )
 
-        # ── Image decoder head (optional) ───────────────────────────────────
-        # Maps predicted next pooled hidden [obs_dim] → per-image-token hiddens
-        # [n_image_tokens, obs_dim]. Pure latent path: NO current-frame shortcut.
-        # Output will be projected through the frozen LLM lm_head by the viz
-        # code to produce image-token logits → VQGAN pixels.
-        if self.image_decoder_enabled:
-            self.image_decoder = nn.Sequential(
-                nn.LayerNorm(self.obs_dim),
-                nn.Linear(self.obs_dim, image_decoder_hidden_dim),
-                nn.GELU(),
-                nn.Linear(image_decoder_hidden_dim, self.n_image_tokens * self.obs_dim),
+        # ── Spatial codec (route B): strided-conv encoder stem + bspace ─────
+        # conv decoder, tied to the frozen LLM lm_head at the output edge.
+        if self.spatial_codec:
+            self.conv_stem = ConvEncoderStem(
+                in_channels=self.in_channels,
+                spatial=self.spatial_grid,
+                obs_dim=self.obs_dim,
+                init_proj_channels=stem_init_proj_channels,
+                stage_channels=tuple(stem_stage_channels),
+                kernel=stem_kernel, stride=stem_stride, padding=stem_padding,
             )
+            self.image_decoder: nn.Module | None = BspaceConvDecoderHead(
+                deter_dim=self.obs_dim,
+                stoch_dim=self.latent_dim,
+                minres=tuple(decoder_minres),
+                mid_channels=decoder_mid_channels,
+                bspace_groups=decoder_bspace_groups,
+                stage_channels=tuple(decoder_stage_channels),
+                out_channels=self.in_channels,
+                out_spatial=self.spatial_grid,
+                kernel=decoder_kernel,
+                stride=decoder_stride,
+                padding=decoder_padding,
+                stoch_hidden=decoder_stoch_hidden,
+            )
+            # Configure number of image tokens to match spatial grid.
+            self.n_image_tokens = self.spatial_grid[0] * self.spatial_grid[1]
         else:
-            self.image_decoder = None
+            self.conv_stem = None
+            # ── Legacy MLP image decoder (route-0 behaviour) ────────────────
+            # Maps predicted next pooled hidden [obs_dim] → per-image-token
+            # hiddens [n_image_tokens, obs_dim]. Pure latent path: NO
+            # current-frame shortcut.  Output will be projected through the
+            # frozen LLM lm_head by the viz code to produce image-token logits
+            # → VQGAN pixels.
+            if self.image_decoder_enabled:
+                self.image_decoder = nn.Sequential(
+                    nn.LayerNorm(self.obs_dim),
+                    nn.Linear(self.obs_dim, image_decoder_hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(image_decoder_hidden_dim, self.n_image_tokens * self.obs_dim),
+                )
+            else:
+                self.image_decoder = None
+
+        # ── io_mode="token": override stem + decoder for discrete-token I/O ──
+        self.io_mode = str(io_mode)
+        if self.io_mode not in ("hidden", "token"):
+            raise ValueError(f"io_mode must be 'hidden' or 'token', got {io_mode!r}")
+        self.token_embed_dim = int(token_embed_dim)
+        self.num_image_tokens_vocab = (
+            int(num_image_tokens_vocab) if num_image_tokens_vocab is not None else None
+        )
+
+        if self.io_mode == "token":
+            if not self.spatial_codec:
+                raise ValueError("io_mode='token' requires spatial_codec=True")
+            if self.num_image_tokens_vocab is None:
+                raise ValueError(
+                    "io_mode='token' requires num_image_tokens_vocab to be set in config"
+                )
+            self.token_embedder = ImageTokenEmbedder(
+                num_image_tokens_vocab=self.num_image_tokens_vocab,
+                d_embed=self.token_embed_dim,
+                spatial=self.spatial_grid,
+            )
+            # Stem input channels = token_embed_dim (not 4096)
+            self.conv_stem = ConvEncoderStem(
+                in_channels=self.token_embed_dim,
+                spatial=self.spatial_grid,
+                obs_dim=self.obs_dim,
+                init_proj_channels=stem_init_proj_channels,
+                stage_channels=tuple(stem_stage_channels),
+                kernel=stem_kernel, stride=stem_stride, padding=stem_padding,
+            )
+            # Decoder output = image-vocab logits (no lm_head needed downstream)
+            self.image_decoder = BspaceConvDecoderHead(
+                deter_dim=self.obs_dim,
+                stoch_dim=self.latent_dim,
+                minres=tuple(decoder_minres),
+                mid_channels=decoder_mid_channels,
+                bspace_groups=decoder_bspace_groups,
+                stage_channels=tuple(decoder_stage_channels),
+                out_channels=self.num_image_tokens_vocab,
+                out_spatial=self.spatial_grid,
+                kernel=decoder_kernel,
+                stride=decoder_stride,
+                padding=decoder_padding,
+                stoch_hidden=decoder_stoch_hidden,
+            )
+            # Token mode's CE-only training makes MSE coef moot.
+            self.image_recon_mse_coef = 0.0
+        else:
+            self.token_embedder = None
+
+        # ── Externally-attached lm_head + image_token_bpe_ids (route B only)
+        # These are used to compute CE loss over image-token logits without
+        # duplicating the (very large) LLM lm_head weights inside the WM.
+        # `attach_lm_head(...)` is called by the workspace after both the
+        # encoder and the WM are built.
+        self._lm_head_ref: list = []   # non-nn.Module container so FSDP ignores
+        self.register_buffer(
+            "image_token_bpe_ids",
+            torch.empty(0, dtype=torch.long),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_bpe_to_img_idx",
+            torch.empty(0, dtype=torch.long),
+            persistent=False,
+        )
+
+    # ── Wiring helpers ───────────────────────────────────────────────────────
+
+    def attach_lm_head(
+        self, lm_head: nn.Module | None, image_token_bpe_ids: torch.Tensor,
+        full_vocab_size: int,
+    ) -> None:
+        """Register the image-vocab mapping, and optionally a reference to the
+        (frozen) LLM lm_head for hidden-mode CE over image-token logits.
+
+        - hidden mode: pass the real lm_head — used to project decoded 4096-d
+          per-token hiddens to image-vocab logits.
+        - token mode:  pass ``lm_head=None`` — decoder already outputs logits.
+          Only the ``_bpe_to_img_idx`` buffer is needed (to map raw BPE ids in
+          inputs / CE targets to image-vocab indices).
+
+        Stored in a non-``nn.Module`` list so FSDP ignores the reference.
+        """
+        self._lm_head_ref = [lm_head] if lm_head is not None else []
+        try:
+            target_device = next(self.parameters()).device
+        except StopIteration:
+            target_device = torch.device("cpu")
+        image_token_bpe_ids = image_token_bpe_ids.to(
+            dtype=torch.long, device=target_device,
+        ).clone()
+        self.image_token_bpe_ids = image_token_bpe_ids
+        rev = torch.full(
+            (int(full_vocab_size),), -1, dtype=torch.long, device=target_device,
+        )
+        rev[image_token_bpe_ids] = torch.arange(
+            image_token_bpe_ids.numel(), dtype=torch.long, device=target_device,
+        )
+        self._bpe_to_img_idx = rev
+
+    @property
+    def has_lm_head(self) -> bool:
+        return bool(self._lm_head_ref)
+
+    @property
+    def lm_head(self) -> nn.Module | None:
+        return self._lm_head_ref[0] if self._lm_head_ref else None
+
+    def _image_logits_from_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        """Run per-token hidden [..., 4096] through a restricted lm_head that
+        projects only onto the image-token subvocabulary.  Returns
+        [..., num_image_vocab].
+        """
+        lm_head = self.lm_head
+        assert lm_head is not None, "lm_head not attached; call attach_lm_head()"
+        # Restrict lm_head to image-vocab rows — no full-vocab matmul.
+        # lm_head weight shape: [V, C_in].
+        w_full = lm_head.weight                              # [V, C]
+        w_img = w_full.index_select(0, self.image_token_bpe_ids)   # [num_img, C]
+        w_img = w_img.to(dtype=hidden.dtype)
+        logits = torch.matmul(hidden, w_img.transpose(-1, -2))
+        b_full = getattr(lm_head, "bias", None)
+        if b_full is not None:
+            b_img = b_full.index_select(0, self.image_token_bpe_ids).to(dtype=hidden.dtype)
+            logits = logits + b_img
+        return logits
 
     # ── Distribution helpers ─────────────────────────────────────────────────
 
@@ -648,14 +853,20 @@ class TSSMWorldModelTransDreamer(nn.Module):
 
     def pretrain_loss(
         self,
-        hidden_seq: torch.Tensor,          # [B, T, obs_dim]
+        hidden_seq: torch.Tensor,
         action_seq: torch.Tensor,          # [B, T, action_dim]
         reward_seq: torch.Tensor | None = None,  # [B, T]
         done_seq:   torch.Tensor | None = None,  # [B, T]
-        next_image_hiddens_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok, obs_dim]
+        next_image_hiddens_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok, in_channels]
+        next_image_token_ids_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok] bpe ids
     ) -> dict[str, torch.Tensor]:
         """
         TransDreamer-style sequence loss.
+
+        `hidden_seq` accepted shapes:
+          - Route-0: [B, T, obs_dim]               — already scalar per frame
+          - Route-B: [B, T, n_img_tok, in_channels] — per-image-token, then
+            conv_stem compresses to [B, T, obs_dim] internally.
 
         Mirrors TransDreamer world_model_loss() (modules_transformer.py:88):
             prior  ← infer_prior_stoch(post_stoch[:, :-1], actions[:, 1:])
@@ -665,6 +876,48 @@ class TSSMWorldModelTransDreamer(nn.Module):
                 value_rhs = KL(post || sg(prior))   ← trains post   (rep loss)
                 kl = (1 - kl_balance) * lhs + kl_balance * rhs
         """
+        # Under route-B, hidden_seq is per-image-token and must pass through
+        # the learnable conv stem before reaching the RSSM posterior.  The
+        # per-token tensor is retained for image-recon losses below.
+        per_token_hidden_seq = None
+        raw_bpe_ids_seq = None  # token mode only: [B, T, N_img] long
+        if self.io_mode == "token":
+            # hidden_seq: [B, T, N_img] long BPE ids.  Map to image-vocab
+            # indices, embed, then run through the same conv_stem as hidden
+            # mode to produce [B, T, obs_dim].
+            if hidden_seq.ndim != 3:
+                raise ValueError(
+                    "io_mode='token' requires hidden_seq shape [B, T, N_img]; "
+                    f"got {tuple(hidden_seq.shape)}"
+                )
+            if self._bpe_to_img_idx.numel() == 0:
+                raise RuntimeError(
+                    "io_mode='token' requires attach_lm_head(lm_head=None, ...) "
+                    "to populate _bpe_to_img_idx before forward"
+                )
+            raw_bpe_ids_seq = hidden_seq.long()
+            img_idx_seq = self._bpe_to_img_idx[raw_bpe_ids_seq]   # [B, T, N_img]
+            if (img_idx_seq < 0).any():
+                raise ValueError(
+                    "io_mode='token': input contains non-image BPE ids; "
+                    "workspace must filter image tokens only"
+                )
+            per_token_hidden_seq = self.token_embedder(img_idx_seq)  # [B, T, N_img, d_embed]
+            hidden_seq = self.conv_stem(per_token_hidden_seq)        # [B, T, obs_dim]
+        elif self.spatial_codec:
+            if hidden_seq.ndim != 4:
+                raise ValueError(
+                    "spatial_codec=True requires hidden_seq shape [B, T, N_img, C_in]; "
+                    f"got {tuple(hidden_seq.shape)}"
+                )
+            per_token_hidden_seq = hidden_seq
+            hidden_seq = self.conv_stem(hidden_seq)            # [B, T, obs_dim]
+        elif hidden_seq.ndim != 3:
+            raise ValueError(
+                "spatial_codec=False requires hidden_seq shape [B, T, obs_dim]; "
+                f"got {tuple(hidden_seq.shape)}"
+            )
+
         B, T, _ = hidden_seq.shape
 
         # ── Step 1: posterior for every frame ────────────────────────────────
@@ -736,16 +989,111 @@ class TSSMWorldModelTransDreamer(nn.Module):
             reward_target = torch.zeros_like(predicted_reward)
         reward_loss = F.mse_loss(predicted_reward, reward_target)
 
-        # ── Step 6: image-decoder loss (optional, pure-latent) ───────────────
-        # Decode predicted next pooled hidden into per-image-token hiddens
-        # and MSE against the ground-truth next frame's image-token hiddens.
-        # No current-frame tokens are fed in — everything flows through the
-        # WM latent, so viz quality directly measures WM capacity.
+        # ── Step 6: image-decoder loss (pure-latent) ─────────────────────────
+        # Decode predicted next latent into per-image-token hiddens (route-B
+        # conv deconv) or per-token hiddens of obs_dim (route-0 MLP).  No
+        # current-frame tokens are fed in — everything flows through the WM
+        # latent, so viz quality directly measures WM capacity.
         image_decoder_loss = predicted_next_hidden.new_zeros(())
-        if (
+        image_recon_ce_loss = predicted_next_hidden.new_zeros(())
+        image_recon_mse_loss = predicted_next_hidden.new_zeros(())
+        image_recon_accuracy = predicted_next_hidden.new_zeros(())
+        pred_entropy = predicted_next_hidden.new_zeros(())
+        uniq_per_sample = predicted_next_hidden.new_zeros(())
+        gt_uniq_per_sample = predicted_next_hidden.new_zeros(())
+
+        if self.io_mode == "token" and self.image_decoder is not None:
+            # Token mode: decoder output IS image-vocab logits; no lm_head.
+            logits = self.image_decoder(
+                predicted_next_hidden, post_stoch[:, 1:]
+            )  # [B, T-1, N_img, num_image_tokens_vocab]
+
+            # CE target: next-frame image-vocab indices.  Derive from the raw
+            # input BPE ids if caller did not pass an explicit target.
+            if next_image_token_ids_target is None:
+                assert raw_bpe_ids_seq is not None
+                tgt_bpe = raw_bpe_ids_seq[:, 1:]
+            else:
+                tgt_bpe = next_image_token_ids_target.to(
+                    device=logits.device, dtype=torch.long
+                )
+            img_idx = self._bpe_to_img_idx[tgt_bpe]             # [B, T-1, N_img]
+            if (img_idx < 0).any():
+                raise ValueError(
+                    "io_mode='token': CE target contains non-image BPE ids"
+                )
+            image_recon_ce_loss = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),
+                img_idx.reshape(-1),
+            )
+            with torch.no_grad():
+                pred_idx = logits.argmax(dim=-1)                   # [B, T-1, N_img]
+                image_recon_accuracy = (pred_idx == img_idx).float().mean()
+                # predicted softmax entropy (avg over positions).  Low ⇒ sharp,
+                # ln(V) ⇒ uniform.  Useful for spotting over-confident collapse.
+                log_probs = F.log_softmax(logits, dim=-1)
+                probs = log_probs.exp()
+                pred_entropy = -(probs * log_probs).sum(dim=-1).mean()
+                # #unique argmax tokens per sample (max = N_img, min = 1).
+                # 1 ⇒ single solid colour; N_img ⇒ fully diverse.
+                flat_pred = pred_idx.reshape(-1, pred_idx.shape[-1])    # [B*T-1, N_img]
+                uniq_per_sample = torch.tensor(
+                    [int(torch.unique(row).numel()) for row in flat_pred],
+                    dtype=logits.dtype, device=logits.device,
+                ).mean()
+                # GT diversity as a baseline — shouldn't be 1 unless data is broken.
+                flat_gt = img_idx.reshape(-1, img_idx.shape[-1])
+                gt_uniq_per_sample = torch.tensor(
+                    [int(torch.unique(row).numel()) for row in flat_gt],
+                    dtype=logits.dtype, device=logits.device,
+                ).mean()
+            image_decoder_loss = self.image_recon_ce_coef * image_recon_ce_loss
+        elif self.spatial_codec and self.image_decoder is not None:
+            # Route-B: conv deconv decoder → [B, T-1, n_img_tok, in_channels]
+            # Inputs: predicted_next_hidden (deter) + post_stoch[:, 1:] (stoch)
+            decoded = self.image_decoder(
+                predicted_next_hidden, post_stoch[:, 1:]
+            )  # [B, T-1, N_img, C_in]
+
+            # MSE on per-image-token 4096-d hiddens (representation anchor)
+            if per_token_hidden_seq is not None and self.image_recon_mse_coef > 0:
+                tgt = per_token_hidden_seq[:, 1:].to(
+                    device=decoded.device, dtype=decoded.dtype
+                ).detach()
+                image_recon_mse_loss = F.mse_loss(decoded, tgt)
+
+            # CE on predicted token ids via frozen lm_head over image vocab
+            if (
+                next_image_token_ids_target is not None
+                and self.has_lm_head
+                and self.image_recon_ce_coef > 0
+            ):
+                logits = self._image_logits_from_hidden(decoded)   # [..., N_img, num_img_vocab]
+                # Map bpe ids → index-into-image-vocab
+                tgt_bpe = next_image_token_ids_target.to(
+                    device=logits.device, dtype=torch.long
+                )
+                img_idx = self._bpe_to_img_idx[tgt_bpe]            # [..., N_img]
+                if (img_idx < 0).any():
+                    # Defensive: any non-image bpe id in the target indicates
+                    # a bug in workspace extraction; skip CE loss and leave
+                    # the zero-tensor in image_recon_ce_loss.
+                    pass
+                else:
+                    image_recon_ce_loss = F.cross_entropy(
+                        logits.reshape(-1, logits.shape[-1]),
+                        img_idx.reshape(-1),
+                    )
+            # Keep legacy aggregate for logging parity
+            image_decoder_loss = (
+                self.image_recon_ce_coef  * image_recon_ce_loss
+                + self.image_recon_mse_coef * image_recon_mse_loss
+            )
+        elif (
             self.image_decoder is not None
             and next_image_hiddens_target is not None
         ):
+            # Route-0 legacy MLP image decoder path.
             Bp, Tm1, _ = predicted_next_hidden.shape
             decoded = self.image_decoder(predicted_next_hidden)            # [B, T-1, n_img_tok*obs_dim]
             decoded = decoded.view(Bp, Tm1, self.n_image_tokens, self.obs_dim)
@@ -761,7 +1109,13 @@ class TSSMWorldModelTransDreamer(nn.Module):
         )
         if self.reward_loss_coef > 0:
             loss = loss + self.reward_loss_coef * reward_loss
-        if self.image_decoder is not None and self.image_decoder_loss_coef > 0:
+        if self.spatial_codec and self.image_decoder is not None:
+            # Route-B: apply CE and MSE with their dedicated coefs directly;
+            # `image_decoder_loss_coef` acts as a global multiplier (default
+            # 1.0) on the combined image-recon loss.
+            scale = self.image_decoder_loss_coef if self.image_decoder_loss_coef > 0 else 1.0
+            loss = loss + scale * image_decoder_loss
+        elif self.image_decoder is not None and self.image_decoder_loss_coef > 0:
             loss = loss + self.image_decoder_loss_coef * image_decoder_loss
 
         return {
@@ -771,7 +1125,13 @@ class TSSMWorldModelTransDreamer(nn.Module):
             "rep_kl":              rep_kl,
             "transition_loss":     transition_loss,
             "reward_loss":         reward_loss,
+            "image_recon_ce_loss":  image_recon_ce_loss,
+            "image_recon_mse_loss": image_recon_mse_loss,
             "image_decoder_loss":  image_decoder_loss,
+            "image_recon_accuracy": image_recon_accuracy,
+            "pred_entropy":        pred_entropy,
+            "pred_unique_tokens":  uniq_per_sample,
+            "gt_unique_tokens":    gt_uniq_per_sample,
         }
 
     def compute_loss_dict(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -806,9 +1166,13 @@ class TSSMWorldModelTransDreamer(nn.Module):
             next_image_hiddens_target = batch.get("next_image_hiddens_seq")
             if next_image_hiddens_target is not None:
                 next_image_hiddens_target = next_image_hiddens_target.to(device=device, dtype=dtype)
+            next_img_token_ids = batch.get("next_image_token_ids_seq")
+            if next_img_token_ids is not None:
+                next_img_token_ids = next_img_token_ids.to(device=device, dtype=torch.long)
             return self.pretrain_loss(
                 hidden_seq, action_seq, reward_seq, done_seq,
                 next_image_hiddens_target=next_image_hiddens_target,
+                next_image_token_ids_target=next_img_token_ids,
             )
 
         if "obs_embedding" not in batch or "next_obs_embedding" not in batch:
@@ -818,9 +1182,17 @@ class TSSMWorldModelTransDreamer(nn.Module):
                 "(obs_embedding, next_obs_embedding, action) in the batch."
             )
 
-        obs = batch["obs_embedding"].to(device=device, dtype=dtype)
-        next_obs = batch["next_obs_embedding"].to(device=device, dtype=dtype)
+        if self.io_mode == "token":
+            # obs / next_obs are raw image BPE ids [B, N_img], long.
+            obs = batch["obs_embedding"].to(device=device, dtype=torch.long)
+            next_obs = batch["next_obs_embedding"].to(device=device, dtype=torch.long)
+        else:
+            obs = batch["obs_embedding"].to(device=device, dtype=dtype)
+            next_obs = batch["next_obs_embedding"].to(device=device, dtype=dtype)
         action = batch["action"].to(device=device, dtype=dtype)
+        # Under spatial_codec both obs / next_obs are [B, N_img, C_in].
+        # Otherwise they are pooled [B, obs_dim].  The stack below handles both.
+        # In token mode they are long [B, N_img].
 
         # action may be [B, H, A] chunk or [B, A] single step
         if action.ndim == 3:
@@ -835,7 +1207,7 @@ class TSSMWorldModelTransDreamer(nn.Module):
         else:
             action_step = action
 
-        hidden_seq = torch.stack([obs, next_obs], dim=1)                # [B, 2, obs_dim]
+        hidden_seq = torch.stack([obs, next_obs], dim=1)                # [B, 2, ...]
         action_seq = torch.stack(
             [torch.zeros_like(action_step), action_step], dim=1
         )                                                                # [B, 2, action_dim]
@@ -850,15 +1222,32 @@ class TSSMWorldModelTransDreamer(nn.Module):
             reward_seq = torch.stack([reward_zero, reward], dim=1).squeeze(-1)
 
         # Optional per-image-token target for the image_decoder head.
-        # Shape [B, n_img_tok, obs_dim] → [B, T-1=1, n_img_tok, obs_dim].
+        # Route-0: [B, n_img_tok, obs_dim] → [B, T-1=1, n_img_tok, obs_dim].
+        # Route-B: under spatial_codec, per-token hiddens are already in
+        # `next_obs_embedding`, so we pull them directly into the target slot.
+        # Token mode: no hidden-space target (only CE via token ids); skip.
         next_image_hiddens_target = None
-        raw_img = batch.get("next_obs_image_hiddens")
-        if raw_img is not None:
-            next_image_hiddens_target = raw_img.to(device=device, dtype=dtype).unsqueeze(1)
+        if self.io_mode == "token":
+            pass
+        elif self.spatial_codec:
+            next_image_hiddens_target = next_obs.unsqueeze(1)   # [B, 1, N_img, C_in]
+        else:
+            raw_img = batch.get("next_obs_image_hiddens")
+            if raw_img is not None:
+                next_image_hiddens_target = raw_img.to(device=device, dtype=dtype).unsqueeze(1)
+
+        # Next-frame image token ids for CE loss (route B).
+        next_image_token_ids_target = None
+        raw_ids = batch.get("next_obs_image_token_ids")
+        if raw_ids is not None:
+            next_image_token_ids_target = raw_ids.to(
+                device=device, dtype=torch.long
+            ).unsqueeze(1)   # [B, 1, N_img]
 
         return self.pretrain_loss(
             hidden_seq, action_seq, reward_seq, None,
             next_image_hiddens_target=next_image_hiddens_target,
+            next_image_token_ids_target=next_image_token_ids_target,
         )
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -874,21 +1263,41 @@ class TSSMWorldModelTransDreamer(nn.Module):
 
         Mirrors the forward path through one step of the TransDreamer pipeline:
         posterior on the current frame -> causal Transformer with one token ->
-        prior -> transition_head producing the predicted next LLM hidden.
+        prior -> transition_head producing the predicted next scalar hidden.
 
         Args:
-            hidden: [B, obs_dim]            current frame pooled hidden
+            hidden:
+              - Route-0: [B, obs_dim]                    pooled current hidden
+              - Route-B: [B, n_img_tok, in_channels]     per-image-token current hidden
             action: [B, action_dim] or [B, H, action_dim] chunk (averaged)
 
         Returns:
-            [B, obs_dim]  predicted next pooled hidden.
+            predicted next scalar hidden [B, obs_dim] (post-conv-stem under route-B).
+            Also stashes post_stoch_step on the returned tensor via attribute.
         """
         first_param = next(self.parameters())
         device, dtype = first_param.device, first_param.dtype
-        hidden = hidden.to(device=device, dtype=dtype)
         action = action.to(device=device, dtype=dtype)
         if action.ndim == 3:
             action = action.mean(dim=1)
+
+        if self.io_mode == "token":
+            # hidden is [B, N_img] long BPE ids → map, embed, stem
+            bpe = hidden.to(device=device, dtype=torch.long)
+            img_idx = self._bpe_to_img_idx[bpe]
+            if (img_idx < 0).any():
+                raise ValueError("predict_next_hidden (token mode): input has non-image BPE ids")
+            per_token = self.token_embedder(img_idx)
+            hidden = self.conv_stem(per_token)                          # [B, obs_dim]
+        else:
+            hidden = hidden.to(device=device, dtype=dtype)
+            if self.spatial_codec and hidden.ndim == 3:
+                hidden = self.conv_stem(hidden)                         # [B, obs_dim]
+            elif self.spatial_codec and hidden.ndim != 2:
+                raise ValueError(
+                    "predict_next_hidden under spatial_codec expects [B, obs_dim] or "
+                    f"[B, N_img, C_in]; got {tuple(hidden.shape)}"
+                )
 
         stats = self.obs_to_stoch(hidden)                             # [B, 2*latent]
         _, _, post_stoch = self._stats_to_dist(stats)                  # [B, latent]
@@ -901,16 +1310,74 @@ class TSSMWorldModelTransDreamer(nn.Module):
         _, _, prior_stoch = self._stats_to_dist(prior_stats)           # [B, 1, latent]
 
         post_feature = torch.cat([h_seq, prior_stoch], dim=-1)         # [B, 1, d_model+latent]
-        return self.transition_head(post_feature).squeeze(1)           # [B, obs_dim]
+        pred = self.transition_head(post_feature).squeeze(1)           # [B, obs_dim]
+        # Remember the step's prior stoch so callers that need it for the
+        # conv deconv decoder can fetch it without rerunning the RSSM.
+        self._last_predicted_stoch = prior_stoch.squeeze(1).detach()
+        return pred
 
     @torch.no_grad()
-    def decode_pooled_to_image_hiddens(self, pooled: torch.Tensor) -> torch.Tensor:
-        """Project a predicted pooled hidden [B, obs_dim] to per-image-token
-        hiddens [B, n_image_tokens, obs_dim]. Only valid when image_decoder_enabled.
+    def decode_pooled_to_image_hiddens(
+        self, pooled: torch.Tensor, stoch: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Project a predicted scalar hidden [B, obs_dim] to per-image-token
+        hiddens.
+          - Route-0 (MLP image_decoder): returns [B, n_image_tokens, obs_dim].
+          - Route-B (conv deconv):       returns [B, n_image_tokens, in_channels]
+            (4096-d, directly feedable into frozen lm_head).
         """
         if self.image_decoder is None:
             raise RuntimeError("image_decoder is not enabled on this WM.")
+        if self.spatial_codec:
+            assert isinstance(self.image_decoder, BspaceConvDecoderHead)
+            first_param = next(self.image_decoder.parameters())
+            x = pooled.to(device=first_param.device, dtype=first_param.dtype)
+            # stoch required for route-B; prefer caller-supplied, else use
+            # the value stashed by predict_next_hidden, else zero.
+            if stoch is None:
+                stash = getattr(self, "_last_predicted_stoch", None)
+                if stash is None:
+                    stoch_tensor = torch.zeros(
+                        x.shape[0], self.latent_dim,
+                        device=first_param.device, dtype=first_param.dtype,
+                    )
+                else:
+                    stoch_tensor = stash
+            else:
+                stoch_tensor = stoch
+            stoch_tensor = stoch_tensor.to(device=first_param.device, dtype=first_param.dtype)
+            return self.image_decoder(x, stoch_tensor)                 # [B, N_img, in_channels]
         first_param = next(self.image_decoder.parameters())
         x = pooled.to(device=first_param.device, dtype=first_param.dtype)
         decoded = self.image_decoder(x)
         return decoded.view(-1, self.n_image_tokens, self.obs_dim)
+
+    @torch.no_grad()
+    def predict_next_image_token_ids(
+        self,
+        cur_bpe_ids: torch.Tensor,   # [B, N_img]  current-frame BPE ids
+        action: torch.Tensor,         # [B, action_dim] or [B, H, action_dim]
+    ) -> torch.Tensor:
+        """Token-mode single-step viz helper.  Runs the full TSSM forward on
+        the current frame, decodes to image-vocab logits, argmaxes, and maps
+        back to raw BPE ids (what the VQGAN expects).
+
+        Returns: [B, N_img] long BPE ids.
+        """
+        if self.io_mode != "token":
+            raise RuntimeError("predict_next_image_token_ids requires io_mode='token'")
+        if self.image_decoder is None or self.token_embedder is None:
+            raise RuntimeError("token-mode WM is missing image_decoder / token_embedder")
+
+        pred_obs = self.predict_next_hidden(cur_bpe_ids, action)          # [B, obs_dim]
+        stoch = getattr(self, "_last_predicted_stoch", None)
+        if stoch is None:
+            raise RuntimeError("predict_next_hidden did not stash _last_predicted_stoch")
+
+        dec_param = next(self.image_decoder.parameters())
+        logits = self.image_decoder(
+            pred_obs.to(device=dec_param.device, dtype=dec_param.dtype),
+            stoch.to(device=dec_param.device, dtype=dec_param.dtype),
+        )  # [B, N_img, num_image_tokens_vocab]
+        img_idx = logits.argmax(dim=-1)                                    # [B, N_img]
+        return self.image_token_bpe_ids[img_idx]                           # [B, N_img] BPE ids

@@ -187,14 +187,25 @@ class NopretokenizeSFTDistributedHelper:
         dist.broadcast_object_list(object_list, src=0)
         return object_list[0]
 
-    def model_state_dict_context(self, module: torch.nn.Module) -> contextlib.AbstractContextManager[None]:
+    def model_state_dict_context(
+        self,
+        module: torch.nn.Module,
+        rank0_only: bool = True,
+    ) -> contextlib.AbstractContextManager[None]:
+        """FSDP FULL_STATE_DICT context.
+
+        - save (``rank0_only=True``, default): only rank 0 receives the gathered
+          full dict; other ranks get empty dicts — efficient for writing.
+        - load (``rank0_only=False``): every rank must provide the full dict,
+          because all ranks read the ckpt file; FSDP scatters per-rank shards.
+        """
         if not isinstance(module, FSDP):
             return contextlib.nullcontext()
         return FSDP.state_dict_type(
             module,
             StateDictType.FULL_STATE_DICT,
-            state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-            optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
+            state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=rank0_only),
+            optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=rank0_only),
         )
 
     def optimizer_state_dict(self, module: torch.nn.Module, optimizer: torch.optim.Optimizer) -> dict[str, Any]:
@@ -212,7 +223,7 @@ class NopretokenizeSFTDistributedHelper:
         if not isinstance(module, FSDP):
             optimizer.load_state_dict(state_dict)
             return
-        with self.model_state_dict_context(module):
+        with self.model_state_dict_context(module, rank0_only=False):
             converted_state_dict = FSDP.optim_state_dict_to_load(module, optimizer, state_dict)
         optimizer.load_state_dict(converted_state_dict)
 
