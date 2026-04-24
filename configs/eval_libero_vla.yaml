@@ -1,0 +1,81 @@
+_target_: src.workspace.eval_libero_vla_workspace.EvalLiberoVLAWorkspace
+
+seed: 7
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+trainer:
+  device: cuda:0
+  debug: false
+
+training:
+  device: cuda:0
+  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/eval_libero_vla
+  debug: false
+  resume: false
+  # rollout is strictly single-process; FSDP sharding breaks single-rank inference.
+  distributed_strategy: ddp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  num_epochs: 0
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  use_ema: false
+  checkpoint_every: 1
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+
+init:
+  vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+
+encoder:
+  _target_: src.models.encoder.RynnVLAEncoder
+  model_path: ${init.vla_ckpt_path}
+  tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  resolution: 256
+  action_dim: 7
+  time_horizon: 10
+  pool: mean
+
+# ── rollout knobs ─────────────────────────────────────────────────────────────
+eval:
+  # Leave ckpt_path null to evaluate the raw init VLA weights (baseline).
+  # Set this to a file produced by PretokenizeVLAWorkspace top-k saves, e.g.
+  # data/outputs/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
+  ckpt_path: null
+
+  task_suite_name: libero_goal      # libero_goal / libero_spatial / libero_object / libero_10
+  num_episodes_per_task: 10
+  action_steps: 10                  # action chunk horizon (must match training)
+
+# ── unused by eval workspace but required by PretokenizeVLAWorkspace ──────────
+# (keeps the inherited resume() / save_checkpoint() machinery happy)
+ema:
+  decay: 0.9999
+  update_after_step: 0
+
+optim:
+  grad_clip_norm: 4.0
+  zero_grad_set_to_none: true
+  vla:
+    name: adam
+    lr: 0.0
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.0
+
+checkpoint:
+  save_last_ckpt: false
+  save_last_snapshot: false
+  topk:
+    monitor_key: eval_success_rate
+    mode: max
+    k: 1
+    format_str: 'eval_success_rate={eval_success_rate:.4f}.ckpt'

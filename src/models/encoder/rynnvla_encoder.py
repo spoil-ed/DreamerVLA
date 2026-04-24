@@ -239,7 +239,7 @@ class RynnVLAEncoder(BaseEncoder):
             labels=labels_list,
             training=True,
             output_hidden_states=True,
-            att_mask=False,
+            att_mask=True,
         )
 
         total_loss = token_loss_coef * token_loss + action_loss_coef * action_loss
@@ -283,7 +283,7 @@ class RynnVLAEncoder(BaseEncoder):
             labels=labels_list,
             training=True,
             output_hidden_states=True,
-            att_mask=False,
+            att_mask=True,
         )
 
         total_loss = token_loss_coef * token_loss + action_loss_coef * action_loss

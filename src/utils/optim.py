@@ -9,7 +9,8 @@ from torch import nn
 
 def build_optimizer(module: nn.Module, optim_cfg: DictConfig) -> torch.optim.Optimizer:
     # Optimizer type
-    if str(optim_cfg.name).lower() != "adam":
+    name = str(optim_cfg.name).lower()
+    if name not in ("adam", "adamw"):
         raise ValueError(f"Unsupported optimizer: {optim_cfg.name}")
     # Optional args
     betas = optim_cfg.get("betas")
@@ -27,4 +28,6 @@ def build_optimizer(module: nn.Module, optim_cfg: DictConfig) -> torch.optim.Opt
     trainable_parameters = [parameter for parameter in module.parameters() if parameter.requires_grad]
     if not trainable_parameters:
         raise ValueError(f"Module `{module.__class__.__name__}` does not expose any trainable parameters.")
+    if name == "adamw":
+        return torch.optim.AdamW(trainable_parameters, **optimizer_kwargs)
     return torch.optim.Adam(trainable_parameters, **optimizer_kwargs)

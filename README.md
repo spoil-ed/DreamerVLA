@@ -13,6 +13,7 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
 
 ## 目录
 
+- [训练范式总览](#训练范式总览)
 - [项目结构](#项目结构)
 - [环境配置](#环境配置)
   - [1. 创建 Conda 环境](#1-创建-conda-环境)
@@ -41,6 +42,75 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
   - [Dreamer-VLA 完整训练](#dreamer-vla-完整训练)
 - [评估](#评估)
 - [已知问题与排错](#已知问题与排错)
+
+---
+
+## 训练范式总览
+
+整体流水线分 **3 个阶段**：前两阶段做独立的 SFT 初始化（可并行），第三阶段把初始化好的 VLA / WM 串到 Dreamer 范式里做 imagination rollout 训练。
+
+```
+┌──────────────────────────────── Stage 0: 数据预处理 ────────────────────────────────┐
+│  scripts/prepare_data.sh                                                              │
+│  LIBERO HDF5 → 去 no-op → 抽图 → Chameleon VQGAN + text tokenizer 预 tokenize        │
+│  产出 {image_tokens, text_tokens, action, state}                                     │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+                │                                               │
+                ▼                                               ▼
+┌──────── Stage 1: SFT 初始化 VLA ────────┐   ┌──────── Stage 2: SFT 初始化 WM ────────┐
+│ Config:   pretokenize_sft_libero_10.yaml │   │ Config:   pretokenize_wm_libero_10      │
+│ Workspace: PretokenizeSFTWorkspace       │   │           (及 transdreamer 变种)        │
+│ 作用:     在预 tokenize 数据上微调       │   │ Workspace: PretokenizeWMWorkspace       │
+│           RynnVLAEncoder 头              │   │ 作用:     VLA 冻结，预训练 TSSM         │
+│                                          │   │           L = L_trans + L_reward + L_KL │
+└──────────────────────────────────────────┘   └─────────────────────────────────────────┘
+                │                                               │
+                └───────────────────┬───────────────────────────┘
+                                    ▼
+┌───────────────── Stage 3: Dreamer 范式 rollout 训练 ─────────────────┐
+│ Config:    dreamer_v3_vla_libero_10.yaml                               │
+│ Workspace: DreamerV3VLAWorkspace                                       │
+│ 算法:      src/algorithms/dreamer_v3_vla.py::imagine_actor_critic_step_v3 │
+│                                                                        │
+│ 每个 batch 交替两段：                                                 │
+│   Phase-1  world_model_pretrain_step()                                 │
+│            继续训 WM（transition + reward + KL）                      │
+│   Phase-2  imagine_actor_critic_step_v3()                              │
+│            从真实 obs 编码出初始 latent (detach)                      │
+│            在 WM 的 latent 空间 imagine H=15 步                        │
+│            λ-returns + twohot critic + target EMA                      │
+│            reward 梯度 → action → policy                               │
+│                                                                        │
+│ 用 training.run_wm_phase / run_actor_critic_phase 控制开关             │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 关键注意点
+
+**1. Stage 3 的 VLA 是冻结的**
+
+代码里 `DreamerV3VLAWorkspace.run()` 显式 `freeze_module(self.encoder)`，Phase-2 imagination 里更新的是 **WM + policy + critic**，不会回传梯度到 RynnVLA 主干。如果想在 Stage 3 继续微调 VLA 本体，需要去掉这个冻结并额外配置 VLA optimizer / param group。
+
+**2. "rollout" = imagination rollout，不是真环境 rollout**
+
+Phase-2 全部在 WM 的 latent 空间里做 H 步 imagination，标准 Dreamer 流程。**不会**回到 `src/env/` 下的 LIBERO 真实环境采数据。如果目标是 Dyna-style（真环境 rollout → 回填 replay buffer → 再训），当前代码形态不匹配，需要额外写 replay buffer + env stepper。
+
+**3. 两个 SFT 是平行的，不是串行依赖**
+
+`PretokenizeSFTWorkspace` 和 `PretokenizeWMWorkspace` 共用同一份预 tokenize 数据，可以在不同机器 / 不同卡上同时启动。Stage 3 从 `init.vla_ckpt_path` 和 WM 的 ckpt 分别加载两条产出。
+
+**4. DreamerV3 与 V1/V2 版本共存**
+
+| Workspace | 算法文件 | Critic | 归一化 | Bootstrap |
+|---|---|---|---|---|
+| `DreamerVLAWorkspace` | `dreamer_vla.py` | scalar MSE | 无 | 同一 critic |
+| `DreamerV3VLAWorkspace` | `dreamer_v3_vla.py` | twohot symlog | percentile | target critic EMA |
+
+新项目优先用 V3；V1/V2 保留用于 ablation 对照。
+
+**5. LIBERO 真环境评估**
+
+Stage 3 的 loss 不足以证明策略有效——真实成功率由 `EvalLiberoVLAWorkspace`（`configs/eval_libero_vla.yaml` / `scripts/eval_libero_vla.sh`）通过在 LIBERO 里真 rollout 得到。评估时的 prompt 格式必须与训练对齐（`his=2`，图像顺序 `[prev_third, prev_wrist, cur_third, cur_wrist]`）——这条已经在 `evaluate_libero` 里落地。
 
 ---
 

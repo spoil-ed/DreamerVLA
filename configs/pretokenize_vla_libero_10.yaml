@@ -19,7 +19,7 @@ training:
   distributed_strategy: fsdp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: true
-  num_epochs: 40
+  num_epochs: 20
   gradient_accumulate_every: 1
   tqdm_interval_sec: 1.0
   max_train_steps: null
@@ -72,10 +72,10 @@ optim:
   zero_grad_set_to_none: true
   vla:
     name: adam
-    lr: 5.0e-6
+    lr: 1.0e-4
     betas: [0.9, 0.95]
     eps: 1.0e-8
-    weight_decay: 0.15
+    weight_decay: 0.01
 
 eval:
   eval_every: 1

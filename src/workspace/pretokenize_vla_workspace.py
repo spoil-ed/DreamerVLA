@@ -252,6 +252,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         num_episodes = int(OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10))
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=10))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
+        # History length must match training (`his` in processed_data_generate_convs.sh).
+        # Training builds img_c = [prev_third, prev_wrist, cur_third, cur_wrist] (his=2).
+        history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
 
         item_processor = self.encoder._build_processor(self.device)
 
@@ -277,6 +280,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
                 done = False
                 actions_buffer: list[np.ndarray] = []
+                # Frame history buffer: list of (third_view_pil, wrist_pil) oldest→newest.
+                # Matches training's `img_history_start_idx = max(0, j - his + 1)` which
+                # repeats the first frame until history fills up.
+                frame_history: list[tuple[Image.Image, Image.Image]] = []
 
                 for t in range(max_steps + 10):
                     if t < 10:
@@ -289,11 +296,19 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
                     )
 
+                    third_pil = Image.fromarray(img)
+                    wrist_pil = Image.fromarray(wrist_img)
+                    frame_history.append((third_pil, wrist_pil))
+                    if len(frame_history) > history_length:
+                        frame_history = frame_history[-history_length:]
+
                     if len(actions_buffer) == 0:
+                        # Pad with the oldest available frame when history is shorter
+                        # than `history_length` (first action_steps steps of episode).
+                        padded = [frame_history[0]] * (history_length - len(frame_history)) + frame_history
                         predicted = self._generate_actions(
                             backbone, item_processor,
-                            Image.fromarray(img), Image.fromarray(wrist_img),
-                            state, task_description, action_steps,
+                            padded, state, task_description, action_steps,
                         )
                         actions_buffer = predicted
 
@@ -326,18 +341,21 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         self,
         backbone,
         item_processor,
-        cur_img: Image.Image,
-        cur_wrist_img: Image.Image,
+        frame_history: list[tuple[Image.Image, Image.Image]],
         state: np.ndarray,
         task_description: str,
         action_steps: int,
     ) -> list[np.ndarray]:
         """Tokenize observation, run model generate, decode action tokens.
 
-        Builds the conversation in the same format as training so that
-        image start/end tokens are always paired correctly.
+        `frame_history` is oldest→newest, each element a (third_view_pil, wrist_pil)
+        tuple. Flattened to the same [prev_third, prev_wrist, cur_third, cur_wrist]
+        ordering used at training time (see src/preprocess/action_state_model_conv_generation.py:
+        `img_c.extend(image_steps[step_idx])` with `img_names=[imgs_third_view, imgs_wrist]`).
         """
-        img_c = [cur_img, cur_wrist_img]
+        img_c: list[Image.Image] = []
+        for third_pil, wrist_pil in frame_history:
+            img_c.extend([third_pil, wrist_pil])
         human_val = f"Finish the task: {task_description}." + "<|state|>" * 1 + "<|image|>" * len(img_c)
 
         conv = {
@@ -480,6 +498,11 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         # resume training
         self.resume(cfg)
+
+        # After optimizer state restore, param_groups may lack `initial_lr`
+        # (LambdaLR requires it when last_epoch > -1).
+        for pg in self.vla_optimizer.param_groups:
+            pg.setdefault("initial_lr", pg["lr"])
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(
