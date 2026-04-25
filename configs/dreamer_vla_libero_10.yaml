@@ -14,7 +14,7 @@ trainer:
 # ── training ──────────────────────────────────────────────────────────────────
 training:
   device: cuda
-  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/dreamer_vla_libero_10
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla_libero_10
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -42,16 +42,16 @@ eval:
 
 # ── model init ────────────────────────────────────────────────────────────────
 init:
-  vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
 # ── encoder (frozen feature extractor) ───────────────────────────────────────
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 10
@@ -70,7 +70,7 @@ world_model:
   reward_loss_coef: 0.1
   kl_loss_coef: 0.1
   min_std: 0.1
-  pretrained_model_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
+  pretrained_model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
   freeze_transition_backbone: false
   backbone_dtype: bfloat16
   transition_time_horizon: null
@@ -114,15 +114,15 @@ algorithm:
 # ── dataset ───────────────────────────────────────────────────────────────────
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
 
 dataloader:
   batch_size: 4

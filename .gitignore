@@ -14,6 +14,7 @@ venv/
 
 # Third-party local checkout (installed in editable mode)
 LIBERO/
+dependencies/
 
 # Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
 # Everything under data/ is generated or downloaded per README; nothing here is source.

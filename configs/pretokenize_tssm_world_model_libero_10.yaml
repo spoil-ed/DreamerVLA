@@ -13,7 +13,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/pretokenize_tssm_world_model_libero_10
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_tssm_world_model_libero_10
   debug: false
   resume: false
   distributed_strategy: fsdp
@@ -28,7 +28,7 @@ training:
 
 dataset:
   _target_: src.dataloader.preencode_sft_dataset.PreencodeSFTDataset
-  manifest_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/preencode/rynnvla_libero_10/manifest.pt
+  manifest_path: /home/user01/liops/workspace/DreamerVLA/data/preencode/rynnvla_libero_10/manifest.pt
   max_open_shards: 2
 
 dataloader:
@@ -51,7 +51,7 @@ world_model:
   reward_loss_coef: 0.0
   kl_loss_coef: 0.1
   min_std: 0.1
-  pretrained_model_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
+  pretrained_model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
   freeze_transition_backbone: false
   backbone_dtype: bfloat16
   transition_time_horizon: null

@@ -27,8 +27,8 @@ from src.workspace.base_workspace import BaseWorkspace
 class NopretokenizeSFTWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
-    default_vla_init_dir = "/home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
-    default_output_dir = "/home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/debug_nopretokenize_sft"
+    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/debug_nopretokenize_sft"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:

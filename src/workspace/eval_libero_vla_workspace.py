@@ -32,7 +32,7 @@ from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace
 class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     """Load a VLA ckpt → run LIBERO rollout → dump JSON metrics."""
 
-    default_output_dir = "/home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/eval_libero_vla"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/eval_libero_vla"
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:

@@ -25,7 +25,7 @@ class PreencodeSFTDataSpec:
 class PreencodeSFTDataset(BaseDataset):
     def __init__(
         self,
-        manifest_path: str | Path = "/home/yuxinglei/workspace/2026nips/Dreamer-VLA/data/preencode/rynnvla_libero_object",
+        manifest_path: str | Path = "/home/user01/liops/workspace/DreamerVLA/data/preencode/rynnvla_libero_object",
         max_open_shards: int = 2,
     ) -> None:
         super().__init__()

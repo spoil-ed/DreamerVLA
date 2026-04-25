@@ -10,7 +10,7 @@ Runs a set of images through:
 Saves a side-by-side comparison grid and prints PSNR / SSIM / L1.
 
 Usage:
-    cd /home/user01/yuxinglei/workspace/DreamerVLA
+    cd /home/user01/liops/workspace/DreamerVLA
     python scripts/verify_vqgan_recon.py \
         --images /path/to/a.png /path/to/b.png \
         --out data/outputs/vqgan_recon_check

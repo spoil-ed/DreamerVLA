@@ -13,7 +13,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/eval_libero_vla
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/eval_libero_vla
   debug: false
   resume: false
   # rollout is strictly single-process; FSDP sharding breaks single-rank inference.
@@ -30,15 +30,15 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 10
@@ -49,9 +49,9 @@ eval:
   # Leave ckpt_path null to evaluate the raw init VLA weights (baseline).
   # Set this to a file produced by PretokenizeVLAWorkspace top-k saves, e.g.
   # data/outputs/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
-  ckpt_path: null
+  ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=001-train_vla_loss=3.274.ckpt
 
-  task_suite_name: libero_goal      # libero_goal / libero_spatial / libero_object / libero_10
+  task_suite_name: libero_10        # libero_goal / libero_spatial / libero_object / libero_10
   num_episodes_per_task: 10
   action_steps: 10                  # action chunk horizon (must match training)
 

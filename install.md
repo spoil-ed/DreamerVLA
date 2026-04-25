@@ -38,7 +38,7 @@ This repository uses the same fix direction as upstream `PR #84`:
 ### Install / Reinstall
 
 ```bash
-cd /home/yuxinglei/workspace/2026nips/Dreamer-VLA/LIBERO
+cd /home/user01/liops/workspace/DreamerVLA/LIBERO
 python -m pip install --no-build-isolation -e .
 ```
 
@@ -56,7 +56,7 @@ python -c "import libero; print(libero.__path__)"
 Then verify the dataset integrity script can run directly:
 
 ```bash
-cd /home/yuxinglei/workspace/2026nips/Dreamer-VLA/LIBERO
+cd /home/user01/liops/workspace/DreamerVLA/LIBERO
 python scripts/check_dataset_integrity.py
 ```
 
@@ -67,13 +67,13 @@ If this command runs without `ModuleNotFoundError`, the packaging issue is fixed
 `LIBERO` does not always read datasets from the current repo. It uses the global config file:
 
 ```bash
-/home/yuxinglei/.libero/config.yaml
+/home/user01/.libero/config.yaml
 ```
 
 Check the active dataset path with:
 
 ```bash
-grep '^datasets:' /home/yuxinglei/.libero/config.yaml
+grep '^datasets:' /home/user01/.libero/config.yaml
 ```
 
 The built-in checks mean:
@@ -84,5 +84,5 @@ The built-in checks mean:
 For the current machine, the validated dataset path is:
 
 ```bash
-/home/yuxinglei/workspace/2026nips/RynnVLA-002/LIBERO/libero/datasets
+/home/user01/liops/workspace/DreamerVLA/LIBERO/libero/datasets
 ```

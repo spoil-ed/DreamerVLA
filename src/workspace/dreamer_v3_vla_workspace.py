@@ -44,7 +44,7 @@ from torch.utils.data import DataLoader
 class DreamerV3VLAWorkspace(DreamerVLAWorkspace):
     """Closed-loop DreamerVLA with DreamerV3 actor-critic (twohot + target critic)."""
 
-    default_output_dir = "/home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/dreamer_v3_vla"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_v3_vla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir=output_dir)

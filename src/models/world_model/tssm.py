@@ -56,7 +56,7 @@ class TSSMWorldModel(nn.Module):
         reward_loss_coef: float = 0.0,
         kl_loss_coef: float = 0.1,
         min_std: float = 0.1,
-        pretrained_model_path: str = "/home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10",
+        pretrained_model_path: str = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10",
         freeze_transition_backbone: bool = False,
         backbone_dtype: str = "bfloat16",
         transition_time_horizon: int | None = None,

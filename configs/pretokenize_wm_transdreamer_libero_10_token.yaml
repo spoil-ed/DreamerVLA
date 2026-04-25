@@ -15,7 +15,7 @@ training:
   device: cuda:0
   # Token-mode WM: input/output both operate on discrete image BPE ids.
   # No frozen Chameleon forward per step; no lm_head borrow; CE only.
-  out_dir: /home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/pretokenize_wm_transdreamer_token
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_wm_transdreamer_token
   debug: false
   resume: false
   distributed_strategy: fsdp
@@ -35,7 +35,7 @@ ema:
   update_after_step: 0
 
 init:
-  vla_ckpt_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
 # Encoder is still instantiated so we can (a) read the image-vocab mapping
 # for num_image_tokens_vocab auto-injection and _bpe_to_img_idx buffer, and
@@ -44,10 +44,10 @@ init:
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 10
@@ -76,9 +76,9 @@ world_model:
   # ── KL with proper free-bits floor (canonical TransDreamer default) ──
   # NOTE: 1.0 is too loose for our 256-d continuous Gaussian latent — KL was
   # pinned at the floor after ~100 steps, so prior_head / posterior got zero
-  # KL gradient for the remainder of training.  Dropped to 0.1 so the KL
+  # KL gradient for the remainder of training.  Dropped to 1.0 so the KL
   # signal stays alive.
-  free_nats: 0.1
+  free_nats: 1.0
   kl_balance: 0.8
   kl_loss_coef: 1.0
   transition_loss_coef: 1.0
@@ -89,7 +89,7 @@ world_model:
 
   # ── Causal Transformer: reuse pretrained Chameleon WM weights ────────
   use_pretrained_backbone: true
-  pretrained_model_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
+  pretrained_model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
   freeze_transition_backbone: false
   backbone_dtype: bfloat16
   transition_time_horizon: null
@@ -120,15 +120,15 @@ world_model:
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/yuxinglei/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
 
 eval:
   eval_every: 1

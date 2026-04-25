@@ -16,14 +16,14 @@
 # Manual stop: Ctrl+C when loss trajectory is clear.
 set -euo pipefail
 
-cd /home/user01/yuxinglei/workspace/DreamerVLA
+cd /home/user01/liops/workspace/DreamerVLA
 
 source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate wmpo
 
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 
-OUT_DIR="/home/user01/yuxinglei/workspace/DreamerVLA/data/outputs/pretokenize_vla/smoke_rynn_aligned_$(date +%Y%m%d_%H%M%S)"
+OUT_DIR="/home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_vla/smoke_rynn_aligned_$(date +%Y%m%d_%H%M%S)"
 echo "OUT_DIR=${OUT_DIR}"
 
 python -m torch.distributed.run \

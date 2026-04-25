@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from src.dataloader.base_dataset import BaseDataset
 from src.dataloader.transition_dataset import SimpleWordTokenizer
 
-DEFAULT_LIBERO_ROOT = Path("/home/yuxinglei/workspace/2026nips/RynnVLA-002/LIBERO")
+DEFAULT_LIBERO_ROOT = Path("/home/user01/liops/workspace/DreamerVLA/LIBERO")
 
 
 def _resolve_libero_paths(
