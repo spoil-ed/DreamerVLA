@@ -1,0 +1,24 @@
+# Warmup WM config with the original flat pretokenized dataset.
+# This keeps pure-VAE warm init from pretokenize_wm_libero_10_warmup.yaml but
+# disables sequence-window sampling entirely.
+
+defaults:
+  - pretokenize_wm_libero_10_warmup
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_wm/pretokenize_wm_libero_10_discrete_minimal_warmup_flat
+
+dataset:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeFlatDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+  # Inherited sequence keys, if present after Hydra merge, are ignored by
+  # PretokenizeFlatDataset.
+
+dataset_val_ind:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeFlatDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+
+dataset_val_ood:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeFlatDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml

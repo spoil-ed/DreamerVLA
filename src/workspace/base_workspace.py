@@ -313,7 +313,9 @@ class BaseWorkspace(ABC):
         if exclude_keys is None:
             exclude_keys = tuple()
         if include_keys is None:
-            include_keys = tuple(payload["pickles"].keys())
+            include_keys = tuple(
+                key for key in payload["pickles"].keys() if key != "_output_dir"
+            )
 
         # State restore
         for key, value in payload["state_dicts"].items():

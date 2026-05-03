@@ -4,8 +4,8 @@ seed: 7
 
 hydra:
   run:
-    dir: .
-  output_subdir: null
+    dir: ${training.out_dir}
+  output_subdir: .hydra
 
 trainer:
   device: cuda:0
@@ -50,10 +50,15 @@ eval:
   # Set this to a file produced by PretokenizeVLAWorkspace top-k saves, e.g.
   # data/outputs/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
   ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=001-train_vla_loss=3.274.ckpt
+  ckpt_kind: auto                 # auto / vla / dreamer
 
   task_suite_name: libero_10        # libero_goal / libero_spatial / libero_object / libero_10
   num_episodes_per_task: 10
   action_steps: 10                  # action chunk horizon (must match training)
+  dreamer_deterministic: true       # Dreamer policy rollout uses actor mean by default
+  dreamer_action_repeat: 1          # replan every env step for latent Dreamer actor
+  dreamer_clip_actions: true        # clip raw actor output to LIBERO action ranges
+  dreamer_which_image_block: -2     # third-view image block; matches WM training default
 
 # ── unused by eval workspace but required by PretokenizeVLAWorkspace ──────────
 # (keeps the inherited resume() / save_checkpoint() machinery happy)

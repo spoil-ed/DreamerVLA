@@ -51,7 +51,7 @@ echo "[1/5] Extracting from raw HDF5 ..."
 rm -rf "${IMG_DIR}"
 mkdir -p "${IMG_DIR}"
 
-python "${SCRIPT_DIR}/smoke_extract_hdf5.py" \
+python -m src.preprocess.smoke_extract_hdf5 \
     --hdf5 "${HDF5_FILE}" \
     --save_dir "${IMG_DIR}" \
     --max_demos "${MAX_DEMOS}" \
@@ -61,13 +61,13 @@ echo "  Extracted to ${IMG_DIR}"
 
 # ---- Step 2: Generate conversations ----
 echo "[2/5] Generating conversations ..."
-rm -f "${CONVS_DIR}"/libero_${LIBERO_TASK_NAME}_his_2_*_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json 2>/dev/null || true
+rm -f "${CONVS_DIR}"/libero_${LIBERO_TASK_NAME}_his_1_*_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json 2>/dev/null || true
 mkdir -p "${CONVS_DIR}"
 
 cd "${ROOT_DIR}/src/preprocess"
 python action_state_model_conv_generation.py \
     --base_dir "${IMG_DIR}" \
-    --his 2 \
+    --his 1 \
     --len_action "${ACTION_HORIZON}" \
     --task_name "${LIBERO_TASK_NAME}" \
     --resolution "${IMAGE_RESOLUTION}" \
@@ -80,14 +80,14 @@ echo "  Conversations written to ${CONVS_DIR}"
 # ---- Step 3: Tokenize ----
 echo "[3/5] Tokenizing ..."
 # Clean stale tokens for this config
-rm -rf "${TOKENS_DIR}"/libero_${LIBERO_TASK_NAME}_his_2_*_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} 2>/dev/null || true
+rm -rf "${TOKENS_DIR}"/libero_${LIBERO_TASK_NAME}_his_1_*_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} 2>/dev/null || true
 
 python pretoken_state_action_model.py \
     --task "${LIBERO_TASK_NAME}" \
     --resolution "${IMAGE_RESOLUTION}" \
     --with_state \
     --img_names "${IMG_NAMES[@]}" \
-    --his 2 \
+    --his 1 \
     --len_action "${ACTION_HORIZON}" \
     --num_procs "${PRETOKENIZE_PROCS}" \
     --tokenizer_path "${TOKENIZER_PATH}" \
@@ -100,8 +100,8 @@ bash concate_record_libero.sh "${TOKENS_DIR}"
 
 mkdir -p "${CONCATE_DIR}"
 python concate_action_world_model_data_libero.py \
-    --source_dir_patterns "libero_${LIBERO_TASK_NAME}_his_2_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
-    --all_patterns "libero_${LIBERO_TASK_NAME}_his_2_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
+    --source_dir_patterns "libero_${LIBERO_TASK_NAME}_his_1_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
+    --all_patterns "libero_${LIBERO_TASK_NAME}_his_1_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
     --processed_data_root "${PROCESSED_DATA_ROOT}"
 
 echo "  Manifest written to ${CONCATE_DIR}"
@@ -112,7 +112,7 @@ mkdir -p "${CONFIG_DIR}"
 
 cat > "${CONFIG_DIR}/smoke_pretokenize.yaml" <<EOF
 META:
-  - path: '${CONCATE_DIR}/libero_${LIBERO_TASK_NAME}_his_2_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json'
+  - path: '${CONCATE_DIR}/libero_${LIBERO_TASK_NAME}_his_1_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json'
 prompt_text: 'Finish the task: {task_text}.'
 EOF
 
@@ -123,5 +123,5 @@ echo "========================================="
 echo " Smoke pretokenize pipeline complete!"
 echo ""
 echo " To run smoke training (VLA + WM):"
-echo "   python scripts/train.py --config-name pretokenize_sft_wm_vla_smoke"
+echo "   python -m src.cli.train --config-name pretokenize_sft_wm_vla_smoke"
 echo "========================================="

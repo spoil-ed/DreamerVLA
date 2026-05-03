@@ -1,95 +1,56 @@
+"""DreamerV3-style actor-critic imagination + WM pretrain step for DreamerVLA.
+
+Phase-1 (`world_model_pretrain_step`) trains the WM on (obs, action, reward,
+next_obs) tuples by routing through `world_model(batch).compute_loss_dict`.
+
+Phase-2 (`imagine_actor_critic_step`) runs an H-step imagination rollout in
+the WM latent space (Hafner et al. 2023, *DreamerV3*):
+
+  • Critic is a *twohot* categorical over `symlog(value)` bins; the critic
+    loss is −log_prob of the twohot target of `stop_grad(λ-returns)`.
+  • A slow-updated *target critic* provides bootstrap values for λ-returns,
+    refreshed every step by Polyak averaging (τ ≈ 0.02).
+  • Actor advantages are normalised by a running percentile scale
+    S = max(1, EMA(P95) − EMA(P5)) so the actor loss is well-conditioned
+    across reward magnitudes (DreamerV3 §B.3).
+  • Actor loss = −E[ discount · (λ-return / S) ] + η · H[π]   (dynamics
+    back-prop through the WM reward head only — transition backbone is
+    detached).
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Any, Mapping
 
 import torch
-import torch.nn.functional as F
 from omegaconf import DictConfig
 from torch import nn
 from torch.distributions import Normal
 
-from src.algorithms.ppo_grpo import (
-    compute_group_relative_advantages,
-    compute_ppo_actor_loss,
-)
-from src.utils.torch_utils import (
-    freeze_module,
-    move_mapping_to_device,
-    repeat_tensor_mapping,
-)
+from src.models.critic.twohot_critic import ReturnPercentileTracker, soft_update
+from src.utils.torch_utils import move_mapping_to_device
 
 
-@dataclass
-class PreparedPPOBatch:
-    grouped_obs: Mapping[str, Any]
-    embedded_obs: Any | None
-    sampled_action: torch.Tensor
-    scores: torch.Tensor
-    advantages: torch.Tensor
-    log_prob_old: torch.Tensor
-    log_prob_ref: torch.Tensor
+@contextmanager
+def _temporarily_freeze(module: nn.Module):
+    params = list(module.parameters())
+    requires_grad = [p.requires_grad for p in params]
+    try:
+        for p in params:
+            p.requires_grad_(False)
+        yield
+    finally:
+        for p, flag in zip(params, requires_grad):
+            p.requires_grad_(flag)
 
 
-def _print_once(obj: object, attr: str, message: str) -> None:
-    if getattr(obj, attr, False):
-        return
-    print(message, flush=True)
-    setattr(obj, attr, True)
-
-
-def sync_policy_snapshot(source: nn.Module, target: nn.Module) -> None:
-    # Snapshot sync
-    if hasattr(source, "snapshot_state_dict") and hasattr(target, "load_snapshot_state_dict"):
-        target.load_snapshot_state_dict(source.snapshot_state_dict())
-    else:
-        target.load_state_dict(source.state_dict())
-    freeze_module(target)
-
-
-def embed_observation(policy: nn.Module, obs: Mapping[str, Any]) -> Any:
-    shared_embedding = getattr(policy, "embedding", None)
-    if shared_embedding is None:
-        hidden = policy.encode(obs)
-        _print_once(
-            policy,
-            "_trace_encode_to_world_model",
-            f"[Trace] policy.encode -> hidden shape {tuple(hidden.shape)}",
-        )
-        return hidden
-    embedded = shared_embedding.embed_observation(obs)
-    _print_once(
-        policy,
-        "_trace_embedding_to_world_model",
-        f"[Trace] shared embedding -> sequence shape {tuple(embedded.embeddings.shape)} "
-        f"mask shape {tuple(embedded.attention_mask.shape)}",
-    )
-    return embedded
-
-
-def score_candidate_actions(
-    policy: nn.Module,
-    world_model: nn.Module,
-    obs: Mapping[str, Any],
-    actions: torch.Tensor,
-    score_source: str,
-    embedded_obs: Any | None = None,
-) -> torch.Tensor:
-    # World score
-    with torch.no_grad():
-        hidden = embedded_obs if embedded_obs is not None else embed_observation(policy, obs)
-        latent = world_model.encode_latent(hidden)
-        next_latent = world_model.predict_next(latent, actions)
-        attention_mask = getattr(hidden, "attention_mask", None)
-        if attention_mask is None and isinstance(hidden, Mapping):
-            attention_mask = hidden.get("attention_mask")
-        if score_source == "reward_head":
-            scores = world_model.reward(latent, actions, next_latent, attention_mask=attention_mask)
-        elif score_source == "dummy_l2":
-            scores = -(actions.pow(2).mean(dim=-1))
-        else:
-            raise ValueError(f"Unsupported score source: {score_source}")
-    return scores
+def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
+    total = torch.zeros((), device=next(module.parameters()).device)
+    for name, param in module.named_parameters():
+        if name_fragment not in name or param.grad is None:
+            continue
+        total = total + param.grad.detach().float().pow(2).sum()
+    return float(total.sqrt().cpu())
 
 
 def world_model_pretrain_step(
@@ -100,35 +61,27 @@ def world_model_pretrain_step(
     device: torch.device,
     optim_cfg: DictConfig,
 ) -> dict[str, float]:
-    # Batch tensors
-    obs = move_mapping_to_device(batch["obs"], device)
-    next_obs = move_mapping_to_device(batch["next_obs"], device)
-    action = batch["action"].to(device)
-    reward = batch.get("reward")
-    if reward is not None:
-        reward = reward.to(device)
+    """Phase-1 WM update: dispatch through ``world_model(batch)`` (forward).
 
-    # Frozen encoder
+    Both ``TSSMWorldModel`` and ``TSSMWorldModelTransDreamer`` accept the same
+    batch dict ``{obs_embedding, next_obs_embedding, action, reward}`` via
+    their ``compute_loss_dict`` entry point, so the workspace can pick whichever
+    WM class it wants. ``policy`` is unused here but kept in the signature for
+    backwards-compat with callers.
+    """
+    del policy  # batch is already encoded by the workspace; nothing to do here.
+    flat_batch: dict[str, Any] = {}
+    for key in ("obs_embedding", "next_obs_embedding", "action", "action_mask",
+                "reward", "next_obs_image_hiddens", "next_obs_image_token_ids"):
+        value = batch.get(key)
+        if isinstance(value, torch.Tensor):
+            flat_batch[key] = value.to(device)
+        elif value is not None:
+            flat_batch[key] = value
+
     world_model.train()
-    policy.eval()
-    with torch.no_grad():
-        hidden = embed_observation(policy, obs)
-        next_hidden = embed_observation(policy, next_obs)
-        _print_once(
-            world_model,
-            "_trace_pretrain_bridge",
-            "[Trace] world_model_pretrain_step received encoder outputs; entering pretrain_loss.",
-        )
+    losses = world_model(flat_batch)
 
-    # Model loss
-    losses = world_model.pretrain_loss(
-        hidden=hidden,
-        action=action,
-        next_hidden=next_hidden,
-        reward_target=reward,
-    )
-
-    # Optim step
     optimizer.zero_grad(set_to_none=bool(optim_cfg.get("zero_grad_set_to_none", True)))
     losses["loss"].backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -137,213 +90,36 @@ def world_model_pretrain_step(
     )
     optimizer.step()
 
+    def _f(key: str, default: float = 0.0) -> float:
+        v = losses.get(key)
+        return float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(default)
+
     return {
-        "loss": float(losses["loss"].detach().cpu()),
-        "transition_loss": float(losses["transition_loss"].detach().cpu()),
-        "reward_loss": float(losses["reward_loss"].detach().cpu()),
-        "predicted_reward_mean": float(losses["predicted_reward_mean"].detach().cpu()),
-        "latent_norm": float(losses["latent_norm"].detach().cpu()),
+        "loss": _f("loss"),
+        "kl_loss": _f("kl_loss"),
+        "dyn_kl": _f("dyn_kl"),
+        "rep_kl": _f("rep_kl"),
+        "transition_loss": _f("transition_loss"),
+        "reward_loss": _f("reward_loss"),
+        "delta_latent_loss": _f("delta_latent_loss"),
+        "action_margin_loss": _f("action_margin_loss"),
+        "image_recon_ce_loss": _f("image_recon_ce_loss"),
+        "image_static_ce_loss": _f("image_static_ce_loss"),
+        "image_dynamic_ce_loss": _f("image_dynamic_ce_loss"),
+        "image_recon_mse_loss": _f("image_recon_mse_loss"),
+        "image_decoder_loss": _f("image_decoder_loss"),
+        "image_recon_accuracy": _f("image_recon_accuracy"),
+        "image_static_accuracy": _f("image_static_accuracy"),
+        "image_dynamic_accuracy": _f("image_dynamic_accuracy"),
+        "image_dynamic_fraction": _f("image_dynamic_fraction"),
+        "pred_entropy": _f("pred_entropy"),
+        "pred_unique_tokens": _f("pred_unique_tokens"),
+        "gt_unique_tokens": _f("gt_unique_tokens"),
+        "predicted_reward_mean": _f("predicted_reward_mean"),
+        "latent_norm": _f("latent_norm"),
         "grad_norm": float(torch.as_tensor(grad_norm).detach().cpu()),
     }
 
-
-def actor_update_step(
-    new_policy: nn.Module,
-    old_policy: nn.Module,
-    ref_policy: nn.Module,
-    world_model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    batch: Mapping[str, Any],
-    device: torch.device,
-    algorithm_cfg: DictConfig,
-    optim_cfg: DictConfig,
-) -> dict[str, float]:
-    prepared = prepare_ppo_batch(
-        new_policy=new_policy,
-        old_policy=old_policy,
-        ref_policy=ref_policy,
-        world_model=world_model,
-        batch=batch,
-        device=device,
-        algorithm_cfg=algorithm_cfg,
-    )
-    return ppo_update_step(
-        new_policy=new_policy,
-        optimizer=optimizer,
-        prepared=prepared,
-        algorithm_cfg=algorithm_cfg,
-        optim_cfg=optim_cfg,
-    )
-
-
-def prepare_ppo_batch(
-    new_policy: nn.Module,
-    old_policy: nn.Module,
-    ref_policy: nn.Module,
-    world_model: nn.Module,
-    batch: Mapping[str, Any],
-    device: torch.device,
-    algorithm_cfg: DictConfig,
-) -> PreparedPPOBatch:
-    # Grouped batch
-    obs = move_mapping_to_device(batch["obs"], device)
-    group_size = int(algorithm_cfg.group_size)
-    grouped_obs = repeat_tensor_mapping(obs, group_size)
-
-    # Snapshot the rollout policy once. This frozen copy defines old_log_prob for
-    # all subsequent PPO updates on the same sampled batch.
-    sync_policy_snapshot(new_policy, old_policy)
-    if ref_policy is not old_policy:
-        freeze_module(ref_policy)
-    new_policy.train()
-    world_model.eval()
-
-    with torch.no_grad():
-        embedded_grouped_obs = embed_observation(new_policy, grouped_obs)
-        _print_once(
-            world_model,
-            "_trace_actor_bridge",
-            "[Trace] actor_update_step received shared encoder outputs; querying world model reward head.",
-        )
-        if getattr(new_policy, "embedding", None) is None:
-            sampled_action, _, _ = new_policy.sample_action(
-                grouped_obs,
-                deterministic=False,
-            )
-        else:
-            sampled_action, _, _ = new_policy.sample_action_from_embedding(
-                embedded_grouped_obs,
-                deterministic=False,
-            )
-
-        scores = score_candidate_actions(
-            policy=new_policy,
-            world_model=world_model,
-            obs=grouped_obs,
-            actions=sampled_action,
-            score_source=str(algorithm_cfg.score_source),
-            embedded_obs=embedded_grouped_obs,
-        )
-        advantages = compute_group_relative_advantages(
-            scores=scores,
-            group_size=group_size,
-            eps=float(algorithm_cfg.advantage_eps),
-        )
-        if getattr(old_policy, "embedding", None) is None:
-            log_prob_old, _, _ = old_policy.evaluate_action(grouped_obs, sampled_action)
-            log_prob_ref, _, _ = ref_policy.evaluate_action(grouped_obs, sampled_action)
-        else:
-            log_prob_old, _, _ = old_policy.evaluate_action_from_embedding(
-                embedded_grouped_obs,
-                sampled_action,
-            )
-            log_prob_ref, _, _ = ref_policy.evaluate_action_from_embedding(
-                embedded_grouped_obs,
-                sampled_action,
-            )
-
-    return PreparedPPOBatch(
-        grouped_obs=grouped_obs,
-        embedded_obs=embedded_grouped_obs,
-        sampled_action=sampled_action,
-        scores=scores.detach(),
-        advantages=advantages.detach(),
-        log_prob_old=log_prob_old.detach(),
-        log_prob_ref=log_prob_ref.detach(),
-    )
-
-
-def ppo_update_step(
-    new_policy: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    prepared: PreparedPPOBatch,
-    algorithm_cfg: DictConfig,
-    optim_cfg: DictConfig,
-) -> dict[str, float]:
-    # PPO loss
-    if getattr(new_policy, "embedding", None) is None:
-        log_prob_new, entropy, _ = new_policy.evaluate_action(prepared.grouped_obs, prepared.sampled_action)
-    else:
-        log_prob_new, entropy, _ = new_policy.evaluate_action_from_embedding(
-            prepared.embedded_obs,
-            prepared.sampled_action,
-        )
-    losses = compute_ppo_actor_loss(
-        log_prob_new=log_prob_new,
-        log_prob_old=prepared.log_prob_old,
-        advantages=prepared.advantages,
-        clip_ratio=float(algorithm_cfg.clip_ratio),
-        entropy=entropy,
-        entropy_coef=float(algorithm_cfg.entropy_coef),
-        log_prob_ref=prepared.log_prob_ref,
-        kl_coef=float(algorithm_cfg.kl_coef),
-    )
-
-    # Optim step
-    optimizer.zero_grad(set_to_none=bool(optim_cfg.get("zero_grad_set_to_none", True)))
-    losses["loss"].backward()
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        new_policy.parameters(),
-        max_norm=float(optim_cfg.get("grad_clip_norm", 1.0)),
-    )
-    optimizer.step()
-
-    return {
-        "loss": float(losses["loss"].detach().cpu()),
-        "policy_loss": float(losses["policy_loss"].detach().cpu()),
-        "entropy_bonus": float(losses["entropy_bonus"].detach().cpu()),
-        "approx_kl_old": float(losses["approx_kl_old"].detach().cpu()),
-        "approx_kl_ref": float(losses["approx_kl_ref"].detach().cpu()),
-        "clip_fraction": float(losses["clip_fraction"].detach().cpu()),
-        "ratio_mean": float(losses["ratio_mean"].detach().cpu()),
-        "advantage_mean": float(losses["advantage_mean"].detach().cpu()),
-        "advantage_std": float(losses["advantage_std"].detach().cpu()),
-        "score_mean": float(prepared.scores.mean().detach().cpu()),
-        "log_prob_new_mean": float(log_prob_new.mean().detach().cpu()),
-        "log_prob_old_mean": float(prepared.log_prob_old.mean().detach().cpu()),
-        "log_prob_ref_mean": float(prepared.log_prob_ref.mean().detach().cpu()),
-        "grad_norm": float(torch.as_tensor(grad_norm).detach().cpu()),
-    }
-
-
-def run_actor_ppo_updates(
-    new_policy: nn.Module,
-    old_policy: nn.Module,
-    ref_policy: nn.Module,
-    world_model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    batch: Mapping[str, Any],
-    device: torch.device,
-    algorithm_cfg: DictConfig,
-    optim_cfg: DictConfig,
-    num_updates: int,
-) -> list[dict[str, float]]:
-    prepared = prepare_ppo_batch(
-        new_policy=new_policy,
-        old_policy=old_policy,
-        ref_policy=ref_policy,
-        world_model=world_model,
-        batch=batch,
-        device=device,
-        algorithm_cfg=algorithm_cfg,
-    )
-    metrics: list[dict[str, float]] = []
-    for update_idx in range(int(num_updates)):
-        step_metrics = ppo_update_step(
-            new_policy=new_policy,
-            optimizer=optimizer,
-            prepared=prepared,
-            algorithm_cfg=algorithm_cfg,
-            optim_cfg=optim_cfg,
-        )
-        step_metrics["update_idx"] = float(update_idx)
-        metrics.append(step_metrics)
-    return metrics
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Dreamer-style actor-critic with imagined rollouts
-# ─────────────────────────────────────────────────────────────────────────────
 
 def compute_lambda_returns(
     rewards: list[torch.Tensor],  # H tensors, each [B]
@@ -370,121 +146,182 @@ def imagine_actor_critic_step(
     policy: nn.Module,
     world_model: nn.Module,
     critic: nn.Module,
+    target_critic: nn.Module,
     actor_optimizer: torch.optim.Optimizer,
     critic_optimizer: torch.optim.Optimizer,
+    return_tracker: ReturnPercentileTracker,
     obs: Mapping[str, Any],
     device: torch.device,
     algorithm_cfg: DictConfig,
     optim_cfg: DictConfig,
 ) -> dict[str, float]:
-    """One Dreamer-style actor-critic update using WM imagination.
+    """Single DreamerV3 actor-critic update over WM imagination.
 
-    Training flow
-    ─────────────
-    1. Encode real obs → WM latent state (detached; no grad back to encoder).
-    2. Imagine H steps:
-         policy samples action from latent feature (reparameterised → grad)
-         WM dynamics predict next latent (detached; no grad through backbone)
-         WM reward head scores (state, action, next_state) → grad through action
-    3. Critic estimates V(s_t) for each imagined state → bootstrap λ-returns.
-    4. Actor loss  = −E[γᵗ · G_t^λ] + entropy bonus.
-    5. Critic loss =  MSE(V(s_t), stop_grad(G_t^λ)).
-
-    Note: gradients flow through the WM *reward head* only (not the transition
-    backbone). This keeps memory bounded and avoids back-propagating through
-    the large causal transformer for H steps.
+    Expects `critic` and `target_critic` to be `TwohotCritic` instances exposing
+    `forward(feat) -> expected_value` and `log_prob_of(feat, target_values)`.
     """
     horizon = int(algorithm_cfg.imagination_horizon)
     gamma = float(algorithm_cfg.gamma)
     lam = float(algorithm_cfg.lam)
-    entropy_coef = float(algorithm_cfg.get("entropy_coef", 0.0))
+    entropy_coef = float(algorithm_cfg.get("entropy_coef", 3.0e-4))
+    target_tau = float(algorithm_cfg.get("target_critic_tau", 0.02))
+    actor_loss_type = str(algorithm_cfg.get("actor_loss_type", "pathwise"))
     grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
     zero_grad = bool(optim_cfg.get("zero_grad_set_to_none", True))
+    use_pg_actor_loss = actor_loss_type in {"dreamerv3_pg", "pg", "policy_gradient"}
+    if actor_loss_type not in {"pathwise", "dreamerv3_pg", "pg", "policy_gradient"}:
+        raise ValueError(f"Unknown actor_loss_type: {actor_loss_type!r}")
 
-    # ── 1. Initial latent state (no gradient back to encoder / WM encoder) ─
     world_model.eval()
+    target_critic.eval()
     policy.train()
     critic.train()
 
+    # ── 1. Initial latent (no grad back to encoder / posterior) ────────────
+    obs = move_mapping_to_device(obs, device)
+    hidden = obs["obs_embedding"]
+    if not isinstance(hidden, torch.Tensor):
+        raise TypeError(
+            f"imagine_actor_critic_step expects obs['obs_embedding'] to be a Tensor, "
+            f"got {type(hidden).__name__}"
+        )
+
+    # FSDP only triggers all-gather on `__call__` / `forward`; route every
+    # custom op through `module({'mode': ..., ...})` so sharded params get
+    # gathered before the matmul and grads flow back through FSDP's backward
+    # hook (reduce-scatter to the local shard).
     with torch.no_grad():
-        hidden = embed_observation(policy, move_mapping_to_device(obs, device))
-        if isinstance(hidden, torch.Tensor):
-            hidden = hidden.detach()
-        initial_latent = world_model.encode_latent(hidden)
+        initial_latent = world_model({"mode": "encode_latent", "hidden": hidden.detach()})
+    # Float32 boundary: WM runs in bf16, policy/critic stay in fp32.
+    current_feat = initial_latent.feature().detach().float()
 
-    current_feat = initial_latent.feature().detach()  # [B, latent_dim+deter_dim]
-
-    # ── 2. H-step imagination ─────────────────────────────────────────────
+    # ── 2. H-step imagination (grad flows through action → reward head) ────
     feats: list[torch.Tensor] = [current_feat]
     rewards: list[torch.Tensor] = []
     entropies: list[torch.Tensor] = []
+    log_probs: list[torch.Tensor] = []
 
-    for _ in range(horizon):
-        # Actor: sample action with reparameterisation (grad flows here)
-        action, _, extra = policy.sample_action_from_embedding(current_feat, deterministic=False)
+    # Keep WM frozen until the actor backward has finished. FSDP registers
+    # different backward hooks depending on `requires_grad` at forward time, so
+    # restoring WM params before `actor_loss.backward()` can trip FSDP's hook
+    # state assertion.
+    with _temporarily_freeze(world_model):
+        for _ in range(horizon):
+            action, _, extra = policy({
+                "mode": "sample", "hidden": current_feat, "deterministic": False,
+            })
+            if extra.get("std") is not None:
+                dist = Normal(extra["mean"], extra["std"])
+                if use_pg_actor_loss:
+                    log_probs.append(dist.log_prob(action.detach()).sum(dim=-1))
+                entropies.append(dist.entropy().sum(dim=-1))
 
-        if entropy_coef > 0.0 and extra.get("std") is not None:
-            dist = Normal(extra["mean"], extra["std"])
-            entropies.append(dist.entropy().sum(dim=-1))   # [B]
+            action_for_world = action.detach() if use_pg_actor_loss else action
+            if use_pg_actor_loss:
+                # DreamerV3-style actor update treats imagined returns as
+                # stop-gradient advantages. The world model rollout only
+                # produces scores, so avoid retaining its graph here.
+                with torch.no_grad():
+                    current_latent = world_model({"mode": "encode_latent", "hidden": current_feat})
+                    next_latent = world_model({
+                        "mode": "predict_next", "latent": current_latent, "actions": action_for_world,
+                    })
+                    next_feat = next_latent.feature().detach().float()
+                    reward = world_model({
+                        "mode": "reward", "latent": current_latent, "actions": action_for_world,
+                        "next_latent": next_latent,
+                    }).float()
+            else:
+                with torch.no_grad():
+                    current_latent = world_model({"mode": "encode_latent", "hidden": current_feat})
+                next_latent = world_model({
+                    "mode": "predict_next", "latent": current_latent, "actions": action_for_world,
+                })
+                next_feat = next_latent.feature().detach().float()
 
-        # Dynamics: predict next state — detach action to avoid backprop
-        # through the large transition backbone
+                reward = world_model({
+                    "mode": "reward", "latent": current_latent, "actions": action_for_world,
+                    "next_latent": next_latent,
+                }).float()
+            rewards.append(reward)
+            feats.append(next_feat)
+            current_feat = next_feat
+
+        # ── 3. Target-critic bootstrap values (stop-grad) ──────────────────
         with torch.no_grad():
-            current_latent = world_model.encode_latent(current_feat)
-            next_latent = world_model.predict_next(current_latent, action.detach())
-            next_feat = next_latent.feature().detach()     # [B, D]
+            feat_stack_all = torch.stack(feats, dim=0)             # [H+1, B, D]
+            Hp1, B, D = feat_stack_all.shape
+            values_flat = target_critic(feat_stack_all.view(Hp1 * B, D)).view(Hp1, B)
+            values = [values_flat[t] for t in range(Hp1)]
 
-        # Reward: gradient CAN flow action → reward_head → actor_loss
-        # cat([current_feat (detached), action (grad), next_feat (detached)])
-        reward = world_model.reward(current_latent, action, next_latent)  # [B]
+        # ── 4. λ-returns (grad through rewards → action → actor) ───────────
+        returns = compute_lambda_returns(rewards, values, gamma, lam)  # [H, B]
 
-        rewards.append(reward)
-        feats.append(next_feat)
-        current_feat = next_feat
+        # ── 5. Percentile return normalisation ─────────────────────────────
+        return_tracker.update(returns)
+        scale = return_tracker.scale()
+        scale_tensor = torch.as_tensor(scale, device=device, dtype=returns.dtype).clamp_min(1.0)
 
-    # ── 3. Critic values for bootstrap (stop_gradient from actor's perspective) ─
-    with torch.no_grad():
-        feat_stack_all = torch.stack(feats, dim=0)           # [H+1, B, D]
-        Hp1, B, D = feat_stack_all.shape
-        values_flat = critic(feat_stack_all.view(Hp1 * B, D)).view(Hp1, B)
-        values = [values_flat[t] for t in range(Hp1)]        # list of H+1 tensors [B]
+        # ── 6. Actor loss ──────────────────────────────────────────────────
+        discount = torch.tensor(
+            [gamma ** t for t in range(horizon)], device=device, dtype=returns.dtype,
+        ).unsqueeze(-1)                                             # [H, 1]
+        if use_pg_actor_loss:
+            if not log_probs:
+                raise RuntimeError("DreamerV3 PG actor loss requires stochastic policy log_probs.")
+            log_prob_stack = torch.stack(log_probs, dim=0)           # [H, B]
+            baseline = values_flat[:-1].detach()                    # [H, B]
+            advantages = (returns.detach() - baseline) / scale_tensor
+            actor_loss = -(discount * log_prob_stack * advantages.detach()).mean()
+        else:
+            actor_loss = -(discount * (returns / scale_tensor)).mean()
+        if entropies:
+            actor_loss = actor_loss - entropy_coef * torch.stack(entropies).mean()
 
-    # ── 4. λ-returns (gradient through rewards → action → policy) ─────────
-    returns = compute_lambda_returns(rewards, values, gamma, lam)  # [H, B]
+        actor_optimizer.zero_grad(set_to_none=zero_grad)
+        actor_loss.backward()
+        actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
+        actor_action_head_grad_norm = _named_grad_norm(policy, "action")
+        actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
+        actor_optimizer.step()
 
-    # ── 5. Actor loss ─────────────────────────────────────────────────────
-    discount = torch.tensor(
-        [gamma ** t for t in range(horizon)],
-        device=device, dtype=returns.dtype,
-    ).unsqueeze(-1)                              # [H, 1]
-    actor_loss = -(discount * returns).mean()
-    if entropies and entropy_coef > 0.0:
-        actor_loss = actor_loss - entropy_coef * torch.stack(entropies).mean()
-
-    actor_optimizer.zero_grad(set_to_none=zero_grad)
-    actor_loss.backward()
-    actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
-    actor_optimizer.step()
-
-    # ── 6. Critic loss: fit stop_grad(λ-returns) ──────────────────────────
-    # Re-run the critic forward *with* gradient (fresh graph, no dependency on actor)
-    feat_stack_h = feat_stack_all[:-1]          # [H, B, D]  (H states)
+    # ── 7. Critic twohot loss against stop_grad(λ-returns) ─────────────────
+    feat_stack_h = feat_stack_all[:-1]                             # [H, B, D]
     H, B2, D2 = feat_stack_h.shape
-    value_preds = critic(feat_stack_h.view(H * B2, D2)).view(H, B2)  # [H, B]
-    critic_loss = F.mse_loss(value_preds, returns.detach())
+    log_probs_critic = critic({
+        "mode": "log_prob",
+        "hidden": feat_stack_h.view(H * B2, D2),
+        "values": returns.detach().view(H * B2),
+    })
+    critic_loss = -log_probs_critic.mean()
 
     critic_optimizer.zero_grad(set_to_none=zero_grad)
     critic_loss.backward()
     critic_grad_norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=grad_clip)
     critic_optimizer.step()
 
+    # ── 8. Polyak-average target critic ────────────────────────────────────
+    soft_update(target_critic, critic, tau=target_tau)
+
     return {
         "actor_loss": float(actor_loss.detach().cpu()),
         "critic_loss": float(critic_loss.detach().cpu()),
         "returns_mean": float(returns.detach().mean().cpu()),
         "returns_std": float(returns.detach().std().cpu()),
+        "return_scale": float(scale),
         "reward_mean": float(torch.stack(rewards).detach().mean().cpu()),
         "value_mean": float(values_flat[:-1].mean().cpu()),
         "actor_grad_norm": float(torch.as_tensor(actor_grad_norm).detach().cpu()),
+        "actor_grad_norm_adapter": actor_adapter_grad_norm,
+        "actor_grad_norm_action_head": actor_action_head_grad_norm,
+        "actor_grad_norm_log_std": actor_log_std_grad_norm,
         "critic_grad_norm": float(torch.as_tensor(critic_grad_norm).detach().cpu()),
     }
+
+
+__all__ = [
+    "compute_lambda_returns",
+    "imagine_actor_critic_step",
+    "world_model_pretrain_step",
+]

@@ -13,7 +13,7 @@ cd "$ROOT_DIR/src/preprocess"
 
 python action_state_model_conv_generation.py \
     --base_dir "$BASE_DIR" \
-    --his 2 \
+    --his 1 \
     --len_action "$ACTION_HORIZON" \
     --task_name "$LIBERO_TASK_NAME" \
     --resolution "$IMAGE_RESOLUTION" \

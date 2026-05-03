@@ -70,12 +70,18 @@ class ConvEncoderStem(nn.Module):
         kernel: int = 4,
         stride: int = 2,
         padding: int = 1,
+        # Append LayerNorm after the final 1024-d Linear projection so that
+        # batch-axis variance is forced > 0; without it the obs vector can
+        # collapse to a single direction across samples (observed empirically
+        # under transition_loss / delta_latent_loss MSE objectives).
+        post_norm: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = int(in_channels)
         self.spatial = (int(spatial[0]), int(spatial[1]))
         self.obs_dim = int(obs_dim)
         self.init_proj_channels = int(init_proj_channels)
+        self.post_norm = bool(post_norm)
 
         # 1×1 projection to compress 4096 → init_proj_channels before the
         # strided convs (keeps conv parameter count sane).
@@ -103,6 +109,7 @@ class ConvEncoderStem(nn.Module):
         self.proj = nn.Linear(flat_dim, obs_dim)
         nn.init.xavier_uniform_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
+        self.post_ln = nn.LayerNorm(obs_dim) if self.post_norm else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -122,6 +129,8 @@ class ConvEncoderStem(nn.Module):
         x = self.conv_stages(x)
         x = x.flatten(1)                                                # [N, flat_dim]
         x = self.proj(x)                                                # [N, obs_dim]
+        if self.post_ln is not None:
+            x = self.post_ln(x)
         x = x.view(*leading, self.obs_dim)
         return x
 

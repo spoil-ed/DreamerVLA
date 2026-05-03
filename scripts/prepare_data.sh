@@ -5,7 +5,7 @@
 #   bash scripts/prepare_data.sh
 #
 # Override defaults via env vars:
-#   LIBERO_TASK_SUITE=libero_10 IMAGE_RESOLUTION=256 bash scripts/prepare_data.sh
+#   LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 bash scripts/prepare_data.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

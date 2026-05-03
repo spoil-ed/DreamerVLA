@@ -6,11 +6,11 @@ Each training step runs two interleaved phases on the same data batch:
            WM learns (obs, action) → next_obs transitions and reward prediction.
            Encoder is frozen; policy/critic are not involved.
 
-  Phase-2  Actor-Critic update  (Dreamer-style)
+  Phase-2  Actor-critic update (DreamerV3-style)
            H-step imagination in WM latent space:
-             policy samples actions → WM gives rewards → critic bootstraps λ-returns
-           Actor  maximises γᵗ·G_t^λ  (gradient through reward head → actions)
-           Critic minimises MSE(V(s_t), stop_grad(G_t^λ))
+             policy samples actions → WM gives rewards → target_critic
+             bootstraps λ-returns → percentile-normalised advantages
+           Twohot symlog critic; Polyak-averaged target critic.
 
 Both phases can be toggled independently via `training.run_wm_phase` and
 `training.run_actor_critic_phase`.
@@ -35,6 +35,7 @@ from src.algorithms.dreamer_vla import (
     world_model_pretrain_step,
 )
 from src.dataloader import BaseDataset
+from src.models.critic.twohot_critic import ReturnPercentileTracker
 from src.trainer import NopretokenizeSFTDistributedHelper
 from src.utils.checkpoint_util import TopKCheckpointManager
 from src.utils.ema import EMAHelper
@@ -45,11 +46,11 @@ from src.workspace.base_workspace import BaseWorkspace
 
 
 class DreamerVLAWorkspace(BaseWorkspace):
-    """Closed-loop DreamerVLA: WM pretraining + Dreamer actor-critic."""
+    """Closed-loop DreamerVLA: WM pretraining + DreamerV3 actor-critic (twohot + target critic)."""
 
     include_keys = ("global_step", "epoch")
     # encoder is frozen — no need to checkpoint it.
-    exclude_keys = ("encoder",)
+    exclude_keys = ("encoder", "_unwrapped_world_model")
 
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla"
@@ -77,7 +78,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
         # ── model placeholders ──────────────────────────────────────────────
         self.encoder = None        # RynnVLAEncoder   — frozen feature extractor
         self.policy = None         # VLAPolicy         — Dreamer actor (latent space)
-        self.critic = None         # Critic            — value function (latent space)
+        self.critic = None         # TwohotCritic      — twohot symlog value function
+        self.target_critic = None  # TwohotCritic      — Polyak-averaged target copy
         self.world_model = None    # TSSMWorldModel    — dynamics + reward
 
         # ── optimizer placeholders ──────────────────────────────────────────
@@ -85,6 +87,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.critic_optimizer = None
         self.world_model_optimizer = None
         self.world_model_ema: EMAHelper | None = None
+        self.return_tracker: ReturnPercentileTracker | None = None
 
     # ──────────────────────────────────────────────────────────────────────
     # Path helpers
@@ -153,11 +156,20 @@ class DreamerVLAWorkspace(BaseWorkspace):
     # Batch assembly
     # ──────────────────────────────────────────────────────────────────────
 
+    def _wm_io_mode(self) -> str:
+        wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
+        return str(getattr(wm, "io_mode", "hidden"))
+
+    def _obs_embedding_for_wm(self, input_ids_list: list[list[int]]) -> torch.Tensor:
+        """Produce the obs_embedding the WM expects: BPE ids in token mode,
+        pooled hiddens otherwise."""
+        if self._wm_io_mode() == "token":
+            return self._extract_image_bpe_ids(input_ids_list)
+        return self._encode_hidden_from_tokenized(input_ids_list)
+
     def _build_wm_pretrain_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Assemble {obs, next_obs, action, reward?} for world_model_pretrain_step.
-        obs / next_obs are {obs_embedding: tensor}.
-        Returns None when required keys are absent.
+        """Assemble flat {obs_embedding, next_obs_embedding, action, reward?}
+        accepted by both TSSMWorldModel.forward and TSSMWorldModelTransDreamer.forward.
         """
         obs_ids = batch.get("wm_obs_input_ids")
         next_obs_ids = batch.get("wm_next_obs_input_ids")
@@ -169,8 +181,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
             return None
 
         wm_batch: dict[str, Any] = {
-            "obs": self._make_obs_dict(obs_ids),
-            "next_obs": self._make_obs_dict(next_obs_ids),
+            "obs_embedding": self._obs_embedding_for_wm(obs_ids),
+            "next_obs_embedding": self._obs_embedding_for_wm(next_obs_ids),
             "action": action.to(self.device),
         }
         reward = batch.get("reward")
@@ -179,16 +191,167 @@ class DreamerVLAWorkspace(BaseWorkspace):
         return wm_batch
 
     def _build_actor_critic_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
-        """
-        Assemble {obs} for imagine_actor_critic_step.
-        obs is {obs_embedding: tensor} — the starting state for imagination.
-        Falls back from wm_obs_input_ids → input_ids.
-        Returns None when neither key is present.
+        """Assemble {obs: {obs_embedding}} for imagine_actor_critic_step.
+        obs_embedding is BPE ids in token mode, pooled hiddens otherwise.
         """
         obs_ids = batch.get("wm_obs_input_ids") or batch.get("input_ids")
         if not isinstance(obs_ids, list):
             return None
-        return {"obs": self._make_obs_dict(obs_ids)}
+        return {"obs": {"obs_embedding": self._obs_embedding_for_wm(obs_ids)}}
+
+    # ── Token-mode helpers (mirrored from pretokenize_wm_workspace) ──────────
+
+    def _get_image_bpe_set(self) -> set[int]:
+        cached = getattr(self, "_image_bpe_set_cache", None)
+        if cached is not None:
+            return cached
+        if self.encoder is None:
+            raise RuntimeError("encoder must be built before _get_image_bpe_set()")
+        vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
+        self._image_bpe_set_cache = set(vocab_mapping.bpe2img.keys())
+        return self._image_bpe_set_cache
+
+    def _extract_image_bpe_ids(
+        self, input_ids_list: list[list[int]],
+    ) -> torch.Tensor:
+        """Pull the WM's target image block's BPE ids out of each tokenized
+        sample, returning [B, n_img_tok] long.  Same logic as
+        PretokenizeWMWorkspace._extract_image_bpe_ids.
+        """
+        from src.utils.wm_image_viz import extract_image_blocks
+        wm_inner = getattr(self, "_unwrapped_world_model", None) or self.world_model
+        n_img_tok = int(getattr(wm_inner, "n_image_tokens", 256))
+        which_block = int(OmegaConf.select(self.cfg, "viz.which_block", default=-2))
+        img_bpe = self._get_image_bpe_set()
+        if not input_ids_list:
+            return torch.zeros((0, n_img_tok), dtype=torch.long, device=self.device)
+        rows: list[list[int]] = []
+        for idx, seq in enumerate(input_ids_list):
+            blocks = extract_image_blocks(list(seq))
+            if not blocks:
+                raise ValueError(f"sample {idx}: no image block found in tokens")
+            bidx = which_block if which_block >= 0 else len(blocks) + which_block
+            if not (0 <= bidx < len(blocks)):
+                raise ValueError(
+                    f"sample {idx}: which_block={which_block} out of range "
+                    f"(have {len(blocks)} blocks)"
+                )
+            _start, _end, block_ids = blocks[bidx]
+            tok_ids = [int(tok) for tok in block_ids if int(tok) in img_bpe]
+            if len(tok_ids) != n_img_tok:
+                raise ValueError(
+                    f"sample {idx}: block has {len(tok_ids)} image tokens, "
+                    f"expected {n_img_tok}"
+                )
+            rows.append(tok_ids)
+        return torch.tensor(rows, dtype=torch.long, device=self.device)
+
+    # ── Cross-run init ckpt loaders ──────────────────────────────────────────
+
+    def _load_encoder_init_ckpt(self, ckpt_path: str) -> None:
+        """Load `state_dicts.encoder` from a workspace-format .ckpt into
+        self.encoder (already instantiated). Used to inject a fine-tuned VLA
+        encoder ckpt at the start of cotrain.
+        """
+        path = pathlib.Path(ckpt_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"init.encoder_state_ckpt not found: {path}")
+        if self.distributed.is_main_process:
+            print(f"[init] loading encoder weights from {path} ...")
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        sd = payload.get("state_dicts", {}).get("encoder")
+        if sd is None:
+            raise RuntimeError(f"{path} has no state_dicts.encoder")
+        target_dtype = next(self.encoder.parameters()).dtype
+        sd = {
+            k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)
+            for k, v in sd.items()
+        }
+        missing, unexpected = self.encoder.load_state_dict(sd, strict=False)
+        if self.distributed.is_main_process:
+            print(
+                f"[init] encoder loaded: {len(sd)} tensors, "
+                f"missing={len(missing)}, unexpected={len(unexpected)}"
+            )
+        del payload
+
+    def _load_world_model_init_ckpt(self, ckpt_path: str) -> None:
+        """Load `state_dicts.world_model` from a workspace-format .ckpt into
+        self.world_model BEFORE FSDP wrap. FSDP `sync_module_states=True` will
+        broadcast rank-0 params to all ranks during wrap, so only rank 0 needs
+        to read the file.
+        """
+        path = pathlib.Path(ckpt_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"init.world_model_state_ckpt not found: {path}")
+        if self.distributed.is_main_process:
+            print(f"[init] loading world_model weights from {path} ...")
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+            sd = payload.get("state_dicts", {}).get("world_model")
+            if sd is None:
+                raise RuntimeError(f"{path} has no state_dicts.world_model")
+            target_dtype = next(self.world_model.parameters()).dtype
+            sd = {
+                k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)
+                for k, v in sd.items()
+            }
+            model_sd = self.world_model.state_dict()
+            mismatched = [
+                (k, tuple(v.shape), tuple(model_sd[k].shape))
+                for k, v in sd.items()
+                if k in model_sd and tuple(v.shape) != tuple(model_sd[k].shape)
+            ]
+            if mismatched:
+                sd = {
+                    k: v for k, v in sd.items()
+                    if k not in model_sd or tuple(v.shape) == tuple(model_sd[k].shape)
+                }
+            missing, unexpected = self.world_model.load_state_dict(sd, strict=False)
+            print(
+                f"[init] world_model loaded: {len(sd)} tensors, "
+                f"missing={len(missing)}, unexpected={len(unexpected)}"
+            )
+            if mismatched:
+                print(f"[init] skipped shape-mismatched tensors: {len(mismatched)}")
+                print(f"[init] shape mismatches (first 5): {mismatched[:5]}")
+            if missing:
+                print(f"[init] missing (first 5): {missing[:5]}")
+            if unexpected:
+                print(f"[init] unexpected (first 5): {unexpected[:5]}")
+            del payload
+        self.distributed.barrier()
+
+    def _attach_image_token_mapping(self) -> None:
+        """For spatial_codec / token-mode WMs, attach the encoder's image-vocab
+        BPE mapping (and lm_head in hidden mode). Required before WM forward.
+        """
+        wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
+        if not getattr(wm, "spatial_codec", False):
+            return
+        if self.encoder is None:
+            return
+        try:
+            lm_head = self.encoder.backbone.lm_head
+            vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
+            image_token_bpe_ids = torch.tensor(
+                sorted(vocab_mapping.bpe2img.keys()), dtype=torch.long,
+            )
+            full_vocab_size = int(lm_head.weight.shape[0])
+            wm_io_mode = str(getattr(wm, "io_mode", "hidden"))
+            wm.attach_lm_head(
+                lm_head if wm_io_mode == "hidden" else None,
+                image_token_bpe_ids,
+                full_vocab_size=full_vocab_size,
+            )
+            if self.distributed.is_main_process:
+                tag = "lm_head" if wm_io_mode == "hidden" else "vocab (token mode)"
+                print(
+                    f"[wm] attached {tag} for image-vocab CE "
+                    f"(image_vocab={image_token_bpe_ids.numel()}, full_vocab={full_vocab_size})"
+                )
+        except Exception as exc:
+            if self.distributed.is_main_process:
+                print(f"[wm] attach_lm_head failed — token-mode WM will crash: {exc}")
 
     # ──────────────────────────────────────────────────────────────────────
     # Checkpoint helpers
@@ -239,7 +402,9 @@ class DreamerVLAWorkspace(BaseWorkspace):
         if exclude_keys is None:
             exclude_keys = tuple()
         if include_keys is None:
-            include_keys = tuple(payload["pickles"].keys())
+            include_keys = tuple(
+                key for key in payload["pickles"].keys() if key != "_output_dir"
+            )
 
         for key, value in payload["state_dicts"].items():
             if key in exclude_keys or key not in self.__dict__ or self.__dict__[key] is None:
@@ -261,6 +426,11 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 return self.critic.state_dict()
         if key == "critic_optimizer" and self.critic_optimizer is not None and self.critic is not None:
             return self.distributed.optimizer_state_dict(self.critic, self.critic_optimizer)
+        if key == "target_critic" and self.target_critic is not None:
+            with self.distributed.model_state_dict_context(self.target_critic):
+                return self.target_critic.state_dict()
+        if key == "return_tracker" and self.return_tracker is not None:
+            return self.return_tracker.state_dict()
         if key == "world_model" and self.world_model is not None:
             with self.distributed.model_state_dict_context(self.world_model):
                 return self.world_model.state_dict()
@@ -284,6 +454,13 @@ class DreamerVLAWorkspace(BaseWorkspace):
             return
         if key == "critic_optimizer" and self.critic_optimizer is not None and self.critic is not None:
             self.distributed.load_optimizer_state_dict(self.critic, self.critic_optimizer, state_dict)
+            return
+        if key == "target_critic" and self.target_critic is not None:
+            with self.distributed.model_state_dict_context(self.target_critic):
+                value.load_state_dict(state_dict, **kwargs)
+            return
+        if key == "return_tracker" and self.return_tracker is not None:
+            value.load_state_dict(state_dict)
             return
         if key == "world_model" and self.world_model is not None:
             with self.distributed.model_state_dict_context(self.world_model):
@@ -313,7 +490,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 k: (v.to(self.device) if isinstance(v, torch.Tensor) else v)
                 for k, v in wm_batch.items()
             }
-            loss_dict = self.world_model.compute_loss_dict(wm_batch)
+            # Route via __call__ so FSDP gathers params before compute_loss_dict.
+            loss_dict = self.world_model(wm_batch)
             val_losses.append(float(loss_dict["loss"].item()))
             val_transition_losses.append(float(loss_dict["transition_loss"].item()))
         self.world_model.train()
@@ -352,7 +530,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
             dataloader_kwargs["collate_fn"] = collate_fn
         train_dataloader = DataLoader(dataset, **dataloader_kwargs)
 
-        # configure validation dataset
         val_dataloaders: dict[str, DataLoader] = {}
         for split_name in ("val_ind", "val_ood"):
             val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
@@ -370,29 +547,51 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 val_dl_kwargs["collate_fn"] = val_collate
             val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
 
-        # ── encoder (frozen) ────────────────────────────────────────────
+        # ── encoder (frozen) ───────────────────────────────────────────
         encoder_cfg = self._build_frozen_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
         freeze_module(self.encoder)
+        encoder_init_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
+        if encoder_init_ckpt:
+            self._load_encoder_init_ckpt(str(encoder_init_ckpt))
 
-        # ── world model (trainable in WM phase, frozen in actor-critic phase) ─
+        # ── world model ────────────────────────────────────────────────
         world_model_cfg = OmegaConf.select(cfg, "world_model")
         if world_model_cfg is None:
             raise ValueError("`world_model` config section is required.")
-
         wm_hidden_dim = (
             self.infer_hidden_dim_from_dataset(dataset)
             or self.infer_hidden_dim_from_encoder(self.encoder)
         )
+        instantiate_kwargs: dict[str, Any] = {}
         if wm_hidden_dim is not None:
-            self.world_model = hydra.utils.instantiate(world_model_cfg, hidden_dim=wm_hidden_dim).to(self.device)
-        else:
-            self.world_model = hydra.utils.instantiate(world_model_cfg).to(self.device)
+            instantiate_kwargs["hidden_dim"] = wm_hidden_dim
+        # token-mode WM needs num_image_tokens_vocab; auto-fill from encoder
+        # when not pinned in the cfg.
+        if (
+            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden")) == "token"
+            and OmegaConf.select(world_model_cfg, "num_image_tokens_vocab") is None
+        ):
+            vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
+            instantiate_kwargs["num_image_tokens_vocab"] = len(vocab_mapping.bpe2img)
+        self.world_model = hydra.utils.instantiate(
+            world_model_cfg, **instantiate_kwargs
+        ).to(self.device)
 
-        # Uniform dtype before FSDP wrapping (transition backbone loads in bf16)
         fsdp_precision = str(OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16"))
         _dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
         self.world_model = self.world_model.to(dtype=_dtype_map.get(fsdp_precision, torch.bfloat16))
+
+        # Pre-FSDP wiring: attach image-token vocab mapping (required for token
+        # mode forward), then load init ckpt while the module is still
+        # unwrapped.  Keep an unwrapped reference for batch-builder helpers
+        # that need to read attributes like io_mode and n_image_tokens.
+        self._unwrapped_world_model = self.world_model
+        self._attach_image_token_mapping()
+        wm_init_ckpt = OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)
+        if wm_init_ckpt:
+            self._load_world_model_init_ckpt(str(wm_init_ckpt))
+
         self.world_model = self.distributed.wrap_trainable_module(self.world_model)
 
         wm_optim_cfg = OmegaConf.select(cfg, "optim.world_model")
@@ -400,12 +599,13 @@ class DreamerVLAWorkspace(BaseWorkspace):
             raise ValueError("`optim.world_model` must be configured.")
         self.world_model_optimizer = build_optimizer(self.world_model, wm_optim_cfg)
 
-        # ── policy (Dreamer actor, acts in WM latent space) ────────────
+        # ── policy (Dreamer actor) ─────────────────────────────────────
         policy_cfg = OmegaConf.select(cfg, "policy")
         if policy_cfg is None:
             raise ValueError("`policy` config section is required.")
-
         self.policy = hydra.utils.instantiate(policy_cfg).to(self.device)
+        # Policy stays in float32 — its forward casts inputs via .float()
+        # internally, so feature dtype is normalised at the call site.
         self.policy = self.distributed.wrap_trainable_module(self.policy)
 
         policy_optim_cfg = OmegaConf.select(cfg, "optim.policy")
@@ -413,20 +613,37 @@ class DreamerVLAWorkspace(BaseWorkspace):
             raise ValueError("`optim.policy` must be configured.")
         self.policy_optimizer = build_optimizer(self.policy, policy_optim_cfg)
 
-        # ── critic (value function in WM latent space) ──────────────────
+        # ── twohot critic (online + target copy) ───────────────────────
         critic_cfg = OmegaConf.select(cfg, "critic")
         if critic_cfg is None:
             raise ValueError("`critic` config section is required.")
 
         self.critic = hydra.utils.instantiate(critic_cfg).to(self.device)
+        self.target_critic = hydra.utils.instantiate(critic_cfg).to(self.device)
+        self.target_critic.load_state_dict(self.critic.state_dict())
+        # Critic / target_critic stay in float32 — feature dtype normalised
+        # at call site (imagine_actor_critic_step).
+        freeze_module(self.target_critic)  # updated by Polyak averaging, never by optimiser
         self.critic = self.distributed.wrap_trainable_module(self.critic)
+        # target_critic must be FSDP-wrapped with the SAME flattening as
+        # critic, otherwise soft_update sees one side as 1-D shards and the
+        # other as 2-D layers and dim mismatches. wrap_trainable_module is
+        # idempotent on already-frozen modules — it'll FSDP-wrap them under
+        # FSDP strategy and DDP-skip them otherwise.
+        self.target_critic = self.distributed.wrap_trainable_module(self.target_critic)
 
         critic_optim_cfg = OmegaConf.select(cfg, "optim.critic")
         if critic_optim_cfg is None:
             raise ValueError("`optim.critic` must be configured.")
         self.critic_optimizer = build_optimizer(self.critic, critic_optim_cfg)
 
-        # configure ema
+        # ── return percentile tracker ──────────────────────────────────
+        self.return_tracker = ReturnPercentileTracker(
+            decay=float(OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)),
+            low=float(OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)),
+            high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
+        )
+
         if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.world_model_ema is None:
             self.world_model_ema = EMAHelper(
                 self.world_model,
@@ -434,38 +651,40 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
             )
 
-        # resume training
         self.resume(cfg)
+        if bool(OmegaConf.select(cfg, "training.resume", default=False)):
+            steps_per_epoch = len(train_dataloader)
+            if steps_per_epoch > 0 and self.global_step > 0 and (self.global_step + 1) % steps_per_epoch == 0:
+                if self.distributed.is_main_process:
+                    print(
+                        "[resume] checkpoint was saved at an epoch boundary; "
+                        f"advancing epoch {self.epoch} -> {self.epoch + 1} "
+                        f"and global_step {self.global_step} -> {self.global_step + 1}"
+                    )
+                self.epoch += 1
+                self.global_step += 1
 
-        # configure lr scheduler
         lr_scheduler_name = str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant"))
         lr_warmup_steps = int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0))
         total_training_steps = (
             len(train_dataloader) * int(cfg.training.num_epochs)
         ) // int(cfg.training.gradient_accumulate_every)
         wm_lr_scheduler = get_scheduler(
-            lr_scheduler_name,
-            optimizer=self.world_model_optimizer,
-            num_warmup_steps=lr_warmup_steps,
-            num_training_steps=total_training_steps,
+            lr_scheduler_name, optimizer=self.world_model_optimizer,
+            num_warmup_steps=lr_warmup_steps, num_training_steps=total_training_steps,
             last_epoch=self.global_step - 1,
         )
         policy_lr_scheduler = get_scheduler(
-            lr_scheduler_name,
-            optimizer=self.policy_optimizer,
-            num_warmup_steps=lr_warmup_steps,
-            num_training_steps=total_training_steps,
+            lr_scheduler_name, optimizer=self.policy_optimizer,
+            num_warmup_steps=lr_warmup_steps, num_training_steps=total_training_steps,
             last_epoch=self.global_step - 1,
         )
         critic_lr_scheduler = get_scheduler(
-            lr_scheduler_name,
-            optimizer=self.critic_optimizer,
-            num_warmup_steps=lr_warmup_steps,
-            num_training_steps=total_training_steps,
+            lr_scheduler_name, optimizer=self.critic_optimizer,
+            num_warmup_steps=lr_warmup_steps, num_training_steps=total_training_steps,
             last_epoch=self.global_step - 1,
         )
 
-        # ── training hyper-params ────────────────────────────────────────
         run_wm_phase = bool(OmegaConf.select(cfg, "training.run_wm_phase", default=True))
         run_ac_phase = bool(OmegaConf.select(cfg, "training.run_actor_critic_phase", default=True))
         algorithm_cfg = OmegaConf.select(cfg, "algorithm")
@@ -493,8 +712,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         try:
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
-
-                for _local_epoch_idx in range(cfg.training.num_epochs):
+                while self.epoch < int(cfg.training.num_epochs):
                     if sampler is not None:
                         sampler.set_epoch(self.epoch)
 
@@ -504,6 +722,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                     epoch_critic_losses: list[float] = []
                     epoch_returns: list[float] = []
                     epoch_rewards: list[float] = []
+                    epoch_scales: list[float] = []
 
                     with tqdm.tqdm(
                         train_dataloader,
@@ -516,7 +735,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                             local_metrics: dict[str, float] = {}
                             step_had_update = False
 
-                            # ── Phase 1: world-model pretraining ──────────
+                            # Phase 1 — world-model pretraining
                             if run_wm_phase:
                                 wm_batch = self._build_wm_pretrain_batch(batch)
                                 if wm_batch is not None:
@@ -532,20 +751,20 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         optim_cfg=optim_cfg,
                                     )
                                     wm_lr_scheduler.step()
-
-                                    # update ema
                                     if self.world_model_ema is not None:
                                         self.world_model_ema.step(self.world_model)
-
                                     epoch_wm_losses.append(wm_metrics["loss"])
                                     local_metrics["train_wm_loss"] = wm_metrics["loss"]
                                     local_metrics["train_wm_transition_loss"] = wm_metrics["transition_loss"]
                                     local_metrics["train_wm_reward_loss"] = wm_metrics["reward_loss"]
                                     local_metrics["train_wm_grad_norm"] = wm_metrics["grad_norm"]
+                                    for name, value in wm_metrics.items():
+                                        if name not in {"loss", "transition_loss", "reward_loss", "grad_norm"}:
+                                            local_metrics[f"train_wm_{name}"] = value
                                     local_metrics["wm_lr"] = float(wm_lr_scheduler.get_last_lr()[0])
                                     step_had_update = True
 
-                            # ── Phase 2: Dreamer actor-critic update ───────
+                            # Phase 2 — DreamerV3 actor-critic imagination
                             if run_ac_phase:
                                 ac_batch = self._build_actor_critic_batch(batch)
                                 if ac_batch is not None:
@@ -554,8 +773,10 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         policy=self.policy,
                                         world_model=self.world_model,
                                         critic=self.critic,
+                                        target_critic=self.target_critic,
                                         actor_optimizer=self.policy_optimizer,
                                         critic_optimizer=self.critic_optimizer,
+                                        return_tracker=self.return_tracker,
                                         obs=ac_batch["obs"],
                                         device=self.device,
                                         algorithm_cfg=algorithm_cfg,
@@ -565,14 +786,21 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                     epoch_critic_losses.append(ac_metrics["critic_loss"])
                                     epoch_returns.append(ac_metrics["returns_mean"])
                                     epoch_rewards.append(ac_metrics["reward_mean"])
-                                    local_metrics["train_actor_loss"] = ac_metrics["actor_loss"]
-                                    local_metrics["train_critic_loss"] = ac_metrics["critic_loss"]
-                                    local_metrics["train_returns_mean"] = ac_metrics["returns_mean"]
-                                    local_metrics["train_returns_std"] = ac_metrics["returns_std"]
-                                    local_metrics["train_reward_mean"] = ac_metrics["reward_mean"]
-                                    local_metrics["train_value_mean"] = ac_metrics["value_mean"]
-                                    local_metrics["train_actor_grad_norm"] = ac_metrics["actor_grad_norm"]
-                                    local_metrics["train_critic_grad_norm"] = ac_metrics["critic_grad_norm"]
+                                    epoch_scales.append(ac_metrics["return_scale"])
+                                    local_metrics.update({
+                                        "train_actor_loss": ac_metrics["actor_loss"],
+                                        "train_critic_loss": ac_metrics["critic_loss"],
+                                        "train_returns_mean": ac_metrics["returns_mean"],
+                                        "train_returns_std": ac_metrics["returns_std"],
+                                        "train_return_scale": ac_metrics["return_scale"],
+                                        "train_reward_mean": ac_metrics["reward_mean"],
+                                        "train_value_mean": ac_metrics["value_mean"],
+                                        "train_actor_grad_norm": ac_metrics["actor_grad_norm"],
+                                        "train_critic_grad_norm": ac_metrics["critic_grad_norm"],
+                                    })
+                                    for name, value in ac_metrics.items():
+                                        if name.startswith("actor_grad_norm_"):
+                                            local_metrics[f"train_{name}"] = value
                                     policy_lr_scheduler.step()
                                     critic_lr_scheduler.step()
                                     local_metrics["policy_lr"] = float(policy_lr_scheduler.get_last_lr()[0])
@@ -582,7 +810,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
                             if not step_had_update:
                                 continue
 
-                            # ── reduce & log ─────────────────────────────
                             reduced = self.distributed.reduce_mean_dict(local_metrics)
                             step_log = {**reduced, "global_step": self.global_step, "epoch": self.epoch}
 
@@ -610,7 +837,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                 reached_max_steps = True
                                 break
 
-                    # ── epoch summary ──────────────────────────────────────
                     if not epoch_wm_losses and not epoch_actor_losses:
                         self.global_step += 1
                         self.epoch += 1
@@ -625,12 +851,12 @@ class DreamerVLAWorkspace(BaseWorkspace):
                         step_log["epoch_critic_loss"] = self.distributed.reduce_sum(sum(epoch_critic_losses)) / ac_n
                         step_log["epoch_returns_mean"] = self.distributed.reduce_sum(sum(epoch_returns)) / ac_n
                         step_log["epoch_reward_mean"] = self.distributed.reduce_sum(sum(epoch_rewards)) / ac_n
+                        step_log["epoch_return_scale"] = self.distributed.reduce_sum(sum(epoch_scales)) / ac_n
 
                     step_log.setdefault("epoch_wm_loss", float("inf"))
                     step_log.setdefault("epoch_actor_loss", float("inf"))
                     step_log.setdefault("epoch_critic_loss", float("inf"))
 
-                    # run validation
                     eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
                     if val_dataloaders and (self.epoch % eval_every) == 0:
                         for split_name, val_dl in val_dataloaders.items():
@@ -654,7 +880,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
                     self.epoch += 1
                     if reached_max_steps:
                         break
-
         finally:
             self.distributed.barrier()
             self.distributed.cleanup()

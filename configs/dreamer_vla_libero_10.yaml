@@ -1,11 +1,17 @@
+# DEPRECATED JOINT TRAINING ROUTE:
+# Legacy DreamerV3-style joint training with TSSMWorldModel.
+# Do not use as a new baseline.
+# Current joint baselines:
+#   - dreamer_vla_libero_10_transdreamer.yaml
+#   - dreamer_vla_libero_10_transdreamer_vlaactor.yaml
 _target_: src.workspace.dreamer_vla_workspace.DreamerVLAWorkspace
 
 seed: 7
 
 hydra:
   run:
-    dir: .
-  output_subdir: null
+    dir: ${training.out_dir}
+  output_subdir: .hydra
 
 trainer:
   device: cuda
@@ -29,7 +35,7 @@ training:
   lr_scheduler: cosine
   lr_warmup_steps: 500
 
-  # Phase switches — set either to false for a single-phase run
+  # Per-batch alternation: Phase-1 WM step → Phase-2 DreamerV3 actor-critic step
   run_wm_phase: true
   run_actor_critic_phase: true
 
@@ -57,7 +63,7 @@ encoder:
   time_horizon: 10
   pool: mean
 
-# ── world model (TSSM, trains in Phase-1) ────────────────────────────────────
+# ── world model (TSSM, trains in Phase-1; unchanged from V1/V2) ──────────────
 world_model:
   _target_: src.models.world_model.TSSMWorldModel
   hidden_dim: 4096          # overridden at runtime from encoder output dim
@@ -76,8 +82,6 @@ world_model:
   transition_time_horizon: null
 
 # ── policy (Dreamer actor, acts in WM latent space) ──────────────────────────
-# hidden_dim MUST equal world_model.latent_dim + world_model.dynamics_hidden_dim
-# so the actor can consume latent.feature() = cat(stoch[256], deter[4096]).
 policy:
   _target_: src.models.vla_policy.VLAPolicy
   action_dim: 7
@@ -87,42 +91,40 @@ policy:
   min_log_std: -5.0
   max_log_std: 2.0
 
-# ── critic (value function in WM latent space) ───────────────────────────────
-# hidden_dim must match policy.hidden_dim (same latent feature as input).
+# ── critic (DreamerV3 twohot critic; online + target copy instantiated together) ─
 critic:
-  _target_: src.models.critic.critic.Critic
+  _target_: src.models.critic.twohot_critic.TwohotCritic
   hidden_dim: 4352            # latent_dim(256) + dynamics_hidden_dim(4096)
   critic_hidden_dim: 512
+  num_bins: 255
+  bin_min: -20.0
+  bin_max: 20.0
 
-# ── Dreamer algorithm ─────────────────────────────────────────────────────────
+# ── DreamerV3 actor-critic hyper-params ──────────────────────────────────────
 algorithm:
-  # Number of WM imagination steps per actor-critic update.
-  # Longer horizon = richer λ-returns but heavier memory use.
   imagination_horizon: 15
-
-  # Discount factor γ
-  gamma: 0.99
-
-  # λ-return mixing coefficient.
-  #   λ=1  → pure discounted MC return (bootstrapped only at horizon end)
-  #   λ=0  → 1-step TD return
+  gamma: 0.997              # DreamerV3 default
   lam: 0.95
+  entropy_coef: 3.0e-4      # DreamerV3 fixed entropy bonus
+  target_critic_tau: 0.02   # Polyak averaging rate for target critic
 
-  # Entropy bonus on actor distribution (encourages exploration)
-  entropy_coef: 0.01
+  return_tracker:
+    decay: 0.99
+    low: 0.05               # P5
+    high: 0.95              # P95
 
 # ── dataset ───────────────────────────────────────────────────────────────────
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize.yaml
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
 
 dataloader:
   batch_size: 4
@@ -153,7 +155,7 @@ optim:
 
   critic:
     name: adam
-    lr: 3.0e-4         # critic typically uses a higher lr than the actor
+    lr: 3.0e-4
     betas: [0.9, 0.95]
     eps: 1.0e-8
     weight_decay: 0.01
@@ -163,7 +165,7 @@ checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
   topk:
-    monitor_key: epoch_returns_mean   # save checkpoints with highest mean λ-return
+    monitor_key: epoch_returns_mean
     mode: max
     k: 3
     format_str: 'epoch={epoch:03d}-epoch_returns_mean={epoch_returns_mean:.4f}.ckpt'

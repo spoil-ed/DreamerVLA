@@ -6,6 +6,7 @@ import copy
 import os
 import pathlib
 import pickle
+import time
 from typing import Any
 
 import hydra
@@ -242,7 +243,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         # Skip eval under FSDP — model is sharded, can't do single-rank inference
         if self.distributed.uses_fsdp:
             if epoch == -1:
-                print("  [Eval] Skipping baseline eval under FSDP. Use scripts/eval_libero.py on saved checkpoints.")
+                print("  [Eval] Skipping baseline eval under FSDP. Use scripts/eval_libero.sh on saved checkpoints.")
             return {}
 
         from libero.libero import benchmark as libero_benchmark
@@ -258,33 +259,50 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         item_processor = self.encoder._build_processor(self.device)
 
+        print(f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...", flush=True)
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         num_tasks = task_suite.n_tasks
         max_steps = TASK_MAX_STEPS.get(task_suite_name, 300)
+        print(
+            f"  [Eval] suite='{task_suite_name}' num_tasks={num_tasks} "
+            f"episodes_per_task={num_episodes} max_steps={max_steps} "
+            f"action_steps={action_steps} history_length={history_length}",
+            flush=True,
+        )
 
         self.encoder.eval()
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         total_episodes, total_successes = 0, 0
+        run_t0 = time.time()
 
         for task_id in range(num_tasks):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
             env, task_description = get_libero_env(task, resolution=resolution)
+            n_eps = min(num_episodes, len(initial_states))
+            print(
+                f"  [Eval] >>> Task {task_id+1}/{num_tasks} start: \"{task_description}\" "
+                f"(episodes={n_eps})",
+                flush=True,
+            )
 
             task_successes = 0
-            for episode_idx in range(min(num_episodes, len(initial_states))):
+            task_t0 = time.time()
+            for episode_idx in range(n_eps):
                 env.reset()
                 obs = env.set_init_state(initial_states[episode_idx])
 
                 done = False
+                ep_t0 = time.time()
                 actions_buffer: list[np.ndarray] = []
                 # Frame history buffer: list of (third_view_pil, wrist_pil) oldest→newest.
                 # Matches training's `img_history_start_idx = max(0, j - his + 1)` which
                 # repeats the first frame until history fills up.
                 frame_history: list[tuple[Image.Image, Image.Image]] = []
 
+                steps_taken = 0
                 for t in range(max_steps + 10):
                     if t < 10:
                         obs, _, done, _ = env.step(get_libero_dummy_action())
@@ -316,6 +334,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         break
                     action = actions_buffer.pop(0)
                     obs, _, done, _ = env.step(action.tolist())
+                    steps_taken = t - 9
 
                     if done:
                         task_successes += 1
@@ -323,18 +342,50 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         break
 
                 total_episodes += 1
+                ep_dt = time.time() - ep_t0
+                tag = "OK " if done else "FAIL"
+                # Reclaim any per-episode GPU/CPU memory leaked by the
+                # mujoco offscreen renderer / torch generation cache.
+                # Without this the EGL context grows ~500MB per episode and
+                # eventually triggers a silent SIGABRT inside the driver.
+                import gc as _gc
+                _gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gpu_mb = (torch.cuda.memory_allocated() // (1024 * 1024)) if torch.cuda.is_available() else 0
+                print(
+                    f"  [Eval]   ep {episode_idx+1}/{n_eps} {tag} "
+                    f"steps={steps_taken} time={ep_dt:5.1f}s "
+                    f"task_succ={task_successes}/{episode_idx+1} "
+                    f"total_succ={total_successes}/{total_episodes} "
+                    f"({total_successes / max(total_episodes,1):.1%})  "
+                    f"gpu_alloc={gpu_mb}MB",
+                    flush=True,
+                )
             env.close()
 
-            rate = task_successes / max(num_episodes, 1)
-            print(f"  [Eval] Task {task_id} ({task_description}): {rate:.1%}")
+            rate = task_successes / max(n_eps, 1)
+            task_dt = time.time() - task_t0
+            print(
+                f"  [Eval] <<< Task {task_id+1}/{num_tasks} done: \"{task_description}\" "
+                f"success={rate:.1%} ({task_successes}/{n_eps}) "
+                f"time={task_dt:.1f}s   running_total={total_successes}/{total_episodes} "
+                f"({total_successes / max(total_episodes,1):.1%})",
+                flush=True,
+            )
 
         avg_success = total_successes / max(total_episodes, 1)
+        run_dt = time.time() - run_t0
         metrics = {
             "eval_success_rate": avg_success,
             "eval_total_episodes": float(total_episodes),
             "eval_total_successes": float(total_successes),
         }
-        print(f"  [Eval] Epoch {epoch} overall success rate: {avg_success:.1%} ({total_successes}/{total_episodes})")
+        print(
+            f"  [Eval] Epoch {epoch} overall success rate: {avg_success:.1%} "
+            f"({total_successes}/{total_episodes}) total_time={run_dt:.1f}s",
+            flush=True,
+        )
         return metrics
 
     def _generate_actions(

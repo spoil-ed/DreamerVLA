@@ -191,6 +191,103 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         # fully loaded state before sync_module_states broadcasts.
         self.distributed.barrier()
 
+    def _warmup_from_pure_vae(self, cfg: DictConfig) -> None:
+        """Optionally warm-init token_embedder/conv_stem/image_decoder from a
+        pure-VAE checkpoint (`src/cli/train_pure_vae.py` output).
+
+        Triggered by `init.warmup_ckpt_path`. Skipped when `training.resume=true`
+        (resume takes precedence) or when the WM ckpt for this run already
+        exists (so reruns don't re-warmup over real progress).
+
+        VAE→WM key mapping:
+          token_embedder.*   →  token_embedder.*       (identical)
+          conv_stem.*        →  conv_stem.*            (identical)
+          decoder.*          →  image_decoder.*        (rename prefix)
+
+        Skipped due to shape divergence:
+          decoder.deter_block.* — VAE used d_deter=obs_dim=1024, WM uses d_model=512
+          posterior_head.*      — VAE input dim is obs_dim only (1024); WM
+                                  posterior_head input is obs_dim+d_model=1536.
+                                  In WM with posterior_uses_h=False, posterior
+                                  is `obs_to_stoch` (1024-dim) — but its keys
+                                  don't match the VAE name, so still skipped.
+        """
+        if bool(OmegaConf.select(cfg, "training.resume", default=False)):
+            return
+        warmup_path = OmegaConf.select(cfg, "init.warmup_ckpt_path", default=None)
+        if warmup_path is None:
+            return
+        existing = self.get_checkpoint_path()
+        if existing.is_file():
+            if self.distributed.is_main_process:
+                print(f"[warmup] WM ckpt already exists at {existing}; skipping VAE warmup.")
+            return
+
+        if self.distributed.is_main_process:
+            print(f"[warmup] loading weights from {warmup_path} ...")
+            payload = torch.load(warmup_path, map_location="cpu", weights_only=False)
+
+            wm_sd_existing = self.world_model.state_dict()
+            target_dtype = next(self.world_model.parameters()).dtype
+
+            # Pure-VAE ckpt format (train_pure_vae.py output): payload["model"]
+            # is the VAE state_dict; map prefixes onto the WM namespace.
+            # To resume from a previous WM ckpt, set training.resume=true and
+            # let the standard resume path handle it.
+            vae_sd = payload.get("model", payload) if isinstance(payload, dict) else payload
+            if not isinstance(vae_sd, dict):
+                print("[warmup] unrecognised ckpt format; skipping.")
+                del payload
+                self.distributed.barrier()
+                return
+
+            mapped: dict[str, torch.Tensor] = {}
+            skipped_shape: list[str] = []
+            skipped_unknown: list[str] = []
+            for k, v in vae_sd.items():
+                if k.startswith("token_embedder.") or k.startswith("conv_stem."):
+                    nk = k
+                elif k.startswith("decoder."):
+                    if k.startswith("decoder.deter_block"):
+                        skipped_shape.append(k + " (deter_block d_deter mismatch)")
+                        continue
+                    nk = "image_decoder." + k.removeprefix("decoder.")
+                elif k.startswith("posterior_head."):
+                    nk_candidate = "obs_to_stoch." + k.removeprefix("posterior_head.")
+                    if nk_candidate in wm_sd_existing and wm_sd_existing[nk_candidate].shape == v.shape:
+                        nk = nk_candidate
+                    else:
+                        skipped_shape.append(k + " (no compatible WM target)")
+                        continue
+                else:
+                    skipped_unknown.append(k)
+                    continue
+
+                if nk not in wm_sd_existing:
+                    skipped_unknown.append(f"{k} -> {nk} (not in WM)")
+                    continue
+                if wm_sd_existing[nk].shape != v.shape:
+                    skipped_shape.append(
+                        f"{k} -> {nk}: src{tuple(v.shape)} vs wm{tuple(wm_sd_existing[nk].shape)}"
+                    )
+                    continue
+
+                tgt = v.to(dtype=target_dtype) if torch.is_floating_point(v) else v
+                mapped[nk] = tgt
+
+            missing, unexpected = self.world_model.load_state_dict(mapped, strict=False)
+            print(
+                f"[warmup] VAE ckpt format: loaded {len(mapped)} tensors via prefix remap; "
+                f"shape-skipped={len(skipped_shape)}, unknown-skipped={len(skipped_unknown)}, "
+                f"WM-missing={len(missing)}, WM-unexpected={len(unexpected)}"
+            )
+            for s in skipped_shape:
+                print(f"[warmup]   skip-shape: {s}")
+            for s in skipped_unknown[:5]:
+                print(f"[warmup]   skip-unknown: {s}")
+            del payload
+        self.distributed.barrier()
+
     def _load_state_dict_from_checkpoint(
         self,
         key: str,
@@ -211,6 +308,10 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                 print(f"[resume] skipping {key} state_dict (WM pre-loaded before FSDP wrap).")
             return
         if key == "world_model_optimizer" and self.world_model_optimizer is not None and self.world_model is not None:
+            if bool(OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False)):
+                if self.distributed.is_main_process:
+                    print("[resume] skipping world_model_optimizer state_dict (training.resume_skip_optimizer=true).")
+                return
             self.distributed.load_optimizer_state_dict(self.world_model, self.world_model_optimizer, state_dict)
             return
         value.load_state_dict(state_dict, **kwargs)
@@ -228,6 +329,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             wm_batch = self._build_world_model_batch(batch)
             if wm_batch is None:
                 continue
+            wm_batch["global_step"] = -1
             wm_loss_dict = self.world_model(wm_batch)
             val_losses.append(float(wm_loss_dict["loss"].item()))
             val_transition_losses.append(float(wm_loss_dict["transition_loss"].item()))
@@ -268,8 +370,40 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         if spatial_codec:
             need_image_hiddens = False
 
+        # Sequence path: dataset returns wm_obs_input_ids_seq (list of list of
+        # token sequences, one per timestep) + action_seq [B, L, A].  Encode all
+        # timesteps in a single backbone forward, then reshape back to [B, L, ...].
+        if (
+            "obs_embedding_seq" not in batch
+            and isinstance(batch.get("wm_obs_input_ids_seq"), list)
+            and isinstance(batch.get("action_seq"), torch.Tensor)
+        ):
+            seq_ids = batch["wm_obs_input_ids_seq"]
+            if not seq_ids:
+                return None
+            batch_size = len(seq_ids)
+            seq_len = len(seq_ids[0]) if batch_size else 0
+            flat_ids = [list(step_ids) for sample in seq_ids for step_ids in sample]
+            if io_mode == "token":
+                obs_embedding_seq = self._extract_image_bpe_ids(flat_ids).view(
+                    batch_size, seq_len, -1
+                )
+                batch["obs_embedding_seq"] = obs_embedding_seq
+            elif self.encoder is not None:
+                obs_embedding_seq, _, _ = self._encode_hidden_from_tokenized(
+                    flat_ids,
+                    return_image_hiddens=False,
+                    return_image_token_ids=False,
+                    per_token_embedding=spatial_codec,
+                )
+                batch["obs_embedding_seq"] = obs_embedding_seq.view(
+                    batch_size, seq_len, *obs_embedding_seq.shape[1:]
+                )
+
+        # Single-step path: dataset returns wm_obs_input_ids + wm_next_obs_input_ids.
         if (
             "obs_embedding" not in batch
+            and "obs_embedding_seq" not in batch
             and isinstance(batch.get("wm_obs_input_ids"), list)
             and isinstance(batch.get("wm_next_obs_input_ids"), list)
         ):
@@ -306,6 +440,8 @@ class PretokenizeWMWorkspace(BaseWorkspace):
 
         wm_batch: dict[str, Any] = {}
         for key in (
+            "obs_embedding_seq", "action_seq", "reward_seq", "done_seq",
+            "next_image_hiddens_seq", "next_image_token_ids_seq",
             "obs_embedding", "next_obs_embedding", "action", "action_mask",
             "reward", "next_obs_image_hiddens", "next_obs_image_token_ids",
         ):
@@ -313,11 +449,20 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             if value is not None:
                 wm_batch[key] = value
 
-        required = ("obs_embedding", "next_obs_embedding", "action")
-        if not all(isinstance(wm_batch.get(key), torch.Tensor) for key in required):
+        has_sequence = all(
+            isinstance(wm_batch.get(key), torch.Tensor)
+            for key in ("obs_embedding_seq", "action_seq")
+        )
+        has_single = all(
+            isinstance(wm_batch.get(key), torch.Tensor)
+            for key in ("obs_embedding", "next_obs_embedding", "action")
+        )
+        if not (has_sequence or has_single):
             return None
 
         for key in (
+            "obs_embedding_seq", "action_seq", "reward_seq", "done_seq",
+            "next_image_hiddens_seq", "next_image_token_ids_seq",
             "obs_embedding", "next_obs_embedding", "action", "action_mask",
             "reward", "next_obs_image_hiddens", "next_obs_image_token_ids",
         ):
@@ -524,6 +669,21 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             obs_ids = batch.get("wm_obs_input_ids")
             nxt_ids = batch.get("wm_next_obs_input_ids")
             action = batch.get("action")
+            # Sequence-mode fallback: rebuild a (obs[0], obs[1], action[1])
+            # single-step view from the sequence batch for the visualiser.
+            if (
+                (not isinstance(obs_ids, list) or not isinstance(nxt_ids, list) or action is None)
+                and isinstance(batch.get("wm_obs_input_ids_seq"), list)
+                and isinstance(batch.get("action_seq"), torch.Tensor)
+            ):
+                seq_ids = batch["wm_obs_input_ids_seq"]
+                action_seq = batch["action_seq"]
+                if seq_ids and len(seq_ids[0]) >= 2 and action_seq.ndim == 3 and action_seq.shape[1] >= 2:
+                    obs_ids = [list(sample[0]) for sample in seq_ids]
+                    nxt_ids = [list(sample[1]) for sample in seq_ids]
+                    # action_seq[:, 0] is the context zero action; action_seq[:, 1]
+                    # is the transition action from obs[0] to obs[1].
+                    action = action_seq[:, 1]
             if not isinstance(obs_ids, list) or not isinstance(nxt_ids, list) or action is None:
                 return
 
@@ -638,7 +798,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             cfg.training.max_train_steps = 5
             cfg.training.checkpoint_every = 1
             if OmegaConf.select(cfg, "viz") is not None:
-                cfg.viz.every_n_steps = 1
+                cfg.viz.every_n_steps = 50
                 cfg.viz.num_samples = 2
             if self.distributed.is_main_process:
                 print(
@@ -693,6 +853,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         # match 2D dict tensors.  Only rank 0 reads the ckpt; barrier ensures
         # all ranks wait before entering FSDP wrap.
         self._preresume_world_model_weights(cfg)
+        self._warmup_from_pure_vae(cfg)
 
         world_optim_cfg = OmegaConf.select(cfg, "optim.world_model")
         if world_optim_cfg is None:
@@ -709,6 +870,9 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         self.world_model_optimizer = build_optimizer(self.world_model, world_optim_cfg)
 
         # configure ema
+        # TODO(unused): no current ABCD config sets use_ema=true.  EMA support
+        # is wired up but never exercised; consider removing if it stays unused
+        # for another release cycle.
         if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.world_model_ema is None:
             self.world_model_ema = EMAHelper(
                 self.world_model,
@@ -718,6 +882,11 @@ class PretokenizeWMWorkspace(BaseWorkspace):
 
         # resume training
         self.resume(cfg)
+
+        # After optimizer state restore (or skip), param_groups may lack
+        # `initial_lr`, which LambdaLR requires when last_epoch > -1.
+        for pg in self.world_model_optimizer.param_groups:
+            pg.setdefault("initial_lr", pg["lr"])
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(
@@ -766,6 +935,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                             wm_batch = self._build_world_model_batch(batch)
                             if wm_batch is None:
                                 continue
+                            wm_batch["global_step"] = int(self.global_step)
 
                             wm_loss_dict = self.world_model(wm_batch)
                             wm_raw_loss = wm_loss_dict["loss"]
@@ -809,13 +979,52 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                                 "train_wm_dyn_kl": _pick("dyn_kl"),
                                 "train_wm_rep_kl": _pick("rep_kl"),
                                 "train_wm_reward_loss": _pick("reward_loss"),
+                                "train_wm_delta_latent_loss": _pick("delta_latent_loss"),
+                                "train_wm_action_margin_loss": _pick("action_margin_loss"),
+                                "train_wm_action_margin_active": _pick("action_margin_active"),
                                 "train_wm_image_recon_ce_loss":  _pick("image_recon_ce_loss"),
+                                "train_wm_image_static_ce_loss": _pick("image_static_ce_loss"),
+                                "train_wm_image_dynamic_ce_loss": _pick("image_dynamic_ce_loss"),
                                 "train_wm_image_recon_mse_loss": _pick("image_recon_mse_loss"),
                                 "train_wm_image_decoder_loss":   _pick("image_decoder_loss"),
                                 "train_wm_image_recon_accuracy": _pick("image_recon_accuracy"),
+                                "train_wm_image_static_accuracy": _pick("image_static_accuracy"),
+                                "train_wm_image_dynamic_accuracy": _pick("image_dynamic_accuracy"),
+                                "train_wm_image_dynamic_fraction": _pick("image_dynamic_fraction"),
                                 "train_wm_pred_entropy":         _pick("pred_entropy"),
                                 "train_wm_pred_unique_tokens":   _pick("pred_unique_tokens"),
                                 "train_wm_gt_unique_tokens":     _pick("gt_unique_tokens"),
+                                # Collapse-tracking diagnostics (added)
+                                "train_wm_kl_post_prior":       _pick("kl_post_prior"),
+                                "train_wm_dyn_loss":            _pick("dyn_loss"),
+                                "train_wm_rep_loss":            _pick("rep_loss"),
+                                "train_wm_post_eff_rank":       _pick("post_eff_rank"),
+                                "train_wm_prior_eff_rank":      _pick("prior_eff_rank"),
+                                "train_wm_post_pairwise_cos":   _pick("post_pairwise_cos"),
+                                "train_wm_prior_pairwise_cos":  _pick("prior_pairwise_cos"),
+                                "train_wm_post_entropy":        _pick("post_entropy"),
+                                "train_wm_prior_entropy":       _pick("prior_entropy"),
+                                "train_wm_post_max_prob":       _pick("post_max_prob"),
+                                "train_wm_prior_max_prob":      _pick("prior_max_prob"),
+                                "train_wm_post_std_mean":       _pick("post_std_mean"),
+                                "train_wm_prior_std_mean":      _pick("prior_std_mean"),
+                                "train_wm_post_logits_std":     _pick("post_logits_std_across_batch"),
+                                "train_wm_prior_logits_std":    _pick("prior_logits_std_across_batch"),
+                                "train_wm_post_logits_mean_abs": _pick("post_logits_mean_abs"),
+                                "train_wm_prior_logits_mean_abs":_pick("prior_logits_mean_abs"),
+                                # Sequence / imagination diagnostics (active when
+                                # the WM is in sequence mode + imagine_loss_steps>0)
+                                "train_wm_sequence_loss_steps":  _pick("sequence_loss_steps"),
+                                "train_wm_sequence_context_steps": _pick("sequence_context_steps"),
+                                "train_wm_sequence_loss_scale":  _pick("sequence_loss_scale"),
+                                "train_wm_imagine_ce_loss":         _pick("imagine_ce_loss"),
+                                "train_wm_imagine_static_ce_loss":  _pick("imagine_static_ce_loss"),
+                                "train_wm_imagine_dynamic_ce_loss": _pick("imagine_dynamic_ce_loss"),
+                                "train_wm_imagine_loss":            _pick("imagine_loss"),
+                                "train_wm_imagine_recon_accuracy":  _pick("imagine_recon_accuracy"),
+                                "train_wm_imagine_static_accuracy": _pick("imagine_static_accuracy"),
+                                "train_wm_imagine_dynamic_accuracy": _pick("imagine_dynamic_accuracy"),
+                                "train_wm_imagine_dynamic_fraction": _pick("imagine_dynamic_fraction"),
                                 "train_wm_grad_norm": pre_clip_grad_norm,
                                 "lr": float(lr_scheduler.get_last_lr()[0]),
                             }
@@ -828,6 +1037,9 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                                 ce=float(step_log.get("train_wm_image_recon_ce_loss", float("nan"))),
                                 acc=float(step_log.get("train_wm_image_recon_accuracy", float("nan"))),
                                 uniq=float(step_log.get("train_wm_pred_unique_tokens", float("nan"))),
+                                ctx=float(step_log.get("train_wm_sequence_context_steps", float("nan"))),
+                                lstep=float(step_log.get("train_wm_sequence_loss_steps", float("nan"))),
+                                lscale=float(step_log.get("train_wm_sequence_loss_scale", float("nan"))),
                             )
 
                             self._maybe_log_images(cfg, batch)

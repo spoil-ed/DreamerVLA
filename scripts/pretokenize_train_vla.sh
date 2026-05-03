@@ -42,7 +42,7 @@ python -m torch.distributed.run \
   --nnodes=1 \
   --nproc-per-node="${NUM_GPUS}" \
   --master_port="${MASTER_PORT}" \
-  scripts/train.py \
+  --module src.cli.train \
   --config-name "${CONFIG_NAME}" \
   +training.vla_action_loss_coef=10 \
   +training.vla_token_loss_coef=1 \

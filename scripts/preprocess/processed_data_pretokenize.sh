@@ -20,7 +20,7 @@ python pretoken_state_action_model.py \
     --resolution "$IMAGE_RESOLUTION" \
     --with_state \
     --img_names "${IMG_NAMES[@]}" \
-    --his 2 \
+    --his 1 \
     --len_action "$ACTION_HORIZON" \
     --num_procs "$PRETOKENIZE_PROCS" \
     --tokenizer_path "$TOKENIZER_PATH" \
@@ -33,6 +33,6 @@ bash concate_record_libero.sh "$PROCESSED_DATA_ROOT/tokens"
 mkdir -p "$PROCESSED_DATA_ROOT/concate_tokens"
 
 python concate_action_world_model_data_libero.py \
-    --source_dir_patterns libero_${TASK_NAME}_his_2_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} \
-    --all_patterns libero_${TASK_NAME}_his_2_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} \
+    --source_dir_patterns libero_${TASK_NAME}_his_1_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} \
+    --all_patterns libero_${TASK_NAME}_his_1_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION} \
     --processed_data_root "$PROCESSED_DATA_ROOT"

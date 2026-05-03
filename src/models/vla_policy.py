@@ -76,11 +76,36 @@ class VLAPolicy(nn.Module):
         return torch.zeros(batch_size, self.hidden_dim, device=self.log_std.device, dtype=torch.float32)
 
     def _distribution_from_hidden(self, hidden: torch.Tensor) -> tuple[Normal, torch.Tensor, torch.Tensor]:
-        hidden = self._reduce_hidden(hidden).float()
+        # Match the param dtype: under FSDP MixedPrecision the gathered weights
+        # are cast to bf16 inside the FSDP forward, so an fp32 input to a
+        # LayerNorm holding bf16 weights triggers `expected Float, got BFloat16`.
+        param_dtype = self.policy_head[0].weight.dtype
+        hidden = self._reduce_hidden(hidden).to(dtype=param_dtype)
         mean = self.policy_head(hidden)
         log_std = self.log_std.clamp(min=self.min_log_std, max=self.max_log_std).unsqueeze(0).expand_as(mean)
         std = log_std.exp()
+        # Distribution math is sensitive to precision — promote outputs to fp32.
+        mean = mean.float()
+        std = std.float()
         return Normal(mean, std), mean, std
+
+    def forward(self, batch: dict) -> Any:
+        """FSDP-compatible dispatcher: routes through __call__ so FSDP's
+        all-gather hook fires before policy_head touches sharded params.
+
+            policy({'mode': 'sample', 'hidden': h, 'deterministic': bool})
+                -> (action, log_prob, {'mean', 'std'})
+            policy({'mode': 'evaluate', 'hidden': h, 'action': a})
+                -> (log_prob, entropy, {'mean', 'std'})
+        """
+        mode = batch.get("mode")
+        if mode == "sample":
+            return self.sample_action_from_embedding(
+                batch["hidden"], deterministic=bool(batch.get("deterministic", False)),
+            )
+        if mode == "evaluate":
+            return self.evaluate_action_from_embedding(batch["hidden"], batch["action"])
+        raise ValueError(f"Unknown VLAPolicy forward mode: {mode!r}")
 
     def sample_action(
         self,

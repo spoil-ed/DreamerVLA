@@ -68,9 +68,9 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
                 └───────────────────┬───────────────────────────┘
                                     ▼
 ┌───────────────── Stage 3: Dreamer 范式 rollout 训练 ─────────────────┐
-│ Config:    dreamer_v3_vla_libero_10.yaml                               │
-│ Workspace: DreamerV3VLAWorkspace                                       │
-│ 算法:      src/algorithms/dreamer_v3_vla.py::imagine_actor_critic_step_v3 │
+│ Config:    dreamer_vla_libero_10.yaml                                  │
+│ Workspace: DreamerVLAWorkspace                                         │
+│ 算法:      src/algorithms/dreamer_vla.py::imagine_actor_critic_step    │
 │                                                                        │
 │ 每个 batch 交替两段：                                                 │
 │   Phase-1  world_model_pretrain_step()                                 │
@@ -89,7 +89,7 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
 
 **1. Stage 3 的 VLA 是冻结的**
 
-代码里 `DreamerV3VLAWorkspace.run()` 显式 `freeze_module(self.encoder)`，Phase-2 imagination 里更新的是 **WM + policy + critic**，不会回传梯度到 RynnVLA 主干。如果想在 Stage 3 继续微调 VLA 本体，需要去掉这个冻结并额外配置 VLA optimizer / param group。
+代码里 `DreamerVLAWorkspace.run()` 显式 `freeze_module(self.encoder)`，Phase-2 imagination 里更新的是 **WM + policy + critic**，不会回传梯度到 RynnVLA 主干。如果想在 Stage 3 继续微调 VLA 本体，需要去掉这个冻结并额外配置 VLA optimizer / param group。
 
 **2. "rollout" = imagination rollout，不是真环境 rollout**
 
@@ -99,14 +99,13 @@ Phase-2 全部在 WM 的 latent 空间里做 H 步 imagination，标准 Dreamer 
 
 `PretokenizeSFTWorkspace` 和 `PretokenizeWMWorkspace` 共用同一份预 tokenize 数据，可以在不同机器 / 不同卡上同时启动。Stage 3 从 `init.vla_ckpt_path` 和 WM 的 ckpt 分别加载两条产出。
 
-**4. DreamerV3 与 V1/V2 版本共存**
+**4. Actor-critic 风格**
 
 | Workspace | 算法文件 | Critic | 归一化 | Bootstrap |
 |---|---|---|---|---|
-| `DreamerVLAWorkspace` | `dreamer_vla.py` | scalar MSE | 无 | 同一 critic |
-| `DreamerV3VLAWorkspace` | `dreamer_v3_vla.py` | twohot symlog | percentile | target critic EMA |
+| `DreamerVLAWorkspace` | `dreamer_vla.py` | twohot symlog | percentile | target critic EMA |
 
-新项目优先用 V3；V1/V2 保留用于 ablation 对照。
+按 DreamerV3 (Hafner et al., 2023, §B) 的 actor-critic 实现：twohot symlog critic + percentile-normalised advantages + Polyak target critic。
 
 **5. LIBERO 真环境评估**
 
@@ -132,16 +131,19 @@ DreamerVLA/
 │   └── outputs/                    # 训练输出（checkpoint, log）
 ├── docs/                           # 技术文档
 ├── LIBERO/                         # LIBERO 基准本地 checkout
-├── scripts/                        # 训练 / 预处理 / 评估脚本
-│   ├── train.py                    # 训练入口
-│   ├── eval_libero.py              # LIBERO 评估
+├── scripts/                        # 训练 / 预处理 / 评估入口脚本（薄 wrapper）
+│   ├── eval_libero.sh              # LIBERO 评估
+│   ├── eval_wm.sh                  # World Model 评估
 │   ├── prepare_data.sh             # 一键数据预处理
+│   ├── download_hf.sh              # 权重下载脚本
+│   ├── install.sh                  # 环境安装脚本
 │   ├── pretokenize_train_vla.sh    # VLA 训练
 │   ├── pretokenize_train_wm.sh     # World Model 训练
-│   ├── pretokenize_train_vla_wm.sh # 联合训练
+│   ├── train_dreamer_vla.sh        # Dreamer-VLA 训练
 │   └── preprocess/                 # 各步骤预处理脚本
 ├── src/                            # 源代码
 │   ├── algorithms/                 # Dreamer-VLA, PPO/GRPO
+│   ├── cli/                        # scripts/ 对应的命令行实现
 │   ├── dataloader/                 # 数据集加载器
 │   ├── env/                        # LIBERO 环境封装
 │   ├── models/                     # 模型定义
@@ -155,7 +157,6 @@ DreamerVLA/
 │   ├── utils/                      # 工具函数
 │   ├── workspace/                  # 实验 Workspace
 │   └── xllmx/                      # 外部 LLM 集成模块
-├── download.sh                     # 权重下载脚本
 ├── pyproject.toml                  # 包配置
 ├── requirements.txt                # Python 依赖
 └── README.md                       # 本文件
@@ -422,7 +423,7 @@ hf download Alibaba-DAMO-Academy/RynnVLA-002 \
 
 ```bash
 cd /home/user01/liops/workspace/DreamerVLA
-bash download.sh
+bash scripts/download_hf.sh
 ```
 
 ### 3. 验证权重文件
@@ -629,19 +630,13 @@ NUM_GPUS=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 CONFIG_NAME=pretokenize_wm_liber
   bash scripts/pretokenize_train_wm.sh
 ```
 
-### VLA + World Model 联合训练
-
-```bash
-bash scripts/pretokenize_train_vla_wm.sh
-```
-
 ### Dreamer-VLA 完整训练
 
 包含 World Model 训练阶段和 Actor-Critic imagination 训练阶段：
 
 ```bash
 NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=dreamer_vla_libero_10 \
-  bash scripts/pretokenize_train_wm.sh
+  bash scripts/train_dreamer_vla.sh
 ```
 
 配置中可通过 `training.run_wm_phase` 和 `training.run_actor_critic_phase` 控制单阶段或双阶段运行。
@@ -656,7 +651,7 @@ NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=dreamer_vla_libero_10 \
 conda activate dreamervla
 cd /home/user01/liops/workspace/DreamerVLA
 
-python scripts/eval_libero.py \
+bash scripts/eval_libero.sh \
     --ckpt_path data/outputs/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \
     --task_suite libero_goal \
     --num_episodes 10 \

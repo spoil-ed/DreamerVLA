@@ -4,8 +4,8 @@ seed: 7
 
 hydra:
   run:
-    dir: .
-  output_subdir: null
+    dir: ${training.out_dir}
+  output_subdir: .hydra
 
 trainer:
   device: cuda:0
@@ -52,15 +52,15 @@ encoder:
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize.yaml
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_2_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
 
 dataloader:
   batch_size: 8

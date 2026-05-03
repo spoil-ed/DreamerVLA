@@ -1,6 +1,6 @@
 """Reusable "decode WM prediction back to pixels" utility.
 
-Extracts the broadcast-delta logic from scripts/eval_wm.py so it can be called
+Extracts the broadcast-delta logic from src.cli.eval_wm so it can be called
 periodically during training to produce rec-vs-gt comparison strips.
 
 Why broadcast-delta: the WM in this repo operates on a single mean-pooled

@@ -559,7 +559,7 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(ChameleonForConditio
         # 获取生成的token
         generated_token = res['sequences'][:, input_ids.shape[1]:]  # [batch_size, 1]
         # print(input_ids, res['sequences'])
-        print(f"Generated token: {generated_token}")  # 调试信息，确认是否为10004
+        # print(f"Generated token: {generated_token}")  # 调试信息（噪音；只在 debug 时打开）
         
         # 构建完整的input_ids（原始输入 + 生成的token）
         full_input_ids = res['sequences']  # [batch_size, original_length + 1]
@@ -593,9 +593,9 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(ChameleonForConditio
         # 将predicted_actions重新reshape为[time_horizon, action_dim]
         predicted_actions = predicted_actions.reshape(self.action_head.time_horizon, self.action_head.action_dim)
         
-        print(f"Predicted actions shape: {predicted_actions.shape}")
-        print(f"Predicted actions: {predicted_actions}")
-        
+        # 调试时再开（每步 16 行 tensor 打印会把 run.log 撑爆）
+        # print(f"Predicted actions shape: {predicted_actions.shape}")
+        # print(f"Predicted actions: {predicted_actions}")
         return predicted_actions
 
 

@@ -1,0 +1,209 @@
+_target_: src.workspace.dreamer_vla_workspace.DreamerVLAWorkspace
+
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+trainer:
+  device: cuda
+  debug: false
+
+# ── training ──────────────────────────────────────────────────────────────────
+training:
+  device: cuda
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla_transdreamer_libero_10
+  debug: false
+  resume: false
+  distributed_strategy: fsdp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: true
+  num_epochs: 20
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  checkpoint_every: 1
+  use_ema: false
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+
+  # Per-batch alternation: Phase-1 WM step → Phase-2 DreamerV3 actor-critic step
+  run_wm_phase: true
+  run_actor_critic_phase: true
+
+ema:
+  decay: 0.9999
+  update_after_step: 0
+
+eval:
+  eval_every: 1
+
+# ── model init ────────────────────────────────────────────────────────────────
+init:
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  # Cross-run init: load fine-tuned encoder + WM from prior pretokenize runs.
+  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=005-train_vla_loss=2.840.ckpt
+  # TODO: fill in after running `bash scripts/pretokenize_train_wm.sh` (config = pretokenize_wm_libero_10)
+  # Path will look like: data/outputs/pretokenize_wm/pretokenize_wm_libero_10_<TIMESTAMP>/checkpoints/<epoch>.ckpt
+  world_model_state_ckpt: null
+
+# ── encoder (frozen feature extractor) ───────────────────────────────────────
+encoder:
+  _target_: src.models.encoder.RynnVLAEncoder
+  model_path: ${init.vla_ckpt_path}
+  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  resolution: 256
+  action_dim: 7
+  time_horizon: 10
+  pool: mean
+
+# ── world model (token-mode TransDreamer; matches pretokenize_wm_libero_10) ──
+world_model:
+  _target_: src.models.world_model.TSSMWorldModelTransDreamer
+  io_mode: token
+  token_embed_dim: 512
+  num_image_tokens_vocab: null     # auto-filled from encoder.vocabulary_mapping.bpe2img
+
+  hidden_dim: 4096                 # unused in token mode but required for sig
+  in_channels: 512                 # ConvEncoderStem input = token_embed_dim
+  obs_dim: 1024
+  action_dim: 7
+  latent_dim: 256
+  d_model: 512
+  n_heads: 8
+  n_layers: 4
+  d_ff: 2048
+  dropout: 0.1
+
+  free_nats: 1.0
+  kl_balance: 0.8
+  kl_loss_coef: 1.0
+  transition_loss_coef: 1.0
+  reward_loss_coef: 0.1
+  mapper_hidden_dim: 512
+  reward_hidden_dim: 256
+  min_std: 0.1
+
+  use_pretrained_backbone: true
+  pretrained_model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10
+  freeze_transition_backbone: false
+  backbone_dtype: bfloat16
+  transition_time_horizon: null
+
+  spatial_codec: true
+  spatial_grid: [16, 16]
+  n_image_tokens: 256
+  stem_init_proj_channels: 384
+  stem_stage_channels: [96, 192]
+  stem_kernel: 4
+  stem_stride: 2
+  stem_padding: 1
+  decoder_mid_channels: 192
+  decoder_bspace_groups: 8
+  decoder_minres: [4, 4]
+  decoder_stage_channels: [96, 48]
+  decoder_kernel: 4
+  decoder_stride: 2
+  decoder_padding: 1
+  decoder_stoch_hidden: 512
+
+  image_decoder_enabled: true
+  image_decoder_loss_coef: 1.0
+  image_recon_ce_coef: 1.0
+  image_recon_mse_coef: 0.0
+  # Must match the value used to train the WM ckpt loaded via init.world_model_state_ckpt.
+  posterior_uses_h: false
+
+# ── policy (Dreamer actor; feature = cat(stoch[256], h[d_model=512]) = 768) ──
+policy:
+  _target_: src.models.vla_policy.VLAPolicy
+  action_dim: 7
+  hidden_dim: 768
+  policy_head_hidden_dim: 512
+  initial_log_std: -0.5
+  min_log_std: -5.0
+  max_log_std: 2.0
+
+# ── critic (DreamerV3 twohot critic; same feature dim as policy) ──
+critic:
+  _target_: src.models.critic.twohot_critic.TwohotCritic
+  hidden_dim: 768
+  critic_hidden_dim: 512
+  num_bins: 255
+  bin_min: -20.0
+  bin_max: 20.0
+
+# ── DreamerV3 actor-critic hyper-params ──────────────────────────────────────
+algorithm:
+  imagination_horizon: 15
+  gamma: 0.997
+  lam: 0.95
+  entropy_coef: 3.0e-4
+  target_critic_tau: 0.02
+
+  return_tracker:
+    decay: 0.99
+    low: 0.05
+    high: 0.95
+
+# ── dataset ───────────────────────────────────────────────────────────────────
+dataset:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize.yaml
+
+dataset_val_ind:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+
+dataset_val_ood:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+
+dataloader:
+  batch_size: 4
+  num_workers: 4
+  shuffle: true
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+# ── optimizers ────────────────────────────────────────────────────────────────
+optim:
+  grad_clip_norm: 1.0
+  zero_grad_set_to_none: true
+
+  world_model:
+    name: adam
+    lr: 1.0e-4
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+  policy:
+    name: adam
+    lr: 3.0e-5
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+  critic:
+    name: adam
+    lr: 3.0e-4
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+# ── checkpointing ─────────────────────────────────────────────────────────────
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    monitor_key: epoch_returns_mean
+    mode: max
+    k: 3
+    format_str: 'epoch={epoch:03d}-epoch_returns_mean={epoch_returns_mean:.4f}.ckpt'

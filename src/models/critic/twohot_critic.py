@@ -43,12 +43,33 @@ class TwohotCritic(nn.Module):
         self.register_buffer("bins", bins, persistent=False)
 
     def logits(self, hidden: Tensor) -> Tensor:
+        # Match param dtype (FSDP MixedPrecision casts gathered Linear weights
+        # to bf16 inside forward).
+        weight_dtype = self.backbone[0].weight.dtype
+        hidden = hidden.to(dtype=weight_dtype)
         return self.backbone(hidden)
 
-    def forward(self, hidden: Tensor) -> Tensor:
-        probs = F.softmax(self.logits(hidden), dim=-1)
+    def _expected_value(self, hidden: Tensor) -> Tensor:
+        probs = F.softmax(self.logits(hidden).float(), dim=-1)
         expected_symlog_value = (probs * self.bins.to(probs.dtype)).sum(dim=-1)
         return symexp(expected_symlog_value)
+
+    def forward(self, hidden):
+        """FSDP-compatible dispatcher.
+
+        Tensor input → expected value (existing behaviour, used by the target
+        critic bootstrap path).
+        Dict input with 'mode' key → routes to log_prob_of so FSDP's all-gather
+        hook fires on the (otherwise custom) call.
+        """
+        if isinstance(hidden, dict):
+            mode = hidden.get("mode")
+            if mode == "log_prob":
+                return self.log_prob_of(hidden["hidden"], hidden["values"])
+            if mode == "value":
+                return self._expected_value(hidden["hidden"])
+            raise ValueError(f"Unknown TwohotCritic forward mode: {mode!r}")
+        return self._expected_value(hidden)
 
     def twohot_targets(self, values: Tensor) -> Tensor:
         bins = self.bins.to(values.dtype).to(values.device)
@@ -67,7 +88,7 @@ class TwohotCritic(nn.Module):
         return targets
 
     def log_prob_of(self, hidden: Tensor, values: Tensor) -> Tensor:
-        log_probs = F.log_softmax(self.logits(hidden), dim=-1)
+        log_probs = F.log_softmax(self.logits(hidden).float(), dim=-1)
         targets = self.twohot_targets(values).detach()
         return (targets * log_probs).sum(dim=-1)
 
