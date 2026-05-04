@@ -138,7 +138,8 @@ DreamerVLA/
 │   ├── download_hf.sh              # 权重下载脚本
 │   ├── install.sh                  # 环境安装脚本
 │   ├── pretokenize_train_vla.sh    # VLA 训练
-│   ├── pretokenize_train_wm.sh     # World Model 训练
+│   ├── train_wm.sh                 # 统一 World Model 训练入口
+│   ├── pretokenize_train_wm.sh     # 兼容旧命令的 WM wrapper
 │   ├── train_dreamer_vla.sh        # Dreamer-VLA 训练
 │   └── preprocess/                 # 各步骤预处理脚本
 ├── src/                            # 源代码
@@ -619,16 +620,29 @@ NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=pretokenize_sft_libero_10 \
 
 ### World Model 训练
 
-TSSM World Model 单独训练：
+World Model 单独训练统一走 `scripts/train_wm.sh`，具体 workspace 由
+`CONFIG_NAME` 或 `WM_KIND` 选择：
 
 ```bash
-# 默认 4 GPU
-bash scripts/pretokenize_train_wm.sh
+# DreamerV3 token WM（单进程 workspace）
+WM_KIND=dreamerv3_token bash scripts/train_wm.sh
 
-# 自定义
-NUM_GPUS=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 CONFIG_NAME=pretokenize_wm_libero_10 \
-  bash scripts/pretokenize_train_wm.sh
+# DreamerV3 pixel WM（单进程 workspace）
+WM_KIND=dreamerv3_pixel bash scripts/train_wm.sh
+
+# TSSM/RSSM/TransDreamer 类 pretokenize WM（torchrun）
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+CONFIG_NAME=pretokenize_wm_libero_10_obs4096_minloss_rssm \
+  bash scripts/train_wm.sh
+
+# Chameleon / LaDiWM-style WM（torchrun）
+WM_KIND=chameleon NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  bash scripts/train_wm.sh
 ```
+
+旧的 `pretokenize_train_wm.sh`、`train_dreamerv3_token.sh`、
+`train_dreamerv3_pixel.sh`、`train_chameleon_ladiwm_wm.sh` 仍可用，但现在都只是
+调用 `train_wm.sh` 的兼容 wrapper。
 
 ### Dreamer-VLA 完整训练
 

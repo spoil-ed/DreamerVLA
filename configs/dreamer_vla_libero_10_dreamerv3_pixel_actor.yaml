@@ -1,0 +1,144 @@
+_target_: src.workspace.dreamer_vla_workspace.DreamerVLAWorkspace
+
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+trainer:
+  device: cuda
+  debug: false
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_pixel_actor
+  debug: false
+  resume: false
+  distributed_strategy: fsdp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  num_epochs: 20
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  checkpoint_every: 1
+  use_ema: false
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  run_wm_phase: true
+  run_actor_critic_phase: true
+
+init:
+  world_model_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10_20260504_075919/ckpt/latest.ckpt
+encoder: null
+
+dataset:
+  _target_: src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset
+  hdf5_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
+  sequence_length: 32
+  image_size: 64
+  image_keys: [agentview_rgb, eye_in_hand_rgb]
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 1
+  num_workers: 2
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+world_model:
+  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel
+  action_dim: 7
+  image_channels: 6
+  image_size: 64
+  deter: 8192
+  hidden: 1024
+  stoch: 32
+  classes: 64
+  blocks: 8
+  depth: 64
+  mults: [2, 3, 4, 4]
+  kernel: 5
+  act: silu
+  unimix: 0.01
+  free_nats: 1.0
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  rec_scale: 1.0
+  rew_scale: 1.0
+  con_scale: 1.0
+  reward_bins: 1
+
+policy:
+  _target_: src.models.vla_policy.VLAPolicy
+  action_dim: 7
+  hidden_dim: 10240
+  policy_head_hidden_dim: 1024
+  num_layers: 3
+  act: silu
+  initial_log_std: -0.5
+  min_log_std: -2.302585093
+  max_log_std: 0.0
+
+critic:
+  _target_: src.models.critic.twohot_critic.TwohotCritic
+  hidden_dim: 10240
+  critic_hidden_dim: 1024
+  num_bins: 255
+  bin_min: -20.0
+  bin_max: 20.0
+
+algorithm:
+  imag_last: 0
+  imagination_horizon: 15
+  horizon: 333
+  contdisc: true
+  lam: 0.95
+  actent: 3.0e-4
+  slowtar: false
+  slowreg: 1.0
+  target_critic_tau: 0.02
+  return_tracker:
+    decay: 0.99
+    low: 0.05
+    high: 0.95
+
+optim:
+  grad_clip_norm: 100.0
+  zero_grad_set_to_none: true
+  world_model:
+    name: adamw
+    lr: 4.0e-5
+    betas: [0.9, 0.999]
+    eps: 1.0e-20
+    weight_decay: 0.0
+  policy:
+    name: adam
+    lr: 3.0e-5
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+  critic:
+    name: adam
+    lr: 3.0e-4
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+eval:
+  eval_every: 1
+
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    monitor_key: epoch_returns_mean
+    mode: max
+    k: 3
+    format_str: 'epoch={epoch:03d}-epoch_returns_mean={epoch_returns_mean:.4f}.ckpt'

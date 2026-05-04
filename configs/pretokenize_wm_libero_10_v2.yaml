@@ -16,7 +16,7 @@ trainer:
   debug: false
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_wm/pretokenize_wm_libero_10_discrete_longt_zfocus_v2
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_discrete_longt_zfocus_v2
   debug: false
   resume: false
   distributed_strategy: fsdp
@@ -182,6 +182,6 @@ checkpoint:
     format_str: epoch={epoch:03d}-train_wm_loss={train_wm_loss:.3f}.ckpt
 viz:
   enabled: true
-  every_n_steps: 500
+  every_n_steps: 100
   num_samples: 4
   which_block: -2

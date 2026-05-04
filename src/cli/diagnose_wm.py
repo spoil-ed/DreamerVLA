@@ -15,7 +15,7 @@ Levels:
 Usage:
   python -m src.cli.diagnose_wm \
       --config-name pretokenize_wm_libero_10 \
-      --ckpt data/outputs/pretokenize_wm/<run>/checkpoints/<file>.ckpt \
+      --ckpt data/outputs/worldmodel/pretokenize_wm/<run>/checkpoints/<file>.ckpt \
       --num-samples 128 \
       --device cuda:0
 """

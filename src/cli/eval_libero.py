@@ -3,7 +3,7 @@
 Usage:
     conda activate wmpo
     bash scripts/eval_libero.sh \
-        --ckpt_path data/outputs/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \
+        --ckpt_path data/outputs/vla/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \
         --task_suite libero_goal \
         --num_episodes 10 \
         --device cuda:0

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .block_linear import BlockLinear
 
@@ -133,6 +134,121 @@ class ConvEncoderStem(nn.Module):
             x = self.post_ln(x)
         x = x.view(*leading, self.obs_dim)
         return x
+
+
+def _activation(name: str) -> nn.Module:
+    name = str(name).lower()
+    if name == "elu":
+        return nn.ELU(inplace=True)
+    if name == "gelu":
+        return nn.GELU()
+    if name == "silu":
+        return nn.SiLU(inplace=True)
+    if name == "relu":
+        return nn.ReLU(inplace=True)
+    raise ValueError(f"Unsupported activation: {name!r}")
+
+
+class DreamerCNNEncoderStem(nn.Module):
+    """Dreamer-style CNN observation encoder for token embedding grids.
+
+    DreamerV3 encodes image observations with a stack of spatial convolutions
+    before the RSSM posterior.  In DreamerVLA token mode we do not have RGB
+    pixels anymore, but image-token embeddings still form a spatial grid.  This
+    stem treats that grid as the observation image and applies a closer
+    Dreamer-style Conv/Norm/Act/Downsample tower before projecting to ``obs_dim``.
+
+    Input:  x  [..., N_img, in_channels]
+    Output: z  [..., obs_dim]
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 512,
+        spatial: tuple[int, int] = (16, 16),
+        obs_dim: int = 1024,
+        depth: int = 64,
+        mults: tuple[int, ...] = (2, 3, 4, 4),
+        kernel: int = 5,
+        layers: int = 1,
+        norm: bool = True,
+        act: str = "gelu",
+        strided: bool = False,
+        post_norm: bool = True,
+    ) -> None:
+        super().__init__()
+        if layers < 1:
+            raise ValueError("DreamerCNNEncoderStem requires layers >= 1")
+        self.in_channels = int(in_channels)
+        self.spatial = (int(spatial[0]), int(spatial[1]))
+        self.obs_dim = int(obs_dim)
+        self.depth = int(depth)
+        self.mults = tuple(int(m) for m in mults)
+        self.kernel = int(kernel)
+        self.layers = int(layers)
+        self.use_norm = bool(norm)
+        self.act_name = str(act)
+        self.strided = bool(strided)
+        self.post_norm = bool(post_norm)
+
+        padding = self.kernel // 2
+        stages: list[nn.Module] = []
+        prev = self.in_channels
+        for mult in self.mults:
+            out_ch = self.depth * mult
+            for layer_idx in range(self.layers):
+                stride = 2 if (self.strided and layer_idx == 0) else 1
+                conv = nn.Conv2d(
+                    prev,
+                    out_ch,
+                    kernel_size=self.kernel,
+                    stride=stride,
+                    padding=padding,
+                    bias=True,
+                )
+                nn.init.xavier_uniform_(conv.weight)
+                nn.init.zeros_(conv.bias)
+                block: list[nn.Module] = [conv]
+                if self.use_norm:
+                    block.append(nn.GroupNorm(1, out_ch))
+                block.append(_activation(self.act_name))
+                stages.append(nn.Sequential(*block))
+                prev = out_ch
+            if not self.strided:
+                stages.append(nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True))
+        self.cnn = nn.Sequential(*stages)
+
+        h, w = self.spatial
+        for _ in self.mults:
+            h = max(h // 2, 1)
+            w = max(w // 2, 1)
+        self.final_spatial = (h, w)
+        flat_dim = prev * h * w
+        self.proj = nn.Linear(flat_dim, self.obs_dim)
+        nn.init.xavier_uniform_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+        self.post_ln = nn.LayerNorm(self.obs_dim) if self.post_norm else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        *leading, n_img, c_in = x.shape
+        if c_in != self.in_channels:
+            raise ValueError(f"Expected input channels {self.in_channels}, got {c_in}")
+        h, w = self.spatial
+        if n_img != h * w:
+            raise ValueError(f"Expected {h * w} image tokens for spatial={self.spatial}, got {n_img}")
+
+        x = x.reshape(-1, n_img, c_in).permute(0, 2, 1).contiguous()
+        x = x.view(-1, c_in, h, w)
+        x = self.cnn(x)
+        # With odd or tiny grids, explicit interpolation keeps the final Linear
+        # shape stable while preserving the Dreamer-style downsampling schedule.
+        if tuple(x.shape[-2:]) != self.final_spatial:
+            x = F.adaptive_avg_pool2d(x, self.final_spatial)
+        x = x.flatten(1)
+        x = self.proj(x)
+        if self.post_ln is not None:
+            x = self.post_ln(x)
+        return x.view(*leading, self.obs_dim)
 
 
 class BspaceConvDecoderHead(nn.Module):
@@ -254,4 +370,4 @@ class BspaceConvDecoderHead(nn.Module):
         return x
 
 
-__all__ = ["ConvEncoderStem", "BspaceConvDecoderHead"]
+__all__ = ["ConvEncoderStem", "DreamerCNNEncoderStem", "BspaceConvDecoderHead"]

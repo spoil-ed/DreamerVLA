@@ -1,0 +1,51 @@
+# Gaussian-latent version of the Dreamer/TransDreamer-aligned token WM.
+#
+# Keeps the token IO, DreamerV3-style CNN observation encoder, TransDreamer
+# transformer dynamics, and bspace token decoder from the discrete variant,
+# but swaps the RSSM stochastic state from 32x32 categorical one-hots to a
+# continuous diagonal-Gaussian latent.
+defaults:
+  - pretokenize_wm_libero_10_dreamer_cnn
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_dreamer_cnn_gauss
+
+init:
+  warmup_ckpt_path: null
+
+world_model:
+  _target_: src.models.world_model.tssm.TSSMWorldModelTransDreamer
+
+  # Match the 1024-wide flat stochastic interface used by the current discrete
+  # model (32 * 32), so downstream decoder/transformer widths stay aligned.
+  latent_type: gaussian
+  latent_dim: 1024
+  min_std: 0.1
+
+  # free_nats is applied per Gaussian dimension in tssm.py. 0.03 * 1024 gives
+  # roughly the same total free-bits floor as the 32-way DreamerV3-style
+  # discrete setup, without forcing a 1024-nat KL floor.
+  free_nats: 0.03
+  kl_balance: 0.83
+  kl_loss_coef: 0.6
+
+  # Keep the same encoder/dynamics/rollout settings as the discrete CNN run.
+  obs_encoder_type: dreamer_cnn
+  # Token grid is 32x16. Three downsampling stages keep a 4x2 final map
+  # instead of the DreamerV3/RGB-style 2x1 map from four stages.
+  dreamer_cnn_mults:
+  - 2
+  - 3
+  - 4
+  use_pretrained_backbone: false
+  transformer_variant: transdreamer
+  # Use the TransDreamer-style observation posterior q(z|o). This keeps the
+  # pure-VAE warmup checkpoint connected to the active WM posterior (`obs_to_stoch`);
+  # q(z|h,o) would require a different 1536-d input head and would be cold after
+  # warm-start.
+  posterior_uses_h: false
+  warmup_vae_steps: 2000
+  imagine_loss_steps: 3
+  imagine_loss_context: 1
+  imagine_loss_scale: 0.2

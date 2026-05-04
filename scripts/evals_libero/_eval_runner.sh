@@ -21,7 +21,7 @@
 #   HISTORY_LENGTH         default: 2
 #   ACTION_STEPS           default: 10
 #   MUJOCO_GL              default: osmesa  (set to `egl` to retry GPU rendering)
-#   OUT_DIR                default: data/outputs/eval_libero_vla/<suite>_<timestamp>
+#   OUT_DIR                default: data/outputs/eval/eval_libero_vla/<suite>_<timestamp>
 #
 # Anything passed as positional args is forwarded as Hydra overrides.
 
@@ -60,7 +60,7 @@ export PYTHONFAULTHANDLER=1
 export PYTHONUNBUFFERED=1
 
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR="${OUT_DIR:-${PROJECT_ROOT}/data/outputs/eval_libero_vla/${TASK_SUITE}_${TIMESTAMP}}"
+OUT_DIR="${OUT_DIR:-${PROJECT_ROOT}/data/outputs/eval/eval_libero_vla/${TASK_SUITE}_${TIMESTAMP}}"
 mkdir -p "$OUT_DIR"
 FULL_LOG="$OUT_DIR/run.log"
 

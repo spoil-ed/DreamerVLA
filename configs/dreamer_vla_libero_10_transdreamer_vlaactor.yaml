@@ -17,7 +17,7 @@ trainer:
 
 training:
   device: cuda
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla_vlaactor/default_run
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamer_vla_vlaactor/default_run
   debug: false
   resume: false
   distributed_strategy: fsdp
@@ -44,9 +44,9 @@ eval:
 
 init:
   vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
-  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=005-train_vla_loss=2.840.ckpt
+  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=005-train_vla_loss=2.840.ckpt
   # TODO: fill in after running `bash scripts/pretokenize_train_wm.sh` (config = pretokenize_wm_libero_10)
-  # Path will look like: data/outputs/pretokenize_wm/pretokenize_wm_libero_10_<TIMESTAMP>/checkpoints/<epoch>.ckpt
+  # Path will look like: data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_<TIMESTAMP>/checkpoints/<epoch>.ckpt
   world_model_state_ckpt: null
 
 encoder:

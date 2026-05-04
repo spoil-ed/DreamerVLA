@@ -1,0 +1,34 @@
+# Same data path, token codec, decoder, and minimal loss set as
+# pretokenize_wm_libero_10_obs4096_minloss, but replace the TransDreamer/LLM
+# dynamics with a DreamerV3-style block-GRU RSSM core.
+defaults:
+  - pretokenize_wm_libero_10_obs4096_minloss
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_obs4096_minloss_rssm
+
+world_model:
+  _target_: src.models.world_model.tssm_discrete.TSSMWorldModelRSSMDiscrete
+
+  # RSSM dynamics are randomly initialised and do not use the Chameleon
+  # transition backbone.  This keeps the old DreamerVLA token observation path
+  # while changing only the deterministic dynamics kernel.
+  use_pretrained_backbone: false
+  posterior_uses_h: true
+  warmup_vae_steps: 0
+  rssm_blocks: 8
+  rssm_hidden: 512
+  rssm_dyn_layers: 1
+  rssm_act: silu
+
+  # Match DreamerV3_token's observation likelihood scale: sum categorical CE
+  # over all image tokens per frame, then average over batch/time.  The older
+  # TSSM path averaged over tokens, making recon about 512x weaker.
+  image_recon_ce_reduction: sum
+
+  # Parent TSSM code clamps KL per stochastic dimension.  DreamerV3's usual
+  # free-nats floor is approximately 1 nat per time step, so with 32 stochastic
+  # dimensions we use 1/32 per dim instead of 1.0 per dim (which produced the
+  # observed total KL floor of 32).
+  free_nats: 0.03125

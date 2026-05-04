@@ -1,0 +1,70 @@
+# Original TransDreamer architecture ablation on LIBERO pretokenized token I/O.
+#
+# This keeps the current DreamerVLA pretokenize workspace, data loader, save/
+# resume/viz plumbing, and token CE interface.  The world-model architecture is
+# switched to a local copy of /home/user01/liops/workspace/TransDreamer:
+#   q(z|o), act_stoch_mlp([z,a]), custom causal Transformer, concat_o deter.
+defaults:
+  - pretokenize_wm_libero_10_obs4096_minloss
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_original_transdreamer
+  # Original TransDreamer was trained in fp32; keep this strict ablation in fp32
+  # instead of inheriting DreamerVLA's bf16 mixed-precision default.
+  fsdp_mixed_precision: fp32
+
+init:
+  # Strict TransDreamer ablation: no DreamerVLA pure-VAE warm start.
+  warmup_ckpt_path: null
+
+world_model:
+  _target_: src.models.world_model.transdreamer_original.OriginalTransDreamerDiscrete
+
+  # Boundary adapter only: image-token ids become a tiny 3-channel grid, then
+  # the TransDreamer CNN takes over.  No pretrained token/VAE weights are used.
+  token_embed_dim: 3
+  state_conditioning: false
+  obs_dim: 1536
+
+  # Original TransDreamer dynamics defaults from TransDreamer/config_files/configs_atari.py.
+  td_d_model: 600
+  td_n_layers: 6
+  td_num_heads: 8
+  td_d_inner: 64
+  td_d_ff_inner: 1024
+  td_dropout: 0.1
+  td_dropatt: 0.1
+  td_pre_lnorm: true
+  td_gating: false
+  td_last_ln: false
+  td_deter_type: concat_o
+  td_hidden_size: 600
+  td_obs_encoder_depth: 48
+  # Token grid is 32x16, so pad=1 keeps four TransDreamer-style K4/S2 convs valid.
+  td_obs_encoder_padding: 1
+
+  # Strict TransDreamer world-model losses: token CE replaces pixel likelihood,
+  # while reward, pcont, balanced KL use the original TransDreamer-style heads.
+  posterior_uses_h: false
+  use_pretrained_backbone: false
+  warmup_vae_steps: 0
+  image_recon_ce_reduction: sum
+  # This strict TransDreamer implementation computes KL as a total over all
+  # 32 discrete units before applying free_nats.  Setting 1.0 here matches the
+  # previous per-unit floor 0.03125 * 32 = 1.0 total nat.
+  free_nats: 1.0
+  kl_balance: 0.8
+  kl_loss_coef: 0.1
+  image_decoder_loss_coef: 1.0
+  transition_loss_coef: 0.0
+  delta_latent_coef: 0.0
+  reward_loss_coef: 1.0
+  pcont_loss_coef: 5.0
+  action_margin_coef: 0.0
+  action_ranking_coef: 0.0
+  dynamic_token_coef: 0.0
+  image_recon_ce_coef: 1.0
+  image_recon_mse_coef: 0.0
+  imagine_loss_steps: 0
+  imagine_loss_scale: 0.0

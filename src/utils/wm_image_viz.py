@@ -142,11 +142,31 @@ class WorldModelImageVisualizer:
         encoder: Any,
         device: torch.device | str,
         which_block: int = -2,
+        which_blocks: list[int] | tuple[int, ...] | None = None,
+        which_block_labels: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         from src.utils.vq_image_decoder import build_bpe2vq_tensor, load_vq_model
 
         self.device = torch.device(device)
         self.which_block = int(which_block)
+        self.which_blocks = (
+            [int(block_idx) for block_idx in which_blocks]
+            if which_blocks is not None else [self.which_block]
+        )
+        if not self.which_blocks:
+            raise ValueError("which_blocks must contain at least one image block index")
+        if which_block_labels is not None:
+            self.which_block_labels = [str(label) for label in which_block_labels]
+            if len(self.which_block_labels) != len(self.which_blocks):
+                raise ValueError(
+                    "which_block_labels length must match which_blocks length: "
+                    f"{len(self.which_block_labels)} vs {len(self.which_blocks)}"
+                )
+        else:
+            self.which_block_labels = [
+                self._default_view_label(block_idx, view_idx)
+                for view_idx, block_idx in enumerate(self.which_blocks)
+            ]
 
         self.vq_model = load_vq_model(
             cfg_path=vqgan_config_path,
@@ -164,6 +184,17 @@ class WorldModelImageVisualizer:
         self._image_bpe_set = set(self.image_token_bpe_ids.tolist())
         self.lm_head = encoder.backbone.lm_head
         self.encoder = encoder
+        vocab_map = getattr(getattr(encoder.backbone, "config", None), "vocabulary_map", {}) or {}
+        self.state_start_token_id = int(vocab_map.get("<reserved15500>", 15504))
+        self.state_end_token_id = int(vocab_map.get("<reserved16000>", 16004))
+
+    @staticmethod
+    def _default_view_label(block_idx: int, view_idx: int) -> str:
+        if int(block_idx) == -2:
+            return "third"
+        if int(block_idx) == -1:
+            return "wrist"
+        return f"view{view_idx}"
 
     @torch.no_grad()
     def _encode_pooled_and_full(
@@ -264,6 +295,41 @@ class WorldModelImageVisualizer:
             block_ids_list.append(block_ids)
         return torch.stack(per_sample, dim=0).float(), block_ids_list
 
+    def _extract_state_tokens(
+        self, input_ids_list: list[list[int]], device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        rows: list[list[int]] = []
+        max_len = 0
+        for seq in input_ids_list:
+            tokens = [int(tok) for tok in seq]
+            state_tokens: list[int] = []
+            idx = 0
+            while idx < len(tokens):
+                if tokens[idx] != self.state_start_token_id:
+                    idx += 1
+                    continue
+                end = idx + 1
+                while end < len(tokens) and tokens[end] != self.state_end_token_id:
+                    end += 1
+                if end < len(tokens):
+                    state_tokens.extend(tokens[idx : end + 1])
+                    idx = end + 1
+                else:
+                    state_tokens.extend(tokens[idx:])
+                    break
+            rows.append(state_tokens)
+            max_len = max(max_len, len(state_tokens))
+
+        ids = torch.zeros((len(rows), max_len), dtype=torch.long, device=device)
+        mask = torch.zeros((len(rows), max_len), dtype=torch.bool, device=device)
+        for idx, row in enumerate(rows):
+            if not row:
+                continue
+            row_t = torch.tensor(row, dtype=torch.long, device=device)
+            ids[idx, : row_t.numel()] = row_t
+            mask[idx, : row_t.numel()] = True
+        return ids, mask
+
     @torch.no_grad()
     def visualize_batch(
         self,
@@ -302,58 +368,85 @@ class WorldModelImageVisualizer:
             # Token-mode viz: WM predicts image BPE ids directly.  No
             # Chameleon forward, no lm_head — just decode gt current / gt
             # next / pred-next token ids via VQGAN.
-            cur_block_ids = []
-            for seq in cur_ids:
+            cur_block_ids: list[list[list[int]]] = []
+            for sample_idx, seq in enumerate(cur_ids):
                 blocks = extract_image_blocks(list(seq))
-                bidx = self.which_block if self.which_block >= 0 else len(blocks) + self.which_block
-                cur_block_ids.append(blocks[bidx][2])
+                selected: list[list[int]] = []
+                for which_block in self.which_blocks:
+                    bidx = which_block if which_block >= 0 else len(blocks) + which_block
+                    if not (0 <= bidx < len(blocks)):
+                        raise ValueError(
+                            f"viz: sample {sample_idx} which_block={which_block} out of range"
+                        )
+                    selected.append(blocks[bidx][2])
+                cur_block_ids.append(selected)
             cur_bpe = torch.tensor(
                 [
-                    [int(t) for t in block if int(t) in self._image_bpe_set]
-                    for block in cur_block_ids
+                    [
+                        int(t)
+                        for block in sample_blocks
+                        for t in block
+                        if int(t) in self._image_bpe_set
+                    ]
+                    for sample_blocks in cur_block_ids
                 ],
                 dtype=torch.long, device=wm_device,
             )
-            pred_bpe = world_model.predict_next_image_token_ids(cur_bpe, action_b)  # [B, N_img]
+            state_ids = state_mask = None
+            if bool(getattr(world_model, "state_conditioning", False)):
+                state_ids, state_mask = self._extract_state_tokens(cur_ids, wm_device)
+            pred_bpe = world_model.predict_next_image_token_ids(
+                cur_bpe,
+                action_b,
+                state_token_ids=state_ids,
+                state_token_mask=state_mask,
+            )  # [B, N_img]
 
             saved: list[Path] = []
             for i in range(n):
-                try:
-                    cur_pil = _decode_bpe_block_to_pil(
-                        cur_block_ids[i], self.bpe2vq, self.vq_model,
-                    )
-                except Exception as exc:
-                    print(f"[viz] gt_cur decode failed for sample {i}: {exc}")
-                    cur_pil = None
-                gt_next_pil = None
-                try:
-                    nxt_blocks = extract_image_blocks(nxt_ids[i])
-                    if nxt_blocks:
-                        bidx = self.which_block if self.which_block >= 0 else len(nxt_blocks) + self.which_block
+                panels: list[tuple[str, Image.Image | None]] = []
+                offset = 0
+                nxt_blocks = extract_image_blocks(nxt_ids[i])
+                for view_idx, block_ids in enumerate(cur_block_ids[i]):
+                    try:
+                        cur_pil = _decode_bpe_block_to_pil(
+                            block_ids, self.bpe2vq, self.vq_model,
+                        )
+                    except Exception as exc:
+                        print(f"[viz] gt_cur decode failed for sample {i} view {view_idx}: {exc}")
+                        cur_pil = None
+
+                    gt_next_pil = None
+                    try:
+                        which_block = self.which_blocks[view_idx]
+                        bidx = which_block if which_block >= 0 else len(nxt_blocks) + which_block
                         if 0 <= bidx < len(nxt_blocks):
                             gt_next_pil = _decode_bpe_block_to_pil(
                                 nxt_blocks[bidx][2], self.bpe2vq, self.vq_model,
                             )
-                except Exception as exc:
-                    print(f"[viz] gt_next decode failed for sample {i}: {exc}")
-                pred_next_pil = None
-                try:
-                    pred_ids_i = pred_bpe[i].tolist()
-                    pred_next_pil = _decode_bpe_block_to_pil(
-                        pred_ids_i, self.bpe2vq, self.vq_model,
-                    )
-                except Exception as exc:
-                    print(f"[viz] pred_next decode failed for sample {i}: {exc}")
+                    except Exception as exc:
+                        print(f"[viz] gt_next decode failed for sample {i} view {view_idx}: {exc}")
+
+                    pred_next_pil = None
+                    try:
+                        n_block_tokens = sum(1 for tok in block_ids if int(tok) in self._image_bpe_set)
+                        pred_ids_i = pred_bpe[i, offset : offset + n_block_tokens].tolist()
+                        offset += n_block_tokens
+                        pred_next_pil = _decode_bpe_block_to_pil(
+                            pred_ids_i, self.bpe2vq, self.vq_model,
+                        )
+                    except Exception as exc:
+                        print(f"[viz] pred_next decode failed for sample {i} view {view_idx}: {exc}")
+
+                    label = self.which_block_labels[view_idx]
+                    panels.extend([
+                        (f"{label} cur", cur_pil),
+                        (f"{label} gt_next", gt_next_pil),
+                        (f"{label} pred", pred_next_pil),
+                    ])
 
                 path = out_dir / f"{tag}_sample{i:02d}.png"
-                _save_panel_strip(
-                    path,
-                    panels=[
-                        ("gt current (vq)",       cur_pil),
-                        ("gt next (vq)",          gt_next_pil),
-                        ("pred next (token)",     pred_next_pil),
-                    ],
-                )
+                _save_panel_strip(path, panels=panels)
                 saved.append(path)
             return saved
 

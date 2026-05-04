@@ -1,0 +1,129 @@
+_target_: src.workspace.chameleon_latent_action_wm_workspace.ChameleonLatentActionWMWorkspace
+seed: 7
+
+trainer:
+  device: cuda:0
+
+training:
+  device: cuda:0
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/chameleon_latent_action_wm_libero_10
+  debug: false
+  resume: false
+  distributed_strategy: ddp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  num_epochs: 51
+  gradient_accumulate_every: 3
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  checkpoint_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+
+init:
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+
+encoder:
+  _target_: src.models.encoder.RynnVLAEncoder
+  model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  resolution: 256
+  action_dim: 7
+  time_horizon: 10
+  pool: mean
+  freeze_backbone: true
+
+latent:
+  mode: image_tokens
+  # The prompt contains third-view then wrist-view image blocks.  Use both
+  # blocks so action-conditioned dynamics sees robot motion from the wrist view
+  # as well as the scene-level third view.
+  which_blocks: [-2, -1]
+  which_block: -2
+  n_image_tokens: 256
+  horizon: -1
+  context_frames: 1
+
+world_model:
+  _target_: src.models.world_model.chameleon_latent_action.ChameleonLaDiWMFlowWorldModel
+  latent_dim: 4096
+  action_dim: 7
+  model_dim: 512
+  depth: 8
+  heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.0
+  max_action_steps: 16
+  max_image_tokens: 512
+  time_embed_dim: 256
+  flow_loss_coef: 1.0
+  latent_mse_coef: 0.1
+  cosine_coef: 0.01
+  aux_loss_coef: 1.0
+  variation_coef: 0.0003
+  eps: 0.001
+  context_frames: 1
+
+dataset:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq.yaml
+  history: 1
+  batch_length: 3
+  replay_context: 1
+  stride: 1
+  sequence_next_obs_source: current_obs
+
+dataset_val_ind:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ind.yaml
+  history: 1
+  batch_length: 3
+  replay_context: 1
+  stride: 1
+  sequence_next_obs_source: current_obs
+
+dataset_val_ood:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ood.yaml
+  history: 1
+  batch_length: 3
+  replay_context: 1
+  stride: 1
+  sequence_next_obs_source: current_obs
+
+dataloader:
+  batch_size: 1
+  num_workers: 8
+  shuffle: true
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+optim:
+  grad_clip_norm: 10.0
+  zero_grad_set_to_none: true
+  world_model:
+    name: adam
+    lr: 0.00005
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 0.0
+
+checkpoint:
+  save_last_ckpt: true
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 3
+    format_str: epoch={epoch:03d}-train_loss={train_loss:.4f}.ckpt
+
+eval:
+  eval_every: 1
+
+diagnostics:
+  action_sensitivity_every: 100

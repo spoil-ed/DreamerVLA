@@ -60,6 +60,7 @@ class VLAActionHeadActor(nn.Module):
         hidden_size_factor: float = 0.25,      # → reduced_hidden_size = 1024
         num_encoder_layers: int = 2,           # match VLA action_head
         adapter_hidden_dim: int = 1024,
+        adapter_type: str = "mlp",             # "mlp" or "identity" for reconstructed VLA hidden
         initial_log_std: float = -0.5,
         min_log_std: float = -5.0,
         max_log_std: float = 2.0,
@@ -72,14 +73,25 @@ class VLAActionHeadActor(nn.Module):
         self.reduced_hidden_size = int(self.hidden_size * hidden_size_factor)
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
+        self.adapter_type = str(adapter_type).lower()
+        if self.adapter_type not in {"mlp", "identity"}:
+            raise ValueError("adapter_type must be one of {'mlp', 'identity'}")
 
         # ── Adapter: WM feat → action_head's expected hidden space ───────────
-        self.adapter = nn.Sequential(
-            nn.LayerNorm(int(hidden_dim)),
-            nn.Linear(int(hidden_dim), int(adapter_hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(adapter_hidden_dim), self.hidden_size),
-        )
+        if self.adapter_type == "identity":
+            if int(hidden_dim) != self.hidden_size:
+                raise ValueError(
+                    "adapter_type='identity' requires hidden_dim == vla_hidden_size "
+                    f"({hidden_dim} != {self.hidden_size})"
+                )
+            self.adapter = nn.Identity()
+        else:
+            self.adapter = nn.Sequential(
+                nn.LayerNorm(int(hidden_dim)),
+                nn.Linear(int(hidden_dim), int(adapter_hidden_dim)),
+                nn.GELU(),
+                nn.Linear(int(adapter_hidden_dim), self.hidden_size),
+            )
 
         # ── VLA ActionHead components (loaded from ckpt below) ──────────────
         # name + dtype must match exactly so the state_dict load lines up.
@@ -154,11 +166,12 @@ class VLAActionHeadActor(nn.Module):
 
     def _action_mean(self, wm_feat: torch.Tensor) -> torch.Tensor:
         """WM feat [B, hidden_dim] → predicted current-step action mean [B, action_dim]."""
-        param_dtype = self.adapter[1].weight.dtype
+        param_dtype = self.hidden_projection.weight.dtype
         wm_feat = wm_feat.to(dtype=param_dtype)
         bs = wm_feat.shape[0]
 
-        # 1. Adapt WM feat to look like a length-1 VLA hidden context
+        # 1. Adapt WM feat to look like a length-1 VLA hidden context.  In
+        # identity mode, WM already emits a reconstructed RynnVLA hidden vector.
         context = self.adapter(wm_feat).unsqueeze(1)                              # [B, 1, 4096]
         context_red = self.hidden_projection(context)                              # [B, 1, 1024]
 

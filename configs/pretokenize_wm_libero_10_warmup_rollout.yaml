@@ -16,7 +16,7 @@ trainer:
   debug: false
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_wm/pretokenize_wm_libero_10_discrete_minimal_warmup_rollout
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_discrete_minimal_warmup_rollout
   debug: false
   resume: false
   distributed_strategy: fsdp
@@ -39,7 +39,7 @@ init:
   # obs_to_stoch (renamed from VAE's posterior_head) from the pure-VAE ckpt.
   # Posterior+decoder start with already-trained weights (acc≈0.44 on autoencode);
   # full WM training (KL + dynamics + reward + pcont) begins from step 0.
-  warmup_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/pure_vae/pure_vae_20260430_154901/final.ckpt
+  warmup_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/vae/pure_vae/pure_vae_20260430_154901/final.ckpt
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
@@ -203,6 +203,6 @@ checkpoint:
     format_str: epoch={epoch:03d}-train_wm_loss={train_wm_loss:.3f}.ckpt
 viz:
   enabled: true
-  every_n_steps: 500
+  every_n_steps: 100
   num_samples: 4
   which_block: -2

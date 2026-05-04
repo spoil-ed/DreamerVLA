@@ -3,7 +3,7 @@
 #
 # Runs `src/cli/diagnose_wm.py` against a saved TSSMWorldModelTransDreamer (or
 # its discrete subclass) checkpoint and writes a JSON report to
-# data/outputs/eval_wm/.
+# data/outputs/eval/eval_wm/.
 #
 # Usage:
 #   conda activate dreamervla
@@ -19,7 +19,7 @@
 #   DEVICE         CUDA device (default: cuda:0)
 #   DATASET_KEY    Which cfg dataset to use: dataset / dataset_val_ind / dataset_val_ood
 #                  (default: dataset_val_ind)
-#   OUT            Output JSON path (default: data/outputs/eval_wm/wm_checklist_<tag>_s<N>.json)
+#   OUT            Output JSON path (default: data/outputs/eval/eval_wm/wm_checklist_<tag>_s<N>.json)
 #
 # Trailing args are forwarded to the python script verbatim.
 #
@@ -78,7 +78,7 @@ DATASET_KEY="${DATASET_KEY:-dataset_val_ind}"
 
 if [[ -z "${CKPT}" ]]; then
   echo "ERROR: CKPT not set. Pass via env var, e.g.:"
-  echo "  CKPT=data/outputs/pretokenize_wm/<run>/checkpoints/<file>.ckpt \\"
+  echo "  CKPT=data/outputs/worldmodel/pretokenize_wm/<run>/checkpoints/<file>.ckpt \\"
   echo "    bash scripts/diagnose_wm.sh"
   exit 1
 fi
@@ -92,7 +92,7 @@ fi
 if [[ -z "${OUT:-}" ]]; then
   CKPT_STEM="$(basename "${CKPT}" .ckpt)"
   RUN_NAME="$(basename "$(dirname "$(dirname "${CKPT}")")")"
-  OUT="${PROJECT_ROOT}/data/outputs/eval_wm/wm_checklist_${RUN_NAME}_${CKPT_STEM}_s${NUM_SAMPLES}.json"
+  OUT="${PROJECT_ROOT}/data/outputs/eval/eval_wm/wm_checklist_${RUN_NAME}_${CKPT_STEM}_s${NUM_SAMPLES}.json"
 fi
 
 mkdir -p "$(dirname "${OUT}")"

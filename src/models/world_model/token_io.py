@@ -2,8 +2,8 @@
 
 Counterpart of the hidden-space Route-B pipeline:
 
-  hidden mode:  bpe ids → [frozen Chameleon] → [B, N_img, 4096]  → ConvEncoderStem
-  token  mode:  bpe ids → [bpe→img_idx map] → [ImageTokenEmbedder] → [B, N_img, d_embed] → ConvEncoderStem
+  hidden mode:  bpe ids → [frozen Chameleon] → [B, N_img, 4096]  → observation CNN stem
+  token  mode:  bpe ids → [bpe→img_idx map] → [ImageTokenEmbedder] → [B, N_img, d_embed] → observation CNN stem
 
 On the decode side, the existing BspaceConvDecoderHead is reused with
 ``out_channels = num_image_tokens_vocab`` so its per-spatial-position output

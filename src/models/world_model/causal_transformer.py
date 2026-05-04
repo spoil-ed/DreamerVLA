@@ -191,6 +191,16 @@ class LLMBackboneCell(nn.Module):
         h = outputs.last_hidden_state.to(dtype=x.dtype)
         return self.proj_out(h)
 
+    def get_fsdp_wrap_module_list(self) -> list[nn.Module]:
+        if hasattr(self.backbone, "get_fsdp_wrap_module_list"):
+            return list(self.backbone.get_fsdp_wrap_module_list())
+        return []
+
+    def get_checkpointing_wrap_module_list(self) -> list[nn.Module]:
+        if hasattr(self.backbone, "get_checkpointing_wrap_module_list"):
+            return list(self.backbone.get_checkpointing_wrap_module_list())
+        return []
+
 
 def _resolve_pretrained_model_dir(pretrained_model_path: str) -> Path:
     candidate = Path(pretrained_model_path).expanduser().resolve()

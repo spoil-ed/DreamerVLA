@@ -1,0 +1,26 @@
+# Original DreamerVLA/TransDreamer dynamics ablation for the current RSSM run.
+#
+# This keeps the obs4096 minimal-loss data path and token decoder, and keeps the
+# DreamerV3-aligned CE/free-nats scale used by the RSSM config.  The only
+# architectural change relative to pretokenize_wm_libero_10_obs4096_minloss_rssm
+# is switching the dynamics kernel back to the original TransDreamer/LLM
+# backbone path.
+defaults:
+  - pretokenize_wm_libero_10_obs4096_minloss
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_obs4096_minloss_transdreamer_sumce
+
+world_model:
+  _target_: src.models.world_model.tssm_discrete.TSSMWorldModelTransDreamerDiscrete
+
+  # Restore original DreamerVLA/TransDreamer dynamics.
+  use_pretrained_backbone: true
+  posterior_uses_h: false
+
+  # Keep the same loss scale as the current RSSM ablation so the comparison is
+  # mostly dynamics-core only.
+  warmup_vae_steps: 0
+  image_recon_ce_reduction: sum
+  free_nats: 0.03125

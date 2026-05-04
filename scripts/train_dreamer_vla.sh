@@ -8,6 +8,7 @@
 #
 # Override via env vars:
 #   NUM_GPUS=8 CONFIG_NAME=dreamer_vla_libero_10 bash scripts/train_dreamer_vla.sh
+#   PYTHON=/path/to/python NUM_GPUS=4 CONFIG_NAME=dreamer_vla_libero_10 bash scripts/train_dreamer_vla.sh
 #
 # Default run naming:
 #   ${CONFIG_NAME}_${RUN_TAG}_${GPU_TAG}_${IMAGE_TAG}_${ACTOR_LOSS_TAG}_${TIMESTAMP}
@@ -27,12 +28,13 @@ NUM_GPUS="${NUM_GPUS:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 CONFIG_NAME="${CONFIG_NAME:-dreamer_vla_libero_10}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+PYTHON_BIN="${PYTHON:-python}"
 
 if [[ -z "${OUT_DIR_BASE:-}" ]]; then
   if [[ "${CONFIG_NAME}" == *"vlaactor"* ]]; then
-    OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/dreamer_vla_vlaactor"
+    OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/dreamervla/dreamer_vla_vlaactor"
   else
-    OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/dreamer_vla"
+    OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/dreamervla"
   fi
 fi
 
@@ -73,7 +75,8 @@ case "${IMAGE_TAG:-}" in
 esac
 
 case "${ACTOR_LOSS_TAG:-}" in
-  "") case "${CFG_ACTOR_LOSS:-pathwise}" in
+  "") case "${CFG_ACTOR_LOSS:-dreamerv3}" in
+        dreamerv3) ACTOR_LOSS_TAG="dreamerv3" ;;
         dreamerv3_pg) ACTOR_LOSS_TAG="dreamerv3pg" ;;
         policy_gradient) ACTOR_LOSS_TAG="pg" ;;
         pg) ACTOR_LOSS_TAG="pg" ;;
@@ -87,15 +90,16 @@ OUT_DIR="${OUT_DIR:-${OUT_DIR_BASE}/${RUN_NAME}}"
 
 echo "Run output dir: ${OUT_DIR}"
 echo "Run name: ${RUN_NAME}"
+echo "Python: ${PYTHON_BIN}"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "DRY_RUN=1, not launching training."
-  echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=${NUM_GPUS} --module src.cli.train --config-name ${CONFIG_NAME} training.out_dir=${OUT_DIR} $*"
+  echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ${PYTHON_BIN} -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=${NUM_GPUS} --module src.cli.train --config-name ${CONFIG_NAME} training.out_dir=${OUT_DIR} $*"
   exit 0
 fi
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
-python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="${NUM_GPUS}" --module src.cli.train \
+"${PYTHON_BIN}" -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="${NUM_GPUS}" --module src.cli.train \
   --config-name "${CONFIG_NAME}" \
   training.out_dir="${OUT_DIR}" \
   "$@"

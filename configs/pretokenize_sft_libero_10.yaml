@@ -13,7 +13,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/debug_pretokenize_sft
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_sft
   debug: false
   resume: false
   distributed_strategy: fsdp

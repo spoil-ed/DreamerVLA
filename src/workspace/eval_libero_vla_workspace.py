@@ -37,7 +37,7 @@ from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace
 class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     """Load a VLA or Dreamer ckpt -> run LIBERO rollout -> dump JSON metrics."""
 
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/eval_libero_vla"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla"
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:
@@ -138,6 +138,10 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             raise RuntimeError(f"{ckpt_path} has no saved cfg; cannot rebuild Dreamer modules.")
         with open_dict(train_cfg):
             train_cfg.eval = copy.deepcopy(eval_cfg_root.eval)
+            if OmegaConf.select(train_cfg, "encoder", default=None) is None:
+                train_cfg.encoder = copy.deepcopy(eval_cfg_root.encoder)
+            if OmegaConf.select(train_cfg, "init.vla_ckpt_path", default=None) is None:
+                train_cfg.init.vla_ckpt_path = OmegaConf.select(eval_cfg_root, "init.vla_ckpt_path")
             train_cfg.training.out_dir = self.output_dir
             train_cfg.training.distributed_strategy = "ddp"
             train_cfg.training.enable_activation_checkpointing = False
@@ -235,6 +239,16 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             key: (value.to(dtype=target_dtype) if isinstance(value, torch.Tensor) and torch.is_floating_point(value) else value)
             for key, value in state_dict.items()
         }
+        if name == "world_model":
+            model_sd = module.state_dict()
+            remapped = {}
+            for key, value in converted.items():
+                if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
+                    candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
+                    if candidate in model_sd:
+                        key = candidate
+                remapped[key] = value
+            converted = remapped
         missing, unexpected = module.load_state_dict(converted, strict=False)
         if self.distributed.is_main_process:
             print(
@@ -266,7 +280,20 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
 
     def _wm_io_mode(self) -> str:
         wm = getattr(self, "_unwrapped_world_model", None) or getattr(self, "world_model", None)
-        return str(getattr(wm, "io_mode", "hidden"))
+        if wm is None:
+            return "hidden"
+        explicit = getattr(wm, "io_mode", None)
+        if explicit is not None:
+            return str(explicit)
+        encoder = getattr(wm, "encoder", None)
+        if encoder is not None and encoder.__class__.__name__ == "DreamerV3TokenEncoder":
+            return "token"
+        return "hidden"
+
+    def _wm_expects_image_vocab_tokens(self) -> bool:
+        wm = getattr(self, "_unwrapped_world_model", None) or getattr(self, "world_model", None)
+        encoder = getattr(wm, "encoder", None)
+        return encoder is not None and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
 
     def _get_image_bpe_set(self) -> set[int]:
         cached = getattr(self, "_image_bpe_set_cache", None)
@@ -280,23 +307,35 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         from src.utils.wm_image_viz import extract_image_blocks
 
         wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
-        n_img_tok = int(getattr(wm, "n_image_tokens", 256))
-        which_block = int(OmegaConf.select(self.cfg, "eval.dreamer_which_image_block", default=-2))
+        wm_encoder = getattr(wm, "encoder", None)
+        n_img_tok = int(getattr(wm, "n_image_tokens", getattr(wm_encoder, "n_image_tokens", 256)))
+        which_blocks_cfg = OmegaConf.select(self.cfg, "eval.dreamer_which_image_blocks", default=None)
+        if which_blocks_cfg is None:
+            which_blocks = [int(OmegaConf.select(self.cfg, "eval.dreamer_which_image_block", default=-2))]
+        else:
+            which_blocks = [int(item) for item in which_blocks_cfg]
         img_bpe = self._get_image_bpe_set()
+        bpe2img = None
+        if self._wm_expects_image_vocab_tokens():
+            bpe2img = self.encoder.backbone.model.vocabulary_mapping.bpe2img
         rows: list[list[int]] = []
         for idx, seq in enumerate(input_ids_list):
             blocks = extract_image_blocks(list(seq))
             if not blocks:
                 raise ValueError(f"rollout sample {idx}: no image block found in tokens")
-            bidx = which_block if which_block >= 0 else len(blocks) + which_block
-            if not (0 <= bidx < len(blocks)):
-                raise ValueError(f"rollout sample {idx}: image block {which_block} out of range")
-            _start, _end, block_ids = blocks[bidx]
-            tok_ids = [int(tok) for tok in block_ids if int(tok) in img_bpe]
+            tok_ids: list[int] = []
+            for which_block in which_blocks:
+                bidx = which_block if which_block >= 0 else len(blocks) + which_block
+                if not (0 <= bidx < len(blocks)):
+                    raise ValueError(f"rollout sample {idx}: image block {which_block} out of range")
+                _start, _end, block_ids = blocks[bidx]
+                tok_ids.extend(int(tok) for tok in block_ids if int(tok) in img_bpe)
             if len(tok_ids) != n_img_tok:
                 raise ValueError(
-                    f"rollout sample {idx}: image block has {len(tok_ids)} image tokens, expected {n_img_tok}"
+                    f"rollout sample {idx}: image blocks {which_blocks} have {len(tok_ids)} image tokens, expected {n_img_tok}"
                 )
+            if bpe2img is not None:
+                tok_ids = [int(bpe2img[int(tok)]) for tok in tok_ids]
             rows.append(tok_ids)
         return torch.tensor(rows, dtype=torch.long, device=self.device)
 

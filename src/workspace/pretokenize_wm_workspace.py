@@ -27,7 +27,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/debug_pretokenize_wm"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/debug_pretokenize_wm"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -45,6 +45,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         self.local_rank = self.distributed.local_rank
         self.world_size = self.distributed.world_size
         self.device = self.distributed.resolve_device(str(self.config.trainer.device))
+        self._auto_disable_vae_loss_warmup_if_preloaded(config)
         if self.distributed.is_main_process:
             self.print_config()
         set_seed(int(self.config.seed) + self.rank)
@@ -201,16 +202,18 @@ class PretokenizeWMWorkspace(BaseWorkspace):
 
         VAE→WM key mapping:
           token_embedder.*   →  token_embedder.*       (identical)
+          state_token_embedder.* → state_token_embedder.* (identical)
+          state_context_proj.*   → state_context_proj.*   (identical)
           conv_stem.*        →  conv_stem.*            (identical)
           decoder.*          →  image_decoder.*        (rename prefix)
 
+        Conditionally remapped when shapes match:
+          posterior_head.*   →  obs_to_stoch.*        (VAE q(z|o) warm-start)
+
         Skipped due to shape divergence:
           decoder.deter_block.* — VAE used d_deter=obs_dim=1024, WM uses d_model=512
-          posterior_head.*      — VAE input dim is obs_dim only (1024); WM
-                                  posterior_head input is obs_dim+d_model=1536.
-                                  In WM with posterior_uses_h=False, posterior
-                                  is `obs_to_stoch` (1024-dim) — but its keys
-                                  don't match the VAE name, so still skipped.
+          posterior_head.*      — only if the target WM `obs_to_stoch.*` tensor
+                                  shape differs from the VAE tensor.
         """
         if bool(OmegaConf.select(cfg, "training.resume", default=False)):
             return
@@ -245,7 +248,12 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             skipped_shape: list[str] = []
             skipped_unknown: list[str] = []
             for k, v in vae_sd.items():
-                if k.startswith("token_embedder.") or k.startswith("conv_stem."):
+                if (
+                    k.startswith("token_embedder.")
+                    or k.startswith("state_token_embedder.")
+                    or k.startswith("state_context_proj.")
+                    or k.startswith("conv_stem.")
+                ):
                     nk = k
                 elif k.startswith("decoder."):
                     if k.startswith("decoder.deter_block"):
@@ -287,6 +295,37 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                 print(f"[warmup]   skip-unknown: {s}")
             del payload
         self.distributed.barrier()
+
+    def _auto_disable_vae_loss_warmup_if_preloaded(self, cfg: DictConfig) -> None:
+        """Disable VAE-loss warmup when this run will preload a pure-VAE ckpt.
+
+        The preload itself is handled by `_warmup_from_pure_vae()` after the WM
+        module is instantiated. This config mutation happens earlier so the
+        instantiated WM starts directly with the full dynamics objective.
+        """
+        if bool(OmegaConf.select(cfg, "training.resume", default=False)):
+            return
+        warmup_path = OmegaConf.select(cfg, "init.warmup_ckpt_path", default=None)
+        if warmup_path is None:
+            return
+        current_steps = int(OmegaConf.select(cfg, "world_model.warmup_vae_steps", default=0) or 0)
+        if current_steps <= 0:
+            return
+        existing = self.get_checkpoint_path()
+        if existing.is_file():
+            return
+
+        resolved = pathlib.Path(str(warmup_path)).expanduser()
+        if not resolved.is_file():
+            return
+
+        with open_dict(cfg):
+            cfg.world_model.warmup_vae_steps = 0
+        if self.distributed.is_main_process:
+            print(
+                "[warmup-auto] init.warmup_ckpt_path is set and exists; "
+                f"overriding world_model.warmup_vae_steps {current_steps} -> 0."
+            )
 
     def _load_state_dict_from_checkpoint(
         self,
@@ -389,6 +428,15 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                     batch_size, seq_len, -1
                 )
                 batch["obs_embedding_seq"] = obs_embedding_seq
+                if self._token_mode_uses_state(wm_inner):
+                    state_ids, state_mask = self._extract_state_bpe_ids(flat_ids)
+                    state_width = int(state_ids.shape[-1])
+                    batch["state_token_ids_seq"] = state_ids.view(
+                        batch_size, seq_len, state_width
+                    )
+                    batch["state_token_mask_seq"] = state_mask.view(
+                        batch_size, seq_len, state_width
+                    )
             elif self.encoder is not None:
                 obs_embedding_seq, _, _ = self._encode_hidden_from_tokenized(
                     flat_ids,
@@ -409,11 +457,27 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         ):
             if io_mode == "token":
                 # Token mode: skip the frozen Chameleon forward entirely.
-                # Just extract the third-view image BPE ids from each sample.
+                # Extract the third-view image BPE ids from each sample; when
+                # enabled, also extract compact state-token blocks for the WM's
+                # image+state observation encoder.
                 obs_embedding = self._extract_image_bpe_ids(batch["wm_obs_input_ids"])
                 next_obs_embedding = self._extract_image_bpe_ids(batch["wm_next_obs_input_ids"])
                 batch["obs_embedding"] = obs_embedding
                 batch["next_obs_embedding"] = next_obs_embedding
+                if self._token_mode_uses_state(wm_inner):
+                    state_ids, state_mask = self._extract_state_bpe_ids(batch["wm_obs_input_ids"])
+                    next_state_ids, next_state_mask = self._extract_state_bpe_ids(
+                        batch["wm_next_obs_input_ids"]
+                    )
+                    state_ids, state_mask, next_state_ids, next_state_mask = (
+                        self._pad_state_token_pair(
+                            state_ids, state_mask, next_state_ids, next_state_mask
+                        )
+                    )
+                    batch["state_token_ids"] = state_ids
+                    batch["state_token_mask"] = state_mask
+                    batch["next_state_token_ids"] = next_state_ids
+                    batch["next_state_token_mask"] = next_state_mask
             elif self.encoder is not None:
                 obs_embedding, _, _ = self._encode_hidden_from_tokenized(
                     batch["wm_obs_input_ids"],
@@ -441,8 +505,11 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         wm_batch: dict[str, Any] = {}
         for key in (
             "obs_embedding_seq", "action_seq", "reward_seq", "done_seq",
+            "state_token_ids_seq", "state_token_mask_seq",
             "next_image_hiddens_seq", "next_image_token_ids_seq",
             "obs_embedding", "next_obs_embedding", "action", "action_mask",
+            "state_token_ids", "state_token_mask",
+            "next_state_token_ids", "next_state_token_mask",
             "reward", "next_obs_image_hiddens", "next_obs_image_token_ids",
         ):
             value = batch.get(key)
@@ -462,8 +529,11 @@ class PretokenizeWMWorkspace(BaseWorkspace):
 
         for key in (
             "obs_embedding_seq", "action_seq", "reward_seq", "done_seq",
+            "state_token_ids_seq", "state_token_mask_seq",
             "next_image_hiddens_seq", "next_image_token_ids_seq",
             "obs_embedding", "next_obs_embedding", "action", "action_mask",
+            "state_token_ids", "state_token_mask",
+            "next_state_token_ids", "next_state_token_mask",
             "reward", "next_obs_image_hiddens", "next_obs_image_token_ids",
         ):
             value = wm_batch.get(key)
@@ -471,41 +541,66 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                 wm_batch[key] = value.to(self.device)
         return wm_batch
 
+    @staticmethod
+    def _token_mode_uses_state(world_model: Any) -> bool:
+        return bool(getattr(world_model, "state_conditioning", False))
+
     def _extract_image_bpe_ids(
         self, input_ids_list: list[list[int]],
     ) -> torch.Tensor:
-        """Token-mode helper: pull the third-view image block's BPE ids out of
-        each sample's input_ids, without invoking the frozen encoder.
+        """Token-mode helper: pull configured image block BPE ids out of each
+        sample's input_ids, without invoking the frozen encoder.
 
-        Returns [B, n_img_tok] long tensor of image BPE ids.
+        ``viz.which_blocks`` may contain multiple blocks (e.g. ``[-2, -1]`` for
+        third-view + wrist-view). Selected 16x16 image-token payloads are
+        concatenated along the token dimension.
+
+        Returns [B, n_img_tok_total] long tensor of image BPE ids.
         """
         from src.utils.wm_image_viz import extract_image_blocks
 
         wm_inner = getattr(self, "_unwrapped_world_model", None) or self.world_model
-        n_img_tok = int(getattr(wm_inner, "n_image_tokens", 256))
-        which_block = int(OmegaConf.select(self.cfg, "viz.which_block", default=-2))
+        n_img_tok_total = int(getattr(wm_inner, "n_image_tokens", 256))
+        which_blocks_cfg = OmegaConf.select(self.cfg, "viz.which_blocks", default=None)
+        if which_blocks_cfg is None:
+            which_blocks = [int(OmegaConf.select(self.cfg, "viz.which_block", default=-2))]
+        else:
+            which_blocks = [int(block_idx) for block_idx in which_blocks_cfg]
+        if not which_blocks:
+            raise ValueError("viz.which_blocks must contain at least one image block index")
+        if n_img_tok_total % len(which_blocks) != 0:
+            raise ValueError(
+                f"n_image_tokens={n_img_tok_total} is not divisible by "
+                f"len(viz.which_blocks)={len(which_blocks)}"
+            )
+        n_img_tok_per_block = n_img_tok_total // len(which_blocks)
         img_bpe = self._get_image_bpe_set()
 
         if not input_ids_list:
-            return torch.zeros((0, n_img_tok), dtype=torch.long, device=self.device)
+            return torch.zeros((0, n_img_tok_total), dtype=torch.long, device=self.device)
 
         rows: list[list[int]] = []
         for idx, seq in enumerate(input_ids_list):
             blocks = extract_image_blocks(list(seq))
             if not blocks:
                 raise ValueError(f"sample {idx}: no image block found in tokens")
-            bidx = which_block if which_block >= 0 else len(blocks) + which_block
-            if not (0 <= bidx < len(blocks)):
-                raise ValueError(
-                    f"sample {idx}: which_block={which_block} out of range (have {len(blocks)} blocks)"
-                )
-            _start, _end, block_ids = blocks[bidx]
-            tok_ids = [int(tok) for tok in block_ids if int(tok) in img_bpe]
-            if len(tok_ids) != n_img_tok:
-                raise ValueError(
-                    f"sample {idx}: block has {len(tok_ids)} image tokens, expected {n_img_tok}"
-                )
-            rows.append(tok_ids)
+            row: list[int] = []
+            for which_block in which_blocks:
+                bidx = which_block if which_block >= 0 else len(blocks) + which_block
+                if not (0 <= bidx < len(blocks)):
+                    raise ValueError(
+                        f"sample {idx}: which_block={which_block} out of range "
+                        f"(have {len(blocks)} blocks)"
+                    )
+                _start, _end, block_ids = blocks[bidx]
+                tok_ids = [int(tok) for tok in block_ids if int(tok) in img_bpe]
+                if len(tok_ids) != n_img_tok_per_block:
+                    raise ValueError(
+                        f"sample {idx}: block {which_block} has {len(tok_ids)} image "
+                        f"tokens, expected {n_img_tok_per_block}"
+                    )
+                row.extend(tok_ids)
+            rows.append(row)
         return torch.tensor(rows, dtype=torch.long, device=self.device)
 
     def _get_image_bpe_set(self) -> set[int]:
@@ -515,6 +610,98 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
         self._image_bpe_set_cache = set(vocab_mapping.bpe2img.keys())
         return self._image_bpe_set_cache
+
+    def _get_state_token_bounds(self) -> tuple[int, int]:
+        cached = getattr(self, "_state_token_bounds_cache", None)
+        if cached is not None:
+            return cached
+        if self.encoder is None:
+            raise ValueError("Encoder is required to infer state token ids.")
+        config = getattr(getattr(self.encoder, "backbone", None), "config", None)
+        vocab_map = getattr(config, "vocabulary_map", None)
+        if not isinstance(vocab_map, dict):
+            raise ValueError("Encoder config does not expose vocabulary_map.")
+        try:
+            start_id = int(vocab_map["<reserved15500>"])
+            end_id = int(vocab_map["<reserved16000>"])
+        except KeyError as exc:
+            raise KeyError("State start/end reserved tokens are missing from vocabulary_map.") from exc
+        if end_id < start_id:
+            raise ValueError(f"Invalid state token range: {start_id}..{end_id}")
+        self._state_token_bounds_cache = (start_id, end_id)
+        return self._state_token_bounds_cache
+
+    def _extract_state_bpe_ids(
+        self, input_ids_list: list[list[int]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract and pad all state-token blocks from tokenized observations.
+
+        Returns ``(ids, mask)`` with shapes [B, S_max].  Empty/missing state
+        blocks produce S_max=0 unless another sample in the same batch has
+        state tokens.
+        """
+        state_start_id, state_end_id = self._get_state_token_bounds()
+        rows: list[list[int]] = []
+        max_len = 0
+        for seq in input_ids_list:
+            tokens = [int(tok) for tok in seq]
+            state_tokens: list[int] = []
+            idx = 0
+            while idx < len(tokens):
+                if tokens[idx] != state_start_id:
+                    idx += 1
+                    continue
+                end = idx + 1
+                while end < len(tokens) and tokens[end] != state_end_id:
+                    end += 1
+                if end < len(tokens):
+                    state_tokens.extend(tokens[idx : end + 1])
+                    idx = end + 1
+                else:
+                    state_tokens.extend(tokens[idx:])
+                    break
+            rows.append(state_tokens)
+            max_len = max(max_len, len(state_tokens))
+
+        ids = torch.zeros((len(rows), max_len), dtype=torch.long, device=self.device)
+        mask = torch.zeros((len(rows), max_len), dtype=torch.bool, device=self.device)
+        for row_idx, row in enumerate(rows):
+            if not row:
+                continue
+            row_t = torch.tensor(row, dtype=torch.long, device=self.device)
+            ids[row_idx, : row_t.numel()] = row_t
+            mask[row_idx, : row_t.numel()] = True
+        return ids, mask
+
+    @staticmethod
+    def _pad_state_token_pair(
+        state_ids: torch.Tensor,
+        state_mask: torch.Tensor,
+        next_state_ids: torch.Tensor,
+        next_state_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        max_len = max(int(state_ids.shape[-1]), int(next_state_ids.shape[-1]))
+        if int(state_ids.shape[-1]) == max_len and int(next_state_ids.shape[-1]) == max_len:
+            return state_ids, state_mask, next_state_ids, next_state_mask
+
+        def _pad(tensor: torch.Tensor, fill: int | bool) -> torch.Tensor:
+            pad_len = max_len - int(tensor.shape[-1])
+            if pad_len <= 0:
+                return tensor
+            pad = torch.full(
+                (*tensor.shape[:-1], pad_len),
+                fill,
+                dtype=tensor.dtype,
+                device=tensor.device,
+            )
+            return torch.cat([tensor, pad], dim=-1)
+
+        return (
+            _pad(state_ids, 0),
+            _pad(state_mask, False),
+            _pad(next_state_ids, 0),
+            _pad(next_state_mask, False),
+        )
 
     def _encode_hidden_from_tokenized(
         self,
@@ -572,8 +759,20 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         if need_per_token:
             from src.utils.wm_image_viz import extract_image_blocks
             wm_inner = getattr(self, "_unwrapped_world_model", None) or self.world_model
-            n_img_tok = int(getattr(wm_inner, "n_image_tokens", 256))
-            which_block = int(OmegaConf.select(self.cfg, "viz.which_block", default=-2))
+            n_img_tok_total = int(getattr(wm_inner, "n_image_tokens", 256))
+            which_blocks_cfg = OmegaConf.select(self.cfg, "viz.which_blocks", default=None)
+            if which_blocks_cfg is None:
+                which_blocks = [int(OmegaConf.select(self.cfg, "viz.which_block", default=-2))]
+            else:
+                which_blocks = [int(block_idx) for block_idx in which_blocks_cfg]
+            if not which_blocks:
+                raise ValueError("viz.which_blocks must contain at least one image block index")
+            if n_img_tok_total % len(which_blocks) != 0:
+                raise ValueError(
+                    f"n_image_tokens={n_img_tok_total} is not divisible by "
+                    f"len(viz.which_blocks)={len(which_blocks)}"
+                )
+            n_img_tok_per_block = n_img_tok_total // len(which_blocks)
             img_bpe = self._get_image_bpe_set()
             hidden_samples: list[torch.Tensor] = []
             id_samples: list[torch.Tensor] = []
@@ -581,19 +780,31 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                 blocks = extract_image_blocks(list(seq))
                 if not blocks:
                     raise ValueError(f"sample {idx}: no image block found in tokens")
-                bidx = which_block if which_block >= 0 else len(blocks) + which_block
-                if not (0 <= bidx < len(blocks)):
+                positions: list[int] = []
+                tok_ids: list[int] = []
+                for which_block in which_blocks:
+                    bidx = which_block if which_block >= 0 else len(blocks) + which_block
+                    if not (0 <= bidx < len(blocks)):
+                        raise ValueError(
+                            f"sample {idx}: which_block={which_block} out of range "
+                            f"(have {len(blocks)} blocks)"
+                        )
+                    start, _end, block_ids = blocks[bidx]
+                    block_positions = [
+                        start + off for off, tok in enumerate(block_ids) if int(tok) in img_bpe
+                    ]
+                    block_tok_ids = [tok for tok in block_ids if int(tok) in img_bpe]
+                    if len(block_positions) != n_img_tok_per_block:
+                        raise ValueError(
+                            f"sample {idx}: block {which_block} has {len(block_positions)} "
+                            f"image tokens, expected {n_img_tok_per_block}"
+                        )
+                    positions.extend(block_positions)
+                    tok_ids.extend(block_tok_ids)
+                if len(positions) != n_img_tok_total:
                     raise ValueError(
-                        f"sample {idx}: which_block={which_block} out of range (have {len(blocks)} blocks)"
-                    )
-                start, _end, block_ids = blocks[bidx]
-                positions = [
-                    start + off for off, tok in enumerate(block_ids) if int(tok) in img_bpe
-                ]
-                tok_ids = [tok for tok in block_ids if int(tok) in img_bpe]
-                if len(positions) != n_img_tok:
-                    raise ValueError(
-                        f"sample {idx}: block has {len(positions)} image tokens, expected {n_img_tok}"
+                        f"sample {idx}: selected image blocks have {len(positions)} "
+                        f"image tokens, expected {n_img_tok_total}"
                     )
                 pos_t = torch.tensor(positions, device=hidden_states.device)
                 hidden_samples.append(hidden_states[idx].index_select(0, pos_t))
@@ -630,14 +841,28 @@ class PretokenizeWMWorkspace(BaseWorkspace):
             return
         try:
             from src.utils.wm_image_viz import WorldModelImageVisualizer
+            which_blocks_cfg = OmegaConf.select(viz_cfg, "which_blocks", default=None)
+            which_block_labels_cfg = OmegaConf.select(viz_cfg, "which_block_labels", default=None)
             self.image_visualizer = WorldModelImageVisualizer(
                 vqgan_config_path=str(vqgan_cfg),
                 vqgan_ckpt_path=str(vqgan_ckpt),
                 encoder=self.encoder,
                 device=self.device,
                 which_block=int(OmegaConf.select(viz_cfg, "which_block", default=-2)),
+                which_blocks=(
+                    [int(block_idx) for block_idx in which_blocks_cfg]
+                    if which_blocks_cfg is not None else None
+                ),
+                which_block_labels=(
+                    [str(label) for label in which_block_labels_cfg]
+                    if which_block_labels_cfg is not None else None
+                ),
             )
-            print(f"[viz] image visualiser ready (which_block={self.image_visualizer.which_block}).")
+            print(
+                "[viz] image visualiser ready "
+                f"(which_blocks={self.image_visualizer.which_blocks}, "
+                f"labels={self.image_visualizer.which_block_labels})."
+            )
         except Exception as exc:
             print(f"[viz] failed to build image visualiser, disabling: {exc}")
             self.image_visualizer = None
@@ -648,7 +873,7 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         batch: dict[str, Any],
     ) -> None:
         viz_cfg = OmegaConf.select(cfg, "viz")
-        every = int(OmegaConf.select(viz_cfg, "every_n_steps", default=500))
+        every = int(OmegaConf.select(viz_cfg, "every_n_steps", default=100))
         if every <= 0 or (self.global_step % every) != 0:
             return  # all ranks return together — no collective needed
 
@@ -782,6 +1007,16 @@ class PretokenizeWMWorkspace(BaseWorkspace):
         ):
             vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
             instantiate_kwargs["num_image_tokens_vocab"] = len(vocab_mapping.bpe2img)
+        if (
+            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden")) == "token"
+            and bool(OmegaConf.select(world_model_cfg, "state_conditioning", default=False))
+            and self.encoder is not None
+        ):
+            state_start_id, state_end_id = self._get_state_token_bounds()
+            if OmegaConf.select(world_model_cfg, "state_token_offset") is None:
+                instantiate_kwargs["state_token_offset"] = state_start_id
+            if OmegaConf.select(world_model_cfg, "num_state_tokens_vocab") is None:
+                instantiate_kwargs["num_state_tokens_vocab"] = state_end_id - state_start_id + 1
 
         self.world_model = hydra.utils.instantiate(
             world_model_cfg, **instantiate_kwargs
@@ -976,6 +1211,8 @@ class PretokenizeWMWorkspace(BaseWorkspace):
                                 "train_wm_loss": float(wm_raw_loss.item()),
                                 "train_wm_transition_loss": _pick("transition_loss"),
                                 "train_wm_kl_loss": _pick("kl_loss"),
+                                "train_wm_vae_warmup": _pick("vae_warmup"),
+                                "train_wm_eff_kl_loss_coef": _pick("eff_kl_loss_coef"),
                                 "train_wm_dyn_kl": _pick("dyn_kl"),
                                 "train_wm_rep_kl": _pick("rep_kl"),
                                 "train_wm_reward_loss": _pick("reward_loss"),

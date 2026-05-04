@@ -10,8 +10,10 @@ import time
 
 import imageio
 import numpy as np
+from PIL import Image
 
 from libero.libero import get_libero_path
+from libero.libero import benchmark as libero_benchmark
 from libero.libero.envs import OffScreenRenderEnv
 
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
@@ -73,3 +75,101 @@ def save_rollout_video(rollout_dir: str, rollout_images: list, idx: int, success
         writer.append_data(img)
     writer.close()
     return mp4_path
+
+
+class LIBERODreamerEnv:
+    """Small Dreamer-style wrapper around LIBERO OffScreenRenderEnv.
+
+    The wrapper exposes ``reset() -> obs`` and ``step(action) -> (obs, reward,
+    done, info)`` while keeping the fields used by the RynnVLA/DreamerVLA
+    tokenizers: third-view image, wrist image, proprioceptive state, task text,
+    and a rolling image history.
+    """
+
+    def __init__(
+        self,
+        task_suite_name: str = "libero_10",
+        task_id: int = 0,
+        episode_id: int = 0,
+        resolution: int = 256,
+        history_length: int = 1,
+        warmup_steps: int = 10,
+        seed: int = 0,
+    ) -> None:
+        self.task_suite_name = str(task_suite_name)
+        self.task_id = int(task_id)
+        self.episode_id = int(episode_id)
+        self.resolution = int(resolution)
+        self.history_length = max(int(history_length), 1)
+        self.warmup_steps = max(int(warmup_steps), 0)
+        self.seed = int(seed)
+
+        benchmark_dict = libero_benchmark.get_benchmark_dict()
+        self.task_suite = benchmark_dict[self.task_suite_name]()
+        self.task = self.task_suite.get_task(self.task_id)
+        self.initial_states = self.task_suite.get_task_init_states(self.task_id)
+        if not len(self.initial_states):
+            raise RuntimeError(f"LIBERO task {self.task_suite_name}/{self.task_id} has no initial states")
+        self.env, self.task_description = get_libero_env(self.task, resolution=self.resolution)
+        self.env.seed(self.seed)
+        self.max_steps = TASK_MAX_STEPS.get(self.task_suite_name, 300)
+        self.frame_history: list[tuple[Image.Image, Image.Image]] = []
+        self.steps = 0
+        self._last_obs = None
+
+    def close(self) -> None:
+        close_fn = getattr(self.env, "close", None)
+        if callable(close_fn):
+            close_fn()
+
+    def reset(self, episode_id: int | None = None) -> dict:
+        if episode_id is not None:
+            self.episode_id = int(episode_id)
+        init_idx = self.episode_id % len(self.initial_states)
+        self.env.reset()
+        obs = self.env.set_init_state(self.initial_states[init_idx])
+        for _ in range(self.warmup_steps):
+            obs, _, done, _ = self.env.step(get_libero_dummy_action())
+            if done:
+                break
+        self.steps = 0
+        self.frame_history = []
+        self._last_obs = obs
+        return self._format_obs(obs)
+
+    def step(self, action) -> tuple[dict, float, bool, dict]:
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
+        obs, reward, done, info = self.env.step(action_arr.tolist())
+        self.steps += 1
+        self._last_obs = obs
+        timeout = self.steps >= self.max_steps
+        done = bool(done or timeout)
+        if info is None:
+            info = {}
+        info = dict(info)
+        info.setdefault("success", bool(done and not timeout))
+        info.setdefault("timeout", bool(timeout))
+        info.setdefault("task_description", self.task_description)
+        return self._format_obs(obs), float(reward), done, info
+
+    def _format_obs(self, obs) -> dict:
+        third = get_libero_image(obs, self.resolution)
+        wrist = get_libero_image(obs, self.resolution, "robot0_eye_in_hand_image")
+        state = np.concatenate(
+            (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+        ).astype(np.float32)
+        third_pil = Image.fromarray(third)
+        wrist_pil = Image.fromarray(wrist)
+        self.frame_history.append((third_pil, wrist_pil))
+        if len(self.frame_history) > self.history_length:
+            self.frame_history = self.frame_history[-self.history_length:]
+        padded_history = [self.frame_history[0]] * (self.history_length - len(self.frame_history)) + self.frame_history
+        return {
+            "third_image": third,
+            "wrist_image": wrist,
+            "state": state,
+            "task_description": self.task_description,
+            "frame_history": list(padded_history),
+            "step": self.steps,
+            "task_id": self.task_id,
+        }

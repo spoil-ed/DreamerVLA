@@ -53,7 +53,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
     exclude_keys = ("encoder", "_unwrapped_world_model")
 
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -167,10 +167,65 @@ class DreamerVLAWorkspace(BaseWorkspace):
             return self._extract_image_bpe_ids(input_ids_list)
         return self._encode_hidden_from_tokenized(input_ids_list)
 
+    def _obs_embedding_sequence_for_wm(self, input_ids_seq: list[list[list[int]]]) -> torch.Tensor:
+        """Encode a nested [B][T][token] observation sequence for Dreamer starts."""
+        if not input_ids_seq:
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
+            return torch.zeros((0, 0, hidden_dim), device=self.device, dtype=torch.float32)
+        batch_size = len(input_ids_seq)
+        seq_len = len(input_ids_seq[0])
+        if seq_len == 0:
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
+            return torch.zeros((batch_size, 0, hidden_dim), device=self.device, dtype=torch.float32)
+        flat: list[list[int]] = []
+        for row in input_ids_seq:
+            if len(row) != seq_len:
+                raise ValueError("All wm_obs_input_ids_seq rows must have the same length.")
+            flat.extend([list(step) for step in row])
+        encoded = self._obs_embedding_for_wm(flat)
+        return encoded.reshape(batch_size, seq_len, *encoded.shape[1:])
+
     def _build_wm_pretrain_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
         """Assemble flat {obs_embedding, next_obs_embedding, action, reward?}
         accepted by both TSSMWorldModel.forward and TSSMWorldModelTransDreamer.forward.
         """
+        if isinstance(batch.get("images"), torch.Tensor) and isinstance(batch.get("actions"), torch.Tensor):
+            return {
+                key: value
+                for key in ("images", "actions", "rewards", "dones", "is_first", "is_terminal", "is_last")
+                if (value := batch.get(key)) is not None
+            }
+        if isinstance(batch.get("tokens"), torch.Tensor) and isinstance(batch.get("actions"), torch.Tensor):
+            return {
+                key: value
+                for key in ("tokens", "actions", "rewards", "dones", "is_first", "is_terminal", "is_last")
+                if (value := batch.get(key)) is not None
+            }
+
+        obs_seq = batch.get("wm_obs_input_ids_seq")
+        action_seq = batch.get("action_seq")
+        if isinstance(obs_seq, list) and isinstance(action_seq, torch.Tensor):
+            hidden_seq = self._obs_embedding_sequence_for_wm(obs_seq)
+            if hidden_seq.shape[1] < 2:
+                return None
+            actions = action_seq.to(self.device)
+            bsz, steps = hidden_seq.shape[:2]
+            obs_flat = hidden_seq[:, :-1].reshape(bsz * (steps - 1), *hidden_seq.shape[2:])
+            next_flat = hidden_seq[:, 1:].reshape(bsz * (steps - 1), *hidden_seq.shape[2:])
+            action_flat = actions[:, 1:].reshape(bsz * (steps - 1), *actions.shape[2:])
+            wm_batch = {
+                "obs_embedding": obs_flat,
+                "next_obs_embedding": next_flat,
+                "action": action_flat,
+            }
+            reward_seq = batch.get("reward_seq")
+            if isinstance(reward_seq, torch.Tensor):
+                wm_batch["reward"] = reward_seq.to(self.device)[:, 1:].reshape(bsz * (steps - 1))
+            done_seq = batch.get("done_seq")
+            if isinstance(done_seq, torch.Tensor):
+                wm_batch["done"] = done_seq.to(self.device)[:, 1:].reshape(bsz * (steps - 1))
+            return wm_batch
+
         obs_ids = batch.get("wm_obs_input_ids")
         next_obs_ids = batch.get("wm_next_obs_input_ids")
         if not isinstance(obs_ids, list) or not isinstance(next_obs_ids, list):
@@ -194,10 +249,55 @@ class DreamerVLAWorkspace(BaseWorkspace):
         """Assemble {obs: {obs_embedding}} for imagine_actor_critic_step.
         obs_embedding is BPE ids in token mode, pooled hiddens otherwise.
         """
+        images = batch.get("images")
+        if isinstance(images, torch.Tensor):
+            if images.ndim != 5:
+                raise ValueError(f"Dreamer pixel actor batch expects images [B,T,C,H,W], got {tuple(images.shape)}")
+            return {"obs": {
+                "images": images.to(self.device),
+                "actions": batch["actions"].to(self.device),
+                "is_first": batch["is_first"].to(self.device),
+            }}
+
+        tokens = batch.get("tokens")
+        if isinstance(tokens, torch.Tensor):
+            if tokens.ndim not in {3, 4}:
+                raise ValueError(f"Dreamer token actor batch expects tokens [B,T,N] or [B,T,V,N], got {tuple(tokens.shape)}")
+            return {"obs": {
+                "tokens": tokens.to(self.device),
+                "actions": batch["actions"].to(self.device),
+                "is_first": batch["is_first"].to(self.device),
+            }}
+
+        obs_seq = batch.get("wm_obs_input_ids_seq")
+        action_seq = batch.get("action_seq")
+        if isinstance(obs_seq, list) and isinstance(action_seq, torch.Tensor):
+            hidden_seq = self._obs_embedding_sequence_for_wm(obs_seq)
+            bsz, steps = hidden_seq.shape[:2]
+            is_first = torch.zeros(bsz, steps, device=self.device, dtype=torch.bool)
+            if steps > 0:
+                is_first[:, 0] = True
+            return {"obs": {
+                "hidden_seq": hidden_seq,
+                "actions": action_seq.to(self.device),
+                "is_first": is_first,
+            }}
+
         obs_ids = batch.get("wm_obs_input_ids") or batch.get("input_ids")
         if not isinstance(obs_ids, list):
             return None
-        return {"obs": {"obs_embedding": self._obs_embedding_for_wm(obs_ids)}}
+        hidden = self._obs_embedding_for_wm(obs_ids)
+        actions = batch.get("action")
+        if not isinstance(actions, torch.Tensor):
+            actions = torch.zeros(hidden.shape[0], 1, int(OmegaConf.select(self.cfg, "world_model.action_dim", default=7)))
+        if actions.ndim == 2:
+            actions = actions[:, None]
+        is_first = torch.ones(hidden.shape[0], 1, device=self.device, dtype=torch.bool)
+        return {"obs": {
+            "hidden_seq": hidden[:, None],
+            "actions": actions.to(self.device),
+            "is_first": is_first,
+        }}
 
     # ── Token-mode helpers (mirrored from pretokenize_wm_workspace) ──────────
 
@@ -276,37 +376,49 @@ class DreamerVLAWorkspace(BaseWorkspace):
         del payload
 
     def _load_world_model_init_ckpt(self, ckpt_path: str) -> None:
-        """Load `state_dicts.world_model` from a workspace-format .ckpt into
-        self.world_model BEFORE FSDP wrap. FSDP `sync_module_states=True` will
-        broadcast rank-0 params to all ranks during wrap, so only rank 0 needs
-        to read the file.
+        """Load world-model weights into self.world_model before wrapping.
+
+        Supports both DreamerVLA workspace checkpoints
+        (`state_dicts.world_model`) and standalone DreamerV3 WM checkpoints
+        (`model`).
         """
         path = pathlib.Path(ckpt_path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"init.world_model_state_ckpt not found: {path}")
         if self.distributed.is_main_process:
             print(f"[init] loading world_model weights from {path} ...")
-            payload = torch.load(path, map_location="cpu", weights_only=False)
-            sd = payload.get("state_dicts", {}).get("world_model")
-            if sd is None:
-                raise RuntimeError(f"{path} has no state_dicts.world_model")
-            target_dtype = next(self.world_model.parameters()).dtype
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        sd = payload.get("state_dicts", {}).get("world_model")
+        if sd is None:
+            sd = payload.get("model")
+        if sd is None:
+            raise RuntimeError(f"{path} has no state_dicts.world_model or model state dict")
+        target_dtype = next(self.world_model.parameters()).dtype
+        sd = {
+            k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)
+            for k, v in sd.items()
+        }
+        model_sd = self.world_model.state_dict()
+        remapped: dict[str, torch.Tensor] = {}
+        for key, value in sd.items():
+            if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
+                candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
+                if candidate in model_sd:
+                    key = candidate
+            remapped[key] = value
+        sd = remapped
+        mismatched = [
+            (k, tuple(v.shape), tuple(model_sd[k].shape))
+            for k, v in sd.items()
+            if k in model_sd and tuple(v.shape) != tuple(model_sd[k].shape)
+        ]
+        if mismatched:
             sd = {
-                k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)
-                for k, v in sd.items()
+                k: v for k, v in sd.items()
+                if k not in model_sd or tuple(v.shape) == tuple(model_sd[k].shape)
             }
-            model_sd = self.world_model.state_dict()
-            mismatched = [
-                (k, tuple(v.shape), tuple(model_sd[k].shape))
-                for k, v in sd.items()
-                if k in model_sd and tuple(v.shape) != tuple(model_sd[k].shape)
-            ]
-            if mismatched:
-                sd = {
-                    k: v for k, v in sd.items()
-                    if k not in model_sd or tuple(v.shape) == tuple(model_sd[k].shape)
-                }
-            missing, unexpected = self.world_model.load_state_dict(sd, strict=False)
+        missing, unexpected = self.world_model.load_state_dict(sd, strict=False)
+        if self.distributed.is_main_process:
             print(
                 f"[init] world_model loaded: {len(sd)} tensors, "
                 f"missing={len(missing)}, unexpected={len(unexpected)}"
@@ -318,7 +430,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 print(f"[init] missing (first 5): {missing[:5]}")
             if unexpected:
                 print(f"[init] unexpected (first 5): {unexpected[:5]}")
-            del payload
+        del payload
         self.distributed.barrier()
 
     def _attach_image_token_mapping(self) -> None:
@@ -492,8 +604,14 @@ class DreamerVLAWorkspace(BaseWorkspace):
             }
             # Route via __call__ so FSDP gathers params before compute_loss_dict.
             loss_dict = self.world_model(wm_batch)
-            val_losses.append(float(loss_dict["loss"].item()))
-            val_transition_losses.append(float(loss_dict["transition_loss"].item()))
+            loss_value = loss_dict.get("loss", loss_dict.get("_loss"))
+            if not isinstance(loss_value, torch.Tensor):
+                continue
+            val_losses.append(float(loss_value.item()))
+            transition_value = loss_dict.get("transition_loss")
+            val_transition_losses.append(
+                float(transition_value.item()) if isinstance(transition_value, torch.Tensor) else 0.0
+            )
         self.world_model.train()
         if not val_losses:
             return {}
@@ -548,12 +666,16 @@ class DreamerVLAWorkspace(BaseWorkspace):
             val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
 
         # ── encoder (frozen) ───────────────────────────────────────────
-        encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-        self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        freeze_module(self.encoder)
-        encoder_init_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
-        if encoder_init_ckpt:
-            self._load_encoder_init_ckpt(str(encoder_init_ckpt))
+        encoder_cfg_root = OmegaConf.select(cfg, "encoder", default=None)
+        if encoder_cfg_root is None:
+            self.encoder = None
+        else:
+            encoder_cfg = self._build_frozen_encoder_cfg(cfg)
+            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
+            freeze_module(self.encoder)
+            encoder_init_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
+            if encoder_init_ckpt:
+                self._load_encoder_init_ckpt(str(encoder_init_ckpt))
 
         # ── world model ────────────────────────────────────────────────
         world_model_cfg = OmegaConf.select(cfg, "world_model")
@@ -794,7 +916,9 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         "train_returns_std": ac_metrics["returns_std"],
                                         "train_return_scale": ac_metrics["return_scale"],
                                         "train_reward_mean": ac_metrics["reward_mean"],
+                                        "train_continue_mean": ac_metrics.get("continue_mean", 1.0),
                                         "train_value_mean": ac_metrics["value_mean"],
+                                        "train_imagine_weight_mean": ac_metrics.get("imagine_weight_mean", 1.0),
                                         "train_actor_grad_norm": ac_metrics["actor_grad_norm"],
                                         "train_critic_grad_norm": ac_metrics["critic_grad_norm"],
                                     })

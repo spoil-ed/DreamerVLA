@@ -28,7 +28,7 @@ NUM_GPUS="${NUM_GPUS:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 CONFIG_NAME="${CONFIG_NAME:-pretokenize_vla_libero_10}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/pretokenize_vla}"
+OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/vla/pretokenize_vla}"
 OUT_DIR="${OUT_DIR:-${OUT_DIR_BASE}/${CONFIG_NAME}_${TIMESTAMP}}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 

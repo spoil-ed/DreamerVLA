@@ -20,7 +20,7 @@ trainer:
 # ── training ──────────────────────────────────────────────────────────────────
 training:
   device: cuda
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamer_vla_libero_10
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamer_vla_libero_10
   debug: false
   resume: false
   distributed_strategy: ddp

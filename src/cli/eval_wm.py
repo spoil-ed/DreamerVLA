@@ -4,8 +4,8 @@ World-model evaluation: rollout predictions and decode them back to pixel images
 Run:
     python -m scripts.eval_wm \
         --config-name pretokenize_wm_libero_10 \
-        --ckpt data/outputs/pretokenize_wm/<run>/checkpoints/<file>.ckpt \
-        --out-dir data/outputs/pretokenize_wm/<run>/eval \
+        --ckpt data/outputs/worldmodel/pretokenize_wm/<run>/checkpoints/<file>.ckpt \
+        --out-dir data/outputs/worldmodel/pretokenize_wm/<run>/eval \
         --num-samples 8 \
         --next-step 1
 
@@ -323,7 +323,7 @@ def main() -> None:
     parser.add_argument(
         "--out-dir",
         default=None,
-        help="Output directory. Defaults to data/outputs/eval_wm/<timestamp>.",
+        help="Output directory. Defaults to data/outputs/eval/eval_wm/<timestamp>.",
     )
     parser.add_argument("--num-samples", type=int, default=8)
     parser.add_argument(
@@ -341,7 +341,7 @@ def main() -> None:
     out_dir = (
         Path(args.out_dir).expanduser()
         if args.out_dir
-        else PROJECT_ROOT / "data" / "outputs" / "eval_wm" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        else PROJECT_ROOT / "data" / "outputs" / "eval" / "eval_wm" / datetime.now().strftime("%Y%m%d_%H%M%S")
     ).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 

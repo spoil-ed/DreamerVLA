@@ -15,6 +15,7 @@ from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
 from src.models.world_model.image_codec import (
     BspaceConvDecoderHead,
     ConvEncoderStem,
+    DreamerCNNEncoderStem,
 )
 from src.models.world_model.token_io import ImageTokenEmbedder
 
@@ -69,12 +70,14 @@ class TSSMWorldModel(nn.Module):
         dynamics_hidden_dim: int = 4096,
         reward_hidden_dim: int = 512,
         reward_loss_coef: float = 0.0,
+        continue_loss_coef: float = 1.0,
         kl_loss_coef: float = 0.1,
         min_std: float = 0.1,
         pretrained_model_path: str = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/Action_World_model_512/libero_10",
         freeze_transition_backbone: bool = False,
         backbone_dtype: str = "bfloat16",
         transition_time_horizon: int | None = None,
+        actor_input_mode: str = "feature",
         training: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
@@ -85,9 +88,13 @@ class TSSMWorldModel(nn.Module):
         self.mapper_hidden_dim = int(mapper_hidden_dim)
         self.dynamics_hidden_dim = int(dynamics_hidden_dim)
         self.reward_loss_coef = float(reward_loss_coef)
+        self.continue_loss_coef = float(continue_loss_coef)
         self.kl_loss_coef = float(kl_loss_coef)
         self.min_std = float(min_std)
         self.freeze_transition_backbone = bool(freeze_transition_backbone)
+        self.actor_input_mode = str(actor_input_mode)
+        if self.actor_input_mode not in {"feature", "predicted_obs"}:
+            raise ValueError("actor_input_mode must be one of {'feature', 'predicted_obs'}")
         self.pretrained_model_path = str(pretrained_model_path)
         self.transition_time_horizon = self._resolve_transition_time_horizon(
             pretrained_model_path=self.pretrained_model_path,
@@ -143,6 +150,12 @@ class TSSMWorldModel(nn.Module):
         self.reward_head = nn.Sequential(
             nn.LayerNorm(2 * (self.latent_dim + self.dynamics_hidden_dim) + self.action_dim),
             nn.Linear(2 * (self.latent_dim + self.dynamics_hidden_dim) + self.action_dim, reward_hidden_dim),
+            nn.GELU(),
+            nn.Linear(reward_hidden_dim, 1),
+        )
+        self.continue_head = nn.Sequential(
+            nn.LayerNorm(self.latent_dim + self.dynamics_hidden_dim),
+            nn.Linear(self.latent_dim + self.dynamics_hidden_dim, reward_hidden_dim),
             nn.GELU(),
             nn.Linear(reward_hidden_dim, 1),
         )
@@ -302,12 +315,80 @@ class TSSMWorldModel(nn.Module):
         features = torch.cat([latent.feature(), actions, next_latent.feature()], dim=-1)
         return self.reward_head(features).squeeze(-1)
 
+    def actor_input(self, latent: TSSMState) -> torch.Tensor:
+        if self.actor_input_mode == "predicted_obs":
+            return self.transition_head(latent.feature())
+        return latent.feature()
+
+    def observe_sequence(
+        self,
+        hidden_seq: torch.Tensor,
+        actions: torch.Tensor,
+        is_first: torch.Tensor | None = None,
+    ) -> dict[str, Any]:
+        first_param = next(self.parameters())
+        device, dtype = first_param.device, first_param.dtype
+        hidden_seq = hidden_seq.to(device=device, dtype=dtype)
+        actions = actions.to(device=device, dtype=dtype)
+        if hidden_seq.ndim == 4:
+            hidden_seq = hidden_seq.mean(dim=2)
+        if hidden_seq.ndim != 3:
+            raise ValueError(f"observe_sequence expects hidden_seq [B,T,D] or [B,T,N,D], got {tuple(hidden_seq.shape)}")
+        bsz, steps, _ = hidden_seq.shape
+        if actions.ndim == 4:
+            actions = actions.mean(dim=2)
+        if actions.ndim != 3:
+            raise ValueError(f"observe_sequence expects actions [B,T,A], got {tuple(actions.shape)}")
+        if actions.shape[:2] != (bsz, steps):
+            raise ValueError(f"actions shape {tuple(actions.shape)} does not match hidden_seq {tuple(hidden_seq.shape)}")
+        if is_first is None:
+            is_first = torch.zeros(bsz, steps, device=device, dtype=torch.bool)
+            is_first[:, 0] = True
+        else:
+            is_first = is_first.to(device=device, dtype=torch.bool)
+
+        latents: list[TSSMState] = []
+        current = self.encode_latent(hidden_seq[:, 0])
+        latents.append(current)
+        for idx in range(1, steps):
+            reset = is_first[:, idx]
+            prior = self.predict_next(current, actions[:, idx])
+            next_hidden = hidden_seq[:, idx]
+            posterior_stats = self.posterior_head(torch.cat([prior.deter, next_hidden], dim=-1))
+            posterior = self._build_state(posterior_stats, prior.deter)
+            encoded = self.encode_latent(next_hidden)
+            current = TSSMState(
+                mean=torch.where(reset.unsqueeze(-1), encoded.mean, posterior.mean),
+                std=torch.where(reset.unsqueeze(-1), encoded.std, posterior.std),
+                stoch=torch.where(reset.unsqueeze(-1), encoded.stoch, posterior.stoch),
+                deter=torch.where(reset.unsqueeze(-1), encoded.deter, posterior.deter),
+            )
+            latents.append(current)
+
+        stacked = TSSMState(
+            mean=torch.stack([x.mean for x in latents], dim=1),
+            std=torch.stack([x.std for x in latents], dim=1),
+            stoch=torch.stack([x.stoch for x in latents], dim=1),
+            deter=torch.stack([x.deter for x in latents], dim=1),
+        )
+        return {"latent": stacked, "feat": stacked.feature()}
+
+    def state_reward(self, latent: TSSMState) -> torch.Tensor:
+        feat = latent.feature()
+        zeros = feat.new_zeros(*feat.shape[:-1], self.action_dim)
+        features = torch.cat([feat, zeros, feat], dim=-1)
+        return self.reward_head(features).squeeze(-1)
+
+    def continue_prob(self, latent: TSSMState) -> torch.Tensor:
+        return torch.sigmoid(self.continue_head(latent.feature()).squeeze(-1))
+
     def pretrain_loss(
         self,
         hidden: torch.Tensor,
         action: torch.Tensor,
         next_hidden: torch.Tensor,
         reward_target: torch.Tensor | None = None,
+        done_target: torch.Tensor | None = None,
         action_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         action = self._apply_action_mask(action, action_mask)
@@ -327,16 +408,25 @@ class TSSMWorldModel(nn.Module):
             reward_target = torch.zeros_like(predicted_reward)
         reward_target = reward_target.reshape_as(predicted_reward)
         reward_loss = F.mse_loss(predicted_reward, reward_target)
+        cont_logits = self.continue_head(prior_next.feature()).squeeze(-1)
+        if done_target is None:
+            continue_target = torch.ones_like(cont_logits)
+        else:
+            continue_target = 1.0 - done_target.to(device=cont_logits.device, dtype=cont_logits.dtype).reshape_as(cont_logits)
+        continue_loss = F.binary_cross_entropy_with_logits(cont_logits, continue_target)
 
         loss = transition_loss + self.kl_loss_coef * kl_loss
         if self.reward_loss_coef > 0:
             loss = loss + self.reward_loss_coef * reward_loss
+        if self.continue_loss_coef > 0:
+            loss = loss + self.continue_loss_coef * continue_loss
 
         return {
             "loss": loss,
             "transition_loss": transition_loss,
             "kl_loss": kl_loss,
             "reward_loss": reward_loss,
+            "continue_loss": continue_loss,
             "predicted_reward_mean": predicted_reward.mean(),
             "latent_norm": latent.feature().norm(dim=-1).mean(),
         }
@@ -347,6 +437,7 @@ class TSSMWorldModel(nn.Module):
         action = batch["action"]
         action_mask = batch.get("action_mask")
         reward = batch.get("reward")
+        done = batch.get("done")
         if hidden is None or next_hidden is None:
             raise ValueError("World model expects `obs_embedding` and `next_obs_embedding` in the batch.")
         first_param = next(self.parameters())
@@ -359,11 +450,14 @@ class TSSMWorldModel(nn.Module):
             action_mask = action_mask.to(device=device)
         if reward is not None:
             reward = reward.to(device=device, dtype=model_dtype)
+        if done is not None:
+            done = done.to(device=device, dtype=model_dtype)
         return self.pretrain_loss(
             hidden=hidden,
             action=action,
             next_hidden=next_hidden,
             reward_target=reward,
+            done_target=done,
             action_mask=action_mask,
         )
 
@@ -377,6 +471,27 @@ class TSSMWorldModel(nn.Module):
         (which fires only on __call__ / forward).  Routing through forward
         ensures sharded parameters are fully materialized before use.
         """
+        mode = batch.get("mode") if isinstance(batch, dict) else None
+        if mode == "encode_latent":
+            return self.encode_latent(batch["hidden"])
+        if mode == "predict_next":
+            return self.predict_next(batch["latent"], batch["actions"])
+        if mode == "reward":
+            if "next_latent" in batch:
+                return self.reward(batch["latent"], batch["actions"], batch["next_latent"])
+            return self.state_reward(batch["latent"])
+        if mode == "continue":
+            return self.continue_prob(batch["latent"])
+        if mode == "actor_input":
+            return self.actor_input(batch["latent"])
+        if mode == "observe_sequence":
+            return self.observe_sequence(
+                batch["hidden_seq"],
+                batch["actions"],
+                batch.get("is_first"),
+            )
+        if mode not in (None, "pretrain"):
+            raise ValueError(f"Unknown TSSMWorldModel forward mode: {mode!r}")
         return self.compute_loss_dict(batch)
 
     @torch.no_grad()
@@ -542,6 +657,7 @@ class TSSMWorldModelTransDreamer(nn.Module):
         decoder_padding: int = 1,
         decoder_stoch_hidden: int = 512,
         image_recon_ce_coef: float = 1.0,    # cross-entropy on token ids
+        image_recon_ce_reduction: str = "mean",  # "mean" or DreamerV3-style "sum" over image tokens
         image_recon_mse_coef: float = 0.1,   # MSE on per-token 4096-d hiddens
         # ── Discrete-token I/O (io_mode="token") ─────────────────────────────
         # Replaces the frozen-Chameleon-hidden I/O with a learnable image-
@@ -554,6 +670,10 @@ class TSSMWorldModelTransDreamer(nn.Module):
         io_mode: str = "hidden",
         token_embed_dim: int = 512,
         num_image_tokens_vocab: int | None = None,
+        state_conditioning: bool = False,
+        state_token_offset: int | None = None,
+        num_state_tokens_vocab: int | None = None,
+        state_conditioning_scale: float = 1.0,
         # ── Imagination rollout loss ────────────────────────────────────────
         # Unrolls the prior `imagine_loss_steps` steps using its own sampled z
         # (no teacher forcing), then computes image-token CE against the GT
@@ -577,6 +697,28 @@ class TSSMWorldModelTransDreamer(nn.Module):
         transformer_variant: str = "orig",
         transformer_max_seq_len: int = 64,
         transformer_max_rel_pos: int = 64,
+        # Observation encoder frontend. Kept at the end to preserve the
+        # historical positional-argument interface.
+        # ``conv_stem`` keeps the existing TransDreamer-inspired compact stem.
+        # ``dreamer_cnn`` uses a DreamerV3-style Conv/Norm/Act/downsample CNN
+        # over the token grid.
+        obs_encoder_type: str = "conv_stem",
+        dreamer_cnn_depth: int = 64,
+        dreamer_cnn_mults: tuple[int, ...] = (2, 3, 4, 4),
+        dreamer_cnn_kernel: int = 5,
+        dreamer_cnn_layers: int = 1,
+        dreamer_cnn_norm: bool = True,
+        dreamer_cnn_act: str = "gelu",
+        dreamer_cnn_strided: bool = False,
+        dreamer_cnn_post_norm: bool = True,
+        actor_input_mode: str = "feature",
+        # Compatibility with configs shared with the discrete WM variant.
+        # These are intentionally ignored by the Gaussian RSSM path.
+        latent_type: str | None = None,
+        stoch_dims: int | None = None,
+        stoch_categories: int | None = None,
+        gumbel_temp: float | None = None,
+        unimix: float | None = None,
     ) -> None:
         super().__init__()
         if not bool(spatial_codec):
@@ -587,6 +729,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self.spatial_codec = True
         self.in_channels = int(in_channels)
         self.spatial_grid = (int(spatial_grid[0]), int(spatial_grid[1]))
+        self.obs_encoder_type = str(obs_encoder_type).lower()
+        if self.obs_encoder_type not in {"conv_stem", "dreamer_cnn"}:
+            raise ValueError(
+                "obs_encoder_type must be one of {'conv_stem', 'dreamer_cnn'}, "
+                f"got {obs_encoder_type!r}"
+            )
         # `obs_dim`: WM's scalar hidden size, post conv stem.
         self.obs_dim = 1024 if obs_dim is None else int(obs_dim)
         self.action_dim = int(action_dim)
@@ -625,6 +773,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
             )
         self.posterior_uses_h = bool(posterior_uses_h)
         self.image_recon_ce_coef = float(image_recon_ce_coef)
+        self.image_recon_ce_reduction = str(image_recon_ce_reduction).lower()
+        if self.image_recon_ce_reduction not in {"mean", "sum"}:
+            raise ValueError(
+                "image_recon_ce_reduction must be one of {'mean', 'sum'}, "
+                f"got {image_recon_ce_reduction!r}"
+            )
         self.image_recon_mse_coef = float(image_recon_mse_coef)
         self.dynamic_token_coef = float(dynamic_token_coef)
         self.delta_latent_coef = float(delta_latent_coef)
@@ -641,6 +795,9 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self.action_ranking_margin = float(action_ranking_margin)
         self.pcont_loss_coef = float(pcont_loss_coef)
         self.pcont_done_threshold = float(pcont_done_threshold)
+        self.actor_input_mode = str(actor_input_mode)
+        if self.actor_input_mode not in {"feature", "predicted_obs"}:
+            raise ValueError("actor_input_mode must be one of {'feature', 'predicted_obs'}")
         # ── Observation-only encoder kept for checkpoint compatibility and
         # legacy diagnostics.  Orthodox Dreamer training below uses
         # posterior_head(h_t, o_t), so prior/posterior share the same h_t.
@@ -761,14 +918,24 @@ class TSSMWorldModelTransDreamer(nn.Module):
         )
 
         # ── Spatial codec: strided-conv encoder stem + bspace conv decoder ──
-        self.conv_stem = ConvEncoderStem(
+        self.conv_stem = self._build_observation_encoder(
             in_channels=self.in_channels,
             spatial=self.spatial_grid,
             obs_dim=self.obs_dim,
-            init_proj_channels=stem_init_proj_channels,
-            stage_channels=tuple(stem_stage_channels),
-            kernel=stem_kernel, stride=stem_stride, padding=stem_padding,
-            post_norm=stem_post_norm,
+            stem_init_proj_channels=stem_init_proj_channels,
+            stem_stage_channels=tuple(stem_stage_channels),
+            stem_kernel=stem_kernel,
+            stem_stride=stem_stride,
+            stem_padding=stem_padding,
+            stem_post_norm=stem_post_norm,
+            dreamer_cnn_depth=dreamer_cnn_depth,
+            dreamer_cnn_mults=tuple(dreamer_cnn_mults),
+            dreamer_cnn_kernel=dreamer_cnn_kernel,
+            dreamer_cnn_layers=dreamer_cnn_layers,
+            dreamer_cnn_norm=dreamer_cnn_norm,
+            dreamer_cnn_act=dreamer_cnn_act,
+            dreamer_cnn_strided=dreamer_cnn_strided,
+            dreamer_cnn_post_norm=dreamer_cnn_post_norm,
         )
         self.image_decoder: nn.Module | None = BspaceConvDecoderHead(
             deter_dim=self.d_model,
@@ -801,6 +968,16 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self.num_image_tokens_vocab = (
             int(num_image_tokens_vocab) if num_image_tokens_vocab is not None else None
         )
+        self.state_conditioning = bool(state_conditioning)
+        self.state_token_offset = (
+            int(state_token_offset) if state_token_offset is not None else None
+        )
+        self.num_state_tokens_vocab = (
+            int(num_state_tokens_vocab) if num_state_tokens_vocab is not None else None
+        )
+        self.state_conditioning_scale = float(state_conditioning_scale)
+        if self.state_conditioning and self.io_mode != "token":
+            raise ValueError("state_conditioning currently requires io_mode='token'.")
 
         # Imagination-rollout knobs (see __init__ docstring above).
         self.imagine_loss_steps = max(int(imagine_loss_steps), 0)
@@ -817,15 +994,44 @@ class TSSMWorldModelTransDreamer(nn.Module):
                 d_embed=self.token_embed_dim,
                 spatial=self.spatial_grid,
             )
+            if self.state_conditioning:
+                if self.state_token_offset is None or self.num_state_tokens_vocab is None:
+                    raise ValueError(
+                        "state_conditioning=True requires state_token_offset "
+                        "and num_state_tokens_vocab."
+                    )
+                self.state_token_embedder = nn.Embedding(
+                    self.num_state_tokens_vocab,
+                    self.token_embed_dim,
+                )
+                self.state_context_proj = nn.Sequential(
+                    nn.LayerNorm(self.token_embed_dim),
+                    nn.Linear(self.token_embed_dim, self.token_embed_dim),
+                    nn.GELU(),
+                    nn.Linear(self.token_embed_dim, self.token_embed_dim),
+                )
+            else:
+                self.state_token_embedder = None
+                self.state_context_proj = None
             # Stem input channels = token_embed_dim (not 4096)
-            self.conv_stem = ConvEncoderStem(
+            self.conv_stem = self._build_observation_encoder(
                 in_channels=self.token_embed_dim,
                 spatial=self.spatial_grid,
                 obs_dim=self.obs_dim,
-                init_proj_channels=stem_init_proj_channels,
-                stage_channels=tuple(stem_stage_channels),
-                kernel=stem_kernel, stride=stem_stride, padding=stem_padding,
-                post_norm=stem_post_norm,
+                stem_init_proj_channels=stem_init_proj_channels,
+                stem_stage_channels=tuple(stem_stage_channels),
+                stem_kernel=stem_kernel,
+                stem_stride=stem_stride,
+                stem_padding=stem_padding,
+                stem_post_norm=stem_post_norm,
+                dreamer_cnn_depth=dreamer_cnn_depth,
+                dreamer_cnn_mults=tuple(dreamer_cnn_mults),
+                dreamer_cnn_kernel=dreamer_cnn_kernel,
+                dreamer_cnn_layers=dreamer_cnn_layers,
+                dreamer_cnn_norm=dreamer_cnn_norm,
+                dreamer_cnn_act=dreamer_cnn_act,
+                dreamer_cnn_strided=dreamer_cnn_strided,
+                dreamer_cnn_post_norm=dreamer_cnn_post_norm,
             )
             # Decoder output = image-vocab logits (no lm_head needed downstream)
             self.image_decoder = BspaceConvDecoderHead(
@@ -846,6 +1052,8 @@ class TSSMWorldModelTransDreamer(nn.Module):
             self.image_recon_mse_coef = 0.0
         else:
             self.token_embedder = None
+            self.state_token_embedder = None
+            self.state_context_proj = None
 
         if self.freeze_image_decoder and self.image_decoder is not None:
             for parameter in self.image_decoder.parameters():
@@ -867,6 +1075,65 @@ class TSSMWorldModelTransDreamer(nn.Module):
             torch.empty(0, dtype=torch.long),
             persistent=False,
         )
+
+    def _build_observation_encoder(
+        self,
+        *,
+        in_channels: int,
+        spatial: tuple[int, int],
+        obs_dim: int,
+        stem_init_proj_channels: int,
+        stem_stage_channels: tuple[int, ...],
+        stem_kernel: int,
+        stem_stride: int,
+        stem_padding: int,
+        stem_post_norm: bool,
+        dreamer_cnn_depth: int,
+        dreamer_cnn_mults: tuple[int, ...],
+        dreamer_cnn_kernel: int,
+        dreamer_cnn_layers: int,
+        dreamer_cnn_norm: bool,
+        dreamer_cnn_act: str,
+        dreamer_cnn_strided: bool,
+        dreamer_cnn_post_norm: bool,
+    ) -> nn.Module:
+        if self.obs_encoder_type == "dreamer_cnn":
+            return DreamerCNNEncoderStem(
+                in_channels=in_channels,
+                spatial=spatial,
+                obs_dim=obs_dim,
+                depth=dreamer_cnn_depth,
+                mults=dreamer_cnn_mults,
+                kernel=dreamer_cnn_kernel,
+                layers=dreamer_cnn_layers,
+                norm=dreamer_cnn_norm,
+                act=dreamer_cnn_act,
+                strided=dreamer_cnn_strided,
+                post_norm=dreamer_cnn_post_norm,
+            )
+        return ConvEncoderStem(
+            in_channels=in_channels,
+            spatial=spatial,
+            obs_dim=obs_dim,
+            init_proj_channels=stem_init_proj_channels,
+            stage_channels=stem_stage_channels,
+            kernel=stem_kernel,
+            stride=stem_stride,
+            padding=stem_padding,
+            post_norm=stem_post_norm,
+        )
+
+    def get_fsdp_wrap_module_list(self) -> list[nn.Module]:
+        causal_transformer = getattr(self, "causal_transformer", None)
+        if hasattr(causal_transformer, "get_fsdp_wrap_module_list"):
+            return list(causal_transformer.get_fsdp_wrap_module_list())
+        return []
+
+    def get_checkpointing_wrap_module_list(self) -> list[nn.Module]:
+        causal_transformer = getattr(self, "causal_transformer", None)
+        if hasattr(causal_transformer, "get_checkpointing_wrap_module_list"):
+            return list(causal_transformer.get_checkpointing_wrap_module_list())
+        return []
 
     def _prepare_decoder_inputs(
         self, dec_h: torch.Tensor, dec_stoch: torch.Tensor,
@@ -950,6 +1217,144 @@ class TSSMWorldModelTransDreamer(nn.Module):
             b_img = b_full.index_select(0, self.image_token_bpe_ids).to(dtype=hidden.dtype)
             logits = logits + b_img
         return logits
+
+    def _state_context_from_tokens(
+        self,
+        state_token_ids: torch.Tensor | None,
+        state_token_mask: torch.Tensor | None,
+        leading_shape: torch.Size | tuple[int, ...],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor | None:
+        if (
+            not self.state_conditioning
+            or self.state_token_embedder is None
+            or self.state_context_proj is None
+        ):
+            return None
+
+        leading_shape = tuple(int(dim) for dim in leading_shape)
+        if state_token_ids is None:
+            return torch.zeros(
+                (*leading_shape, self.token_embed_dim), device=device, dtype=dtype,
+            )
+
+        state_token_ids = state_token_ids.to(device=device, dtype=torch.long)
+        if tuple(state_token_ids.shape[:-1]) != leading_shape:
+            raise ValueError(
+                "state_token_ids leading shape must match image-token embeddings: "
+                f"expected {leading_shape}, got {tuple(state_token_ids.shape[:-1])}"
+            )
+        if state_token_mask is None:
+            state_token_mask = torch.ones_like(state_token_ids, dtype=torch.bool)
+        else:
+            state_token_mask = state_token_mask.to(device=device, dtype=torch.bool)
+            if state_token_mask.shape != state_token_ids.shape:
+                raise ValueError(
+                    "state_token_mask shape must match state_token_ids: "
+                    f"{tuple(state_token_mask.shape)} vs {tuple(state_token_ids.shape)}"
+                )
+
+        if state_token_ids.shape[-1] == 0:
+            return torch.zeros(
+                (*leading_shape, self.token_embed_dim), device=device, dtype=dtype,
+            )
+
+        if self.state_token_offset is None or self.num_state_tokens_vocab is None:
+            raise RuntimeError("State-token conditioning was not initialised correctly.")
+        state_idx = state_token_ids - int(self.state_token_offset)
+        valid_range = (state_idx >= 0) & (state_idx < int(self.num_state_tokens_vocab))
+        invalid_visible = state_token_mask & ~valid_range
+        if invalid_visible.any():
+            bad = state_token_ids[invalid_visible][:8].detach().cpu().tolist()
+            raise ValueError(f"state_token_ids contain ids outside configured range: {bad}")
+
+        safe_idx = state_idx.clamp(min=0, max=int(self.num_state_tokens_vocab) - 1)
+        emb = self.state_token_embedder(safe_idx).to(dtype=dtype)
+        valid = state_token_mask & valid_range
+        weights = valid.to(dtype=emb.dtype).unsqueeze(-1)
+        denom = weights.sum(dim=-2).clamp_min(1.0)
+        context = (emb * weights).sum(dim=-2) / denom
+        context = self.state_context_proj(context)
+        has_state = valid.any(dim=-1, keepdim=True)
+        context = torch.where(has_state, context, torch.zeros_like(context))
+        return context * self.state_conditioning_scale
+
+    def _fuse_state_context(
+        self,
+        image_token_embeddings: torch.Tensor,
+        state_token_ids: torch.Tensor | None,
+        state_token_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        context = self._state_context_from_tokens(
+            state_token_ids,
+            state_token_mask,
+            image_token_embeddings.shape[:-2],
+            device=image_token_embeddings.device,
+            dtype=image_token_embeddings.dtype,
+        )
+        if context is None:
+            return image_token_embeddings
+        return image_token_embeddings + context.unsqueeze(-2)
+
+    @staticmethod
+    def _pad_last_dim_to(
+        tensor: torch.Tensor,
+        size: int,
+        fill: int | bool = 0,
+    ) -> torch.Tensor:
+        pad_len = int(size) - int(tensor.shape[-1])
+        if pad_len <= 0:
+            return tensor
+        pad = torch.full(
+            (*tensor.shape[:-1], pad_len),
+            fill,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+        return torch.cat([tensor, pad], dim=-1)
+
+    def _state_token_seq_from_single_batch(
+        self,
+        batch: dict[str, Any],
+        *,
+        device: torch.device,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        state_ids = batch.get("state_token_ids")
+        next_state_ids = batch.get("next_state_token_ids")
+        if state_ids is None and next_state_ids is None:
+            return None, None
+        state_mask = batch.get("state_token_mask")
+        next_state_mask = batch.get("next_state_token_mask")
+
+        ref = state_ids if state_ids is not None else next_state_ids
+        assert isinstance(ref, torch.Tensor)
+        batch_size = int(ref.shape[0])
+
+        def _ids_or_empty(value: Any) -> torch.Tensor:
+            if isinstance(value, torch.Tensor):
+                return value.to(device=device, dtype=torch.long)
+            return torch.zeros((batch_size, 0), device=device, dtype=torch.long)
+
+        def _mask_or_default(value: Any, ids: torch.Tensor) -> torch.Tensor:
+            if isinstance(value, torch.Tensor):
+                return value.to(device=device, dtype=torch.bool)
+            return torch.ones_like(ids, dtype=torch.bool)
+
+        state_ids_t = _ids_or_empty(state_ids)
+        next_state_ids_t = _ids_or_empty(next_state_ids)
+        state_mask_t = _mask_or_default(state_mask, state_ids_t)
+        next_state_mask_t = _mask_or_default(next_state_mask, next_state_ids_t)
+        max_len = max(int(state_ids_t.shape[-1]), int(next_state_ids_t.shape[-1]))
+        state_ids_t = self._pad_last_dim_to(state_ids_t, max_len, 0)
+        next_state_ids_t = self._pad_last_dim_to(next_state_ids_t, max_len, 0)
+        state_mask_t = self._pad_last_dim_to(state_mask_t, max_len, False)
+        next_state_mask_t = self._pad_last_dim_to(next_state_mask_t, max_len, False)
+        return (
+            torch.stack([state_ids_t, next_state_ids_t], dim=1),
+            torch.stack([state_mask_t, next_state_mask_t], dim=1),
+        )
 
     # ── Distribution helpers ─────────────────────────────────────────────────
 
@@ -1223,6 +1628,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
 
     # ── Imagination rollout (no teacher forcing) ─────────────────────────────
 
+    def _reduce_image_token_ce(self, ce_per_token: torch.Tensor) -> torch.Tensor:
+        """Reduce image-token CE with either per-token mean or DreamerV3 sum."""
+        if self.image_recon_ce_reduction == "sum":
+            return ce_per_token.reshape(*ce_per_token.shape[:-1], -1).sum(dim=-1).mean()
+        return ce_per_token.mean()
+
     def _imagine_rollout_loss(
         self,
         post_stoch_warm: torch.Tensor,        # [B, ctx, latent]
@@ -1294,20 +1705,23 @@ class TSSMWorldModelTransDreamer(nn.Module):
         ).view_as(img_idx)
         dynamic_mask = img_idx != prev_idx
         static_mask = ~dynamic_mask
-        ce_mean = ce_per_token.mean()
+        ce_loss = self._reduce_image_token_ce(ce_per_token)
         static_ce = (
-            ce_per_token[static_mask].mean() if static_mask.any() else ce_mean.new_zeros(())
+            ce_per_token[static_mask].mean() if static_mask.any() else ce_loss.new_zeros(())
         )
         dynamic_ce = (
-            ce_per_token[dynamic_mask].mean() if dynamic_mask.any() else ce_mean.new_zeros(())
+            ce_per_token[dynamic_mask].mean() if dynamic_mask.any() else ce_loss.new_zeros(())
         )
 
         if self.dynamic_token_coef > 0:
-            weighted = self.image_recon_ce_coef * (
-                static_ce + self.dynamic_token_coef * dynamic_ce
+            weighted_ce = ce_per_token * torch.where(
+                dynamic_mask,
+                ce_per_token.new_full((), self.dynamic_token_coef),
+                ce_per_token.new_ones(()),
             )
+            weighted = self.image_recon_ce_coef * self._reduce_image_token_ce(weighted_ce)
         else:
-            weighted = self.image_recon_ce_coef * ce_mean
+            weighted = self.image_recon_ce_coef * ce_loss
 
         with torch.no_grad():
             pred_idx = logits.argmax(dim=-1)
@@ -1325,7 +1739,7 @@ class TSSMWorldModelTransDreamer(nn.Module):
             dyn_frac = dynamic_mask.float().mean()
 
         return {
-            "imagine_ce_loss": ce_mean,
+            "imagine_ce_loss": ce_loss,
             "imagine_static_ce_loss": static_ce,
             "imagine_dynamic_ce_loss": dynamic_ce,
             "imagine_loss_weighted": weighted,
@@ -1345,6 +1759,8 @@ class TSSMWorldModelTransDreamer(nn.Module):
         done_seq:   torch.Tensor | None = None,  # [B, T]
         next_image_hiddens_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok, in_channels]
         next_image_token_ids_target: torch.Tensor | None = None,  # [B, T-1, n_img_tok] bpe ids
+        state_token_ids_seq: torch.Tensor | None = None,  # [B, T, S_state] raw BPE ids
+        state_token_mask_seq: torch.Tensor | None = None,  # [B, T, S_state]
         global_step: int | None = None,
     ) -> dict[str, torch.Tensor]:
         """
@@ -1408,6 +1824,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
                     "workspace must filter image tokens only"
                 )
             per_token_hidden_seq = self.token_embedder(img_idx_seq)  # [B, T, N_img, d_embed]
+            per_token_hidden_seq = self._fuse_state_context(
+                per_token_hidden_seq,
+                state_token_ids_seq,
+                state_token_mask_seq,
+            )
             hidden_seq = self.conv_stem(per_token_hidden_seq)        # [B, T, obs_dim]
         else:
             # io_mode="hidden": spatial_codec is always True, so hidden_seq must
@@ -1685,16 +2106,18 @@ class TSSMWorldModelTransDreamer(nn.Module):
             prev_img_idx = self._bpe_to_img_idx[raw_bpe_ids_seq[:, :-1]]
             dynamic_mask = img_idx != prev_img_idx
             static_mask = ~dynamic_mask
-            image_recon_ce_loss = ce_per_token.mean()
+            image_recon_ce_loss = self._reduce_image_token_ce(ce_per_token)
             if static_mask.any():
                 image_static_ce_loss = ce_per_token[static_mask].mean()
             if dynamic_mask.any():
                 image_dynamic_ce_loss = ce_per_token[dynamic_mask].mean()
             if self.dynamic_token_coef > 0:
-                image_decoder_loss = (
-                    self.image_recon_ce_coef
-                    * (image_static_ce_loss + self.dynamic_token_coef * image_dynamic_ce_loss)
+                weighted_ce = ce_per_token * torch.where(
+                    dynamic_mask,
+                    ce_per_token.new_full((), self.dynamic_token_coef),
+                    ce_per_token.new_ones(()),
                 )
+                image_decoder_loss = self.image_recon_ce_coef * self._reduce_image_token_ce(weighted_ce)
             else:
                 image_decoder_loss = self.image_recon_ce_coef * image_recon_ce_loss
             with torch.no_grad():
@@ -1939,10 +2362,18 @@ class TSSMWorldModelTransDreamer(nn.Module):
             next_img_token_ids = batch.get("next_image_token_ids_seq")
             if next_img_token_ids is not None:
                 next_img_token_ids = next_img_token_ids.to(device=device, dtype=torch.long)
+            state_token_ids_seq = batch.get("state_token_ids_seq")
+            if state_token_ids_seq is not None:
+                state_token_ids_seq = state_token_ids_seq.to(device=device, dtype=torch.long)
+            state_token_mask_seq = batch.get("state_token_mask_seq")
+            if state_token_mask_seq is not None:
+                state_token_mask_seq = state_token_mask_seq.to(device=device, dtype=torch.bool)
             return self.pretrain_loss(
                 hidden_seq, action_seq, reward_seq, done_seq,
                 next_image_hiddens_target=next_image_hiddens_target,
                 next_image_token_ids_target=next_img_token_ids,
+                state_token_ids_seq=state_token_ids_seq,
+                state_token_mask_seq=state_token_mask_seq,
                 global_step=global_step,
             )
 
@@ -1982,6 +2413,9 @@ class TSSMWorldModelTransDreamer(nn.Module):
         action_seq = torch.stack(
             [torch.zeros_like(action_step), action_step], dim=1
         )                                                                # [B, 2, action_dim]
+        state_token_ids_seq, state_token_mask_seq = self._state_token_seq_from_single_batch(
+            batch, device=device,
+        )
 
         reward = batch.get("reward")
         reward_seq = None
@@ -2012,6 +2446,8 @@ class TSSMWorldModelTransDreamer(nn.Module):
             hidden_seq, action_seq, reward_seq, None,
             next_image_hiddens_target=next_image_hiddens_target,
             next_image_token_ids_target=next_image_token_ids_target,
+            state_token_ids_seq=state_token_ids_seq,
+            state_token_mask_seq=state_token_mask_seq,
             global_step=global_step,
         )
 
@@ -2034,7 +2470,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
         if mode in (None, "pretrain"):
             return self.compute_loss_dict(batch)
         if mode == "encode_latent":
-            return self.encode_latent(batch["hidden"])
+            return self.encode_latent(
+                batch["hidden"],
+                state_token_ids=batch.get("state_token_ids"),
+                state_token_mask=batch.get("state_token_mask"),
+            )
         if mode == "predict_next":
             return self.predict_next(batch["latent"], batch["actions"])
         if mode == "reward":
@@ -2042,6 +2482,8 @@ class TSSMWorldModelTransDreamer(nn.Module):
                 batch["latent"], batch["actions"], batch["next_latent"],
                 attention_mask=batch.get("attention_mask"),
             )
+        if mode == "actor_input":
+            return self.actor_input(batch["latent"])
         raise ValueError(f"Unknown TSSMWorldModelTransDreamer forward mode: {mode!r}")
 
     # ── Single-step RSSM adapters for Dreamer-style imagination ──────────────
@@ -2051,7 +2493,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
     # like it does for TSSMWorldModel.  Single-step rollout carries history in
     # latent.h and injects it into the next causal-Transformer token.
 
-    def _hidden_to_pooled(self, hidden: torch.Tensor) -> torch.Tensor:
+    def _hidden_to_pooled(
+        self,
+        hidden: torch.Tensor,
+        state_token_ids: torch.Tensor | None = None,
+        state_token_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Map raw input → pooled [B, obs_dim] using the same I/O front-end as
         compute_loss_dict.  Handles token-mode BPE ids, spatial-codec per-token
         hiddens, and already-pooled hiddens.
@@ -2077,6 +2524,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
             if (img_idx < 0).any():
                 raise ValueError("encode_latent (token mode): non-image BPE ids in input")
             per_token = self.token_embedder(img_idx)              # [B, N_img, d_embed]
+            per_token = self._fuse_state_context(
+                per_token,
+                state_token_ids,
+                state_token_mask,
+            )
             return self.conv_stem(per_token).to(dtype=dtype)       # [B, obs_dim]
         h = hidden.to(device=device, dtype=dtype)
         if h.ndim == 3:
@@ -2089,7 +2541,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
             f"(expected [B, {self.obs_dim}] or feature-wrap [B, {self.latent_dim + self.d_model}])"
         )
 
-    def encode_latent(self, hidden: torch.Tensor) -> "TransDreamerLatentState":
+    def encode_latent(
+        self,
+        hidden: torch.Tensor,
+        state_token_ids: torch.Tensor | None = None,
+        state_token_mask: torch.Tensor | None = None,
+    ) -> "TransDreamerLatentState":
         """Wrap an observation (or a previous .feature()) into a state.
 
         Two input modes:
@@ -2112,7 +2569,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
                 stoch=stoch,
                 h=h_part,
             )
-        pooled = self._hidden_to_pooled(hidden).to(device=device, dtype=dtype)
+        pooled = self._hidden_to_pooled(
+            hidden,
+            state_token_ids=state_token_ids,
+            state_token_mask=state_token_mask,
+        ).to(device=device, dtype=dtype)
         h_init = torch.zeros(pooled.shape[0], self.d_model, device=device, dtype=dtype)
         mean, std, stoch = self._posterior_from_obs_h(pooled, h_init)
         return TransDreamerLatentState(mean=mean, std=std, stoch=stoch, h=h_init)
@@ -2157,11 +2618,18 @@ class TSSMWorldModelTransDreamer(nn.Module):
         feat = torch.cat([next_latent.h, next_latent.stoch], dim=-1)
         return self.reward_head(feat).squeeze(-1)
 
+    def actor_input(self, latent: "TransDreamerLatentState") -> torch.Tensor:
+        if self.actor_input_mode == "predicted_obs":
+            return self.transition_head(latent.feature())
+        return latent.feature()
+
     @torch.no_grad()
     def predict_next_hidden(
         self,
         hidden: torch.Tensor,
         action: torch.Tensor,
+        state_token_ids: torch.Tensor | None = None,
+        state_token_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Single-step inference helper used for eval/visualisation.
 
@@ -2187,12 +2655,11 @@ class TSSMWorldModelTransDreamer(nn.Module):
 
         if self.io_mode == "token":
             # hidden is [B, N_img] long BPE ids → map, embed, stem
-            bpe = hidden.to(device=device, dtype=torch.long)
-            img_idx = self._bpe_to_img_idx[bpe]
-            if (img_idx < 0).any():
-                raise ValueError("predict_next_hidden (token mode): input has non-image BPE ids")
-            per_token = self.token_embedder(img_idx)
-            hidden = self.conv_stem(per_token)                          # [B, obs_dim]
+            hidden = self._hidden_to_pooled(
+                hidden,
+                state_token_ids=state_token_ids,
+                state_token_mask=state_token_mask,
+            )
         else:
             hidden = hidden.to(device=device, dtype=dtype)
             if hidden.ndim == 3:
@@ -2261,6 +2728,8 @@ class TSSMWorldModelTransDreamer(nn.Module):
         self,
         cur_bpe_ids: torch.Tensor,   # [B, N_img]  current-frame BPE ids
         action: torch.Tensor,         # [B, action_dim] or [B, H, action_dim]
+        state_token_ids: torch.Tensor | None = None,
+        state_token_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Token-mode single-step viz helper.  Runs the full TSSM forward on
         the current frame, decodes to image-vocab logits, argmaxes, and maps
@@ -2273,7 +2742,12 @@ class TSSMWorldModelTransDreamer(nn.Module):
         if self.image_decoder is None or self.token_embedder is None:
             raise RuntimeError("token-mode WM is missing image_decoder / token_embedder")
 
-        _ = self.predict_next_hidden(cur_bpe_ids, action)                 # stashes h_t/z_t
+        _ = self.predict_next_hidden(
+            cur_bpe_ids,
+            action,
+            state_token_ids=state_token_ids,
+            state_token_mask=state_token_mask,
+        )                                                                 # stashes h_t/z_t
         h = getattr(self, "_last_predicted_h", None)
         stoch = getattr(self, "_last_predicted_stoch", None)
         if h is None or stoch is None:

@@ -32,7 +32,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/debug_pretokenize_vla"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -263,7 +263,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         num_tasks = task_suite.n_tasks
-        max_steps = TASK_MAX_STEPS.get(task_suite_name, 300)
+        max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
+        if max_tasks is not None:
+            num_tasks = min(num_tasks, int(max_tasks))
+        max_steps = int(OmegaConf.select(eval_cfg, "max_steps", default=TASK_MAX_STEPS.get(task_suite_name, 300)))
         print(
             f"  [Eval] suite='{task_suite_name}' num_tasks={num_tasks} "
             f"episodes_per_task={num_episodes} max_steps={max_steps} "

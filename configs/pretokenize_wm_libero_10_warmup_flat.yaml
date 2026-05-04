@@ -7,7 +7,7 @@ defaults:
   - _self_
 
 training:
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/pretokenize_wm/pretokenize_wm_libero_10_discrete_minimal_warmup_flat
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_10_discrete_minimal_warmup_flat
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeFlatDataset

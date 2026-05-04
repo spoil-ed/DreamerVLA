@@ -22,6 +22,8 @@ class VLAPolicy(nn.Module):
         action_dim: int = 7,
         hidden_dim: int = 128,
         policy_head_hidden_dim: int = 128,
+        num_layers: int = 1,
+        act: str = "gelu",
         initial_log_std: float = -0.5,
         min_log_std: float = -5.0,
         max_log_std: float = 2.0,
@@ -33,12 +35,24 @@ class VLAPolicy(nn.Module):
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
 
-        self.policy_head = nn.Sequential(
-            nn.LayerNorm(self.hidden_dim),
-            nn.Linear(self.hidden_dim, int(policy_head_hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(policy_head_hidden_dim), self.action_dim),
-        )
+        activation: nn.Module
+        if str(act).lower() in {"silu", "swish"}:
+            activation = nn.SiLU()
+        elif str(act).lower() == "relu":
+            activation = nn.ReLU()
+        else:
+            activation = nn.GELU()
+        layers: list[nn.Module] = []
+        cur = self.hidden_dim
+        for _ in range(max(int(num_layers), 1)):
+            layers.extend([
+                nn.LayerNorm(cur),
+                nn.Linear(cur, int(policy_head_hidden_dim)),
+                activation,
+            ])
+            cur = int(policy_head_hidden_dim)
+        layers.append(nn.Linear(cur, self.action_dim))
+        self.policy_head = nn.Sequential(*layers)
         self.log_std = nn.Parameter(torch.full((self.action_dim,), float(initial_log_std)))
         self.embedding: SharedObservationEmbedding | None = None
 

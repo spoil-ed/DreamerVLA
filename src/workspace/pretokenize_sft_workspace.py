@@ -26,7 +26,7 @@ class PretokenizeSFTWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/debug_pretokenize_sft"
+    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_sft"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:

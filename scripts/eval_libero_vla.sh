@@ -4,11 +4,11 @@
 # Usage:
 #   conda activate dreamervla
 #   bash scripts/eval_libero_vla.sh \
-#     eval.ckpt_path=data/outputs/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt \
+#     eval.ckpt_path=data/outputs/vla/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt \
 #     eval.task_suite_name=libero_goal \
 #     eval.num_episodes_per_task=10
 #   bash scripts/eval_libero_vla.sh \
-#     eval.ckpt_path=data/outputs/dreamer_vla/.../checkpoints/epoch=008-epoch_returns_mean=3.6211.ckpt \
+#     eval.ckpt_path=data/outputs/dreamervla/.../checkpoints/epoch=008-epoch_returns_mean=3.6211.ckpt \
 #     eval.ckpt_kind=dreamer \
 #     eval.task_suite_name=libero_10
 #
@@ -23,7 +23,7 @@ cd "${PROJECT_ROOT}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4}"
 CONFIG_NAME="${CONFIG_NAME:-eval_libero_vla}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/eval_libero_vla}"
+OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/eval/eval_libero_vla}"
 OUT_DIR="${OUT_DIR:-${OUT_DIR_BASE}/${CONFIG_NAME}_${TIMESTAMP}}"
 
 mkdir -p "${OUT_DIR}"

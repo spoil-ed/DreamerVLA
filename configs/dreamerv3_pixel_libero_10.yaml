@@ -1,0 +1,83 @@
+_target_: src.workspace.dreamerv3_pixel_workspace.DreamerV3PixelWorkspace
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10
+  device: cuda:0
+  data_parallel: true
+  seed: 7
+  max_steps: 10000
+  num_epochs: null
+  log_every: 20
+  save_every: 1000
+  tqdm_interval_sec: 1.0
+  resume: false
+  resume_path: null
+  resume_strict: true
+  resume_skip_optimizer: false
+
+dataset:
+  _target_: src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset
+  hdf5_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
+  sequence_length: 32
+  image_size: 64
+  image_keys:
+  - agentview_rgb
+  - eye_in_hand_rgb
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 8
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+  persistent_workers: true
+
+world_model:
+  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel
+  action_dim: 7
+  image_channels: 6
+  image_size: 64
+
+  # DreamerV3 defaults from local dreamerv3/dreamerv3/configs.yaml.
+  deter: 8192
+  hidden: 1024
+  stoch: 32
+  classes: 64
+  blocks: 8
+  depth: 64
+  mults:
+  - 2
+  - 3
+  - 4
+  - 4
+  kernel: 5
+  act: silu
+  unimix: 0.01
+  free_nats: 1.0
+
+  # DreamerV3 world-model loss scales.
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  rec_scale: 1.0
+  rew_scale: 1.0
+  con_scale: 1.0
+
+optim:
+  lr: 4e-5
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-20
+  weight_decay: 0.0
+  warmup: 1000
+  grad_clip: 100.0
+
+viz:
+  enabled: true
+  every_n_steps: 100
+  num_samples: 4
+  cell_size: 192
+  view_labels: [third, wrist]
+  channels_per_view: 3
