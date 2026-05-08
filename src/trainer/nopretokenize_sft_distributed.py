@@ -141,6 +141,8 @@ class NopretokenizeSFTDistributedHelper:
             return module
         if self.uses_fsdp:
             return self._wrap_with_fsdp(module)
+        if not any(p.requires_grad for p in module.parameters()):
+            return module
         return self._wrap_module_with_ddp(module)
 
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
@@ -304,7 +306,10 @@ class NopretokenizeSFTDistributedHelper:
 
     def barrier(self) -> None:
         if dist.is_available() and dist.is_initialized():
-            dist.barrier()
+            if torch.cuda.is_available():
+                dist.barrier(device_ids=[self.local_rank])
+            else:
+                dist.barrier()
 
     def cleanup(self) -> None:
         if dist.is_available() and dist.is_initialized():

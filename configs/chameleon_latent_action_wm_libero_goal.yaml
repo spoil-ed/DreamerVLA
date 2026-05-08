@@ -1,0 +1,6 @@
+defaults:
+  - chameleon_latent_action_wm_libero_10
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/chameleon_latent_action_wm_libero_goal

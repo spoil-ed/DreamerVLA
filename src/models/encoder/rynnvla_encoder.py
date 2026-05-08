@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+import io
 from pathlib import Path
 from typing import Any
+import warnings
 
 import numpy as np
 import torch
+from transformers.utils import logging as hf_logging
 
 from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     ChameleonXLLMXForConditionalGeneration_ck_action_head,
@@ -88,15 +92,24 @@ class RynnVLAEncoder(BaseEncoder):
         self.pool = str(pool)
 
         self._processor: FlexARItemProcessorActionState | None = None
-        self.backbone = ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
-            self.model_path,
-            action_dim=self.action_dim,
-            time_horizon=self.time_horizon,
-            attn_implementation="sdpa",
-            torch_dtype=torch.bfloat16,
-            ignore_mismatched_sizes=False,
-            low_cpu_mem_usage=False,
-        )
+        hf_verbosity = hf_logging.get_verbosity()
+        hf_progress_enabled = hf_logging.is_progress_bar_enabled()
+        try:
+            hf_logging.set_verbosity_error()
+            hf_logging.disable_progress_bar()
+            self.backbone = ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
+                self.model_path,
+                action_dim=self.action_dim,
+                time_horizon=self.time_horizon,
+                attn_implementation="sdpa",
+                torch_dtype=torch.bfloat16,
+                ignore_mismatched_sizes=False,
+                low_cpu_mem_usage=False,
+            )
+        finally:
+            hf_logging.set_verbosity(hf_verbosity)
+            if hf_progress_enabled:
+                hf_logging.enable_progress_bar()
         if hasattr(self.backbone.model, "vqmodel"):
             del self.backbone.model.vqmodel
         if freeze_backbone:
@@ -106,14 +119,21 @@ class RynnVLAEncoder(BaseEncoder):
 
     def _build_processor(self, device: torch.device) -> FlexARItemProcessorActionState:
         if self._processor is None or self._processor.device != str(device):
-            self._processor = FlexARItemProcessorActionState(
-                tokenizer_path=self.tokenizer_path,
-                text_tokenizer_path=self.text_tokenizer_path,
-                vqgan_cfg_path=self.chameleon_vqgan_config,
-                vqgan_ckpt_path=self.chameleon_vqgan_ckpt,
-                target_size=self.resolution,
-                device=str(device),
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*torch\.load.*weights_only=False.*",
+                    category=FutureWarning,
+                )
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self._processor = FlexARItemProcessorActionState(
+                        tokenizer_path=self.tokenizer_path,
+                        text_tokenizer_path=self.text_tokenizer_path,
+                        vqgan_cfg_path=self.chameleon_vqgan_config,
+                        vqgan_ckpt_path=self.chameleon_vqgan_ckpt,
+                        target_size=self.resolution,
+                        device=str(device),
+                    )
         return self._processor
 
     @property
@@ -317,7 +337,17 @@ class RynnVLAEncoder(BaseEncoder):
             labels_list.append(labels)
             lengths.append(len(input_ids))
 
-        with torch.no_grad():
+        with torch.no_grad(), warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*nested_from_padded CUDA kernels only support.*",
+                category=UserWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*PyTorch API of nested tensors is in prototype stage.*",
+                category=UserWarning,
+            )
             _, _, _, hidden_states, labels_tensor, _, _ = self.backbone(
                 input_ids=input_ids_list,
                 labels=labels_list,

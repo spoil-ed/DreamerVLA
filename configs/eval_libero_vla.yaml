@@ -52,8 +52,10 @@ eval:
   ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=006-train_vla_loss=2.820.ckpt
   ckpt_kind: auto                 # auto / vla / dreamer
 
-  task_suite_name: libero_10        # libero_goal / libero_spatial / libero_object / libero_10
+  task_suite_name: libero_goal      # libero_goal / libero_spatial / libero_object / libero_10
   num_episodes_per_task: 10
+  task_start: 0
+  task_ids: null
   max_tasks: null
   max_steps: null
   action_steps: 10                  # action chunk horizon (must match training)

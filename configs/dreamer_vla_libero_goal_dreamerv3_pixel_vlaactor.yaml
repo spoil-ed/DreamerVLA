@@ -1,0 +1,10 @@
+defaults:
+  - dreamer_vla_libero_10_dreamerv3_pixel_vlaactor
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_pixel_vlaactor_libero_goal
+
+init:
+  encoder_state_ckpt: null
+  require_encoder_state_ckpt: true

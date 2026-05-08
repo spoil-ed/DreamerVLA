@@ -41,6 +41,8 @@ infer_kind() {
     echo "dreamerv3_token"
   elif [[ "${config}" == dreamerv3_pixel* ]]; then
     echo "dreamerv3_pixel"
+  elif [[ "${config}" == rynn_backbone_* ]]; then
+    echo "rynn_backbone"
   elif [[ "${config}" == chameleon_* || "${config}" == *chameleon* ]]; then
     echo "chameleon"
   else
@@ -51,23 +53,26 @@ infer_kind() {
 if [[ -z "${CONFIG_NAME:-}" ]]; then
   case "${WM_KIND:-pretokenize}" in
     dreamerv3_token|token)
-      CONFIG_NAME="dreamerv3_token_libero_10"
+      CONFIG_NAME="dreamerv3_token_libero_goal"
       ;;
     dreamerv3_pixel|pixel)
-      CONFIG_NAME="dreamerv3_pixel_libero_10"
+      CONFIG_NAME="dreamerv3_pixel_libero_goal"
       ;;
     chameleon|ladiwm)
-      CONFIG_NAME="chameleon_latent_action_wm_libero_10"
+      CONFIG_NAME="chameleon_latent_action_wm_libero_goal"
+      ;;
+    rynn_backbone|rynn|strategy3)
+      CONFIG_NAME="rynn_backbone_dreamerv3_pixel_wm_libero_goal"
       ;;
     pretokenize|tssm|rssm|transdreamer|"")
       if [[ "${WARMUP:-0}" == "1" || "${WM_WARMUP:-0}" == "1" ]]; then
-        CONFIG_NAME="pretokenize_wm_libero_10_warmup"
+        CONFIG_NAME="pretokenize_wm_libero_goal_warmup"
       else
-        CONFIG_NAME="pretokenize_wm_libero_10_transdreamer"
+        CONFIG_NAME="pretokenize_wm_libero_goal_transdreamer"
       fi
       ;;
     *)
-      echo "ERROR: unknown WM_KIND='${WM_KIND}'. Use pretokenize, dreamerv3_token, dreamerv3_pixel, or chameleon." >&2
+    echo "ERROR: unknown WM_KIND='${WM_KIND}'. Use pretokenize, dreamerv3_token, dreamerv3_pixel, chameleon, or rynn_backbone." >&2
       exit 2
       ;;
   esac
@@ -84,6 +89,9 @@ case "${WM_KIND_RESOLVED}" in
   ladiwm)
     WM_KIND_RESOLVED="chameleon"
     ;;
+  rynn|strategy3)
+    WM_KIND_RESOLVED="rynn_backbone"
+    ;;
 esac
 
 case "${WM_KIND_RESOLVED}" in
@@ -93,11 +101,23 @@ case "${WM_KIND_RESOLVED}" in
     ;;
   dreamerv3_pixel)
     DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/dreamerv3_pixel"
-    DEFAULT_LAUNCHER="single"
+    if [[ "${DREAMERV3_PIXEL_DDP:-${PIXEL_DDP:-${DDP:-0}}}" == "1" ]]; then
+      DEFAULT_LAUNCHER="torchrun"
+    else
+      DEFAULT_LAUNCHER="single"
+    fi
     ;;
   chameleon)
     DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/chameleon_latent_action_wm"
     DEFAULT_LAUNCHER="torchrun"
+    ;;
+  rynn_backbone)
+    DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/rynn_backbone_dreamerv3_wm"
+    if [[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]]; then
+      DEFAULT_LAUNCHER="torchrun"
+    else
+      DEFAULT_LAUNCHER="single"
+    fi
     ;;
   pretokenize|tssm|rssm|transdreamer)
     DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/pretokenize_wm"
@@ -108,6 +128,18 @@ case "${WM_KIND_RESOLVED}" in
     exit 2
     ;;
 esac
+
+if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" && "${DREAMERV3_PIXEL_DDP:-${PIXEL_DDP:-${DDP:-0}}}" == "1" && -z "${RUN_TAG}" ]]; then
+  RUN_TAG="ddp_bs${BATCH_SIZE:-64}_nw${NUM_WORKERS:-16}_vizoff"
+fi
+
+if [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" && "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" && -z "${RUN_TAG}" ]]; then
+  if [[ "${CONFIG_NAME}" == *precomputed* ]]; then
+    RUN_TAG="ddp_precomputed_bs${BATCH_SIZE:-96}_nw${NUM_WORKERS:-8}_viz"
+  else
+    RUN_TAG="ddp_bs${BATCH_SIZE:-2}_nw${NUM_WORKERS:-8}_rynn"
+  fi
+fi
 
 if [[ "${WM_KIND_RESOLVED}" == "chameleon" && -z "${RUN_TAG}" ]]; then
   RUN_TAG="ladiwm_like_t4_tokens"
@@ -134,6 +166,7 @@ COMMON_OVERRIDES=(
 
 SEQUENCE_OVERRIDES=()
 WM_T="${WM_T:-}"
+WM_STRIDE="${WM_STRIDE:-}"
 if [[ -n "${WM_T}" ]]; then
   case "${WM_KIND_RESOLVED}" in
     pretokenize|tssm|rssm|transdreamer)
@@ -143,6 +176,14 @@ if [[ -n "${WM_T}" ]]; then
         "++dataset_val_ood.sequence_length=${WM_T}"
       )
       ;;
+    dreamerv3_pixel|rynn_backbone)
+      SEQUENCE_OVERRIDES=(
+        "dataset.sequence_length=${WM_T}"
+      )
+      if [[ -n "${WM_STRIDE}" ]]; then
+        SEQUENCE_OVERRIDES+=("dataset.stride=${WM_STRIDE}")
+      fi
+      ;;
   esac
 fi
 
@@ -150,25 +191,68 @@ SMOKE_OVERRIDES=()
 if [[ "${WM_SMOKE:-0}" == "1" ]]; then
   SMOKE_OVERRIDES=(
     "training.num_epochs=1"
-    "training.max_train_steps=${WM_SMOKE_STEPS:-1}"
     "dataloader.batch_size=${WM_SMOKE_BATCH_SIZE:-1}"
     "dataloader.num_workers=0"
     "dataloader.persistent_workers=false"
     "dataloader.pin_memory=false"
-    "checkpoint.save_last_ckpt=false"
   )
-  if [[ "${WM_KIND_RESOLVED}" == "pretokenize" || "${WM_KIND_RESOLVED}" == "tssm" || "${WM_KIND_RESOLVED}" == "rssm" || "${WM_KIND_RESOLVED}" == "transdreamer" ]]; then
+  if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" || "${WM_KIND_RESOLVED}" == "dreamerv3_token" || "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
     SMOKE_OVERRIDES+=(
+      "training.max_steps=${WM_SMOKE_STEPS:-1}"
+      "viz.enabled=false"
+    )
+  elif [[ "${WM_KIND_RESOLVED}" == "pretokenize" || "${WM_KIND_RESOLVED}" == "tssm" || "${WM_KIND_RESOLVED}" == "rssm" || "${WM_KIND_RESOLVED}" == "transdreamer" ]]; then
+    SMOKE_OVERRIDES+=(
+      "training.max_train_steps=${WM_SMOKE_STEPS:-1}"
       "dataset_val_ind=null"
       "dataset_val_ood=null"
       "viz.enabled=false"
+      "checkpoint.save_last_ckpt=false"
       "checkpoint.topk.k=0"
+    )
+  elif [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
+    SMOKE_OVERRIDES+=(
+      "training.max_train_steps=${WM_SMOKE_STEPS:-1}"
+      "dataset_val_ind=null"
+      "dataset_val_ood=null"
+      "checkpoint.save_last_ckpt=false"
+      "checkpoint.topk.k=0"
+    )
+  fi
+  if [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
+    SMOKE_OVERRIDES+=(
+      "dataset.sequence_length=${WM_SMOKE_T:-2}"
+      "dataset.stride=${WM_SMOKE_STRIDE:-8}"
+      "training.encoder_chunk_size=${WM_SMOKE_ENCODER_CHUNK_SIZE:-2}"
     )
   fi
 fi
 
 KIND_OVERRIDES=()
-if [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
+if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" ]]; then
+  if [[ "${DREAMERV3_PIXEL_DDP:-${PIXEL_DDP:-${DDP:-0}}}" == "1" ]]; then
+    # Aggressive H100-oriented defaults. In DDP these are per-rank values, so
+    # global batch = BATCH_SIZE * NUM_GPUS.
+    BATCH_SIZE="${BATCH_SIZE:-64}"
+    NUM_WORKERS="${NUM_WORKERS:-16}"
+    KIND_OVERRIDES=(
+      "training.distributed_strategy=ddp"
+      "training.data_parallel=false"
+      "dataloader.batch_size=${BATCH_SIZE}"
+      "dataloader.num_workers=${NUM_WORKERS}"
+      "dataloader.persistent_workers=true"
+      "dataloader.pin_memory=true"
+      "viz.enabled=false"
+    )
+  else
+    if [[ -n "${BATCH_SIZE:-}" ]]; then
+      KIND_OVERRIDES+=("dataloader.batch_size=${BATCH_SIZE}")
+    fi
+    if [[ -n "${NUM_WORKERS:-}" ]]; then
+      KIND_OVERRIDES+=("dataloader.num_workers=${NUM_WORKERS}")
+    fi
+  fi
+elif [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
   BATCH_SIZE="${BATCH_SIZE:-1}"
   GRAD_ACCUM="${GRAD_ACCUM:-3}"
   NUM_WORKERS="${NUM_WORKERS:-8}"
@@ -187,6 +271,48 @@ if [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
     "optim.world_model.lr=${LR}"
     "optim.world_model.weight_decay=${WEIGHT_DECAY}"
   )
+elif [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
+  if [[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]]; then
+    if [[ "${CONFIG_NAME}" == *precomputed* ]]; then
+      # Precomputed hidden avoids the frozen VLA backbone during training and
+      # can use pure-pixel-like batches.
+      BATCH_SIZE="${BATCH_SIZE:-96}"
+      NUM_WORKERS="${NUM_WORKERS:-2}"
+    else
+      # Online Rynn-pixel carries a frozen VLA backbone on each rank, so the
+      # useful per-GPU batch is much smaller than pure pixel DreamerV3.
+      BATCH_SIZE="${BATCH_SIZE:-2}"
+      NUM_WORKERS="${NUM_WORKERS:-2}"
+    fi
+    RYNN_ENCODER_CHUNK_SIZE="${RYNN_ENCODER_CHUNK_SIZE:-8}"
+  else
+    BATCH_SIZE="${BATCH_SIZE:-1}"
+    NUM_WORKERS="${NUM_WORKERS:-2}"
+    RYNN_ENCODER_CHUNK_SIZE="${RYNN_ENCODER_CHUNK_SIZE:-8}"
+  fi
+  PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
+  PIN_MEMORY="${PIN_MEMORY:-false}"
+  PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-true}"
+  DATALOADER_MP_CONTEXT="${DATALOADER_MP_CONTEXT:-forkserver}"
+  LR="${LR:-4.0e-5}"
+  WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
+  GRAD_CLIP="${GRAD_CLIP:-100.0}"
+  LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-1000}"
+  KIND_OVERRIDES=(
+    "training.distributed_strategy=$([[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]] && echo ddp || echo single)"
+    "training.data_parallel=$([[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]] && echo false || echo true)"
+    "training.encoder_chunk_size=${RYNN_ENCODER_CHUNK_SIZE}"
+    "dataloader.batch_size=${BATCH_SIZE}"
+    "dataloader.num_workers=${NUM_WORKERS}"
+    "dataloader.persistent_workers=${PERSISTENT_WORKERS}"
+    "dataloader.pin_memory=${PIN_MEMORY}"
+    "dataloader.prefetch_factor=${PREFETCH_FACTOR}"
+    "dataloader.multiprocessing_context=${DATALOADER_MP_CONTEXT}"
+    "optim.lr=${LR}"
+    "optim.weight_decay=${WEIGHT_DECAY}"
+    "optim.grad_clip=${GRAD_CLIP}"
+    "optim.warmup=${LR_WARMUP_STEPS}"
+  )
 fi
 
 echo "WM kind:        ${WM_KIND_RESOLVED}"
@@ -204,6 +330,7 @@ fi
 
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 CMD=()

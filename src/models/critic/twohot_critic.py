@@ -15,6 +15,41 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = float(eps)
+
+    def forward(self, x: Tensor) -> Tensor:
+        dtype = x.dtype
+        x32 = x.float()
+        rms = x32.square().mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return (x32 * rms).to(dtype) * self.weight.to(dtype=dtype)
+
+
+def _activation(name: str) -> nn.Module:
+    name = str(name).lower()
+    if name in {"silu", "swish"}:
+        return nn.SiLU()
+    if name == "gelu":
+        return nn.GELU()
+    if name == "relu":
+        return nn.ReLU()
+    raise ValueError(f"Unsupported critic activation: {name}")
+
+
+def _norm(name: str, dim: int) -> nn.Module | None:
+    name = str(name).lower()
+    if name in {"none", "identity", ""}:
+        return None
+    if name == "rms":
+        return RMSNorm(dim)
+    if name in {"layer", "layernorm"}:
+        return nn.LayerNorm(dim)
+    raise ValueError(f"Unsupported critic norm: {name}")
+
+
 def symlog(x: Tensor) -> Tensor:
     return torch.sign(x) * torch.log1p(torch.abs(x))
 
@@ -31,21 +66,38 @@ class TwohotCritic(nn.Module):
         num_bins: int = 255,
         bin_min: float = -20.0,
         bin_max: float = 20.0,
+        critic_layers: int = 1,
+        activation: str = "gelu",
+        norm: str = "none",
+        outscale: float = 1.0,
     ) -> None:
         super().__init__()
         self.num_bins = int(num_bins)
-        self.backbone = nn.Sequential(
-            nn.Linear(int(hidden_dim), int(critic_hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(critic_hidden_dim), int(num_bins)),
-        )
+        modules: list[nn.Module] = []
+        cur_dim = int(hidden_dim)
+        for _ in range(int(critic_layers)):
+            modules.append(nn.Linear(cur_dim, int(critic_hidden_dim)))
+            norm_layer = _norm(norm, int(critic_hidden_dim))
+            if norm_layer is not None:
+                modules.append(norm_layer)
+            modules.append(_activation(activation))
+            cur_dim = int(critic_hidden_dim)
+        final = nn.Linear(cur_dim, int(num_bins))
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                final.weight.mul_(float(outscale))
+                if final.bias is not None:
+                    final.bias.mul_(float(outscale))
+        modules.append(final)
+        self.backbone = nn.Sequential(*modules)
         bins = torch.linspace(float(bin_min), float(bin_max), int(num_bins))
         self.register_buffer("bins", bins, persistent=False)
 
     def logits(self, hidden: Tensor) -> Tensor:
         # Match param dtype (FSDP MixedPrecision casts gathered Linear weights
         # to bf16 inside forward).
-        weight_dtype = self.backbone[0].weight.dtype
+        first_linear = next(module for module in self.backbone if isinstance(module, nn.Linear))
+        weight_dtype = first_linear.weight.dtype
         hidden = hidden.to(dtype=weight_dtype)
         return self.backbone(hidden)
 

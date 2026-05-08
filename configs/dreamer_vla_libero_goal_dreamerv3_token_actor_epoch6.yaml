@@ -1,0 +1,9 @@
+defaults:
+  - dreamer_vla_libero_10_dreamerv3_token_actor_epoch6
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_token_actor_epoch6_scalar_reward_libero_goal
+
+init:
+  encoder_state_ckpt: null

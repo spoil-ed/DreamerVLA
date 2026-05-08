@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+import warnings
 
 import hydra
 import torch
@@ -329,7 +330,13 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
 
                         batch = _to_device(batch, self.device)
                         model.train()
-                        out = model(batch)
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore",
+                                message=r".*Was asked to gather along dimension 0.*",
+                                category=UserWarning,
+                            )
+                            out = model(batch)
                         loss = out["_loss"].mean()
                         optimizer.zero_grad(set_to_none=True)
                         loss.backward()

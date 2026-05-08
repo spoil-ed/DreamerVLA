@@ -1,0 +1,6 @@
+defaults:
+  - dreamer_vla_libero_10
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamer_vla_libero_goal

@@ -1,0 +1,6 @@
+defaults:
+  - dreamerv3_pixel_libero_10
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_goal

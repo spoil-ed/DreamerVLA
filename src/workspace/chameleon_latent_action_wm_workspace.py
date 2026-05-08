@@ -10,6 +10,7 @@ No Dreamer h, no posterior/prior KL, no image decoder.
 from __future__ import annotations
 
 import copy
+import math
 import os
 import pathlib
 import pickle
@@ -36,6 +37,19 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/debug"
 
+    @staticmethod
+    def _first_finite_metric(metrics: dict[str, Any], *keys: str) -> float | None:
+        for key in keys:
+            if key not in metrics:
+                continue
+            try:
+                value = float(metrics[key])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                return value
+        return None
+
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
             output_dir = str(OmegaConf.select(config, "training.out_dir", default=self.default_output_dir))
@@ -51,7 +65,7 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
         self.local_rank = self.distributed.local_rank
         self.world_size = self.distributed.world_size
         self.device = self.distributed.resolve_device(str(OmegaConf.select(config, "trainer.device", default="auto")))
-        if self.distributed.is_main_process:
+        if self.distributed.is_main_process and bool(OmegaConf.select(config, "training.print_config", default=True)):
             self.print_config()
         set_seed(int(OmegaConf.select(config, "seed", default=7)) + self.rank)
 
@@ -275,15 +289,27 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
         for key, value in metrics_sum.items():
             reduced[f"val_{split_name}_{key}"] = self.distributed.reduce_sum(value) / count_global
         if self.distributed.is_main_process and reduced:
-            mse_value = reduced.get(
-                f"val_{split_name}_mse_loss",
-                reduced.get(f"val_{split_name}_latent_mse_loss", float("nan")),
-            )
-            print(
-                f"  [Val {split_name}] loss={reduced.get(f'val_{split_name}_loss', float('nan')):.4f} "
-                f"mse={mse_value:.4f} "
-                f"cos={reduced.get(f'val_{split_name}_pred_target_cos', float('nan')):.4f}"
-            )
+            display: list[str] = []
+            for name, keys, fmt in (
+                ("loss", (f"val_{split_name}_loss",), ".4f"),
+                ("rec", (f"val_{split_name}_rec_loss",), ".4f"),
+                (
+                    "mse",
+                    (
+                        f"val_{split_name}_image_mse",
+                        f"val_{split_name}_mse_loss",
+                        f"val_{split_name}_latent_mse_loss",
+                    ),
+                    ".4f",
+                ),
+                ("psnr", (f"val_{split_name}_image_psnr",), ".2f"),
+                ("cos", (f"val_{split_name}_pred_target_cos",), ".4f"),
+            ):
+                value = self._first_finite_metric(reduced, *keys)
+                if value is not None:
+                    display.append(f"{name}={value:{fmt}}")
+            if display:
+                print(f"  [Val {split_name}] " + " ".join(display))
         return reduced
 
     # ---- run ----
@@ -292,7 +318,7 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
         history: list[dict[str, float | str | int]] = []
         cfg = copy.deepcopy(self.cfg)
         if self.distributed.is_main_process:
-            print("Chameleon latent-action WM Workspace begin.")
+            print(f"{self.__class__.__name__} begin.")
 
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
@@ -375,7 +401,8 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
         if self.distributed.is_main_process:
             os.makedirs(self.output_dir, exist_ok=True)
         self.distributed.barrier()
-        log_path = os.path.join(self.output_dir, "chameleon_latent_wm_logs.json.txt")
+        log_name = str(getattr(self, "log_filename", "chameleon_latent_wm_logs.json.txt"))
+        log_path = os.path.join(self.output_dir, log_name)
         try:
             with self.distributed.logger_context(log_path) as logger:
                 reached_max_steps = False
@@ -385,6 +412,7 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
                     epoch_metrics: dict[str, list[float]] = {}
                     self.world_model.train()
                     accum_steps = max(1, int(cfg.training.gradient_accumulate_every))
+                    log_every = int(OmegaConf.select(cfg, "training.log_every", default=1))
                     micro_batches = 0
                     self.world_model_optimizer.zero_grad(
                         set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
@@ -428,6 +456,8 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
 
                             local_metrics: dict[str, float] = {}
                             for key, value in out.items():
+                                if key == "_loss":
+                                    continue
                                 if isinstance(value, torch.Tensor) and value.ndim == 0:
                                     local_metrics[f"train_{key}"] = float(value.item())
                                     epoch_metrics.setdefault(key, []).append(float(value.item()))
@@ -445,24 +475,27 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
                                     for key, value in diag.items():
                                         if isinstance(value, torch.Tensor) and value.ndim == 0:
                                             local_metrics[f"train_{key}"] = float(value.item())
-                            local_metrics["train_grad_norm"] = float(grad_norm)
+                            if math.isfinite(float(grad_norm)):
+                                local_metrics["train_grad_norm"] = float(grad_norm)
                             local_metrics["lr"] = float(lr_scheduler.get_last_lr()[0])
                             local_metrics["optimizer_step"] = float(do_optimizer_step)
                             reduced = self.distributed.reduce_mean_dict(local_metrics)
                             step_log = {**reduced, "global_step": self.global_step, "epoch": self.epoch}
-                            logger.log(step_log)
-                            tepoch.set_postfix(
-                                refresh=False,
-                                loss=float(step_log["train_loss"]),
-                                mse=float(
-                                    step_log.get(
-                                        "train_mse_loss",
-                                        step_log.get("train_latent_mse_loss", float("nan")),
-                                    )
-                                ),
-                                flow=float(step_log.get("train_flow_loss", float("nan"))),
-                                cos=float(step_log["train_pred_target_cos"]),
-                            )
+                            if do_optimizer_step and log_every > 0 and (self.global_step % log_every) == 0:
+                                logger.log(step_log)
+                            postfix: dict[str, float] = {}
+                            for name, keys in (
+                                ("loss", ("train_loss",)),
+                                ("rec", ("train_rec_loss",)),
+                                ("mse", ("train_image_mse", "train_mse_loss", "train_latent_mse_loss")),
+                                ("psnr", ("train_image_psnr",)),
+                                ("flow", ("train_flow_loss",)),
+                                ("cos", ("train_pred_target_cos",)),
+                            ):
+                                value = self._first_finite_metric(step_log, *keys)
+                                if value is not None:
+                                    postfix[name] = value
+                            tepoch.set_postfix(postfix, refresh=False)
                             if do_optimizer_step:
                                 self.global_step += 1
                             if reached_max_steps:

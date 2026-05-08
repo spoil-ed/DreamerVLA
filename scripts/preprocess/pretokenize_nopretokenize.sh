@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+export TASK_NAME="${TASK_NAME:-goal}"
+export LIBERO_TASK_NAME="${LIBERO_TASK_NAME:-${TASK_NAME}}"
+
 bash "$SCRIPT_DIR/processed_data_no_op.sh"
 bash "$SCRIPT_DIR/processed_data_save_img_action_state_wrist.sh"
 bash "$SCRIPT_DIR/processed_data_generate_convs.sh"

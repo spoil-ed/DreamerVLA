@@ -65,6 +65,7 @@ class VLAActionHeadActor(nn.Module):
         min_log_std: float = -5.0,
         max_log_std: float = 2.0,
         init_action_head_ckpt: str | None = None,
+        **_: Any,
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
@@ -147,6 +148,18 @@ class VLAActionHeadActor(nn.Module):
         if not action_head_sd:
             print(f"[VLAActor] no '{prefix}' keys in encoder state_dict; nothing to warm-start")
             return
+        emb = action_head_sd.get("action_token_embeddings.weight")
+        if emb is not None:
+            expected = self.time_horizon * self.action_dim * self.hidden_size
+            got = int(emb.shape[-1])
+            if got != expected:
+                ckpt_horizon = got // max(self.action_dim * self.hidden_size, 1)
+                raise ValueError(
+                    "VLA action head checkpoint is not compatible with this actor: "
+                    f"configured time_horizon={self.time_horizon}, action_dim={self.action_dim}, "
+                    f"hidden_size={self.hidden_size}, but checkpoint embedding width={got} "
+                    f"(implied time_horizon={ckpt_horizon})."
+                )
         missing, unexpected = self.load_state_dict(action_head_sd, strict=False)
         # `missing` includes adapter / log_std (intentional random init); not a problem.
         non_adapter_missing = [k for k in missing if not k.startswith("adapter.") and k != "log_std"]

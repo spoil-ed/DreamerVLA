@@ -10,7 +10,7 @@
 #   bash scripts/eval_libero_vla.sh \
 #     eval.ckpt_path=data/outputs/dreamervla/.../checkpoints/epoch=008-epoch_returns_mean=3.6211.ckpt \
 #     eval.ckpt_kind=dreamer \
-#     eval.task_suite_name=libero_10
+#     eval.task_suite_name=libero_goal
 #
 # Rollout must run on a single process (single GPU); the underlying LIBERO
 # benchmark does not support sharded inference.

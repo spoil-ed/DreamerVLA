@@ -1,0 +1,12 @@
+defaults:
+  - dreamer_vla_libero_10_rynn_pixel_precomputed_vlaactor
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/rynn_pixel_ehat4096_vlahead_binary_reward_libero_goal
+
+init:
+  # Do not silently reuse the old libero_10 VLA action-head checkpoint for
+  # goal runs. Pass the freshly trained goal VLA checkpoint explicitly.
+  encoder_state_ckpt: null
+  require_encoder_state_ckpt: true

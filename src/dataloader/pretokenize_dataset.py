@@ -584,4 +584,170 @@ class PretokenizeFlatDataset(PretokenizeDataset):
         super().__init__(config_path=config_path)
 
 
-__all__ = ["PretokenizeDataSpec", "PretokenizeDataset", "PretokenizeFlatDataset"]
+class PretokenizeActionChunkDataset(PretokenizeDataset):
+    """Build multi-step VLA action chunks from atomic his=1/horizon=1 samples.
+
+    The pretokenized atom already contains the current observation prompt and a
+    single action-token block.  For VLA training with a chunking action head, we
+    can reuse the atom manifest and concatenate action-token blocks from
+    contiguous frames in the same trajectory, avoiding duplicate pretokenized
+    datasets for every action horizon.
+    """
+
+    def __init__(
+        self,
+        config_path: str | Path,
+        action_horizon: int = 10,
+        history: int | None = None,
+        batch_length: int | None = None,
+        replay_context: int | None = None,
+        sequence_length: int | None = None,
+        stride: int | None = None,
+        sequence_next_obs_source: str | None = None,
+    ) -> None:
+        super().__init__(
+            config_path=config_path,
+            history=history,
+            batch_length=batch_length,
+            replay_context=replay_context,
+            sequence_length=sequence_length,
+            stride=stride,
+            sequence_next_obs_source=sequence_next_obs_source,
+        )
+        if self.sequence_mode:
+            raise ValueError("PretokenizeActionChunkDataset only supports flat atomic manifests.")
+        self.action_horizon = max(int(action_horizon), 1)
+        self._chunk_windows: list[tuple[int, ...]] = []
+        self._record_payload_cache: dict[int, dict[str, Any]] = {}
+        self._record_paths: list[Path] = [
+            self.resolve_project_path(record["file"], base_dir=self.manifest_path.parent)
+            for record in self.records
+        ]
+        self._build_chunk_windows()
+        self._record_payload_cache.clear()
+        self._data_spec = PretokenizeDataSpec(
+            config_path=str(self.config_path),
+            manifest_path=str(self.manifest_path),
+            num_samples=len(self._chunk_windows),
+            max_token_length=self.max_token_length + max(self.action_horizon - 1, 0) * 9,
+            history=self.history,
+            prompt_text=self.data_spec.prompt_text,
+        )
+
+    def __len__(self) -> int:
+        return len(self._chunk_windows)
+
+    def _load_payload_by_index(self, index: int) -> dict[str, Any]:
+        cached = self._record_payload_cache.get(index)
+        if cached is not None:
+            return cached
+        with self._record_paths[index].open("rb") as handle:
+            payload = pickle.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected dict payload in {self._record_paths[index]}")
+        self._record_payload_cache[index] = payload
+        return payload
+
+    def _build_chunk_windows(self) -> None:
+        frames_by_key: dict[str, dict[int, int]] = {}
+        for record_index, _record in enumerate(self.records):
+            try:
+                payload = self._load_payload_by_index(record_index)
+            except Exception:
+                continue
+            image_path = self._select_current_third_view(payload.get("image", []))
+            parsed = self._parse_image_path(image_path)
+            if parsed is None:
+                continue
+            _task_name, trajectory_key, frame_index = parsed
+            frame_map = frames_by_key.setdefault(trajectory_key, {})
+            frame_map.setdefault(frame_index, record_index)
+
+        for frame_map in frames_by_key.values():
+            frame_set = set(frame_map)
+            for start in sorted(frame_map):
+                wanted = range(start, start + self.action_horizon)
+                if all(frame in frame_set for frame in wanted):
+                    self._chunk_windows.append(tuple(frame_map[frame] for frame in wanted))
+
+    @staticmethod
+    def _action_label_block(labels: list[int]) -> list[int]:
+        valid = [idx for idx, value in enumerate(labels) if int(value) >= 0]
+        if not valid:
+            raise ValueError("Atomic pretokenized sample has no action labels.")
+        block = [int(value) for value in labels[valid[0] : valid[-1] + 1]]
+        # Single-step atoms end with EOT. Multi-step chunks should carry one
+        # EOT after all action blocks, matching native horizon>1 pretokenization.
+        if block and block[-1] == 8710:
+            block = block[:-1]
+        return block
+
+    @staticmethod
+    def _prompt_prefix(input_ids: list[int], labels: list[int]) -> tuple[list[int], list[int]]:
+        first_valid = next((idx for idx, value in enumerate(labels) if int(value) >= 0), len(labels))
+        return [int(x) for x in input_ids[:first_valid]], [-100] * first_valid
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        record_indices = self._chunk_windows[index]
+        first_index = record_indices[0]
+        first_payload = self._load_payload_by_index(first_index)
+        first_record = self.records[first_index]
+        first_file = self._record_paths[first_index]
+
+        item = self._flat_item_from_payload(first_record, first_file, first_payload, first_index)
+
+        prefix_ids, prefix_labels = self._prompt_prefix(
+            list(first_payload["token"]),
+            list(first_payload["label"]),
+        )
+        action_token_blocks: list[int] = []
+        actions: list[Any] = []
+        rewards: list[float] = []
+        chunk_files: list[str] = []
+        for record_index in record_indices:
+            payload = self._load_payload_by_index(record_index)
+            action_token_blocks.extend(self._action_label_block(list(payload["label"])))
+            actions.extend(list(payload.get("action", [])))
+            reward_value = payload.get("reward")
+            if reward_value is None and isinstance(payload.get("meta"), dict):
+                reward_value = payload["meta"].get("reward", 0.0)
+            rewards.append(float(reward_value if reward_value is not None else 0.0))
+            chunk_files.append(str(self._record_paths[record_index]))
+
+        input_ids = prefix_ids + action_token_blocks + [8710]
+        labels = prefix_labels + action_token_blocks + [8710]
+        wm_action = self._load_action_sequence(actions)
+
+        meta = dict(item.get("meta", {}))
+        meta.update(
+            {
+                "action_horizon": self.action_horizon,
+                "source_action_horizon": 1,
+                "chunk_files": chunk_files,
+                "effective_horizon": int(wm_action.shape[0]),
+                "full_horizon": self.action_horizon,
+            }
+        )
+
+        item.update(
+            {
+                "input_ids": input_ids,
+                "labels": labels,
+                "length": len(input_ids),
+                "action": actions,
+                "reward": rewards[-1] if rewards else float(item.get("reward", 0.0)),
+                "wm_action": wm_action,
+                "wm_action_mask": torch.ones(int(wm_action.shape[0]), dtype=torch.bool),
+                "meta": meta,
+                "id": int(index),
+            }
+        )
+        return item
+
+
+__all__ = [
+    "PretokenizeDataSpec",
+    "PretokenizeDataset",
+    "PretokenizeFlatDataset",
+    "PretokenizeActionChunkDataset",
+]

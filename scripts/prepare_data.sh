@@ -15,6 +15,7 @@ export LIBERO_TASK_SUITE="${LIBERO_TASK_SUITE:-libero_goal}"
 export IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-256}"
 export ACTION_HORIZON="${ACTION_HORIZON:-10}"
 export TASK_NAME="${TASK_NAME:-goal}"
+export LIBERO_TASK_NAME="${LIBERO_TASK_NAME:-${TASK_NAME}}"
 
 echo "=== Step 1/5: Filter no-ops from raw LIBERO HDF5 ==="
 bash "${PREPROCESS_DIR}/processed_data_no_op.sh"

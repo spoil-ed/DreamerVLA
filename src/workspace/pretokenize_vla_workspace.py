@@ -247,7 +247,14 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             return {}
 
         from libero.libero import benchmark as libero_benchmark
-        from src.env import get_libero_env, get_libero_dummy_action, get_libero_image, quat2axisangle, TASK_MAX_STEPS
+        from src.env import (
+            get_libero_env,
+            get_libero_dummy_action,
+            get_libero_image,
+            quat2axisangle,
+            save_rollout_video,
+            TASK_MAX_STEPS,
+        )
 
         task_suite_name = str(OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal"))
         num_episodes = int(OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10))
@@ -256,19 +263,30 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         # History length must match training (`his` in processed_data_generate_convs.sh).
         # Training builds img_c = [prev_third, prev_wrist, cur_third, cur_wrist] (his=2).
         history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
+        save_video = bool(OmegaConf.select(eval_cfg, "save_video", default=False))
+        video_max_episodes = int(OmegaConf.select(eval_cfg, "video_max_episodes", default=1))
+        video_dir = os.path.join(self.output_dir, "videos")
 
         item_processor = self.encoder._build_processor(self.device)
 
         print(f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...", flush=True)
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
-        num_tasks = task_suite.n_tasks
-        max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
-        if max_tasks is not None:
-            num_tasks = min(num_tasks, int(max_tasks))
-        max_steps = int(OmegaConf.select(eval_cfg, "max_steps", default=TASK_MAX_STEPS.get(task_suite_name, 300)))
+        total_tasks = int(task_suite.n_tasks)
+        task_ids_cfg = OmegaConf.select(eval_cfg, "task_ids", default=None)
+        if task_ids_cfg is not None:
+            task_ids = [int(task_id) for task_id in task_ids_cfg]
+        else:
+            task_start = int(OmegaConf.select(eval_cfg, "task_start", default=0))
+            max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
+            task_stop = total_tasks if max_tasks is None else min(total_tasks, task_start + int(max_tasks))
+            task_ids = list(range(task_start, task_stop))
+        if not task_ids:
+            raise ValueError("LIBERO eval selected no tasks; check eval.task_ids/task_start/max_tasks.")
+        max_steps_cfg = OmegaConf.select(eval_cfg, "max_steps", default=None)
+        max_steps = int(max_steps_cfg if max_steps_cfg is not None else TASK_MAX_STEPS.get(task_suite_name, 300))
         print(
-            f"  [Eval] suite='{task_suite_name}' num_tasks={num_tasks} "
+            f"  [Eval] suite='{task_suite_name}' tasks={task_ids} "
             f"episodes_per_task={num_episodes} max_steps={max_steps} "
             f"action_steps={action_steps} history_length={history_length}",
             flush=True,
@@ -280,13 +298,13 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         total_episodes, total_successes = 0, 0
         run_t0 = time.time()
 
-        for task_id in range(num_tasks):
+        for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
             env, task_description = get_libero_env(task, resolution=resolution)
             n_eps = min(num_episodes, len(initial_states))
             print(
-                f"  [Eval] >>> Task {task_id+1}/{num_tasks} start: \"{task_description}\" "
+                f"  [Eval] >>> Task {task_id} ({task_index+1}/{len(task_ids)}) start: \"{task_description}\" "
                 f"(episodes={n_eps})",
                 flush=True,
             )
@@ -300,6 +318,8 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                 done = False
                 ep_t0 = time.time()
                 actions_buffer: list[np.ndarray] = []
+                should_record = save_video and total_episodes < video_max_episodes
+                rollout_images: list[np.ndarray] = []
                 # Frame history buffer: list of (third_view_pil, wrist_pil) oldest→newest.
                 # Matches training's `img_history_start_idx = max(0, j - his + 1)` which
                 # repeats the first frame until history fills up.
@@ -312,6 +332,8 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         continue
 
                     img = get_libero_image(obs, resolution)
+                    if should_record:
+                        rollout_images.append(img)
                     wrist_img = get_libero_image(obs, resolution, "robot0_eye_in_hand_image")
                     state = np.concatenate(
                         (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
@@ -327,6 +349,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         # Pad with the oldest available frame when history is shorter
                         # than `history_length` (first action_steps steps of episode).
                         padded = [frame_history[0]] * (history_length - len(frame_history)) + frame_history
+                        # Eval subclasses can use the raw simulator observation for
+                        # non-VLA inputs (for example pixel DreamerV3 rollout) while
+                        # keeping the VLA PIL history path unchanged.
+                        self._libero_current_raw_obs = obs
                         predicted = self._generate_actions(
                             backbone, item_processor,
                             padded, state, task_description, action_steps,
@@ -344,6 +370,15 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         total_successes += 1
                         break
 
+                video_path = None
+                if should_record and rollout_images:
+                    video_path = save_rollout_video(
+                        video_dir,
+                        rollout_images,
+                        total_episodes,
+                        bool(done),
+                        task_description,
+                    )
                 total_episodes += 1
                 ep_dt = time.time() - ep_t0
                 tag = "OK " if done else "FAIL"
@@ -362,7 +397,8 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     f"task_succ={task_successes}/{episode_idx+1} "
                     f"total_succ={total_successes}/{total_episodes} "
                     f"({total_successes / max(total_episodes,1):.1%})  "
-                    f"gpu_alloc={gpu_mb}MB",
+                    f"gpu_alloc={gpu_mb}MB"
+                    f"{' video=' + video_path if video_path else ''}",
                     flush=True,
                 )
             env.close()
@@ -370,7 +406,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             rate = task_successes / max(n_eps, 1)
             task_dt = time.time() - task_t0
             print(
-                f"  [Eval] <<< Task {task_id+1}/{num_tasks} done: \"{task_description}\" "
+                f"  [Eval] <<< Task {task_id} ({task_index+1}/{len(task_ids)}) done: \"{task_description}\" "
                 f"success={rate:.1%} ({task_successes}/{n_eps}) "
                 f"time={task_dt:.1f}s   running_total={total_successes}/{total_episodes} "
                 f"({total_successes / max(total_episodes,1):.1%})",
@@ -496,6 +532,17 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
+        dataset_action_horizon = getattr(dataset, "action_horizon", None)
+        encoder_time_horizon = int(OmegaConf.select(cfg, "encoder.time_horizon", default=0) or 0)
+        if dataset_action_horizon is not None and encoder_time_horizon:
+            if int(dataset_action_horizon) != encoder_time_horizon:
+                raise ValueError(
+                    "VLA dataset action_horizon must match encoder.time_horizon "
+                    f"({int(dataset_action_horizon)} != {encoder_time_horizon})."
+                )
+            if self.distributed.is_main_process:
+                print(f"  VLA action horizon: {encoder_time_horizon} "
+                      f"(dataset={type(dataset).__name__})")
 
         dataloader_kwargs = dict(cfg.dataloader)
         sampler = self.distributed.maybe_make_sampler(

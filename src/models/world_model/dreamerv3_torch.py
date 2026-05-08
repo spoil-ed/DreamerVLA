@@ -49,6 +49,31 @@ def _act(name: str) -> nn.Module:
     raise ValueError(f"Unsupported activation: {name}")
 
 
+def _module_ref_tensor(module: nn.Module) -> torch.Tensor | None:
+    for tensor in module.parameters(recurse=True):
+        return tensor
+    for tensor in module.buffers(recurse=True):
+        return tensor
+    # DataParallel replicas can expose copied weights as plain Tensor
+    # attributes instead of registered Parameters.
+    for child in module.modules():
+        for attr in ("weight", "bias"):
+            tensor = getattr(child, attr, None)
+            if isinstance(tensor, torch.Tensor):
+                return tensor
+    return None
+
+
+def _module_dtype(module: nn.Module, fallback: torch.dtype) -> torch.dtype:
+    tensor = _module_ref_tensor(module)
+    return tensor.dtype if tensor is not None else fallback
+
+
+def _module_device(module: nn.Module, fallback: torch.device) -> torch.device:
+    tensor = _module_ref_tensor(module)
+    return tensor.device if tensor is not None else fallback
+
+
 class DreamerV3PixelEncoder(nn.Module):
     def __init__(
         self,
@@ -90,7 +115,7 @@ class DreamerV3PixelEncoder(nn.Module):
         b, t, c, h, w = images.shape
         if c != self.in_channels:
             raise ValueError(f"Expected {self.in_channels} channels, got {c}")
-        param_dtype = next(self.cnn.parameters()).dtype
+        param_dtype = _module_dtype(self.cnn, images.dtype)
         x = images.reshape(b * t, c, h, w).to(dtype=param_dtype) / 255.0 - 0.5
         x = self.cnn(x)
         x = x.flatten(start_dim=1)
@@ -615,7 +640,54 @@ class SymexpTwoHotHead(nn.Module):
         return ((p1 * b1).flip(-1) + (p2 * b2)).sum(dim=-1)
 
 
-def _make_reward_head(feat_dim: int, reward_bins: int, hidden: int, act: str) -> nn.Module:
+class BinaryRewardHead(nn.Module):
+    """Bernoulli reward head for sparse 0/1 environments such as LIBERO."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        layers: int = 1,
+        units: int = 1024,
+        act: str = "silu",
+        init_logit: float = -5.0,
+    ) -> None:
+        super().__init__()
+        self.net = MLPHead(in_dim, 1, layers=layers, units=units, act=act)
+        final = self.net.net[-1]
+        if isinstance(final, nn.Linear) and final.bias is not None:
+            nn.init.constant_(final.bias, float(init_logit))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+    def loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        logits = logits.squeeze(-1).float()
+        target = target.to(device=logits.device, dtype=torch.float32).detach().clamp(0.0, 1.0)
+        return F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+
+    def pred(self, logits: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(logits.squeeze(-1).float()).to(dtype=logits.dtype)
+
+
+def _make_reward_head(
+    feat_dim: int,
+    reward_bins: int,
+    hidden: int,
+    act: str,
+    reward_head_type: str = "twohot",
+    reward_init_logit: float = -5.0,
+) -> nn.Module:
+    reward_head_type = str(reward_head_type).lower()
+    if reward_head_type in {"binary", "bernoulli", "sigmoid"}:
+        return BinaryRewardHead(
+            feat_dim,
+            layers=1,
+            units=hidden,
+            act=act,
+            init_logit=reward_init_logit,
+        )
+    if reward_head_type not in {"twohot", "symexp_twohot", "regression", "mse"}:
+        raise ValueError(f"Unsupported reward_head_type: {reward_head_type}")
     if int(reward_bins) <= 1:
         return MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
     return SymexpTwoHotHead(feat_dim, bins=reward_bins, layers=1, units=hidden, act=act)
@@ -685,8 +757,8 @@ class DreamerV3ActorAdapterMixin:
         return int(self.rssm.deter + self.rssm.stoch * self.rssm.classes)
 
     def _latent_from_feature(self, feature: torch.Tensor) -> DreamerV3LatentState:
-        dtype = next(self.parameters()).dtype
-        device = next(self.parameters()).device
+        dtype = _module_dtype(self, feature.dtype)
+        device = _module_device(self, feature.device)
         feature = feature.to(device=device, dtype=dtype)
         deter = feature[:, : self.rssm.deter]
         stoch_flat = feature[:, self.rssm.deter :]
@@ -697,7 +769,7 @@ class DreamerV3ActorAdapterMixin:
         if hidden.ndim == 2 and hidden.shape[-1] == self._feature_dim() and torch.is_floating_point(hidden):
             return self._latent_from_feature(hidden)
 
-        device = next(self.parameters()).device
+        device = _module_device(self, hidden.device)
         obs = self._single_observation_sequence(hidden.to(device=device))
         enc = self.encoder(obs)
         batch_size = enc.shape[0]
@@ -712,7 +784,7 @@ class DreamerV3ActorAdapterMixin:
         )
 
     def predict_next(self, latent: DreamerV3LatentState, actions: torch.Tensor) -> DreamerV3LatentState:
-        device = next(self.parameters()).device
+        device = _module_device(self, actions.device)
         dtype = latent.deter.dtype
         action = actions.to(device=device, dtype=dtype)
         if action.ndim == 3:
@@ -729,6 +801,9 @@ class DreamerV3ActorAdapterMixin:
     def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
         return latent.feature()
 
+    def critic_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
+        return latent.feature()
+
     def observe_sequence(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
         if "images" in batch:
             obs = batch["images"]
@@ -736,7 +811,7 @@ class DreamerV3ActorAdapterMixin:
             obs = batch["tokens"]
         else:
             raise KeyError("DreamerV3 observe_sequence expects `images` or `tokens`.")
-        device = next(self.parameters()).device
+        device = _module_device(self, obs.device)
         enc = self.encoder(obs.to(device=device))
         actions = batch["actions"].to(device=device, dtype=enc.dtype)
         is_first = batch["is_first"].to(device=device)
@@ -778,6 +853,8 @@ class DreamerV3ActorAdapterMixin:
             return self.continue_prob(batch["latent"])
         if mode == "actor_input":
             return self.actor_input(batch["latent"])
+        if mode == "critic_input":
+            return self.critic_input(batch["latent"])
         if mode == "observe_sequence":
             return self.observe_sequence(batch)
         raise ValueError(f"Unknown DreamerV3 actor-adapter mode: {mode!r}")
@@ -833,6 +910,8 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         unimix: float = 0.01,
         free_nats: float = 1.0,
         reward_bins: int = 255,
+        reward_head_type: str = "twohot",
+        reward_init_logit: float = -5.0,
         contdisc: bool = True,
         horizon: int = 333,
         dyn_scale: float = 1.0,
@@ -867,7 +946,14 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act=act,
         )
         feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(feat_dim, reward_bins, hidden, act)
+        self.reward_head = _make_reward_head(
+            feat_dim,
+            reward_bins,
+            hidden,
+            act,
+            reward_head_type=reward_head_type,
+            reward_init_logit=reward_init_logit,
+        )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
         self.rep_scale = float(rep_scale)
@@ -963,6 +1049,8 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         unimix: float = 0.01,
         free_nats: float = 1.0,
         reward_bins: int = 255,
+        reward_head_type: str = "twohot",
+        reward_init_logit: float = -5.0,
         contdisc: bool = True,
         horizon: int = 333,
         dyn_scale: float = 1.0,
@@ -1010,7 +1098,14 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act=act,
         )
         feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(feat_dim, reward_bins, hidden, act)
+        self.reward_head = _make_reward_head(
+            feat_dim,
+            reward_bins,
+            hidden,
+            act,
+            reward_head_type=reward_head_type,
+            reward_init_logit=reward_init_logit,
+        )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
         self.rep_scale = float(rep_scale)
@@ -1148,6 +1243,8 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         con_scale: float = 1.0,
         rec_reduction: str = "sum",
         reward_bins: int = 255,
+        reward_head_type: str = "twohot",
+        reward_init_logit: float = -5.0,
         contdisc: bool = True,
         horizon: int = 333,
     ) -> None:
@@ -1189,7 +1286,14 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act=act,
         )
         feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(feat_dim, reward_bins, hidden, act)
+        self.reward_head = _make_reward_head(
+            feat_dim,
+            reward_bins,
+            hidden,
+            act,
+            reward_head_type=reward_head_type,
+            reward_init_logit=reward_init_logit,
+        )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
         self.rep_scale = float(rep_scale)
@@ -1290,10 +1394,287 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         return self._compat_forward_dict(out)
 
 
+class _RynnBackboneObsEncoder(nn.Module):
+    """Identity/projection shim for frozen RynnVLA backbone outputs."""
+
+    def __init__(
+        self,
+        obs_dim: int = 4096,
+        embed_dim: int | None = None,
+        hidden: int = 2048,
+        layers: int = 2,
+        act: str = "silu",
+    ) -> None:
+        super().__init__()
+        self.obs_dim = int(obs_dim)
+        self.out_dim = int(embed_dim if embed_dim is not None else obs_dim)
+        self.register_buffer("_dtype_anchor", torch.empty(0), persistent=False)
+        if self.out_dim == self.obs_dim:
+            self.net = nn.Identity()
+        else:
+            modules: list[nn.Module] = [nn.LayerNorm(self.obs_dim)]
+            dim = self.obs_dim
+            for _ in range(max(int(layers) - 1, 0)):
+                modules.extend([nn.Linear(dim, int(hidden)), _act(act)])
+                dim = int(hidden)
+            modules.append(nn.Linear(dim, self.out_dim))
+            self.net = nn.Sequential(*modules)
+
+    def forward(self, obs_embedding: torch.Tensor) -> torch.Tensor:
+        if obs_embedding.ndim == 2:
+            obs_embedding = obs_embedding[:, None]
+        if obs_embedding.ndim != 3:
+            raise ValueError(
+                f"Rynn backbone obs_embedding must be [B,T,D] or [B,D], got {tuple(obs_embedding.shape)}"
+            )
+        if obs_embedding.shape[-1] != self.obs_dim:
+            raise ValueError(
+                f"Rynn backbone obs dim mismatch: got {obs_embedding.shape[-1]}, expected {self.obs_dim}"
+            )
+        dtype = _module_dtype(self, obs_embedding.dtype)
+        return self.net(obs_embedding.to(dtype=dtype))
+
+
+class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
+    """Pixel DreamerV3 with the observation encoder replaced by frozen RynnVLA.
+
+    The workspace supplies:
+
+      images: raw pixel observations, used as the reconstruction target.
+      obs_embedding: frozen RynnVLA-002 hidden vectors, used as RSSM observations.
+
+    Thus only the ``encode`` slot changes.  RSSM, pixel decoder, reward head and
+    continue head stay aligned with ``DreamerV3PixelWorldModel``.
+    """
+
+    def __init__(
+        self,
+        obs_dim: int = 4096,
+        latent_dim: int | None = None,
+        action_dim: int = 7,
+        image_channels: int = 6,
+        image_size: int = 64,
+        embed_dim: int | None = None,
+        encoder_hidden: int = 2048,
+        encoder_layers: int = 2,
+        deter: int = 8192,
+        hidden: int = 1024,
+        stoch: int = 32,
+        classes: int = 64,
+        blocks: int = 8,
+        depth: int = 64,
+        mults: tuple[int, ...] = (2, 3, 4, 4),
+        kernel: int = 5,
+        act: str = "silu",
+        unimix: float = 0.01,
+        free_nats: float = 1.0,
+        reward_bins: int = 255,
+        reward_head_type: str = "twohot",
+        reward_init_logit: float = -5.0,
+        contdisc: bool = True,
+        horizon: int = 333,
+        dyn_scale: float = 1.0,
+        rep_scale: float = 0.1,
+        rec_scale: float = 1.0,
+        rew_scale: float = 1.0,
+        con_scale: float = 1.0,
+        hidden_rec_scale: float = 100.0,
+        hidden_decoder_layers: int = 1,
+        hidden_decoder_units: int = 2048,
+    ) -> None:
+        super().__init__()
+        if latent_dim is not None:
+            obs_dim = int(obs_dim if obs_dim is not None else latent_dim)
+        self.obs_dim = int(obs_dim)
+        self.image_channels = int(image_channels)
+        self.image_size = int(image_size)
+        self.encoder = _RynnBackboneObsEncoder(
+            obs_dim=obs_dim,
+            embed_dim=embed_dim,
+            hidden=encoder_hidden,
+            layers=encoder_layers,
+            act=act,
+        )
+        self.rssm = DreamerV3RSSM(
+            action_dim=action_dim,
+            deter=deter,
+            hidden=hidden,
+            stoch=stoch,
+            classes=classes,
+            blocks=blocks,
+            unimix=unimix,
+            free_nats=free_nats,
+            act=act,
+        )
+        self.rssm.build_posterior(self.encoder.out_dim, act=act)
+        self.decoder = DreamerV3PixelDecoder(
+            image_channels=image_channels,
+            image_size=image_size,
+            deter=deter,
+            stoch=stoch,
+            classes=classes,
+            depth=depth,
+            mults=tuple(mults),
+            kernel=kernel,
+            act=act,
+        )
+        feat_dim = int(deter) + int(stoch) * int(classes)
+        self.hidden_decoder = MLPHead(
+            feat_dim,
+            self.obs_dim,
+            layers=int(hidden_decoder_layers),
+            units=int(hidden_decoder_units),
+            act=act,
+        )
+        self.reward_head = _make_reward_head(
+            feat_dim,
+            reward_bins,
+            hidden,
+            act,
+            reward_head_type=reward_head_type,
+            reward_init_logit=reward_init_logit,
+        )
+        self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
+        self.dyn_scale = float(dyn_scale)
+        self.rep_scale = float(rep_scale)
+        self.rec_scale = float(rec_scale)
+        self.rew_scale = float(rew_scale)
+        self.con_scale = float(con_scale)
+        self.hidden_rec_scale = float(hidden_rec_scale)
+        self.contdisc = bool(contdisc)
+        self.horizon = int(horizon)
+
+    def _feature_dim(self) -> int:
+        return int(self.rssm.deter + self.rssm.stoch * self.rssm.classes)
+
+    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
+        return torch.cat(
+            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
+            dim=-1,
+        )
+
+    def _resize_target(self, images: torch.Tensor, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        if images.ndim != 5:
+            raise ValueError(f"images must be [B,T,C,H,W], got {tuple(images.shape)}")
+        bsz, steps, channels, height, width = images.shape
+        if channels != self.image_channels:
+            raise ValueError(f"Expected {self.image_channels} image channels, got {channels}")
+        target = images.to(device=device, dtype=dtype) / 255.0
+        if (height, width) == (self.image_size, self.image_size):
+            return target
+        flat = target.reshape(bsz * steps, channels, height, width)
+        flat = F.interpolate(flat, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
+        return flat.reshape(bsz, steps, channels, self.image_size, self.image_size)
+
+    def encode_latent(self, hidden: torch.Tensor) -> DreamerV3LatentState:
+        if hidden.ndim == 2 and hidden.shape[-1] == self._feature_dim() and torch.is_floating_point(hidden):
+            return self._latent_from_feature(hidden)
+        device = _module_device(self, hidden.device)
+        obs = self.encoder(hidden.to(device=device))
+        batch_size = obs.shape[0]
+        dtype = obs.dtype
+        actions = torch.zeros(batch_size, 1, self.rssm.action_dim, device=device, dtype=dtype)
+        is_first = torch.ones(batch_size, 1, device=device, dtype=torch.bool)
+        seq = self.rssm.observe(obs, actions, is_first)
+        return DreamerV3LatentState(
+            deter=seq["deter"][:, 0],
+            stoch=seq["stoch"][:, 0],
+            logits=seq["post_logits"][:, 0],
+        )
+
+    def observe_sequence(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
+        obs_embedding = batch["obs_embedding"]
+        device = _module_device(self, obs_embedding.device)
+        enc = self.encoder(obs_embedding.to(device=device))
+        actions = batch["actions"].to(device=device, dtype=enc.dtype)
+        is_first = batch["is_first"].to(device=device)
+        seq = self.rssm.observe(enc, actions, is_first)
+        latent = DreamerV3LatentState(
+            deter=seq["deter"],
+            stoch=seq["stoch"],
+            logits=seq["post_logits"],
+        )
+        return {"latent": latent, "feat": latent.feature()}
+
+    def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
+        return self.hidden_decoder(latent.feature())
+
+    def critic_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
+        return latent.feature()
+
+    def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
+        images = batch["images"]
+        obs_embedding = batch["obs_embedding"]
+        actions = batch["actions"]
+        rewards = batch["rewards"].to(device=actions.device, dtype=actions.dtype)
+        terminal = batch.get("is_terminal", batch["dones"])
+        dones = terminal.to(device=actions.device, dtype=actions.dtype)
+        is_first = batch["is_first"].to(device=actions.device)
+
+        enc = self.encoder(obs_embedding)
+        seq = self.rssm.observe(enc, actions, is_first)
+        kls = self.rssm.kl_loss(seq["post_logits"], seq["prior_logits"])
+        recon = self.decoder(seq["deter"], seq["stoch"])
+        target = self._resize_target(images, dtype=recon.dtype, device=recon.device)
+        rec_per = (recon - target).square().sum(dim=(-3, -2, -1))
+        rec_loss = rec_per.mean()
+
+        feat = self.feature(seq)
+        hidden_pred = self.hidden_decoder(feat)
+        hidden_target = obs_embedding.to(device=hidden_pred.device, dtype=hidden_pred.dtype).detach()
+        hidden_mse = (hidden_pred.float() - hidden_target.float()).square().mean()
+        hidden_pred_norm = F.normalize(hidden_pred.float(), dim=-1)
+        hidden_target_norm = F.normalize(hidden_target.float(), dim=-1)
+        hidden_cosine = 1.0 - (hidden_pred_norm * hidden_target_norm).sum(dim=-1).mean()
+        reward_logits = self.reward_head(feat)
+        cont_logits = self.continue_head(feat).squeeze(-1)
+        reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
+        cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
+        if self.contdisc:
+            cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
+        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target)
+
+        loss = (
+            self.rec_scale * rec_loss
+            + self.dyn_scale * kls["dyn"]
+            + self.rep_scale * kls["rep"]
+            + self.hidden_rec_scale * hidden_mse
+            + self.rew_scale * reward_loss
+            + self.con_scale * cont_loss
+        )
+        mse = (recon.detach() - target).square().mean()
+        metrics = {
+            "loss": loss.detach(),
+            "rec_loss": rec_loss.detach(),
+            "dyn_loss": kls["dyn"].detach(),
+            "rep_loss": kls["rep"].detach(),
+            "reward_loss": reward_loss.detach(),
+            "continue_loss": cont_loss.detach(),
+            "hidden_rec_loss": hidden_mse.detach(),
+            "hidden_rec_scaled_loss": (self.hidden_rec_scale * hidden_mse).detach(),
+            "hidden_cosine_loss": hidden_cosine.detach(),
+            "hidden_pred_norm": hidden_pred.detach().float().norm(dim=-1).mean().detach(),
+            "hidden_target_norm": hidden_target.detach().float().norm(dim=-1).mean().detach(),
+            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
+            "image_mse": mse.detach(),
+            "image_psnr": (-10.0 * torch.log10(mse.clamp_min(1e-8))).detach(),
+            "dyn_entropy": kls["dyn_entropy"].detach(),
+            "rep_entropy": kls["rep_entropy"].detach(),
+        }
+        return DreamerV3Loss(loss=loss, metrics=metrics)
+
+    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if isinstance(batch, dict) and batch.get("mode") is not None:
+            return self._forward_actor_adapter(batch)
+        out = self.loss(batch)
+        return self._compat_forward_dict(out)
+
+
 __all__ = [
     "DreamerV3PixelWorldModel",
     "DreamerV3TokenWorldModel",
     "DreamerV3TokenFromPixelWorldModel",
+    "DreamerV3PixelRynnBackboneWorldModel",
     "DreamerV3PixelEncoder",
     "DreamerV3TokenEncoder",
     "DreamerV3RSSM",

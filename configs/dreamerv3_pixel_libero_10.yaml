@@ -3,6 +3,9 @@ _target_: src.workspace.dreamerv3_pixel_workspace.DreamerV3PixelWorkspace
 training:
   out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10
   device: cuda:0
+  # single: one process, optional torch.nn.DataParallel.
+  # ddp: launch with torchrun; each GPU/rank gets its own DataLoader shard.
+  distributed_strategy: single
   data_parallel: true
   seed: 7
   max_steps: 10000

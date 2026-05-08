@@ -15,7 +15,10 @@ training:
   out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_token_actor
   debug: false
   resume: false
-  distributed_strategy: fsdp
+  # DreamerV3-token WM cotrain uses the same model both for supervised WM
+  # updates and no-grad imagination. PyTorch FSDP can trip its post-backward
+  # hook state on this path; DDP is stable on the 80GB H100 setup.
+  distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: false
   num_epochs: 20
@@ -50,12 +53,13 @@ dataset:
   max_windows: null
 
 dataloader:
-  batch_size: 1
-  num_workers: 2
+  batch_size: 2
+  num_workers: 6
   shuffle: true
   drop_last: true
   pin_memory: true
   persistent_workers: true
+  prefetch_factor: 4
 
 world_model:
   _target_: src.models.world_model.dreamerv3_torch.DreamerV3TokenFromPixelWorldModel
@@ -151,3 +155,13 @@ checkpoint:
     mode: max
     k: 3
     format_str: 'epoch={epoch:03d}-epoch_returns_mean={epoch_returns_mean:.4f}.ckpt'
+
+viz:
+  enabled: true
+  every_n_steps: 100
+  num_samples: 2
+  cell_size: 192
+  view_labels: [third, wrist]
+  vqgan_config_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  vqgan_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  device: null

@@ -15,7 +15,7 @@
 #
 # Override via env vars:
 #   NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/pretokenize_train_vla.sh
-#   CONFIG_NAME=pretokenize_vla_libero_10 bash scripts/pretokenize_train_vla.sh
+#   CONFIG_NAME=pretokenize_vla_libero_goal bash scripts/pretokenize_train_vla.sh
 # Override/add any hydra arg as trailing args:
 #   bash scripts/pretokenize_train_vla.sh training.num_epochs=5 optim.vla.lr=1e-6
 set -euo pipefail
@@ -26,7 +26,7 @@ cd "${PROJECT_ROOT}"
 
 NUM_GPUS="${NUM_GPUS:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
-CONFIG_NAME="${CONFIG_NAME:-pretokenize_vla_libero_10}"
+CONFIG_NAME="${CONFIG_NAME:-pretokenize_vla_libero_goal}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/vla/pretokenize_vla}"
 OUT_DIR="${OUT_DIR:-${OUT_DIR_BASE}/${CONFIG_NAME}_${TIMESTAMP}}"

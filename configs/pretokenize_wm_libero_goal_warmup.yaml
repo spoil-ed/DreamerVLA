@@ -1,0 +1,6 @@
+defaults:
+  - pretokenize_wm_libero_10_warmup
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/pretokenize_wm/pretokenize_wm_libero_goal_discrete_minimal_warmup_third_wrist_state

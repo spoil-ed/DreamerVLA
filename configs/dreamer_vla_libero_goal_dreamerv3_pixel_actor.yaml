@@ -1,0 +1,6 @@
+defaults:
+  - dreamer_vla_libero_10_dreamerv3_pixel_actor
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_pixel_actor_libero_goal

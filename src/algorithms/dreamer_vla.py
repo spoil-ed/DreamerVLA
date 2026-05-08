@@ -119,6 +119,11 @@ def world_model_pretrain_step(
         "image_recon_mse_loss": _f("image_recon_mse_loss"),
         "image_decoder_loss": _f("image_decoder_loss"),
         "image_recon_accuracy": _f("image_recon_accuracy"),
+        "hidden_rec_loss": _f("hidden_rec_loss"),
+        "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
+        "hidden_cosine_loss": _f("hidden_cosine_loss"),
+        "hidden_pred_norm": _f("hidden_pred_norm"),
+        "hidden_target_norm": _f("hidden_target_norm"),
         "image_static_accuracy": _f("image_static_accuracy"),
         "image_dynamic_accuracy": _f("image_dynamic_accuracy"),
         "image_dynamic_fraction": _f("image_dynamic_fraction"),
@@ -152,6 +157,16 @@ def _world_model_actor_input(world_model: nn.Module, latent: Any) -> torch.Tenso
         if "actor_input" not in message and "Unknown" not in message:
             raise
     return latent.feature()
+
+
+def _world_model_critic_input(world_model: nn.Module, latent: Any) -> torch.Tensor:
+    try:
+        return world_model({"mode": "critic_input", "latent": latent})
+    except ValueError as exc:
+        message = str(exc)
+        if "critic_input" not in message and "Unknown" not in message:
+            raise
+    return _world_model_actor_input(world_model, latent)
 
 
 def _latent_time_dim(value: Any) -> int:
@@ -290,8 +305,8 @@ def imagine_actor_critic_step(
 
     with _temporarily_freeze(world_model):
         for _ in range(horizon):
-            current_feat = _world_model_actor_input(world_model, current_latent).detach().float()
-            action, _, extra = policy({"mode": "sample", "hidden": current_feat, "deterministic": False})
+            current_actor_feat = _world_model_actor_input(world_model, current_latent).detach().float()
+            action, _, extra = policy({"mode": "sample", "hidden": current_actor_feat, "deterministic": False})
             if extra.get("std") is not None:
                 dist = Normal(extra["mean"], extra["std"])
                 log_probs.append(dist.log_prob(action.detach()).sum(dim=-1))
@@ -308,8 +323,8 @@ def imagine_actor_critic_step(
             raise RuntimeError("DreamerV3 actor loss requires stochastic policy log_probs.")
 
         with torch.no_grad():
-            feat_stack = torch.stack(
-                [_world_model_actor_input(world_model, latent).detach().float() for latent in latents],
+            critic_feat_stack = torch.stack(
+                [_world_model_critic_input(world_model, latent).detach().float() for latent in latents],
                 dim=1,
             )  # [B*K,H+1,D]
             reward_stack = torch.stack(
@@ -324,8 +339,8 @@ def imagine_actor_critic_step(
                 dim=1,
             ).clamp(0.0, 1.0)
 
-            BKHp1, Hp1, D = feat_stack.shape
-            flat_feats = feat_stack.reshape(BKHp1 * Hp1, D)
+            BKHp1, Hp1, D = critic_feat_stack.shape
+            flat_feats = critic_feat_stack.reshape(BKHp1 * Hp1, D)
             critic_values = critic({"mode": "value", "hidden": flat_feats}).view(BKHp1, Hp1)
             slow_values = target_critic({"mode": "value", "hidden": flat_feats}).view(BKHp1, Hp1)
             target_values = slow_values if slowtar else critic_values
@@ -361,7 +376,7 @@ def imagine_actor_critic_step(
         actor_optimizer.step()
 
     # ── 3. Value loss, matching DreamerV3 value target from imagined returns.
-    feat_stack_h = feat_stack[:, :-1].detach()                       # [B*K,H,D]
+    feat_stack_h = critic_feat_stack[:, :-1].detach()                # [B*K,H,D]
     B2, H, D2 = feat_stack_h.shape
     log_probs_critic = critic({
         "mode": "log_prob",

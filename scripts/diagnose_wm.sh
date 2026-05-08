@@ -70,7 +70,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-CONFIG_NAME="${CONFIG_NAME:-pretokenize_wm_libero_10}"
+CONFIG_NAME="${CONFIG_NAME:-pretokenize_wm_libero_goal}"
 CKPT="${CKPT:-}"
 NUM_SAMPLES="${NUM_SAMPLES:-128}"
 DEVICE="${DEVICE:-cuda:0}"

@@ -25,6 +25,7 @@ from typing import Any
 
 import hydra
 import torch
+import torch.nn.functional as F
 import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
@@ -88,6 +89,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.world_model_optimizer = None
         self.world_model_ema: EMAHelper | None = None
         self.return_tracker: ReturnPercentileTracker | None = None
+        self.vq_model = None
 
     # ──────────────────────────────────────────────────────────────────────
     # Path helpers
@@ -189,6 +191,19 @@ class DreamerVLAWorkspace(BaseWorkspace):
         """Assemble flat {obs_embedding, next_obs_embedding, action, reward?}
         accepted by both TSSMWorldModel.forward and TSSMWorldModelTransDreamer.forward.
         """
+        if (
+            isinstance(batch.get("images"), torch.Tensor)
+            and isinstance(batch.get("obs_embedding"), torch.Tensor)
+            and isinstance(batch.get("actions"), torch.Tensor)
+        ):
+            return {
+                key: value
+                for key in (
+                    "images", "obs_embedding", "actions", "rewards", "dones",
+                    "is_first", "is_terminal", "is_last",
+                )
+                if (value := batch.get(key)) is not None
+            }
         if isinstance(batch.get("images"), torch.Tensor) and isinstance(batch.get("actions"), torch.Tensor):
             return {
                 key: value
@@ -249,6 +264,19 @@ class DreamerVLAWorkspace(BaseWorkspace):
         """Assemble {obs: {obs_embedding}} for imagine_actor_critic_step.
         obs_embedding is BPE ids in token mode, pooled hiddens otherwise.
         """
+        obs_embedding = batch.get("obs_embedding")
+        if isinstance(obs_embedding, torch.Tensor):
+            if obs_embedding.ndim != 3:
+                raise ValueError(
+                    "Dreamer Rynn-hidden actor batch expects obs_embedding "
+                    f"[B,T,D], got {tuple(obs_embedding.shape)}"
+                )
+            return {"obs": {
+                "obs_embedding": obs_embedding.to(self.device),
+                "actions": batch["actions"].to(self.device),
+                "is_first": batch["is_first"].to(self.device),
+            }}
+
         images = batch.get("images")
         if isinstance(images, torch.Tensor):
             if images.ndim != 5:
@@ -298,6 +326,140 @@ class DreamerVLAWorkspace(BaseWorkspace):
             "actions": actions.to(self.device),
             "is_first": is_first,
         }}
+
+    # ── Token DreamerV3 WM visualisation ────────────────────────────────────
+
+    def _maybe_build_viz(self) -> None:
+        if not self.distributed.is_main_process:
+            return
+        viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
+        if viz_cfg is None or not bool(OmegaConf.select(viz_cfg, "enabled", default=False)):
+            return
+        cfg_path = OmegaConf.select(
+            viz_cfg,
+            "vqgan_config_path",
+            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
+        )
+        ckpt_path = OmegaConf.select(
+            viz_cfg,
+            "vqgan_ckpt_path",
+            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+        )
+        try:
+            from src.utils.vq_image_decoder import load_vq_model
+
+            viz_device_cfg = OmegaConf.select(viz_cfg, "device", default=None)
+            viz_device = self.device if viz_device_cfg is None else torch.device(str(viz_device_cfg))
+            self.vq_model = load_vq_model(cfg_path=cfg_path, ckpt_path=ckpt_path, device=viz_device)
+            print(f"[dreamer-vla][viz] VQGAN ready on {viz_device}")
+        except Exception as exc:
+            print(f"[dreamer-vla][viz] failed to build VQGAN visualizer, disabling: {exc}")
+            self.vq_model = None
+
+    @torch.no_grad()
+    def _decode_token_view(self, token_ids: torch.Tensor, h: int, w: int):
+        from src.utils.vq_image_decoder import tensor_to_pil, vq_tokens_to_pixels
+
+        if self.vq_model is None:
+            return None
+        token_ids = token_ids.reshape(1, h * w).to(
+            device=next(self.vq_model.parameters()).device,
+            dtype=torch.long,
+        )
+        pixels = vq_tokens_to_pixels(token_ids, self.vq_model, h_latent=h, w_latent=w)
+        return tensor_to_pil(pixels[0])
+
+    @staticmethod
+    def _save_viz_strip(path: pathlib.Path, panels: list[tuple[str, Any]], cell_size: int) -> None:
+        from PIL import Image, ImageDraw
+
+        header = 22
+        canvas = Image.new("RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32))
+        draw = ImageDraw.Draw(canvas)
+        for idx, (label, image) in enumerate(panels):
+            x0 = idx * cell_size
+            if image is not None:
+                canvas.paste(image.convert("RGB").resize((cell_size, cell_size)), (x0, header))
+            else:
+                draw.rectangle([x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20))
+                draw.text((x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230))
+            draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(path)
+
+    @torch.no_grad()
+    def _maybe_save_token_viz(self, batch: dict[str, Any]) -> None:
+        if not self.distributed.is_main_process:
+            return
+        viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
+        if viz_cfg is None or self.vq_model is None:
+            return
+        every = int(OmegaConf.select(viz_cfg, "every_n_steps", default=500))
+        if every <= 0 or self.global_step % every != 0:
+            return
+        wm = getattr(self, "_unwrapped_world_model", None) or self.distributed.unwrap_module(self.world_model)
+        if wm is None or not hasattr(wm, "encoder") or not hasattr(wm, "rssm") or not hasattr(wm, "decoder"):
+            return
+
+        tokens = batch.get("tokens")
+        actions = batch.get("actions")
+        is_first = batch.get("is_first")
+        if not isinstance(tokens, torch.Tensor) or not isinstance(actions, torch.Tensor):
+            return
+        if not isinstance(is_first, torch.Tensor) or tokens.ndim != 4 or tokens.shape[1] < 2:
+            return
+
+        tokens = tokens.to(self.device, non_blocking=True).long()
+        actions = actions.to(self.device, non_blocking=True)
+        is_first = is_first.to(self.device, non_blocking=True)
+        was_training = wm.training
+        wm.eval()
+        try:
+            enc = wm.encoder(tokens)
+            seq = wm.rssm.observe(enc, actions.to(dtype=enc.dtype), is_first)
+            post_logits = wm.decoder(seq["deter"], seq["stoch"])
+            post_pred = post_logits.argmax(dim=-1)
+
+            deter0 = seq["deter"][:, 0]
+            stoch0 = seq["stoch"][:, 0]
+            action1 = actions[:, 1].to(device=deter0.device, dtype=deter0.dtype)
+            prior_deter1 = wm.rssm._core(deter0, stoch0, action1)
+            prior_logits1 = wm.rssm._prior(prior_deter1)
+            prior_idx1 = prior_logits1.argmax(dim=-1)
+            prior_stoch1 = F.one_hot(prior_idx1, wm.rssm.classes).to(dtype=prior_logits1.dtype)
+            prior_dec_logits = wm.decoder(prior_deter1[:, None], prior_stoch1[:, None])
+            prior_pred = prior_dec_logits.argmax(dim=-1)[:, 0]
+        finally:
+            if was_training:
+                wm.train()
+
+        b, _t, num_views, tokens_per_view = tokens.shape
+        h, w = tuple(int(x) for x in wm.encoder.spatial_grid)
+        if h * w != tokens_per_view:
+            print(f"[dreamer-vla][viz] skip: h*w={h*w} != tokens_per_view={tokens_per_view}")
+            return
+        view_labels = list(OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"]))
+        if len(view_labels) != num_views:
+            view_labels = [f"view{idx}" for idx in range(num_views)]
+
+        num_samples = min(int(OmegaConf.select(viz_cfg, "num_samples", default=2)), b)
+        cell_size = int(OmegaConf.select(viz_cfg, "cell_size", default=192))
+        out_dir = pathlib.Path(self.output_dir) / "viz"
+        saved = 0
+        for sample_idx in range(num_samples):
+            panels: list[tuple[str, Any]] = []
+            for view_idx, label in enumerate(view_labels):
+                panels.extend([
+                    (f"{label} cur", self._decode_token_view(tokens[sample_idx, 0, view_idx], h, w)),
+                    (f"{label} recon", self._decode_token_view(post_pred[sample_idx, 0, view_idx], h, w)),
+                    (f"{label} next", self._decode_token_view(tokens[sample_idx, 1, view_idx], h, w)),
+                    (f"{label} prior", self._decode_token_view(prior_pred[sample_idx, view_idx], h, w)),
+                ])
+            path = out_dir / f"step_{self.global_step:07d}_sample{sample_idx:02d}.png"
+            self._save_viz_strip(path, panels, cell_size=cell_size)
+            saved += 1
+        if saved:
+            print(f"[dreamer-vla][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}")
 
     # ── Token-mode helpers (mirrored from pretokenize_wm_workspace) ──────────
 
@@ -399,8 +561,17 @@ class DreamerVLAWorkspace(BaseWorkspace):
             for k, v in sd.items()
         }
         model_sd = self.world_model.state_dict()
+        reset_reward_head = bool(
+            OmegaConf.select(self.cfg, "init.reset_world_model_reward_head", default=False)
+        )
         remapped: dict[str, torch.Tensor] = {}
+        skipped_reward_head = 0
         for key, value in sd.items():
+            if key.startswith("module."):
+                key = key.removeprefix("module.")
+            if reset_reward_head and key.startswith("reward_head."):
+                skipped_reward_head += 1
+                continue
             if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
                 candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
                 if candidate in model_sd:
@@ -426,6 +597,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
             if mismatched:
                 print(f"[init] skipped shape-mismatched tensors: {len(mismatched)}")
                 print(f"[init] shape mismatches (first 5): {mismatched[:5]}")
+            if skipped_reward_head:
+                print(f"[init] reset reward_head; skipped {skipped_reward_head} checkpoint tensors")
             if missing:
                 print(f"[init] missing (first 5): {missing[:5]}")
             if unexpected:
@@ -635,6 +808,9 @@ class DreamerVLAWorkspace(BaseWorkspace):
         assert isinstance(dataset, BaseDataset)
 
         dataloader_kwargs = dict(cfg.dataloader)
+        if int(dataloader_kwargs.get("num_workers", 0)) <= 0:
+            dataloader_kwargs.pop("prefetch_factor", None)
+            dataloader_kwargs["persistent_workers"] = False
         sampler = self.distributed.maybe_make_sampler(
             dataset,
             shuffle=bool(dataloader_kwargs.get("shuffle", True)),
@@ -657,6 +833,9 @@ class DreamerVLAWorkspace(BaseWorkspace):
             val_dl_kwargs = dict(cfg.dataloader)
             val_dl_kwargs["shuffle"] = False
             val_dl_kwargs["drop_last"] = False
+            if int(val_dl_kwargs.get("num_workers", 0)) <= 0:
+                val_dl_kwargs.pop("prefetch_factor", None)
+                val_dl_kwargs["persistent_workers"] = False
             val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
             if val_sampler is not None:
                 val_dl_kwargs["sampler"] = val_sampler
@@ -725,6 +904,16 @@ class DreamerVLAWorkspace(BaseWorkspace):
         policy_cfg = OmegaConf.select(cfg, "policy")
         if policy_cfg is None:
             raise ValueError("`policy` config section is required.")
+        policy_target = str(OmegaConf.select(policy_cfg, "_target_", default=""))
+        require_encoder_ckpt = bool(OmegaConf.select(cfg, "init.require_encoder_state_ckpt", default=False))
+        encoder_state_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
+        if require_encoder_ckpt and "VLAActionHeadActor" in policy_target and not encoder_state_ckpt:
+            raise ValueError(
+                "This DreamerVLA config reuses the VLA action head, so it needs a "
+                "matching goal VLA checkpoint. Pass one with "
+                "`init.encoder_state_ckpt=/path/to/vla.ckpt` or "
+                "`VLA_STATE_CKPT=/path/to/vla.ckpt bash scripts/train_dreamer_vla_rynn_pixel.sh`."
+            )
         self.policy = hydra.utils.instantiate(policy_cfg).to(self.device)
         # Policy stays in float32 — its forward casts inputs via .float()
         # internally, so feature dtype is normalised at the call site.
@@ -765,6 +954,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
             low=float(OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)),
             high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
         )
+        self._maybe_build_viz()
 
         if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.world_model_ema is None:
             self.world_model_ema = EMAHelper(
@@ -948,6 +1138,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                 pbar_postfix["G"] = reduced["train_returns_mean"]
                             if pbar_postfix:
                                 tepoch.set_postfix(refresh=False, **pbar_postfix)
+
+                            self._maybe_save_token_viz(batch)
 
                             is_last_batch = batch_idx == len(train_dataloader) - 1
                             if not is_last_batch:

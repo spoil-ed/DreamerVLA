@@ -1,0 +1,25 @@
+defaults:
+  - pretokenize_vla_libero_10
+  - _self_
+
+training:
+  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla_goal
+
+dataloader:
+  batch_size: 20
+  num_workers: 2
+
+dataset:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+  action_horizon: 10
+
+dataset_val_ind:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+  action_horizon: 10
+
+dataset_val_ood:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+  action_horizon: 10
