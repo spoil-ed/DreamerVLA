@@ -52,6 +52,8 @@ class RynnVLAEncoderOutput:
     hidden_states: torch.Tensor
     attention_mask: torch.Tensor
     labels: torch.Tensor
+    input_ids: list[list[int]]
+    lengths: list[int]
 
 
 class RynnVLAEncoder(BaseEncoder):
@@ -65,6 +67,7 @@ class RynnVLAEncoder(BaseEncoder):
         resolution: int = 256,
         action_dim: int = 7,
         time_horizon: int = 5,
+        action_head_type: str = "legacy",
         pool: str = "mean",
         freeze_backbone: bool = True,
     ) -> None:
@@ -89,6 +92,7 @@ class RynnVLAEncoder(BaseEncoder):
         self.resolution = int(resolution)
         self.action_dim = int(action_dim)
         self.time_horizon = int(time_horizon)
+        self.action_head_type = str(action_head_type)
         self.pool = str(pool)
 
         self._processor: FlexARItemProcessorActionState | None = None
@@ -101,9 +105,10 @@ class RynnVLAEncoder(BaseEncoder):
                 self.model_path,
                 action_dim=self.action_dim,
                 time_horizon=self.time_horizon,
+                action_head_type=self.action_head_type,
                 attn_implementation="sdpa",
                 torch_dtype=torch.bfloat16,
-                ignore_mismatched_sizes=False,
+                ignore_mismatched_sizes=self.action_head_type != "legacy",
                 low_cpu_mem_usage=False,
             )
         finally:
@@ -371,6 +376,8 @@ class RynnVLAEncoder(BaseEncoder):
             hidden_states=hidden_states.float(),
             attention_mask=attention_mask,
             labels=labels_tensor,
+            input_ids=input_ids_list,
+            lengths=lengths,
         )
 
     def encode(self, obs: dict[str, Any]) -> torch.Tensor:

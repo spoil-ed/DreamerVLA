@@ -6,5 +6,9 @@ training:
   out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamerv3_pixel_vlaactor_libero_goal
 
 init:
-  encoder_state_ckpt: null
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
   require_encoder_state_ckpt: true
+
+policy:
+  time_horizon: 5

@@ -53,7 +53,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
     # encoder is frozen — no need to checkpoint it.
     exclude_keys = ("encoder", "_unwrapped_world_model")
 
-    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
+    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -275,6 +275,15 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "obs_embedding": obs_embedding.to(self.device),
                 "actions": batch["actions"].to(self.device),
                 "is_first": batch["is_first"].to(self.device),
+                **(
+                    {
+                        "actor_input_ids": batch["actor_input_ids"].to(self.device),
+                        "actor_attention_mask": batch["actor_attention_mask"].to(self.device),
+                    }
+                    if isinstance(batch.get("actor_input_ids"), torch.Tensor)
+                    and isinstance(batch.get("actor_attention_mask"), torch.Tensor)
+                    else {}
+                ),
             }}
 
         images = batch.get("images")
@@ -1104,6 +1113,12 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         "train_critic_loss": ac_metrics["critic_loss"],
                                         "train_returns_mean": ac_metrics["returns_mean"],
                                         "train_returns_std": ac_metrics["returns_std"],
+                                        "train_raw_returns_mean": ac_metrics.get("raw_returns_mean", ac_metrics["returns_mean"]),
+                                        "train_raw_returns_std": ac_metrics.get("raw_returns_std", ac_metrics["returns_std"]),
+                                        "train_return_norm_enabled": ac_metrics.get("return_norm_enabled", 0.0),
+                                        "train_return_norm_low": ac_metrics.get("return_norm_low", 0.0),
+                                        "train_return_norm_high": ac_metrics.get("return_norm_high", 0.0),
+                                        "train_return_norm_scale": ac_metrics.get("return_norm_scale", 1.0),
                                         "train_return_scale": ac_metrics["return_scale"],
                                         "train_reward_mean": ac_metrics["reward_mean"],
                                         "train_continue_mean": ac_metrics.get("continue_mean", 1.0),

@@ -9,6 +9,8 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
 
 > **注意**：本仓库的环境基于 [WMPO](https://github.com/WM-PO/WMPO) 和 [RynnVLA-002](https://github.com/alibaba-damo-academy/RynnVLA-002) 修改而来，数据集也沿用 RynnVLA-002 的数据处理流程。下面的安装文档会完整覆盖从零搭建环境的全部步骤。
 
+当前发布级仓库结构见 [docs/repository_structure.md](docs/repository_structure.md)，脚本入口见 [scripts/README.md](scripts/README.md)，配置注册表见 [configs/README.md](configs/README.md)。
+
 ---
 
 ## 目录
@@ -58,8 +60,8 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
                 │                                               │
                 ▼                                               ▼
 ┌──────── Stage 1: SFT 初始化 VLA ────────┐   ┌──────── Stage 2: SFT 初始化 WM ────────┐
-│ Config:   pretokenize_sft_libero_10.yaml │   │ Config:   pretokenize_wm_libero_10      │
-│ Workspace: PretokenizeSFTWorkspace       │   │           (及 transdreamer 变种)        │
+│ Config:   pretokenize_vla_libero_goal.yaml │ │ Config:   rynn_backbone_dreamerv3_pixel │
+│ Workspace: PretokenizeVLAWorkspace         │ │           _wm_libero_goal_precomputed   │
 │ 作用:     在预 tokenize 数据上微调       │   │ Workspace: PretokenizeWMWorkspace       │
 │           RynnVLAEncoder 头              │   │ 作用:     VLA 冻结，预训练 TSSM         │
 │                                          │   │           L = L_trans + L_reward + L_KL │
@@ -68,7 +70,7 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
                 └───────────────────┬───────────────────────────┘
                                     ▼
 ┌───────────────── Stage 3: Dreamer 范式 rollout 训练 ─────────────────┐
-│ Config:    dreamer_vla_libero_10.yaml                                  │
+│ Config:    dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml │
 │ Workspace: DreamerVLAWorkspace                                         │
 │ 算法:      src/algorithms/dreamer_vla.py::imagine_actor_critic_step    │
 │                                                                        │
@@ -115,13 +117,28 @@ Stage 3 的 loss 不足以证明策略有效——真实成功率由 `EvalLibero
 
 ## 项目结构
 
+发布时推荐按下面的边界理解仓库：
+
+```text
+DreamerVLA/
+├── configs/        # Hydra 实验配置；当前主线和历史 ablation 见 configs/README.md
+├── scripts/        # 训练、评估、预处理、诊断入口；稳定入口见 scripts/README.md
+├── src/            # Python 源码包；workspace/model/dataloader/algorithm 都在这里
+├── docs/           # 架构说明、实验结论、发布结构说明
+├── data/           # 运行时数据、权重、输出；被 gitignore 忽略
+├── LIBERO/         # 本地 LIBERO checkout；被 gitignore 忽略
+└── dependencies/   # 本地第三方依赖 checkout / wheel；被 gitignore 忽略
+```
+
+当前 LIBERO-goal / Rynn-pixel 主线要求 VLA base、VLA action head、hidden sidecar 和 `time_horizon` 完全一致；具体路径和约束见 `configs/README.md`。
+
 ```text
 DreamerVLA/
 ├── configs/                        # 实验配置 (Hydra YAML)
-│   ├── pretokenize_sft_libero_10.yaml
-│   ├── pretokenize_wm_libero_10.yaml
-│   ├── pretokenize_vla_libero_10.yaml
-│   ├── dreamer_vla_libero_10.yaml
+│   ├── pretokenize_vla_libero_goal.yaml
+│   ├── rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml
+│   ├── dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml
+│   ├── eval_libero_vla.yaml
 │   └── ...
 ├── data/                           # 运行时数据（不入 git）
 │   ├── ckpts/                      # 模型权重
@@ -407,17 +424,17 @@ hf download Alpha-VLLM/Lumina-mGPT-7B-768 \
 ```bash
 CKPT_DIR=/home/user01/liops/workspace/DreamerVLA/data/ckpts
 
-# VLA 模型权重（256 分辨率，libero_10）
+# VLA 模型权重（256 分辨率，当前主线使用 libero_goal）
 hf download Alibaba-DAMO-Academy/RynnVLA-002 \
   --repo-type model \
-  --local-dir "${CKPT_DIR}/VLA_model_256/libero_10" \
-  --include "VLA_model_256/libero_10/*"
+  --local-dir "${CKPT_DIR}/VLA_model_256/libero_goal" \
+  --include "VLA_model_256/libero_goal/*"
 
-# Action World Model 权重（512 分辨率，libero_10）
+# Action World Model 权重（512 分辨率，可选；当前 Rynn-pixel 主线不直接依赖）
 hf download Alibaba-DAMO-Academy/RynnVLA-002 \
   --repo-type model \
-  --local-dir "${CKPT_DIR}/Action_World_model_512/libero_10" \
-  --include "Action_World_model_512/libero_10/*"
+  --local-dir "${CKPT_DIR}/Action_World_model_512/libero_goal" \
+  --include "Action_World_model_512/libero_goal/*"
 ```
 
 也可以直接使用仓库自带脚本（需要先确认路径正确）：
@@ -442,16 +459,16 @@ data/ckpts/
 ├── starting_point/
 ├── models--Alpha-VLLM--Lumina-mGPT-7B-768/
 ├── VLA_model_256/
-│   └── libero_10/
+│   └── libero_goal/
 └── Action_World_model_512/
-    └── libero_10/
+    └── libero_goal/
 ```
 
 快速检查：
 
 ```bash
 ls data/ckpts/chameleon/tokenizer/
-ls data/ckpts/VLA_model_256/libero_10/
+ls data/ckpts/VLA_model_256/libero_goal/
 ls data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/
 ```
 
@@ -514,7 +531,7 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 \
 将图像/动作/状态组织为训练所需的对话格式（包含 `<|state|>`, `<|image|>`, `<|action|>` 等特殊 token）：
 
 ```bash
-LIBERO_TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+LIBERO_TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
   bash scripts/preprocess/processed_data_generate_convs.sh
 ```
 
@@ -525,7 +542,7 @@ LIBERO_TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
 将对话 JSON 预先编码为 token 序列，并合并为单一 manifest 文件：
 
 ```bash
-TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
   bash scripts/preprocess/processed_data_pretokenize.sh
 ```
 
@@ -544,7 +561,7 @@ TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
 自动生成 pretokenize 和 nopretokenize 两种训练配置：
 
 ```bash
-LIBERO_TASK_SUITE=libero_goal TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=10 \
+LIBERO_TASK_SUITE=libero_goal TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
   bash scripts/preprocess/prepare_train_configs.sh
 ```
 
@@ -562,7 +579,7 @@ bash scripts/prepare_data.sh
 通过环境变量覆盖默认参数：
 
 ```bash
-LIBERO_TASK_SUITE=libero_10 IMAGE_RESOLUTION=256 ACTION_HORIZON=10 TASK_NAME=10 \
+LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=goal \
   bash scripts/prepare_data.sh
 ```
 
@@ -574,9 +591,9 @@ LIBERO_TASK_SUITE=libero_10 IMAGE_RESOLUTION=256 ACTION_HORIZON=10 TASK_NAME=10 
 
 | 文件 | 需更新的字段 |
 |------|-------------|
-| `configs/pretokenize_sft_libero_10.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.config_path` |
-| `configs/pretokenize_wm_libero_10.yaml` | 同上，外加 `world_model.pretrained_model_path` |
-| `configs/dreamer_vla_libero_10.yaml` | 同上 |
+| `configs/pretokenize_vla_libero_goal.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.config_path` |
+| `configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml` | `init.vla_ckpt_path`, `encoder.model_path`, `dataset.hidden_dir`, `dataset.expected_*` |
+| `configs/dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon` |
 
 通用规则：将所有 `/home/user01/liops/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
 
@@ -614,7 +631,7 @@ cd /home/user01/liops/workspace/DreamerVLA
 bash scripts/pretokenize_train_vla.sh
 
 # 自定义 GPU 数量和配置
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=pretokenize_sft_libero_10 \
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=pretokenize_vla_libero_goal \
   bash scripts/pretokenize_train_vla.sh
 ```
 
@@ -630,10 +647,9 @@ WM_KIND=dreamerv3_token bash scripts/train_wm.sh
 # DreamerV3 pixel WM（单进程 workspace）
 WM_KIND=dreamerv3_pixel bash scripts/train_wm.sh
 
-# TSSM/RSSM/TransDreamer 类 pretokenize WM（torchrun）
+# 当前 Rynn-pixel precomputed WM（torchrun）
 NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-CONFIG_NAME=pretokenize_wm_libero_10_obs4096_minloss_rssm \
-  bash scripts/train_wm.sh
+  bash scripts/train_rynn_backbone_dreamerv3_wm.sh
 
 # Chameleon / LaDiWM-style WM（torchrun）
 WM_KIND=chameleon NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
@@ -649,8 +665,8 @@ WM_KIND=chameleon NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
 包含 World Model 训练阶段和 Actor-Critic imagination 训练阶段：
 
 ```bash
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=dreamer_vla_libero_10 \
-  bash scripts/train_dreamer_vla.sh
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  bash scripts/train_dreamer_vla_rynn_pixel.sh
 ```
 
 配置中可通过 `training.run_wm_phase` 和 `training.run_actor_critic_phase` 控制单阶段或双阶段运行。

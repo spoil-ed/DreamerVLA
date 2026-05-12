@@ -1,0 +1,5 @@
+\begin{abstract}
+Embodied intelligence research mainly follows two directions: Vision-Language-Action (VLA) models and world model–based reinforcement learning methods. VLA models benefit from strong semantic understanding provided by large vision-language models, but they often lack the ability to model environment dynamics and perform long-horizon reasoning. In contrast, world model approaches such as Dreamer can perform long-horizon planning through latent dynamics models, but they typically have weaker perception and limited semantic understanding.
+
+In this work, we explore the DreamerVLA that combines the strengths of both approaches. We first use a VLA encoder to embed multimodal observations, including images, language instructions, and proprioceptive states, into a fixed-length representation. A bottleneck module extracts a compact latent state that contains key physical information. A world model is then trained in the latent space, and an actor–critic module performs imagined rollouts to optimize the policy. This framework aims to integrate semantic perception with model-based planning for embodied decision making.
+\end{abstract}

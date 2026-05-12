@@ -19,7 +19,9 @@
 #   CUDA_VISIBLE_DEVICES   default: 4 (eval is single-GPU only)
 #   NUM_EPISODES           default: 10
 #   HISTORY_LENGTH         default: 2
-#   ACTION_STEPS           default: 10
+#   ACTION_STEPS           default: 5 for libero_goal/object, 10 otherwise
+#   VLA_INIT_CKPT          default: data/ckpts/VLA_model_256/${TASK_SUITE} if present
+#   ENCODER_TIME_HORIZON   default: ACTION_STEPS
 #   MUJOCO_GL              default: osmesa  (set to `egl` to retry GPU rendering)
 #   OUT_DIR                default: data/outputs/eval/eval_libero_vla/<suite>_<timestamp>
 #
@@ -37,7 +39,17 @@ cd "${PROJECT_ROOT}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4}"
 NUM_EPISODES="${NUM_EPISODES:-10}"
 HISTORY_LENGTH="${HISTORY_LENGTH:-2}"
-ACTION_STEPS="${ACTION_STEPS:-10}"
+if [[ -z "${ACTION_STEPS:-}" ]]; then
+  case "${TASK_SUITE}" in
+    libero_goal|libero_object) ACTION_STEPS=5 ;;
+    *) ACTION_STEPS=10 ;;
+  esac
+fi
+VLA_INIT_CKPT="${VLA_INIT_CKPT:-}"
+if [[ -z "${VLA_INIT_CKPT}" && -d "${PROJECT_ROOT}/data/ckpts/VLA_model_256/${TASK_SUITE}" ]]; then
+  VLA_INIT_CKPT="${PROJECT_ROOT}/data/ckpts/VLA_model_256/${TASK_SUITE}"
+fi
+ENCODER_TIME_HORIZON="${ENCODER_TIME_HORIZON:-${ACTION_STEPS}}"
 
 # ── GL / rendering backend ───────────────────────────────────────────────
 # osmesa: software (CPU) rendering — slow but no GL driver bugs
@@ -70,12 +82,22 @@ echo "  ckpt_path           = $CKPT_PATH"
 echo "  num_episodes        = $NUM_EPISODES per task"
 echo "  history_length      = $HISTORY_LENGTH"
 echo "  action_steps        = $ACTION_STEPS"
+echo "  vla_init_ckpt       = ${VLA_INIT_CKPT:-<config-default>}"
+echo "  encoder_time_horizon= $ENCODER_TIME_HORIZON"
 echo "  out_dir             = $OUT_DIR"
 echo "  full_log            = $FULL_LOG"
 echo "  MUJOCO_GL           = $MUJOCO_GL"
 echo "  LIBGL_DRIVERS_PATH  = $LIBGL_DRIVERS_PATH"
 echo "  CUDA_VISIBLE_DEVICES= $CUDA_VISIBLE_DEVICES"
 echo
+
+EXTRA_OVERRIDES=(
+  "encoder.time_horizon=${ENCODER_TIME_HORIZON}"
+)
+if [[ -n "${VLA_INIT_CKPT}" ]]; then
+  EXTRA_OVERRIDES+=("init.vla_ckpt_path=${VLA_INIT_CKPT}")
+  EXTRA_OVERRIDES+=("encoder.model_path=${VLA_INIT_CKPT}")
+fi
 
 CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
 python -u -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=1 \
@@ -87,4 +109,5 @@ python -u -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=1 \
   "eval.num_episodes_per_task=$NUM_EPISODES" \
   "++eval.history_length=$HISTORY_LENGTH" \
   "eval.action_steps=$ACTION_STEPS" \
+  "${EXTRA_OVERRIDES[@]}" \
   "$@" 2>&1 | tee "$FULL_LOG"

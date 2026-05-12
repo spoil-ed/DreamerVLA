@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any
@@ -15,11 +16,12 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.models.encoder.protocol import EncoderInputBatch
 from src.models.encoder.rynnvla_encoder import RynnVLAEncoder
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _project_path(path: str | Path) -> Path:
@@ -68,12 +70,26 @@ def _init_distributed() -> tuple[int, int, int, torch.device]:
     return rank, world_size, local_rank, device
 
 
-def _is_complete_hdf5(path: Path) -> bool:
+def _is_complete_hdf5(path: Path, *, require_actor_sequence: bool = False) -> bool:
     if not path.is_file():
         return False
     try:
         with h5py.File(path, "r") as handle:
-            return bool(handle.attrs.get("complete", False))
+            if not bool(handle.attrs.get("complete", False)):
+                return False
+            if not require_actor_sequence:
+                return True
+            if not bool(handle.attrs.get("save_actor_sequence", False)):
+                return False
+            data_group = handle.get("data")
+            if data_group is None:
+                return False
+            for demo_key in data_group.keys():
+                demo = data_group[demo_key]
+                for key in ("actor_hidden_states", "actor_input_ids", "actor_attention_mask", "actor_seq_lens"):
+                    if key not in demo:
+                        return False
+            return True
     except OSError:
         return False
 
@@ -94,6 +110,62 @@ def _compression(name: str) -> str | None:
     if normalized not in {"lzf", "gzip"}:
         raise ValueError(f"Unsupported HDF5 compression: {name}")
     return normalized
+
+
+def _prepare_actor_sequence_arrays(
+    *,
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor,
+    input_ids: list[list[int]],
+    target_token_id: int,
+) -> dict[str, np.ndarray]:
+    """Prepare full VLA token-hidden sequence arrays for HDF5 storage.
+
+    ``VLAActionHeadActor`` sequence mode expects the hidden states before the
+    action trigger, plus ``input_ids`` that contain the trigger token.  The
+    backbone returns hidden states for the current prompt only, so we append the
+    trigger to the stored ids and mark it valid in the actor attention mask.
+    """
+    if hidden_states.ndim != 3:
+        raise ValueError(f"hidden_states must be [B,L,D], got {tuple(hidden_states.shape)}")
+    if attention_mask.ndim != 2:
+        raise ValueError(f"attention_mask must be [B,L], got {tuple(attention_mask.shape)}")
+    batch_size, seq_len, _hidden_dim = hidden_states.shape
+    if attention_mask.shape != (batch_size, seq_len):
+        raise ValueError(
+            "attention_mask shape mismatch: "
+            f"got {tuple(attention_mask.shape)}, expected {(batch_size, seq_len)}"
+        )
+    if len(input_ids) != batch_size:
+        raise ValueError(f"input_ids batch mismatch: got {len(input_ids)}, expected {batch_size}")
+
+    input_rows = np.zeros((batch_size, seq_len + 1), dtype=np.int32)
+    mask_rows = np.zeros((batch_size, seq_len + 1), dtype=np.bool_)
+    seq_lens = np.zeros((batch_size,), dtype=np.int32)
+    lengths = attention_mask.to(dtype=torch.long).sum(dim=1).detach().cpu().tolist()
+    for idx, valid_len_raw in enumerate(lengths):
+        valid_len = int(valid_len_raw)
+        if valid_len < 1:
+            raise ValueError(f"sample {idx} has no valid hidden tokens")
+        if valid_len > seq_len:
+            raise ValueError(f"sample {idx} valid_len={valid_len} exceeds seq_len={seq_len}")
+        if len(input_ids[idx]) < valid_len:
+            raise ValueError(
+                f"sample {idx} input_ids shorter than attention_mask: "
+                f"len(input_ids)={len(input_ids[idx])}, valid_len={valid_len}"
+            )
+        row_ids = [int(tok) for tok in input_ids[idx][:valid_len]]
+        input_rows[idx, :valid_len] = np.asarray(row_ids, dtype=np.int32)
+        input_rows[idx, valid_len] = int(target_token_id)
+        mask_rows[idx, : valid_len + 1] = True
+        seq_lens[idx] = valid_len
+
+    return {
+        "actor_hidden_states": hidden_states.detach().cpu().numpy(),
+        "actor_input_ids": input_rows,
+        "actor_attention_mask": mask_rows,
+        "actor_seq_lens": seq_lens,
+    }
 
 
 def _source_stats(source_path: Path, args: argparse.Namespace) -> dict[str, Any]:
@@ -227,9 +299,26 @@ def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEnco
         resolution=args.resolution,
         action_dim=args.action_dim,
         time_horizon=args.time_horizon,
+        action_head_type=args.action_head_type,
         pool=args.pool,
         freeze_backbone=True,
     ).to(device)
+    if args.encoder_state_ckpt:
+        payload = torch.load(args.encoder_state_ckpt, map_location="cpu", weights_only=False)
+        encoder_state = payload.get("state_dicts", {}).get("encoder")
+        if encoder_state is None:
+            raise RuntimeError(f"{args.encoder_state_ckpt} has no state_dicts.encoder")
+        missing, unexpected = encoder.load_state_dict(encoder_state, strict=False)
+        if missing:
+            print(
+                f"[rynn-hidden] warning: missing encoder keys while loading "
+                f"{args.encoder_state_ckpt}: {len(missing)}"
+            )
+        if unexpected:
+            print(
+                f"[rynn-hidden] warning: unexpected encoder keys while loading "
+                f"{args.encoder_state_ckpt}: {len(unexpected)}"
+            )
     encoder.eval()
     for parameter in encoder.parameters():
         parameter.requires_grad = False
@@ -243,7 +332,10 @@ def _encode_chunk(
     image_keys: tuple[str, ...],
     start: int,
     end: int,
-) -> np.ndarray:
+    *,
+    save_actor_sequence: bool,
+    target_token_id: int,
+) -> dict[str, np.ndarray]:
     prompt_text: list[str] = []
     conversations: list[list[dict[str, str]]] = []
     image_batches: list[list[Any]] = []
@@ -262,8 +354,18 @@ def _encode_chunk(
         task_type=None,
     )
     with torch.no_grad():
-        hidden = encoder.encode_inputs(batch).hidden.detach().cpu().numpy()
-    return hidden
+        encoded = encoder.encode_inputs(batch)
+    result = {"hidden": encoded.hidden.detach().cpu().numpy()}
+    if save_actor_sequence:
+        result.update(
+            _prepare_actor_sequence_arrays(
+                hidden_states=encoded.hidden_states,
+                attention_mask=encoded.attention_mask,
+                input_ids=encoded.input_ids,
+                target_token_id=int(target_token_id),
+            )
+        )
+    return result
 
 
 def _write_source_sidecar(
@@ -288,6 +390,7 @@ def _write_source_sidecar(
     demos_written = 0
     frames_written = 0
     hidden_dim: int | None = None
+    actor_seq_len: int | None = None
 
     with h5py.File(source_path, "r", swmr=True, libver="latest") as source, h5py.File(tmp_path, "w", libver="latest") as out:
         data_group = source["data"]
@@ -314,16 +417,23 @@ def _write_source_sidecar(
             demo_out.attrs["length"] = length
             demo_out.attrs["task_prompt"] = prompt
             dset = None
+            actor_hidden_dset = None
+            actor_input_ids_dset = None
+            actor_attention_mask_dset = None
+            actor_seq_lens_dset = None
             for start in range(0, length, int(args.chunk_size)):
                 end = min(start + int(args.chunk_size), length)
-                hidden = _encode_chunk(
+                encoded = _encode_chunk(
                     encoder=encoder,
                     prompt=prompt,
                     obs_group=obs_group,
                     image_keys=image_keys,
                     start=start,
                     end=end,
+                    save_actor_sequence=bool(args.save_actor_sequence),
+                    target_token_id=int(args.action_trigger_token_id),
                 )
+                hidden = encoded["hidden"]
                 if dset is None:
                     hidden_dim = int(hidden.shape[-1])
                     dset = demo_out.create_dataset(
@@ -336,6 +446,67 @@ def _write_source_sidecar(
                     dset.attrs["hidden_dim"] = hidden_dim
                     dset.attrs["source_dtype"] = "float32"
                 dset[start:end] = hidden.astype(hidden_dtype, copy=False)
+                if bool(args.save_actor_sequence):
+                    actor_hidden = encoded["actor_hidden_states"]
+                    actor_input_ids = encoded["actor_input_ids"]
+                    actor_attention_mask = encoded["actor_attention_mask"]
+                    actor_seq_lens = encoded["actor_seq_lens"]
+                    chunk_seq_len = int(actor_hidden.shape[1])
+                    if actor_hidden_dset is None:
+                        actor_seq_len = chunk_seq_len
+                        actor_hidden_dset = demo_out.create_dataset(
+                            "actor_hidden_states",
+                            shape=(length, actor_seq_len, hidden_dim),
+                            maxshape=(length, None, hidden_dim),
+                            dtype=hidden_dtype,
+                            chunks=(1, actor_seq_len, hidden_dim),
+                            compression=compression,
+                        )
+                        actor_input_ids_dset = demo_out.create_dataset(
+                            "actor_input_ids",
+                            shape=(length, actor_seq_len + 1),
+                            maxshape=(length, None),
+                            dtype=np.int32,
+                            chunks=(min(max(1, int(args.chunk_size)), length), actor_seq_len + 1),
+                            compression=compression,
+                        )
+                        actor_attention_mask_dset = demo_out.create_dataset(
+                            "actor_attention_mask",
+                            shape=(length, actor_seq_len + 1),
+                            maxshape=(length, None),
+                            dtype=np.bool_,
+                            chunks=(min(max(1, int(args.chunk_size)), length), actor_seq_len + 1),
+                            compression=compression,
+                        )
+                        actor_seq_lens_dset = demo_out.create_dataset(
+                            "actor_seq_lens",
+                            shape=(length,),
+                            dtype=np.int32,
+                            chunks=(min(max(1, int(args.chunk_size)), length),),
+                            compression=compression,
+                        )
+                        actor_hidden_dset.attrs["hidden_dim"] = hidden_dim
+                        actor_hidden_dset.attrs["source_dtype"] = "float32"
+                        actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
+                        actor_input_ids_dset.attrs["target_token_id"] = int(args.action_trigger_token_id)
+                    elif chunk_seq_len > int(actor_hidden_dset.shape[1]):
+                        actor_seq_len = chunk_seq_len
+                        actor_hidden_dset.resize((length, actor_seq_len, hidden_dim))
+                        actor_input_ids_dset.resize((length, actor_seq_len + 1))
+                        actor_attention_mask_dset.resize((length, actor_seq_len + 1))
+                        actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
+
+                    target_seq_len = int(actor_hidden_dset.shape[1])
+                    if chunk_seq_len < target_seq_len:
+                        pad = target_seq_len - chunk_seq_len
+                        actor_hidden = np.pad(actor_hidden, ((0, 0), (0, pad), (0, 0)))
+                        actor_input_ids = np.pad(actor_input_ids, ((0, 0), (0, pad)))
+                        actor_attention_mask = np.pad(actor_attention_mask, ((0, 0), (0, pad)))
+
+                    actor_hidden_dset[start:end] = actor_hidden.astype(hidden_dtype, copy=False)
+                    actor_input_ids_dset[start:end] = actor_input_ids.astype(np.int32, copy=False)
+                    actor_attention_mask_dset[start:end] = actor_attention_mask.astype(np.bool_, copy=False)
+                    actor_seq_lens_dset[start:end] = actor_seq_lens.astype(np.int32, copy=False)
                 frames_written += end - start
             demos_written += 1
             _write_rank_progress(
@@ -357,7 +528,11 @@ def _write_source_sidecar(
         out.attrs["image_keys"] = json.dumps(list(image_keys))
         out.attrs["resolution"] = int(args.resolution)
         out.attrs["model_path"] = str(args.model_path)
+        out.attrs["encoder_state_ckpt"] = str(args.encoder_state_ckpt or "")
         out.attrs["pool"] = str(args.pool)
+        out.attrs["save_actor_sequence"] = bool(args.save_actor_sequence)
+        out.attrs["action_trigger_token_id"] = int(args.action_trigger_token_id)
+        out.attrs["actor_sequence_dim"] = int(actor_seq_len or 0)
         out.attrs["complete"] = True
 
     tmp_path.replace(output_path)
@@ -367,6 +542,8 @@ def _write_source_sidecar(
         "demos": demos_written,
         "frames": frames_written,
         "hidden_dim": int(hidden_dim or 0),
+        "actor_sequence_dim": int(actor_seq_len or 0),
+        "save_actor_sequence": bool(args.save_actor_sequence),
     }
 
 
@@ -384,10 +561,25 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256_rynn_hidden"),
+        default=str(
+            PROJECT_ROOT
+            / "data"
+            / "processed_data"
+            / "libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000"
+        ),
     )
     parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
     parser.add_argument("--hidden-key", default="obs_embedding")
+    parser.add_argument(
+        "--save-actor-sequence",
+        action="store_true",
+        help=(
+            "Also store full token hidden sequences for native VLA action-head "
+            "training/eval: actor_hidden_states, actor_input_ids, "
+            "actor_attention_mask, actor_seq_lens."
+        ),
+    )
+    parser.add_argument("--action-trigger-token-id", type=int, default=10004)
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--output-dtype", default="float16", choices=["float16", "float32"])
     parser.add_argument("--compression", default="none", choices=["none", "lzf", "gzip"])
@@ -395,7 +587,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-demos-per-file", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-global-progress", action="store_true")
-    parser.add_argument("--model-path", default=_default_ckpt_path("VLA_model_256", "libero_10"))
+    parser.add_argument("--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal"))
+    parser.add_argument("--encoder-state-ckpt", default=None)
     parser.add_argument("--tokenizer-path", default=_default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"))
     parser.add_argument(
         "--text-tokenizer-path",
@@ -411,7 +604,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--action-dim", type=int, default=7)
-    parser.add_argument("--time-horizon", type=int, default=10)
+    parser.add_argument("--time-horizon", type=int, default=5)
+    parser.add_argument("--action-head-type", default="legacy", choices=["legacy", "pi0_query"])
     parser.add_argument("--pool", default="mean", choices=["mean", "last"])
     return parser.parse_args()
 
@@ -514,7 +708,10 @@ def main() -> None:
         if output_path.exists():
             if args.overwrite:
                 output_path.unlink()
-            elif _is_complete_hdf5(output_path):
+            elif _is_complete_hdf5(
+                output_path,
+                require_actor_sequence=bool(args.save_actor_sequence),
+            ):
                 print(f"[rank{rank}] skip complete {output_path}")
                 completed_demos += int(source_stat["demos"])
                 completed_frames += int(source_stat["frames"])

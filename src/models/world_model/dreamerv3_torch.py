@@ -366,6 +366,39 @@ class DreamerV3RSSM(nn.Module):
             "post_logits": torch.stack(post_logits_seq, dim=1),
         }
 
+    def observe_next(
+        self,
+        latent: DreamerV3LatentState,
+        token: torch.Tensor,
+        action: torch.Tensor,
+        is_first: torch.Tensor | bool | None = None,
+    ) -> DreamerV3LatentState:
+        if token.ndim != 2:
+            raise ValueError(f"token must be [B,D], got {tuple(token.shape)}")
+        batch = int(token.shape[0])
+        if action.ndim == 3:
+            action = action[:, 0]
+        if action.ndim == 1:
+            action = action[None]
+        if action.shape[0] != batch:
+            raise ValueError(f"action batch mismatch: got {action.shape[0]}, expected {batch}")
+        if is_first is None:
+            reset = torch.zeros(batch, device=token.device, dtype=torch.bool)
+        elif isinstance(is_first, bool):
+            reset = torch.full((batch,), bool(is_first), device=token.device, dtype=torch.bool)
+        else:
+            reset = is_first.to(device=token.device).reshape(batch).bool()
+        keep = (~reset).to(dtype=token.dtype).view(batch, 1)
+        deter = latent.deter.to(device=token.device, dtype=token.dtype) * keep
+        stoch = latent.stoch.to(device=token.device, dtype=token.dtype) * keep.view(batch, 1, 1)
+        action = action.to(device=token.device, dtype=token.dtype) * keep
+        deter = self._core(deter, stoch, action)
+        prior_logits = self._prior(deter)
+        del prior_logits
+        post_logits = self._posterior_logits(deter, token)
+        post_stoch = self._sample(post_logits)
+        return DreamerV3LatentState(deter=deter, stoch=post_stoch, logits=post_logits)
+
     def kl_loss(self, post_logits: torch.Tensor, prior_logits: torch.Tensor) -> dict[str, torch.Tensor]:
         dyn = self._kl(post_logits.detach(), prior_logits)
         rep = self._kl(post_logits, prior_logits.detach())
@@ -558,6 +591,142 @@ class MLPHead(nn.Module):
         return self.net(x)
 
 
+class FullHiddenSequenceDecoder(nn.Module):
+    """Decode RSSM features into a fixed-length VLA token hidden sequence."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        sequence_length: int,
+        hidden_dim: int = 4096,
+        query_dim: int = 1024,
+        layers: int = 1,
+        units: int = 2048,
+        act: str = "silu",
+    ) -> None:
+        super().__init__()
+        self.sequence_length = int(sequence_length)
+        self.hidden_dim = int(hidden_dim)
+        self.query_dim = int(query_dim)
+        if self.sequence_length <= 0:
+            raise ValueError(f"sequence_length must be positive, got {sequence_length}")
+        self.feature_proj = MLPHead(in_dim, self.query_dim, layers=1, units=units, act=act)
+        self.position = nn.Parameter(torch.zeros(self.sequence_length, self.query_dim))
+        nn.init.normal_(self.position, std=0.02)
+        mods: list[nn.Module] = []
+        cur = self.query_dim
+        for _ in range(int(layers)):
+            mods.extend([nn.Linear(cur, int(units)), RMSNorm(int(units)), _act(act)])
+            cur = int(units)
+        mods.append(nn.Linear(cur, self.hidden_dim))
+        self.token_head = nn.Sequential(*mods)
+
+    def forward(self, feature: torch.Tensor) -> torch.Tensor:
+        context = self.feature_proj(feature).unsqueeze(-2)
+        token_query = context + self.position.to(device=feature.device, dtype=context.dtype)
+        return self.token_head(token_query)
+
+
+class CompactTokenSequenceAutoencoder(nn.Module):
+    """Compress VLA token hidden states into a small token latent and decode a tail context."""
+
+    def __init__(
+        self,
+        in_dim: int = 4096,
+        latent_tokens: int = 32,
+        latent_dim: int = 1024,
+        target_tokens: int = 64,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.in_dim = int(in_dim)
+        self.latent_tokens = int(latent_tokens)
+        self.latent_dim = int(latent_dim)
+        self.target_tokens = int(target_tokens)
+        if self.latent_tokens <= 0 or self.target_tokens <= 0:
+            raise ValueError("latent_tokens and target_tokens must be positive")
+        self.input_norm = RMSNorm(self.in_dim)
+        self.input_proj = nn.Linear(self.in_dim, self.latent_dim)
+        self.latent_queries = nn.Parameter(torch.zeros(self.latent_tokens, self.latent_dim))
+        self.decoder_queries = nn.Parameter(torch.zeros(self.target_tokens, self.latent_dim))
+        nn.init.normal_(self.latent_queries, std=0.02)
+        nn.init.normal_(self.decoder_queries, std=0.02)
+        self.encoder_attn = nn.MultiheadAttention(
+            self.latent_dim,
+            int(num_heads),
+            dropout=float(dropout),
+            batch_first=True,
+        )
+        self.decoder_attn = nn.MultiheadAttention(
+            self.latent_dim,
+            int(num_heads),
+            dropout=float(dropout),
+            batch_first=True,
+        )
+        self.latent_norm = RMSNorm(self.latent_dim)
+        self.decode_norm = RMSNorm(self.latent_dim)
+        self.output_proj = nn.Linear(self.latent_dim, self.in_dim)
+
+    @staticmethod
+    def tail_tokens(hidden: torch.Tensor, mask: torch.Tensor | None, target_tokens: int) -> tuple[torch.Tensor, torch.Tensor]:
+        if hidden.ndim < 3:
+            raise ValueError(f"hidden must end with [L,D], got {tuple(hidden.shape)}")
+        length = int(hidden.shape[-2])
+        target_tokens = int(target_tokens)
+        if mask is None:
+            mask = torch.ones(*hidden.shape[:-1], device=hidden.device, dtype=torch.bool)
+        mask = mask.to(device=hidden.device).bool()
+        valid = mask.long().sum(dim=-1).clamp_min(1)
+        offsets = torch.arange(target_tokens, device=hidden.device)
+        indices = valid.unsqueeze(-1) - target_tokens + offsets
+        target_mask = indices >= 0
+        indices = indices.clamp(0, length - 1)
+        gather_index = indices.unsqueeze(-1).expand(*indices.shape, int(hidden.shape[-1]))
+        tail = torch.gather(hidden, dim=-2, index=gather_index)
+        return tail, target_mask
+
+    def encode(self, hidden: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+        original_shape = hidden.shape[:-2]
+        length = int(hidden.shape[-2])
+        hidden_flat = hidden.reshape(-1, length, int(hidden.shape[-1]))
+        if hidden_flat.shape[-1] != self.in_dim:
+            raise ValueError(f"hidden dim mismatch: got {hidden_flat.shape[-1]}, expected {self.in_dim}")
+        if mask is None:
+            mask_flat = torch.ones(hidden_flat.shape[:2], device=hidden.device, dtype=torch.bool)
+        else:
+            mask_flat = mask.reshape(-1, length).to(device=hidden.device).bool()
+        key = self.input_proj(self.input_norm(hidden_flat))
+        queries = self.latent_queries.to(device=hidden.device, dtype=key.dtype).unsqueeze(0).expand(key.shape[0], -1, -1)
+        latent, _ = self.encoder_attn(queries, key, key, key_padding_mask=~mask_flat)
+        latent = self.latent_norm(latent + queries)
+        return latent.reshape(*original_shape, self.latent_tokens, self.latent_dim)
+
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        original_shape = latent.shape[:-2]
+        latent_flat = latent.reshape(-1, self.latent_tokens, self.latent_dim)
+        queries = self.decoder_queries.to(device=latent.device, dtype=latent.dtype).unsqueeze(0).expand(
+            latent_flat.shape[0],
+            -1,
+            -1,
+        )
+        decoded, _ = self.decoder_attn(queries, latent_flat, latent_flat)
+        decoded = self.decode_norm(decoded + queries)
+        decoded = self.output_proj(decoded)
+        return decoded.reshape(*original_shape, self.target_tokens, self.in_dim)
+
+    def forward(self, hidden: torch.Tensor, mask: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+        latent = self.encode(hidden, mask)
+        reconstruction = self.decode(latent)
+        target, target_mask = self.tail_tokens(hidden, mask, self.target_tokens)
+        return {
+            "latent": latent,
+            "reconstruction": reconstruction,
+            "target": target,
+            "target_mask": target_mask,
+        }
+
+
 def symexp(x: torch.Tensor) -> torch.Tensor:
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
 
@@ -650,9 +819,11 @@ class BinaryRewardHead(nn.Module):
         units: int = 1024,
         act: str = "silu",
         init_logit: float = -5.0,
+        pos_weight: float | None = None,
     ) -> None:
         super().__init__()
         self.net = MLPHead(in_dim, 1, layers=layers, units=units, act=act)
+        self.pos_weight = None if pos_weight is None else float(pos_weight)
         final = self.net.net[-1]
         if isinstance(final, nn.Linear) and final.bias is not None:
             nn.init.constant_(final.bias, float(init_logit))
@@ -663,7 +834,10 @@ class BinaryRewardHead(nn.Module):
     def loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         logits = logits.squeeze(-1).float()
         target = target.to(device=logits.device, dtype=torch.float32).detach().clamp(0.0, 1.0)
-        return F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        pos_weight = None
+        if self.pos_weight is not None:
+            pos_weight = torch.tensor(self.pos_weight, device=logits.device, dtype=logits.dtype)
+        return F.binary_cross_entropy_with_logits(logits, target, reduction="none", pos_weight=pos_weight)
 
     def pred(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(logits.squeeze(-1).float()).to(dtype=logits.dtype)
@@ -676,6 +850,7 @@ def _make_reward_head(
     act: str,
     reward_head_type: str = "twohot",
     reward_init_logit: float = -5.0,
+    reward_pos_weight: float | None = None,
 ) -> nn.Module:
     reward_head_type = str(reward_head_type).lower()
     if reward_head_type in {"binary", "bernoulli", "sigmoid"}:
@@ -685,6 +860,7 @@ def _make_reward_head(
             units=hidden,
             act=act,
             init_logit=reward_init_logit,
+            pos_weight=reward_pos_weight,
         )
     if reward_head_type not in {"twohot", "symexp_twohot", "regression", "mse"}:
         raise ValueError(f"Unsupported reward_head_type: {reward_head_type}")
@@ -798,6 +974,18 @@ class DreamerV3ActorAdapterMixin:
         stoch = self.rssm._sample(logits)
         return DreamerV3LatentState(deter=deter, stoch=stoch, logits=logits)
 
+    def observe_next(
+        self,
+        latent: DreamerV3LatentState,
+        hidden: torch.Tensor,
+        actions: torch.Tensor,
+        is_first: torch.Tensor | bool | None = None,
+    ) -> DreamerV3LatentState:
+        device = _module_device(self, hidden.device)
+        obs = self._single_observation_sequence(hidden.to(device=device))
+        enc = self.encoder(obs)
+        return self.rssm.observe_next(latent, enc[:, 0], actions, is_first=is_first)
+
     def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
         return latent.feature()
 
@@ -845,6 +1033,13 @@ class DreamerV3ActorAdapterMixin:
             return self.encode_latent(batch["hidden"])
         if mode == "predict_next":
             return self.predict_next(batch["latent"], batch["actions"])
+        if mode == "observe_next":
+            return self.observe_next(
+                batch["latent"],
+                batch["hidden"],
+                batch["actions"],
+                is_first=batch.get("is_first"),
+            )
         if mode == "reward":
             if "next_latent" in batch:
                 return self.reward(batch["latent"], batch.get("actions"), batch["next_latent"])
@@ -853,6 +1048,10 @@ class DreamerV3ActorAdapterMixin:
             return self.continue_prob(batch["latent"])
         if mode == "actor_input":
             return self.actor_input(batch["latent"])
+        if mode == "actor_input_sequence":
+            if not hasattr(self, "actor_input_sequence"):
+                raise ValueError("actor_input_sequence is not implemented for this world model")
+            return self.actor_input_sequence(batch["latent"])
         if mode == "critic_input":
             return self.critic_input(batch["latent"])
         if mode == "observe_sequence":
@@ -912,6 +1111,7 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         reward_bins: int = 255,
         reward_head_type: str = "twohot",
         reward_init_logit: float = -5.0,
+        reward_pos_weight: float | None = None,
         contdisc: bool = True,
         horizon: int = 333,
         dyn_scale: float = 1.0,
@@ -953,6 +1153,7 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act,
             reward_head_type=reward_head_type,
             reward_init_logit=reward_init_logit,
+            reward_pos_weight=reward_pos_weight,
         )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
@@ -1051,6 +1252,7 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         reward_bins: int = 255,
         reward_head_type: str = "twohot",
         reward_init_logit: float = -5.0,
+        reward_pos_weight: float | None = None,
         contdisc: bool = True,
         horizon: int = 333,
         dyn_scale: float = 1.0,
@@ -1105,6 +1307,7 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act,
             reward_head_type=reward_head_type,
             reward_init_logit=reward_init_logit,
+            reward_pos_weight=reward_pos_weight,
         )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
@@ -1245,6 +1448,7 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
         reward_bins: int = 255,
         reward_head_type: str = "twohot",
         reward_init_logit: float = -5.0,
+        reward_pos_weight: float | None = None,
         contdisc: bool = True,
         horizon: int = 333,
     ) -> None:
@@ -1293,6 +1497,7 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
             act,
             reward_head_type=reward_head_type,
             reward_init_logit=reward_init_logit,
+            reward_pos_weight=reward_pos_weight,
         )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
@@ -1471,6 +1676,7 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
         reward_bins: int = 255,
         reward_head_type: str = "twohot",
         reward_init_logit: float = -5.0,
+        reward_pos_weight: float | None = None,
         contdisc: bool = True,
         horizon: int = 333,
         dyn_scale: float = 1.0,
@@ -1481,6 +1687,12 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
         hidden_rec_scale: float = 100.0,
         hidden_decoder_layers: int = 1,
         hidden_decoder_units: int = 2048,
+        full_hidden_rec_scale: float = 0.0,
+        actor_sequence_length: int = 0,
+        actor_input_kind: str = "hidden",
+        sequence_decoder_query_dim: int = 1024,
+        sequence_decoder_layers: int = 1,
+        sequence_decoder_units: int = 2048,
     ) -> None:
         super().__init__()
         if latent_dim is not None:
@@ -1488,6 +1700,9 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
         self.obs_dim = int(obs_dim)
         self.image_channels = int(image_channels)
         self.image_size = int(image_size)
+        self.actor_input_kind = str(actor_input_kind).lower()
+        if self.actor_input_kind not in {"hidden", "feature"}:
+            raise ValueError("actor_input_kind must be one of: hidden, feature")
         self.encoder = _RynnBackboneObsEncoder(
             obs_dim=obs_dim,
             embed_dim=embed_dim,
@@ -1526,6 +1741,19 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
             units=int(hidden_decoder_units),
             act=act,
         )
+        self.actor_sequence_length = int(actor_sequence_length)
+        self.full_hidden_rec_scale = float(full_hidden_rec_scale)
+        self.sequence_decoder: nn.Module | None = None
+        if self.actor_sequence_length > 0:
+            self.sequence_decoder = FullHiddenSequenceDecoder(
+                feat_dim,
+                sequence_length=self.actor_sequence_length,
+                hidden_dim=self.obs_dim,
+                query_dim=int(sequence_decoder_query_dim),
+                layers=int(sequence_decoder_layers),
+                units=int(sequence_decoder_units),
+                act=act,
+            )
         self.reward_head = _make_reward_head(
             feat_dim,
             reward_bins,
@@ -1533,6 +1761,7 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
             act,
             reward_head_type=reward_head_type,
             reward_init_logit=reward_init_logit,
+            reward_pos_weight=reward_pos_weight,
         )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
         self.dyn_scale = float(dyn_scale)
@@ -1582,6 +1811,19 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
             logits=seq["post_logits"][:, 0],
         )
 
+    def observe_next(
+        self,
+        latent: DreamerV3LatentState,
+        hidden: torch.Tensor,
+        actions: torch.Tensor,
+        is_first: torch.Tensor | bool | None = None,
+    ) -> DreamerV3LatentState:
+        device = _module_device(self, hidden.device)
+        enc = self.encoder(hidden.to(device=device))
+        if enc.ndim != 3 or enc.shape[1] != 1:
+            raise ValueError(f"Rynn observe_next expected one obs embedding, got encoder output {tuple(enc.shape)}")
+        return self.rssm.observe_next(latent, enc[:, 0], actions, is_first=is_first)
+
     def observe_sequence(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
         obs_embedding = batch["obs_embedding"]
         device = _module_device(self, obs_embedding.device)
@@ -1597,7 +1839,14 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
         return {"latent": latent, "feat": latent.feature()}
 
     def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
+        if self.actor_input_kind == "feature":
+            return latent.feature()
         return self.hidden_decoder(latent.feature())
+
+    def actor_input_sequence(self, latent: DreamerV3LatentState) -> torch.Tensor:
+        if self.sequence_decoder is None:
+            raise ValueError("actor_input_sequence requires actor_sequence_length > 0")
+        return self.sequence_decoder(latent.feature())
 
     def critic_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
         return latent.feature()
@@ -1626,6 +1875,29 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
         hidden_pred_norm = F.normalize(hidden_pred.float(), dim=-1)
         hidden_target_norm = F.normalize(hidden_target.float(), dim=-1)
         hidden_cosine = 1.0 - (hidden_pred_norm * hidden_target_norm).sum(dim=-1).mean()
+        full_hidden_loss = feat.new_zeros(())
+        full_hidden_cosine = feat.new_zeros(())
+        if self.sequence_decoder is not None and "actor_hidden_states" in batch:
+            full_pred = self.sequence_decoder(feat)
+            full_target = batch["actor_hidden_states"].to(device=full_pred.device, dtype=full_pred.dtype).detach()
+            if full_target.shape[-2] != full_pred.shape[-2]:
+                target_len = int(full_pred.shape[-2])
+                if full_target.shape[-2] > target_len:
+                    full_target = full_target[..., :target_len, :]
+                else:
+                    pad = target_len - int(full_target.shape[-2])
+                    full_target = F.pad(full_target, (0, 0, 0, pad))
+            mask = batch.get("actor_attention_mask")
+            if isinstance(mask, torch.Tensor):
+                mask = mask.to(device=full_pred.device).bool()[..., : full_pred.shape[-2]]
+            else:
+                mask = torch.ones(full_pred.shape[:-1], device=full_pred.device, dtype=torch.bool)
+            mask_f = mask.to(dtype=full_pred.dtype).unsqueeze(-1)
+            denom = mask_f.sum().clamp_min(1.0) * full_pred.shape[-1]
+            full_hidden_loss = ((full_pred.float() - full_target.float()).square() * mask_f.float()).sum() / denom
+            pred_norm = F.normalize(full_pred.float(), dim=-1)
+            target_norm = F.normalize(full_target.float(), dim=-1)
+            full_hidden_cosine = ((1.0 - (pred_norm * target_norm).sum(dim=-1)) * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
         reward_logits = self.reward_head(feat)
         cont_logits = self.continue_head(feat).squeeze(-1)
         reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
@@ -1639,6 +1911,7 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
             + self.dyn_scale * kls["dyn"]
             + self.rep_scale * kls["rep"]
             + self.hidden_rec_scale * hidden_mse
+            + self.full_hidden_rec_scale * full_hidden_loss
             + self.rew_scale * reward_loss
             + self.con_scale * cont_loss
         )
@@ -1653,6 +1926,9 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module
             "hidden_rec_loss": hidden_mse.detach(),
             "hidden_rec_scaled_loss": (self.hidden_rec_scale * hidden_mse).detach(),
             "hidden_cosine_loss": hidden_cosine.detach(),
+            "full_hidden_rec_loss": full_hidden_loss.detach(),
+            "full_hidden_rec_scaled_loss": (self.full_hidden_rec_scale * full_hidden_loss).detach(),
+            "full_hidden_cosine_loss": full_hidden_cosine.detach(),
             "hidden_pred_norm": hidden_pred.detach().float().norm(dim=-1).mean().detach(),
             "hidden_target_norm": hidden_target.detach().float().norm(dim=-1).mean().detach(),
             "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
@@ -1680,5 +1956,6 @@ __all__ = [
     "DreamerV3RSSM",
     "DreamerV3PixelDecoder",
     "DreamerV3TokenDecoder",
+    "CompactTokenSequenceAutoencoder",
     "SymexpTwoHotHead",
 ]

@@ -31,7 +31,7 @@ from src.workspace.base_workspace import BaseWorkspace
 class PretokenizeVLAWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
-    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10"
+    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:

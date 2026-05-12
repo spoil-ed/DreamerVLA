@@ -19,25 +19,28 @@ training:
   save_final: true
 
 init:
-  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
-  model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
   tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
   text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
   chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
   chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
-  time_horizon: 10
+  time_horizon: 5
   pool: mean
   freeze_backbone: true
 
 dataset:
   _target_: src.dataloader.libero_pixel_rynn_hidden_sequence_dataset.LIBEROPixelRynnHiddenSequenceDataset
   hdf5_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
-  hidden_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_rynn_hidden
+  hidden_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000_fullseq
+  expected_model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  expected_encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
+  expected_time_horizon: 5
   sequence_length: 32
   # Hidden was computed from the original 256x256 images. Training only needs
   # RGB reconstruction targets at the DreamerV3 decoder size.
@@ -46,6 +49,8 @@ dataset:
   - agentview_rgb
   - eye_in_hand_rgb
   hidden_key: obs_embedding
+  load_actor_sequence: true
+  actor_sequence_length: 640
   stride: 1
   max_files: null
   max_demos_per_file: null
@@ -90,6 +95,11 @@ world_model:
   rew_scale: 1.0
   con_scale: 1.0
   hidden_rec_scale: 100.0
+  full_hidden_rec_scale: 10.0
+  actor_sequence_length: 640
+  sequence_decoder_query_dim: 1024
+  sequence_decoder_layers: 1
+  sequence_decoder_units: 2048
   hidden_decoder_layers: 1
   hidden_decoder_units: 2048
   reward_bins: 255

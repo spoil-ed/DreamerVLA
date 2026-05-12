@@ -20,7 +20,7 @@ imagination rollout trains the actor and value head:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any, Mapping
 
 import torch
@@ -88,7 +88,7 @@ def world_model_pretrain_step(
 
     world_model.train()
     losses = world_model(flat_batch)
-    loss_tensor = losses.get("loss", losses.get("_loss"))
+    loss_tensor = losses.get("_loss", losses.get("loss"))
     if not isinstance(loss_tensor, torch.Tensor):
         raise KeyError("world_model output must contain Tensor key 'loss' or '_loss'")
 
@@ -122,6 +122,9 @@ def world_model_pretrain_step(
         "hidden_rec_loss": _f("hidden_rec_loss"),
         "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
         "hidden_cosine_loss": _f("hidden_cosine_loss"),
+        "full_hidden_rec_loss": _f("full_hidden_rec_loss"),
+        "full_hidden_rec_scaled_loss": _f("full_hidden_rec_scaled_loss"),
+        "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),
         "hidden_pred_norm": _f("hidden_pred_norm"),
         "hidden_target_norm": _f("hidden_target_norm"),
         "image_static_accuracy": _f("image_static_accuracy"),
@@ -157,6 +160,16 @@ def _world_model_actor_input(world_model: nn.Module, latent: Any) -> torch.Tenso
         if "actor_input" not in message and "Unknown" not in message:
             raise
     return latent.feature()
+
+
+def _world_model_actor_input_sequence(world_model: nn.Module, latent: Any) -> torch.Tensor:
+    try:
+        return world_model({"mode": "actor_input_sequence", "latent": latent})
+    except ValueError as exc:
+        message = str(exc)
+        if "actor_input_sequence" not in message and "Unknown" not in message:
+            raise
+    raise RuntimeError("Configured actor_input_mode=sequence, but world_model has no actor_input_sequence.")
 
 
 def _world_model_critic_input(world_model: nn.Module, latent: Any) -> torch.Tensor:
@@ -255,6 +268,56 @@ def compute_lambda_returns(
     return torch.stack(returns, dim=1)
 
 
+@dataclass
+class ReturnNormalizationOutput:
+    returns: torch.Tensor
+    values: torch.Tensor
+    low: float
+    high: float
+    scale: float
+    enabled: bool
+
+
+def normalize_returns_for_actor_critic(
+    returns: torch.Tensor,
+    values: torch.Tensor,
+    algorithm_cfg: DictConfig,
+) -> ReturnNormalizationOutput:
+    norm_cfg = algorithm_cfg.get("return_normalization", None)
+    mode = "none" if norm_cfg is None else str(norm_cfg.get("mode", "none")).lower()
+    if mode in {"none", "identity", "off", "false", "0"}:
+        return ReturnNormalizationOutput(
+            returns=returns,
+            values=values,
+            low=float("nan"),
+            high=float("nan"),
+            scale=1.0,
+            enabled=False,
+        )
+    if mode not in {"minmax01", "percentile01"}:
+        raise ValueError("algorithm.return_normalization.mode must be one of: none, minmax01")
+
+    low_q = float(norm_cfg.get("low", 0.05))
+    high_q = float(norm_cfg.get("high", 0.95))
+    eps = float(norm_cfg.get("eps", 1.0e-6))
+    flat = returns.detach().float().flatten()
+    low = torch.quantile(flat, low_q).to(device=returns.device, dtype=returns.dtype)
+    high = torch.quantile(flat, high_q).to(device=returns.device, dtype=returns.dtype)
+    scale = (high - low).clamp_min(eps)
+
+    def _map(x: torch.Tensor) -> torch.Tensor:
+        return ((x - low) / scale).clamp(0.0, 1.0)
+
+    return ReturnNormalizationOutput(
+        returns=_map(returns),
+        values=_map(values),
+        low=float(low.detach().cpu()),
+        high=float(high.detach().cpu()),
+        scale=float(scale.detach().cpu()),
+        enabled=True,
+    )
+
+
 def imagine_actor_critic_step(
     policy: nn.Module,
     world_model: nn.Module,
@@ -274,6 +337,9 @@ def imagine_actor_critic_step(
     `forward(feat) -> expected_value` and `log_prob_of(feat, target_values)`.
     """
     horizon = int(algorithm_cfg.imagination_horizon)
+    actor_input_mode = str(algorithm_cfg.get("actor_input_mode", "pooled")).lower()
+    if actor_input_mode not in {"pooled", "sequence"}:
+        raise ValueError("algorithm.actor_input_mode must be one of: pooled, sequence")
     lam = float(algorithm_cfg.lam)
     entropy_coef = float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 3.0e-4)))
     target_tau = float(algorithm_cfg.get("target_critic_tau", 0.02))
@@ -295,6 +361,21 @@ def imagine_actor_critic_step(
     obs = move_mapping_to_device(obs, device)
     with torch.no_grad():
         current_latent = _detach_latent(_world_model_observe_starts(world_model, obs, imag_last))
+        actor_input_ids = None
+        actor_attention_mask = None
+        if actor_input_mode == "sequence":
+            if "actor_input_ids" not in obs or "actor_attention_mask" not in obs:
+                raise RuntimeError(
+                    "algorithm.actor_input_mode=sequence requires obs.actor_input_ids "
+                    "and obs.actor_attention_mask from the dataset."
+                )
+            actor_seq_len = _latent_time_dim(obs["actor_input_ids"])
+            actor_starts = min(int(imag_last) if int(imag_last) > 0 else actor_seq_len, actor_seq_len)
+            actor_input_ids = _flatten_last_steps(obs["actor_input_ids"], actor_starts)
+            actor_attention_mask = _flatten_last_steps(
+                obs["actor_attention_mask"],
+                actor_starts,
+            )
 
     # ── 2. H-step imagination. DreamerV3 stops gradients through imagined
     # states by default (`ac_grads: False` in the official config) and trains
@@ -305,8 +386,18 @@ def imagine_actor_critic_step(
 
     with _temporarily_freeze(world_model):
         for _ in range(horizon):
-            current_actor_feat = _world_model_actor_input(world_model, current_latent).detach().float()
-            action, _, extra = policy({"mode": "sample", "hidden": current_actor_feat, "deterministic": False})
+            if actor_input_mode == "sequence":
+                current_actor_seq = _world_model_actor_input_sequence(world_model, current_latent).detach().float()
+                action, _, extra = policy({
+                    "mode": "sample",
+                    "hidden_states": current_actor_seq,
+                    "input_ids": actor_input_ids,
+                    "attention_mask": actor_attention_mask,
+                    "deterministic": False,
+                })
+            else:
+                current_actor_feat = _world_model_actor_input(world_model, current_latent).detach().float()
+                action, _, extra = policy({"mode": "sample", "hidden": current_actor_feat, "deterministic": False})
             if extra.get("std") is not None:
                 dist = Normal(extra["mean"], extra["std"])
                 log_probs.append(dist.log_prob(action.detach()).sum(dim=-1))
@@ -353,12 +444,18 @@ def imagine_actor_critic_step(
                 lam=lam,
             )
 
+        raw_returns = returns
+        raw_baseline_values = target_values[:, :-1]
+        normalized = normalize_returns_for_actor_critic(raw_returns, raw_baseline_values, algorithm_cfg)
+        returns = normalized.returns
+        baseline_values = normalized.values
+
         return_tracker.update(returns)
-        scale = return_tracker.scale()
+        scale = 1.0 if normalized.enabled else return_tracker.scale()
         scale_tensor = torch.as_tensor(scale, device=device, dtype=returns.dtype).clamp_min(1.0)
         weights = torch.cumprod(float(disc) * continue_stack, dim=1) / float(disc)
         weights = weights[:, :-1]
-        advantages = (returns - target_values[:, :-1]) / scale_tensor
+        advantages = (returns - baseline_values) / scale_tensor
 
         log_prob_stack = torch.stack(log_probs, dim=1)              # [B*K,H]
         entropy_stack = torch.stack(entropies, dim=1) if entropies else torch.zeros_like(log_prob_stack)
@@ -411,6 +508,12 @@ def imagine_actor_critic_step(
         "critic_loss": float(critic_loss.detach().cpu()),
         "returns_mean": float(returns.detach().mean().cpu()),
         "returns_std": float(returns.detach().std().cpu()),
+        "raw_returns_mean": float(raw_returns.detach().mean().cpu()),
+        "raw_returns_std": float(raw_returns.detach().std().cpu()),
+        "return_norm_enabled": float(normalized.enabled),
+        "return_norm_low": normalized.low,
+        "return_norm_high": normalized.high,
+        "return_norm_scale": normalized.scale,
         "return_scale": float(scale),
         "reward_mean": float(reward_stack[:, 1:].detach().mean().cpu()),
         "continue_mean": float(continue_stack[:, 1:].detach().mean().cpu()),
@@ -427,6 +530,7 @@ def imagine_actor_critic_step(
 
 __all__ = [
     "compute_lambda_returns",
+    "normalize_returns_for_actor_critic",
     "imagine_actor_critic_step",
     "world_model_pretrain_step",
 ]

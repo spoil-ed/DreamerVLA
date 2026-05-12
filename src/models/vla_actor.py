@@ -39,6 +39,7 @@ from torch.distributions import Normal
 
 from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
+    PerTokenRegressionActionHead,
 )
 
 
@@ -65,6 +66,7 @@ class VLAActionHeadActor(nn.Module):
         min_log_std: float = -5.0,
         max_log_std: float = 2.0,
         init_action_head_ckpt: str | None = None,
+        action_head_type: str = "legacy",
         **_: Any,
     ) -> None:
         super().__init__()
@@ -75,8 +77,14 @@ class VLAActionHeadActor(nn.Module):
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
         self.adapter_type = str(adapter_type).lower()
+        self.action_head_type = str(action_head_type)
         if self.adapter_type not in {"mlp", "identity"}:
             raise ValueError("adapter_type must be one of {'mlp', 'identity'}")
+        if self.action_head_type not in {"legacy", "pi0_query"}:
+            raise ValueError("action_head_type must be one of {'legacy', 'pi0_query'}")
+        self.action_token_count = (
+            self.time_horizon if self.action_head_type == "pi0_query" else self.time_horizon * self.action_dim
+        )
 
         # ── Adapter: WM feat → action_head's expected hidden space ───────────
         if self.adapter_type == "identity":
@@ -97,7 +105,7 @@ class VLAActionHeadActor(nn.Module):
         # ── VLA ActionHead components (loaded from ckpt below) ──────────────
         # name + dtype must match exactly so the state_dict load lines up.
         self.action_token_embeddings = nn.Embedding(
-            1, self.time_horizon * self.action_dim * self.hidden_size,
+            1, self.action_token_count * self.hidden_size,
         )
         nn.init.normal_(self.action_token_embeddings.weight, std=0.02)
 
@@ -115,12 +123,19 @@ class VLAActionHeadActor(nn.Module):
             num_layers=int(num_encoder_layers),
             norm=nn.LayerNorm(self.reduced_hidden_size),
         )
-        self.output_projection = L1RegressionActionHead(
-            self.reduced_hidden_size,
-            self.reduced_hidden_size,
-            self.time_horizon,
-            self.action_dim,
-        )
+        if self.action_head_type == "pi0_query":
+            self.output_projection = PerTokenRegressionActionHead(
+                self.reduced_hidden_size,
+                self.reduced_hidden_size,
+                self.action_dim,
+            )
+        else:
+            self.output_projection = L1RegressionActionHead(
+                self.reduced_hidden_size,
+                self.reduced_hidden_size,
+                self.time_horizon,
+                self.action_dim,
+            )
 
         # ── Gaussian std for reparameterized exploration ─────────────────────
         self.log_std = nn.Parameter(torch.full((self.action_dim,), float(initial_log_std)))
@@ -150,13 +165,17 @@ class VLAActionHeadActor(nn.Module):
             return
         emb = action_head_sd.get("action_token_embeddings.weight")
         if emb is not None:
-            expected = self.time_horizon * self.action_dim * self.hidden_size
+            expected = self.action_token_count * self.hidden_size
             got = int(emb.shape[-1])
             if got != expected:
-                ckpt_horizon = got // max(self.action_dim * self.hidden_size, 1)
+                if self.action_head_type == "pi0_query":
+                    ckpt_horizon = got // max(self.hidden_size, 1)
+                else:
+                    ckpt_horizon = got // max(self.action_dim * self.hidden_size, 1)
                 raise ValueError(
                     "VLA action head checkpoint is not compatible with this actor: "
-                    f"configured time_horizon={self.time_horizon}, action_dim={self.action_dim}, "
+                    f"configured action_head_type={self.action_head_type}, "
+                    f"time_horizon={self.time_horizon}, action_dim={self.action_dim}, "
                     f"hidden_size={self.hidden_size}, but checkpoint embedding width={got} "
                     f"(implied time_horizon={ckpt_horizon})."
                 )
@@ -177,8 +196,8 @@ class VLAActionHeadActor(nn.Module):
     # Mean prediction
     # ──────────────────────────────────────────────────────────────────────
 
-    def _action_mean(self, wm_feat: torch.Tensor) -> torch.Tensor:
-        """WM feat [B, hidden_dim] → predicted current-step action mean [B, action_dim]."""
+    def _action_chunk_from_single_context(self, wm_feat: torch.Tensor) -> torch.Tensor:
+        """WM feat [B, hidden_dim] -> action chunk [B, T, A]."""
         param_dtype = self.hidden_projection.weight.dtype
         wm_feat = wm_feat.to(dtype=param_dtype)
         bs = wm_feat.shape[0]
@@ -190,7 +209,7 @@ class VLAActionHeadActor(nn.Module):
 
         # 2. Reuse action_head's learnable action token embeddings (70 = T*A slots)
         action_tokens = self.action_token_embeddings.weight.view(
-            1, self.time_horizon * self.action_dim, self.hidden_size,
+            1, self.action_token_count, self.hidden_size,
         ).expand(bs, -1, -1)                                                       # [B, 70, 4096]
         action_tokens_red = self.hidden_projection(action_tokens)                  # [B, 70, 1024]
 
@@ -200,10 +219,136 @@ class VLAActionHeadActor(nn.Module):
 
         # 4. Project the action-token outputs to a [B, time_horizon, action_dim] chunk
         action_part = out[:, 1:, :]                                                # [B, 70, 1024]
-        action_chunk = self.output_projection(action_part)                          # [B, T, A]
+        actions = self.output_projection(action_part)
+        if self.action_head_type == "pi0_query":
+            return actions.reshape(bs, self.time_horizon, self.action_dim)
+        return actions                                                              # [B, T, A]
 
-        # 5. RL imagination uses one action per step → take first step of the chunk
-        return action_chunk[:, 0, :].float()                                        # [B, A]
+    def _action_chunk_from_sequence(
+        self,
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        target_token_id: int = 10004,
+    ) -> torch.Tensor:
+        """Native ActionHead path using full VLA token hidden states.
+
+        This mirrors ``ActionHead.forward`` in the RynnVLA backbone: keep all
+        hidden states before the action trigger token, append learned action
+        tokens, run the action-head Transformer, then project to [B,T,A].
+        """
+        param_dtype = self.hidden_projection.weight.dtype
+        hidden_states = hidden_states.to(dtype=param_dtype)
+        input_ids = input_ids.to(device=hidden_states.device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(device=hidden_states.device)
+
+        batch_size = hidden_states.shape[0]
+        action_tokens = self.action_token_embeddings.weight.view(
+            1, self.action_token_count, self.hidden_size,
+        ).expand(batch_size, -1, -1).to(dtype=param_dtype)
+
+        extracted_hidden_states: list[torch.Tensor] = []
+        extracted_attention_masks: list[torch.Tensor] = []
+        for idx in range(batch_size):
+            target_positions = (input_ids[idx] == int(target_token_id)).nonzero(as_tuple=True)[0]
+            if len(target_positions) == 0:
+                end_pos = int(hidden_states.shape[1])
+            else:
+                end_pos = int(target_positions[0].item())
+            end_pos = max(1, min(end_pos, int(hidden_states.shape[1])))
+            extracted_hidden_states.append(hidden_states[idx, :end_pos, :])
+            if attention_mask is not None:
+                extracted_attention_masks.append(attention_mask[idx, :end_pos])
+
+        combined_states: list[torch.Tensor] = []
+        combined_masks: list[torch.Tensor] = []
+        max_length = 0
+        for idx, context in enumerate(extracted_hidden_states):
+            combined = torch.cat([context, action_tokens[idx]], dim=0)
+            combined_states.append(combined)
+            max_length = max(max_length, int(combined.shape[0]))
+            if attention_mask is not None:
+                mask = torch.cat(
+                    [
+                        extracted_attention_masks[idx],
+                        torch.ones(
+                            self.action_token_count,
+                            device=hidden_states.device,
+                            dtype=attention_mask.dtype,
+                        ),
+                    ],
+                    dim=0,
+                )
+                combined_masks.append(mask)
+
+        padded_states: list[torch.Tensor] = []
+        padded_masks: list[torch.Tensor] = []
+        for idx, combined in enumerate(combined_states):
+            pad = max_length - int(combined.shape[0])
+            if pad > 0:
+                combined = torch.cat(
+                    [
+                        combined,
+                        torch.zeros(pad, self.hidden_size, device=hidden_states.device, dtype=param_dtype),
+                    ],
+                    dim=0,
+                )
+            padded_states.append(combined)
+            if attention_mask is not None:
+                mask = combined_masks[idx]
+                if pad > 0:
+                    mask = torch.cat(
+                        [
+                            mask,
+                            torch.zeros(pad, device=hidden_states.device, dtype=attention_mask.dtype),
+                        ],
+                        dim=0,
+                    )
+                padded_masks.append(mask)
+
+        processed_hidden = torch.stack(padded_states, dim=0)
+        if attention_mask is None:
+            processed_mask = torch.ones(
+                batch_size,
+                processed_hidden.shape[1],
+                device=hidden_states.device,
+                dtype=torch.bool,
+            )
+        else:
+            processed_mask = torch.stack(padded_masks, dim=0).bool()
+
+        projected = self.hidden_projection(processed_hidden)
+        out = self.transformer_encoder(projected, src_key_padding_mask=(~processed_mask))
+
+        action_outputs: list[torch.Tensor] = []
+        for idx, context in enumerate(extracted_hidden_states):
+            start = int(context.shape[0])
+            end = start + self.action_token_count
+            action_outputs.append(out[idx, start:end, :])
+        action_part = torch.stack(action_outputs, dim=0)
+        actions = self.output_projection(action_part)
+        if self.action_head_type == "pi0_query":
+            return actions.reshape(batch_size, self.time_horizon, self.action_dim)
+        return actions
+
+    def _action_chunk(self, batch: dict[str, Any]) -> torch.Tensor:
+        hidden_states = batch.get("hidden_states")
+        input_ids = batch.get("input_ids")
+        if hidden_states is not None:
+            if input_ids is None:
+                raise ValueError("VLAActionHeadActor sequence mode requires `input_ids`.")
+            return self._action_chunk_from_sequence(
+                hidden_states=hidden_states,
+                input_ids=input_ids,
+                attention_mask=batch.get("attention_mask"),
+                target_token_id=int(batch.get("target_token_id", 10004)),
+            )
+        return self._action_chunk_from_single_context(batch["hidden"])
+
+    def _action_mean(self, batch: dict[str, Any]) -> torch.Tensor:
+        # RL imagination uses one action per step -> take first step of the chunk.
+        return self._action_chunk(batch)[:, 0, :].float()
 
     # ──────────────────────────────────────────────────────────────────────
     # FSDP-compatible dispatcher (matches VLAPolicy interface)
@@ -212,8 +357,8 @@ class VLAActionHeadActor(nn.Module):
     def forward(self, batch: dict[str, Any]) -> Any:
         """Routes through __call__ so FSDP's auto-gather hook fires."""
         mode = batch.get("mode")
-        hidden = batch["hidden"]
-        mean = self._action_mean(hidden)
+        action_chunk = self._action_chunk(batch)
+        mean = action_chunk[:, 0, :].float()
         log_std = (
             self.log_std.clamp(min=self.min_log_std, max=self.max_log_std)
             .unsqueeze(0)
@@ -223,9 +368,13 @@ class VLAActionHeadActor(nn.Module):
         dist = Normal(mean, std)
         if mode == "sample":
             deterministic = bool(batch.get("deterministic", False))
+            if bool(batch.get("return_chunk", False)):
+                action = action_chunk.float() if deterministic else action_chunk.float()
+                log_prob = torch.zeros(mean.shape[0], device=mean.device, dtype=mean.dtype)
+                return action, log_prob, {"mean": mean, "std": std, "action_chunk": action_chunk.float()}
             action = mean if deterministic else dist.rsample()
             log_prob = dist.log_prob(action).sum(dim=-1)
-            return action, log_prob, {"mean": mean, "std": std}
+            return action, log_prob, {"mean": mean, "std": std, "action_chunk": action_chunk.float()}
         if mode == "evaluate":
             action = batch["action"]
             log_prob = dist.log_prob(action).sum(dim=-1)

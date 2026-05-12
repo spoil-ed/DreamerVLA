@@ -92,8 +92,20 @@ INIT_OVERRIDES=()
 if [[ -n "${VLA_STATE_CKPT:-${ENCODER_STATE_CKPT:-}}" ]]; then
   INIT_OVERRIDES+=("init.encoder_state_ckpt=${VLA_STATE_CKPT:-${ENCODER_STATE_CKPT}}")
 fi
+if [[ -n "${VLA_INIT_CKPT:-}" ]]; then
+  INIT_OVERRIDES+=("init.vla_ckpt_path=${VLA_INIT_CKPT}")
+fi
 if [[ -n "${WORLD_MODEL_STATE_CKPT:-}" ]]; then
   INIT_OVERRIDES+=("init.world_model_state_ckpt=${WORLD_MODEL_STATE_CKPT}")
+fi
+if [[ -n "${ACTION_HORIZON:-${TIME_HORIZON:-}}" ]]; then
+  if [[ "${CONFIG_NAME}" != *"precomputed"* && "${USE_PRECOMPUTED_ENCODER:-0}" != "1" ]]; then
+    INIT_OVERRIDES+=("encoder.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
+  fi
+  INIT_OVERRIDES+=("policy.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
+fi
+if [[ -n "${RYNN_HIDDEN_DIR:-}" ]]; then
+  INIT_OVERRIDES+=("dataset.hidden_dir=${RYNN_HIDDEN_DIR}")
 fi
 
 echo "Run output dir: ${OUT_DIR}"

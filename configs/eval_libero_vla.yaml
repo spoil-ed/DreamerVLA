@@ -30,7 +30,8 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
@@ -41,7 +42,7 @@ encoder:
   chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
-  time_horizon: 10
+  time_horizon: 5
   pool: mean
 
 # ── rollout knobs ─────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ eval:
   # Leave ckpt_path null to evaluate the raw init VLA weights (baseline).
   # Set this to a file produced by PretokenizeVLAWorkspace top-k saves, e.g.
   # data/outputs/vla/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
-  ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_10_20260425_015740/checkpoints/epoch=006-train_vla_loss=2.820.ckpt
+  ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
   ckpt_kind: auto                 # auto / vla / dreamer
 
   task_suite_name: libero_goal      # libero_goal / libero_spatial / libero_object / libero_10
@@ -58,12 +59,18 @@ eval:
   task_ids: null
   max_tasks: null
   max_steps: null
-  action_steps: 10                  # action chunk horizon (must match training)
+  action_steps: 5                   # action chunk horizon (must match training)
+  save_video: false
+  video_max_episodes: 1
   dreamer_deterministic: true       # Dreamer policy rollout uses actor mean by default
   dreamer_action_repeat: 1          # replan every env step for latent Dreamer actor
   dreamer_clip_actions: true        # clip raw actor output to LIBERO action ranges
+  dreamer_rollout_mode: stateless    # stateless / online_rssm
+  dreamer_actor_input_source: rssm   # rssm / encoder / encoder_sequence
   dreamer_which_image_block: -2     # third-view image block; matches WM training default
   dreamer_which_image_blocks: [-2, -1]
+  log_action_stats: false
+  log_action_stats_limit: 8
 
 # ── unused by eval workspace but required by PretokenizeVLAWorkspace ──────────
 # (keeps the inherited resume() / save_checkpoint() machinery happy)

@@ -4,3 +4,10 @@ defaults:
 
 training:
   out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla/dreamer_vla_libero_goal
+
+init:
+  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+
+encoder:
+  model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  time_horizon: 5

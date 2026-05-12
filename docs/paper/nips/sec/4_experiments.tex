@@ -1,0 +1,50 @@
+\section{Experiments}
+
+\subsection{Experimental Setup}
+
+\paragraph{Baselines}
+
+\subsection{Main Results}
+
+\begin{table}[t]
+\centering
+\caption{Comparison with state-of-the-art methods on LIBERO.}
+\label{tab:libero_main_simple}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccccc}
+\toprule
+Method & Spatial & Object & Goal & Long & Avg. \\
+\midrule
+GR-1              & -- & -- & -- & -- & -- \\
+RT-1              & -- & -- & -- & -- & -- \\
+Diffusion Policy  & -- & -- & -- & -- & -- \\
+Octo              & -- & -- & -- & -- & -- \\
+OpenVLA           & -- & -- & -- & -- & -- \\
+RynnVLA           & -- & -- & -- & -- & -- \\
+\midrule
+\textbf{DreamerVLA (Ours)} & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Study}
+
+\begin{table}[t]
+\centering
+\caption{Ablation study on LIBERO. Each row adds one component to the baseline.}
+\label{tab:libero_ablation}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccccccc}
+\toprule
+Variant & WM & PPO & Adv. & KL & Spatial & Goal & Long & Avg. \\
+\midrule
+Baseline (VLA only)        &   &   &   &   & -- & -- & -- & -- \\
++ PPO                      &   & \checkmark &   &   & -- & -- & -- & -- \\
++ PPO + WM                 & \checkmark & \checkmark &   &   & -- & -- & -- & -- \\
++ PPO + WM + Adv.          & \checkmark & \checkmark & \checkmark &   & -- & -- & -- & -- \\
+Full model                 & \checkmark & \checkmark & \checkmark & \checkmark & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Generalization and Robustness}

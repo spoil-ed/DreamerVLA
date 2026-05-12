@@ -313,6 +313,35 @@ elif [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
     "optim.grad_clip=${GRAD_CLIP}"
     "optim.warmup=${LR_WARMUP_STEPS}"
   )
+  if [[ -n "${VLA_INIT_CKPT:-}" ]]; then
+    KIND_OVERRIDES+=(
+      "init.vla_ckpt_path=${VLA_INIT_CKPT}"
+      "encoder.model_path=${VLA_INIT_CKPT}"
+    )
+  fi
+  if [[ -n "${ACTION_HORIZON:-${TIME_HORIZON:-}}" ]]; then
+    KIND_OVERRIDES+=("encoder.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
+  fi
+  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${RYNN_HIDDEN_DIR:-}" ]]; then
+    KIND_OVERRIDES+=(
+      "dataset.hidden_dir=${RYNN_HIDDEN_DIR}"
+      "dataset.expected_model_path=${VLA_INIT_CKPT:-}"
+      "dataset.expected_encoder_state_ckpt=${VLA_STATE_CKPT:-${ENCODER_STATE_CKPT:-}}"
+      "dataset.expected_time_horizon=${ACTION_HORIZON:-${TIME_HORIZON:-5}}"
+    )
+  fi
+  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${LOAD_ACTOR_SEQUENCE:-}" ]]; then
+    KIND_OVERRIDES+=("dataset.load_actor_sequence=${LOAD_ACTOR_SEQUENCE}")
+  fi
+  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${ACTOR_SEQUENCE_LENGTH:-}" ]]; then
+    KIND_OVERRIDES+=(
+      "dataset.actor_sequence_length=${ACTOR_SEQUENCE_LENGTH}"
+      "world_model.actor_sequence_length=${ACTOR_SEQUENCE_LENGTH}"
+    )
+  fi
+  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${FULL_HIDDEN_REC_SCALE:-}" ]]; then
+    KIND_OVERRIDES+=("world_model.full_hidden_rec_scale=${FULL_HIDDEN_REC_SCALE}")
+  fi
 fi
 
 echo "WM kind:        ${WM_KIND_RESOLVED}"

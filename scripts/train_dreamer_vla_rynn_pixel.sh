@@ -5,13 +5,15 @@
 # This uses:
 #   pixel RGB -> reconstruction target
 #   precomputed Rynn hidden -> RSSM observation encoder input
-#   Dreamer RSSM [h,z] -> e_hat 4096 -> reused VLA ActionHead actor
+#   Dreamer RSSM [h,z] -> full token hidden sequence -> reused VLA ActionHead actor
 #   LIBERO sparse reward -> binary [0,1] reward head
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
+USER_RYNN_HIDDEN_DIR="${RYNN_HIDDEN_DIR:-}"
+source "${SCRIPT_DIR}/env_libero_goal.sh"
 
 export PATH="${DREAMERVLA_ENV_BIN:-/home/user01/miniconda3/envs/dreamervla/bin}:$PATH"
 export CONFIG_NAME="${CONFIG_NAME:-dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor}"
@@ -29,10 +31,14 @@ else
   PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-false}"
 fi
 export BATCH_SIZE NUM_WORKERS PREFETCH_FACTOR PIN_MEMORY DROP_LAST PERSISTENT_WORKERS DATALOADER_MP_CONTEXT
-export RUN_TAG="${RUN_TAG:-rynn_pixel_ehat4096_vlahead_binary_reward_bs${BATCH_SIZE}_nw${NUM_WORKERS}}"
+export RUN_TAG="${RUN_TAG:-rynn_pixel_${DREAMERVLA_UNIFIED_VLA_TAG}_fullseq_vlahead_binary_reward_bs${BATCH_SIZE}_nw${NUM_WORKERS}}"
 export OUT_DIR_BASE="${OUT_DIR_BASE:-${PROJECT_ROOT}/data/outputs/dreamervla}"
 export PYTHON="${PYTHON:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+if [[ -z "${USER_RYNN_HIDDEN_DIR}" ]]; then
+  export RYNN_HIDDEN_DIR="${RYNN_HIDDEN_FULLSEQ_DIR}"
+fi
+export VLA_INIT_CKPT VLA_STATE_CKPT ENCODER_STATE_CKPT RYNN_HIDDEN_DIR RYNN_HIDDEN_FULLSEQ_DIR ACTION_HORIZON TIME_HORIZON
 
 DATALOADER_OVERRIDES=(
   "dataloader.batch_size=${BATCH_SIZE}"
@@ -47,6 +53,11 @@ if [[ "${NUM_WORKERS}" -gt 0 ]]; then
 fi
 
 INIT_OVERRIDES=()
+INIT_OVERRIDES+=(
+  "dataset.expected_model_path=${VLA_INIT_CKPT}"
+  "dataset.expected_encoder_state_ckpt=${VLA_STATE_CKPT}"
+  "dataset.expected_time_horizon=${ACTION_HORIZON}"
+)
 if [[ -n "${WORLD_MODEL_STATE_CKPT:-}" ]]; then
   INIT_OVERRIDES+=("init.reset_world_model_reward_head=${RESET_WORLD_MODEL_REWARD_HEAD:-false}")
 elif [[ -n "${RESET_WORLD_MODEL_REWARD_HEAD:-}" ]]; then

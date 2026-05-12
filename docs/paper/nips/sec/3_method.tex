@@ -1,0 +1,227 @@
+\section{Method}
+
+\subsection{Overview}
+
+We propose \textbf{Dreamer-VLA}, a hybrid framework that decouples \emph{semantic understanding} from \emph{physical prediction} for robotic manipulation. The key idea is to reuse a large pretrained Vision-Language-Action (VLA) model as a frozen multimodal encoder, while training a compact latent world model and an imagination-based actor-critic policy on top of its hidden representations.
+
+At each time step $t$, the robot receives a multimodal observation
+\[
+o_t = \{o_t^{img}, o_t^{txt}, o_t^{prop}\},
+\]
+where $o_t^{img}$ contains the third-person and wrist-camera RGB observations, $o_t^{txt}$ is the task instruction, and $o_t^{prop}$ denotes proprioceptive state. These inputs are first converted into a unified token sequence and passed through a frozen RynnVLA encoder to obtain a high-level semantic representation
+\[
+z_t^{\text{sem}} = f_{\text{VLA}}(o_t) \in \mathbb{R}^{4096}.
+\]
+
+Instead of directly training a policy on raw observations or fine-tuning the VLA backbone, we introduce a trainable \textbf{Transformer Stochastic State-Space Model (TSSM)} that models latent dynamics in the semantic feature space. The TSSM maps the frozen VLA feature into a latent state
+\[
+s_t = (z_t, h_t),
+\]
+where $z_t \in \mathbb{R}^{d_z}$ is a stochastic latent variable and $h_t \in \mathbb{R}^{d_h}$ is a deterministic latent state. Based on this latent state, we train (i) a world model to predict future latent transitions and rewards, and (ii) an actor-critic policy purely in imagination, following the Dreamer-style learning paradigm.
+
+Overall, our framework consists of three components:
+\begin{enumerate}
+    \item a \textbf{frozen pretrained VLA encoder} for multimodal semantic representation,
+    \item a \textbf{trainable latent world model} for predicting future dynamics in latent space,
+    \item an \textbf{imagination-based actor-critic} for policy optimization without pixel-level reconstruction.
+\end{enumerate}
+
+This decomposition enables the model to inherit rich language-grounded visual priors from the pretrained VLA while learning compact, task-specific predictive dynamics for long-horizon control.
+
+\subsection{Frozen VLA Encoder}
+
+We build our framework on top of a pretrained RynnVLA encoder and keep it frozen throughout training. Given the current observation, we first serialize the multimodal inputs into the same prompt format used during pretraining. Concretely, with history length $\texttt{his}=2$, the input sequence contains previous and current third-person images, previous and current wrist images, proprioceptive state, and task text:
+\[
+x_t =
+[\text{prev-third},\ \text{prev-wrist},\ \text{cur-third},\ \text{cur-wrist},\ \text{state},\ \text{text}].
+\]
+
+Images are discretized using the Chameleon VQ tokenizer, while the language instruction is tokenized using the Chameleon BPE tokenizer. The resulting token sequence is processed by the frozen RynnVLA Transformer backbone to produce a contextual hidden representation
+\[
+z_t^{\text{sem}} = f_{\text{VLA}}(x_t).
+\]
+
+A central design choice of Dreamer-VLA is that the VLA encoder is \emph{never} updated during world-model or policy learning. This preserves the strong semantic and language grounding capabilities of the pretrained model, and shifts all task-specific adaptation to the downstream latent dynamics and control modules.
+
+\subsection{Latent World Model}
+
+On top of the frozen semantic representation, we train a Transformer Stochastic State-Space Model (TSSM) to capture robot dynamics in latent space. The latent state is defined as
+\[
+s_t = (z_t, h_t),
+\]
+where $z_t$ is a stochastic latent variable and $h_t$ is a deterministic latent feature. In our implementation, $z_t$ is Gaussian with dimension $d_z=256$, while $h_t$ has dimension $d_h=4096$.
+
+\paragraph{Latent encoding.}
+Given the frozen VLA feature $z_t^{\text{sem}}$, we use two lightweight projection heads to construct the latent state:
+\[
+q_\phi(z_t \mid z_t^{\text{sem}}), \qquad h_t = g_\phi(z_t^{\text{sem}}).
+\]
+The stochastic branch predicts the mean and standard deviation of a Gaussian posterior, from which $z_t$ is sampled, while the deterministic branch directly maps the semantic feature to the deterministic latent state.
+
+\paragraph{Latent transition.}
+To predict the next latent state, we condition on the current latent state and action:
+\[
+\hat{s}_{t+1} = f_{\text{dyn}}(s_t, a_t).
+\]
+Unlike conventional RSSM-based world models that use GRUs, our transition model is implemented with a \textbf{causal Transformer backbone} inherited from a pretrained RynnVLA action-world-model checkpoint. Specifically, the current latent state and action are first embedded into tokens, augmented with learned type embeddings, and then processed by the Transformer to produce the next latent prior:
+\[
+p_\theta(z_{t+1} \mid h_{t+1}, a_t).
+\]
+
+In parallel, the transition model also predicts the next semantic feature directly:
+\[
+\hat{z}_{t+1}^{\text{sem}} = g_{\text{trans}}(s_t, a_t),
+\]
+which allows us to supervise dynamics learning in the frozen VLA feature space without reconstructing pixels.
+
+\paragraph{Reward prediction.}
+In addition to latent transition modeling, the world model includes a reward head:
+\[
+\hat{r}_t = g_r(s_t, a_t, s_{t+1}),
+\]
+implemented as a lightweight MLP over the latent transition tuple. This reward predictor provides the imagined rewards used during actor-critic training.
+
+\subsection{Policy and Value Learning in Imagination}
+
+Given the latent state $s_t = (z_t, h_t)$, we train a policy and a value function entirely in the latent imagination space of the world model.
+
+\paragraph{Actor.}
+The policy is a Gaussian actor
+\[
+a_t \sim \pi_\psi(\cdot \mid s_t),
+\]
+parameterized by an MLP on top of the concatenated latent feature:
+\[
+[s_t] = [z_t; h_t] \in \mathbb{R}^{d_z + d_h}.
+\]
+The actor outputs the action mean, together with a learned per-dimension log-standard deviation.
+
+\paragraph{Critic.}
+For value estimation, we adopt the DreamerV3-style two-hot critic. Instead of regressing a scalar return directly, the critic predicts a categorical distribution over symlog-transformed value bins:
+\[
+V_\omega(s_t) \rightarrow p_\omega(b \mid s_t),
+\]
+where the bins are uniformly spaced in symlog space. The predicted scalar value is then obtained by taking the expectation over bins and mapping it back with the inverse symlog transform.
+
+To stabilize training, we maintain a slowly updated target critic $V_{\omega^-}$ using Polyak averaging:
+\[
+\omega^- \leftarrow (1-\tau)\omega^- + \tau \omega.
+\]
+
+\paragraph{Imagination rollout.}
+Starting from a real encoded latent state $s_0$, we roll out the world model for $H$ imagined steps:
+\[
+a_t \sim \pi_\psi(\cdot \mid s_t), \qquad
+s_{t+1} = f_{\text{dyn}}(s_t, a_t), \qquad
+\hat{r}_t = g_r(s_t, a_t, s_{t+1}).
+\]
+This produces imagined trajectories entirely in latent space, without interacting with the environment and without generating future images.
+
+Based on the imagined rewards and bootstrapped terminal value from the target critic, we compute $\lambda$-returns:
+\[
+R_t^\lambda
+=
+\hat{r}_t
++
+\gamma \big[(1-\lambda)V_{\omega^-}(s_{t+1}) + \lambda R_{t+1}^\lambda \big].
+\]
+
+\subsection{Training Objectives}
+
+Training consists of two alternating phases: world-model learning on real transitions, and actor-critic optimization on imagined trajectories.
+
+\subsubsection{World-model objective}
+
+Given a real transition $(o_t, a_t, o_{t+1}, r_t)$, we first obtain semantic features $z_t^{\text{sem}}$ and $z_{t+1}^{\text{sem}}$ from the frozen VLA encoder, then optimize the world model with three losses:
+\[
+\mathcal{L}_{\text{WM}}
+=
+\mathcal{L}_{\text{trans}}
++
+\beta_{\text{KL}} \mathcal{L}_{\text{KL}}
++
+\beta_r \mathcal{L}_{\text{reward}}.
+\]
+
+The transition loss supervises next-step semantic prediction:
+\[
+\mathcal{L}_{\text{trans}}
+=
+\left\|
+\hat{z}_{t+1}^{\text{sem}} - z_{t+1}^{\text{sem}}
+\right\|_2^2.
+\]
+
+The KL term regularizes the predicted prior against the posterior inferred from the true next observation:
+\[
+\mathcal{L}_{\text{KL}}
+=
+\mathrm{KL}\big(
+q_\phi(z_{t+1}\mid o_{t+1})
+\;\|\;
+p_\theta(z_{t+1}\mid s_t,a_t)
+\big).
+\]
+
+The reward loss trains the reward head:
+\[
+\mathcal{L}_{\text{reward}}
+=
+\left\|
+\hat{r}_t - r_t
+\right\|_2^2.
+\]
+
+Importantly, we do \emph{not} reconstruct pixels. The world model is trained purely in the latent semantic space induced by the frozen VLA encoder.
+
+\subsubsection{Actor objective}
+
+The actor is optimized to maximize imagined returns under the learned world model. Following DreamerV3, we normalize returns using a running percentile-based scale:
+\[
+S = \max\big(1, P_{95}^{\text{ema}} - P_{5}^{\text{ema}}\big),
+\]
+where $P_{95}^{\text{ema}}$ and $P_{5}^{\text{ema}}$ are exponentially averaged return percentiles.
+
+The actor loss is
+\[
+\mathcal{L}_{\pi}
+=
+-
+\mathbb{E}\left[
+\sum_{t=0}^{H-1}
+\gamma^t
+\frac{R_t^\lambda}{S}
+\right]
+-
+\eta \,\mathcal{H}\!\left[\pi_\psi(\cdot \mid s_t)\right],
+\]
+where $\eta$ is the entropy regularization coefficient.
+
+\subsubsection{Critic objective}
+
+The critic is trained to match the stop-gradient $\lambda$-returns using a two-hot target in symlog space:
+\[
+\mathcal{L}_{V}
+=
+-
+\mathbb{E}
+\left[
+\log p_\omega\big(
+\mathrm{twohot}(\mathrm{sg}(R_t^\lambda))
+\mid s_t
+\big)
+\right].
+\]
+
+This categorical value parameterization substantially improves stability compared with scalar value regression in our high-dimensional latent setting.
+
+\subsection{Training Strategy}
+
+During all stages, the RynnVLA encoder remains frozen, and only the latent world model, actor, and critic are updated. Training alternates between:
+
+\begin{enumerate}
+    \item \textbf{World-model update}: optimize $\mathcal{L}_{\text{WM}}$ on real transitions;
+    \item \textbf{Imagination update}: optimize $\mathcal{L}_{\pi}$ and $\mathcal{L}_{V}$ on imagined trajectories generated by the latent world model.
+\end{enumerate}
+
+This design preserves the semantic prior of the pretrained VLA encoder while enabling efficient task-specific adaptation through latent dynamics learning and imagination-based policy optimization.
