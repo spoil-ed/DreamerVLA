@@ -1,5 +1,5 @@
-_target_: src.workspace.pretokenize_vla_workspace.PretokenizeVLAWorkspace
-
+# @package _global_
+_target_: src.workspace.VLASFTWorkspace
 seed: 7
 
 hydra:

@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import gc
 import os
-import pathlib
-import pickle
 import time
 from typing import Any
 
@@ -29,8 +28,12 @@ from src.workspace.base_workspace import BaseWorkspace
 
 
 class PretokenizeVLAWorkspace(BaseWorkspace):
+    workspace_name = "vla_sft_compat"
+    workspace_status = "compatibility"
+    workspace_family = "vla"
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
+    checkpoint_restore_output_dir = True
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
 
@@ -57,30 +60,6 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         self.vla_optimizer = None
         self.vla_ema: EMAHelper | None = None
 
-    # ---- path helpers ----
-
-    def _resolve_vla_init_path(self) -> str:
-        configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
-        candidate = (
-            pathlib.Path(str(configured)).expanduser().resolve()
-            if configured is not None
-            else pathlib.Path(self.default_vla_init_dir)
-        )
-        if candidate.is_dir():
-            if (candidate / "config.json").is_file():
-                return str(candidate)
-            for subdir in sorted(path for path in candidate.iterdir() if path.is_dir()):
-                if (subdir / "config.json").is_file():
-                    return str(subdir.resolve())
-        return str(candidate.resolve())
-
-    def build_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
-        encoder_cfg = copy.deepcopy(cfg.encoder)
-        init_model_path = OmegaConf.select(cfg, "init.vla_ckpt_path")
-        if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
-            encoder_cfg.model_path = str(init_model_path)
-        return encoder_cfg
-
     def _build_trainable_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
         encoder_cfg = self.build_encoder_cfg(cfg)
         with open_dict(encoder_cfg):
@@ -101,64 +80,6 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                 parameter.requires_grad = True
                 matched += 1
         return matched
-
-    # ---- checkpoint ----
-
-    def save_checkpoint(
-        self,
-        path: str | pathlib.Path | None = None,
-        tag: str = "latest",
-        exclude_keys: tuple[str, ...] | None = None,
-        include_keys: tuple[str, ...] | None = None,
-    ) -> str:
-        if path is None:
-            path = self.get_checkpoint_path(tag=tag)
-        path = pathlib.Path(path)
-
-        if exclude_keys is None:
-            exclude_keys = tuple(self.exclude_keys)
-        if include_keys is None:
-            include_keys = tuple(self.include_keys) + ("_output_dir",)
-
-        if not self.distributed.requires_collective_checkpointing and not self.distributed.is_main_process:
-            return str(path.absolute())
-
-        payload = {"cfg": self.cfg, "state_dicts": {}, "pickles": {}}
-        for key, value in self.__dict__.items():
-            if key in exclude_keys:
-                continue
-            if hasattr(value, "state_dict") and hasattr(value, "load_state_dict"):
-                state_dict = self._state_dict_for_checkpoint(key, value)
-                if self.distributed.is_main_process and state_dict is not None:
-                    payload["state_dicts"][key] = _copy_to_cpu(state_dict)
-            elif key in include_keys and self.distributed.is_main_process:
-                payload["pickles"][key] = pickle.dumps(value)
-
-        if self.distributed.is_main_process:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(payload, path)
-        return str(path.absolute())
-
-    def load_payload(
-        self,
-        payload: dict[str, Any],
-        exclude_keys: tuple[str, ...] | None = None,
-        include_keys: tuple[str, ...] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        if exclude_keys is None:
-            exclude_keys = tuple()
-        if include_keys is None:
-            include_keys = tuple(payload["pickles"].keys())
-
-        for key, value in payload["state_dicts"].items():
-            if key in exclude_keys or key not in self.__dict__:
-                continue
-            self._load_state_dict_from_checkpoint(key, self.__dict__[key], value, **kwargs)
-
-        for key in include_keys:
-            if key in payload["pickles"]:
-                self.__dict__[key] = pickle.loads(payload["pickles"][key])
 
     def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
         if key == "encoder" and self.encoder is not None:
@@ -353,6 +274,14 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         # non-VLA inputs (for example pixel DreamerV3 rollout) while
                         # keeping the VLA PIL history path unchanged.
                         self._libero_current_raw_obs = obs
+                        self._libero_current_eval_context = {
+                            "task_id": int(task_id),
+                            "task_index": int(task_index),
+                            "episode_idx": int(episode_idx),
+                            "env_step": int(steps_taken),
+                            "rollout_t": int(t),
+                            "task_description": str(task_description),
+                        }
                         predicted = self._generate_actions(
                             backbone, item_processor,
                             padded, state, task_description, action_steps,
@@ -362,6 +291,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     if len(actions_buffer) == 0:
                         break
                     action = actions_buffer.pop(0)
+                    if bool(OmegaConf.select(self.cfg, "eval.empty_cuda_cache_each_step", default=False)):
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     obs, _, done, _ = env.step(action.tolist())
                     steps_taken = t - 9
 
@@ -544,38 +477,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                 print(f"  VLA action horizon: {encoder_time_horizon} "
                       f"(dataset={type(dataset).__name__})")
 
-        dataloader_kwargs = dict(cfg.dataloader)
-        sampler = self.distributed.maybe_make_sampler(
-            dataset,
-            shuffle=bool(dataloader_kwargs.get("shuffle", True)),
-            drop_last=bool(dataloader_kwargs.get("drop_last", False)),
-        )
-        if sampler is not None:
-            dataloader_kwargs["shuffle"] = False
-            dataloader_kwargs["sampler"] = sampler
-        collate_fn = getattr(dataset, "collate_fn", None)
-        if callable(collate_fn):
-            dataloader_kwargs["collate_fn"] = collate_fn
-        train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+        train_dataloader = self.make_distributed_dataloader(dataset, cfg.dataloader)
 
         # ---- Build val dataloaders (optional) ----
-        val_dataloaders: dict[str, DataLoader] = {}
-        for split_name in ("val_ind", "val_ood"):
-            val_cfg_key = f"dataset_{split_name}"
-            val_ds_cfg = OmegaConf.select(cfg, val_cfg_key, default=None)
-            if val_ds_cfg is None:
-                continue
-            val_ds = hydra.utils.instantiate(val_ds_cfg)
-            val_dl_kwargs = dict(cfg.dataloader)
-            val_dl_kwargs["shuffle"] = False
-            val_dl_kwargs["drop_last"] = False
-            val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
-            if val_sampler is not None:
-                val_dl_kwargs["sampler"] = val_sampler
-            val_collate = getattr(val_ds, "collate_fn", None)
-            if callable(val_collate):
-                val_dl_kwargs["collate_fn"] = val_collate
-            val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
+        val_dataloaders = self.make_val_dataloaders(cfg)
 
         encoder_cfg = self._build_trainable_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
@@ -639,8 +544,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
                 for _local_epoch_idx in range(cfg.training.num_epochs - self.epoch):
-                    if sampler is not None:
-                        sampler.set_epoch(self.epoch)
+                    self.set_dataloader_epoch(train_dataloader, self.epoch)
 
                     step_log: dict[str, float | str | int] = {}
                     train_vla_losses: list[float] = []
@@ -761,13 +665,3 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
 
 __all__ = ["PretokenizeVLAWorkspace"]
-
-
-def _copy_to_cpu(value: Any) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu()
-    if isinstance(value, dict):
-        return {key: _copy_to_cpu(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_copy_to_cpu(item) for item in value]
-    return copy.deepcopy(value)

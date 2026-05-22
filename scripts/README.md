@@ -8,44 +8,53 @@ recipes.
 
 | Script | Purpose |
 | --- | --- |
-| `env_libero_goal.sh` | Canonical LIBERO-goal path / checkpoint / horizon registry sourced by launch wrappers |
+| `env_libero_goal_pi0_query.sh` | Current pi0 action-hidden LIBERO-goal path / checkpoint / horizon registry |
+| `env_libero_goal.sh` | Shared LIBERO-goal defaults for data prep and VLA SFT |
 | `download_hf.sh` | Download model checkpoints from Hugging Face into `data/ckpts/` |
 | `prepare_data.sh` | Standard LIBERO data preparation pipeline |
-| `prepare_dreamervla_data.sh` | From-zero DreamerVLA data pipeline, including Rynn full token hidden sidecar |
-| `prepare_latent_data.sh` | One-shot wrapper for hidden / latent sidecar preparation |
-| `preprocess_rynn_pixel_hidden.sh` | Generate RynnVLA hidden sidecar HDF5 files |
-| `preprocess_rynn_pixel_hidden.py` | Python implementation for the hidden sidecar generator |
+| `run_pi0_query_hidden_pipeline.sh` | Current action-hidden pipeline wrapper; preprocess, WM, and actor stages |
+| `preprocess_rynn_pixel_hidden.sh` | Generate pi0 action-query hidden sidecar HDF5 files |
+| `preprocess_rynn_pixel_hidden.py` | Python implementation for action-hidden sidecar generation |
+| `prepare_dreamervla_data.sh` | DreamerVLA data preparation wrapper |
 | `preprocess/*.sh` | Lower-level preprocessing steps retained for reproducibility |
 
-Current canonical hidden sidecars for LIBERO-goal:
+Current canonical action-hidden sidecar for LIBERO-goal:
 
 ```text
-data/processed_data/libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000
-data/processed_data/libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000_fullseq
+data/processed_data/libero_goal_no_noops_t_256_pi0_action_hidden_vla_policy_h2
 ```
 
-The active wrappers source `env_libero_goal.sh`, which keeps these values
+The current action-hidden wrappers source `env_libero_goal_pi0_query.sh`, which keeps these values
 aligned:
 
 ```text
 VLA_INIT_CKPT
 VLA_STATE_CKPT / ENCODER_STATE_CKPT
 ACTION_HORIZON / TIME_HORIZON
-RYNN_HIDDEN_DIR
-RYNN_HIDDEN_FULLSEQ_DIR
+ACTION_HEAD_TYPE=pi0_query
+PI0_ACTION_HIDDEN_DIR
+PI0_QUERY_PROMPT_STYLE=vla_policy
+PI0_QUERY_HISTORY=2
+PI0_QUERY_INCLUDE_STATE=1
+PI0_QUERY_ROTATE_IMAGES_180=1
 ```
 
 ## Training
 
-| Script | Main Config | Purpose |
-| --- | --- | --- |
-| `pretokenize_train_vla.sh` | `pretokenize_vla_libero_goal` | Train / finetune VLA action head |
-| `train_rynn_backbone_dreamerv3_wm.sh` | `rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed` | Train Rynn-hidden DreamerV3 world model |
-| `train_dreamer_vla_rynn_pixel.sh` | `dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor` | Train DreamerVLA with Rynn-pixel WM and VLA action-head actor |
-| `train_dreamerv3_pixel.sh` | `dreamerv3_pixel_libero_goal` | Pixel DreamerV3 baseline |
-| `train_dreamerv3_token.sh` | `dreamerv3_token_libero_goal` | Token DreamerV3 baseline |
-| `train_wm.sh` | env-selected | Generic WM training wrapper |
-| `train_dreamer_vla.sh` | env-selected | Generic DreamerVLA training wrapper |
+| Script | Main Config | Public Workspace | Purpose |
+| --- | --- | --- | --- |
+| `pretokenize_train_vla.sh` | `pretokenize_vla_libero_goal_pi0_query` | `VLASFTWorkspace` | Current pi0 action-query VLA action head SFT when `ACTION_HEAD_TYPE=pi0_query` |
+| `run_pi0_query_hidden_pipeline.sh` | `rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed` | `ActionHiddenWMWorkspace` | Current preprocess + action-hidden WM pipeline |
+| `train_pi0_action_hidden_dreamerv3_wm.sh` | `rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed` | `ActionHiddenWMWorkspace` | Current action-hidden DreamerV3 WM training |
+| `run_pi0_action_hidden_reconstruct_actor.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Current action-hidden actor training |
+| `run_pi0_action_hidden_head_actor_variants.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Current actor-head adapter sweep |
+| `train_dreamerv3_pixel.sh` | `dreamerv3_pixel_libero_goal` | `PixelWMWorkspace` | Secondary pixel DreamerV3 baseline |
+| `train_dreamerv3_token.sh` | `dreamerv3_token_libero_goal` | `TokenWMWorkspace` | Secondary token DreamerV3 baseline |
+| `train_wm.sh` | env-selected | route-specific `src.workspace.*` target from config | Generic WM training wrapper |
+| `train_chameleon_ladiwm_wm.sh` | `chameleon_latent_action_wm_libero_goal` | `ChameleonLatentWMWorkspace` | Chameleon / LaDiWM-style WM baseline |
+| `train_dreamer_vla.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Generic action-hidden DreamerVLA training wrapper |
+
+Configs point directly at the route-specific workspace class.
 
 Most wrappers accept standard environment variables:
 
@@ -67,7 +76,6 @@ logs in the terminal.
 | --- | --- |
 | `eval_libero_vla.sh` | Single-process LIBERO rollout eval for VLA or Dreamer checkpoints |
 | `eval_libero.sh` | Legacy LIBERO eval wrapper |
-| `eval_wm.sh` | World-model diagnostics / reconstruction eval |
 | `evals_libero/*.sh` | Task-suite specific eval wrappers |
 
 For Dreamer checkpoints, `eval_libero_vla.sh` supports:
@@ -88,7 +96,6 @@ These switches are useful for actor and hidden ablations.
 | `monitor_dreamer_vla_metrics.py` | Summarize training log trends |
 | `visualize_dreamervla_reward.py` | Reward-model visualization helper |
 | `smoke_libero_online_env.py` | Smoke test for online LIBERO env wiring |
-| `diagnose_wm.sh` | WM diagnostic wrapper |
 
 Diagnostic outputs should go under:
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end pi0-query hidden pipeline for LIBERO-goal:
 #   1. use the pi0-query VLA action head ckpt
-#   2. precompute Rynn hidden + full token hidden sidecar
-#   3. train the Rynn-hidden DreamerV3 world model
-#   4. train DreamerVLA with the matching pi0-query VLA action head actor
+#   2. precompute pi0 action-query hidden sidecar
+#   3. train the action-hidden DreamerV3 world model
+#   4. train the pi0 action-hidden DreamerVLA actor.
 #
 # Default mode prints the exact commands without launching long jobs:
 #   bash scripts/run_pi0_query_hidden_pipeline.sh
@@ -37,14 +37,16 @@ WM_MASTER_PORT="${WM_MASTER_PORT:-29552}"
 DREAMERVLA_MASTER_PORT="${DREAMERVLA_MASTER_PORT:-29553}"
 
 PI0_QUERY_VLA_STATE_CKPT="${PI0_QUERY_VLA_STATE_CKPT:-${VLA_STATE_CKPT}}"
-PI0_QUERY_HIDDEN_DIR="${PI0_QUERY_HIDDEN_DIR:-${RYNN_HIDDEN_FULLSEQ_DIR}}"
-PI0_QUERY_WM_OUT_DIR="${PI0_QUERY_WM_OUT_DIR:-${PROJECT_ROOT}/data/outputs/worldmodel/rynn_backbone_dreamerv3_wm/pi0_query_hidden_wm_${PIPELINE_ID}}"
-PI0_QUERY_DREAMERVLA_OUT_DIR="${PI0_QUERY_DREAMERVLA_OUT_DIR:-${PROJECT_ROOT}/data/outputs/dreamervla/pi0_query_hidden_dreamervla_${PIPELINE_ID}}"
+PI0_QUERY_HIDDEN_DIR="${PI0_QUERY_ACTION_HIDDEN_DIR:-${PI0_ACTION_HIDDEN_DIR}}"
+PI0_QUERY_WM_OUT_DIR="${PI0_QUERY_WM_OUT_DIR:-${PROJECT_ROOT}/data/outputs/worldmodel/action_hidden_dreamerv3_wm/pi0_action_hidden_wm_${PIPELINE_ID}}"
+PI0_QUERY_DREAMERVLA_OUT_DIR="${PI0_QUERY_DREAMERVLA_OUT_DIR:-${PROJECT_ROOT}/data/outputs/dreamervla/pi0_action_hidden_dreamervla_${PIPELINE_ID}}"
 WORLD_MODEL_STATE_CKPT="${WORLD_MODEL_STATE_CKPT:-${PI0_QUERY_WM_OUT_DIR}/ckpt/latest.ckpt}"
 
 ACTION_HORIZON="${ACTION_HORIZON:-5}"
 TIME_HORIZON="${TIME_HORIZON:-${ACTION_HORIZON}}"
 ACTOR_SEQUENCE_LENGTH="${ACTOR_SEQUENCE_LENGTH:-640}"
+OBS_HIDDEN_SOURCE="${OBS_HIDDEN_SOURCE:-action_query}"
+RYNN_WM_OBS_DIM="${RYNN_WM_OBS_DIM:-5120}"
 
 print_cmd() {
   printf '  '
@@ -65,7 +67,13 @@ preprocess_cmd=(
   "ACTION_HEAD_TYPE=pi0_query"
   "VLA_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
   "ENCODER_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
-  "SAVE_ACTOR_SEQUENCE=1"
+  "SAVE_ACTOR_SEQUENCE=${SAVE_ACTOR_SEQUENCE:-0}"
+  "OBS_HIDDEN_SOURCE=${OBS_HIDDEN_SOURCE}"
+  "PROMPT_STYLE=${PI0_QUERY_PROMPT_STYLE}"
+  "HISTORY=${PI0_QUERY_HISTORY}"
+  "INCLUDE_STATE=${PI0_QUERY_INCLUDE_STATE}"
+  "ROTATE_IMAGES_180=${PI0_QUERY_ROTATE_IMAGES_180}"
+  "SAVE_ACTION_HIDDEN=${SAVE_ACTION_HIDDEN:-1}"
   "OUT_DIR=${PI0_QUERY_HIDDEN_DIR}"
   "ACTION_HORIZON=${ACTION_HORIZON}"
   "TIME_HORIZON=${TIME_HORIZON}"
@@ -81,19 +89,33 @@ wm_cmd=(
   "NUM_GPUS=${WM_NUM_GPUS}"
   "MASTER_PORT=${WM_MASTER_PORT}"
   "OUT_DIR=${PI0_QUERY_WM_OUT_DIR}"
-  "RYNN_WM_HIDDEN_DIR=${PI0_QUERY_HIDDEN_DIR}"
+  "CONFIG_NAME=rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
+  "ACTION_HIDDEN_DIR=${PI0_QUERY_HIDDEN_DIR}"
   "VLA_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
   "ENCODER_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
   "ACTION_HORIZON=${ACTION_HORIZON}"
   "TIME_HORIZON=${TIME_HORIZON}"
-  "LOAD_ACTOR_SEQUENCE=true"
-  "ACTOR_SEQUENCE_LENGTH=${ACTOR_SEQUENCE_LENGTH}"
+  "OBS_HIDDEN_SOURCE=${OBS_HIDDEN_SOURCE}"
+  "ACTION_HIDDEN_EXPECTED_OBS_HIDDEN_SOURCE=action_query"
+  "ACTION_HIDDEN_EXPECTED_PROMPT_STYLE=vla_policy"
+  "ACTION_HIDDEN_EXPECTED_HISTORY=2"
+  "ACTION_HIDDEN_EXPECTED_INCLUDE_STATE=true"
+  "ACTION_HIDDEN_EXPECTED_ROTATE_IMAGES_180=true"
+  "ACTION_HIDDEN_WM_OBS_DIM=${RYNN_WM_OBS_DIM}"
+  "LOAD_ACTOR_SEQUENCE=false"
+  "ACTOR_SEQUENCE_LENGTH=0"
+  "FULL_HIDDEN_REC_SCALE=0.0"
   "BATCH_SIZE=${WM_BATCH_SIZE:-96}"
   "NUM_WORKERS=${WM_NUM_WORKERS:-2}"
-  bash scripts/train_rynn_backbone_dreamerv3_wm.sh
+  bash scripts/train_pi0_action_hidden_dreamerv3_wm.sh
   "dataset.hidden_dir=${PI0_QUERY_HIDDEN_DIR}"
   "dataset.expected_encoder_state_ckpt=${PI0_QUERY_VLA_STATE_CKPT}"
-  "+dataset.expected_action_head_type=pi0_query"
+  "dataset.expected_action_head_type=pi0_query"
+  "dataset.expected_obs_hidden_source=action_query"
+  "dataset.expected_prompt_style=vla_policy"
+  "dataset.expected_history=2"
+  "dataset.expected_include_state=true"
+  "dataset.expected_rotate_images_180=true"
 )
 
 dreamervla_cmd=(
@@ -102,6 +124,8 @@ dreamervla_cmd=(
   "NUM_GPUS=${DREAMERVLA_NUM_GPUS}"
   "MASTER_PORT=${DREAMERVLA_MASTER_PORT}"
   "OUT_DIR=${PI0_QUERY_DREAMERVLA_OUT_DIR}"
+  "CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor"
+  "ACTION_HIDDEN_DIR=${PI0_QUERY_HIDDEN_DIR}"
   "RYNN_HIDDEN_DIR=${PI0_QUERY_HIDDEN_DIR}"
   "VLA_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
   "ENCODER_STATE_CKPT=${PI0_QUERY_VLA_STATE_CKPT}"
@@ -110,10 +134,15 @@ dreamervla_cmd=(
   "TIME_HORIZON=${TIME_HORIZON}"
   "BATCH_SIZE=${DREAMERVLA_BATCH_SIZE:-10}"
   "NUM_WORKERS=${DREAMERVLA_NUM_WORKERS:-2}"
-  bash scripts/train_dreamer_vla_rynn_pixel.sh
+  bash scripts/train_dreamer_vla.sh
   "dataset.hidden_dir=${PI0_QUERY_HIDDEN_DIR}"
   "dataset.expected_encoder_state_ckpt=${PI0_QUERY_VLA_STATE_CKPT}"
   "+dataset.expected_action_head_type=pi0_query"
+  "+dataset.expected_obs_hidden_source=action_query"
+  "+dataset.expected_prompt_style=vla_policy"
+  "+dataset.expected_history=2"
+  "+dataset.expected_include_state=true"
+  "+dataset.expected_rotate_images_180=true"
   "+policy.action_head_type=pi0_query"
   "policy.init_action_head_ckpt=${PI0_QUERY_VLA_STATE_CKPT}"
 )
@@ -125,7 +154,7 @@ echo "vla_state_ckpt:     ${PI0_QUERY_VLA_STATE_CKPT}"
 echo "hidden_dir:         ${PI0_QUERY_HIDDEN_DIR}"
 echo "wm_out_dir:         ${PI0_QUERY_WM_OUT_DIR}"
 echo "wm_state_ckpt:      ${WORLD_MODEL_STATE_CKPT}"
-echo "dreamervla_out_dir: ${PI0_QUERY_DREAMERVLA_OUT_DIR}"
+echo "dreamervla_out_dir: ${PI0_QUERY_DREAMERVLA_OUT_DIR} (follow-up; not launched by action-hidden all)"
 echo
 
 case "${PIPELINE_STAGE}" in
@@ -136,7 +165,7 @@ case "${PIPELINE_STAGE}" in
     echo "[2/3] Train pi0-query hidden world model:"
     print_cmd "${wm_cmd[@]}"
     echo
-    echo "[3/3] Train DreamerVLA from matching WM + pi0-query action head:"
+    echo "[3/3] DreamerVLA actor stage:"
     print_cmd "${dreamervla_cmd[@]}"
     ;;
   preprocess)

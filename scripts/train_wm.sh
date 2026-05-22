@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 # Unified world-model training entrypoint.
 #
-# This script launches all current WM trainers. The workspace/model is selected
+# This script launches WM trainers, including secondary baselines. The current
+# mainline action-hidden route should normally enter through
+# scripts/train_pi0_action_hidden_dreamerv3_wm.sh or
+# scripts/run_pi0_query_hidden_pipeline.sh. The workspace/model is selected
 # by the Hydra config; this wrapper only standardizes defaults, output layout,
 # launch mode, and common smoke/sequence overrides.
 #
 # Examples:
-#   # Current DreamerV3 token WM
+#   # Current mainline: pi0 action-hidden DreamerV3 WM
+#   bash scripts/train_pi0_action_hidden_dreamerv3_wm.sh
+#
+#   # Secondary DreamerV3 token WM
 #   WM_KIND=dreamerv3_token bash scripts/train_wm.sh
 #
 #   # DreamerV3 pixel WM
 #   WM_KIND=dreamerv3_pixel bash scripts/train_wm.sh
 #
-#   # Original/pretokenized token WM ablation
-#   CONFIG_NAME=pretokenize_wm_libero_10_obs4096_minloss_rssm bash scripts/train_wm.sh
-#
 #   # Chameleon/LaDiWM-style WM
 #   WM_KIND=chameleon BATCH_SIZE=1 GRAD_ACCUM=3 bash scripts/train_wm.sh
 #
-#   # Smoke test for distributed pretokenize WM configs
-#   WM_SMOKE=1 WM_KIND=pretokenize CUDA_VISIBLE_DEVICES=4 NUM_GPUS=1 bash scripts/train_wm.sh
+#   # Smoke test for the action-hidden WM config
+#   WM_SMOKE=1 WM_KIND=action_hidden CUDA_VISIBLE_DEVICES=4 NUM_GPUS=1 bash scripts/train_wm.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,17 +44,20 @@ infer_kind() {
     echo "dreamerv3_token"
   elif [[ "${config}" == dreamerv3_pixel* ]]; then
     echo "dreamerv3_pixel"
-  elif [[ "${config}" == rynn_backbone_* ]]; then
-    echo "rynn_backbone"
+  elif [[ "${config}" == *action_hidden* ]]; then
+    echo "action_hidden"
   elif [[ "${config}" == chameleon_* || "${config}" == *chameleon* ]]; then
     echo "chameleon"
   else
-    echo "pretokenize"
+    echo "action_hidden"
   fi
 }
 
 if [[ -z "${CONFIG_NAME:-}" ]]; then
-  case "${WM_KIND:-pretokenize}" in
+  case "${WM_KIND:-action_hidden}" in
+    action_hidden|pi0_action_hidden)
+      CONFIG_NAME="rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
+      ;;
     dreamerv3_token|token)
       CONFIG_NAME="dreamerv3_token_libero_goal"
       ;;
@@ -61,18 +67,8 @@ if [[ -z "${CONFIG_NAME:-}" ]]; then
     chameleon|ladiwm)
       CONFIG_NAME="chameleon_latent_action_wm_libero_goal"
       ;;
-    rynn_backbone|rynn|strategy3)
-      CONFIG_NAME="rynn_backbone_dreamerv3_pixel_wm_libero_goal"
-      ;;
-    pretokenize|tssm|rssm|transdreamer|"")
-      if [[ "${WARMUP:-0}" == "1" || "${WM_WARMUP:-0}" == "1" ]]; then
-        CONFIG_NAME="pretokenize_wm_libero_goal_warmup"
-      else
-        CONFIG_NAME="pretokenize_wm_libero_goal_transdreamer"
-      fi
-      ;;
     *)
-    echo "ERROR: unknown WM_KIND='${WM_KIND}'. Use pretokenize, dreamerv3_token, dreamerv3_pixel, chameleon, or rynn_backbone." >&2
+      echo "ERROR: unknown WM_KIND='${WM_KIND}'. Use action_hidden, dreamerv3_token, dreamerv3_pixel, or chameleon." >&2
       exit 2
       ;;
   esac
@@ -89,12 +85,20 @@ case "${WM_KIND_RESOLVED}" in
   ladiwm)
     WM_KIND_RESOLVED="chameleon"
     ;;
-  rynn|strategy3)
-    WM_KIND_RESOLVED="rynn_backbone"
+  pi0_action_hidden)
+    WM_KIND_RESOLVED="action_hidden"
     ;;
 esac
 
 case "${WM_KIND_RESOLVED}" in
+  action_hidden)
+    DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/action_hidden_dreamerv3_wm"
+    if [[ "${ACTION_HIDDEN_DDP:-${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}}" == "1" ]]; then
+      DEFAULT_LAUNCHER="torchrun"
+    else
+      DEFAULT_LAUNCHER="single"
+    fi
+    ;;
   dreamerv3_token)
     DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/dreamerv3_token"
     DEFAULT_LAUNCHER="single"
@@ -111,18 +115,6 @@ case "${WM_KIND_RESOLVED}" in
     DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/chameleon_latent_action_wm"
     DEFAULT_LAUNCHER="torchrun"
     ;;
-  rynn_backbone)
-    DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/rynn_backbone_dreamerv3_wm"
-    if [[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]]; then
-      DEFAULT_LAUNCHER="torchrun"
-    else
-      DEFAULT_LAUNCHER="single"
-    fi
-    ;;
-  pretokenize|tssm|rssm|transdreamer)
-    DEFAULT_OUT_DIR_BASE="${PROJECT_ROOT}/data/outputs/worldmodel/pretokenize_wm"
-    DEFAULT_LAUNCHER="torchrun"
-    ;;
   *)
     echo "ERROR: could not infer supported WM kind from CONFIG_NAME='${CONFIG_NAME}'." >&2
     exit 2
@@ -133,12 +125,8 @@ if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" && "${DREAMERV3_PIXEL_DDP:-${PI
   RUN_TAG="ddp_bs${BATCH_SIZE:-64}_nw${NUM_WORKERS:-16}_vizoff"
 fi
 
-if [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" && "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" && -z "${RUN_TAG}" ]]; then
-  if [[ "${CONFIG_NAME}" == *precomputed* ]]; then
-    RUN_TAG="ddp_precomputed_bs${BATCH_SIZE:-96}_nw${NUM_WORKERS:-8}_viz"
-  else
-    RUN_TAG="ddp_bs${BATCH_SIZE:-2}_nw${NUM_WORKERS:-8}_rynn"
-  fi
+if [[ "${WM_KIND_RESOLVED}" == "action_hidden" && "${ACTION_HIDDEN_DDP:-${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}}" == "1" && -z "${RUN_TAG}" ]]; then
+  RUN_TAG="pi0_action_hidden_ddp_precomputed_bs${BATCH_SIZE:-96}_nw${NUM_WORKERS:-2}_viz"
 fi
 
 if [[ "${WM_KIND_RESOLVED}" == "chameleon" && -z "${RUN_TAG}" ]]; then
@@ -169,14 +157,7 @@ WM_T="${WM_T:-}"
 WM_STRIDE="${WM_STRIDE:-}"
 if [[ -n "${WM_T}" ]]; then
   case "${WM_KIND_RESOLVED}" in
-    pretokenize|tssm|rssm|transdreamer)
-      SEQUENCE_OVERRIDES=(
-        "++dataset.sequence_length=${WM_T}"
-        "++dataset_val_ind.sequence_length=${WM_T}"
-        "++dataset_val_ood.sequence_length=${WM_T}"
-      )
-      ;;
-    dreamerv3_pixel|rynn_backbone)
+    dreamerv3_pixel|action_hidden)
       SEQUENCE_OVERRIDES=(
         "dataset.sequence_length=${WM_T}"
       )
@@ -196,19 +177,10 @@ if [[ "${WM_SMOKE:-0}" == "1" ]]; then
     "dataloader.persistent_workers=false"
     "dataloader.pin_memory=false"
   )
-  if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" || "${WM_KIND_RESOLVED}" == "dreamerv3_token" || "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
+  if [[ "${WM_KIND_RESOLVED}" == "dreamerv3_pixel" || "${WM_KIND_RESOLVED}" == "dreamerv3_token" || "${WM_KIND_RESOLVED}" == "action_hidden" ]]; then
     SMOKE_OVERRIDES+=(
       "training.max_steps=${WM_SMOKE_STEPS:-1}"
       "viz.enabled=false"
-    )
-  elif [[ "${WM_KIND_RESOLVED}" == "pretokenize" || "${WM_KIND_RESOLVED}" == "tssm" || "${WM_KIND_RESOLVED}" == "rssm" || "${WM_KIND_RESOLVED}" == "transdreamer" ]]; then
-    SMOKE_OVERRIDES+=(
-      "training.max_train_steps=${WM_SMOKE_STEPS:-1}"
-      "dataset_val_ind=null"
-      "dataset_val_ood=null"
-      "viz.enabled=false"
-      "checkpoint.save_last_ckpt=false"
-      "checkpoint.topk.k=0"
     )
   elif [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
     SMOKE_OVERRIDES+=(
@@ -219,7 +191,7 @@ if [[ "${WM_SMOKE:-0}" == "1" ]]; then
       "checkpoint.topk.k=0"
     )
   fi
-  if [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
+  if [[ "${WM_KIND_RESOLVED}" == "action_hidden" ]]; then
     SMOKE_OVERRIDES+=(
       "dataset.sequence_length=${WM_SMOKE_T:-2}"
       "dataset.stride=${WM_SMOKE_STRIDE:-8}"
@@ -271,24 +243,15 @@ elif [[ "${WM_KIND_RESOLVED}" == "chameleon" ]]; then
     "optim.world_model.lr=${LR}"
     "optim.world_model.weight_decay=${WEIGHT_DECAY}"
   )
-elif [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
-  if [[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]]; then
-    if [[ "${CONFIG_NAME}" == *precomputed* ]]; then
-      # Precomputed hidden avoids the frozen VLA backbone during training and
-      # can use pure-pixel-like batches.
-      BATCH_SIZE="${BATCH_SIZE:-96}"
-      NUM_WORKERS="${NUM_WORKERS:-2}"
-    else
-      # Online Rynn-pixel carries a frozen VLA backbone on each rank, so the
-      # useful per-GPU batch is much smaller than pure pixel DreamerV3.
-      BATCH_SIZE="${BATCH_SIZE:-2}"
-      NUM_WORKERS="${NUM_WORKERS:-2}"
-    fi
-    RYNN_ENCODER_CHUNK_SIZE="${RYNN_ENCODER_CHUNK_SIZE:-8}"
+elif [[ "${WM_KIND_RESOLVED}" == "action_hidden" ]]; then
+  if [[ "${ACTION_HIDDEN_DDP:-${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}}" == "1" ]]; then
+    BATCH_SIZE="${BATCH_SIZE:-96}"
+    NUM_WORKERS="${NUM_WORKERS:-2}"
+    ACTION_HIDDEN_ENCODER_CHUNK_SIZE="${ACTION_HIDDEN_ENCODER_CHUNK_SIZE:-${RYNN_ENCODER_CHUNK_SIZE:-8}}"
   else
     BATCH_SIZE="${BATCH_SIZE:-1}"
     NUM_WORKERS="${NUM_WORKERS:-2}"
-    RYNN_ENCODER_CHUNK_SIZE="${RYNN_ENCODER_CHUNK_SIZE:-8}"
+    ACTION_HIDDEN_ENCODER_CHUNK_SIZE="${ACTION_HIDDEN_ENCODER_CHUNK_SIZE:-${RYNN_ENCODER_CHUNK_SIZE:-8}}"
   fi
   PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
   PIN_MEMORY="${PIN_MEMORY:-false}"
@@ -299,9 +262,9 @@ elif [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
   GRAD_CLIP="${GRAD_CLIP:-100.0}"
   LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-1000}"
   KIND_OVERRIDES=(
-    "training.distributed_strategy=$([[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]] && echo ddp || echo single)"
-    "training.data_parallel=$([[ "${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}" == "1" ]] && echo false || echo true)"
-    "training.encoder_chunk_size=${RYNN_ENCODER_CHUNK_SIZE}"
+    "training.distributed_strategy=$([[ "${ACTION_HIDDEN_DDP:-${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}}" == "1" ]] && echo ddp || echo single)"
+    "training.data_parallel=$([[ "${ACTION_HIDDEN_DDP:-${RYNN_PIXEL_DDP:-${RYNN_BACKBONE_DDP:-${DDP:-0}}}}" == "1" ]] && echo false || echo true)"
+    "training.encoder_chunk_size=${ACTION_HIDDEN_ENCODER_CHUNK_SIZE}"
     "dataloader.batch_size=${BATCH_SIZE}"
     "dataloader.num_workers=${NUM_WORKERS}"
     "dataloader.persistent_workers=${PERSISTENT_WORKERS}"
@@ -322,24 +285,46 @@ elif [[ "${WM_KIND_RESOLVED}" == "rynn_backbone" ]]; then
   if [[ -n "${ACTION_HORIZON:-${TIME_HORIZON:-}}" ]]; then
     KIND_OVERRIDES+=("encoder.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
   fi
-  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${RYNN_HIDDEN_DIR:-}" ]]; then
+  ACTION_HIDDEN_DIR="${ACTION_HIDDEN_DIR:-${RYNN_WM_HIDDEN_DIR:-${RYNN_HIDDEN_DIR:-}}}"
+  if [[ -n "${ACTION_HIDDEN_DIR}" ]]; then
     KIND_OVERRIDES+=(
-      "dataset.hidden_dir=${RYNN_HIDDEN_DIR}"
+      "dataset.hidden_dir=${ACTION_HIDDEN_DIR}"
       "dataset.expected_model_path=${VLA_INIT_CKPT:-}"
       "dataset.expected_encoder_state_ckpt=${VLA_STATE_CKPT:-${ENCODER_STATE_CKPT:-}}"
       "dataset.expected_time_horizon=${ACTION_HORIZON:-${TIME_HORIZON:-5}}"
     )
   fi
-  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${LOAD_ACTOR_SEQUENCE:-}" ]]; then
+  if [[ -n "${HDF5_DIR:-}" ]]; then
+    KIND_OVERRIDES+=("dataset.hdf5_dir=${HDF5_DIR}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_EXPECTED_OBS_HIDDEN_SOURCE:-${RYNN_EXPECTED_OBS_HIDDEN_SOURCE:-${OBS_HIDDEN_SOURCE:-}}}" ]]; then
+    KIND_OVERRIDES+=("dataset.expected_obs_hidden_source=${ACTION_HIDDEN_EXPECTED_OBS_HIDDEN_SOURCE:-${RYNN_EXPECTED_OBS_HIDDEN_SOURCE:-${OBS_HIDDEN_SOURCE}}}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_EXPECTED_PROMPT_STYLE:-${RYNN_EXPECTED_PROMPT_STYLE:-}}" ]]; then
+    KIND_OVERRIDES+=("dataset.expected_prompt_style=${ACTION_HIDDEN_EXPECTED_PROMPT_STYLE:-${RYNN_EXPECTED_PROMPT_STYLE}}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_EXPECTED_HISTORY:-${RYNN_EXPECTED_HISTORY:-}}" ]]; then
+    KIND_OVERRIDES+=("dataset.expected_history=${ACTION_HIDDEN_EXPECTED_HISTORY:-${RYNN_EXPECTED_HISTORY}}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_EXPECTED_INCLUDE_STATE:-${RYNN_EXPECTED_INCLUDE_STATE:-}}" ]]; then
+    KIND_OVERRIDES+=("dataset.expected_include_state=${ACTION_HIDDEN_EXPECTED_INCLUDE_STATE:-${RYNN_EXPECTED_INCLUDE_STATE}}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_EXPECTED_ROTATE_IMAGES_180:-${RYNN_EXPECTED_ROTATE_IMAGES_180:-}}" ]]; then
+    KIND_OVERRIDES+=("dataset.expected_rotate_images_180=${ACTION_HIDDEN_EXPECTED_ROTATE_IMAGES_180:-${RYNN_EXPECTED_ROTATE_IMAGES_180}}")
+  fi
+  if [[ -n "${ACTION_HIDDEN_WM_OBS_DIM:-${RYNN_WM_OBS_DIM:-${WM_OBS_DIM:-}}}" ]]; then
+    KIND_OVERRIDES+=("world_model.obs_dim=${ACTION_HIDDEN_WM_OBS_DIM:-${RYNN_WM_OBS_DIM:-${WM_OBS_DIM}}}")
+  fi
+  if [[ -n "${LOAD_ACTOR_SEQUENCE:-}" ]]; then
     KIND_OVERRIDES+=("dataset.load_actor_sequence=${LOAD_ACTOR_SEQUENCE}")
   fi
-  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${ACTOR_SEQUENCE_LENGTH:-}" ]]; then
+  if [[ -n "${ACTOR_SEQUENCE_LENGTH:-}" ]]; then
     KIND_OVERRIDES+=(
       "dataset.actor_sequence_length=${ACTOR_SEQUENCE_LENGTH}"
       "world_model.actor_sequence_length=${ACTOR_SEQUENCE_LENGTH}"
     )
   fi
-  if [[ "${CONFIG_NAME}" == *precomputed* && -n "${FULL_HIDDEN_REC_SCALE:-}" ]]; then
+  if [[ -n "${FULL_HIDDEN_REC_SCALE:-}" ]]; then
     KIND_OVERRIDES+=("world_model.full_hidden_rec_scale=${FULL_HIDDEN_REC_SCALE}")
   fi
 fi

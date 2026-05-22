@@ -7,15 +7,15 @@
 #   bash scripts/train_dreamer_vla.sh
 #
 # Override via env vars:
-#   NUM_GPUS=8 CONFIG_NAME=dreamer_vla_libero_goal bash scripts/train_dreamer_vla.sh
-#   PYTHON=/path/to/python NUM_GPUS=4 CONFIG_NAME=dreamer_vla_libero_goal bash scripts/train_dreamer_vla.sh
+#   NUM_GPUS=8 CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor bash scripts/train_dreamer_vla.sh
+#   PYTHON=/path/to/python NUM_GPUS=4 CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor bash scripts/train_dreamer_vla.sh
 #
 # Default run naming:
 #   ${CONFIG_NAME}_${RUN_TAG}_${GPU_TAG}_${IMAGE_TAG}_${ACTOR_LOSS_TAG}_${TIMESTAMP}
 #
 # Examples:
-#   dreamer_vla_libero_goal_gpu0123_noimg_dreamerv3pg_20260427_145500
-#   dreamer_vla_libero_goal_ablation1_gpu4567_img_pathwise_20260427_145500
+#   dreamer_vla_libero_goal_pi0_action_hidden_head_actor_gpu0123_noimg_dreamerv3_20260427_145500
+#   dreamer_vla_libero_goal_pi0_action_hidden_head_actor_ablation1_gpu4567_noimg_pg_20260427_145500
 #
 # You can still override OUT_DIR directly for exact paths.
 set -euo pipefail
@@ -26,7 +26,7 @@ cd "${PROJECT_ROOT}"
 
 NUM_GPUS="${NUM_GPUS:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
-CONFIG_NAME="${CONFIG_NAME:-dreamer_vla_libero_goal}"
+CONFIG_NAME="${CONFIG_NAME:-dreamer_vla_libero_goal_pi0_action_hidden_head_actor}"
 TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 PYTHON_BIN="${PYTHON:-python}"
 
@@ -98,14 +98,20 @@ fi
 if [[ -n "${WORLD_MODEL_STATE_CKPT:-}" ]]; then
   INIT_OVERRIDES+=("init.world_model_state_ckpt=${WORLD_MODEL_STATE_CKPT}")
 fi
+if [[ -n "${DREAMERVLA_STATE_CKPT:-}" ]]; then
+  INIT_OVERRIDES+=("init.dreamervla_state_ckpt=${DREAMERVLA_STATE_CKPT}")
+fi
 if [[ -n "${ACTION_HORIZON:-${TIME_HORIZON:-}}" ]]; then
   if [[ "${CONFIG_NAME}" != *"precomputed"* && "${USE_PRECOMPUTED_ENCODER:-0}" != "1" ]]; then
     INIT_OVERRIDES+=("encoder.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
   fi
   INIT_OVERRIDES+=("policy.time_horizon=${ACTION_HORIZON:-${TIME_HORIZON}}")
 fi
-if [[ -n "${RYNN_HIDDEN_DIR:-}" ]]; then
-  INIT_OVERRIDES+=("dataset.hidden_dir=${RYNN_HIDDEN_DIR}")
+if [[ -n "${ACTION_HIDDEN_DIR:-${RYNN_HIDDEN_DIR:-}}" ]]; then
+  INIT_OVERRIDES+=("dataset.hidden_dir=${ACTION_HIDDEN_DIR:-${RYNN_HIDDEN_DIR}}")
+fi
+if [[ -n "${HDF5_DIR:-}" ]]; then
+  INIT_OVERRIDES+=("dataset.hdf5_dir=${HDF5_DIR}")
 fi
 
 echo "Run output dir: ${OUT_DIR}"

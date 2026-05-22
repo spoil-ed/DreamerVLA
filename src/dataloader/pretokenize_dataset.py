@@ -561,29 +561,6 @@ class PretokenizeDataset(BaseDataset):
         }
 
 
-class PretokenizeFlatDataset(PretokenizeDataset):
-    """Original flat pretokenized dataset behavior.
-
-    This class intentionally ignores sequence-window arguments.  Use it in
-    configs when a run must stay on the original
-    ``wm_obs_input_ids``/``wm_next_obs_input_ids`` single-transition path.
-    """
-
-    def __init__(
-        self,
-        config_path: str | Path,
-        history: int | None = None,
-        batch_length: int | None = None,
-        replay_context: int | None = None,
-        sequence_length: int | None = None,
-        stride: int | None = None,
-        sequence_next_obs_source: str | None = None,
-    ) -> None:
-        # Accept and ignore sequence-window arguments so configs can inherit
-        # from sequence-enabled WM configs while still forcing the flat path.
-        super().__init__(config_path=config_path)
-
-
 class PretokenizeActionChunkDataset(PretokenizeDataset):
     """Build multi-step VLA action chunks from atomic his=1/horizon=1 samples.
 
@@ -748,6 +725,5 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
 __all__ = [
     "PretokenizeDataSpec",
     "PretokenizeDataset",
-    "PretokenizeFlatDataset",
     "PretokenizeActionChunkDataset",
 ]

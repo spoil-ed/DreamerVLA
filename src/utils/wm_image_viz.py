@@ -1,17 +1,10 @@
 """Reusable "decode WM prediction back to pixels" utility.
 
-Extracts the broadcast-delta logic from src.cli.eval_wm so it can be called
-periodically during training to produce rec-vs-gt comparison strips.
-
-Why broadcast-delta: the WM in this repo operates on a single mean-pooled
-4096-d hidden per frame -- spatial structure is already discarded by the
-encoder. To turn a predicted pooled hidden back into an image we (a) take the
-current frame's per-token hidden states, (b) add the predicted delta
-(pred_next_pooled - cur_pooled) to every image-token position, (c) project
-through the LLM's lm_head to get image-token logits, and (d) decode via the
-Chameleon VQGAN. The picture carries the global change the WM anticipates
-stamped onto the spatial template of the current frame -- qualitative sanity
-check, not a pixel-accurate prediction.
+This supports qualitative rec-vs-gt comparison strips for routes that keep
+Chameleon image-token context around the WM observation. The visualization is a
+sanity check, not a pixel-accurate prediction: it projects a predicted hidden
+delta back through the VLA language head and decodes image-token logits with
+the Chameleon VQGAN.
 """
 from __future__ import annotations
 
@@ -347,7 +340,7 @@ class WorldModelImageVisualizer:
           - Route-B (spatial_codec=True): per-image-token hidden → conv stem
             → RSSM → conv deconv → lm_head → VQGAN.  Panels: cur / gt_next /
             pred_latent.
-          - Route-0: mean-pooled hidden path with broadcast-delta fallback
+          - Route-0: hidden-delta visualization fallback
             and optional MLP image_decoder panel.
         """
         out_dir = Path(out_dir)

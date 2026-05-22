@@ -1,5 +1,4 @@
-_target_: src.workspace.pretokenize_vla_workspace.PretokenizeVLAWorkspace
-
+_target_: src.workspace.VLASFTWorkspace
 seed: 7
 
 hydra:

@@ -9,6 +9,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.models.world_model.block_linear import BlockLinear
+from src.models.world_model.base_world_model import (
+    DreamerV3ActorAdapterMixin,
+    DreamerV3LatentState,
+    DreamerV3Loss,
+)
 
 
 class RMSNorm(nn.Module):
@@ -46,6 +51,8 @@ def _act(name: str) -> nn.Module:
         return nn.GELU()
     if name == "relu":
         return nn.ReLU()
+    if name == "elu":
+        return nn.ELU()
     raise ValueError(f"Unsupported activation: {name}")
 
 
@@ -591,6 +598,291 @@ class MLPHead(nn.Module):
         return self.net(x)
 
 
+class _ResBlock(nn.Module):
+    def __init__(self, dim: int, act: str) -> None:
+        super().__init__()
+        self.norm = RMSNorm(dim)
+        self.fc1 = nn.Linear(dim, dim)
+        self.act = _act(act)
+        self.fc2 = nn.Linear(dim, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        h = self.act(self.fc1(h))
+        return x + self.fc2(h)
+
+
+class ResMLPHead(nn.Module):
+    """ResNet-style MLP head: input proj -> N residual blocks -> output proj.
+
+    Each block: x + Linear(act(Linear(RMSNorm(x)))).
+    Stable for deeper stacks than plain MLPHead because of skip connections.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        layers: int = 2,
+        units: int = 8192,
+        act: str = "silu",
+        outscale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.input_proj = nn.Linear(int(in_dim), int(units))
+        self.blocks = nn.ModuleList([_ResBlock(int(units), act) for _ in range(int(layers))])
+        self.norm_out = RMSNorm(int(units))
+        final = nn.Linear(int(units), int(out_dim))
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                final.weight.mul_(float(outscale))
+                if final.bias is not None:
+                    final.bias.mul_(float(outscale))
+        self.output_proj = final
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.input_proj(x)
+        for blk in self.blocks:
+            h = blk(h)
+        return self.output_proj(self.norm_out(h))
+
+
+class Pi0StyleHiddenDecoder(nn.Module):
+    """Pi0-action-head-style hidden decoder.
+
+    Replicates the original Pi0StyleActionQueryHead pattern: a TransformerEncoder
+    over [memory_tokens, learned_query_tokens]. Memory comes from feat (deter +
+    stoch*classes) split into ``mem_tokens`` tokens of width ``d_model``. We have
+    ``num_queries = out_dim // d_model`` learned query embeddings; their output
+    positions, concatenated, form the reconstructed action_hidden.
+
+    Default ``d_model=1024, mem_tokens=8, nhead=8`` mirrors pi0's reduced_hidden
+    width and gives an FF dim of 4096 -- compact compared to a 16384-unit MLP.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        layers: int = 4,
+        d_model: int = 1024,
+        nhead: int = 8,
+        mem_tokens: int = 8,
+        dim_feedforward_mult: int = 4,
+        dropout: float = 0.0,
+        act: str = "gelu",
+        outscale: float = 1.0,
+        token_dim: int | None = None,
+        **_: object,
+    ) -> None:
+        super().__init__()
+        d_model = int(d_model)
+        mem_tokens = int(mem_tokens)
+        out_dim = int(out_dim)
+        token_dim = int(token_dim) if token_dim is not None else d_model
+        if out_dim % token_dim != 0:
+            raise ValueError(
+                f"Pi0StyleHiddenDecoder: out_dim={out_dim} must be divisible by token_dim={token_dim}"
+            )
+        self.num_queries = out_dim // token_dim
+        self.d_model = d_model
+        self.token_dim = token_dim
+        self.mem_tokens = mem_tokens
+        self.out_dim = out_dim
+        self.feat_proj = nn.Linear(int(in_dim), mem_tokens * d_model)
+        self.queries = nn.Parameter(torch.randn(self.num_queries, d_model) * 0.02)
+        self.out_proj = nn.Linear(d_model, token_dim) if token_dim != d_model else nn.Identity()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=int(nhead),
+            dim_feedforward=d_model * int(dim_feedforward_mult),
+            dropout=float(dropout),
+            activation=str(act).lower() if str(act).lower() in {"relu", "gelu"} else "gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=int(layers),
+            norm=nn.LayerNorm(d_model),
+        )
+        self.output_norm = nn.LayerNorm(d_model)
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                self.queries.mul_(float(outscale))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        lead_shape = x.shape[:-1]
+        x_flat = x.reshape(-1, x.shape[-1])
+        N = x_flat.shape[0]
+        mem = self.feat_proj(x_flat).view(N, self.mem_tokens, self.d_model)
+        queries = self.queries.unsqueeze(0).expand(N, -1, -1)
+        seq = torch.cat([mem, queries], dim=1)
+        out = self.transformer(seq)
+        out_queries = self.output_norm(out[:, self.mem_tokens :, :])
+        out_tokens = self.out_proj(out_queries)
+        return out_tokens.reshape(*lead_shape, self.out_dim)
+
+
+class Pi0TimeBroadcastDecoder(nn.Module):
+    """Time-only transformer decoder with joint broadcast.
+
+    Structural finding (docs/hidden_token_structure_report.md): the
+    35 = 5*7 action_hidden tokens collapse to a 5-step time sequence
+    with 7 statistically-identical joint copies per step (same-t residual
+    cosine = 0.996). So only 5 learned query tokens are needed; the 7
+    joints are produced by broadcasting.
+
+    Architecture (default ``T_q=5, joint_broadcast=7, d_model=1024``):
+
+        feat ``[B, ..., in_dim]``
+            → Linear → ``mem [B, mem_tokens, d_model]``
+        concat with learned ``queries [T_q, d_model]``
+            → ``[B, mem_tokens + T_q, d_model]``
+        TransformerEncoder × L
+            → take last ``T_q`` positions → ``time_out [B, T_q, d_model]``
+        broadcast along joint axis (repeat)
+            → ``[B, T_q, J, d_model]`` → flatten → ``[B, T_q * J * d_model]``
+
+    Compared to ``Pi0StyleHiddenDecoder``:
+        - 35 queries → 5 queries  (-86 % query params)
+        - attention seq 43 → 13   (-91 % attention ops)
+        - feat_proj unchanged → total params ≈ same
+        - removes the 30×30 degenerate joint-pair attention block
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        layers: int = 4,
+        d_model: int = 1024,
+        nhead: int = 8,
+        mem_tokens: int = 8,
+        n_time_queries: int = 5,
+        joint_broadcast: int = 7,
+        dim_feedforward_mult: int = 4,
+        dropout: float = 0.0,
+        act: str = "gelu",
+        outscale: float = 1.0,
+        token_dim: int | None = None,
+        **_: object,
+    ) -> None:
+        super().__init__()
+        d_model = int(d_model)
+        mem_tokens = int(mem_tokens)
+        out_dim = int(out_dim)
+        n_time_queries = int(n_time_queries)
+        joint_broadcast = int(joint_broadcast)
+        token_dim = int(token_dim) if token_dim is not None else d_model
+        expected = n_time_queries * joint_broadcast * token_dim
+        if out_dim != expected:
+            raise ValueError(
+                f"Pi0TimeBroadcastDecoder: out_dim={out_dim} must equal "
+                f"n_time_queries × joint_broadcast × token_dim "
+                f"({n_time_queries}×{joint_broadcast}×{token_dim}={expected})"
+            )
+        self.d_model = d_model
+        self.token_dim = token_dim
+        self.mem_tokens = mem_tokens
+        self.n_time_queries = n_time_queries
+        self.joint_broadcast = joint_broadcast
+        self.out_dim = out_dim
+        self.feat_proj = nn.Linear(int(in_dim), mem_tokens * d_model)
+        self.queries = nn.Parameter(torch.randn(n_time_queries, d_model) * 0.02)
+        self.out_proj = nn.Linear(d_model, token_dim) if token_dim != d_model else nn.Identity()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=int(nhead),
+            dim_feedforward=d_model * int(dim_feedforward_mult),
+            dropout=float(dropout),
+            activation=str(act).lower() if str(act).lower() in {"relu", "gelu"} else "gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=int(layers),
+            norm=nn.LayerNorm(d_model),
+        )
+        self.output_norm = nn.LayerNorm(d_model)
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                self.queries.mul_(float(outscale))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        lead_shape = x.shape[:-1]
+        x_flat = x.reshape(-1, x.shape[-1])
+        N = x_flat.shape[0]
+        mem = self.feat_proj(x_flat).view(N, self.mem_tokens, self.d_model)
+        queries = self.queries.unsqueeze(0).expand(N, -1, -1)
+        seq = torch.cat([mem, queries], dim=1)
+        out = self.transformer(seq)
+        time_out = self.output_norm(out[:, self.mem_tokens :, :])  # [N, T_q, d_model]
+        time_tokens = self.out_proj(time_out)                       # [N, T_q, token_dim]
+        # broadcast across joint axis: [N, T_q, 1, token_dim] -> [N, T_q, J, token_dim]
+        broadcast = time_tokens.unsqueeze(2).expand(-1, -1, self.joint_broadcast, -1)
+        return broadcast.reshape(*lead_shape, self.out_dim)
+
+
+class PerTokenMLPHead(nn.Module):
+    """Per-token shared MLP decoder for structured hidden reconstruction.
+
+    Treats the output ``[B, ..., out_dim]`` as ``n_tokens × token_dim`` and produces
+    each of the ``n_tokens`` 1024-dim tokens via a SHARED MLP, conditioned on a
+    small learned query embedding to distinguish token positions.
+
+    Architecture:
+        feat ``[B, T, in_dim]``
+            → broadcast to ``[B, T, n_tokens, in_dim]``
+            → concat learned ``query_emb [n_tokens, query_dim]`` → ``[B, T, n_tokens, in_dim+query_dim]``
+            → shared ``MLPHead`` ``(in_dim+query_dim) → ... → token_dim`` → ``[B, T, n_tokens, token_dim]``
+            → reshape → ``[B, T, n_tokens*token_dim]``
+
+    Param budget (default ``layers=2, units=2048, query_dim=128``) for
+    in_dim=10240, n_tokens=35, token_dim=1024:
+        query_emb 35×128 = 4.5 K
+        Linear(10368 → 2048) = 21.2 M
+        Linear(2048 → 1024)  =  2.1 M
+        ≈ 23 M total — matches the OLD pi0_query-head decoder's per-token capacity.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        n_tokens: int,
+        token_dim: int,
+        query_dim: int = 128,
+        layers: int = 2,
+        units: int = 2048,
+        act: str = "silu",
+        outscale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.n_tokens = int(n_tokens)
+        self.token_dim = int(token_dim)
+        self.query_dim = int(query_dim)
+        self.out_dim = self.n_tokens * self.token_dim
+        self.query_emb = nn.Parameter(torch.randn(self.n_tokens, self.query_dim) * 0.02)
+        self.mlp = MLPHead(
+            int(in_dim) + self.query_dim,
+            self.token_dim,
+            layers=int(layers),
+            units=int(units),
+            act=act,
+            outscale=outscale,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: ``[..., in_dim]`` → ``[..., n_tokens * token_dim]``"""
+        lead_shape = x.shape[:-1]
+        x_expanded = x.unsqueeze(-2).expand(*lead_shape, self.n_tokens, -1)
+        q = self.query_emb.to(dtype=x.dtype).expand(*lead_shape, -1, -1)
+        x_with_q = torch.cat([x_expanded, q], dim=-1)
+        out = self.mlp(x_with_q)
+        return out.reshape(*lead_shape, self.out_dim)
+
+
 class FullHiddenSequenceDecoder(nn.Module):
     """Decode RSSM features into a fixed-length VLA token hidden sequence."""
 
@@ -882,723 +1174,6 @@ def _reward_pred(head: nn.Module, pred: torch.Tensor) -> torch.Tensor:
     return pred.squeeze(-1)
 
 
-@dataclass
-class DreamerV3Loss:
-    loss: torch.Tensor
-    metrics: dict[str, torch.Tensor]
-
-
-@dataclass
-class DreamerV3LatentState:
-    """Single-step DreamerV3 RSSM state used by DreamerVLA actor cotrain."""
-
-    deter: torch.Tensor
-    stoch: torch.Tensor
-    logits: torch.Tensor | None = None
-
-    def feature(self) -> torch.Tensor:
-        return torch.cat([self.deter, self.stoch.reshape(*self.stoch.shape[:-2], -1)], dim=-1)
-
-
-class DreamerV3ActorAdapterMixin:
-    """Adds DreamerVLA's single-step actor interface to DreamerV3 WMs.
-
-    The standalone DreamerV3 trainers call ``model(batch)`` and use the
-    sequence loss.  DreamerVLA cotrain additionally needs:
-
-      model({'mode': 'encode_latent', 'hidden': obs})
-      model({'mode': 'predict_next', 'latent': state, 'actions': action})
-      model({'mode': 'reward', ...})
-
-    This mixin keeps both routes available without changing the public config
-    surface of the standalone pixel/token baselines.
-    """
-
-    def _single_observation_sequence(self, hidden: torch.Tensor) -> torch.Tensor:
-        if isinstance(self.encoder, DreamerV3TokenEncoder):
-            if hidden.ndim in {2, 3}:
-                return hidden[:, None]
-            if hidden.ndim == 4 and hidden.shape[1] == 1:
-                return hidden
-            raise ValueError(f"Unsupported DreamerV3 token observation shape: {tuple(hidden.shape)}")
-
-        # Pixel obs: [B,C,H,W] -> [B,1,C,H,W].
-        if hidden.ndim == 4:
-            return hidden[:, None]
-        if hidden.ndim == 5 and hidden.shape[1] == 1:
-            return hidden
-        raise ValueError(f"Unsupported DreamerV3 single observation shape: {tuple(hidden.shape)}")
-
-    def _feature_dim(self) -> int:
-        return int(self.rssm.deter + self.rssm.stoch * self.rssm.classes)
-
-    def _latent_from_feature(self, feature: torch.Tensor) -> DreamerV3LatentState:
-        dtype = _module_dtype(self, feature.dtype)
-        device = _module_device(self, feature.device)
-        feature = feature.to(device=device, dtype=dtype)
-        deter = feature[:, : self.rssm.deter]
-        stoch_flat = feature[:, self.rssm.deter :]
-        stoch = stoch_flat.reshape(feature.shape[0], self.rssm.stoch, self.rssm.classes)
-        return DreamerV3LatentState(deter=deter, stoch=stoch)
-
-    def encode_latent(self, hidden: torch.Tensor) -> DreamerV3LatentState:
-        if hidden.ndim == 2 and hidden.shape[-1] == self._feature_dim() and torch.is_floating_point(hidden):
-            return self._latent_from_feature(hidden)
-
-        device = _module_device(self, hidden.device)
-        obs = self._single_observation_sequence(hidden.to(device=device))
-        enc = self.encoder(obs)
-        batch_size = enc.shape[0]
-        dtype = enc.dtype
-        actions = torch.zeros(batch_size, 1, self.rssm.action_dim, device=device, dtype=dtype)
-        is_first = torch.ones(batch_size, 1, device=device, dtype=torch.bool)
-        seq = self.rssm.observe(enc, actions, is_first)
-        return DreamerV3LatentState(
-            deter=seq["deter"][:, 0],
-            stoch=seq["stoch"][:, 0],
-            logits=seq["post_logits"][:, 0],
-        )
-
-    def predict_next(self, latent: DreamerV3LatentState, actions: torch.Tensor) -> DreamerV3LatentState:
-        device = _module_device(self, actions.device)
-        dtype = latent.deter.dtype
-        action = actions.to(device=device, dtype=dtype)
-        if action.ndim == 3:
-            action = action.mean(dim=1)
-        deter = self.rssm._core(
-            latent.deter.to(device=device, dtype=dtype),
-            latent.stoch.to(device=device, dtype=dtype),
-            action,
-        )
-        logits = self.rssm._prior(deter)
-        stoch = self.rssm._sample(logits)
-        return DreamerV3LatentState(deter=deter, stoch=stoch, logits=logits)
-
-    def observe_next(
-        self,
-        latent: DreamerV3LatentState,
-        hidden: torch.Tensor,
-        actions: torch.Tensor,
-        is_first: torch.Tensor | bool | None = None,
-    ) -> DreamerV3LatentState:
-        device = _module_device(self, hidden.device)
-        obs = self._single_observation_sequence(hidden.to(device=device))
-        enc = self.encoder(obs)
-        return self.rssm.observe_next(latent, enc[:, 0], actions, is_first=is_first)
-
-    def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        return latent.feature()
-
-    def critic_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        return latent.feature()
-
-    def observe_sequence(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
-        if "images" in batch:
-            obs = batch["images"]
-        elif "tokens" in batch:
-            obs = batch["tokens"]
-        else:
-            raise KeyError("DreamerV3 observe_sequence expects `images` or `tokens`.")
-        device = _module_device(self, obs.device)
-        enc = self.encoder(obs.to(device=device))
-        actions = batch["actions"].to(device=device, dtype=enc.dtype)
-        is_first = batch["is_first"].to(device=device)
-        seq = self.rssm.observe(enc, actions, is_first)
-        latent = DreamerV3LatentState(
-            deter=seq["deter"],
-            stoch=seq["stoch"],
-            logits=seq["post_logits"],
-        )
-        return {"latent": latent, "feat": latent.feature()}
-
-    def state_reward(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        pred = self.reward_head(latent.feature())
-        return _reward_pred(self.reward_head, pred).squeeze(-1)
-
-    def continue_prob(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        return torch.sigmoid(self.continue_head(latent.feature()).squeeze(-1))
-
-    def reward(
-        self,
-        latent: DreamerV3LatentState,
-        actions: torch.Tensor,
-        next_latent: DreamerV3LatentState,
-    ) -> torch.Tensor:
-        del latent, actions
-        return self.state_reward(next_latent)
-
-    def _forward_actor_adapter(self, batch: dict[str, Any]) -> Any:
-        mode = batch.get("mode")
-        if mode == "encode_latent":
-            return self.encode_latent(batch["hidden"])
-        if mode == "predict_next":
-            return self.predict_next(batch["latent"], batch["actions"])
-        if mode == "observe_next":
-            return self.observe_next(
-                batch["latent"],
-                batch["hidden"],
-                batch["actions"],
-                is_first=batch.get("is_first"),
-            )
-        if mode == "reward":
-            if "next_latent" in batch:
-                return self.reward(batch["latent"], batch.get("actions"), batch["next_latent"])
-            return self.state_reward(batch["latent"])
-        if mode == "continue":
-            return self.continue_prob(batch["latent"])
-        if mode == "actor_input":
-            return self.actor_input(batch["latent"])
-        if mode == "actor_input_sequence":
-            if not hasattr(self, "actor_input_sequence"):
-                raise ValueError("actor_input_sequence is not implemented for this world model")
-            return self.actor_input_sequence(batch["latent"])
-        if mode == "critic_input":
-            return self.critic_input(batch["latent"])
-        if mode == "observe_sequence":
-            return self.observe_sequence(batch)
-        raise ValueError(f"Unknown DreamerV3 actor-adapter mode: {mode!r}")
-
-    @staticmethod
-    def _compat_forward_dict(out: DreamerV3Loss) -> dict[str, torch.Tensor]:
-        result = {"_loss": out.loss, **out.metrics}
-        result["loss"] = out.loss
-        zero = out.loss.new_zeros(())
-        if "dyn_loss" in result:
-            result.setdefault("dyn_kl", result["dyn_loss"])
-        if "rep_loss" in result:
-            result.setdefault("rep_kl", result["rep_loss"])
-        if "rec_loss" in result:
-            result.setdefault("image_decoder_loss", result["rec_loss"])
-        if "image_mse" in result:
-            result.setdefault("image_recon_mse_loss", result["image_mse"])
-        if "token_ce" in result:
-            result.setdefault("image_recon_ce_loss", result["token_ce"])
-        if "token_acc" in result:
-            result.setdefault("image_recon_accuracy", result["token_acc"])
-        if "reward_pred_mean" in result:
-            result.setdefault("predicted_reward_mean", result["reward_pred_mean"])
-        result.setdefault("transition_loss", zero)
-        result.setdefault("kl_loss", result.get("dyn_loss", zero) + result.get("rep_loss", zero))
-        result.setdefault("delta_latent_loss", zero)
-        result.setdefault("action_margin_loss", zero)
-        return result
-
-
-class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
-    """PyTorch DreamerV3 world model for pixel observations.
-
-    This intentionally mirrors the public DreamerV3 architecture: CNN encoder,
-    discrete RSSM with block-GRU deterministic state, decoder from (h, z),
-    reward and continue heads, and split dyn/rep KL losses.
-    """
-
-    def __init__(
-        self,
-        action_dim: int = 7,
-        image_channels: int = 6,
-        image_size: int = 64,
-        deter: int = 8192,
-        hidden: int = 1024,
-        stoch: int = 32,
-        classes: int = 64,
-        blocks: int = 8,
-        depth: int = 64,
-        mults: tuple[int, ...] = (2, 3, 4, 4),
-        kernel: int = 5,
-        act: str = "silu",
-        unimix: float = 0.01,
-        free_nats: float = 1.0,
-        reward_bins: int = 255,
-        reward_head_type: str = "twohot",
-        reward_init_logit: float = -5.0,
-        reward_pos_weight: float | None = None,
-        contdisc: bool = True,
-        horizon: int = 333,
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        rec_scale: float = 1.0,
-        rew_scale: float = 1.0,
-        con_scale: float = 1.0,
-    ) -> None:
-        super().__init__()
-        self.encoder = DreamerV3PixelEncoder(image_channels, image_size, depth, mults, kernel, act)
-        self.rssm = DreamerV3RSSM(
-            action_dim=action_dim,
-            deter=deter,
-            hidden=hidden,
-            stoch=stoch,
-            classes=classes,
-            blocks=blocks,
-            unimix=unimix,
-            free_nats=free_nats,
-            act=act,
-        )
-        self.rssm.build_posterior(self.encoder.out_dim, act=act)
-        self.decoder = DreamerV3PixelDecoder(
-            image_channels=image_channels,
-            image_size=image_size,
-            deter=deter,
-            stoch=stoch,
-            classes=classes,
-            depth=depth,
-            mults=mults,
-            kernel=kernel,
-            act=act,
-        )
-        feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(
-            feat_dim,
-            reward_bins,
-            hidden,
-            act,
-            reward_head_type=reward_head_type,
-            reward_init_logit=reward_init_logit,
-            reward_pos_weight=reward_pos_weight,
-        )
-        self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
-        self.dyn_scale = float(dyn_scale)
-        self.rep_scale = float(rep_scale)
-        self.rec_scale = float(rec_scale)
-        self.rew_scale = float(rew_scale)
-        self.con_scale = float(con_scale)
-        self.contdisc = bool(contdisc)
-        self.horizon = int(horizon)
-
-    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat([seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)], dim=-1)
-
-    def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
-        images = batch["images"]
-        actions = batch["actions"]
-        rewards = batch["rewards"].to(device=images.device, dtype=torch.float32)
-        dones = batch["dones"].to(device=images.device, dtype=torch.float32)
-        is_first = batch["is_first"].to(device=images.device)
-
-        tokens = self.encoder(images)
-        seq = self.rssm.observe(tokens, actions, is_first)
-        kls = self.rssm.kl_loss(seq["post_logits"], seq["prior_logits"])
-        recon = self.decoder(seq["deter"], seq["stoch"])
-        target = images.to(device=recon.device, dtype=recon.dtype) / 255.0
-        rec_per = (recon - target).square().sum(dim=(-3, -2, -1))
-        rec_loss = rec_per.mean()
-
-        feat = self.feature(seq)
-        reward_logits = self.reward_head(feat)
-        cont_logits = self.continue_head(feat).squeeze(-1)
-        reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
-        cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
-        if self.contdisc:
-            cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
-        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target)
-
-        loss = (
-            self.rec_scale * rec_loss
-            + self.dyn_scale * kls["dyn"]
-            + self.rep_scale * kls["rep"]
-            + self.rew_scale * reward_loss
-            + self.con_scale * cont_loss
-        )
-        mse = (recon.detach() - target).square().mean()
-        metrics = {
-            "loss": loss.detach(),
-            "rec_loss": rec_loss.detach(),
-            "dyn_loss": kls["dyn"].detach(),
-            "rep_loss": kls["rep"].detach(),
-            "reward_loss": reward_loss.detach(),
-            "continue_loss": cont_loss.detach(),
-            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
-            "image_mse": mse.detach(),
-            "image_psnr": (-10.0 * torch.log10(mse.clamp_min(1e-8))).detach(),
-            "dyn_entropy": kls["dyn_entropy"].detach(),
-            "rep_entropy": kls["rep_entropy"].detach(),
-        }
-        return DreamerV3Loss(loss=loss, metrics=metrics)
-
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(batch, dict) and batch.get("mode") is not None:
-            return self._forward_actor_adapter(batch)
-        out = self.loss(batch)
-        return self._compat_forward_dict(out)
-
-
-class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
-    """DreamerV3 RSSM with categorical image-token observations.
-
-    This is the controlled token counterpart of ``DreamerV3PixelWorldModel``:
-    same RSSM, same aggregate free-nats KL semantics, same reward and continue
-    heads. The observation likelihood is the only intended change, replacing
-    pixel MSE with categorical CE over image tokens.
-    """
-
-    def __init__(
-        self,
-        action_dim: int = 7,
-        num_image_tokens_vocab: int = 8192,
-        n_image_tokens: int = 512,
-        num_views: int = 2,
-        spatial_grid: tuple[int, int] = (16, 16),
-        token_embed_dim: int = 512,
-        deter: int = 8192,
-        hidden: int = 1024,
-        stoch: int = 32,
-        classes: int = 64,
-        blocks: int = 8,
-        depth: int = 64,
-        mults: tuple[int, ...] = (2, 3),
-        kernel: int = 5,
-        act: str = "silu",
-        unimix: float = 0.01,
-        free_nats: float = 1.0,
-        reward_bins: int = 255,
-        reward_head_type: str = "twohot",
-        reward_init_logit: float = -5.0,
-        reward_pos_weight: float | None = None,
-        contdisc: bool = True,
-        horizon: int = 333,
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        rec_scale: float = 1.0,
-        rew_scale: float = 1.0,
-        con_scale: float = 1.0,
-        rec_reduction: str = "sum",
-    ) -> None:
-        super().__init__()
-        self.encoder = DreamerV3TokenEncoder(
-            num_image_tokens_vocab=num_image_tokens_vocab,
-            n_image_tokens=n_image_tokens,
-            num_views=num_views,
-            spatial_grid=tuple(spatial_grid),
-            token_embed_dim=token_embed_dim,
-            depth=depth,
-            mults=tuple(mults),
-            kernel=kernel,
-            act=act,
-        )
-        self.rssm = DreamerV3RSSM(
-            action_dim=action_dim,
-            deter=deter,
-            hidden=hidden,
-            stoch=stoch,
-            classes=classes,
-            blocks=blocks,
-            unimix=unimix,
-            free_nats=free_nats,
-            act=act,
-        )
-        self.rssm.build_posterior(self.encoder.out_dim, act=act)
-        self.decoder = DreamerV3TokenDecoder(
-            num_image_tokens_vocab=num_image_tokens_vocab,
-            n_image_tokens=n_image_tokens,
-            num_views=num_views,
-            spatial_grid=tuple(spatial_grid),
-            deter=deter,
-            stoch=stoch,
-            classes=classes,
-            depth=depth,
-            mults=tuple(mults),
-            kernel=kernel,
-            act=act,
-        )
-        feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(
-            feat_dim,
-            reward_bins,
-            hidden,
-            act,
-            reward_head_type=reward_head_type,
-            reward_init_logit=reward_init_logit,
-            reward_pos_weight=reward_pos_weight,
-        )
-        self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
-        self.dyn_scale = float(dyn_scale)
-        self.rep_scale = float(rep_scale)
-        self.rec_scale = float(rec_scale)
-        self.rew_scale = float(rew_scale)
-        self.con_scale = float(con_scale)
-        self.rec_reduction = str(rec_reduction).lower()
-        if self.rec_reduction not in {"sum", "mean"}:
-            raise ValueError("rec_reduction must be 'sum' or 'mean'")
-        self.contdisc = bool(contdisc)
-        self.horizon = int(horizon)
-
-    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat(
-            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
-            dim=-1,
-        )
-
-    def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
-        tokens = batch["tokens"].long()
-        actions = batch["actions"]
-        rewards = batch["rewards"].to(device=actions.device, dtype=actions.dtype)
-        terminal = batch.get("is_terminal", batch["dones"])
-        dones = terminal.to(device=actions.device, dtype=actions.dtype)
-        is_first = batch["is_first"].to(device=actions.device)
-
-        enc = self.encoder(tokens)
-        seq = self.rssm.observe(enc, actions, is_first)
-        kls = self.rssm.kl_loss(seq["post_logits"], seq["prior_logits"])
-        logits = self.decoder(seq["deter"], seq["stoch"])  # [B,T,views,tokens,classes]
-
-        ce = F.cross_entropy(
-            logits.reshape(-1, logits.shape[-1]),
-            tokens.reshape(-1).to(device=logits.device),
-            reduction="none",
-        ).reshape(tokens.shape)
-        rec_per_step = ce.reshape(ce.shape[0], ce.shape[1], -1).sum(dim=-1)
-        rec_loss = rec_per_step.mean() if self.rec_reduction == "sum" else ce.mean()
-
-        feat = self.feature(seq)
-        reward_logits = self.reward_head(feat)
-        cont_logits = self.continue_head(feat).squeeze(-1)
-        reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
-        cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
-        if self.contdisc:
-            cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
-        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target, reduction="none").mean()
-
-        loss = (
-            self.rec_scale * rec_loss
-            + self.dyn_scale * kls["dyn"]
-            + self.rep_scale * kls["rep"]
-            + self.rew_scale * reward_loss
-            + self.con_scale * cont_loss
-        )
-
-        with torch.no_grad():
-            pred = logits.argmax(dim=-1)
-            reward_pred = _reward_pred(self.reward_head, reward_logits.detach())
-            token_acc = (pred == tokens.to(device=pred.device)).float().mean()
-            token_ce = ce.detach().float().mean()
-            log_probs = F.log_softmax(logits.detach().float(), dim=-1)
-            probs = log_probs.exp()
-            pred_entropy = -(probs * log_probs).sum(dim=-1).mean()
-            flat_pred = pred.reshape(pred.shape[0] * pred.shape[1], -1)
-            flat_gt = tokens.to(device=pred.device).reshape(tokens.shape[0] * tokens.shape[1], -1)
-            pred_unique = torch.tensor(
-                [int(torch.unique(row).numel()) for row in flat_pred],
-                dtype=logits.dtype,
-                device=logits.device,
-            ).mean()
-            gt_unique = torch.tensor(
-                [int(torch.unique(row).numel()) for row in flat_gt],
-                dtype=logits.dtype,
-                device=logits.device,
-            ).mean()
-        metrics = {
-            "loss": loss.detach(),
-            "rec_loss": rec_loss.detach(),
-            "token_ce": token_ce,
-            "token_acc": token_acc.detach(),
-            "dyn_loss": kls["dyn"].detach(),
-            "rep_loss": kls["rep"].detach(),
-            "reward_loss": reward_loss.detach(),
-            "reward_pred_mean": reward_pred.mean().detach(),
-            "continue_loss": cont_loss.detach(),
-            "pred_entropy": pred_entropy.detach(),
-            "pred_unique_tokens": pred_unique.detach(),
-            "gt_unique_tokens": gt_unique.detach(),
-            "dyn_entropy": kls["dyn_entropy"].detach(),
-            "rep_entropy": kls["rep_entropy"].detach(),
-        }
-        return DreamerV3Loss(loss=loss, metrics=metrics)
-
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(batch, dict) and batch.get("mode") is not None:
-            return self._forward_actor_adapter(batch)
-        out = self.loss(batch)
-        return self._compat_forward_dict(out)
-
-
-class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
-    """Pixel-world-model copy with only the observation distribution changed.
-
-    This is the controlled ablation requested for token observations: keep the
-    same RSSM, reward head, continue head, KL scales, and loss aggregation as
-    ``DreamerV3PixelWorldModel``. The only replacement is:
-
-      pixel obs + MSE decoder loss -> spatial token obs + categorical CE loss.
-    """
-
-    def __init__(
-        self,
-        action_dim: int = 7,
-        num_image_tokens_vocab: int = 8192,
-        n_image_tokens: int = 512,
-        num_views: int = 2,
-        spatial_grid: tuple[int, int] = (16, 16),
-        token_embed_dim: int = 512,
-        deter: int = 8192,
-        hidden: int = 1024,
-        stoch: int = 32,
-        classes: int = 64,
-        blocks: int = 8,
-        depth: int = 64,
-        mults: tuple[int, ...] = (2, 3),
-        kernel: int = 5,
-        act: str = "silu",
-        unimix: float = 0.01,
-        free_nats: float = 1.0,
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        rec_scale: float = 1.0,
-        rew_scale: float = 1.0,
-        con_scale: float = 1.0,
-        rec_reduction: str = "sum",
-        reward_bins: int = 255,
-        reward_head_type: str = "twohot",
-        reward_init_logit: float = -5.0,
-        reward_pos_weight: float | None = None,
-        contdisc: bool = True,
-        horizon: int = 333,
-    ) -> None:
-        super().__init__()
-        self.encoder = DreamerV3TokenEncoder(
-            num_image_tokens_vocab=num_image_tokens_vocab,
-            n_image_tokens=n_image_tokens,
-            num_views=num_views,
-            spatial_grid=tuple(spatial_grid),
-            token_embed_dim=token_embed_dim,
-            depth=depth,
-            mults=tuple(mults),
-            kernel=kernel,
-            act=act,
-        )
-        self.rssm = DreamerV3RSSM(
-            action_dim=action_dim,
-            deter=deter,
-            hidden=hidden,
-            stoch=stoch,
-            classes=classes,
-            blocks=blocks,
-            unimix=unimix,
-            free_nats=free_nats,
-            act=act,
-        )
-        self.rssm.build_posterior(self.encoder.out_dim, act=act)
-        self.decoder = DreamerV3TokenDecoder(
-            num_image_tokens_vocab=num_image_tokens_vocab,
-            n_image_tokens=n_image_tokens,
-            num_views=num_views,
-            spatial_grid=tuple(spatial_grid),
-            deter=deter,
-            stoch=stoch,
-            classes=classes,
-            depth=depth,
-            mults=tuple(mults),
-            kernel=kernel,
-            act=act,
-        )
-        feat_dim = int(deter) + int(stoch) * int(classes)
-        self.reward_head = _make_reward_head(
-            feat_dim,
-            reward_bins,
-            hidden,
-            act,
-            reward_head_type=reward_head_type,
-            reward_init_logit=reward_init_logit,
-            reward_pos_weight=reward_pos_weight,
-        )
-        self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
-        self.dyn_scale = float(dyn_scale)
-        self.rep_scale = float(rep_scale)
-        self.rec_scale = float(rec_scale)
-        self.rew_scale = float(rew_scale)
-        self.con_scale = float(con_scale)
-        self.rec_reduction = str(rec_reduction).lower()
-        if self.rec_reduction not in {"sum", "mean"}:
-            raise ValueError("rec_reduction must be 'sum' or 'mean'")
-        self.contdisc = bool(contdisc)
-        self.horizon = int(horizon)
-
-    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat(
-            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
-            dim=-1,
-        )
-
-    def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
-        tokens = batch["tokens"].long()
-        actions = batch["actions"]
-        rewards = batch["rewards"].to(device=actions.device, dtype=actions.dtype)
-        dones = batch["dones"].to(device=actions.device, dtype=actions.dtype)
-        is_first = batch["is_first"].to(device=actions.device)
-
-        enc = self.encoder(tokens)
-        seq = self.rssm.observe(enc, actions, is_first)
-        kls = self.rssm.kl_loss(seq["post_logits"], seq["prior_logits"])
-        logits = self.decoder(seq["deter"], seq["stoch"])  # [B,T,views,tokens,classes]
-
-        ce = F.cross_entropy(
-            logits.reshape(-1, logits.shape[-1]),
-            tokens.reshape(-1).to(device=logits.device),
-            reduction="none",
-        ).reshape(tokens.shape)
-        rec_per = ce.reshape(ce.shape[0], ce.shape[1], -1).sum(dim=-1)
-        rec_loss = rec_per.mean() if self.rec_reduction == "sum" else ce.mean()
-
-        feat = self.feature(seq)
-        reward_logits = self.reward_head(feat)
-        cont_logits = self.continue_head(feat).squeeze(-1)
-        reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
-        cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
-        if self.contdisc:
-            cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
-        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target)
-
-        loss = (
-            self.rec_scale * rec_loss
-            + self.dyn_scale * kls["dyn"]
-            + self.rep_scale * kls["rep"]
-            + self.rew_scale * reward_loss
-            + self.con_scale * cont_loss
-        )
-
-        with torch.no_grad():
-            pred = logits.argmax(dim=-1)
-            token_acc = (pred == tokens.to(device=pred.device)).float().mean()
-            token_ce = ce.detach().float().mean()
-            log_probs = F.log_softmax(logits.detach().float(), dim=-1)
-            probs = log_probs.exp()
-            pred_entropy = -(probs * log_probs).sum(dim=-1).mean()
-            flat_pred = pred.reshape(pred.shape[0] * pred.shape[1], -1)
-            flat_gt = tokens.to(device=pred.device).reshape(tokens.shape[0] * tokens.shape[1], -1)
-            pred_unique = torch.tensor(
-                [int(torch.unique(row).numel()) for row in flat_pred],
-                dtype=logits.dtype,
-                device=logits.device,
-            ).mean()
-            gt_unique = torch.tensor(
-                [int(torch.unique(row).numel()) for row in flat_gt],
-                dtype=logits.dtype,
-                device=logits.device,
-            ).mean()
-
-        metrics = {
-            "loss": loss.detach(),
-            "rec_loss": rec_loss.detach(),
-            "token_ce": token_ce,
-            "token_acc": token_acc.detach(),
-            "dyn_loss": kls["dyn"].detach(),
-            "rep_loss": kls["rep"].detach(),
-            "reward_loss": reward_loss.detach(),
-            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
-            "continue_loss": cont_loss.detach(),
-            "pred_entropy": pred_entropy.detach(),
-            "pred_unique_tokens": pred_unique.detach(),
-            "gt_unique_tokens": gt_unique.detach(),
-            "dyn_entropy": kls["dyn_entropy"].detach(),
-            "rep_entropy": kls["rep_entropy"].detach(),
-        }
-        return DreamerV3Loss(loss=loss, metrics=metrics)
-
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(batch, dict) and batch.get("mode") is not None:
-            return self._forward_actor_adapter(batch)
-        out = self.loss(batch)
-        return self._compat_forward_dict(out)
-
-
 class _RynnBackboneObsEncoder(nn.Module):
     """Identity/projection shim for frozen RynnVLA backbone outputs."""
 
@@ -1639,314 +1214,29 @@ class _RynnBackboneObsEncoder(nn.Module):
         dtype = _module_dtype(self, obs_embedding.dtype)
         return self.net(obs_embedding.to(dtype=dtype))
 
+_WORLD_MODEL_EXPORTS = {
+    "DreamerV3PixelWorldModel": "src.models.world_model.dreamer_v3_pixel_world_model",
+    "DreamerV3TokenWorldModel": "src.models.world_model.dreamer_v3_token_world_model",
+    "DreamerV3TokenFromPixelWorldModel": "src.models.world_model.dreamer_v3_token_from_pixel_world_model",
+    "DreamerV3PixelRynnBackboneWorldModel": "src.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model",
+}
 
-class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin, nn.Module):
-    """Pixel DreamerV3 with the observation encoder replaced by frozen RynnVLA.
 
-    The workspace supplies:
+def __getattr__(name: str):
+    if name in _WORLD_MODEL_EXPORTS:
+        from importlib import import_module
 
-      images: raw pixel observations, used as the reconstruction target.
-      obs_embedding: frozen RynnVLA-002 hidden vectors, used as RSSM observations.
-
-    Thus only the ``encode`` slot changes.  RSSM, pixel decoder, reward head and
-    continue head stay aligned with ``DreamerV3PixelWorldModel``.
-    """
-
-    def __init__(
-        self,
-        obs_dim: int = 4096,
-        latent_dim: int | None = None,
-        action_dim: int = 7,
-        image_channels: int = 6,
-        image_size: int = 64,
-        embed_dim: int | None = None,
-        encoder_hidden: int = 2048,
-        encoder_layers: int = 2,
-        deter: int = 8192,
-        hidden: int = 1024,
-        stoch: int = 32,
-        classes: int = 64,
-        blocks: int = 8,
-        depth: int = 64,
-        mults: tuple[int, ...] = (2, 3, 4, 4),
-        kernel: int = 5,
-        act: str = "silu",
-        unimix: float = 0.01,
-        free_nats: float = 1.0,
-        reward_bins: int = 255,
-        reward_head_type: str = "twohot",
-        reward_init_logit: float = -5.0,
-        reward_pos_weight: float | None = None,
-        contdisc: bool = True,
-        horizon: int = 333,
-        dyn_scale: float = 1.0,
-        rep_scale: float = 0.1,
-        rec_scale: float = 1.0,
-        rew_scale: float = 1.0,
-        con_scale: float = 1.0,
-        hidden_rec_scale: float = 100.0,
-        hidden_decoder_layers: int = 1,
-        hidden_decoder_units: int = 2048,
-        full_hidden_rec_scale: float = 0.0,
-        actor_sequence_length: int = 0,
-        actor_input_kind: str = "hidden",
-        sequence_decoder_query_dim: int = 1024,
-        sequence_decoder_layers: int = 1,
-        sequence_decoder_units: int = 2048,
-    ) -> None:
-        super().__init__()
-        if latent_dim is not None:
-            obs_dim = int(obs_dim if obs_dim is not None else latent_dim)
-        self.obs_dim = int(obs_dim)
-        self.image_channels = int(image_channels)
-        self.image_size = int(image_size)
-        self.actor_input_kind = str(actor_input_kind).lower()
-        if self.actor_input_kind not in {"hidden", "feature"}:
-            raise ValueError("actor_input_kind must be one of: hidden, feature")
-        self.encoder = _RynnBackboneObsEncoder(
-            obs_dim=obs_dim,
-            embed_dim=embed_dim,
-            hidden=encoder_hidden,
-            layers=encoder_layers,
-            act=act,
-        )
-        self.rssm = DreamerV3RSSM(
-            action_dim=action_dim,
-            deter=deter,
-            hidden=hidden,
-            stoch=stoch,
-            classes=classes,
-            blocks=blocks,
-            unimix=unimix,
-            free_nats=free_nats,
-            act=act,
-        )
-        self.rssm.build_posterior(self.encoder.out_dim, act=act)
-        self.decoder = DreamerV3PixelDecoder(
-            image_channels=image_channels,
-            image_size=image_size,
-            deter=deter,
-            stoch=stoch,
-            classes=classes,
-            depth=depth,
-            mults=tuple(mults),
-            kernel=kernel,
-            act=act,
-        )
-        feat_dim = int(deter) + int(stoch) * int(classes)
-        self.hidden_decoder = MLPHead(
-            feat_dim,
-            self.obs_dim,
-            layers=int(hidden_decoder_layers),
-            units=int(hidden_decoder_units),
-            act=act,
-        )
-        self.actor_sequence_length = int(actor_sequence_length)
-        self.full_hidden_rec_scale = float(full_hidden_rec_scale)
-        self.sequence_decoder: nn.Module | None = None
-        if self.actor_sequence_length > 0:
-            self.sequence_decoder = FullHiddenSequenceDecoder(
-                feat_dim,
-                sequence_length=self.actor_sequence_length,
-                hidden_dim=self.obs_dim,
-                query_dim=int(sequence_decoder_query_dim),
-                layers=int(sequence_decoder_layers),
-                units=int(sequence_decoder_units),
-                act=act,
-            )
-        self.reward_head = _make_reward_head(
-            feat_dim,
-            reward_bins,
-            hidden,
-            act,
-            reward_head_type=reward_head_type,
-            reward_init_logit=reward_init_logit,
-            reward_pos_weight=reward_pos_weight,
-        )
-        self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
-        self.dyn_scale = float(dyn_scale)
-        self.rep_scale = float(rep_scale)
-        self.rec_scale = float(rec_scale)
-        self.rew_scale = float(rew_scale)
-        self.con_scale = float(con_scale)
-        self.hidden_rec_scale = float(hidden_rec_scale)
-        self.contdisc = bool(contdisc)
-        self.horizon = int(horizon)
-
-    def _feature_dim(self) -> int:
-        return int(self.rssm.deter + self.rssm.stoch * self.rssm.classes)
-
-    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat(
-            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
-            dim=-1,
-        )
-
-    def _resize_target(self, images: torch.Tensor, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
-        if images.ndim != 5:
-            raise ValueError(f"images must be [B,T,C,H,W], got {tuple(images.shape)}")
-        bsz, steps, channels, height, width = images.shape
-        if channels != self.image_channels:
-            raise ValueError(f"Expected {self.image_channels} image channels, got {channels}")
-        target = images.to(device=device, dtype=dtype) / 255.0
-        if (height, width) == (self.image_size, self.image_size):
-            return target
-        flat = target.reshape(bsz * steps, channels, height, width)
-        flat = F.interpolate(flat, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
-        return flat.reshape(bsz, steps, channels, self.image_size, self.image_size)
-
-    def encode_latent(self, hidden: torch.Tensor) -> DreamerV3LatentState:
-        if hidden.ndim == 2 and hidden.shape[-1] == self._feature_dim() and torch.is_floating_point(hidden):
-            return self._latent_from_feature(hidden)
-        device = _module_device(self, hidden.device)
-        obs = self.encoder(hidden.to(device=device))
-        batch_size = obs.shape[0]
-        dtype = obs.dtype
-        actions = torch.zeros(batch_size, 1, self.rssm.action_dim, device=device, dtype=dtype)
-        is_first = torch.ones(batch_size, 1, device=device, dtype=torch.bool)
-        seq = self.rssm.observe(obs, actions, is_first)
-        return DreamerV3LatentState(
-            deter=seq["deter"][:, 0],
-            stoch=seq["stoch"][:, 0],
-            logits=seq["post_logits"][:, 0],
-        )
-
-    def observe_next(
-        self,
-        latent: DreamerV3LatentState,
-        hidden: torch.Tensor,
-        actions: torch.Tensor,
-        is_first: torch.Tensor | bool | None = None,
-    ) -> DreamerV3LatentState:
-        device = _module_device(self, hidden.device)
-        enc = self.encoder(hidden.to(device=device))
-        if enc.ndim != 3 or enc.shape[1] != 1:
-            raise ValueError(f"Rynn observe_next expected one obs embedding, got encoder output {tuple(enc.shape)}")
-        return self.rssm.observe_next(latent, enc[:, 0], actions, is_first=is_first)
-
-    def observe_sequence(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
-        obs_embedding = batch["obs_embedding"]
-        device = _module_device(self, obs_embedding.device)
-        enc = self.encoder(obs_embedding.to(device=device))
-        actions = batch["actions"].to(device=device, dtype=enc.dtype)
-        is_first = batch["is_first"].to(device=device)
-        seq = self.rssm.observe(enc, actions, is_first)
-        latent = DreamerV3LatentState(
-            deter=seq["deter"],
-            stoch=seq["stoch"],
-            logits=seq["post_logits"],
-        )
-        return {"latent": latent, "feat": latent.feature()}
-
-    def actor_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        if self.actor_input_kind == "feature":
-            return latent.feature()
-        return self.hidden_decoder(latent.feature())
-
-    def actor_input_sequence(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        if self.sequence_decoder is None:
-            raise ValueError("actor_input_sequence requires actor_sequence_length > 0")
-        return self.sequence_decoder(latent.feature())
-
-    def critic_input(self, latent: DreamerV3LatentState) -> torch.Tensor:
-        return latent.feature()
-
-    def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
-        images = batch["images"]
-        obs_embedding = batch["obs_embedding"]
-        actions = batch["actions"]
-        rewards = batch["rewards"].to(device=actions.device, dtype=actions.dtype)
-        terminal = batch.get("is_terminal", batch["dones"])
-        dones = terminal.to(device=actions.device, dtype=actions.dtype)
-        is_first = batch["is_first"].to(device=actions.device)
-
-        enc = self.encoder(obs_embedding)
-        seq = self.rssm.observe(enc, actions, is_first)
-        kls = self.rssm.kl_loss(seq["post_logits"], seq["prior_logits"])
-        recon = self.decoder(seq["deter"], seq["stoch"])
-        target = self._resize_target(images, dtype=recon.dtype, device=recon.device)
-        rec_per = (recon - target).square().sum(dim=(-3, -2, -1))
-        rec_loss = rec_per.mean()
-
-        feat = self.feature(seq)
-        hidden_pred = self.hidden_decoder(feat)
-        hidden_target = obs_embedding.to(device=hidden_pred.device, dtype=hidden_pred.dtype).detach()
-        hidden_mse = (hidden_pred.float() - hidden_target.float()).square().mean()
-        hidden_pred_norm = F.normalize(hidden_pred.float(), dim=-1)
-        hidden_target_norm = F.normalize(hidden_target.float(), dim=-1)
-        hidden_cosine = 1.0 - (hidden_pred_norm * hidden_target_norm).sum(dim=-1).mean()
-        full_hidden_loss = feat.new_zeros(())
-        full_hidden_cosine = feat.new_zeros(())
-        if self.sequence_decoder is not None and "actor_hidden_states" in batch:
-            full_pred = self.sequence_decoder(feat)
-            full_target = batch["actor_hidden_states"].to(device=full_pred.device, dtype=full_pred.dtype).detach()
-            if full_target.shape[-2] != full_pred.shape[-2]:
-                target_len = int(full_pred.shape[-2])
-                if full_target.shape[-2] > target_len:
-                    full_target = full_target[..., :target_len, :]
-                else:
-                    pad = target_len - int(full_target.shape[-2])
-                    full_target = F.pad(full_target, (0, 0, 0, pad))
-            mask = batch.get("actor_attention_mask")
-            if isinstance(mask, torch.Tensor):
-                mask = mask.to(device=full_pred.device).bool()[..., : full_pred.shape[-2]]
-            else:
-                mask = torch.ones(full_pred.shape[:-1], device=full_pred.device, dtype=torch.bool)
-            mask_f = mask.to(dtype=full_pred.dtype).unsqueeze(-1)
-            denom = mask_f.sum().clamp_min(1.0) * full_pred.shape[-1]
-            full_hidden_loss = ((full_pred.float() - full_target.float()).square() * mask_f.float()).sum() / denom
-            pred_norm = F.normalize(full_pred.float(), dim=-1)
-            target_norm = F.normalize(full_target.float(), dim=-1)
-            full_hidden_cosine = ((1.0 - (pred_norm * target_norm).sum(dim=-1)) * mask.float()).sum() / mask.float().sum().clamp_min(1.0)
-        reward_logits = self.reward_head(feat)
-        cont_logits = self.continue_head(feat).squeeze(-1)
-        reward_loss = _reward_loss(self.reward_head, reward_logits, rewards)
-        cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
-        if self.contdisc:
-            cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
-        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target)
-
-        loss = (
-            self.rec_scale * rec_loss
-            + self.dyn_scale * kls["dyn"]
-            + self.rep_scale * kls["rep"]
-            + self.hidden_rec_scale * hidden_mse
-            + self.full_hidden_rec_scale * full_hidden_loss
-            + self.rew_scale * reward_loss
-            + self.con_scale * cont_loss
-        )
-        mse = (recon.detach() - target).square().mean()
-        metrics = {
-            "loss": loss.detach(),
-            "rec_loss": rec_loss.detach(),
-            "dyn_loss": kls["dyn"].detach(),
-            "rep_loss": kls["rep"].detach(),
-            "reward_loss": reward_loss.detach(),
-            "continue_loss": cont_loss.detach(),
-            "hidden_rec_loss": hidden_mse.detach(),
-            "hidden_rec_scaled_loss": (self.hidden_rec_scale * hidden_mse).detach(),
-            "hidden_cosine_loss": hidden_cosine.detach(),
-            "full_hidden_rec_loss": full_hidden_loss.detach(),
-            "full_hidden_rec_scaled_loss": (self.full_hidden_rec_scale * full_hidden_loss).detach(),
-            "full_hidden_cosine_loss": full_hidden_cosine.detach(),
-            "hidden_pred_norm": hidden_pred.detach().float().norm(dim=-1).mean().detach(),
-            "hidden_target_norm": hidden_target.detach().float().norm(dim=-1).mean().detach(),
-            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
-            "image_mse": mse.detach(),
-            "image_psnr": (-10.0 * torch.log10(mse.clamp_min(1e-8))).detach(),
-            "dyn_entropy": kls["dyn_entropy"].detach(),
-            "rep_entropy": kls["rep_entropy"].detach(),
-        }
-        return DreamerV3Loss(loss=loss, metrics=metrics)
-
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(batch, dict) and batch.get("mode") is not None:
-            return self._forward_actor_adapter(batch)
-        out = self.loss(batch)
-        return self._compat_forward_dict(out)
+        module = import_module(_WORLD_MODEL_EXPORTS[name])
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
+    "DreamerV3ActorAdapterMixin",
+    "DreamerV3LatentState",
+    "DreamerV3Loss",
     "DreamerV3PixelWorldModel",
     "DreamerV3TokenWorldModel",
     "DreamerV3TokenFromPixelWorldModel",
@@ -1958,4 +1248,9 @@ __all__ = [
     "DreamerV3TokenDecoder",
     "CompactTokenSequenceAutoencoder",
     "SymexpTwoHotHead",
+    "BinaryRewardHead",
+    "Pi0StyleHiddenDecoder",
+    "Pi0TimeBroadcastDecoder",
+    "PerTokenMLPHead",
+    "FullHiddenSequenceDecoder",
 ]

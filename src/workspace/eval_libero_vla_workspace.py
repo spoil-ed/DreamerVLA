@@ -31,6 +31,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
+from transformers import GenerationConfig
 
 from src.utils.torch_utils import freeze_module
 from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace
@@ -39,6 +40,9 @@ from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace
 class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     """Load a VLA or Dreamer ckpt -> run LIBERO rollout -> dump JSON metrics."""
 
+    workspace_name = "libero_eval_compat"
+    workspace_status = "compatibility"
+    workspace_family = "eval"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla"
 
     def run(self) -> list[dict[str, Any]]:
@@ -100,6 +104,7 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
 
         # ── rollout ──────────────────────────────────────────────────────────
         os.makedirs(self.output_dir, exist_ok=True)
+        self._init_policy_trace(cfg)
         metrics = self.evaluate_libero(epoch=-1)
 
         # ── dump metrics ─────────────────────────────────────────────────────
@@ -126,6 +131,17 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         except TypeError:
             return torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
+    @staticmethod
+    def _checkpoint_cfg_from_payload(payload: dict[str, Any]) -> DictConfig:
+        cfg = payload.get("cfg")
+        if cfg is None:
+            raise RuntimeError("Dreamer checkpoint has no saved cfg; cannot rebuild Dreamer modules.")
+        if isinstance(cfg, DictConfig):
+            return copy.deepcopy(cfg)
+        if isinstance(cfg, dict):
+            return OmegaConf.create(copy.deepcopy(cfg))
+        raise TypeError(f"Dreamer checkpoint cfg must be DictConfig or dict, got {type(cfg).__name__}")
+
     def _run_dreamer_eval(
         self,
         eval_cfg_root: DictConfig,
@@ -135,9 +151,10 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         if self.distributed.is_main_process:
             print("  [Eval] detected Dreamer checkpoint; using world_model + policy rollout.")
 
-        train_cfg = copy.deepcopy(payload.get("cfg"))
-        if train_cfg is None:
-            raise RuntimeError(f"{ckpt_path} has no saved cfg; cannot rebuild Dreamer modules.")
+        try:
+            train_cfg = self._checkpoint_cfg_from_payload(payload)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{ckpt_path} has no saved cfg; cannot rebuild Dreamer modules.") from exc
         with open_dict(train_cfg):
             train_cfg.eval = copy.deepcopy(eval_cfg_root.eval)
             if OmegaConf.select(train_cfg, "encoder", default=None) is None:
@@ -187,6 +204,24 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         self._hidden_noise_mse_sum = 0.0
         self._hidden_noise_cosine_sum = 0.0
         self._hidden_noise_count = 0
+        self._hidden_action_compare_enabled = bool(
+            OmegaConf.select(train_cfg, "eval.log_hidden_action_compare", default=False)
+        )
+        self._hidden_action_compare_limit = int(
+            OmegaConf.select(train_cfg, "eval.hidden_action_compare_limit", default=300)
+        )
+        self._hidden_action_compare_unnorm = bool(
+            OmegaConf.select(train_cfg, "eval.hidden_action_compare_unnorm_policy_outputs", default=True)
+        )
+        self._hidden_action_compare_count = 0
+        self._hidden_action_compare_sums: dict[str, float] = {}
+        self._hidden_action_compare_path = os.path.join(self.output_dir, "hidden_action_compare.jsonl")
+        self._hidden_action_compare_summary_path = os.path.join(self.output_dir, "hidden_action_compare_summary.json")
+        if self._hidden_action_compare_enabled and self.distributed.is_main_process:
+            os.makedirs(self.output_dir, exist_ok=True)
+            with open(self._hidden_action_compare_path, "w"):
+                pass
+        self._init_policy_trace(train_cfg)
 
         self._build_dreamer_modules(train_cfg, payload)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -198,6 +233,14 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             metrics["hidden_noise_mean_mse"] = float(self._hidden_noise_mse_sum / self._hidden_noise_count)
             metrics["hidden_noise_mean_cosine_loss"] = float(self._hidden_noise_cosine_sum / self._hidden_noise_count)
             metrics["hidden_noise_count"] = int(self._hidden_noise_count)
+        if int(getattr(self, "_hidden_action_compare_count", 0)) > 0:
+            compare_summary = self._hidden_action_compare_summary()
+            metrics = dict(metrics)
+            metrics.update({f"hidden_action_compare_{key}": value for key, value in compare_summary.items()})
+            if self.distributed.is_main_process:
+                with open(self._hidden_action_compare_summary_path, "w") as f:
+                    json.dump(compare_summary, f, indent=2)
+                print(f"  [Eval] wrote hidden/action compare summary -> {self._hidden_action_compare_summary_path}")
 
         if self.distributed.is_main_process:
             metrics_out = {
@@ -209,9 +252,19 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 "dreamer_action_repeat": int(self._dreamer_action_repeat),
                 "dreamer_deterministic": bool(self._dreamer_deterministic),
                 "dreamer_clip_actions": bool(self._dreamer_clip_actions),
+                "dreamer_unnorm_actions": bool(self._dreamer_should_unnorm_actions()),
+                "dreamer_rssm_action_source": str(
+                    OmegaConf.select(train_cfg, "eval.dreamer_rssm_action_source", default="env")
+                ),
                 "dreamer_rollout_mode": str(self._dreamer_rollout_mode),
                 "dreamer_actor_input_source": str(self._dreamer_actor_input_source),
                 "dreamer_policy_source": str(self._dreamer_policy_source),
+                "dreamer_wm_history_length": int(
+                    OmegaConf.select(train_cfg, "eval.dreamer_wm_history_length", default=1)
+                ),
+                "dreamer_wm_rotate_images": bool(
+                    OmegaConf.select(train_cfg, "eval.dreamer_wm_rotate_images", default=False)
+                ),
                 "hidden_noise_std": float(self._hidden_noise_std),
                 "hidden_noise_seed": int(self._hidden_noise_seed),
                 **metrics,
@@ -250,6 +303,269 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             self._hidden_noise_cosine_sum += float(cosine.detach().cpu())
             self._hidden_noise_count += 1
         return perturbed
+
+    def _init_policy_trace(self, cfg: DictConfig) -> None:
+        self._policy_trace_enabled = bool(OmegaConf.select(cfg, "eval.trace_policy_debug", default=False))
+        self._policy_trace_limit = int(OmegaConf.select(cfg, "eval.trace_policy_debug_limit", default=64))
+        self._policy_trace_count = 0
+        self._policy_trace_dir = os.path.join(self.output_dir, "policy_trace_arrays")
+        self._policy_trace_path = os.path.join(self.output_dir, "policy_trace.jsonl")
+        if self._policy_trace_enabled and self.distributed.is_main_process:
+            os.makedirs(self._policy_trace_dir, exist_ok=True)
+            with open(self._policy_trace_path, "w"):
+                pass
+
+    @staticmethod
+    def _to_numpy_array(value: Any) -> np.ndarray | None:
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().float().numpy()
+        return np.asarray(value, dtype=np.float32)
+
+    @staticmethod
+    def _array_summary(value: np.ndarray | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        arr = np.asarray(value, dtype=np.float32)
+        return {
+            "shape": list(arr.shape),
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "l2": float(np.linalg.norm(arr.reshape(-1))),
+        }
+
+    def _write_policy_trace(
+        self,
+        *,
+        source: str,
+        state: np.ndarray,
+        action_chunk_raw: np.ndarray,
+        action_chunk_env: np.ndarray,
+        action_hidden: Any | None = None,
+        wm_style_action_hidden: Any | None = None,
+        live_action_hidden: Any | None = None,
+        recon_action_hidden: Any | None = None,
+        obs_embedding: Any | None = None,
+        actor_input: Any | None = None,
+        rssm_latent: Any | None = None,
+        input_ids: Any | None = None,
+    ) -> None:
+        if not bool(getattr(self, "_policy_trace_enabled", False)):
+            return
+        index = int(getattr(self, "_policy_trace_count", 0))
+        if index >= int(getattr(self, "_policy_trace_limit", 64)):
+            return
+
+        arrays: dict[str, np.ndarray] = {
+            "state": np.asarray(state, dtype=np.float32).reshape(-1),
+            "action_chunk_raw": np.asarray(action_chunk_raw, dtype=np.float32),
+            "action_chunk_env": np.asarray(action_chunk_env, dtype=np.float32),
+        }
+        optional_arrays = {
+            "action_hidden": self._to_numpy_array(action_hidden),
+            "wm_style_action_hidden": self._to_numpy_array(wm_style_action_hidden),
+            "live_action_hidden": self._to_numpy_array(live_action_hidden),
+            "recon_action_hidden": self._to_numpy_array(recon_action_hidden),
+            "obs_embedding": self._to_numpy_array(obs_embedding),
+            "actor_input": self._to_numpy_array(actor_input),
+            "input_ids": self._to_numpy_array(input_ids),
+        }
+        if rssm_latent is not None:
+            for attr in ("deter", "stoch", "logits", "mean", "std", "h"):
+                if hasattr(rssm_latent, attr):
+                    optional_arrays[f"rssm_{attr}"] = self._to_numpy_array(getattr(rssm_latent, attr))
+        for key, value in optional_arrays.items():
+            if value is not None:
+                arrays[key] = np.asarray(value, dtype=np.float32)
+
+        array_path = os.path.join(self._policy_trace_dir, f"step_{index:06d}_{source}.npz")
+        np.savez_compressed(array_path, **arrays)
+        context = dict(getattr(self, "_libero_current_eval_context", {}) or {})
+        raw_chunk = arrays["action_chunk_raw"].reshape(-1, arrays["action_chunk_raw"].shape[-1])
+        env_chunk = arrays["action_chunk_env"].reshape(-1, arrays["action_chunk_env"].shape[-1])
+        record = {
+            "index": index,
+            "source": str(source),
+            "context": context,
+            "array_path": array_path,
+            "state": arrays["state"].tolist(),
+            "first_action_raw": raw_chunk[0].tolist(),
+            "first_action_env": env_chunk[0].tolist(),
+            "summaries": {key: self._array_summary(value) for key, value in arrays.items()},
+        }
+        if self.distributed.is_main_process:
+            with open(self._policy_trace_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        self._policy_trace_count = index + 1
+
+    @staticmethod
+    def _action_clip_bounds() -> tuple[np.ndarray, np.ndarray]:
+        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+        max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
+        return min_values, max_values
+
+    def _policy_first_action_raw_from_hidden(self, hidden: torch.Tensor) -> np.ndarray:
+        action, _, extra = self.policy({
+            "mode": "sample",
+            "hidden": hidden.detach(),
+            "deterministic": True,
+            "return_chunk": True,
+        })
+        action_tensor = extra.get("action_chunk", action)
+        action_np = action_tensor.squeeze(0).detach().cpu().float().numpy()
+        if action_np.ndim > 1:
+            action_np = action_np.reshape(-1, action_np.shape[-1])[0]
+        return np.asarray(action_np[:7], dtype=np.float32)
+
+    def _policy_raw_to_env_action_for_compare(self, action_raw: np.ndarray) -> np.ndarray:
+        action_raw = np.asarray(action_raw[:7], dtype=np.float32)
+        if bool(getattr(self, "_hidden_action_compare_unnorm", True)):
+            return np.asarray(self._unnorm_actions(action_raw.reshape(1, -1))[0], dtype=np.float32)
+        min_values, max_values = self._action_clip_bounds()
+        return np.clip(action_raw, min_values, max_values).astype(np.float32, copy=False)
+
+    @staticmethod
+    def _action_stats(prefix: str, left: np.ndarray, right: np.ndarray) -> dict[str, float]:
+        diff = np.asarray(left, dtype=np.float32) - np.asarray(right, dtype=np.float32)
+        return {
+            f"{prefix}_mse": float(np.mean(np.square(diff))),
+            f"{prefix}_mae": float(np.mean(np.abs(diff))),
+            f"{prefix}_max_abs": float(np.max(np.abs(diff))),
+        }
+
+    def _dreamer_policy_raw_to_env_action(self, action_raw: np.ndarray) -> np.ndarray:
+        action = np.asarray(action_raw[:7], dtype=np.float32)
+        if self._dreamer_should_unnorm_actions():
+            action = np.asarray(self._unnorm_actions(action.reshape(1, -1))[0], dtype=np.float32)
+        if bool(getattr(self, "_dreamer_clip_actions", True)):
+            min_values, max_values = self._action_clip_bounds()
+            action = np.clip(action, min_values, max_values)
+        return action.astype(np.float32, copy=False)
+
+    def _dreamer_should_unnorm_actions(self) -> bool:
+        setting = OmegaConf.select(self.cfg, "eval.dreamer_unnorm_actions", default="auto")
+        if isinstance(setting, str):
+            normalized = setting.lower()
+            if normalized in {"auto", ""}:
+                policy_name = self.policy.__class__.__name__ if hasattr(self, "policy") else ""
+                policy_target = str(OmegaConf.select(self.cfg, "policy._target_", default=""))
+                return "Pi0ActionHiddenActor" in policy_name or "VLAActionHeadActor" in policy_name or (
+                    "Pi0ActionHiddenActor" in policy_target or "VLAActionHeadActor" in policy_target
+                )
+            if normalized in {"true", "1", "yes", "y"}:
+                return True
+            if normalized in {"false", "0", "no", "n"}:
+                return False
+        return bool(setting)
+
+    def _dreamer_rssm_action_from_raw_env(self, raw_action: np.ndarray, env_action: np.ndarray) -> np.ndarray:
+        source = str(OmegaConf.select(self.cfg, "eval.dreamer_rssm_action_source", default="env")).lower()
+        if source not in {"env", "raw"}:
+            raise ValueError("eval.dreamer_rssm_action_source must be one of: env, raw")
+        if source == "raw":
+            return np.asarray(raw_action[:7], dtype=np.float32)
+        # WM training uses HDF5 LIBERO actions, i.e. the executed/env scale.
+        return np.asarray(env_action[:7], dtype=np.float32)
+
+    def _record_hidden_action_compare(
+        self,
+        *,
+        live_hidden: torch.Tensor | None,
+        recon_hidden: torch.Tensor | None,
+        recon_action_raw: np.ndarray | None,
+        executed_action: np.ndarray | None,
+        context: dict[str, Any] | None = None,
+        source: str,
+    ) -> None:
+        if not bool(getattr(self, "_hidden_action_compare_enabled", False)):
+            return
+        if int(getattr(self, "_hidden_action_compare_count", 0)) >= int(
+            getattr(self, "_hidden_action_compare_limit", 300)
+        ):
+            return
+        if live_hidden is None or recon_hidden is None:
+            return
+
+        with torch.no_grad():
+            live = live_hidden.detach().float().reshape(live_hidden.shape[0], -1)
+            recon = recon_hidden.detach().float().reshape(recon_hidden.shape[0], -1)
+            if live.shape != recon.shape:
+                return
+            hidden_diff = recon - live
+            hidden_mse = float(hidden_diff.square().mean().detach().cpu())
+            hidden_mae = float(hidden_diff.abs().mean().detach().cpu())
+            hidden_max_abs = float(hidden_diff.abs().max().detach().cpu())
+            live_norm = float(live.norm(dim=-1).mean().detach().cpu())
+            recon_norm = float(recon.norm(dim=-1).mean().detach().cpu())
+            hidden_cosine_loss = float((1.0 - F.cosine_similarity(recon, live, dim=-1).mean()).detach().cpu())
+            live_action_raw = self._policy_first_action_raw_from_hidden(live_hidden)
+            if recon_action_raw is None:
+                recon_action_raw = self._policy_first_action_raw_from_hidden(recon_hidden)
+
+        recon_action_raw = np.asarray(recon_action_raw[:7], dtype=np.float32)
+        live_action_env = self._policy_raw_to_env_action_for_compare(live_action_raw)
+        recon_action_env = self._policy_raw_to_env_action_for_compare(recon_action_raw)
+        record: dict[str, Any] = {
+            "index": int(getattr(self, "_hidden_action_compare_count", 0)),
+            "source": str(source),
+            "context": dict(context or {}),
+            "hidden_mse": hidden_mse,
+            "hidden_mae": hidden_mae,
+            "hidden_max_abs": hidden_max_abs,
+            "hidden_cosine_loss": hidden_cosine_loss,
+            "live_hidden_norm": live_norm,
+            "recon_hidden_norm": recon_norm,
+            "recon_to_live_norm_ratio": float(recon_norm / max(live_norm, 1.0e-8)),
+            "live_action_raw": live_action_raw.tolist(),
+            "recon_action_raw": recon_action_raw.tolist(),
+            "live_action_env": live_action_env.tolist(),
+            "recon_action_env": recon_action_env.tolist(),
+            **self._action_stats("recon_vs_live_raw_action", recon_action_raw, live_action_raw),
+            **self._action_stats("recon_vs_live_env_action", recon_action_env, live_action_env),
+        }
+        if executed_action is not None:
+            executed = np.asarray(executed_action[:7], dtype=np.float32)
+            record["executed_action"] = executed.tolist()
+            record.update(self._action_stats("executed_vs_live_env_action", executed, live_action_env))
+            record.update(self._action_stats("executed_vs_recon_env_action", executed, recon_action_env))
+            record.update(self._action_stats("executed_vs_recon_raw_action", executed, recon_action_raw))
+
+        sums = getattr(self, "_hidden_action_compare_sums", {})
+        for key, value in record.items():
+            if isinstance(value, float):
+                sums[key] = float(sums.get(key, 0.0) + value)
+        self._hidden_action_compare_sums = sums
+        self._hidden_action_compare_count = int(getattr(self, "_hidden_action_compare_count", 0)) + 1
+
+        if self.distributed.is_main_process:
+            with open(self._hidden_action_compare_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+            if record["index"] < int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8)):
+                print(
+                    "  [Eval][hidden-action-compare] "
+                    f"idx={record['index']} hidden_mse={hidden_mse:.6g} "
+                    f"hidden_cos={hidden_cosine_loss:.6g} "
+                    f"env_action_mse={record['recon_vs_live_env_action_mse']:.6g} "
+                    f"exec_vs_live_env={record.get('executed_vs_live_env_action_mse', float('nan')):.6g}",
+                    flush=True,
+                )
+
+    def _hidden_action_compare_summary(self) -> dict[str, float | str | int | bool]:
+        count = int(getattr(self, "_hidden_action_compare_count", 0))
+        sums = getattr(self, "_hidden_action_compare_sums", {})
+        summary: dict[str, float | str | int | bool] = {
+            "count": count,
+            "jsonl_path": str(getattr(self, "_hidden_action_compare_path", "")),
+            "policy_outputs_unnormed_for_compare": bool(getattr(self, "_hidden_action_compare_unnorm", True)),
+        }
+        if count <= 0:
+            return summary
+        for key, value in sorted(sums.items()):
+            summary[f"mean_{key}"] = float(value / count)
+        return summary
 
     def _build_dreamer_modules(self, cfg: DictConfig, payload: dict[str, Any]) -> None:
         state_dicts = payload.get("state_dicts", {})
@@ -312,13 +628,6 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         for key in ("policy_optimizer", "critic_optimizer", "world_model_optimizer", "critic", "target_critic"):
             state_dicts.pop(key, None)
         gc.collect()
-
-    def _build_frozen_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
-        encoder_cfg = self.build_encoder_cfg(cfg)
-        with open_dict(encoder_cfg):
-            encoder_cfg.model_path = self._resolve_vla_init_path()
-            encoder_cfg.freeze_backbone = True
-        return encoder_cfg
 
     def _load_module_state(self, module: Any, state_dict: dict[str, Any], name: str) -> None:
         target_dtype = next(module.parameters()).dtype
@@ -497,7 +806,99 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     def _obs_embedding_for_wm(self, input_ids_list: list[list[int]]) -> torch.Tensor:
         if self._wm_io_mode() == "token":
             return self._extract_image_bpe_ids(input_ids_list)
+        if self._use_action_query_obs_hidden():
+            hidden_states, input_ids, attention_mask = self._encode_hidden_sequence_from_tokenized(input_ids_list)
+            action_hidden = self.encoder.extract_action_hidden(
+                hidden_states=hidden_states,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                target_token_id=int(OmegaConf.select(self.cfg, "eval.target_token_id", default=10004)),
+                eval=True,
+            )
+            return action_hidden.reshape(action_hidden.shape[0], -1).float().detach()
         return self._encode_hidden_from_tokenized(input_ids_list)
+
+    def _use_action_query_obs_hidden(self) -> bool:
+        source = str(OmegaConf.select(self.cfg, "eval.obs_hidden_source", default="auto")).lower()
+        if source not in {"auto", "pooled", "action_query"}:
+            raise ValueError("eval.obs_hidden_source must be one of: auto, pooled, action_query")
+        if source == "action_query":
+            return True
+        if source == "pooled":
+            return False
+        return str(OmegaConf.select(self.cfg, "encoder.action_head_type", default="legacy")).lower() == "pi0_query"
+
+    def _dreamer_wm_observation_input_ids(
+        self,
+        item_processor: Any,
+        frame_history: list[tuple[Image.Image, Image.Image]],
+        state: np.ndarray,
+        task_description: str,
+    ) -> list[int]:
+        img_c: list[Image.Image] = []
+        for third_pil, wrist_pil in frame_history:
+            img_c.extend([third_pil, wrist_pil])
+        prompt_style = str(OmegaConf.select(self.cfg, "eval.dreamer_wm_prompt_style", default="vla_policy")).lower()
+        if prompt_style != "vla_policy":
+            raise ValueError("eval.dreamer_wm_prompt_style must be 'vla_policy'")
+        if not bool(OmegaConf.select(self.cfg, "eval.dreamer_wm_include_state", default=True)):
+            raise ValueError("eval.dreamer_wm_include_state must be true")
+        if int(OmegaConf.select(self.cfg, "eval.dreamer_wm_history_length", default=2)) != 2:
+            raise ValueError("eval.dreamer_wm_history_length must be 2 to match the existing sidecar")
+
+        human_val = f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * len(img_c)
+        conv = {
+            "conversations": [{"from": "human", "value": human_val}],
+            "image": img_c,
+            "state": [state],
+            "action": [],
+        }
+        tokens = item_processor.process_item(conv, training_mode=False)
+        if isinstance(tokens, tuple):
+            tokens = tokens[0]
+        return [int(tok) for tok in tokens]
+
+    def _dreamer_wm_frame_history(
+        self,
+        frame_history: list[tuple[Image.Image, Image.Image]],
+    ) -> list[tuple[Image.Image, Image.Image]]:
+        """Return the image history used for Dreamer WM encoding.
+
+        Pure VLA rollout uses rotated history frames because its SFT data was
+        saved as rotated PNGs.  New action-hidden WM sidecars can now use the
+        same rotated two-step policy history; older sidecars can still request
+        raw single-frame inputs through eval.dreamer_wm_* overrides.
+        """
+        if not frame_history:
+            return frame_history
+
+        history_cfg = OmegaConf.select(self.cfg, "eval.dreamer_wm_history_length", default=None)
+        if history_cfg is None:
+            history_len = len(frame_history)
+        else:
+            history_len = max(1, int(history_cfg))
+        selected = list(frame_history[-history_len:])
+
+        rotate = bool(OmegaConf.select(self.cfg, "eval.dreamer_wm_rotate_images", default=False))
+        if rotate:
+            return selected
+
+        raw_obs = getattr(self, "_libero_current_raw_obs", None)
+        if history_len == 1 and isinstance(raw_obs, dict):
+            if "agentview_image" in raw_obs and "robot0_eye_in_hand_image" in raw_obs:
+                third = np.asarray(raw_obs["agentview_image"], dtype=np.uint8)
+                wrist = np.asarray(raw_obs["robot0_eye_in_hand_image"], dtype=np.uint8)
+                return [(Image.fromarray(third), Image.fromarray(wrist))]
+
+        # `frame_history` entries were produced by get_libero_image(), which
+        # rotates env RGB by 180 degrees. Rotate them back to match HDF5 sidecar
+        # preprocessing when raw simulator observations are unavailable.
+        restored: list[tuple[Image.Image, Image.Image]] = []
+        for third_pil, wrist_pil in selected:
+            third = np.asarray(third_pil, dtype=np.uint8)[::-1, ::-1].copy()
+            wrist = np.asarray(wrist_pil, dtype=np.uint8)[::-1, ::-1].copy()
+            restored.append((Image.fromarray(third), Image.fromarray(wrist)))
+        return restored
 
     @staticmethod
     def _resize_hwc_uint8(image: np.ndarray, size: int) -> np.ndarray:
@@ -544,20 +945,13 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         if self._wm_expects_pixel_images():
             return self._pixel_obs_for_wm(frame_history), None
 
-        img_c: list[Image.Image] = []
-        for third_pil, wrist_pil in frame_history:
-            img_c.extend([third_pil, wrist_pil])
-        human_val = f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * len(img_c)
-        conv = {
-            "conversations": [{"from": "human", "value": human_val}],
-            "image": img_c,
-            "action": [],
-            "state": [state],
-        }
-        tokens = item_processor.process_item(conv, training_mode=False)
-        if isinstance(tokens, tuple):
-            tokens = tokens[0]
-        input_ids = [int(tok) for tok in tokens]
+        wm_frame_history = self._dreamer_wm_frame_history(frame_history)
+        input_ids = self._dreamer_wm_observation_input_ids(
+            item_processor=item_processor,
+            frame_history=wm_frame_history,
+            state=state,
+            task_description=task_description,
+        )
         return self._obs_embedding_for_wm([input_ids]), input_ids
 
     def _dreamer_dummy_sequence_inputs(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -572,7 +966,25 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         latent: Any,
         input_ids: list[int] | None = None,
         action_steps: int = 1,
+        live_hidden: torch.Tensor | None = None,
     ) -> np.ndarray:
+        env_actions, _rssm_actions = self._dreamer_action_chunk_from_latent(
+            latent=latent,
+            input_ids=input_ids,
+            action_steps=action_steps,
+            live_hidden=live_hidden,
+        )
+        if not env_actions:
+            raise RuntimeError("Dreamer policy produced an empty action chunk")
+        return env_actions[0]
+
+    def _dreamer_action_chunk_from_latent(
+        self,
+        latent: Any,
+        input_ids: list[int] | None = None,
+        action_steps: int = 1,
+        live_hidden: torch.Tensor | None = None,
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         actor_input_mode = str(OmegaConf.select(self.cfg, "algorithm.actor_input_mode", default="pooled")).lower()
         if actor_input_mode == "sequence":
             hidden_states = self.world_model({"mode": "actor_input_sequence", "latent": latent}).float()
@@ -595,11 +1007,7 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
                 "return_chunk": True,
             })
-            action_np = action.squeeze(0).detach().cpu().float().numpy()
-            if action_np.ndim == 2:
-                action_np = action_np[0]
-            else:
-                action_np = action_np.reshape(-1, action_np.shape[-1])[0]
+            action_chunk_np = action.squeeze(0).detach().cpu().float().numpy()
         else:
             feat = self.world_model({"mode": "actor_input", "latent": latent}).float()
             feat = self._maybe_add_hidden_noise(feat)
@@ -607,17 +1015,54 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 "mode": "sample",
                 "hidden": feat,
                 "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
+                "return_chunk": True,
             })
-            action_np = action.squeeze(0).detach().cpu().float().numpy()
-            if action_np.ndim > 1:
-                action_np = action_np.reshape(-1, action_np.shape[-1])[0]
+            action_chunk_np = action.squeeze(0).detach().cpu().float().numpy()
 
-        action_np = np.asarray(action_np[:7], dtype=np.float32)
-        raw_action_np = action_np.copy()
-        if bool(getattr(self, "_dreamer_clip_actions", True)):
-            min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
-            max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
-            action_np = np.clip(action_np, min_values, max_values)
+        if action_chunk_np.ndim == 1:
+            action_chunk_np = action_chunk_np.reshape(1, -1)
+        else:
+            action_chunk_np = action_chunk_np.reshape(-1, action_chunk_np.shape[-1])
+        max_actions = max(int(action_steps), 1)
+        raw_actions = [np.asarray(row[:7], dtype=np.float32).copy() for row in action_chunk_np[:max_actions]]
+        env_actions = [self._dreamer_policy_raw_to_env_action(row).astype(np.float32, copy=False) for row in raw_actions]
+        rssm_actions = [
+            self._dreamer_rssm_action_from_raw_env(raw, env).astype(np.float32, copy=False)
+            for raw, env in zip(raw_actions, env_actions)
+        ]
+        if not env_actions:
+            return [], []
+        raw_action_np = raw_actions[0]
+        action_np = env_actions[0]
+        self._record_hidden_action_compare(
+            live_hidden=live_hidden,
+            recon_hidden=feat if "feat" in locals() else None,
+            recon_action_raw=raw_action_np,
+            executed_action=action_np,
+            context=getattr(self, "_libero_current_eval_context", None),
+            source="online_rssm",
+        )
+        live_trace_hidden = None
+        recon_trace_hidden = None
+        if live_hidden is not None and "feat" in locals() and live_hidden.ndim == 2 and feat.ndim == 2:
+            hidden_dim = int(OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024))
+            horizon = int(OmegaConf.select(self.cfg, "policy.time_horizon", default=5))
+            expected = hidden_dim * horizon
+            if int(live_hidden.shape[-1]) == expected and int(feat.shape[-1]) == expected:
+                live_trace_hidden = live_hidden.reshape(live_hidden.shape[0], horizon, hidden_dim)
+                recon_trace_hidden = feat.reshape(feat.shape[0], horizon, hidden_dim)
+        self._write_policy_trace(
+            source="dreamer",
+            state=np.asarray(getattr(self, "_libero_current_eval_context_state", []), dtype=np.float32),
+            action_chunk_raw=action_chunk_np[:max_actions],
+            action_chunk_env=np.stack(env_actions, axis=0),
+            live_action_hidden=live_trace_hidden,
+            recon_action_hidden=recon_trace_hidden,
+            obs_embedding=live_hidden,
+            actor_input=feat if "feat" in locals() else None,
+            rssm_latent=latent,
+            input_ids=np.asarray(input_ids, dtype=np.float32) if input_ids is not None else None,
+        )
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
             limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
@@ -625,14 +1070,15 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 print(
                     "  [Eval][online-action] "
                     f"raw={np.array2string(raw_action_np, precision=4, suppress_small=False)} "
-                    f"clipped={np.array2string(action_np, precision=4, suppress_small=False)} "
+                    f"env={np.array2string(action_np, precision=4, suppress_small=False)} "
+                    f"rssm={np.array2string(rssm_actions[0], precision=4, suppress_small=False)} "
                     f"abs_mean={float(np.mean(np.abs(action_np))):.5f} "
                     f"max_abs={float(np.max(np.abs(action_np))):.5f} "
-                    f"action_steps={int(action_steps)}",
+                    f"chunk={len(env_actions)} action_steps={int(action_steps)}",
                     flush=True,
                 )
             self._dreamer_eval_action_log_count = count + 1
-        return action_np.astype(np.float32, copy=False)
+        return env_actions, rssm_actions
 
     def _dreamer_online_reset(self) -> None:
         self._dreamer_online_latent = None
@@ -730,6 +1176,8 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                         break
                 ep_t0 = time.time()
                 frame_history: list[tuple[Image.Image, Image.Image]] = []
+                env_actions_buffer: list[np.ndarray] = []
+                rssm_actions_buffer: list[np.ndarray] = []
                 should_record = save_video and total_episodes < video_max_episodes
                 rollout_images: list[np.ndarray] = []
                 steps_taken = 0
@@ -758,9 +1206,32 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                     )
                     with torch.no_grad():
                         latent = self._dreamer_online_update_latent(obs_embedding)
-                        action = self._dreamer_action_from_latent(latent, input_ids=input_ids, action_steps=action_steps)
+                        self._libero_current_eval_context = {
+                            "task_id": int(task_id),
+                            "task_index": int(task_index),
+                            "episode_idx": int(episode_idx),
+                            "env_step": int(step_idx),
+                            "rollout_t": int(step_idx),
+                            "task_description": str(task_description),
+                        }
+                        self._libero_current_eval_context_state = state
+                        if not env_actions_buffer:
+                            env_actions_buffer, rssm_actions_buffer = self._dreamer_action_chunk_from_latent(
+                                latent,
+                                input_ids=input_ids,
+                                action_steps=action_steps,
+                                live_hidden=obs_embedding,
+                            )
+                    if not env_actions_buffer:
+                        break
+                    action = env_actions_buffer.pop(0)
+                    rssm_action = rssm_actions_buffer.pop(0) if rssm_actions_buffer else action
+                    if bool(OmegaConf.select(self.cfg, "eval.empty_cuda_cache_each_step", default=False)):
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     obs, _, done, _ = env.step(action.tolist())
-                    self._dreamer_online_prev_action = torch.from_numpy(action).to(self.device).reshape(1, -1)
+                    self._dreamer_online_prev_action = torch.from_numpy(rssm_action).to(self.device).reshape(1, -1)
                     steps_taken = step_idx + 1
                     if done:
                         task_successes += 1
@@ -805,6 +1276,94 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             "eval_dreamer_rollout_mode_online_rssm": 1.0,
         }
 
+    def _generate_vla_actions_with_trace(
+        self,
+        backbone: Any,
+        item_processor: Any,
+        frame_history: list[tuple[Image.Image, Image.Image]],
+        state: np.ndarray,
+        task_description: str,
+        action_steps: int,
+    ) -> list[np.ndarray]:
+        img_c: list[Image.Image] = []
+        for third_pil, wrist_pil in frame_history:
+            img_c.extend([third_pil, wrist_pil])
+        human_val = f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * len(img_c)
+        conv = {
+            "conversations": [{"from": "human", "value": human_val}],
+            "image": img_c,
+            "action": [],
+            "state": [state],
+        }
+        tokens = item_processor.process_item(conv, training_mode=False)
+        if isinstance(tokens, tuple):
+            tokens = tokens[0]
+        tokens = [int(tok) for tok in tokens]
+        input_ids = torch.tensor(tokens, dtype=torch.int64, device=self.device).unsqueeze(0)
+
+        generation_config = GenerationConfig(
+            max_new_tokens=1,
+            max_length=backbone.config.max_position_embeddings,
+            temperature=1,
+            top_k=None,
+            do_sample=False,
+            eos_token_id=[8710],
+        )
+        if not hasattr(backbone, "generate_action_head"):
+            return super()._generate_actions(backbone, item_processor, frame_history, state, task_description, action_steps)
+
+        try:
+            predicted = backbone.generate_action_head(input_ids, generation_config)
+            action_chunk_raw = predicted.detach().cpu().float().numpy()
+            if action_chunk_raw.ndim == 1:
+                action_chunk_raw = action_chunk_raw.reshape(1, -1)
+            else:
+                action_chunk_raw = action_chunk_raw.reshape(-1, action_chunk_raw.shape[-1])
+            action_chunk_env = self._unnorm_actions(action_chunk_raw)
+
+            action_hidden = None
+            wm_style_action_hidden = None
+            if self._use_action_query_obs_hidden():
+                hidden_states, seq_input_ids, seq_attention_mask = self._encode_hidden_sequence_from_tokenized([tokens])
+                action_hidden = self.encoder.extract_action_hidden(
+                    hidden_states=hidden_states,
+                    input_ids=seq_input_ids,
+                    attention_mask=seq_attention_mask,
+                    target_token_id=int(OmegaConf.select(self.cfg, "eval.target_token_id", default=10004)),
+                    eval=True,
+                )
+                try:
+                    wm_frame_history = self._dreamer_wm_frame_history(frame_history)
+                    wm_tokens = self._dreamer_wm_observation_input_ids(
+                        item_processor=item_processor,
+                        frame_history=wm_frame_history,
+                        state=state,
+                        task_description=task_description,
+                    )
+                    wm_flat = self._obs_embedding_for_wm([wm_tokens])
+                    horizon = int(OmegaConf.select(self.cfg, "encoder.time_horizon", default=5))
+                    hidden_dim = int(wm_flat.shape[-1]) // max(horizon, 1)
+                    if hidden_dim * horizon == int(wm_flat.shape[-1]):
+                        wm_style_action_hidden = wm_flat.reshape(wm_flat.shape[0], horizon, hidden_dim)
+                except Exception as exc:
+                    if bool(OmegaConf.select(self.cfg, "eval.trace_policy_debug_verbose", default=False)):
+                        print(f"  [Eval][trace] failed to compute wm_style_action_hidden: {exc}", flush=True)
+
+            self._write_policy_trace(
+                source="vla",
+                state=state,
+                action_chunk_raw=action_chunk_raw,
+                action_chunk_env=action_chunk_env,
+                action_hidden=action_hidden,
+                wm_style_action_hidden=wm_style_action_hidden,
+                obs_embedding=wm_style_action_hidden,
+                input_ids=np.asarray(tokens, dtype=np.float32),
+            )
+            return [action_chunk_env[i].astype(np.float32) for i in range(min(len(action_chunk_env), int(action_steps)))]
+        except Exception as exc:
+            print(f"  [Eval] generate_action_head failed: {exc}", flush=True)
+            return super()._generate_actions(backbone, item_processor, frame_history, state, task_description, action_steps)
+
     def _generate_actions(
         self,
         backbone: Any,
@@ -815,26 +1374,28 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         action_steps: int,
     ) -> list[np.ndarray]:
         if not getattr(self, "_dreamer_eval", False):
+            if bool(getattr(self, "_policy_trace_enabled", False)):
+                return self._generate_vla_actions_with_trace(
+                    backbone,
+                    item_processor,
+                    frame_history,
+                    state,
+                    task_description,
+                    action_steps,
+                )
             return super()._generate_actions(backbone, item_processor, frame_history, state, task_description, action_steps)
 
         with torch.no_grad():
             if self._wm_expects_pixel_images():
                 obs_embedding = self._pixel_obs_for_wm(frame_history)
             else:
-                img_c: list[Image.Image] = []
-                for third_pil, wrist_pil in frame_history:
-                    img_c.extend([third_pil, wrist_pil])
-                human_val = f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * len(img_c)
-                conv = {
-                    "conversations": [{"from": "human", "value": human_val}],
-                    "image": img_c,
-                    "action": [],
-                    "state": [state],
-                }
-                tokens = item_processor.process_item(conv, training_mode=False)
-                if isinstance(tokens, tuple):
-                    tokens = tokens[0]
-                input_ids = [int(tok) for tok in tokens]
+                wm_frame_history = self._dreamer_wm_frame_history(frame_history)
+                input_ids = self._dreamer_wm_observation_input_ids(
+                    item_processor=item_processor,
+                    frame_history=wm_frame_history,
+                    state=state,
+                    task_description=task_description,
+                )
                 obs_embedding = self._obs_embedding_for_wm([input_ids])
             actor_input_source = getattr(self, "_dreamer_actor_input_source", "rssm")
             if actor_input_source == "encoder_sequence":
@@ -888,16 +1449,23 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 "mode": "sample",
                 "hidden": feat,
                 "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
+                "return_chunk": True,
             })
-        action_np = action.squeeze(0).detach().cpu().float().numpy()
-        if action_np.ndim > 1:
-            action_np = action_np.reshape(-1, action_np.shape[-1])[0]
-        action_np = action_np[:7]
-        raw_action_np = action_np.copy()
-        if bool(getattr(self, "_dreamer_clip_actions", True)):
-            min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
-            max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
-            action_np = np.clip(action_np, min_values, max_values)
+        action_chunk_np = action.squeeze(0).detach().cpu().float().numpy()
+        if action_chunk_np.ndim == 1:
+            action_chunk_np = action_chunk_np.reshape(1, -1)
+        else:
+            action_chunk_np = action_chunk_np.reshape(-1, action_chunk_np.shape[-1])
+        raw_action_np = np.asarray(action_chunk_np[0, :7], dtype=np.float32).copy()
+        action_np = self._dreamer_policy_raw_to_env_action(raw_action_np)
+        self._record_hidden_action_compare(
+            live_hidden=obs_embedding if actor_input_source == "rssm" else None,
+            recon_hidden=feat if actor_input_source == "rssm" else None,
+            recon_action_raw=raw_action_np,
+            executed_action=action_np,
+            context=getattr(self, "_libero_current_eval_context", None),
+            source="stateless",
+        )
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
             limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
@@ -905,14 +1473,40 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 print(
                     "  [Eval][action] "
                     f"raw={np.array2string(raw_action_np, precision=4, suppress_small=False)} "
-                    f"clipped={np.array2string(action_np, precision=4, suppress_small=False)} "
+                    f"env={np.array2string(action_np, precision=4, suppress_small=False)} "
                     f"abs_mean={float(np.mean(np.abs(action_np))):.5f} "
                     f"max_abs={float(np.max(np.abs(action_np))):.5f}",
                     flush=True,
                 )
             self._dreamer_eval_action_log_count = count + 1
-        repeat = min(int(getattr(self, "_dreamer_action_repeat", 1)), max(int(action_steps), 1))
-        return [action_np.astype(np.float32) for _ in range(repeat)]
+        env_actions = [
+            self._dreamer_policy_raw_to_env_action(np.asarray(row[:7], dtype=np.float32)).astype(np.float32)
+            for row in action_chunk_np[: max(int(action_steps), 1)]
+        ]
+        if not env_actions:
+            return []
+        live_hidden = None
+        recon_hidden = None
+        if actor_input_source == "rssm" and obs_embedding.ndim == 2 and feat.ndim == 2:
+            hidden_dim = int(OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024))
+            horizon = int(OmegaConf.select(self.cfg, "policy.time_horizon", default=5))
+            expected = hidden_dim * horizon
+            if int(obs_embedding.shape[-1]) == expected and int(feat.shape[-1]) == expected:
+                live_hidden = obs_embedding.reshape(obs_embedding.shape[0], horizon, hidden_dim)
+                recon_hidden = feat.reshape(feat.shape[0], horizon, hidden_dim)
+        self._write_policy_trace(
+            source="dreamer",
+            state=state,
+            action_chunk_raw=action_chunk_np,
+            action_chunk_env=np.stack(env_actions, axis=0),
+            live_action_hidden=live_hidden,
+            recon_action_hidden=recon_hidden,
+            obs_embedding=obs_embedding,
+            actor_input=feat,
+            rssm_latent=latent if "latent" in locals() else None,
+            input_ids=np.asarray(input_ids, dtype=np.float32) if "input_ids" in locals() and input_ids is not None else None,
+        )
+        return env_actions
 
 
 __all__ = ["EvalLiberoVLAWorkspace"]

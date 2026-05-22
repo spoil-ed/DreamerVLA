@@ -109,6 +109,8 @@ def main() -> None:
     dtype = torch.bfloat16 if args.dtype == "bf16" and device.type == "cuda" else torch.float32
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False, mmap=True)
     cfg = ckpt["cfg"]
+    if isinstance(cfg, dict):
+        cfg = OmegaConf.create(cfg)
 
     dataset_cfg = OmegaConf.create(OmegaConf.to_container(cfg.dataset, resolve=True))
     if args.hidden_dir:

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Canonical LIBERO-goal / RynnVLA path registry.
+# SECONDARY pooled-hidden LIBERO-goal / RynnVLA path registry.
+# Current mainline uses env_libero_goal_pi0_query.sh.
 #
 # Source this file from launch scripts when the experiment must keep the VLA
 # base checkpoint, finetuned action head, hidden sidecar, and horizon aligned.

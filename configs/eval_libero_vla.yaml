@@ -1,5 +1,4 @@
-_target_: src.workspace.eval_libero_vla_workspace.EvalLiberoVLAWorkspace
-
+_target_: src.workspace.LiberoEvalWorkspace
 seed: 7
 
 hydra:
@@ -48,7 +47,7 @@ encoder:
 # ── rollout knobs ─────────────────────────────────────────────────────────────
 eval:
   # Leave ckpt_path null to evaluate the raw init VLA weights (baseline).
-  # Set this to a file produced by PretokenizeVLAWorkspace top-k saves, e.g.
+  # Set this to a file produced by VLASFTWorkspace top-k saves, e.g.
   # data/outputs/vla/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
   ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
   ckpt_kind: auto                 # auto / vla / dreamer
@@ -65,14 +64,29 @@ eval:
   dreamer_deterministic: true       # Dreamer policy rollout uses actor mean by default
   dreamer_action_repeat: 1          # replan every env step for latent Dreamer actor
   dreamer_clip_actions: true        # clip raw actor output to LIBERO action ranges
+  dreamer_unnorm_actions: auto      # auto: unnorm VLA/pi0 action-head actors, leave plain Dreamer actors raw
+  dreamer_rssm_action_source: env   # env/raw; WM was trained on HDF5 LIBERO env-scale actions
   dreamer_rollout_mode: stateless    # stateless / online_rssm
   dreamer_actor_input_source: rssm   # rssm / encoder / encoder_sequence
+  dreamer_wm_history_length: 2       # match existing vla_policy_h2 action-hidden sidecar
+  dreamer_wm_rotate_images: true     # keep get_libero_image() rotated frames, matching pure VLA policy input
+  dreamer_wm_prompt_style: vla_policy
+  dreamer_wm_include_state: true
+  obs_hidden_source: auto             # auto / pooled / action_query
+  target_token_id: 10004
   dreamer_which_image_block: -2     # third-view image block; matches WM training default
   dreamer_which_image_blocks: [-2, -1]
   log_action_stats: false
   log_action_stats_limit: 8
+  log_hidden_action_compare: false
+  hidden_action_compare_limit: 300
+  hidden_action_compare_unnorm_policy_outputs: true
+  trace_policy_debug: false
+  trace_policy_debug_limit: 64
+  trace_policy_debug_verbose: false
+  empty_cuda_cache_each_step: false
 
-# ── unused by eval workspace but required by PretokenizeVLAWorkspace ──────────
+# ── unused by eval workspace but required by the VLA SFT implementation ───────
 # (keeps the inherited resume() / save_checkpoint() machinery happy)
 ema:
   decay: 0.9999

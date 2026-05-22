@@ -22,6 +22,10 @@ class RynnBackboneDreamerV3WMWorkspace(DreamerV3PixelWorkspace):
     observations before the normal DreamerV3 world-model forward pass.
     """
 
+    workspace_name = "rynn_backbone_wm_compat"
+    workspace_status = "compatibility"
+    workspace_family = "world_model"
+
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
         self.log_path = self.out_dir / "dreamerv3_pixel_rynn_backbone_logs.json.txt"

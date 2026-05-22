@@ -8,9 +8,4 @@ try:
 except Exception:
     VLAPolicy = None
 
-try:
-    from .world_model import TSSMWorldModel
-except Exception:
-    TSSMWorldModel = None
-
-__all__ = ["Critic", "TSSMWorldModel", "VLAPolicy"]
+__all__ = ["Critic", "VLAPolicy"]

@@ -67,3 +67,26 @@ def test_rynn_world_model_can_expose_rssm_feature_for_dreamer_actor() -> None:
     actor_input = model.actor_input(latent)
 
     assert actor_input.shape == (2, 31)
+
+
+def test_rynn_world_model_default_encoder_uses_obs_embedding_directly() -> None:
+    model = DreamerV3PixelRynnBackboneWorldModel(
+        obs_dim=12,
+        action_dim=2,
+        image_channels=3,
+        image_size=64,
+        encoder_hidden=16,
+        encoder_layers=1,
+        deter=16,
+        hidden=8,
+        stoch=3,
+        classes=5,
+        blocks=4,
+        depth=4,
+    )
+    obs_embedding = torch.randn(2, 3, 12)
+
+    enc = model._encode_obs_embedding(obs_embedding)
+
+    assert enc.shape == obs_embedding.shape
+    assert torch.allclose(enc, obs_embedding)

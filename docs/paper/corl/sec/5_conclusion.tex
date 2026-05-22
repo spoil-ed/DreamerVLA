@@ -1,0 +1,3 @@
+\section{Conclusion}
+
+We presented DreamerVLA, a framework that combines the semantic representation ability of pretrained Vision-Language-Action models with the long-horizon reasoning ability of latent world models. By keeping the VLA encoder frozen and training a compact latent dynamics model together with an imagination-based actor-critic module, DreamerVLA separates language-grounded perception from task-specific predictive control. This design avoids pixel-level reconstruction while enabling policy optimization through imagined latent rollouts. Future work will further evaluate the framework on broader real-world manipulation tasks and study how world-model uncertainty can be used to improve safe deployment.

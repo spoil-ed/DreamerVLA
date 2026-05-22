@@ -52,16 +52,22 @@ scripts/*.sh
 
 ## Current Research Mainline
 
-The current active mainline is LIBERO-goal with RynnVLA hidden observations and
-a DreamerV3-style RSSM:
+The current active mainline is LIBERO-goal with pi0 action-query hidden
+observations and a DreamerV3-style RSSM:
 
 ```text
-VLA goal checkpoint
-  -> precomputed RynnVLA hidden sidecar
-  -> Rynn-pixel DreamerV3 world model
-  -> DreamerVLA actor/critic training
-  -> LIBERO rollout eval
+LIBERO obs + language + state
+  -> frozen RynnVLA/Chameleon backbone
+  -> pi0 action-query block
+  -> action_hidden [H, 1024]
+  -> flattened action-hidden sidecar [H*1024]
+  -> DreamerV3 RSSM posterior / transition
+  -> hidden reconstruction + reward + continue + optional image reconstruction
 ```
+
+The first implemented version freezes the shared VLA backbone and trains the WM
+from precomputed action-hidden sidecars. Joint finetuning and action-hidden
+DreamerVLA actor training are follow-up work, not the current mainline.
 
 Canonical active assets:
 
@@ -69,18 +75,19 @@ Canonical active assets:
 VLA base:
   data/ckpts/VLA_model_256/libero_goal
 
-VLA action head / encoder state:
-  data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
+pi0 VLA action head / encoder state:
+  data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt
 
-Precomputed hidden sidecar:
-  data/processed_data/libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000
+Precomputed action-hidden sidecar:
+  data/processed_data/libero_goal_no_noops_t_256_pi0_action_hidden_latest_fullseq
 
 Action horizon:
   5
 ```
 
-Keep those three aligned. Do not mix goal action heads with `libero_10` hidden
-sidecars.
+Keep the VLA base, pi0 action-head checkpoint, sidecar metadata,
+`action_head_type=pi0_query`, and `time_horizon` aligned. Do not mix pooled
+hidden sidecars with action-hidden WM configs.
 
 ## Public Entry Points
 
@@ -89,11 +96,11 @@ For current work, prefer these scripts:
 ```text
 scripts/download_hf.sh
 scripts/env_libero_goal.sh
+scripts/env_libero_goal_pi0_query.sh
 scripts/prepare_data.sh
-scripts/prepare_latent_data.sh
 scripts/pretokenize_train_vla.sh
-scripts/train_rynn_backbone_dreamerv3_wm.sh
-scripts/train_dreamer_vla_rynn_pixel.sh
+scripts/run_pi0_query_hidden_pipeline.sh
+scripts/train_pi0_action_hidden_dreamerv3_wm.sh
 scripts/eval_libero_vla.sh
 scripts/analyze_rynn_hidden_action_metrics.py
 ```
@@ -108,9 +115,32 @@ Configs are grouped by experiment family:
 configs/pretokenize_vla_*.yaml              # VLA SFT
 configs/dreamerv3_pixel_*.yaml              # pixel WM baseline
 configs/dreamerv3_token_*.yaml              # token WM baseline
-configs/rynn_backbone_dreamerv3_*.yaml      # Rynn hidden / pixel WM
-configs/dreamer_vla_*.yaml                  # DreamerVLA actor-critic runs
+configs/rynn_backbone_dreamerv3_action_hidden_*.yaml  # current pi0 action-hidden WM
+configs/chameleon_latent_action_wm_*.yaml             # Chameleon / LaDiWM-style baseline
+configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml
 configs/eval_libero_vla.yaml                # rollout eval
+```
+
+Active configs should target the public workspace API in `src.workspace`:
+
+```text
+ActionHiddenWMWorkspace      # current pi0 action-hidden WM
+PixelWMWorkspace             # pixel DreamerV3 baseline
+TokenWMWorkspace             # token DreamerV3 baseline
+ChameleonLatentWMWorkspace   # Chameleon / LaDiWM-style baseline
+VLASFTWorkspace              # VLA action-head SFT
+JointDreamerVLAWorkspace     # current action-hidden actor route
+LiberoEvalWorkspace          # LIBERO rollout eval
+```
+
+Each config points directly at a route-specific workspace class.
+
+Physical layout follows the same boundary:
+
+```text
+src/workspace/__init__.py        # public workspace exports
+src/workspace/base_workspace.py  # shared lifecycle/checkpoint helpers
+src/workspace/*_workspace.py     # route-specific workspace implementations
 ```
 
 See `configs/README.md` for the active registry and historical configs.

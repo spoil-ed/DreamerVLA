@@ -7,18 +7,24 @@ import pickle
 from pprint import pprint
 from typing import Any, Mapping
 
+import hydra
 import torch
 from hydra.core.hydra_config import HydraConfig
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
+from torch.utils.data import DataLoader
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class BaseWorkspace(ABC):
+    workspace_name = "base"
+    workspace_status = "abstract"
+    workspace_family = "workspace"
     include_keys = tuple()
     exclude_keys = tuple()
+    checkpoint_restore_output_dir = False
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         # Runtime config
@@ -73,6 +79,108 @@ class BaseWorkspace(ABC):
         if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
             encoder_cfg.model_path = str(init_model_path)
         return encoder_cfg
+
+    def _resolve_vla_init_path(self) -> str:
+        configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
+        default_dir = getattr(self, "default_vla_init_dir", None)
+        candidate = (
+            pathlib.Path(str(configured)).expanduser().resolve()
+            if configured is not None
+            else pathlib.Path(str(default_dir)).expanduser().resolve()
+        )
+        if candidate.is_dir():
+            if (candidate / "config.json").is_file():
+                return str(candidate)
+            for subdir in sorted(path for path in candidate.iterdir() if path.is_dir()):
+                if (subdir / "config.json").is_file():
+                    return str(subdir.resolve())
+        return str(candidate.resolve())
+
+    def _build_frozen_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
+        encoder_cfg = self.build_encoder_cfg(cfg)
+        with open_dict(encoder_cfg):
+            encoder_cfg.model_path = self._resolve_vla_init_path()
+            encoder_cfg.freeze_backbone = True
+        return encoder_cfg
+
+    @staticmethod
+    def _dataloader_kwargs(config: Mapping[str, Any] | DictConfig) -> dict[str, Any]:
+        if isinstance(config, DictConfig):
+            return dict(OmegaConf.to_container(config, resolve=True))
+        return dict(config)
+
+    @staticmethod
+    def _sanitize_worker_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        if int(kwargs.get("num_workers", 0) or 0) <= 0:
+            kwargs.pop("prefetch_factor", None)
+            kwargs["persistent_workers"] = False
+        return kwargs
+
+    def make_distributed_dataloader(
+        self,
+        dataset: Any,
+        dataloader_cfg: Mapping[str, Any] | DictConfig,
+        *,
+        shuffle: bool | None = None,
+        drop_last: bool | None = None,
+        sanitize_worker_kwargs: bool = False,
+    ) -> DataLoader:
+        dataloader_kwargs = self._dataloader_kwargs(dataloader_cfg)
+        if sanitize_worker_kwargs:
+            dataloader_kwargs = self._sanitize_worker_kwargs(dataloader_kwargs)
+
+        effective_shuffle = bool(dataloader_kwargs.get("shuffle", True)) if shuffle is None else bool(shuffle)
+        effective_drop_last = (
+            bool(dataloader_kwargs.get("drop_last", False))
+            if drop_last is None
+            else bool(drop_last)
+        )
+        dataloader_kwargs["shuffle"] = effective_shuffle
+        dataloader_kwargs["drop_last"] = effective_drop_last
+
+        distributed = getattr(self, "distributed", None)
+        if distributed is not None and hasattr(distributed, "maybe_make_sampler"):
+            sampler = distributed.maybe_make_sampler(
+                dataset,
+                shuffle=effective_shuffle,
+                drop_last=effective_drop_last,
+            )
+            if sampler is not None:
+                dataloader_kwargs["shuffle"] = False
+                dataloader_kwargs["sampler"] = sampler
+
+        collate_fn = getattr(dataset, "collate_fn", None)
+        if callable(collate_fn):
+            dataloader_kwargs["collate_fn"] = collate_fn
+        return DataLoader(dataset, **dataloader_kwargs)
+
+    def make_val_dataloaders(
+        self,
+        cfg: DictConfig,
+        *,
+        split_names: tuple[str, ...] = ("val_ind", "val_ood"),
+        sanitize_worker_kwargs: bool = False,
+    ) -> dict[str, DataLoader]:
+        val_dataloaders: dict[str, DataLoader] = {}
+        for split_name in split_names:
+            val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
+            if val_ds_cfg is None:
+                continue
+            val_ds = hydra.utils.instantiate(val_ds_cfg)
+            val_dataloaders[split_name] = self.make_distributed_dataloader(
+                val_ds,
+                cfg.dataloader,
+                shuffle=False,
+                drop_last=False,
+                sanitize_worker_kwargs=sanitize_worker_kwargs,
+            )
+        return val_dataloaders
+
+    @staticmethod
+    def set_dataloader_epoch(dataloader: DataLoader, epoch: int) -> None:
+        set_epoch = getattr(getattr(dataloader, "sampler", None), "set_epoch", None)
+        if callable(set_epoch):
+            set_epoch(int(epoch))
 
     def freeze_module_in_place(self, module: Any) -> Any:
         # Freeze module
@@ -273,13 +381,22 @@ class BaseWorkspace(ABC):
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
         path = pathlib.Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
 
         # Payload config
         if exclude_keys is None:
             exclude_keys = tuple(self.exclude_keys)
         if include_keys is None:
             include_keys = tuple(self.include_keys) + ("_output_dir",)
+
+        distributed = getattr(self, "distributed", None)
+        is_main_process = True if distributed is None else bool(distributed.is_main_process)
+        requires_collective = (
+            False
+            if distributed is None
+            else bool(getattr(distributed, "requires_collective_checkpointing", False))
+        )
+        if distributed is not None and not requires_collective and not is_main_process:
+            return str(path.absolute())
 
         payload = {
             "cfg": self.cfg,
@@ -291,11 +408,15 @@ class BaseWorkspace(ABC):
         for key, value in self.__dict__.items():
             if hasattr(value, "state_dict") and hasattr(value, "load_state_dict"):
                 if key not in exclude_keys:
-                    payload["state_dicts"][key] = _copy_to_cpu(value.state_dict())
-            elif key in include_keys:
+                    state_dict = self._state_dict_for_checkpoint(key, value)
+                    if is_main_process and state_dict is not None:
+                        payload["state_dicts"][key] = _copy_to_cpu(state_dict)
+            elif key in include_keys and is_main_process:
                 payload["pickles"][key] = pickle.dumps(value)
 
-        torch.save(payload, path)
+        if is_main_process:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(payload, path)
         return str(path.absolute())
 
     def get_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
@@ -311,21 +432,35 @@ class BaseWorkspace(ABC):
     ) -> None:
         # Key filters
         if exclude_keys is None:
-            exclude_keys = tuple()
+            exclude_keys = tuple(self.exclude_keys)
+        pickles = payload.get("pickles", {})
+        state_dicts = payload.get("state_dicts", {})
         if include_keys is None:
-            include_keys = tuple(
-                key for key in payload["pickles"].keys() if key != "_output_dir"
-            )
+            include_keys = tuple(pickles.keys())
+            if not bool(getattr(self, "checkpoint_restore_output_dir", False)):
+                include_keys = tuple(key for key in include_keys if key != "_output_dir")
 
         # State restore
-        for key, value in payload["state_dicts"].items():
+        for key, value in state_dicts.items():
             if key not in exclude_keys and key in self.__dict__ and self.__dict__[key] is not None:
-                self.__dict__[key].load_state_dict(value, **kwargs)
+                self._load_state_dict_from_checkpoint(key, self.__dict__[key], value, **kwargs)
 
         # Pickle restore
         for key in include_keys:
-            if key in payload["pickles"]:
-                self.__dict__[key] = pickle.loads(payload["pickles"][key])
+            if key in pickles:
+                self.__dict__[key] = pickle.loads(pickles[key])
+
+    def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
+        return value.state_dict()
+
+    def _load_state_dict_from_checkpoint(
+        self,
+        key: str,
+        value: Any,
+        state_dict: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        value.load_state_dict(state_dict, **kwargs)
 
     def load_checkpoint(
         self,
@@ -347,6 +482,23 @@ class BaseWorkspace(ABC):
             include_keys=include_keys,
         )
         return payload
+
+    def setup(self) -> None:
+        """Optional lifecycle hook before execution.
+
+        Existing workspaces build most state inside ``run``.  The hook gives
+        new workspaces a common interface without forcing a large rewrite of
+        the current training loops.
+        """
+        return None
+
+    def execute(self) -> object:
+        """Run the workspace through the public lifecycle interface."""
+        return self.run()
+
+    def teardown(self) -> None:
+        """Optional lifecycle hook after execution."""
+        return None
 
     @abstractmethod
     def run(self) -> object:

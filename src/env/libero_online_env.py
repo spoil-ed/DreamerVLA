@@ -26,6 +26,7 @@ from src.env.libero_env import (
     get_libero_env,
     quat2axisangle,
 )
+from src.utils.episode_end import resolve_episode_end
 
 
 ACTION_LOW = np.array(
@@ -233,12 +234,17 @@ class LIBEROOnlineEnv:
         raw_obs, raw_reward, raw_done, raw_info = self.env.step(action_arr.tolist())
         self._elapsed_steps += 1
         success = self._is_success(raw_done=raw_done, reward=float(raw_reward), info=raw_info)
-        terminated = bool(success)
-        truncated = bool(self._elapsed_steps >= self.max_steps and not terminated)
+        episode_end = resolve_episode_end(
+            success=success,
+            elapsed_steps=self._elapsed_steps,
+            max_steps=self.max_steps,
+        )
+        terminated = episode_end.terminated
+        truncated = episode_end.truncated
         reward = float(1.0 if success else 0.0) if self.cfg.sparse_success_reward else float(raw_reward)
 
         self._raw_obs = raw_obs
-        is_last = bool(terminated or truncated)
+        is_last = episode_end.done
         obs = self._format_obs(raw_obs, is_first=False, is_last=is_last, is_terminal=terminated)
         info = self._make_info(
             raw_info=raw_info,

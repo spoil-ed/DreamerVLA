@@ -1,5 +1,5 @@
-_target_: src.workspace.dreamerv3_token_workspace.DreamerV3TokenWorkspace
-
+# @package _global_
+_target_: src.workspace.TokenWMWorkspace
 training:
   out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_token/dreamerv3_token_libero_10
   device: cuda:0

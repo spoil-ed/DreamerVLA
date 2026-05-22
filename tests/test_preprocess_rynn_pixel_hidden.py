@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import sys
+
 import torch
 
-from scripts.preprocess_rynn_pixel_hidden import _prepare_actor_sequence_arrays
+from scripts.preprocess_rynn_pixel_hidden import _prepare_actor_sequence_arrays, _select_obs_hidden, parse_args
 from src.dataloader.libero_pixel_rynn_hidden_sequence_dataset import LIBEROPixelRynnHiddenSequenceDataset
 from src.models.world_model.dreamerv3_torch import (
     CompactTokenSequenceAutoencoder,
@@ -40,6 +42,38 @@ def test_prepare_actor_sequence_arrays_appends_action_trigger_and_pads() -> None
     assert arrays["actor_input_ids"][1].tolist() == [21, 22, 10004, 0, 0]
     assert arrays["actor_attention_mask"][0].tolist() == [True, True, True, True, False]
     assert arrays["actor_attention_mask"][1].tolist() == [True, True, True, False, False]
+
+
+def test_select_obs_hidden_can_flatten_action_query_hidden_for_wm() -> None:
+    pooled = torch.randn(2, 8)
+    action_hidden = torch.arange(2 * 3 * 4, dtype=torch.float32).reshape(2, 3, 4)
+
+    selected = _select_obs_hidden(
+        pooled_hidden=pooled,
+        action_hidden=action_hidden,
+        obs_hidden_source="action_query",
+    )
+
+    assert selected.shape == (2, 12)
+    assert selected[0].tolist() == action_hidden[0].reshape(-1).tolist()
+    assert _select_obs_hidden(
+        pooled_hidden=pooled,
+        action_hidden=None,
+        obs_hidden_source="pooled",
+    ).shape == (2, 8)
+
+
+def test_preprocess_cli_defaults_to_pi0_action_query_sidecar(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["preprocess_rynn_pixel_hidden.py"])
+
+    args = parse_args()
+
+    assert args.obs_hidden_source == "action_query"
+    assert args.action_head_type == "pi0_query"
+    assert args.prompt_style == "vla_policy"
+    assert args.history == 2
+    assert args.include_state is True
+    assert args.rotate_images_180 is True
 
 
 def test_pad_or_truncate_actor_sequence_arrays() -> None:

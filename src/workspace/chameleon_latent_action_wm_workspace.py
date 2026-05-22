@@ -12,8 +12,6 @@ from __future__ import annotations
 import copy
 import math
 import os
-import pathlib
-import pickle
 from typing import Any
 
 import hydra
@@ -32,8 +30,12 @@ from src.workspace.base_workspace import BaseWorkspace
 
 
 class ChameleonLatentActionWMWorkspace(BaseWorkspace):
+    workspace_name = "chameleon_latent_wm_compat"
+    workspace_status = "compatibility"
+    workspace_family = "world_model"
     include_keys = ("global_step", "epoch")
-    exclude_keys = tuple()
+    exclude_keys = ("encoder",)
+    checkpoint_restore_output_dir = True
     default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
     default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/debug"
 
@@ -74,65 +76,29 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
         self.world_model_optimizer = None
         self._image_bpe_set_cache: set[int] | None = None
 
-    # ---- setup helpers ----
+    def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
+        if key == "world_model" and self.world_model is not None:
+            with self.distributed.model_state_dict_context(self.world_model):
+                return self.world_model.state_dict()
+        if key == "world_model_optimizer" and self.world_model_optimizer is not None and self.world_model is not None:
+            return self.distributed.optimizer_state_dict(self.world_model, self.world_model_optimizer)
+        return value.state_dict()
 
-    def _resolve_vla_init_path(self) -> str:
-        configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
-        candidate = (
-            pathlib.Path(str(configured)).expanduser().resolve()
-            if configured is not None
-            else pathlib.Path(self.default_vla_init_dir)
-        )
-        if candidate.is_dir():
-            if (candidate / "config.json").is_file():
-                return str(candidate)
-            for subdir in sorted(path for path in candidate.iterdir() if path.is_dir()):
-                if (subdir / "config.json").is_file():
-                    return str(subdir.resolve())
-        return str(candidate.resolve())
-
-    def _build_frozen_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
-        encoder_cfg = copy.deepcopy(cfg.encoder)
-        init_model_path = OmegaConf.select(cfg, "init.vla_ckpt_path")
-        if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
-            encoder_cfg.model_path = str(init_model_path)
-        with open_dict(encoder_cfg):
-            encoder_cfg.model_path = self._resolve_vla_init_path()
-            encoder_cfg.freeze_backbone = True
-        return encoder_cfg
-
-    # ---- checkpoint ----
-
-    def save_checkpoint(self, path: str | pathlib.Path | None = None, tag: str = "latest") -> str:
-        if path is None:
-            path = self.get_checkpoint_path(tag=tag)
-        path = pathlib.Path(path)
-        if not self.distributed.requires_collective_checkpointing and not self.distributed.is_main_process:
-            return str(path.absolute())
-        payload = {"cfg": self.cfg, "state_dicts": {}, "pickles": {}}
-        if self.distributed.is_main_process:
-            if self.world_model is not None:
-                payload["state_dicts"]["world_model"] = _copy_to_cpu(self.world_model.state_dict())
-            if self.world_model_optimizer is not None:
-                payload["state_dicts"]["world_model_optimizer"] = _copy_to_cpu(
-                    self.world_model_optimizer.state_dict()
-                )
-            payload["pickles"]["global_step"] = pickle.dumps(self.global_step)
-            payload["pickles"]["epoch"] = pickle.dumps(self.epoch)
-            payload["pickles"]["_output_dir"] = pickle.dumps(self._output_dir)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(payload, path)
-        return str(path.absolute())
-
-    def load_payload(self, payload: dict[str, Any], **kwargs: Any) -> None:
-        sd = payload.get("state_dicts", {})
-        if self.world_model is not None and "world_model" in sd:
-            self.world_model.load_state_dict(sd["world_model"], strict=False)
-        if self.world_model_optimizer is not None and "world_model_optimizer" in sd:
-            self.world_model_optimizer.load_state_dict(sd["world_model_optimizer"])
-        for key in ("global_step", "epoch", "_output_dir"):
-            if key in payload.get("pickles", {}):
-                self.__dict__[key] = pickle.loads(payload["pickles"][key])
+    def _load_state_dict_from_checkpoint(
+        self,
+        key: str,
+        value: Any,
+        state_dict: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        if key == "world_model" and self.world_model is not None:
+            with self.distributed.model_state_dict_context(self.world_model, rank0_only=False):
+                value.load_state_dict(state_dict, strict=False)
+            return
+        if key == "world_model_optimizer" and self.world_model_optimizer is not None and self.world_model is not None:
+            self.distributed.load_optimizer_state_dict(self.world_model, self.world_model_optimizer, state_dict)
+            return
+        value.load_state_dict(state_dict, **kwargs)
 
     # ---- latent extraction ----
 
@@ -322,36 +288,9 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
 
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
-        dataloader_kwargs = dict(cfg.dataloader)
-        sampler = self.distributed.maybe_make_sampler(
-            dataset,
-            shuffle=bool(dataloader_kwargs.get("shuffle", True)),
-            drop_last=bool(dataloader_kwargs.get("drop_last", False)),
-        )
-        if sampler is not None:
-            dataloader_kwargs["shuffle"] = False
-            dataloader_kwargs["sampler"] = sampler
-        collate_fn = getattr(dataset, "collate_fn", None)
-        if callable(collate_fn):
-            dataloader_kwargs["collate_fn"] = collate_fn
-        train_dataloader = DataLoader(dataset, **dataloader_kwargs)
+        train_dataloader = self.make_distributed_dataloader(dataset, cfg.dataloader)
 
-        val_dataloaders: dict[str, DataLoader] = {}
-        for split_name in ("val_ind", "val_ood"):
-            val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
-            if val_ds_cfg is None:
-                continue
-            val_ds = hydra.utils.instantiate(val_ds_cfg)
-            val_kwargs = dict(cfg.dataloader)
-            val_kwargs["shuffle"] = False
-            val_kwargs["drop_last"] = False
-            val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
-            if val_sampler is not None:
-                val_kwargs["sampler"] = val_sampler
-            val_collate = getattr(val_ds, "collate_fn", None)
-            if callable(val_collate):
-                val_kwargs["collate_fn"] = val_collate
-            val_dataloaders[split_name] = DataLoader(val_ds, **val_kwargs)
+        val_dataloaders = self.make_val_dataloaders(cfg)
 
         encoder_cfg = self._build_frozen_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
@@ -407,8 +346,7 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
             with self.distributed.logger_context(log_path) as logger:
                 reached_max_steps = False
                 for _ in range(int(cfg.training.num_epochs)):
-                    if sampler is not None:
-                        sampler.set_epoch(self.epoch)
+                    self.set_dataloader_epoch(train_dataloader, self.epoch)
                     epoch_metrics: dict[str, list[float]] = {}
                     self.world_model.train()
                     accum_steps = max(1, int(cfg.training.gradient_accumulate_every))
@@ -535,12 +473,3 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
 
 __all__ = ["ChameleonLatentActionWMWorkspace"]
 
-
-def _copy_to_cpu(value: Any) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu()
-    if isinstance(value, dict):
-        return {key: _copy_to_cpu(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_copy_to_cpu(item) for item in value]
-    return copy.deepcopy(value)

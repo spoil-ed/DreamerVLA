@@ -4,11 +4,15 @@ import json
 
 import pytest
 import torch
+from torch import nn
+from omegaconf import OmegaConf
 
 from src.dataloader.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from src.models.vla_actor import VLAActionHeadActor
+from src.models.vla_actor import Pi0ActionHiddenActor, VLAActionHeadActor
+from src.workspace.dreamer_vla_workspace import DreamerVLAWorkspace
+from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
 
 
 def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
@@ -38,6 +42,39 @@ def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
         )
 
 
+def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
+    (tmp_path / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "time_horizon": 5,
+                "action_head_type": "pi0_query",
+            }
+        ),
+        encoding="utf-8",
+    )
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset.hidden_dir = tmp_path
+    dataset.load_actor_sequence = False
+
+    with pytest.raises(ValueError, match="model_path mismatch"):
+        dataset._validate_hidden_sidecar(
+            expected_model_path="/tmp/model",
+            expected_encoder_state_ckpt=None,
+            expected_time_horizon=5,
+            expected_action_head_type="pi0_query",
+            require_preprocess_config=True,
+        )
+
+    with pytest.raises(ValueError, match="encoder_state_ckpt mismatch"):
+        dataset._validate_hidden_sidecar(
+            expected_model_path=None,
+            expected_encoder_state_ckpt="/tmp/encoder.ckpt",
+            expected_time_horizon=5,
+            expected_action_head_type="pi0_query",
+            require_preprocess_config=True,
+        )
+
+
 def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
     actor = VLAActionHeadActor(
         hidden_dim=16,
@@ -56,3 +93,187 @@ def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
 
     assert actor.action_token_embeddings.weight.shape == (1, 4 * 16)
     assert chunk.shape == (2, 4, 3)
+
+
+def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> None:
+    path = tmp_path / "vla_without_action_head.ckpt"
+    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
+
+    with pytest.raises(RuntimeError, match="action_head"):
+        VLAActionHeadActor(
+            hidden_dim=16,
+            action_dim=3,
+            time_horizon=4,
+            vla_hidden_size=16,
+            hidden_size_factor=0.25,
+            num_encoder_layers=1,
+            adapter_type="identity",
+            action_head_type="pi0_query",
+            init_action_head_ckpt=str(path),
+        )
+
+
+def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
+    workspace = EvalLiberoVLAWorkspace.__new__(EvalLiberoVLAWorkspace)
+    workspace.cfg = OmegaConf.create(
+        {
+            "eval": {"obs_hidden_source": "action_query", "target_token_id": 10004},
+            "encoder": {"action_head_type": "pi0_query"},
+        }
+    )
+
+    hidden_states = torch.randn(1, 3, 6)
+    input_ids = torch.tensor([[11, 12, 13, 10004]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    action_hidden = torch.arange(1 * 5 * 4, dtype=torch.float32).reshape(1, 5, 4)
+
+    class DummyEncoder:
+        def extract_action_hidden(self, **kwargs):
+            assert kwargs["hidden_states"] is hidden_states
+            assert kwargs["input_ids"] is input_ids
+            assert kwargs["attention_mask"] is attention_mask
+            assert kwargs["target_token_id"] == 10004
+            return action_hidden
+
+    workspace.encoder = DummyEncoder()
+    workspace._wm_io_mode = lambda: "hidden"  # type: ignore[method-assign]
+    workspace._encode_hidden_sequence_from_tokenized = lambda _tokens: (  # type: ignore[method-assign]
+        hidden_states,
+        input_ids,
+        attention_mask,
+    )
+
+    obs_embedding = workspace._obs_embedding_for_wm([[11, 12, 13]])
+
+    assert obs_embedding.shape == (1, 20)
+    assert obs_embedding.tolist() == action_hidden.reshape(1, -1).tolist()
+
+
+def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
+    cfg = EvalLiberoVLAWorkspace._checkpoint_cfg_from_payload({
+        "cfg": {
+            "training": {"out_dir": "/tmp/eval"},
+            "eval": {"task_suite_name": "libero_goal"},
+        }
+    })
+
+    assert OmegaConf.select(cfg, "training.out_dir") == "/tmp/eval"
+    assert OmegaConf.select(cfg, "eval.task_suite_name") == "libero_goal"
+
+
+def test_pi0_action_hidden_actor_decodes_flattened_action_hidden() -> None:
+    actor = Pi0ActionHiddenActor(
+        hidden_dim=20,
+        action_hidden_dim=4,
+        action_dim=3,
+        time_horizon=5,
+        adapter_type="identity",
+    )
+
+    action, log_prob, extra = actor({
+        "mode": "sample",
+        "hidden": torch.randn(2, 20),
+        "deterministic": True,
+    })
+
+    assert action.shape == (2, 3)
+    assert log_prob.shape == (2,)
+    assert extra["action_chunk"].shape == (2, 5, 3)
+
+
+def test_pi0_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
+    source = Pi0ActionHiddenActor(
+        hidden_dim=20,
+        action_hidden_dim=4,
+        action_dim=3,
+        time_horizon=5,
+        adapter_type="identity",
+    )
+    ckpt = {
+        "state_dicts": {
+            "encoder": {
+                f"backbone.action_head.output_projection.{key}": value.detach().clone()
+                for key, value in source.output_projection.state_dict().items()
+            }
+        }
+    }
+    path = tmp_path / "vla.ckpt"
+    torch.save(ckpt, path)
+
+    actor = Pi0ActionHiddenActor(
+        hidden_dim=20,
+        action_hidden_dim=4,
+        action_dim=3,
+        time_horizon=5,
+        adapter_type="identity",
+        init_action_head_ckpt=str(path),
+    )
+
+    for key, value in source.output_projection.state_dict().items():
+        assert torch.equal(actor.output_projection.state_dict()[key], value)
+
+
+def test_pi0_action_hidden_actor_rejects_ckpt_without_output_projection(tmp_path) -> None:
+    path = tmp_path / "vla_without_projection.ckpt"
+    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
+
+    with pytest.raises(RuntimeError, match="output_projection"):
+        Pi0ActionHiddenActor(
+            hidden_dim=20,
+            action_hidden_dim=4,
+            action_dim=3,
+            time_horizon=5,
+            adapter_type="identity",
+            init_action_head_ckpt=str(path),
+        )
+
+
+def test_dreamervla_init_loader_filters_and_remaps_compatible_state() -> None:
+    class TinyWorldModel(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reward_head = nn.Module()
+            self.reward_head.net = nn.Module()
+            self.reward_head.net.net = nn.Linear(2, 1)
+            self.keep = nn.Linear(2, 2)
+
+    class DummyDistributed:
+        def __init__(self) -> None:
+            self.rank0_only_args: list[bool] = []
+            self.is_main_process = False
+
+        def model_state_dict_context(self, _module: nn.Module, rank0_only: bool = True):
+            self.rank0_only_args.append(rank0_only)
+
+            class Ctx:
+                def __enter__(self):
+                    return None
+
+                def __exit__(self, *_exc):
+                    return False
+
+            return Ctx()
+
+    workspace = DreamerVLAWorkspace.__new__(DreamerVLAWorkspace)
+    workspace.world_model = nn.Module()
+    workspace.world_model.module = TinyWorldModel()
+    workspace.distributed = DummyDistributed()
+
+    target = workspace.world_model.module
+    original_keep_weight = target.keep.weight.detach().clone()
+    reward_weight = torch.full_like(target.reward_head.net.net.weight, 0.25)
+    reward_bias = torch.full_like(target.reward_head.net.net.bias, -0.5)
+
+    workspace._load_compatible_module_state(
+        "world_model",
+        {
+            "reward_head.net.weight": reward_weight,
+            "reward_head.net.bias": reward_bias,
+            "keep.weight": torch.zeros(3, 3),
+        },
+    )
+
+    assert workspace.distributed.rank0_only_args == [False]
+    assert torch.equal(target.reward_head.net.net.weight, reward_weight)
+    assert torch.equal(target.reward_head.net.net.bias, reward_bias)
+    assert torch.equal(target.keep.weight, original_keep_weight)

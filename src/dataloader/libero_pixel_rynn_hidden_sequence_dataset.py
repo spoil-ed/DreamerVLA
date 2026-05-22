@@ -40,6 +40,11 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         expected_encoder_state_ckpt: str | None = None,
         expected_time_horizon: int | None = None,
         expected_action_head_type: str | None = None,
+        expected_obs_hidden_source: str | None = None,
+        expected_prompt_style: str | None = None,
+        expected_history: int | None = None,
+        expected_include_state: bool | None = None,
+        expected_rotate_images_180: bool | None = None,
         require_preprocess_config: bool = True,
         load_actor_sequence: bool = False,
         actor_sequence_length: int | None = None,
@@ -74,14 +79,25 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             expected_encoder_state_ckpt=expected_encoder_state_ckpt,
             expected_time_horizon=expected_time_horizon,
             expected_action_head_type=expected_action_head_type,
+            expected_obs_hidden_source=expected_obs_hidden_source,
+            expected_prompt_style=expected_prompt_style,
+            expected_history=expected_history,
+            expected_include_state=expected_include_state,
+            expected_rotate_images_180=expected_rotate_images_180,
             require_preprocess_config=bool(require_preprocess_config),
         )
 
     @staticmethod
     def _same_path(left: str | None, right: str | None) -> bool:
         if not left or not right:
-            return True
+            return left == right
         return str(Path(left).expanduser().resolve()) == str(Path(right).expanduser().resolve())
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
 
     def _validate_hidden_sidecar(
         self,
@@ -90,7 +106,12 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         expected_encoder_state_ckpt: str | None,
         expected_time_horizon: int | None,
         expected_action_head_type: str | None,
-        require_preprocess_config: bool,
+        expected_obs_hidden_source: str | None = None,
+        expected_prompt_style: str | None = None,
+        expected_history: int | None = None,
+        expected_include_state: bool | None = None,
+        expected_rotate_images_180: bool | None = None,
+        require_preprocess_config: bool = True,
     ) -> None:
         config_path = self.hidden_dir / "preprocess_config.json"
         if not config_path.is_file():
@@ -123,6 +144,33 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             if got != str(expected_action_head_type):
                 errors.append(
                     f"action_head_type mismatch: sidecar={got!r}, expected={expected_action_head_type!r}"
+                )
+        if expected_obs_hidden_source:
+            got = str(config.get("obs_hidden_source", "pooled"))
+            if got != str(expected_obs_hidden_source):
+                errors.append(
+                    f"obs_hidden_source mismatch: sidecar={got!r}, expected={expected_obs_hidden_source!r}"
+                )
+        if expected_prompt_style:
+            got = str(config.get("prompt_style", "legacy"))
+            if got != str(expected_prompt_style):
+                errors.append(f"prompt_style mismatch: sidecar={got!r}, expected={expected_prompt_style!r}")
+        if expected_history is not None:
+            got = config.get("history")
+            if got is None or int(got) != int(expected_history):
+                errors.append(f"history mismatch: sidecar={got!r}, expected={int(expected_history)}")
+        if expected_include_state is not None:
+            got = self._as_bool(config.get("include_state", False))
+            expected = self._as_bool(expected_include_state)
+            if got != expected:
+                errors.append(f"include_state mismatch: sidecar={got!r}, expected={expected!r}")
+        if expected_rotate_images_180 is not None:
+            got = self._as_bool(config.get("rotate_images_180", False))
+            expected = self._as_bool(expected_rotate_images_180)
+            if got != expected:
+                errors.append(
+                    "rotate_images_180 mismatch: "
+                    f"sidecar={got!r}, expected={expected!r}"
                 )
         if errors:
             joined = "\n  - ".join(errors)

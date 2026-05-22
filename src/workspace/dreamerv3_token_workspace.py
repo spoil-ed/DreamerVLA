@@ -26,6 +26,10 @@ def _to_device(value: Any, device: torch.device) -> Any:
 class DreamerV3TokenWorkspace(BaseWorkspace):
     """Standalone DreamerV3-style world-model trainer for image tokens."""
 
+    workspace_name = "token_wm_compat"
+    workspace_status = "compatibility"
+    workspace_family = "world_model"
+
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
         self.device = torch.device(OmegaConf.select(config, "training.device", default="cuda:0"))

@@ -27,11 +27,6 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
     def get_normalizer(self) -> Any:
         """Return dataset-side normalization metadata used by the workspace."""
 
-    @property
-    def spec(self) -> Any:
-        """Backward-compatible alias for callers that still expect `spec`."""
-        return self.data_spec
-
     @staticmethod
     def resolve_project_path(path: str | Path, base_dir: Path | None = None) -> Path:
         path = Path(path)

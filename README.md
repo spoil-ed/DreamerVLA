@@ -1,10 +1,11 @@
 # Dreamer-VLA
 
-Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 风格 World Model 的机器人操控研究框架。核心思路：
+Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 风格 World Model 的机器人操控研究框架。当前主线是 **pi0 action-hidden DreamerV3 WM**：
 
-- 使用 **RynnVLA** 作为多模态编码器 / 动作先验（frozen）
-- 在语义表征空间训练紧凑的 **latent world model**（TSSM）
-- 通过 **PPO 风格** Actor-Critic 在 imagination rollouts 中优化策略
+- 复用 **RynnVLA / Chameleon backbone + pi0 action-query block**，一直抽到 action hidden
+- action hidden 同时作为 VLA action head 输入，以及 DreamerV3 RSSM 的 observation embedding
+- 第一版固定共享 VLA backbone，预计算 action-hidden sidecar，再训练 DreamerV3 RSSM / decoder / reward / continue
+- joint finetune 与 DreamerVLA actor-critic 训练暂列为 follow-up，避免破坏已经可用的 VLA 表达
 - 基于 **LIBERO** 基准的离线数据和预处理管线
 
 > **注意**：本仓库的环境基于 [WMPO](https://github.com/WM-PO/WMPO) 和 [RynnVLA-002](https://github.com/alibaba-damo-academy/RynnVLA-002) 修改而来，数据集也沿用 RynnVLA-002 的数据处理流程。下面的安装文档会完整覆盖从零搭建环境的全部步骤。
@@ -49,69 +50,59 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
 
 ## 训练范式总览
 
-整体流水线分 **3 个阶段**：前两阶段做独立的 SFT 初始化（可并行），第三阶段把初始化好的 VLA / WM 串到 Dreamer 范式里做 imagination rollout 训练。
+当前流水线先收束到 **frozen shared backbone + action-hidden WM**。VLA 和 WM 共享从 observation 到 pi0 action hidden 的整段表征，WM 不再另接一个独立 pixel CNN encoder：
 
 ```
-┌──────────────────────────────── Stage 0: 数据预处理 ────────────────────────────────┐
-│  scripts/prepare_data.sh                                                              │
-│  LIBERO HDF5 → 去 no-op → 抽图 → Chameleon VQGAN + text tokenizer 预 tokenize        │
-│  产出 {image_tokens, text_tokens, action, state}                                     │
-└───────────────────────────────────────────────────────────────────────────────────────┘
-                │                                               │
-                ▼                                               ▼
-┌──────── Stage 1: SFT 初始化 VLA ────────┐   ┌──────── Stage 2: SFT 初始化 WM ────────┐
-│ Config:   pretokenize_vla_libero_goal.yaml │ │ Config:   rynn_backbone_dreamerv3_pixel │
-│ Workspace: PretokenizeVLAWorkspace         │ │           _wm_libero_goal_precomputed   │
-│ 作用:     在预 tokenize 数据上微调       │   │ Workspace: PretokenizeWMWorkspace       │
-│           RynnVLAEncoder 头              │   │ 作用:     VLA 冻结，预训练 TSSM         │
-│                                          │   │           L = L_trans + L_reward + L_KL │
-└──────────────────────────────────────────┘   └─────────────────────────────────────────┘
-                │                                               │
-                └───────────────────┬───────────────────────────┘
-                                    ▼
-┌───────────────── Stage 3: Dreamer 范式 rollout 训练 ─────────────────┐
-│ Config:    dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml │
-│ Workspace: DreamerVLAWorkspace                                         │
-│ 算法:      src/algorithms/dreamer_vla.py::imagine_actor_critic_step    │
-│                                                                        │
-│ 每个 batch 交替两段：                                                 │
-│   Phase-1  world_model_pretrain_step()                                 │
-│            继续训 WM（transition + reward + KL）                      │
-│   Phase-2  imagine_actor_critic_step_v3()                              │
-│            从真实 obs 编码出初始 latent (detach)                      │
-│            在 WM 的 latent 空间 imagine H=15 步                        │
-│            λ-returns + twohot critic + target EMA                      │
-│            reward 梯度 → action → policy                               │
-│                                                                        │
-│ 用 training.run_wm_phase / run_actor_critic_phase 控制开关             │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────── Stage 0: 数据准备 ────────────────────────┐
+│ LIBERO HDF5 -> no-op 过滤 / 图像抽取 / task language / state/action │
+└────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────── Stage 1: pi0 VLA action head SFT ────────────────┐
+│ Config:   pretokenize_vla_libero_goal_pi0_query.yaml             │
+│ Script:   scripts/pretokenize_train_vla.sh                       │
+│ 输出:     frozen VLA ckpt, action_head_type=pi0_query             │
+└───────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────── Stage 2: 预计算 action-hidden sidecar ───────────────┐
+│ Script: scripts/run_pi0_query_hidden_pipeline.sh                 │
+│        PIPELINE_STAGE=preprocess                                 │
+│ obs + language + state                                           │
+│   -> shared VLA backbone + pi0 action-query block                │
+│   -> action_hidden [H, 1024]                                     │
+│   -> flatten to obs_embedding [H*1024]                           │
+└───────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────── Stage 3: frozen action-hidden DreamerV3 WM ──────────┐
+│ Config:    rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_ │
+│            precomputed.yaml                                      │
+│ Script:    scripts/train_pi0_action_hidden_dreamerv3_wm.sh       │
+│ Workspace: ActionHiddenWMWorkspace                               │
+│ Model:     DreamerV3PixelRynnBackboneWorldModel                  │
+│ 学习:      RSSM posterior/transition, hidden decoder, reward,     │
+│            continue, optional image decoder                       │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ### 关键注意点
 
-**1. Stage 3 的 VLA 是冻结的**
+**1. action hidden 有两个身份**
 
-代码里 `DreamerVLAWorkspace.run()` 显式 `freeze_module(self.encoder)`，Phase-2 imagination 里更新的是 **WM + policy + critic**，不会回传梯度到 RynnVLA 主干。如果想在 Stage 3 继续微调 VLA 本体，需要去掉这个冻结并额外配置 VLA optimizer / param group。
+对 VLA，它是 action regressor 的输入；对 WM，它是 DreamerV3 RSSM posterior encoder 的 observation embedding。当前第一版把 action hidden 预计算成 sidecar，训练 WM 时固定 VLA backbone。
 
-**2. "rollout" = imagination rollout，不是真环境 rollout**
+**2. 当前实现边界：先 frozen，再 actor**
 
-Phase-2 全部在 WM 的 latent 空间里做 H 步 imagination，标准 Dreamer 流程。**不会**回到 `src/env/` 下的 LIBERO 真实环境采数据。如果目标是 Dyna-style（真环境 rollout → 回填 replay buffer → 再训），当前代码形态不匹配，需要额外写 replay buffer + env stepper。
+joint finetune 需要让 WM loss 和 VLA action loss 同时作用到共享 backbone，风险更高，容易把已可用的 VLA action 表达拉坏。本仓库当前主线先跑通 frozen action-hidden WM，再用 action-hidden actor 训练下游策略。
 
-**3. 两个 SFT 是平行的，不是串行依赖**
+**3. DreamerVLA actor-critic 当前走 action-hidden head**
 
-`PretokenizeSFTWorkspace` 和 `PretokenizeWMWorkspace` 共用同一份预 tokenize 数据，可以在不同机器 / 不同卡上同时启动。Stage 3 从 `init.vla_ckpt_path` 和 WM 的 ckpt 分别加载两条产出。
+当前 actor 配置是 `configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml`，脚本入口是 `scripts/run_pi0_action_hidden_reconstruct_actor.sh` 或 `scripts/train_dreamer_vla.sh`。
 
-**4. Actor-critic 风格**
+**4. pixel WM / token WM / LaDiWM 是 secondary**
 
-| Workspace | 算法文件 | Critic | 归一化 | Bootstrap |
-|---|---|---|---|---|
-| `DreamerVLAWorkspace` | `dreamer_vla.py` | twohot symlog | percentile | target critic EMA |
-
-按 DreamerV3 (Hafner et al., 2023, §B) 的 actor-critic 实现：twohot symlog critic + percentile-normalised advantages + Polyak target critic。
-
-**5. LIBERO 真环境评估**
-
-Stage 3 的 loss 不足以证明策略有效——真实成功率由 `EvalLiberoVLAWorkspace`（`configs/eval_libero_vla.yaml` / `scripts/eval_libero_vla.sh`）通过在 LIBERO 里真 rollout 得到。评估时的 prompt 格式必须与训练对齐（`his=2`，图像顺序 `[prev_third, prev_wrist, cur_third, cur_wrist]`）——这条已经在 `evaluate_libero` 里落地。
+这些路线保留用于 baseline / reproducibility；旧 pooled hidden、TransDreamer/TSSM token WM、semantic bottleneck 和旧 scalar actor 分支已从训练入口删除。路线列表见 `docs/wm_training_routes.md`。
 
 ---
 
@@ -130,14 +121,14 @@ DreamerVLA/
 └── dependencies/   # 本地第三方依赖 checkout / wheel；被 gitignore 忽略
 ```
 
-当前 LIBERO-goal / Rynn-pixel 主线要求 VLA base、VLA action head、hidden sidecar 和 `time_horizon` 完全一致；具体路径和约束见 `configs/README.md`。
+当前 LIBERO-goal / pi0 action-hidden 主线要求 VLA base、pi0 VLA action head、action-hidden sidecar、`action_head_type=pi0_query` 和 `time_horizon` 完全一致；具体路径和约束见 `configs/README.md`。
 
 ```text
 DreamerVLA/
 ├── configs/                        # 实验配置 (Hydra YAML)
 │   ├── pretokenize_vla_libero_goal.yaml
-│   ├── rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml
-│   ├── dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml
+│   ├── pretokenize_vla_libero_goal_pi0_query.yaml
+│   ├── rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml
 │   ├── eval_libero_vla.yaml
 │   └── ...
 ├── data/                           # 运行时数据（不入 git）
@@ -150,13 +141,12 @@ DreamerVLA/
 ├── LIBERO/                         # LIBERO 基准本地 checkout
 ├── scripts/                        # 训练 / 预处理 / 评估入口脚本（薄 wrapper）
 │   ├── eval_libero.sh              # LIBERO 评估
-│   ├── eval_wm.sh                  # World Model 评估
+│   ├── eval_libero_vla.sh          # VLA / Dreamer checkpoint LIBERO 评估
 │   ├── prepare_data.sh             # 一键数据预处理
 │   ├── download_hf.sh              # 权重下载脚本
 │   ├── install.sh                  # 环境安装脚本
 │   ├── pretokenize_train_vla.sh    # VLA 训练
 │   ├── train_wm.sh                 # 统一 World Model 训练入口
-│   ├── pretokenize_train_wm.sh     # 兼容旧命令的 WM wrapper
 │   ├── train_dreamer_vla.sh        # Dreamer-VLA 训练
 │   └── preprocess/                 # 各步骤预处理脚本
 ├── src/                            # 源代码
@@ -167,7 +157,7 @@ DreamerVLA/
 │   ├── models/                     # 模型定义
 │   │   ├── chameleon_model/        # Chameleon 视觉语言模型
 │   │   ├── encoder/                # RynnVLA 编码器封装
-│   │   ├── world_model/            # TSSM World Model
+│   │   ├── world_model/            # DreamerV3 / Chameleon WM
 │   │   ├── critic/                 # Critic 网络
 │   │   └── vla_policy.py           # Actor 策略网络
 │   ├── preprocess/                 # 数据预处理逻辑
@@ -430,7 +420,7 @@ hf download Alibaba-DAMO-Academy/RynnVLA-002 \
   --local-dir "${CKPT_DIR}/VLA_model_256/libero_goal" \
   --include "VLA_model_256/libero_goal/*"
 
-# Action World Model 权重（512 分辨率，可选；当前 Rynn-pixel 主线不直接依赖）
+# Action World Model 权重（512 分辨率，可选；当前 action-hidden 主线不直接依赖）
 hf download Alibaba-DAMO-Academy/RynnVLA-002 \
   --repo-type model \
   --local-dir "${CKPT_DIR}/Action_World_model_512/libero_goal" \
@@ -483,13 +473,13 @@ ls data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/
 LIBERO 数据集为 HDF5 格式。推荐使用 Hugging Face 源下载：
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA/LIBERO/benchmark_scripts
+cd /home/user01/liops/workspace/DreamerVLA
 
 # 下载全部数据集（libero_goal, libero_spatial, libero_object, libero_100）
-python download_libero_datasets.py --datasets all --use-huggingface
+python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
 
 # 或只下载特定子集
-python download_libero_datasets.py --datasets libero_goal --use-huggingface
+python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets libero_goal --use-huggingface
 ```
 
 默认下载到 `LIBERO/libero/datasets/` 目录下。也可以通过 `--download-dir` 指定其他路径。
@@ -592,8 +582,8 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 | 文件 | 需更新的字段 |
 |------|-------------|
 | `configs/pretokenize_vla_libero_goal.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.config_path` |
-| `configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml` | `init.vla_ckpt_path`, `encoder.model_path`, `dataset.hidden_dir`, `dataset.expected_*` |
-| `configs/dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon` |
+| `configs/rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml` | `init.vla_ckpt_path`, `encoder.model_path`, `dataset.hidden_dir`, `dataset.expected_*` |
+| `configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon` |
 
 通用规则：将所有 `/home/user01/liops/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
 
@@ -609,7 +599,7 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 | **输出** | `obs_embedding`, `action`, `reward` 等连续张量 | `input_ids`, `labels` 等 token ID |
 | **用途** | World Model 训练 | VLA token-level SFT 训练 |
 | **数据集** | `preencode_sft_dataset.py` | `pretokenize_dataset.py` |
-| **Workspace** | `preencode_sft_workspace.py` | `pretokenize_sft_workspace.py` |
+| **Workspace** | 旧 preencode 分支已移除 | `pretokenize_vla_workspace.py` / `VLASFTWorkspace` |
 
 **判断规则**：batch 里是 `obs_embedding` 等连续特征 → preencode；是 `input_ids/labels` → pretokenize。
 
@@ -627,49 +617,53 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 conda activate dreamervla
 cd /home/user01/liops/workspace/DreamerVLA
 
-# 默认 8 GPU
-bash scripts/pretokenize_train_vla.sh
+# 当前 pi0 action-query VLA head
+ACTION_HEAD_TYPE=pi0_query CONFIG_NAME=pretokenize_vla_libero_goal_pi0_query \
+  bash scripts/pretokenize_train_vla.sh
 
 # 自定义 GPU 数量和配置
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG_NAME=pretokenize_vla_libero_goal \
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 ACTION_HEAD_TYPE=pi0_query \
+  CONFIG_NAME=pretokenize_vla_libero_goal_pi0_query \
   bash scripts/pretokenize_train_vla.sh
 ```
 
 ### World Model 训练
 
-World Model 单独训练统一走 `scripts/train_wm.sh`，具体 workspace 由
-`CONFIG_NAME` 或 `WM_KIND` 选择：
+当前主线 World Model 训练走 pi0 action-hidden pipeline。默认先打印命令，不启动长任务：
 
 ```bash
-# DreamerV3 token WM（单进程 workspace）
-WM_KIND=dreamerv3_token bash scripts/train_wm.sh
+# 1. 预计算 pi0 action-hidden sidecar
+PIPELINE_STAGE=preprocess bash scripts/run_pi0_query_hidden_pipeline.sh
 
-# DreamerV3 pixel WM（单进程 workspace）
-WM_KIND=dreamerv3_pixel bash scripts/train_wm.sh
-
-# 当前 Rynn-pixel precomputed WM（torchrun）
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-  bash scripts/train_rynn_backbone_dreamerv3_wm.sh
-
-# Chameleon / LaDiWM-style WM（torchrun）
-WM_KIND=chameleon NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-  bash scripts/train_wm.sh
+# 2. 用 frozen action hidden 训练 DreamerV3 RSSM
+PIPELINE_STAGE=wm bash scripts/run_pi0_query_hidden_pipeline.sh
 ```
 
-旧的 `pretokenize_train_wm.sh`、`train_dreamerv3_token.sh`、
-`train_dreamerv3_pixel.sh`、`train_chameleon_ladiwm_wm.sh` 仍可用，但现在都只是
-调用 `train_wm.sh` 的兼容 wrapper。
+也可以直接调用 WM wrapper：
+
+```bash
+NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  bash scripts/train_pi0_action_hidden_dreamerv3_wm.sh
+```
+
+`scripts/train_wm.sh` 仍是统一 WM wrapper。当前支持 `action_hidden`、
+`dreamerv3_token`、`dreamerv3_pixel`、`chameleon` 四类入口。
 
 ### Dreamer-VLA 完整训练
 
-包含 World Model 训练阶段和 Actor-Critic imagination 训练阶段：
+Action-hidden route 的 DreamerVLA actor-critic stage 使用 pi0 action-hidden head：
 
 ```bash
 NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-  bash scripts/train_dreamer_vla_rynn_pixel.sh
+  bash scripts/run_pi0_action_hidden_reconstruct_actor.sh
 ```
 
-配置中可通过 `training.run_wm_phase` 和 `training.run_actor_critic_phase` 控制单阶段或双阶段运行。
+如果只想调用通用 wrapper：
+
+```bash
+CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor \
+  bash scripts/train_dreamer_vla.sh
+```
 
 ---
 

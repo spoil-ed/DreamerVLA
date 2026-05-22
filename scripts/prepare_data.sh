@@ -3,8 +3,8 @@
 # raw LIBERO HDF5 -> no-noop pixel HDF5 -> VLA/pretokenized data/configs.
 #
 # Optional:
-#   PREPARE_LATENT_DATA=1 also generates the RynnVLA hidden/fullseq sidecar
-#   needed by Rynn-pixel DreamerVLA.
+#   PREPARE_LATENT_DATA=1 also generates the pi0 action-query hidden sidecar
+#   used by the current action-hidden DreamerVLA route.
 #
 # Usage:
 #   bash scripts/prepare_data.sh

@@ -1,4 +1,6 @@
-_target_: src.workspace.chameleon_latent_action_wm_workspace.ChameleonLatentActionWMWorkspace
+# @package _global_
+_target_: src.workspace.ChameleonLatentWMWorkspace
+
 seed: 7
 
 trainer:

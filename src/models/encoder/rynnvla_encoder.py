@@ -380,6 +380,41 @@ class RynnVLAEncoder(BaseEncoder):
             lengths=lengths,
         )
 
+    def extract_action_hidden(
+        self,
+        *,
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        target_token_id: int = 10004,
+        eval: bool = True,
+    ) -> torch.Tensor:
+        action_head = getattr(self.backbone, "action_head", None)
+        if action_head is None or not hasattr(action_head, "extract_action_hidden"):
+            raise ValueError(
+                "RynnVLAEncoder.extract_action_hidden requires an action head "
+                "that exposes extract_action_hidden; use action_head_type='pi0_query' "
+                "or 'legacy' (both expose it)."
+            )
+        try:
+            param = next(action_head.parameters())
+            hidden_states = hidden_states.to(device=param.device, dtype=param.dtype)
+            input_ids = input_ids.to(device=param.device)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device=param.device)
+        except StopIteration:
+            pass
+        action_hidden, ok = action_head.extract_action_hidden(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            target_token_id=int(target_token_id),
+            eval=bool(eval),
+        )
+        if not ok:
+            raise ValueError("pi0 action head did not find a usable action context")
+        return action_hidden.float()
+
     def encode(self, obs: dict[str, Any]) -> torch.Tensor:
         meta = obs.get("meta") if isinstance(obs.get("meta"), list) else None
         batch = self.prepare_inputs(obs, action=None, action_mask=None, meta=meta)

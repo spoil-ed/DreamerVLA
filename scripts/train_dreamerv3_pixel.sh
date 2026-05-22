@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Backward-compatible wrapper for DreamerV3 pixel world-model training.
+# SECONDARY baseline wrapper for DreamerV3 pixel world-model training.
+# Current mainline uses pi0 action-hidden DreamerV3 WM.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

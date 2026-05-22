@@ -134,6 +134,101 @@ class ActionHead(nn.Module):
             self.reduced_hidden_size, self.reduced_hidden_size, self.time_horizon, self.action_dim
         )
         
+    def extract_action_hidden(self, hidden_states, input_ids, attention_mask=None, target_token_id=10004, eval=False):
+        """Return the action-token transformer outputs before output_projection.
+
+        Shape: [batch_size, time_horizon * action_dim, reduced_hidden_size]
+             = [B, 5*7, 1024] for libero_goal defaults.
+
+        Mirrors the forward pass up to ``action_outputs_tensor`` so that downstream
+        consumers (e.g. DreamerV3 world model sidecar preprocessing) can reuse the
+        same context-conditioned action representation that the regressor sees.
+        """
+        batch_size = hidden_states.shape[0]
+        action_tokens = self.action_token_embeddings.weight.view(
+            1, self.time_horizon * self.action_dim, self.hidden_size
+        ).expand(batch_size, -1, -1)
+
+        extracted_hidden_states: list[torch.Tensor] = []
+        extracted_attention_masks: list[torch.Tensor] = []
+        flag = True
+        for i in range(batch_size):
+            target_positions = (input_ids[i] == target_token_id).nonzero(as_tuple=True)[0]
+            if len(target_positions) > 1 or eval:
+                end_pos = int(target_positions[0].item())
+            else:
+                continue
+            extracted_hidden_states.append(hidden_states[i, :end_pos, :])
+            if attention_mask is not None:
+                extracted_attention_masks.append(attention_mask[i, :end_pos])
+
+        if len(extracted_hidden_states) == 0:
+            extracted_hidden_states.append(hidden_states[0, 0:1, :])
+            action_tokens = action_tokens[0:1]
+            flag = False
+
+        combined_states_list: list[torch.Tensor] = []
+        combined_attention_masks: list[torch.Tensor] = []
+        max_length = 0
+        for idx, context in enumerate(extracted_hidden_states):
+            combined_hidden = torch.cat([context, action_tokens[idx]], dim=0)
+            combined_states_list.append(combined_hidden)
+            if attention_mask is not None:
+                action_tokens_mask = torch.ones(
+                    self.time_horizon * self.action_dim,
+                    device=attention_mask.device,
+                    dtype=attention_mask.dtype,
+                )
+                combined_attention_masks.append(torch.cat([extracted_attention_masks[idx], action_tokens_mask], dim=0))
+            max_length = max(max_length, combined_hidden.shape[0])
+
+        padded_hidden_states: list[torch.Tensor] = []
+        padded_attention_masks: list[torch.Tensor] = []
+        for idx, combined_hidden in enumerate(combined_states_list):
+            current_length = combined_hidden.shape[0]
+            if current_length < max_length:
+                padding = torch.zeros(
+                    max_length - current_length, self.hidden_size,
+                    device=hidden_states.device, dtype=hidden_states.dtype,
+                )
+                combined_hidden = torch.cat([combined_hidden, padding], dim=0)
+            padded_hidden_states.append(combined_hidden)
+            if attention_mask is not None:
+                combined_mask = combined_attention_masks[idx]
+                if combined_mask.shape[0] < max_length:
+                    mask_padding = torch.zeros(
+                        max_length - combined_mask.shape[0],
+                        device=attention_mask.device, dtype=attention_mask.dtype,
+                    )
+                    combined_mask = torch.cat([combined_mask, mask_padding], dim=0)
+                padded_attention_masks.append(combined_mask)
+
+        processed_hidden_states = torch.stack(padded_hidden_states, dim=0)
+        if attention_mask is not None:
+            processed_attention_mask = torch.stack(padded_attention_masks, dim=0)
+        else:
+            processed_attention_mask = torch.ones(
+                len(extracted_hidden_states), processed_hidden_states.shape[1],
+                device=processed_hidden_states.device,
+            )
+
+        projected_states = self.hidden_projection(processed_hidden_states)
+        transformer_output = self.transformer_encoder(
+            projected_states,
+            src_key_padding_mask=~processed_attention_mask.bool(),
+        )
+
+        action_outputs: list[torch.Tensor] = []
+        for idx, context in enumerate(extracted_hidden_states):
+            action_start = context.shape[0]
+            action_end = action_start + self.time_horizon * self.action_dim
+            if action_end > transformer_output.shape[1]:
+                action_end = transformer_output.shape[1]
+            action_outputs.append(transformer_output[idx, action_start:action_end, :])
+
+        action_outputs_tensor = torch.stack(action_outputs, dim=0)
+        return action_outputs_tensor, flag
+
     def forward(self, hidden_states, input_ids, attention_mask=None, target_token_id=10004, eval=False):
         """
         Args:
@@ -141,7 +236,7 @@ class ActionHead(nn.Module):
             input_ids: [batch_size, seq_len] - 对应的input_ids
             attention_mask: [batch_size, seq_len] - 注意力掩码（可选）
             target_token_id: int - 目标token id (默认10004)
-        
+
         Returns:
             actions: 预测的动作序列
         """
@@ -150,7 +245,7 @@ class ActionHead(nn.Module):
         # print(f"Input hidden_states has NaN: {torch.isnan(hidden_states).any()}")
         # if torch.isnan(hidden_states).any():
         #     print(f"NaN positions in hidden_states: {torch.isnan(hidden_states).nonzero()}")
-        
+
         batch_size = hidden_states.shape[0]
         action_tokens = self.action_token_embeddings.weight.view(1, self.time_horizon * self.action_dim, self.hidden_size).expand(batch_size, -1, -1)
         
@@ -346,7 +441,14 @@ class Pi0StyleActionQueryHead(nn.Module):
             self.reduced_hidden_size, self.reduced_hidden_size, self.action_dim
         )
 
-    def forward(self, hidden_states, input_ids, attention_mask=None, target_token_id=10004, eval=False):
+    def extract_action_hidden(self, hidden_states, input_ids, attention_mask=None, target_token_id=10004, eval=False):
+        """Return observation-conditioned action-query hidden states.
+
+        The returned tensor is the input to ``output_projection`` and has shape
+        ``[batch, time_horizon, reduced_hidden_size]``.  This is the shared
+        representation used by the action regressor and by the action-hidden
+        DreamerV3 world model.
+        """
         batch_size = hidden_states.shape[0]
         action_tokens = self.action_token_embeddings.weight.view(
             1, self.time_horizon, self.hidden_size
@@ -423,7 +525,7 @@ class Pi0StyleActionQueryHead(nn.Module):
         projected_states = self.hidden_projection(processed_hidden_states)
         transformer_output = self.transformer_encoder(
             projected_states,
-            src_key_padding_mask=(1 - processed_attention_mask).bool(),
+            src_key_padding_mask=(~processed_attention_mask.bool()),
         )
 
         action_outputs = []
@@ -432,6 +534,16 @@ class Pi0StyleActionQueryHead(nn.Module):
             action_end = action_start + self.time_horizon
             action_outputs.append(transformer_output[idx, action_start:action_end, :])
         action_outputs_tensor = torch.stack(action_outputs, dim=0)
+        return action_outputs_tensor, flag
+
+    def forward(self, hidden_states, input_ids, attention_mask=None, target_token_id=10004, eval=False):
+        action_outputs_tensor, flag = self.extract_action_hidden(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            target_token_id=target_token_id,
+            eval=eval,
+        )
         actions = self.output_projection(action_outputs_tensor)
         return actions.reshape(-1, self.action_dim), flag
 

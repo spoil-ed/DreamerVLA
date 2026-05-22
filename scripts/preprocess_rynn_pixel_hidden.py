@@ -20,7 +20,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.models.encoder.protocol import EncoderInputBatch
 from src.models.encoder.rynnvla_encoder import RynnVLAEncoder
 
 
@@ -168,6 +167,24 @@ def _prepare_actor_sequence_arrays(
     }
 
 
+def _select_obs_hidden(
+    *,
+    pooled_hidden: torch.Tensor,
+    action_hidden: torch.Tensor | None,
+    obs_hidden_source: str,
+) -> torch.Tensor:
+    source = str(obs_hidden_source).lower()
+    if source == "pooled":
+        return pooled_hidden
+    if source != "action_query":
+        raise ValueError("obs_hidden_source must be one of: pooled, action_query")
+    if action_hidden is None:
+        raise ValueError("obs_hidden_source='action_query' requires action_hidden")
+    if action_hidden.ndim != 3:
+        raise ValueError(f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}")
+    return action_hidden.reshape(action_hidden.shape[0], -1)
+
+
 def _source_stats(source_path: Path, args: argparse.Namespace) -> dict[str, Any]:
     demos = 0
     frames = 0
@@ -185,6 +202,73 @@ def _source_stats(source_path: Path, args: argparse.Namespace) -> dict[str, Any]
         "demos": demos,
         "frames": frames,
     }
+
+
+def _state_from_obs_group(obs_group: h5py.Group, index: int) -> np.ndarray:
+    required = ("ee_pos", "ee_ori", "gripper_states")
+    missing = [key for key in required if key not in obs_group]
+    if missing:
+        raise KeyError(f"missing state keys under obs: {missing}")
+    return np.concatenate(
+        [
+            np.asarray(obs_group["ee_pos"][index], dtype=np.float32).reshape(-1),
+            np.asarray(obs_group["ee_ori"][index], dtype=np.float32).reshape(-1),
+            np.asarray(obs_group["gripper_states"][index], dtype=np.float32).reshape(-1),
+        ],
+        axis=0,
+    )
+
+
+def _history_indices(index: int, history: int) -> list[int]:
+    history = max(1, int(history))
+    start = max(0, int(index) - history + 1)
+    indices = list(range(start, int(index) + 1))
+    if len(indices) < history:
+        indices = [indices[0]] * (history - len(indices)) + indices
+    return indices
+
+
+def _image_from_hdf5(
+    obs_group: h5py.Group,
+    key: str,
+    index: int,
+    *,
+    rotate_images_180: bool,
+) -> Image.Image:
+    image = np.asarray(obs_group[key][index], dtype=np.uint8)
+    if bool(rotate_images_180):
+        image = image[::-1, ::-1].copy()
+    return Image.fromarray(image)
+
+
+def _build_vla_policy_record(
+    *,
+    prompt: str,
+    obs_group: h5py.Group,
+    image_keys: tuple[str, ...],
+    index: int,
+    history: int,
+    include_state: bool,
+    rotate_images_180: bool,
+) -> dict[str, Any]:
+    if len(image_keys) != 2:
+        raise ValueError("prompt_style='vla_policy' expects exactly two image keys: third-view and wrist-view")
+    images: list[Image.Image] = []
+    for hidx in _history_indices(index, history):
+        for key in image_keys:
+            images.append(_image_from_hdf5(obs_group, key, hidx, rotate_images_180=rotate_images_180))
+    human_val = f"Finish the task: {prompt}."
+    if include_state:
+        human_val += "<|state|>"
+    human_val += "<|image|>" * len(images)
+    record: dict[str, Any] = {
+        "conversations": [{"from": "human", "value": human_val}],
+        "image": images,
+        "action": [],
+    }
+    if include_state:
+        record["state"] = [_state_from_obs_group(obs_group, index)]
+    return record
 
 
 def _write_rank_progress(
@@ -334,37 +418,105 @@ def _encode_chunk(
     end: int,
     *,
     save_actor_sequence: bool,
+    save_action_hidden: bool,
+    obs_hidden_source: str,
     target_token_id: int,
+    prompt_style: str,
+    history: int,
+    include_state: bool,
+    rotate_images_180: bool,
 ) -> dict[str, np.ndarray]:
-    prompt_text: list[str] = []
-    conversations: list[list[dict[str, str]]] = []
-    image_batches: list[list[Any]] = []
-    for tidx in range(start, end):
-        views: list[Image.Image] = []
-        for key in image_keys:
-            image = np.asarray(obs_group[key][tidx], dtype=np.uint8)
-            views.append(Image.fromarray(image))
-        prompt_text.append(prompt)
-        conversations.append([])
-        image_batches.append(views)
-    batch = EncoderInputBatch(
-        prompt_text=prompt_text,
-        conversations=conversations,
-        images=image_batches,
-        task_type=None,
-    )
-    with torch.no_grad():
-        encoded = encoder.encode_inputs(batch)
-    result = {"hidden": encoded.hidden.detach().cpu().numpy()}
-    if save_actor_sequence:
-        result.update(
-            _prepare_actor_sequence_arrays(
-                hidden_states=encoded.hidden_states,
-                attention_mask=encoded.attention_mask,
-                input_ids=encoded.input_ids,
-                target_token_id=int(target_token_id),
-            )
+    if str(prompt_style).lower() != "vla_policy" or not bool(include_state) or not bool(rotate_images_180) or int(history) != 2:
+        raise ValueError(
+            "pi0 action-hidden preprocessing must match the existing sidecar: "
+            "vla_policy + history=2 + state + rotate180"
         )
+
+    processor = encoder._build_processor(encoder.device)
+    input_ids_list: list[list[int]] = []
+    labels_list: list[list[int]] = []
+    for tidx in range(start, end):
+        record = _build_vla_policy_record(
+            prompt=prompt,
+            obs_group=obs_group,
+            image_keys=image_keys,
+            index=tidx,
+            history=2,
+            include_state=True,
+            rotate_images_180=True,
+        )
+        tokens = processor.process_item(record, training_mode=False)
+        if isinstance(tokens, tuple):
+            tokens = tokens[0]
+        tokens = [int(tok) for tok in tokens]
+        input_ids_list.append(tokens)
+        labels_list.append([-100] * len(tokens))
+    lengths = [len(seq) for seq in input_ids_list]
+    with torch.no_grad():
+        _, _, _, hidden_states, labels_tensor, _, _ = encoder.backbone(
+            input_ids=input_ids_list,
+            labels=labels_list,
+            training=True,
+            output_hidden_states=True,
+            att_mask=False,
+        )
+    attention_mask = torch.zeros(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+    for idx, length in enumerate(lengths):
+        attention_mask[idx, :length] = True
+    weights = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
+    pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+    encoded = type(
+        "_EncodedChunk",
+        (),
+        {
+            "hidden": pooled.float(),
+            "hidden_states": hidden_states.float(),
+            "attention_mask": attention_mask,
+            "labels": labels_tensor,
+            "input_ids": input_ids_list,
+            "lengths": lengths,
+        },
+    )()
+
+    need_actor_arrays = (
+        bool(save_actor_sequence)
+        or bool(save_action_hidden)
+        or str(obs_hidden_source).lower() == "action_query"
+    )
+    actor_arrays = None
+    if need_actor_arrays:
+        actor_arrays = _prepare_actor_sequence_arrays(
+            hidden_states=encoded.hidden_states,
+            attention_mask=encoded.attention_mask,
+            input_ids=encoded.input_ids,
+            target_token_id=int(target_token_id),
+        )
+    action_hidden = None
+    if bool(save_action_hidden) or str(obs_hidden_source).lower() == "action_query":
+        if actor_arrays is None:
+            raise RuntimeError("internal error: action hidden requested without actor input arrays")
+        device = encoded.hidden_states.device
+        input_ids = torch.as_tensor(actor_arrays["actor_input_ids"], device=device, dtype=torch.long)
+        attention_mask = torch.as_tensor(actor_arrays["actor_attention_mask"], device=device, dtype=torch.bool)
+        with torch.no_grad():
+            action_hidden = encoder.extract_action_hidden(
+                hidden_states=encoded.hidden_states,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                target_token_id=int(target_token_id),
+                eval=True,
+            )
+
+    hidden = _select_obs_hidden(
+        pooled_hidden=encoded.hidden,
+        action_hidden=action_hidden,
+        obs_hidden_source=str(obs_hidden_source),
+    )
+    result = {"hidden": hidden.detach().cpu().numpy()}
+    if bool(save_actor_sequence) and actor_arrays is not None:
+        result.update(actor_arrays)
+    if bool(save_action_hidden) and action_hidden is not None:
+        result["action_hidden_states"] = action_hidden.detach().cpu().numpy()
     return result
 
 
@@ -391,6 +543,9 @@ def _write_source_sidecar(
     frames_written = 0
     hidden_dim: int | None = None
     actor_seq_len: int | None = None
+    actor_hidden_dim: int | None = None
+    action_hidden_seq_len: int | None = None
+    action_hidden_dim: int | None = None
 
     with h5py.File(source_path, "r", swmr=True, libver="latest") as source, h5py.File(tmp_path, "w", libver="latest") as out:
         data_group = source["data"]
@@ -421,6 +576,7 @@ def _write_source_sidecar(
             actor_input_ids_dset = None
             actor_attention_mask_dset = None
             actor_seq_lens_dset = None
+            action_hidden_dset = None
             for start in range(0, length, int(args.chunk_size)):
                 end = min(start + int(args.chunk_size), length)
                 encoded = _encode_chunk(
@@ -431,7 +587,13 @@ def _write_source_sidecar(
                     start=start,
                     end=end,
                     save_actor_sequence=bool(args.save_actor_sequence),
+                    save_action_hidden=bool(args.save_action_hidden),
+                    obs_hidden_source=str(args.obs_hidden_source),
                     target_token_id=int(args.action_trigger_token_id),
+                    prompt_style=str(args.prompt_style),
+                    history=int(args.history),
+                    include_state=bool(args.include_state),
+                    rotate_images_180=bool(args.rotate_images_180),
                 )
                 hidden = encoded["hidden"]
                 if dset is None:
@@ -454,12 +616,13 @@ def _write_source_sidecar(
                     chunk_seq_len = int(actor_hidden.shape[1])
                     if actor_hidden_dset is None:
                         actor_seq_len = chunk_seq_len
+                        actor_hidden_dim = int(actor_hidden.shape[-1])
                         actor_hidden_dset = demo_out.create_dataset(
                             "actor_hidden_states",
-                            shape=(length, actor_seq_len, hidden_dim),
-                            maxshape=(length, None, hidden_dim),
+                            shape=(length, actor_seq_len, actor_hidden_dim),
+                            maxshape=(length, None, actor_hidden_dim),
                             dtype=hidden_dtype,
-                            chunks=(1, actor_seq_len, hidden_dim),
+                            chunks=(1, actor_seq_len, actor_hidden_dim),
                             compression=compression,
                         )
                         actor_input_ids_dset = demo_out.create_dataset(
@@ -485,13 +648,13 @@ def _write_source_sidecar(
                             chunks=(min(max(1, int(args.chunk_size)), length),),
                             compression=compression,
                         )
-                        actor_hidden_dset.attrs["hidden_dim"] = hidden_dim
+                        actor_hidden_dset.attrs["hidden_dim"] = actor_hidden_dim
                         actor_hidden_dset.attrs["source_dtype"] = "float32"
                         actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
                         actor_input_ids_dset.attrs["target_token_id"] = int(args.action_trigger_token_id)
                     elif chunk_seq_len > int(actor_hidden_dset.shape[1]):
                         actor_seq_len = chunk_seq_len
-                        actor_hidden_dset.resize((length, actor_seq_len, hidden_dim))
+                        actor_hidden_dset.resize((length, actor_seq_len, int(actor_hidden_dim or actor_hidden.shape[-1])))
                         actor_input_ids_dset.resize((length, actor_seq_len + 1))
                         actor_attention_mask_dset.resize((length, actor_seq_len + 1))
                         actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
@@ -507,6 +670,23 @@ def _write_source_sidecar(
                     actor_input_ids_dset[start:end] = actor_input_ids.astype(np.int32, copy=False)
                     actor_attention_mask_dset[start:end] = actor_attention_mask.astype(np.bool_, copy=False)
                     actor_seq_lens_dset[start:end] = actor_seq_lens.astype(np.int32, copy=False)
+                if bool(args.save_action_hidden):
+                    action_hidden = encoded["action_hidden_states"]
+                    chunk_action_horizon = int(action_hidden.shape[1])
+                    if action_hidden_dset is None:
+                        action_hidden_seq_len = chunk_action_horizon
+                        action_hidden_dim = int(action_hidden.shape[-1])
+                        action_hidden_dset = demo_out.create_dataset(
+                            "action_hidden_states",
+                            shape=(length, action_hidden_seq_len, action_hidden_dim),
+                            dtype=hidden_dtype,
+                            chunks=(1, action_hidden_seq_len, action_hidden_dim),
+                            compression=compression,
+                        )
+                        action_hidden_dset.attrs["hidden_dim"] = action_hidden_dim
+                        action_hidden_dset.attrs["source_dtype"] = "float32"
+                        action_hidden_dset.attrs["sequence_dim"] = action_hidden_seq_len
+                    action_hidden_dset[start:end] = action_hidden.astype(hidden_dtype, copy=False)
                 frames_written += end - start
             demos_written += 1
             _write_rank_progress(
@@ -524,15 +704,24 @@ def _write_source_sidecar(
         out.attrs["source_hdf5_dir"] = str(source_path.parent)
         out.attrs["hidden_key"] = str(args.hidden_key)
         out.attrs["hidden_dim"] = int(hidden_dim or 0)
+        out.attrs["obs_hidden_source"] = str(args.obs_hidden_source)
         out.attrs["output_dtype"] = str(hidden_dtype)
         out.attrs["image_keys"] = json.dumps(list(image_keys))
+        out.attrs["prompt_style"] = str(args.prompt_style)
+        out.attrs["history"] = int(args.history)
+        out.attrs["include_state"] = bool(args.include_state)
+        out.attrs["rotate_images_180"] = bool(args.rotate_images_180)
         out.attrs["resolution"] = int(args.resolution)
         out.attrs["model_path"] = str(args.model_path)
         out.attrs["encoder_state_ckpt"] = str(args.encoder_state_ckpt or "")
         out.attrs["pool"] = str(args.pool)
         out.attrs["save_actor_sequence"] = bool(args.save_actor_sequence)
+        out.attrs["save_action_hidden"] = bool(args.save_action_hidden)
         out.attrs["action_trigger_token_id"] = int(args.action_trigger_token_id)
         out.attrs["actor_sequence_dim"] = int(actor_seq_len or 0)
+        out.attrs["actor_hidden_dim"] = int(actor_hidden_dim or 0)
+        out.attrs["action_hidden_sequence_dim"] = int(action_hidden_seq_len or 0)
+        out.attrs["action_hidden_dim"] = int(action_hidden_dim or 0)
         out.attrs["complete"] = True
 
     tmp_path.replace(output_path)
@@ -543,7 +732,12 @@ def _write_source_sidecar(
         "frames": frames_written,
         "hidden_dim": int(hidden_dim or 0),
         "actor_sequence_dim": int(actor_seq_len or 0),
+        "actor_hidden_dim": int(actor_hidden_dim or 0),
+        "action_hidden_sequence_dim": int(action_hidden_seq_len or 0),
+        "action_hidden_dim": int(action_hidden_dim or 0),
         "save_actor_sequence": bool(args.save_actor_sequence),
+        "save_action_hidden": bool(args.save_action_hidden),
+        "obs_hidden_source": str(args.obs_hidden_source),
     }
 
 
@@ -565,11 +759,46 @@ def parse_args() -> argparse.Namespace:
             PROJECT_ROOT
             / "data"
             / "processed_data"
-            / "libero_goal_no_noops_t_256_rynn_hidden_goal_h5_epoch000"
+            / "libero_goal_no_noops_t_256_pi0_action_hidden_vla_policy_h2"
         ),
     )
     parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
+    parser.add_argument(
+        "--prompt-style",
+        default="vla_policy",
+        choices=["vla_policy"],
+        help="Construct inputs exactly like the existing pi0 VLA action-hidden sidecar.",
+    )
+    parser.add_argument(
+        "--history",
+        type=int,
+        default=2,
+        help="Number of timesteps of two-view image history; the existing sidecar uses 2.",
+    )
+    parser.add_argument(
+        "--include-state",
+        action="store_true",
+        default=True,
+        help="Include ee_pos + ee_ori + gripper_states in the VLA-policy prompt.",
+    )
+    parser.add_argument(
+        "--rotate-images-180",
+        action="store_true",
+        default=True,
+        help="Rotate HDF5 images by 180 degrees before tokenization, matching get_libero_image().",
+    )
     parser.add_argument("--hidden-key", default="obs_embedding")
+    parser.add_argument(
+        "--obs-hidden-source",
+        default="action_query",
+        choices=["pooled", "action_query"],
+        help=(
+            "Which VLA representation is written to --hidden-key. "
+            "'action_query' writes the flattened pi0 action-query hidden "
+            "after the action-head transformer; 'pooled' keeps the old "
+            "4096-d pooled backbone hidden for explicit ablations."
+        ),
+    )
     parser.add_argument(
         "--save-actor-sequence",
         action="store_true",
@@ -578,6 +807,11 @@ def parse_args() -> argparse.Namespace:
             "training/eval: actor_hidden_states, actor_input_ids, "
             "actor_attention_mask, actor_seq_lens."
         ),
+    )
+    parser.add_argument(
+        "--save-action-hidden",
+        action="store_true",
+        help="Also store unflattened pi0 action-query hidden states as action_hidden_states.",
     )
     parser.add_argument("--action-trigger-token-id", type=int, default=10004)
     parser.add_argument("--chunk-size", type=int, default=16)
@@ -605,7 +839,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--time-horizon", type=int, default=5)
-    parser.add_argument("--action-head-type", default="legacy", choices=["legacy", "pi0_query"])
+    parser.add_argument("--action-head-type", default="pi0_query", choices=["legacy", "pi0_query"])
     parser.add_argument("--pool", default="mean", choices=["mean", "last"])
     return parser.parse_args()
 

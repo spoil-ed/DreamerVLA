@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Backward-compatible wrapper for Chameleon/LaDiWM-style world-model training.
+# SECONDARY / ABLATION wrapper for Chameleon/LaDiWM-style world-model training.
+# The current mainline is scripts/train_pi0_action_hidden_dreamerv3_wm.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

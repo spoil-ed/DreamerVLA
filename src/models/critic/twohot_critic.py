@@ -148,7 +148,9 @@ class TwohotCritic(nn.Module):
 class ReturnPercentileTracker:
     """EMA tracker for P95 − P5 of returns, used to normalise actor advantages.
 
-    DreamerV3 §B.3: S = max(1, P95(R) − P5(R)); advantage = R / S.
+    DreamerV3 §B.3: S = max(1, P95(R) − P5(R)); actor advantage
+    uses (return − value baseline) / S. DreamerV3 metrics report
+    normalised returns as (return - P5) / S.
     """
 
     def __init__(self, decay: float = 0.99, low: float = 0.05, high: float = 0.95) -> None:
@@ -174,6 +176,14 @@ class ReturnPercentileTracker:
         if self._low_ema is None or self._high_ema is None:
             return 1.0
         return max(1.0, self._high_ema - self._low_ema)
+
+    def offset(self) -> float:
+        if self._low_ema is None:
+            return 0.0
+        return self._low_ema
+
+    def stats(self) -> tuple[float, float]:
+        return self.offset(), self.scale()
 
     def state_dict(self) -> dict:
         return {"decay": self.decay, "low": self.low, "high": self.high,

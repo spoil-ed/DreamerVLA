@@ -18,9 +18,9 @@ Both phases can be toggled independently via `training.run_wm_phase` and
 from __future__ import annotations
 
 import copy
+import contextlib
 import os
 import pathlib
-import pickle
 from typing import Any
 
 import hydra
@@ -28,7 +28,7 @@ import torch
 import torch.nn.functional as F
 import tqdm
 from diffusers.optimization import get_scheduler
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from src.algorithms.dreamer_vla import (
@@ -49,6 +49,9 @@ from src.workspace.base_workspace import BaseWorkspace
 class DreamerVLAWorkspace(BaseWorkspace):
     """Closed-loop DreamerVLA: WM pretraining + DreamerV3 actor-critic (twohot + target critic)."""
 
+    workspace_name = "joint_dreamer_vla_compat"
+    workspace_status = "compatibility"
+    workspace_family = "actor"
     include_keys = ("global_step", "epoch")
     # encoder is frozen — no need to checkpoint it.
     exclude_keys = ("encoder", "_unwrapped_world_model")
@@ -81,7 +84,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.policy = None         # VLAPolicy         — Dreamer actor (latent space)
         self.critic = None         # TwohotCritic      — twohot symlog value function
         self.target_critic = None  # TwohotCritic      — Polyak-averaged target copy
-        self.world_model = None    # TSSMWorldModel    — dynamics + reward
+        self.world_model = None    # DreamerV3 WM      — dynamics + reward
 
         # ── optimizer placeholders ──────────────────────────────────────────
         self.policy_optimizer = None
@@ -90,35 +93,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.world_model_ema: EMAHelper | None = None
         self.return_tracker: ReturnPercentileTracker | None = None
         self.vq_model = None
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Path helpers
-    # ──────────────────────────────────────────────────────────────────────
-
-    def _resolve_vla_init_path(self) -> str:
-        configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
-        candidate = (
-            pathlib.Path(str(configured)).expanduser().resolve()
-            if configured is not None
-            else pathlib.Path(self.default_vla_init_dir)
-        )
-        if candidate.is_dir():
-            if (candidate / "config.json").is_file():
-                return str(candidate)
-            for subdir in sorted(p for p in candidate.iterdir() if p.is_dir()):
-                if (subdir / "config.json").is_file():
-                    return str(subdir.resolve())
-        return str(candidate.resolve())
-
-    def _build_frozen_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
-        encoder_cfg = copy.deepcopy(cfg.encoder)
-        init_model_path = OmegaConf.select(cfg, "init.vla_ckpt_path")
-        if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
-            encoder_cfg.model_path = str(init_model_path)
-        with open_dict(encoder_cfg):
-            encoder_cfg.model_path = self._resolve_vla_init_path()
-            encoder_cfg.freeze_backbone = True
-        return encoder_cfg
 
     # ──────────────────────────────────────────────────────────────────────
     # Embedding helpers
@@ -188,9 +162,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         return encoded.reshape(batch_size, seq_len, *encoded.shape[1:])
 
     def _build_wm_pretrain_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
-        """Assemble flat {obs_embedding, next_obs_embedding, action, reward?}
-        accepted by both TSSMWorldModel.forward and TSSMWorldModelTransDreamer.forward.
-        """
+        """Assemble the WM pretrain batch for retained DreamerV3-style routes."""
         if (
             isinstance(batch.get("images"), torch.Tensor)
             and isinstance(batch.get("obs_embedding"), torch.Tensor)
@@ -264,6 +236,14 @@ class DreamerVLAWorkspace(BaseWorkspace):
         """Assemble {obs: {obs_embedding}} for imagine_actor_critic_step.
         obs_embedding is BPE ids in token mode, pooled hiddens otherwise.
         """
+        def _replay_value_fields() -> dict[str, torch.Tensor]:
+            fields: dict[str, torch.Tensor] = {}
+            for key in ("rewards", "reward", "dones", "is_terminal", "is_last"):
+                value = batch.get(key)
+                if isinstance(value, torch.Tensor) and value.ndim >= 2:
+                    fields[key] = value.to(self.device)
+            return fields
+
         obs_embedding = batch.get("obs_embedding")
         if isinstance(obs_embedding, torch.Tensor):
             if obs_embedding.ndim != 3:
@@ -275,6 +255,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "obs_embedding": obs_embedding.to(self.device),
                 "actions": batch["actions"].to(self.device),
                 "is_first": batch["is_first"].to(self.device),
+                **_replay_value_fields(),
                 **(
                     {
                         "actor_input_ids": batch["actor_input_ids"].to(self.device),
@@ -294,6 +275,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "images": images.to(self.device),
                 "actions": batch["actions"].to(self.device),
                 "is_first": batch["is_first"].to(self.device),
+                **_replay_value_fields(),
             }}
 
         tokens = batch.get("tokens")
@@ -304,6 +286,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "tokens": tokens.to(self.device),
                 "actions": batch["actions"].to(self.device),
                 "is_first": batch["is_first"].to(self.device),
+                **_replay_value_fields(),
             }}
 
         obs_seq = batch.get("wm_obs_input_ids_seq")
@@ -470,7 +453,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         if saved:
             print(f"[dreamer-vla][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}")
 
-    # ── Token-mode helpers (mirrored from pretokenize_wm_workspace) ──────────
+    # ── Token-mode helpers for VLA/image-token visualization ────────────────
 
     def _get_image_bpe_set(self) -> set[int]:
         cached = getattr(self, "_image_bpe_set_cache", None)
@@ -615,6 +598,98 @@ class DreamerVLAWorkspace(BaseWorkspace):
         del payload
         self.distributed.barrier()
 
+    def _load_dreamervla_init_ckpt(self, ckpt_path: str) -> None:
+        """Selectively initialise from a previous DreamerVLA checkpoint.
+
+        This is intentionally separate from resume: it lets a new actor class
+        reuse the old WM/critic while skipping incompatible policy and optimizer
+        state.
+        """
+        path = pathlib.Path(ckpt_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"init.dreamervla_state_ckpt not found: {path}")
+        if self.distributed.is_main_process:
+            print(f"[init] loading DreamerVLA init state from {path} ...")
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        state_dicts = payload.get("state_dicts", {})
+        if not isinstance(state_dicts, dict) or not state_dicts:
+            raise RuntimeError(f"{path} has no state_dicts")
+
+        load_plan = {
+            "world_model": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_world_model", default=True)),
+            "critic": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_critic", default=True)),
+            "target_critic": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_target_critic", default=True)),
+            "policy": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_policy", default=False)),
+            "return_tracker": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_return_tracker", default=True)),
+        }
+        strict = bool(OmegaConf.select(self.cfg, "init.load_dreamervla_strict", default=False))
+        for key, enabled in load_plan.items():
+            if not enabled or key not in state_dicts or getattr(self, key, None) is None:
+                continue
+            if key == "return_tracker":
+                self.return_tracker.load_state_dict(state_dicts[key])
+                if self.distributed.is_main_process:
+                    print("[init] return_tracker loaded from DreamerVLA checkpoint")
+                continue
+            self._load_compatible_module_state(key, state_dicts[key], strict=strict)
+        del payload
+        self.distributed.barrier()
+
+    def _load_compatible_module_state(self, key: str, state_dict: dict[str, Any], *, strict: bool = False) -> None:
+        module = getattr(self, key)
+        context_keys = {"policy", "critic", "target_critic", "world_model"}
+        context = (
+            self.distributed.model_state_dict_context(module, rank0_only=False)
+            if key in context_keys
+            else contextlib.nullcontext()
+        )
+        with context:
+            target_sd = module.state_dict()
+            try:
+                target_dtype = next(module.parameters()).dtype
+            except StopIteration:
+                target_dtype = None
+            filtered: dict[str, Any] = {}
+            mismatched: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = []
+            for raw_key, value in state_dict.items():
+                load_key = raw_key.removeprefix("module.") if isinstance(raw_key, str) else raw_key
+                if (
+                    key == "world_model"
+                    and isinstance(load_key, str)
+                    and load_key.startswith("reward_head.net.")
+                    and not load_key.startswith("reward_head.net.net.")
+                ):
+                    candidate = load_key.replace("reward_head.net.", "reward_head.net.net.", 1)
+                    if candidate in target_sd or f"module.{candidate}" in target_sd:
+                        load_key = candidate
+                candidate_keys = [load_key]
+                if isinstance(load_key, str):
+                    if not load_key.startswith("module."):
+                        candidate_keys.append(f"module.{load_key}")
+                    else:
+                        candidate_keys.append(load_key.removeprefix("module."))
+                target_key = next((candidate for candidate in candidate_keys if candidate in target_sd), load_key)
+                if target_key in target_sd and isinstance(value, torch.Tensor):
+                    if tuple(value.shape) != tuple(target_sd[target_key].shape):
+                        mismatched.append((str(target_key), tuple(value.shape), tuple(target_sd[target_key].shape)))
+                        continue
+                    if target_dtype is not None and torch.is_floating_point(value):
+                        value = value.to(dtype=target_dtype)
+                filtered[str(target_key)] = value
+            missing, unexpected = module.load_state_dict(filtered, strict=strict)
+        if self.distributed.is_main_process:
+            print(
+                f"[init] {key} loaded from DreamerVLA checkpoint: tensors={len(filtered)} "
+                f"missing={len(missing)} unexpected={len(unexpected)} strict={strict}"
+            )
+            if mismatched:
+                print(f"[init] {key} skipped shape-mismatched tensors: {len(mismatched)}")
+                print(f"[init] {key} shape mismatches (first 5): {mismatched[:5]}")
+            if missing:
+                print(f"[init] {key} missing (first 5): {missing[:5]}")
+            if unexpected:
+                print(f"[init] {key} unexpected (first 5): {unexpected[:5]}")
+
     def _attach_image_token_mapping(self) -> None:
         """For spatial_codec / token-mode WMs, attach the encoder's image-vocab
         BPE mapping (and lm_head in hidden mode). Required before WM forward.
@@ -650,64 +725,6 @@ class DreamerVLAWorkspace(BaseWorkspace):
     # ──────────────────────────────────────────────────────────────────────
     # Checkpoint helpers
     # ──────────────────────────────────────────────────────────────────────
-
-    def save_checkpoint(
-        self,
-        path: str | pathlib.Path | None = None,
-        tag: str = "latest",
-        exclude_keys: tuple[str, ...] | None = None,
-        include_keys: tuple[str, ...] | None = None,
-    ) -> str:
-        if path is None:
-            path = self.get_checkpoint_path(tag=tag)
-        path = pathlib.Path(path)
-
-        if exclude_keys is None:
-            exclude_keys = tuple(self.exclude_keys)
-        if include_keys is None:
-            include_keys = tuple(self.include_keys) + ("_output_dir",)
-
-        if not self.distributed.requires_collective_checkpointing and not self.distributed.is_main_process:
-            return str(path.absolute())
-
-        payload = {"cfg": self.cfg, "state_dicts": {}, "pickles": {}}
-        for key, value in self.__dict__.items():
-            if key in exclude_keys:
-                continue
-            if hasattr(value, "state_dict") and hasattr(value, "load_state_dict"):
-                state_dict = self._state_dict_for_checkpoint(key, value)
-                if self.distributed.is_main_process and state_dict is not None:
-                    payload["state_dicts"][key] = _copy_to_cpu(state_dict)
-            elif key in include_keys and self.distributed.is_main_process:
-                payload["pickles"][key] = pickle.dumps(value)
-
-        if self.distributed.is_main_process:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(payload, path)
-        return str(path.absolute())
-
-    def load_payload(
-        self,
-        payload: dict[str, Any],
-        exclude_keys: tuple[str, ...] | None = None,
-        include_keys: tuple[str, ...] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        if exclude_keys is None:
-            exclude_keys = tuple()
-        if include_keys is None:
-            include_keys = tuple(
-                key for key in payload["pickles"].keys() if key != "_output_dir"
-            )
-
-        for key, value in payload["state_dicts"].items():
-            if key in exclude_keys or key not in self.__dict__ or self.__dict__[key] is None:
-                continue
-            self._load_state_dict_from_checkpoint(key, self.__dict__[key], value, **kwargs)
-
-        for key in include_keys:
-            if key in payload["pickles"]:
-                self.__dict__[key] = pickle.loads(payload["pickles"][key])
 
     def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
         if key == "policy" and self.policy is not None:
@@ -816,42 +833,12 @@ class DreamerVLAWorkspace(BaseWorkspace):
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
 
-        dataloader_kwargs = dict(cfg.dataloader)
-        if int(dataloader_kwargs.get("num_workers", 0)) <= 0:
-            dataloader_kwargs.pop("prefetch_factor", None)
-            dataloader_kwargs["persistent_workers"] = False
-        sampler = self.distributed.maybe_make_sampler(
+        train_dataloader = self.make_distributed_dataloader(
             dataset,
-            shuffle=bool(dataloader_kwargs.get("shuffle", True)),
-            drop_last=bool(dataloader_kwargs.get("drop_last", False)),
+            cfg.dataloader,
+            sanitize_worker_kwargs=True,
         )
-        if sampler is not None:
-            dataloader_kwargs["shuffle"] = False
-            dataloader_kwargs["sampler"] = sampler
-        collate_fn = getattr(dataset, "collate_fn", None)
-        if callable(collate_fn):
-            dataloader_kwargs["collate_fn"] = collate_fn
-        train_dataloader = DataLoader(dataset, **dataloader_kwargs)
-
-        val_dataloaders: dict[str, DataLoader] = {}
-        for split_name in ("val_ind", "val_ood"):
-            val_ds_cfg = OmegaConf.select(cfg, f"dataset_{split_name}", default=None)
-            if val_ds_cfg is None:
-                continue
-            val_ds = hydra.utils.instantiate(val_ds_cfg)
-            val_dl_kwargs = dict(cfg.dataloader)
-            val_dl_kwargs["shuffle"] = False
-            val_dl_kwargs["drop_last"] = False
-            if int(val_dl_kwargs.get("num_workers", 0)) <= 0:
-                val_dl_kwargs.pop("prefetch_factor", None)
-                val_dl_kwargs["persistent_workers"] = False
-            val_sampler = self.distributed.maybe_make_sampler(val_ds, shuffle=False, drop_last=False)
-            if val_sampler is not None:
-                val_dl_kwargs["sampler"] = val_sampler
-            val_collate = getattr(val_ds, "collate_fn", None)
-            if callable(val_collate):
-                val_dl_kwargs["collate_fn"] = val_collate
-            val_dataloaders[split_name] = DataLoader(val_ds, **val_dl_kwargs)
+        val_dataloaders = self.make_val_dataloaders(cfg, sanitize_worker_kwargs=True)
 
         # ── encoder (frozen) ───────────────────────────────────────────
         encoder_cfg_root = OmegaConf.select(cfg, "encoder", default=None)
@@ -921,7 +908,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "This DreamerVLA config reuses the VLA action head, so it needs a "
                 "matching goal VLA checkpoint. Pass one with "
                 "`init.encoder_state_ckpt=/path/to/vla.ckpt` or "
-                "`VLA_STATE_CKPT=/path/to/vla.ckpt bash scripts/train_dreamer_vla_rynn_pixel.sh`."
+                "`VLA_STATE_CKPT=/path/to/vla.ckpt bash scripts/train_dreamer_vla.sh`."
             )
         self.policy = hydra.utils.instantiate(policy_cfg).to(self.device)
         # Policy stays in float32 — its forward casts inputs via .float()
@@ -964,6 +951,10 @@ class DreamerVLAWorkspace(BaseWorkspace):
             high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
         )
         self._maybe_build_viz()
+
+        dreamervla_init_ckpt = OmegaConf.select(cfg, "init.dreamervla_state_ckpt", default=None)
+        if dreamervla_init_ckpt:
+            self._load_dreamervla_init_ckpt(str(dreamervla_init_ckpt))
 
         if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.world_model_ema is None:
             self.world_model_ema = EMAHelper(
@@ -1034,8 +1025,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
                 while self.epoch < int(cfg.training.num_epochs):
-                    if sampler is not None:
-                        sampler.set_epoch(self.epoch)
+                    self.set_dataloader_epoch(train_dataloader, self.epoch)
 
                     step_log: dict[str, float | str | int] = {}
                     epoch_wm_losses: list[float] = []
@@ -1110,19 +1100,38 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                     epoch_scales.append(ac_metrics["return_scale"])
                                     local_metrics.update({
                                         "train_actor_loss": ac_metrics["actor_loss"],
+                                        "train_actor_bc_loss": ac_metrics.get("actor_bc_loss", 0.0),
+                                        "train_actor_bc_scale": ac_metrics.get("actor_bc_scale", 0.0),
+                                        "train_actor_vla_drift_raw_mse": ac_metrics.get("actor_vla_drift_raw_mse", 0.0),
+                                        "train_actor_vla_drift_env_mse": ac_metrics.get("actor_vla_drift_env_mse", 0.0),
+                                        "train_actor_vla_drift_env_mse_clipped": ac_metrics.get(
+                                            "actor_vla_drift_env_mse_clipped", 0.0
+                                        ),
+                                        "train_actor_vla_drift_env_mae": ac_metrics.get("actor_vla_drift_env_mae", 0.0),
                                         "train_critic_loss": ac_metrics["critic_loss"],
                                         "train_returns_mean": ac_metrics["returns_mean"],
                                         "train_returns_std": ac_metrics["returns_std"],
                                         "train_raw_returns_mean": ac_metrics.get("raw_returns_mean", ac_metrics["returns_mean"]),
                                         "train_raw_returns_std": ac_metrics.get("raw_returns_std", ac_metrics["returns_std"]),
+                                        "train_advantage_mean": ac_metrics.get("advantage_mean", 0.0),
+                                        "train_advantage_std": ac_metrics.get("advantage_std", 0.0),
+                                        "train_advantage_mag": ac_metrics.get("advantage_mag", 0.0),
                                         "train_return_norm_enabled": ac_metrics.get("return_norm_enabled", 0.0),
                                         "train_return_norm_low": ac_metrics.get("return_norm_low", 0.0),
                                         "train_return_norm_high": ac_metrics.get("return_norm_high", 0.0),
                                         "train_return_norm_scale": ac_metrics.get("return_norm_scale", 1.0),
+                                        "train_return_norm_batch_scale": ac_metrics.get("return_norm_batch_scale", 1.0),
+                                        "train_ret_normed_min": ac_metrics.get("ret_normed_min", 0.0),
+                                        "train_ret_normed_max": ac_metrics.get("ret_normed_max", 0.0),
+                                        "train_ret_normed_rate": ac_metrics.get("ret_normed_rate", 0.0),
                                         "train_return_scale": ac_metrics["return_scale"],
                                         "train_reward_mean": ac_metrics["reward_mean"],
                                         "train_continue_mean": ac_metrics.get("continue_mean", 1.0),
                                         "train_value_mean": ac_metrics["value_mean"],
+                                        "train_critic_target_mean": ac_metrics.get("critic_target_mean", 0.0),
+                                        "train_repval_loss": ac_metrics.get("repval_loss", 0.0),
+                                        "train_repval_applied": ac_metrics.get("repval_applied", 0.0),
+                                        "train_repval_weight_mean": ac_metrics.get("repval_weight_mean", 0.0),
                                         "train_imagine_weight_mean": ac_metrics.get("imagine_weight_mean", 1.0),
                                         "train_actor_grad_norm": ac_metrics["actor_grad_norm"],
                                         "train_critic_grad_norm": ac_metrics["critic_grad_norm"],
@@ -1219,15 +1228,3 @@ class DreamerVLAWorkspace(BaseWorkspace):
 
 
 __all__ = ["DreamerVLAWorkspace"]
-
-
-# ── internal helpers ──────────────────────────────────────────────────────────
-
-def _copy_to_cpu(value: Any) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu()
-    if isinstance(value, dict):
-        return {k: _copy_to_cpu(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_copy_to_cpu(v) for v in value]
-    return copy.deepcopy(value)

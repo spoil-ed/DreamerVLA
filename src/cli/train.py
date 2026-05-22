@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.workspace.base_workspace import BaseWorkspace
+from src.workspace import BaseWorkspace
 
 
 def run(cfg: DictConfig) -> None:
@@ -21,15 +21,19 @@ def run(cfg: DictConfig) -> None:
     # Workspace class
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
-    # Run workspace
-    workspace.run()
+    # Run workspace through the public lifecycle API.
+    workspace.setup()
+    try:
+        workspace.execute()
+    finally:
+        workspace.teardown()
 
 
 main = run
 
 
 def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
-    config_name = "nopretokenize_sft_cotrain_libero_10"
+    config_name = "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
     overrides: list[str] = []
     i = 0
     while i < len(argv):
@@ -38,7 +42,8 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
             print(
                 "Usage: python -m src.cli.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m src.cli.train --config-name pretokenize_vla_libero_10 training.num_epochs=5\n"
+                "  python -m src.cli.train --config-name pretokenize_vla_libero_goal_pi0_query training.num_epochs=5\n"
+                "  python -m src.cli.train --config-name rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed training.max_steps=10\n"
                 "  python -m src.cli.train --config-name eval_libero_vla eval.task_suite_name=libero_goal"
             )
             raise SystemExit(0)

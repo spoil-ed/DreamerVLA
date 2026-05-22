@@ -29,6 +29,10 @@ def _to_device(value: Any, device: torch.device) -> Any:
 class DreamerV3PixelWorkspace(BaseWorkspace):
     """Standalone pixel-level DreamerV3 world-model trainer for LIBERO."""
 
+    workspace_name = "pixel_wm_compat"
+    workspace_status = "compatibility"
+    workspace_family = "world_model"
+
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
         self.rank = 0
