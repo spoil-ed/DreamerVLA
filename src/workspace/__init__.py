@@ -8,7 +8,7 @@ from src.workspace.dreamer_vla_workspace import DreamerVLAWorkspace as _DreamerV
 from src.workspace.dreamerv3_pixel_workspace import DreamerV3PixelWorkspace as _DreamerV3PixelWorkspace
 from src.workspace.dreamerv3_token_workspace import DreamerV3TokenWorkspace as _DreamerV3TokenWorkspace
 from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace as _EvalLiberoVLAWorkspace
-from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace as _PretokenizeVLAWorkspace
+from src.workspace.vla_sft_workspace import VLASFTWorkspace as _VLASFTWorkspace
 from src.workspace.openvla_oft_workspace import OpenVLAOFTTrainingWorkspace as _OpenVLAOFTTrainingWorkspace
 from src.workspace.rynn_backbone_dreamerv3_wm_workspace import (
     RynnBackboneDreamerV3WMWorkspace as _RynnBackboneDreamerV3WMWorkspace,
@@ -39,7 +39,7 @@ class TokenWMWorkspace(_DreamerV3TokenWorkspace):
     workspace_family = "world_model"
 
 
-class VLASFTWorkspace(_PretokenizeVLAWorkspace):
+class VLASFTWorkspace(_VLASFTWorkspace):
     workspace_name = "vla_sft"
     workspace_status = "current"
     workspace_family = "vla"

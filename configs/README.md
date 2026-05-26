@@ -9,6 +9,7 @@ checkpoint paths, output tags, and smoke-test limits.
 | Stage | Script | Default Config |
 | --- | --- | --- |
 | VLA training | `scripts/train_vla.sh` | `vla_pi0_query` |
+| VLA one-trajectory SFT | `CONFIG=vla_sft_one_trajectory scripts/train_vla.sh` | `vla_sft_one_trajectory` |
 | WM training | `scripts/train_wm.sh` | `world_model_rssm_step` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor` |
 
@@ -17,6 +18,7 @@ checkpoint paths, output tags, and smoke-test limits.
 | Route | Config |
 | --- | --- |
 | VLA | `vla_pi0_query` |
+| VLA one-trajectory SFT | `vla_sft_one_trajectory` |
 | WM RSSM step | `world_model_rssm_step` |
 | WM DINO step | `world_model_dinowm_step` |
 | WM DINO chunk | `world_model_dinowm_chunk` |
@@ -51,6 +53,7 @@ Switch tasks with Hydra, for example:
 
 ```bash
 bash scripts/train_vla.sh task=libero_object
+CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
 WM_KIND=dinowm bash scripts/train_wm.sh task=libero_spatial
 ```
 

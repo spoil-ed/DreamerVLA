@@ -29,6 +29,10 @@ class PretokenizeDataSpec:
     stride: int | None = None
     sequence_next_obs_source: str = "current_obs"
     prompt_text: str | None = None
+    one_trajectory_sft: bool = False
+    trajectories_per_task: int | None = None
+    trajectory_offset: int | None = None
+    selected_trajectory_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

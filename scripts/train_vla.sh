@@ -7,11 +7,15 @@
 #
 #  Available CONFIGs:
 #    vla_pi0_query   (default)   pi0_query head, pretokenize SFT
+#    vla_sft_one_trajectory      pi0_query head, one demo trajectory per task
 #
 #  Examples:
 #    bash scripts/train_vla.sh
 #    bash scripts/train_vla.sh task=libero_object
 #    NGPU=4 bash scripts/train_vla.sh task=libero_10 training.num_epochs=5
+#    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
+#    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh \
+#        dataset.trajectory_offset=3
 #    OUT_DIR=data/outputs/vla/pi0_query/libero_object_run1 \
 #        bash scripts/train_vla.sh task=libero_object
 # ============================================================================

@@ -14,7 +14,7 @@ metadata from `configs/task/*.yaml`.
 
 | Script | Main Config | Public Workspace | Purpose |
 | --- | --- | --- | --- |
-| `train_vla.sh` | `vla_pi0_query` | `VLASFTWorkspace` | VLA SFT |
+| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory` | `VLASFTWorkspace` | VLA SFT, including one trajectory per task |
 | `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTWorkspace` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
 | `train_wm.sh` | `world_model_rssm_step`, `world_model_dinowm_step`, `world_model_dinowm_chunk` | route-specific `src.workspace.*` target from config | WM training |
 | `train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_rynn_dino_wm_wmpo_outcome` | `JointDreamerVLAWorkspace` | DreamerVLA training |
@@ -42,6 +42,13 @@ Non-goal LIBERO VLA SFT uses suite-specific pretrained weights under
 bash scripts/train_vla_nongoal_45.sh libero_10
 TAG=libero_object bash scripts/train_vla_nongoal_45.sh
 TAG=libero_spatial bash scripts/train_vla_nongoal_45.sh
+```
+
+One-trajectory SFT keeps one demonstration trajectory per LIBERO task:
+
+```bash
+CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
+CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
 ```
 
 ## Evaluation

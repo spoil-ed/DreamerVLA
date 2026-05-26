@@ -1,0 +1,14 @@
+defaults:
+  - vla_pi0_query
+  - _self_
+
+training:
+  out_dir: ${oc.env:OUT_DIR,data/outputs/vla/pi0_query_one_trajectory/${task.name}/${now:%Y%m%d_%H%M%S}}
+
+dataset:
+  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  config_path: ${task.pretokenize_config_path}
+  action_horizon: ${task.action_horizon}
+  trajectories_per_task: 1
+  trajectory_offset: 0
+  strict: true
