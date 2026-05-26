@@ -1,0 +1,23 @@
+defaults:
+  - openvla_oft_libero_goal
+  - _self_
+
+training:
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/openvla_oft_hdf5_goal
+
+dataset:
+  _target_: src.dataloader.OpenVLAOFTHDF5DatasetFactory
+  hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
+  dataset_statistics_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal/dataset_statistics.json
+  dataset_statistics_key: libero_goal_no_noops
+  action_horizon: 8
+  image_keys: [agentview_rgb, eye_in_hand_rgb]
+  use_wrist_image: true
+  use_proprio: true
+  batch_size: 1
+  num_workers: 0
+  shuffle: true
+  drop_last: false
+  max_files: null
+  max_demos_per_file: null
+  max_samples: null

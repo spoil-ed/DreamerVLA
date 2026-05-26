@@ -13,7 +13,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla
   debug: false
   resume: true
   distributed_strategy: fsdp
@@ -33,15 +33,15 @@ ema:
   update_after_step: 0
 
 init:
-  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 10
@@ -49,15 +49,15 @@ encoder:
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize.yaml
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ind.yaml
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_10_256_pretokenize_val_ood.yaml
 
 dataloader:
   batch_size: 8

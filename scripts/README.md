@@ -6,53 +6,18 @@ recipes.
 
 ## Data Preparation
 
-| Script | Purpose |
-| --- | --- |
-| `env_libero_goal_pi0_query.sh` | Current pi0 action-hidden LIBERO-goal path / checkpoint / horizon registry |
-| `env_libero_goal.sh` | Shared LIBERO-goal defaults for data prep and VLA SFT |
-| `download_hf.sh` | Download model checkpoints from Hugging Face into `data/ckpts/` |
-| `prepare_data.sh` | Standard LIBERO data preparation pipeline |
-| `run_pi0_query_hidden_pipeline.sh` | Current action-hidden pipeline wrapper; preprocess, WM, and actor stages |
-| `preprocess_rynn_pixel_hidden.sh` | Generate pi0 action-query hidden sidecar HDF5 files |
-| `preprocess_rynn_pixel_hidden.py` | Python implementation for action-hidden sidecar generation |
-| `prepare_dreamervla_data.sh` | DreamerVLA data preparation wrapper |
-| `preprocess/*.sh` | Lower-level preprocessing steps retained for reproducibility |
-
-Current canonical action-hidden sidecar for LIBERO-goal:
-
-```text
-data/processed_data/libero_goal_no_noops_t_256_pi0_action_hidden_vla_policy_h2
-```
-
-The current action-hidden wrappers source `env_libero_goal_pi0_query.sh`, which keeps these values
-aligned:
-
-```text
-VLA_INIT_CKPT
-VLA_STATE_CKPT / ENCODER_STATE_CKPT
-ACTION_HORIZON / TIME_HORIZON
-ACTION_HEAD_TYPE=pi0_query
-PI0_ACTION_HIDDEN_DIR
-PI0_QUERY_PROMPT_STYLE=vla_policy
-PI0_QUERY_HISTORY=2
-PI0_QUERY_INCLUDE_STATE=1
-PI0_QUERY_ROTATE_IMAGES_180=1
-```
+Historical data-preparation shell recipes are archived under
+`scripts/archive/uncertain_shells/`. Current training launchers take task
+metadata from `configs/task/*.yaml`.
 
 ## Training
 
 | Script | Main Config | Public Workspace | Purpose |
 | --- | --- | --- | --- |
-| `pretokenize_train_vla.sh` | `pretokenize_vla_libero_goal_pi0_query` | `VLASFTWorkspace` | Current pi0 action-query VLA action head SFT when `ACTION_HEAD_TYPE=pi0_query` |
-| `run_pi0_query_hidden_pipeline.sh` | `rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed` | `ActionHiddenWMWorkspace` | Current preprocess + action-hidden WM pipeline |
-| `train_pi0_action_hidden_dreamerv3_wm.sh` | `rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed` | `ActionHiddenWMWorkspace` | Current action-hidden DreamerV3 WM training |
-| `run_pi0_action_hidden_reconstruct_actor.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Current action-hidden actor training |
-| `run_pi0_action_hidden_head_actor_variants.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Current actor-head adapter sweep |
-| `train_dreamerv3_pixel.sh` | `dreamerv3_pixel_libero_goal` | `PixelWMWorkspace` | Secondary pixel DreamerV3 baseline |
-| `train_dreamerv3_token.sh` | `dreamerv3_token_libero_goal` | `TokenWMWorkspace` | Secondary token DreamerV3 baseline |
-| `train_wm.sh` | env-selected | route-specific `src.workspace.*` target from config | Generic WM training wrapper |
-| `train_chameleon_ladiwm_wm.sh` | `chameleon_latent_action_wm_libero_goal` | `ChameleonLatentWMWorkspace` | Chameleon / LaDiWM-style WM baseline |
-| `train_dreamer_vla.sh` | `dreamer_vla_libero_goal_pi0_action_hidden_head_actor` | `JointDreamerVLAWorkspace` | Generic action-hidden DreamerVLA training wrapper |
+| `train_vla.sh` | `vla_pi0_query` | `VLASFTWorkspace` | VLA SFT |
+| `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTWorkspace` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
+| `train_wm.sh` | `world_model_rssm_step`, `world_model_dinowm_step`, `world_model_dinowm_chunk` | route-specific `src.workspace.*` target from config | WM training |
+| `train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_rynn_dino_wm_wmpo_outcome` | `JointDreamerVLAWorkspace` | DreamerVLA training |
 
 Configs point directly at the route-specific workspace class.
 
@@ -69,6 +34,15 @@ OUT_DIR_BASE=/path/to/output/root
 
 `DETACH=1` backgrounds training and writes a `train.pid`; omit `DETACH` to keep
 logs in the terminal.
+
+Non-goal LIBERO VLA SFT uses suite-specific pretrained weights under
+`data/ckpts/VLA_model_256/<suite>`:
+
+```bash
+bash scripts/train_vla_nongoal_45.sh libero_10
+TAG=libero_object bash scripts/train_vla_nongoal_45.sh
+TAG=libero_spatial bash scripts/train_vla_nongoal_45.sh
+```
 
 ## Evaluation
 

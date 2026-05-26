@@ -21,8 +21,8 @@ What's here:
 What's intentionally NOT here (lives with its family):
 
     * ``DreamerV3RSSM``, ``DreamerV3PixelEncoder/Decoder``, pi0 hidden
-      decoders, RynnBackboneObsEncoder, reward heads — all in
-      ``dreamerv3_torch.py``.
+      decoders and RynnBackboneObsEncoder — grouped with their model family;
+      reward heads live in ``reward_heads.py``.
     * Causal transformer + multihead attention (ported from TransDreamer,
       tightly coupled with TSSM dynamics) — in ``tssm_torch.py``.
 

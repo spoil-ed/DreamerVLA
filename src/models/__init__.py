@@ -8,4 +8,10 @@ try:
 except Exception:
     VLAPolicy = None
 
-__all__ = ["Critic", "VLAPolicy"]
+try:
+    from .world_model import OFTDinoWMWorldModel, RynnDinoWMWorldModel
+except Exception:
+    OFTDinoWMWorldModel = None
+    RynnDinoWMWorldModel = None
+
+__all__ = ["Critic", "VLAPolicy", "OFTDinoWMWorldModel", "RynnDinoWMWorldModel"]

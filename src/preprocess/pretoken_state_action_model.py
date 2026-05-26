@@ -14,7 +14,18 @@ from src.preprocess.paths import DEFAULT_CONVS_DIR, DEFAULT_TOKENIZER_PATH, DEFA
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def run_script(rank, all_ranks, resolution, in_filename_path, out_dir, with_state, tokenizer_path, image_views_per_frame, gpu_pool): # 添加 task 参数
+def run_script(
+    rank,
+    all_ranks,
+    resolution,
+    in_filename_path,
+    out_dir,
+    with_state,
+    tokenizer_path,
+    image_views_per_frame,
+    gpu_pool,
+    overwrite,
+): # 添加 task 参数
     # gpu_pool is the list of *physical* GPU indices the launcher was told to
     # use (defaults to [0,1,2,3] for backwards compatibility). Each worker
     # pins itself to one GPU via round-robin over that pool.
@@ -23,6 +34,7 @@ def run_script(rank, all_ranks, resolution, in_filename_path, out_dir, with_stat
 
     script_name = "pre_tokenize_action_state_local.py" if with_state else "pre_tokenize_action_local.py"
     script_path = SCRIPT_DIR / script_name
+    overwrite_arg = " --overwrite" if overwrite else ""
     os.system(
         f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script_path))} "
         f"--splits={all_ranks} "
@@ -32,6 +44,7 @@ def run_script(rank, all_ranks, resolution, in_filename_path, out_dir, with_stat
         f"--tokenizer {shlex.quote(str(tokenizer_path))} "
         f"--target_size {resolution} "
         f"--image_views_per_frame {int(image_views_per_frame)}"
+        f"{overwrite_arg}"
     )
     
 
@@ -80,6 +93,11 @@ if __name__ == "__main__":
             "Use e.g. '4,5,6,7' when GPUs 0-3 are busy with training."
         ),
     )
+    parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='Forward --overwrite to workers and re-tokenize existing pkl files.',
+    )
 
     # 3. 解析命令行参数
     args = parser.parse_args()
@@ -124,6 +142,7 @@ if __name__ == "__main__":
                     args.tokenizer_path,
                     image_views_per_frame,
                     gpu_pool,
+                    args.overwrite,
                 ),
             )
             p.start()

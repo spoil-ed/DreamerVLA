@@ -12,10 +12,9 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla
   debug: false
   resume: false
-  # rollout is strictly single-process; FSDP sharding breaks single-rank inference.
   distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: false
@@ -29,52 +28,48 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
-  encoder_state_ckpt: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
+  vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model
+  encoder_state_ckpt: null
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 5
+  action_head_type: legacy
   pool: mean
 
-# ── rollout knobs ─────────────────────────────────────────────────────────────
 eval:
-  # Leave ckpt_path null to evaluate the raw init VLA weights (baseline).
-  # Set this to a file produced by VLASFTWorkspace top-k saves, e.g.
-  # data/outputs/vla/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt
-  ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla/pretokenize_vla_libero_goal_libero_goal_h5_20260508_060320/checkpoints/goal_h5_epoch000_train_vla_loss_1p323.ckpt
-  ckpt_kind: auto                 # auto / vla / dreamer
-
-  task_suite_name: libero_goal      # libero_goal / libero_spatial / libero_object / libero_10
+  ckpt_path: null
+  ckpt_kind: vla
+  task_suite_name: libero_goal
   num_episodes_per_task: 10
   task_start: 0
   task_ids: null
   max_tasks: null
   max_steps: null
-  action_steps: 5                   # action chunk horizon (must match training)
+  action_steps: 5
   save_video: false
   video_max_episodes: 1
-  dreamer_deterministic: true       # Dreamer policy rollout uses actor mean by default
-  dreamer_action_repeat: 1          # replan every env step for latent Dreamer actor
-  dreamer_clip_actions: true        # clip raw actor output to LIBERO action ranges
-  dreamer_unnorm_actions: auto      # auto: unnorm VLA/pi0 action-head actors, leave plain Dreamer actors raw
-  dreamer_rssm_action_source: env   # env/raw; WM was trained on HDF5 LIBERO env-scale actions
-  dreamer_rollout_mode: stateless    # stateless / online_rssm
-  dreamer_actor_input_source: rssm   # rssm / encoder / encoder_sequence
-  dreamer_wm_history_length: 2       # match existing vla_policy_h2 action-hidden sidecar
-  dreamer_wm_rotate_images: true     # keep get_libero_image() rotated frames, matching pure VLA policy input
+  dreamer_deterministic: true
+  dreamer_action_repeat: 1
+  dreamer_clip_actions: true
+  dreamer_unnorm_actions: auto
+  dreamer_rssm_action_source: env
+  dreamer_rollout_mode: stateless
+  dreamer_actor_input_source: rssm
+  dreamer_wm_history_length: 2
+  dreamer_wm_rotate_images: true
   dreamer_wm_prompt_style: vla_policy
   dreamer_wm_include_state: true
-  obs_hidden_source: auto             # auto / pooled / action_query
+  obs_hidden_source: auto
   target_token_id: 10004
-  dreamer_which_image_block: -2     # third-view image block; matches WM training default
+  dreamer_which_image_block: -2
   dreamer_which_image_blocks: [-2, -1]
   log_action_stats: false
   log_action_stats_limit: 8
@@ -85,9 +80,29 @@ eval:
   trace_policy_debug_limit: 64
   trace_policy_debug_verbose: false
   empty_cuda_cache_each_step: false
+  export_real_relabel: false
+  real_relabel_dir: null
+  tdmpc_mpc:
+    enabled: false
+    use_target_critic: true
+    horizon: 3
+    iterations: 6
+    num_samples: 512
+    num_elites: 64
+    num_pi_trajs: 24
+    action_dim: 7
+    min_std: 0.05
+    max_std: 2.0
+    temperature: 0.5
+    gamma: 0.995
+    terminal_value_scale: 1.0
+    reward_scale: 1.0
+    value_mode: state
+    execute_steps: ${eval.action_steps}
+    eval_mode: true
+    warm_start: true
+    seed: ${seed}
 
-# ── unused by eval workspace but required by the VLA SFT implementation ───────
-# (keeps the inherited resume() / save_checkpoint() machinery happy)
 ema:
   decay: 0.9999
   update_after_step: 0
@@ -109,4 +124,4 @@ checkpoint:
     monitor_key: eval_success_rate
     mode: max
     k: 1
-    format_str: 'eval_success_rate={eval_success_rate:.4f}.ckpt'
+    format_str: eval_success_rate={eval_success_rate:.4f}.ckpt

@@ -136,12 +136,12 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         cfg_path = OmegaConf.select(
             viz_cfg,
             "vqgan_config_path",
-            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
+            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
         )
         ckpt_path = OmegaConf.select(
             viz_cfg,
             "vqgan_ckpt_path",
-            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
         )
         try:
             from src.utils.vq_image_decoder import load_vq_model

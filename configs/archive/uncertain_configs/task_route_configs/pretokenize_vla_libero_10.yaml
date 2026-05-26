@@ -1,0 +1,97 @@
+_target_: src.workspace.VLASFTWorkspace
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+trainer:
+  device: cuda:0
+  debug: false
+
+training:
+  device: cuda:0
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/pretokenize_vla_libero_10
+  debug: false
+  resume: false
+  distributed_strategy: fsdp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: true
+  train_encoder_backbone: true
+  vla_train_action_head_only: false
+  num_epochs: 20
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  use_ema: false
+  checkpoint_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 50
+  vla_action_loss_coef: 10
+  vla_token_loss_coef: 1
+
+ema:
+  decay: 0.9999
+  update_after_step: 0
+
+init:
+  vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+
+encoder:
+  _target_: src.models.encoder.RynnVLAEncoder
+  model_path: ${init.vla_ckpt_path}
+  tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  resolution: 256
+  action_dim: 7
+  time_horizon: 10
+  action_head_type: legacy
+  pool: mean
+
+dataset:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_10/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+  action_horizon: 10
+
+dataset_val_ind:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_10/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+  action_horizon: 10
+
+dataset_val_ood:
+  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_10/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+  action_horizon: 10
+
+dataloader:
+  batch_size: 20
+  num_workers: 2
+  shuffle: true
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+optim:
+  grad_clip_norm: 4.0
+  zero_grad_set_to_none: true
+  vla:
+    name: adamw
+    lr: 5.0e-6
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.1
+
+eval:
+  eval_every: 1
+
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    monitor_key: train_vla_loss
+    mode: min
+    k: 3
+    format_str: 'epoch={epoch:03d}-train_vla_loss={train_vla_loss:.3f}.ckpt'

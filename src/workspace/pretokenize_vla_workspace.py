@@ -34,8 +34,8 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
+    default_vla_init_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -504,6 +504,11 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         # resume training
         self.resume(cfg)
+        if bool(OmegaConf.select(cfg, "training.resume_advance_epoch", default=False)):
+            self.epoch += 1
+            self.global_step += 1
+            if self.distributed.is_main_process:
+                print(f"  [resume] advanced to epoch={self.epoch} global_step={self.global_step}")
 
         # After optimizer state restore, param_groups may lack `initial_lr`
         # (LambdaLR requires it when last_epoch > -1).

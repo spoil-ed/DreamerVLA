@@ -33,6 +33,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from transformers import GenerationConfig
 
+from src.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
 from src.utils.torch_utils import freeze_module
 from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace
 
@@ -43,7 +44,7 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     workspace_name = "libero_eval_compat"
     workspace_status = "compatibility"
     workspace_family = "eval"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla"
+    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla"
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:
@@ -197,6 +198,11 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         ).lower()
         if self._dreamer_policy_source not in {"ckpt", "init"}:
             raise ValueError("eval.dreamer_policy_source must be one of: ckpt, init")
+        self._tdmpc_mpc_enabled = bool(OmegaConf.select(train_cfg, "eval.tdmpc_mpc.enabled", default=False))
+        self._tdmpc_mpc_use_target_critic = bool(
+            OmegaConf.select(train_cfg, "eval.tdmpc_mpc.use_target_critic", default=True)
+        )
+        self._tdmpc_mpc_planner = self._build_tdmpc_mpc_planner(train_cfg) if self._tdmpc_mpc_enabled else None
         self._hidden_noise_std = float(OmegaConf.select(train_cfg, "eval.hidden_noise_std", default=0.0))
         self._hidden_noise_seed = int(OmegaConf.select(train_cfg, "eval.hidden_noise_seed", default=0))
         self._hidden_noise_generator = torch.Generator(device=self.device)
@@ -222,10 +228,17 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             with open(self._hidden_action_compare_path, "w"):
                 pass
         self._init_policy_trace(train_cfg)
+        self._init_real_relabel_export(train_cfg)
 
         self._build_dreamer_modules(train_cfg, payload)
         os.makedirs(self.output_dir, exist_ok=True)
         metrics = self.evaluate_libero(epoch=-1)
+        if bool(getattr(self, "_real_relabel_enabled", False)):
+            self._write_real_relabel_summary()
+            metrics.update({
+                "real_relabel_num_records": float(len(getattr(self, "_real_relabel_records", []))),
+                "real_relabel_success_rate": float(getattr(self, "_real_relabel_success_rate", 0.0)),
+            })
         if self._hidden_noise_count > 0:
             metrics = dict(metrics)
             metrics["hidden_noise_std"] = float(self._hidden_noise_std)
@@ -259,6 +272,7 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 "dreamer_rollout_mode": str(self._dreamer_rollout_mode),
                 "dreamer_actor_input_source": str(self._dreamer_actor_input_source),
                 "dreamer_policy_source": str(self._dreamer_policy_source),
+                "tdmpc_mpc_enabled": bool(getattr(self, "_tdmpc_mpc_enabled", False)),
                 "dreamer_wm_history_length": int(
                     OmegaConf.select(train_cfg, "eval.dreamer_wm_history_length", default=1)
                 ),
@@ -282,6 +296,106 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         ):
             return self._evaluate_libero_online_rssm(epoch)
         return super().evaluate_libero(epoch)
+
+    def _build_tdmpc_mpc_planner(self, cfg: DictConfig) -> TDMPCMPCPlanner:
+        planner_cfg = OmegaConf.select(cfg, "eval.tdmpc_mpc", default={}) or {}
+        action_steps = int(OmegaConf.select(cfg, "eval.action_steps", default=1))
+        config = TDMPCMPCConfig(
+            horizon=int(planner_cfg.get("horizon", 3)),
+            iterations=int(planner_cfg.get("iterations", 6)),
+            num_samples=int(planner_cfg.get("num_samples", 512)),
+            num_elites=int(planner_cfg.get("num_elites", 64)),
+            num_pi_trajs=int(planner_cfg.get("num_pi_trajs", 24)),
+            action_dim=int(planner_cfg.get("action_dim", 7)),
+            min_std=float(planner_cfg.get("min_std", 0.05)),
+            max_std=float(planner_cfg.get("max_std", 2.0)),
+            temperature=float(planner_cfg.get("temperature", 0.5)),
+            gamma=float(planner_cfg.get("gamma", 0.995)),
+            terminal_value_scale=float(planner_cfg.get("terminal_value_scale", 1.0)),
+            reward_scale=float(planner_cfg.get("reward_scale", 1.0)),
+            value_mode=str(planner_cfg.get("value_mode", "state")),
+            execute_steps=int(planner_cfg.get("execute_steps", action_steps)),
+            eval_mode=bool(planner_cfg.get("eval_mode", True)),
+            warm_start=bool(planner_cfg.get("warm_start", True)),
+            seed=int(planner_cfg.get("seed", OmegaConf.select(cfg, "seed", default=0))),
+        )
+        if self.distributed.is_main_process:
+            print(
+                "  [Eval][tdmpc-mpc] enabled "
+                f"horizon={config.horizon} samples={config.num_samples} elites={config.num_elites} "
+                f"pi_trajs={config.num_pi_trajs} iterations={config.iterations} "
+                f"execute_steps={config.execute_steps}",
+                flush=True,
+            )
+        return TDMPCMPCPlanner(config)
+
+    def _init_real_relabel_export(self, cfg: DictConfig) -> None:
+        self._real_relabel_enabled = bool(OmegaConf.select(cfg, "eval.export_real_relabel", default=False))
+        self._real_relabel_records: list[dict[str, Any]] = []
+        self._real_relabel_success_rate = 0.0
+        relabel_dir = OmegaConf.select(cfg, "eval.real_relabel_dir", default=None)
+        if relabel_dir is None:
+            relabel_dir = os.path.join(self.output_dir, "real_relabel")
+        self._real_relabel_dir = str(relabel_dir)
+        self._real_relabel_jsonl_path = os.path.join(self._real_relabel_dir, "real_rollout_relabel_records.jsonl")
+        self._real_relabel_summary_path = os.path.join(self._real_relabel_dir, "real_rollout_relabel_summary.json")
+        if self._real_relabel_enabled and self.distributed.is_main_process:
+            os.makedirs(self._real_relabel_dir, exist_ok=True)
+            with open(self._real_relabel_jsonl_path, "w"):
+                pass
+
+    @staticmethod
+    def _real_relabel_sparse_rewards(success: bool, finish_step: int, max_steps: int) -> list[float]:
+        length = max(1, min(int(finish_step), int(max_steps)))
+        rewards = [0.0] * length
+        if success:
+            rewards[length - 1] = 1.0
+        return rewards
+
+    def _append_real_relabel_record(self, record: dict[str, Any]) -> None:
+        if not bool(getattr(self, "_real_relabel_enabled", False)):
+            return
+        self._real_relabel_records.append(record)
+        with open(self._real_relabel_jsonl_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+
+    def _write_real_relabel_summary(self) -> None:
+        records = list(getattr(self, "_real_relabel_records", []))
+        successes = int(sum(int(bool(row.get("complete", False))) for row in records))
+        success_rate = successes / max(len(records), 1)
+        self._real_relabel_success_rate = float(success_rate)
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in records:
+            groups.setdefault(str(row.get("prompt_key", "")), []).append(row)
+        group_rows = []
+        for prompt_key, rows in sorted(groups.items()):
+            acc = float(np.mean([float(row.get("acc", 0.0)) for row in rows])) if rows else 0.0
+            group_rows.append({
+                "prompt_key": prompt_key,
+                "num_samples": len(rows),
+                "successes": int(sum(int(bool(row.get("complete", False))) for row in rows)),
+                "acc_mean": acc,
+                "keep_by_accuracy_band": bool(0.01 <= acc <= 0.99),
+            })
+        summary = {
+            "num_records": len(records),
+            "successes": successes,
+            "success_rate": float(success_rate),
+            "records_jsonl": str(getattr(self, "_real_relabel_jsonl_path", "")),
+            "wmpo_style_filter": {
+                "accuracy_lower_bound": 0.01,
+                "accuracy_upper_bound": 0.99,
+                "num_prompt_groups": len(group_rows),
+                "num_kept_prompt_groups": int(sum(int(row["keep_by_accuracy_band"]) for row in group_rows)),
+                "num_records": len(records),
+                "num_kept_records": int(sum(len(groups[row["prompt_key"]]) for row in group_rows if row["keep_by_accuracy_band"])),
+                "groups": group_rows,
+            },
+        }
+        os.makedirs(self._real_relabel_dir, exist_ok=True)
+        with open(self._real_relabel_summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"  [Eval] wrote real relabel summary -> {self._real_relabel_summary_path}", flush=True)
 
     def _maybe_add_hidden_noise(self, hidden: torch.Tensor) -> torch.Tensor:
         noise_std = float(getattr(self, "_hidden_noise_std", 0.0))
@@ -470,6 +584,68 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         # WM training uses HDF5 LIBERO actions, i.e. the executed/env scale.
         return np.asarray(env_action[:7], dtype=np.float32)
 
+    def _tdmpc_mpc_raw_to_rssm_tensor(self, raw_action: torch.Tensor) -> torch.Tensor:
+        raw_action = raw_action[..., :7].float()
+        source = str(OmegaConf.select(self.cfg, "eval.dreamer_rssm_action_source", default="env")).lower()
+        if source not in {"env", "raw"}:
+            raise ValueError("eval.dreamer_rssm_action_source must be one of: env, raw")
+        if source == "raw":
+            return raw_action
+        if self._dreamer_should_unnorm_actions():
+            low_np, high_np = self._action_clip_bounds()
+            low = torch.as_tensor(low_np, device=raw_action.device, dtype=raw_action.dtype)
+            high = torch.as_tensor(high_np, device=raw_action.device, dtype=raw_action.dtype)
+            action = (raw_action + 1.0) * 0.5 * (high - low + 1.0e-8) + low
+        else:
+            action = raw_action
+        if bool(getattr(self, "_dreamer_clip_actions", True)):
+            low_np, high_np = self._action_clip_bounds()
+            low = torch.as_tensor(low_np, device=raw_action.device, dtype=raw_action.dtype)
+            high = torch.as_tensor(high_np, device=raw_action.device, dtype=raw_action.dtype)
+            action = torch.maximum(torch.minimum(action, high), low)
+        return action
+
+    def _tdmpc_mpc_action_chunk_from_latent(
+        self,
+        latent: Any,
+        action_steps: int = 1,
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        planner = getattr(self, "_tdmpc_mpc_planner", None)
+        if planner is None:
+            raise RuntimeError("TD-MPC MPC planner requested but was not initialized.")
+        result = planner.plan(
+            policy=self.policy,
+            world_model=self.world_model,
+            latent=latent,
+            device=self.device,
+            target_critic=getattr(self, "target_critic", None),
+            action_transform=self._tdmpc_mpc_raw_to_rssm_tensor,
+        )
+        raw_chunk_np = result.raw_actions.detach().cpu().float().numpy()
+        if raw_chunk_np.ndim == 1:
+            raw_chunk_np = raw_chunk_np.reshape(1, -1)
+        raw_actions = [np.asarray(row[:7], dtype=np.float32).copy() for row in raw_chunk_np[: max(int(action_steps), 1)]]
+        env_actions = [self._dreamer_policy_raw_to_env_action(row).astype(np.float32, copy=False) for row in raw_actions]
+        rssm_actions = [
+            self._dreamer_rssm_action_from_raw_env(raw, env).astype(np.float32, copy=False)
+            for raw, env in zip(raw_actions, env_actions)
+        ]
+        if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
+            count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
+            limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
+            if count < limit and env_actions:
+                print(
+                    "  [Eval][tdmpc-mpc-action] "
+                    f"value={float(result.best_value.reshape(-1)[0].cpu()):.5f} "
+                    f"elite_mean={float(result.elite_value_mean.reshape(-1)[0].cpu()):.5f} "
+                    f"raw={np.array2string(raw_actions[0], precision=4, suppress_small=False)} "
+                    f"env={np.array2string(env_actions[0], precision=4, suppress_small=False)} "
+                    f"chunk={len(env_actions)}",
+                    flush=True,
+                )
+            self._dreamer_eval_action_log_count = count + 1
+        return env_actions, rssm_actions
+
     def _record_hidden_action_compare(
         self,
         *,
@@ -624,7 +800,29 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             print("  [Eval] using init policy/action_head; skipped Dreamer checkpoint policy state.")
         self.policy.eval()
 
-        # Drop optimizer/critic tensors as soon as possible; Dreamer eval only needs actor + WM.
+        self.target_critic = None
+        if bool(getattr(self, "_tdmpc_mpc_enabled", False)) and bool(getattr(self, "_tdmpc_mpc_use_target_critic", True)):
+            critic_state = state_dicts.get("target_critic") or state_dicts.get("critic")
+            critic_cfg = OmegaConf.select(cfg, "critic")
+            if critic_cfg is None or critic_state is None:
+                if self.distributed.is_main_process:
+                    print("  [Eval][tdmpc-mpc] target critic unavailable; using reward-only MPC.")
+            else:
+                planner_value_mode = str(OmegaConf.select(cfg, "eval.tdmpc_mpc.value_mode", default="state")).lower()
+                if planner_value_mode in {"state_action", "q", "q_za", "q(z,a)"}:
+                    critic_cfg = OmegaConf.create(OmegaConf.to_container(critic_cfg, resolve=True))
+                    critic_action_dim = int(OmegaConf.select(
+                        cfg,
+                        "eval.tdmpc_mpc.action_dim",
+                        default=OmegaConf.select(cfg, "algorithm.tdmpc_ac.action_dim", default=7),
+                    ))
+                    critic_cfg.hidden_dim = int(critic_cfg.hidden_dim) + critic_action_dim
+                self.target_critic = hydra.utils.instantiate(critic_cfg).to(self.device)
+                self._load_module_state(self.target_critic, critic_state, "target_critic")
+                freeze_module(self.target_critic)
+                self.target_critic.eval()
+
+        # Drop optimizer/critic tensors as soon as possible after optional MPC critic load.
         for key in ("policy_optimizer", "critic_optimizer", "world_model_optimizer", "critic", "target_critic"):
             state_dicts.pop(key, None)
         gc.collect()
@@ -985,6 +1183,8 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
         action_steps: int = 1,
         live_hidden: torch.Tensor | None = None,
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        if bool(getattr(self, "_real_relabel_enabled", False)):
+            self._last_real_relabel_actor_step = None
         actor_input_mode = str(OmegaConf.select(self.cfg, "algorithm.actor_input_mode", default="pooled")).lower()
         if actor_input_mode == "sequence":
             hidden_states = self.world_model({"mode": "actor_input_sequence", "latent": latent}).float()
@@ -1034,6 +1234,24 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
             return [], []
         raw_action_np = raw_actions[0]
         action_np = env_actions[0]
+        if bool(getattr(self, "_real_relabel_enabled", False)) and "feat" in locals():
+            old_log_prob = float("nan")
+            try:
+                raw_action_t = torch.as_tensor(raw_action_np, dtype=feat.dtype, device=feat.device).reshape(1, -1)
+                with torch.no_grad():
+                    old_log_prob_t, _entropy_t, _extra_eval = self.policy({
+                        "mode": "evaluate",
+                        "hidden": feat.detach().float(),
+                        "action": raw_action_t,
+                    })
+                old_log_prob = float(old_log_prob_t.detach().float().reshape(-1)[0].cpu())
+            except Exception:
+                old_log_prob = float("nan")
+            self._last_real_relabel_actor_step = {
+                "actor_input": feat.detach().float().reshape(feat.shape[0], -1)[0].cpu().tolist(),
+                "raw_action": np.asarray(raw_action_np, dtype=np.float32).reshape(-1).tolist(),
+                "old_log_prob": old_log_prob,
+            }
         self._record_hidden_action_compare(
             live_hidden=live_hidden,
             recon_hidden=feat if "feat" in locals() else None,
@@ -1083,6 +1301,9 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
     def _dreamer_online_reset(self) -> None:
         self._dreamer_online_latent = None
         self._dreamer_online_prev_action = None
+        planner = getattr(self, "_tdmpc_mpc_planner", None)
+        if planner is not None:
+            planner.reset()
 
     def _dreamer_online_update_latent(self, obs_embedding: torch.Tensor) -> Any:
         if getattr(self, "_dreamer_online_latent", None) is None:
@@ -1181,6 +1402,12 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 should_record = save_video and total_episodes < video_max_episodes
                 rollout_images: list[np.ndarray] = []
                 steps_taken = 0
+                wm_reward_trace: list[float] = []
+                action_norm_trace: list[float] = []
+                actor_input_trace: list[list[float]] = []
+                raw_action_trace: list[list[float]] = []
+                old_log_prob_trace: list[float] = []
+                actor_step_index_trace: list[int] = []
 
                 for step_idx in range(max_steps):
                     img = get_libero_image(obs, resolution)
@@ -1206,6 +1433,12 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                     )
                     with torch.no_grad():
                         latent = self._dreamer_online_update_latent(obs_embedding)
+                        if bool(getattr(self, "_real_relabel_enabled", False)):
+                            try:
+                                reward_pred = self.world_model({"mode": "reward", "latent": latent})
+                                wm_reward_trace.append(float(reward_pred.detach().float().reshape(-1)[0].cpu()))
+                            except Exception:
+                                wm_reward_trace.append(float("nan"))
                         self._libero_current_eval_context = {
                             "task_id": int(task_id),
                             "task_index": int(task_index),
@@ -1216,12 +1449,29 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                         }
                         self._libero_current_eval_context_state = state
                         if not env_actions_buffer:
-                            env_actions_buffer, rssm_actions_buffer = self._dreamer_action_chunk_from_latent(
-                                latent,
-                                input_ids=input_ids,
-                                action_steps=action_steps,
-                                live_hidden=obs_embedding,
-                            )
+                            if bool(getattr(self, "_tdmpc_mpc_enabled", False)):
+                                env_actions_buffer, rssm_actions_buffer = self._tdmpc_mpc_action_chunk_from_latent(
+                                    latent,
+                                    action_steps=action_steps,
+                                )
+                            else:
+                                env_actions_buffer, rssm_actions_buffer = self._dreamer_action_chunk_from_latent(
+                                    latent,
+                                    input_ids=input_ids,
+                                    action_steps=action_steps,
+                                    live_hidden=obs_embedding,
+                                )
+                            if bool(getattr(self, "_real_relabel_enabled", False)):
+                                trace_item = getattr(self, "_last_real_relabel_actor_step", None)
+                                if isinstance(trace_item, dict):
+                                    actor_input = trace_item.get("actor_input")
+                                    raw_action = trace_item.get("raw_action")
+                                    old_log_prob = trace_item.get("old_log_prob")
+                                    if isinstance(actor_input, list) and isinstance(raw_action, list):
+                                        actor_input_trace.append(actor_input)
+                                        raw_action_trace.append(raw_action)
+                                        old_log_prob_trace.append(float(old_log_prob))
+                                        actor_step_index_trace.append(int(step_idx))
                     if not env_actions_buffer:
                         break
                     action = env_actions_buffer.pop(0)
@@ -1231,6 +1481,8 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                     obs, _, done, _ = env.step(action.tolist())
+                    if bool(getattr(self, "_real_relabel_enabled", False)):
+                        action_norm_trace.append(float(np.linalg.norm(np.asarray(action, dtype=np.float32))))
                     self._dreamer_online_prev_action = torch.from_numpy(rssm_action).to(self.device).reshape(1, -1)
                     steps_taken = step_idx + 1
                     if done:
@@ -1242,6 +1494,47 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 if should_record and rollout_images:
                     video_path = save_rollout_video(video_dir, rollout_images, total_episodes, bool(done), task_description)
                 total_episodes += 1
+                if bool(getattr(self, "_real_relabel_enabled", False)):
+                    finite_rewards = [float(x) for x in wm_reward_trace if np.isfinite(float(x))]
+                    policy_mode = "deterministic" if bool(getattr(self, "_dreamer_deterministic", True)) else "sample"
+                    prompt_key = f"task{int(task_id):02d}_ep{int(episode_idx):03d}_{policy_mode}"
+                    trajectory_id = f"{prompt_key}_sample000"
+                    first_ge_08 = next(
+                        (idx for idx, value in enumerate(wm_reward_trace) if np.isfinite(float(value)) and float(value) >= 0.8),
+                        -1,
+                    )
+                    relabel_record = {
+                        "trajectory_id": trajectory_id,
+                        "prompt_key": prompt_key,
+                        "task_id": int(task_id),
+                        "episode_idx": int(episode_idx),
+                        "sample_idx": 0,
+                        "policy_mode": policy_mode,
+                        "complete": bool(done),
+                        "acc": float(bool(done)),
+                        "finish_step": int(steps_taken),
+                        "max_steps": int(max_steps),
+                        "valid_action_tokens": int(steps_taken * 7),
+                        "real_sparse_rewards": self._real_relabel_sparse_rewards(bool(done), int(steps_taken), int(max_steps)),
+                        "reward_relabel": {
+                            "type": "terminal_outcome",
+                            "positive_step": int(steps_taken - 1) if bool(done) else -1,
+                            "target_return": float(bool(done)),
+                        },
+                        "wm_reward_pred": {
+                            "mean": float(np.mean(finite_rewards)) if finite_rewards else float("nan"),
+                            "max": float(np.max(finite_rewards)) if finite_rewards else float("nan"),
+                            "last": float(finite_rewards[-1]) if finite_rewards else float("nan"),
+                            "first_ge_0p8_step": int(first_ge_08),
+                            "trace": wm_reward_trace,
+                        },
+                        "action_norm_mean": float(np.mean(action_norm_trace)) if action_norm_trace else float("nan"),
+                        "actor_inputs": actor_input_trace,
+                        "raw_actions": raw_action_trace,
+                        "old_log_probs": old_log_prob_trace,
+                        "actor_step_indices": actor_step_index_trace,
+                    }
+                    self._append_real_relabel_record(relabel_record)
                 ep_dt = time.time() - ep_t0
                 tag = "OK " if done else "FAIL"
                 gc.collect()
@@ -1440,6 +1733,12 @@ class EvalLiberoVLAWorkspace(PretokenizeVLAWorkspace):
                 feat = self._maybe_add_hidden_noise(feat)
             else:
                 latent = self.world_model({"mode": "encode_latent", "hidden": obs_embedding})
+                if bool(getattr(self, "_tdmpc_mpc_enabled", False)):
+                    env_actions, _rssm_actions = self._tdmpc_mpc_action_chunk_from_latent(
+                        latent,
+                        action_steps=action_steps,
+                    )
+                    return env_actions
                 if hasattr(self.world_model, "actor_input"):
                     feat = self.world_model.actor_input(latent).float()
                 else:

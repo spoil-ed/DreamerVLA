@@ -1,0 +1,116 @@
+# @package _global_
+# DINO-WM-style predictor over full legacy RynnVLA action hidden.
+# Target hidden shape per timestep: 5 * 7 * 1024 = 35840.
+# Primary objective: minimize next-frame latent prediction loss
+#   obs_embedding[:, t] -> obs_embedding[:, t + 1].
+defaults:
+  - _self_
+  - /task: libero_goal
+
+_target_: src.workspace.RynnDinoWMWorkspace
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+training:
+  out_dir: ${oc.env:OUT_DIR,data/outputs/worldmodel/dinowm_step/${now:%Y%m%d_%H%M%S}}
+  device: cuda:0
+  distributed_strategy: single
+  data_parallel: false
+  seed: 7
+  max_steps: 10000
+  num_epochs: null
+  log_every: 20
+  save_every: 1000
+  tqdm_interval_sec: 1.0
+  resume: false
+  resume_path: null
+  resume_strict: true
+  resume_skip_optimizer: false
+  save_final: true
+
+dataset:
+  # DINO-WM mainline pretraining: teacher-forced multi-frame next-latent
+  # prediction + open-loop rollout + binary reward head.  The reward head
+  # requires a `rewards` field, so the balanced terminal dataset is used
+  # (per_window_dense puts +1 on every step of a terminal-ending window).
+  _target_: src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  hdf5_dir: ${task.hdf5_reward_dir}
+  hidden_dir: ${task.pi0_legacy_action_hidden_dir}
+  expected_model_path: ${task.vla_ckpt_path}
+  expected_encoder_state_ckpt: null
+  expected_time_horizon: ${task.time_horizon}
+  expected_action_head_type: ${task.legacy_action_hidden.expected_action_head_type}
+  expected_obs_hidden_source: ${task.legacy_action_hidden.expected_obs_hidden_source}
+  expected_prompt_style: ${task.legacy_action_hidden.expected_prompt_style}
+  expected_history: ${task.legacy_action_hidden.expected_history}
+  expected_include_state: ${task.legacy_action_hidden.expected_include_state}
+  expected_rotate_images_180: ${task.legacy_action_hidden.expected_rotate_images_180}
+  reward_mode: per_window_dense
+  balanced_length: 50000
+  balanced_seed: 0
+  # Matches the existing m384 ckpt's WM_T=32 training run.  Must be
+  # >= num_hist + rollout_horizon = 3 + 8 = 11 for rollout=8 to fire.
+  sequence_length: 32
+  image_size: ${task.image_size}
+  image_keys: ${task.image_keys}
+  hidden_key: ${task.hidden_key}
+  load_actor_sequence: false
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+  persistent_workers: true
+  prefetch_factor: 2
+  multiprocessing_context: null
+
+world_model:
+  _target_: src.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel
+  obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
+  action_dim: ${task.action_dim}
+  token_count: ${task.legacy_action_hidden.token_count}
+  token_dim: ${task.legacy_action_hidden.token_dim}
+  # Matches the existing m384 ckpt used by the actor stage.  Raise to 1024 via
+  # `MODEL_DIM=1024 bash scripts/train_wm.sh` for capacity-ablation experiments.
+  model_dim: 384
+  depth: 6
+  heads: 8
+  mlp_dim: 2048
+  dropout: 0.1
+  num_hist: 3
+  num_pred: 1
+  max_seq_len: 128
+  hidden_loss_scale: 1.0
+  cosine_loss_scale: 0.1
+  # Mainline DINO-WM defaults: teacher-forced multi-frame next-latent
+  # prediction (always on) + open-loop autoregressive rollout (horizon=8) for
+  # imagination stability + binary reward head for PPO imagined reward.
+  rollout_loss_scale: 1.0
+  rollout_horizon: 8
+  rollout_context: null
+  reward_head_type: binary
+  reward_loss_scale: 32.0
+  reward_hidden_dim: 1024
+  reward_init_logit: 0.0
+  reward_pos_weight: 1.0
+  return_predictions: false
+
+optim:
+  lr: 5e-5
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-20
+  weight_decay: 0.0
+  warmup: 1000
+  grad_clip: 100.0
+
+viz:
+  enabled: false

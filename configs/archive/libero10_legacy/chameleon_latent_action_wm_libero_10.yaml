@@ -8,7 +8,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/chameleon_latent_action_wm_libero_10
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/chameleon_latent_action_wm_libero_10
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -23,15 +23,15 @@ training:
   lr_warmup_steps: 500
 
 init:
-  vla_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
 
 encoder:
   _target_: src.models.encoder.RynnVLAEncoder
-  model_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
-  tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10
+  tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 10
@@ -71,7 +71,7 @@ world_model:
 
 dataset:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq.yaml
   history: 1
   batch_length: 3
   replay_context: 1
@@ -80,7 +80,7 @@ dataset:
 
 dataset_val_ind:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ind.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ind.yaml
   history: 1
   batch_length: 3
   replay_context: 1
@@ -89,7 +89,7 @@ dataset_val_ind:
 
 dataset_val_ood:
   _target_: src.dataloader.pretokenize_dataset.PretokenizeDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ood.yaml
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq_val_ood.yaml
   history: 1
   batch_length: 3
   replay_context: 1

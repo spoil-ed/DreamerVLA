@@ -1,0 +1,30 @@
+# LatentSuccessClassifier training config for libero_goal v1 (demo-only).
+# Source data: 299 demo positives across 5 shards. Negatives are sampled
+# earlier-window of same episodes at training time.
+classifier:
+  latent_dim: 35840
+  window: 8
+  hidden_dim: 1024
+  num_layers: 8
+  num_heads: 16
+  mlp_ratio: 4.0
+  dropout: 0.1
+
+data:
+  train_glob: "data/wmpo/classifier_shards/libero_goal/libero_goal_demos_00000[0-3].tar"
+  val_glob:   "data/wmpo/classifier_shards/libero_goal/libero_goal_demos_000004.tar"
+  stride_train: 8
+  stride_val: 1
+  num_workers: 2
+
+train:
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  batch_size: 8
+  max_steps: 20000
+  eval_steps: 500
+  log_every: 50
+  ckpt_dir: data/outputs/dreamervla/outcome_classifier/libero_goal/v1_demo_only
+  thresh_min: 0.3
+  thresh_max: 1.0
+  thresh_steps: 20

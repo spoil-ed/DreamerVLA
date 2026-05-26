@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,8 +16,33 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.workspace import BaseWorkspace
 
 
+def _auto_apply_distributed(cfg: DictConfig) -> None:
+    """If launched under torchrun (RANK + WORLD_SIZE>1 in env), force DDP.
+
+    Lets shell wrappers stay distribution-agnostic: a single ``python -m
+    src.cli.train`` invocation works for both single-GPU and torchrun launches,
+    no need to forward ``training.distributed_strategy=ddp`` etc. by hand.
+    """
+    if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+        return
+    try:
+        world_size = int(os.environ["WORLD_SIZE"])
+    except ValueError:
+        return
+    if world_size <= 1:
+        return
+    training = cfg.get("training") if hasattr(cfg, "get") else None
+    if training is None:
+        return
+    if "distributed_strategy" in training:
+        training.distributed_strategy = "ddp"
+    if "data_parallel" in training:
+        training.data_parallel = False
+
+
 def run(cfg: DictConfig) -> None:
     # Resolve config
+    _auto_apply_distributed(cfg)
     OmegaConf.resolve(cfg)
     # Workspace class
     cls = hydra.utils.get_class(cfg._target_)
@@ -33,7 +59,7 @@ main = run
 
 
 def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
-    config_name = "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
+    config_name = "world_model_rssm_step"
     overrides: list[str] = []
     i = 0
     while i < len(argv):
@@ -42,9 +68,9 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
             print(
                 "Usage: python -m src.cli.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m src.cli.train --config-name pretokenize_vla_libero_goal_pi0_query training.num_epochs=5\n"
-                "  python -m src.cli.train --config-name rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed training.max_steps=10\n"
-                "  python -m src.cli.train --config-name eval_libero_vla eval.task_suite_name=libero_goal"
+                "  python -m src.cli.train --config-name vla_pi0_query training.num_epochs=5\n"
+                "  python -m src.cli.train --config-name world_model_rssm_step training.max_steps=10\n"
+                "  python -m src.cli.train --config-name dreamervla_rynn_dino_wm_actor_critic task=libero_object"
             )
             raise SystemExit(0)
         if arg in ("--config-name", "-cn"):

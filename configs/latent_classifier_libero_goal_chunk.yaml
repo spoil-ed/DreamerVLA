@@ -1,0 +1,94 @@
+# LatentSuccessClassifier — CHUNK-LEVEL variant aligned 1:1 with the
+# action-level small_tf baseline, with ONLY the time unit reinterpreted:
+#
+#   action-level (small_tf, archived):           chunk-level (this config):
+#     window=8 env-steps consecutive               window=8 chunks (= 40 env-steps)
+#     stride_train=8 env-steps (non-overlap)       stride_train=8 chunks = 40 env-steps
+#     stride_val=1 env-step (dense sweep)          stride_val=1 chunk  = 5 env-steps
+#     1 "frame" = 1 env-step hidden                1 "frame" = chunk-end hidden
+#
+# Every other knob (arch, optimizer, regularization, max_steps, batch_size,
+# label_smoothing, weight_decay, episode_eval cadence) is byte-identical to
+# the archived small_tf config — only the data-time unit and the chunk-pool
+# fields change.
+#
+# chunk_pool="last" matches the user spec "实实在在做完 chunk 的那一帧": each
+# classifier-frame is the hidden AT the end of the chunk (= after executing
+# the K-action chunk), which is also what the chunk WM's
+# predict_next_chunk hidden_seq[:, -1] emits at inference time.
+#
+# Launch:
+#   CONFIG=latent_classifier_libero_goal_chunk NGPU=1 CUDA_VISIBLE_DEVICES=4 \
+#     bash scripts/train_wm.sh
+
+_target_: src.workspace.LatentClassifierWorkspace
+
+classifier:
+  latent_dim: 35840
+  window: 8
+  head_type: transformer
+  hidden_dim: 256
+  num_layers: 4
+  num_heads: 4
+  mlp_ratio: 2.0
+  dropout: 0.5
+  granularity: chunk
+  chunk_size: 5
+  chunk_pool: last
+
+data:
+  success_dir_raw: data/processed_data/libero_goal_no_noops_t_256
+  success_dir_hidden: data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  failure_dir_raw: data/processed_data/libero_goal_no_noops_t_256_failures
+  failure_dir_hidden: data/processed_data/libero_goal_no_noops_t_256_failures_pi0_legacy_action_hidden_vla_policy_h2
+  window: 8
+  # stride values in env-step units; mapped to "chunks" by multiplying by K=5
+  # so they match small_tf's stride semantics: stride_train = 1 window-length
+  # (non-overlapping negatives), stride_val = 1 unit (dense sweep).
+  stride_train: 40
+  stride_val: 5
+  chunk_subsample: 5
+  chunk_pool: last
+
+training:
+  out_dir: data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf_chunk
+  device: cuda
+  seed: 0
+  resume: false
+
+  # ---- optimization (byte-identical to small_tf) ----
+  max_steps: 8000
+  batch_size: 32
+  val_batch_size: 256
+  num_workers: 2
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  label_smoothing: 0.1
+  class_balanced: false
+
+  # ---- cadence ----
+  eval_every: 200
+  ckpt_every: 500
+  log_every: 50
+
+  # ---- threshold sweep ----
+  thresh_min: 0.3
+  thresh_max: 1.0
+  thresh_steps: 20
+
+  # ---- episode-level eval ----
+  # episode_eval_min_steps in ENV-STEP units. Workspace remaps to chunks via
+  # ceil(min_steps / K). The effective eligibility gate is:
+  #   first_end_env = max(W * K, ceil(min_steps / K) * K + W * K)
+  # For W=8 chunks + K=5, first_end_env = max(40, ceil(min_steps/5)*5 + 40).
+  # We want gate ≈ 72 env-step to match the action-level small_tf baseline
+  # (which had W=8 env-step + min_steps=64 → first_end_env=72). With W=8
+  # chunks the window-coverage is 40 env-step inherent, so we deliberately
+  # LOWER min_steps to 32 (ceil(32/5)=7 chunks → first_end=15 chunks=75 env)
+  # to give the chunk classifier the same wall-clock eligibility window as
+  # small_tf. Otherwise success demos finishing before env-step ~105 are
+  # structurally false-negative regardless of model quality.
+  episode_eval_enabled: true
+  episode_eval_min_steps: 32
+  episode_eval_stride: 1
+  episode_eval_batch: 256

@@ -29,21 +29,31 @@ class LIBEROBalancedTerminalDataset(LIBEROPixelRynnHiddenSequenceDataset):
         ALL ``W`` steps get reward=1; otherwise all 0. Gives 8× denser positive
         signal so the reward_head sees "I am within W steps of success" as
         positive, not just "I am the terminal frame".
+      * ``"from_hdf5"``: pass-through. Use the HDF5 ``rewards`` field as-is
+        (sliced to the window). Intended for datasets that already shape the
+        per-step reward (e.g. ``pi06_progress_delta`` telescoping deltas, or
+        ``pi06_remaining_steps`` success-to-go). Does not modify the value.
     """
 
     def __init__(
         self,
         *args: Any,
         reward_mode: str = "sparse",
+        success_to_go_discount: float = 0.97,
         balanced_length: int = 0,
         balanced_seed: int = 0,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.reward_mode = str(reward_mode).lower()
-        if self.reward_mode not in {"sparse", "per_window_dense"}:
+        self.success_to_go_discount = float(success_to_go_discount)
+        if self.reward_mode not in {"sparse", "per_window_dense", "from_hdf5"}:
             raise ValueError(
-                f"reward_mode must be one of 'sparse'|'per_window_dense', got {reward_mode!r}"
+                f"reward_mode must be one of 'sparse'|'per_window_dense'|'from_hdf5', got {reward_mode!r}"
+            )
+        if self.success_to_go_discount < 0.0:
+            raise ValueError(
+                f"success_to_go_discount must be non-negative, got {self.success_to_go_discount}"
             )
         self.balanced_length = int(balanced_length)
         self._balanced_seed = int(balanced_seed)
@@ -90,16 +100,31 @@ class LIBEROBalancedTerminalDataset(LIBEROPixelRynnHiddenSequenceDataset):
         start = int(entry.start)
         end = start + self.sequence_length
         is_positive = bool(end == entry.episode_length)
+        if "sparse_rewards" in demo:
+            sparse_rewards = np.asarray(demo["sparse_rewards"][start:end], dtype=np.float32)
+        else:
+            sparse_rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
         if self.reward_mode == "per_window_dense":
             # WMPO-style: every step in a positive window labeled 1; negative window all 0
             rewards = np.full((self.sequence_length,), float(is_positive), dtype=np.float32)
+        elif self.reward_mode == "from_hdf5":
+            # Pass-through HDF5 rewards (shaped per-step, e.g. progress-delta).
+            # Falls back to sparse_rewards when no separate rewards field exists.
+            if "rewards" in demo:
+                rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
+            else:
+                rewards = sparse_rewards
         else:
             # sparse: use HDF5 sparse_rewards (typically [0,...,0,1] only at terminal)
-            if "sparse_rewards" in demo:
-                rewards = np.asarray(demo["sparse_rewards"][start:end], dtype=np.float32)
-            else:
-                rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
+            rewards = sparse_rewards
+        success_to_go = np.zeros_like(sparse_rewards, dtype=np.float32)
+        running = 0.0
+        gamma = float(self.success_to_go_discount)
+        for offset in range(self.sequence_length - 1, -1, -1):
+            running = float(sparse_rewards[offset]) + gamma * running
+            success_to_go[offset] = min(running, 1.0)
         item["rewards"] = torch.from_numpy(rewards)
+        item["success_to_go"] = torch.from_numpy(success_to_go)
         item["is_positive_window"] = is_positive
         return item
 

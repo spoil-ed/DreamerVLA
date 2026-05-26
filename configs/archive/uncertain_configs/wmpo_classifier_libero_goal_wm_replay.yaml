@@ -1,0 +1,38 @@
+# LatentSuccessClassifier training config — Phase 3 v2 (WM-replay data).
+# Pos and neg trajectories are chunk-WM imagined; chunk structure matches PPO
+# inference distribution. Failure examples generated via demo-tail-swap.
+classifier:
+  latent_dim: 35840
+  window: 8
+  hidden_dim: 1024
+  num_layers: 8
+  num_heads: 16
+  mlp_ratio: 4.0
+  dropout: 0.1
+
+wm_replay:
+  raw_dir: data/processed_data/libero_goal_no_noops_t_256
+  hidden_dir: data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  chunk_wm_ckpt: data/outputs/worldmodel/rynn_dino_wm_fullhidden/m1024_d6_rollout8_reward32_bs80/fixed_branch_20260523_195333/ckpt/step_00002000.ckpt
+  K: 5
+  num_hist: 3
+  neg_method: swap
+  swap_min_frac: 0.30
+  swap_max_frac: 0.80
+  noise_std: 0.05
+  max_train_demos: null   # all but last few for val
+  val_demos_tail: 32      # last 32 demos held out
+
+train:
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  batch_size: 8
+  max_steps: 20000
+  eval_steps: 500
+  log_every: 50
+  ckpt_dir: data/outputs/dreamervla/outcome_classifier/libero_goal/v2_wm_replay
+  thresh_min: 0.3
+  thresh_max: 1.0
+  thresh_steps: 20
+  stride_train: 8
+  stride_val: 1

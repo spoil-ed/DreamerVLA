@@ -1,7 +1,7 @@
 # @package _global_
 _target_: src.workspace.PixelWMWorkspace
 training:
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10
   device: cuda:0
   # single: one process, optional torch.nn.DataParallel.
   # ddp: launch with torchrun; each GPU/rank gets its own DataLoader shard.
@@ -20,7 +20,7 @@ training:
 
 dataset:
   _target_: src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset
-  hdf5_dir: /home/user01/liops/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
+  hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
   sequence_length: 32
   image_size: 64
   image_keys:

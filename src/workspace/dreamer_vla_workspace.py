@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import copy
 import contextlib
+import json
+import math
 import os
 import pathlib
+import random
 from typing import Any
 
 import hydra
@@ -35,6 +38,8 @@ from src.algorithms.dreamer_vla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
+from src.algorithms.dino_wmpo import dino_wmpo_ppo_step
+from src.algorithms.ppo import dino_wmpo_dense_chunk_step, dino_wmpo_outcome_step
 from src.dataloader import BaseDataset
 from src.models.critic.twohot_critic import ReturnPercentileTracker
 from src.trainer import NopretokenizeSFTDistributedHelper
@@ -56,8 +61,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
     # encoder is frozen — no need to checkpoint it.
     exclude_keys = ("encoder", "_unwrapped_world_model")
 
-    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/dreamervla"
+    default_vla_init_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -82,6 +87,7 @@ class DreamerVLAWorkspace(BaseWorkspace):
         # ── model placeholders ──────────────────────────────────────────────
         self.encoder = None        # RynnVLAEncoder   — frozen feature extractor
         self.policy = None         # VLAPolicy         — Dreamer actor (latent space)
+        self.ref_policy = None     # Frozen actor snapshot for KL/BC anchoring
         self.critic = None         # TwohotCritic      — twohot symlog value function
         self.target_critic = None  # TwohotCritic      — Polyak-averaged target copy
         self.world_model = None    # DreamerV3 WM      — dynamics + reward
@@ -93,6 +99,8 @@ class DreamerVLAWorkspace(BaseWorkspace):
         self.world_model_ema: EMAHelper | None = None
         self.return_tracker: ReturnPercentileTracker | None = None
         self.vq_model = None
+        self._real_relabel_steps: list[dict[str, Any]] = []
+        self._real_relabel_rng = random.Random(int(OmegaConf.select(config, "seed", default=0)) + 1701)
 
     # ──────────────────────────────────────────────────────────────────────
     # Embedding helpers
@@ -171,21 +179,30 @@ class DreamerVLAWorkspace(BaseWorkspace):
             return {
                 key: value
                 for key in (
-                    "images", "obs_embedding", "actions", "rewards", "dones",
+                    "images", "obs_embedding", "actions", "current_actions", "rewards", "dones",
                     "is_first", "is_terminal", "is_last",
+                    "success_to_go", "return_to_go", "return_targets",
                 )
                 if (value := batch.get(key)) is not None
             }
         if isinstance(batch.get("images"), torch.Tensor) and isinstance(batch.get("actions"), torch.Tensor):
             return {
                 key: value
-                for key in ("images", "actions", "rewards", "dones", "is_first", "is_terminal", "is_last")
+                for key in (
+                    "images", "actions", "current_actions", "rewards", "dones", "is_first",
+                    "is_terminal", "is_last",
+                    "success_to_go", "return_to_go", "return_targets",
+                )
                 if (value := batch.get(key)) is not None
             }
         if isinstance(batch.get("tokens"), torch.Tensor) and isinstance(batch.get("actions"), torch.Tensor):
             return {
                 key: value
-                for key in ("tokens", "actions", "rewards", "dones", "is_first", "is_terminal", "is_last")
+                for key in (
+                    "tokens", "actions", "current_actions", "rewards", "dones", "is_first",
+                    "is_terminal", "is_last",
+                    "success_to_go", "return_to_go", "return_targets",
+                )
                 if (value := batch.get(key)) is not None
             }
 
@@ -319,6 +336,128 @@ class DreamerVLAWorkspace(BaseWorkspace):
             "is_first": is_first,
         }}
 
+    def _load_real_relabel_steps(self, cfg: DictConfig) -> list[dict[str, Any]]:
+        relabel_cfg = OmegaConf.select(cfg, "algorithm.real_rollout_relabel", default=None)
+        if relabel_cfg is None or not bool(OmegaConf.select(relabel_cfg, "enabled", default=False)):
+            return []
+        raw_paths = OmegaConf.select(relabel_cfg, "paths", default=None)
+        if raw_paths is None:
+            single_path = OmegaConf.select(relabel_cfg, "path", default=None)
+            raw_paths = [single_path] if single_path else []
+        paths = [pathlib.Path(str(path)).expanduser() for path in list(raw_paths)]
+        if not paths:
+            raise ValueError("algorithm.real_rollout_relabel.enabled=true requires `path` or `paths`.")
+
+        baseline = float(OmegaConf.select(relabel_cfg, "outcome_baseline", default=0.5))
+        positive_weight = float(OmegaConf.select(relabel_cfg, "positive_weight", default=1.0))
+        negative_weight = float(OmegaConf.select(relabel_cfg, "negative_weight", default=1.0))
+        terminal_only = str(OmegaConf.select(relabel_cfg, "reward_placement", default="terminal")).lower() == "terminal"
+        max_steps_per_traj = int(OmegaConf.select(relabel_cfg, "max_steps_per_trajectory", default=0))
+        lower = float(OmegaConf.select(relabel_cfg, "accuracy_lower_bound", default=0.01))
+        upper = float(OmegaConf.select(relabel_cfg, "accuracy_upper_bound", default=0.99))
+        keep_all_failures = bool(OmegaConf.select(relabel_cfg, "keep_all_failures_as_negatives", default=True))
+
+        records: list[dict[str, Any]] = []
+        for path in paths:
+            if not path.is_file():
+                raise FileNotFoundError(f"real rollout relabel jsonl not found: {path}")
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        records.append(json.loads(line))
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in records:
+            groups.setdefault(str(row.get("prompt_key", "")), []).append(row)
+        kept_prompt_keys: set[str] = set()
+        for prompt_key, rows in groups.items():
+            acc = sum(float(bool(row.get("complete", False))) for row in rows) / max(len(rows), 1)
+            if lower <= acc <= upper or (keep_all_failures and acc <= 0.0):
+                kept_prompt_keys.add(prompt_key)
+
+        steps: list[dict[str, Any]] = []
+        skipped_missing_trace = 0
+        for row in records:
+            if str(row.get("prompt_key", "")) not in kept_prompt_keys:
+                continue
+            actor_inputs = row.get("actor_inputs")
+            raw_actions = row.get("raw_actions")
+            old_log_probs = row.get("old_log_probs")
+            actor_step_indices = row.get("actor_step_indices")
+            if not (isinstance(actor_inputs, list) and isinstance(raw_actions, list) and isinstance(old_log_probs, list)):
+                skipped_missing_trace += 1
+                continue
+            n = min(len(actor_inputs), len(raw_actions), len(old_log_probs))
+            if isinstance(actor_step_indices, list):
+                n = min(n, len(actor_step_indices))
+                step_indices = [int(value) for value in actor_step_indices[:n]]
+            else:
+                step_indices = list(range(n))
+            if max_steps_per_traj > 0:
+                n = min(n, max_steps_per_traj)
+                step_indices = step_indices[:n]
+            if n <= 0:
+                continue
+            complete = bool(row.get("complete", False))
+            finish_step = max(1, int(row.get("finish_step", n)))
+            finish_env_index = finish_step - 1
+            terminal_trace_idx = max(
+                (idx for idx, env_idx in enumerate(step_indices) if int(env_idx) <= finish_env_index),
+                default=n - 1,
+            )
+            advantage = float(row.get("acc", float(complete))) - baseline
+            sample_weight = positive_weight if advantage > 0.0 else negative_weight
+            for idx in range(n):
+                if terminal_only and idx != terminal_trace_idx:
+                    continue
+                old_log_prob = float(old_log_probs[idx])
+                if not math.isfinite(old_log_prob):
+                    continue
+                steps.append({
+                    "hidden": actor_inputs[idx],
+                    "action": raw_actions[idx],
+                    "old_log_prob": old_log_prob,
+                    "advantage": advantage,
+                    "weight": sample_weight,
+                    "complete": complete,
+                })
+
+        if self.distributed.is_main_process:
+            print(
+                "[real-relabel] "
+                f"records={len(records)} kept_prompts={len(kept_prompt_keys)}/{len(groups)} "
+                f"steps={len(steps)} skipped_missing_trace={skipped_missing_trace}",
+                flush=True,
+            )
+        return steps
+
+    def _sample_real_relabel_batch(self, algorithm_cfg: DictConfig) -> dict[str, torch.Tensor] | None:
+        steps = getattr(self, "_real_relabel_steps", [])
+        if not steps:
+            return None
+        relabel_cfg = OmegaConf.select(algorithm_cfg, "real_rollout_relabel", default=None)
+        if relabel_cfg is None or float(OmegaConf.select(relabel_cfg, "loss_scale", default=0.0)) <= 0.0:
+            return None
+        batch_size = max(1, int(OmegaConf.select(relabel_cfg, "batch_size", default=64)))
+        replace = len(steps) < batch_size
+        if replace:
+            chosen = [steps[self._real_relabel_rng.randrange(len(steps))] for _ in range(batch_size)]
+        else:
+            chosen = self._real_relabel_rng.sample(steps, batch_size)
+        hidden = torch.tensor([row["hidden"] for row in chosen], dtype=torch.float32, device=self.device)
+        action = torch.tensor([row["action"] for row in chosen], dtype=torch.float32, device=self.device)
+        old_log_prob = torch.tensor([row["old_log_prob"] for row in chosen], dtype=torch.float32, device=self.device)
+        advantage = torch.tensor([row["advantage"] for row in chosen], dtype=torch.float32, device=self.device)
+        weight = torch.tensor([row["weight"] for row in chosen], dtype=torch.float32, device=self.device)
+        return {
+            "hidden": hidden,
+            "action": action,
+            "old_log_prob": old_log_prob,
+            "advantage": advantage,
+            "weight": weight,
+        }
+
     # ── Token DreamerV3 WM visualisation ────────────────────────────────────
 
     def _maybe_build_viz(self) -> None:
@@ -330,12 +469,12 @@ class DreamerVLAWorkspace(BaseWorkspace):
         cfg_path = OmegaConf.select(
             viz_cfg,
             "vqgan_config_path",
-            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
+            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
         )
         ckpt_path = OmegaConf.select(
             viz_cfg,
             "vqgan_ckpt_path",
-            default="/home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
         )
         try:
             from src.utils.vq_image_decoder import load_vq_model
@@ -910,7 +1049,17 @@ class DreamerVLAWorkspace(BaseWorkspace):
                 "`init.encoder_state_ckpt=/path/to/vla.ckpt` or "
                 "`VLA_STATE_CKPT=/path/to/vla.ckpt bash scripts/train_dreamer_vla.sh`."
             )
-        self.policy = hydra.utils.instantiate(policy_cfg).to(self.device)
+        policy_module = hydra.utils.instantiate(policy_cfg).to(self.device)
+        algorithm_cfg_for_ref = OmegaConf.select(cfg, "algorithm", default={})
+        use_ref_policy = (
+            float(OmegaConf.select(algorithm_cfg_for_ref, "kl_coef", default=0.0)) > 0.0
+            or float(OmegaConf.select(algorithm_cfg_for_ref, "actor_bc_to_ref_scale", default=0.0)) > 0.0
+        )
+        if use_ref_policy:
+            self.ref_policy = copy.deepcopy(policy_module).to(self.device)
+            freeze_module(self.ref_policy)
+            self.ref_policy.eval()
+        self.policy = policy_module
         # Policy stays in float32 — its forward casts inputs via .float()
         # internally, so feature dtype is normalised at the call site.
         self.policy = self.distributed.wrap_trainable_module(self.policy)
@@ -924,6 +1073,19 @@ class DreamerVLAWorkspace(BaseWorkspace):
         critic_cfg = OmegaConf.select(cfg, "critic")
         if critic_cfg is None:
             raise ValueError("`critic` config section is required.")
+        tdmpc_value_mode = str(OmegaConf.select(cfg, "algorithm.tdmpc_ac.value_mode", default="state")).lower()
+        if tdmpc_value_mode in {"state_action", "q", "q_za", "q(z,a)"}:
+            critic_cfg = OmegaConf.create(OmegaConf.to_container(critic_cfg, resolve=True))
+            critic_action_dim = int(OmegaConf.select(
+                cfg,
+                "algorithm.tdmpc_ac.action_dim",
+                default=OmegaConf.select(cfg, "policy.action_dim", default=7),
+            ))
+            critic_cfg.hidden_dim = int(critic_cfg.hidden_dim) + critic_action_dim
+            print(
+                "[tdmpc_ac] using state_action critic: "
+                f"critic.hidden_dim={critic_cfg.hidden_dim} (+ action_dim={critic_action_dim})"
+            )
 
         self.critic = hydra.utils.instantiate(critic_cfg).to(self.device)
         self.target_critic = hydra.utils.instantiate(critic_cfg).to(self.device)
@@ -943,6 +1105,47 @@ class DreamerVLAWorkspace(BaseWorkspace):
         if critic_optim_cfg is None:
             raise ValueError("`optim.critic` must be configured.")
         self.critic_optimizer = build_optimizer(self.critic, critic_optim_cfg)
+
+        # ── classifier (only needed by the wmpo_outcome route) ─────────
+        # Loaded frozen — provides the outcome reward (LatentSuccessClassifier
+        # over the imagined latent video). Skipped when update_type != wmpo_outcome.
+        self.classifier = None
+        self.classifier_threshold = 0.5
+        actor_update_kind = str(
+            OmegaConf.select(cfg, "algorithm.update_type", default="dreamer")
+        ).lower()
+        if actor_update_kind == "wmpo_outcome":
+            from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+            classifier_ckpt_path = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
+            if not classifier_ckpt_path:
+                raise ValueError(
+                    "update_type=wmpo_outcome requires init.classifier_state_ckpt — "
+                    "path to a LatentSuccessClassifier .ckpt (model+threshold+config)."
+                )
+            cls_payload = torch.load(str(classifier_ckpt_path), map_location="cpu", weights_only=False)
+            cls_cfg_blob = cls_payload.get("config", {}).get("classifier")
+            if cls_cfg_blob is None:
+                raise RuntimeError(
+                    f"classifier ckpt {classifier_ckpt_path} has no config.classifier blob"
+                )
+            cls_cfg = LatentSuccessClassifierConfig(**cls_cfg_blob)
+            self.classifier = LatentSuccessClassifier(cls_cfg).to(self.device).eval()
+            self.classifier.load_state_dict(cls_payload["model"])
+            freeze_module(self.classifier)
+            override_thresh = OmegaConf.select(
+                cfg, "algorithm.wmpo.classifier_threshold", default=None
+            )
+            self.classifier_threshold = float(
+                override_thresh if override_thresh is not None
+                else cls_payload.get("threshold", 0.5)
+            )
+            if self.distributed.is_main_process:
+                print(
+                    f"[init] classifier loaded from {classifier_ckpt_path}; "
+                    f"threshold={self.classifier_threshold:.4f}; "
+                    f"ckpt F1={cls_payload.get('f1', float('nan')):.4f}",
+                    flush=True,
+                )
 
         # ── return percentile tracker ──────────────────────────────────
         self.return_tracker = ReturnPercentileTracker(
@@ -1002,7 +1205,9 @@ class DreamerVLAWorkspace(BaseWorkspace):
         algorithm_cfg = OmegaConf.select(cfg, "algorithm")
         if algorithm_cfg is None:
             raise ValueError("`algorithm` config section is required.")
+        actor_update_kind = str(OmegaConf.select(algorithm_cfg, "update_type", default="dreamer")).lower()
         optim_cfg = OmegaConf.select(cfg, "optim")
+        self._real_relabel_steps = self._load_real_relabel_steps(cfg)
 
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, "checkpoints"),
@@ -1080,19 +1285,66 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                 ac_batch = self._build_actor_critic_batch(batch)
                                 if ac_batch is not None:
                                     self.world_model.eval()
-                                    ac_metrics = imagine_actor_critic_step(
-                                        policy=self.policy,
-                                        world_model=self.world_model,
-                                        critic=self.critic,
-                                        target_critic=self.target_critic,
-                                        actor_optimizer=self.policy_optimizer,
-                                        critic_optimizer=self.critic_optimizer,
-                                        return_tracker=self.return_tracker,
-                                        obs=ac_batch["obs"],
-                                        device=self.device,
-                                        algorithm_cfg=algorithm_cfg,
-                                        optim_cfg=optim_cfg,
-                                    )
+                                    if actor_update_kind in {"wmpo_outcome", "outcome"}:
+                                        # WMPO/verl reference: chunk-WM imagination +
+                                        # LatentSuccessClassifier outcome reward. Pure
+                                        # imagination — no env rollout needed.
+                                        ac_metrics = dino_wmpo_outcome_step(
+                                            policy=self.policy,
+                                            chunk_world_model=self.world_model,
+                                            classifier=self.classifier,
+                                            classifier_threshold=self.classifier_threshold,
+                                            actor_optimizer=self.policy_optimizer,
+                                            obs=ac_batch["obs"],
+                                            device=self.device,
+                                            algorithm_cfg=algorithm_cfg,
+                                            optim_cfg=optim_cfg,
+                                            ref_policy=self.ref_policy,
+                                        )
+                                    elif actor_update_kind in {"wmpo_dense_chunk", "dense_chunk"}:
+                                        # Chunk-WM-driven dense-reward PPO. The configured
+                                        # world_model._target_ must be ChunkAwareRynnDinoWMWorldModel
+                                        # so self.world_model exposes predict_next_chunk.
+                                        ac_metrics = dino_wmpo_dense_chunk_step(
+                                            policy=self.policy,
+                                            chunk_world_model=self.world_model,
+                                            actor_optimizer=self.policy_optimizer,
+                                            obs=ac_batch["obs"],
+                                            device=self.device,
+                                            algorithm_cfg=algorithm_cfg,
+                                            optim_cfg=optim_cfg,
+                                            ref_policy=self.ref_policy,
+                                        )
+                                    elif actor_update_kind in {"wmpo_ppo", "ppo", "grpo"}:
+                                        ac_metrics = dino_wmpo_ppo_step(
+                                            policy=self.policy,
+                                            world_model=self.world_model,
+                                            actor_optimizer=self.policy_optimizer,
+                                            obs=ac_batch["obs"],
+                                            device=self.device,
+                                            algorithm_cfg=algorithm_cfg,
+                                            optim_cfg=optim_cfg,
+                                            ref_policy=self.ref_policy,
+                                            real_relabel_batch=self._sample_real_relabel_batch(algorithm_cfg),
+                                            critic=self.critic,
+                                            target_critic=self.target_critic,
+                                            critic_optimizer=self.critic_optimizer,
+                                        )
+                                    else:
+                                        ac_metrics = imagine_actor_critic_step(
+                                            policy=self.policy,
+                                            world_model=self.world_model,
+                                            critic=self.critic,
+                                            target_critic=self.target_critic,
+                                            actor_optimizer=self.policy_optimizer,
+                                            critic_optimizer=self.critic_optimizer,
+                                            return_tracker=self.return_tracker,
+                                            obs=ac_batch["obs"],
+                                            device=self.device,
+                                            algorithm_cfg=algorithm_cfg,
+                                            optim_cfg=optim_cfg,
+                                            ref_policy=self.ref_policy,
+                                        )
                                     epoch_actor_losses.append(ac_metrics["actor_loss"])
                                     epoch_critic_losses.append(ac_metrics["critic_loss"])
                                     epoch_returns.append(ac_metrics["returns_mean"])
@@ -1126,6 +1378,16 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         "train_ret_normed_rate": ac_metrics.get("ret_normed_rate", 0.0),
                                         "train_return_scale": ac_metrics["return_scale"],
                                         "train_reward_mean": ac_metrics["reward_mean"],
+                                        "train_success_return_shaping_scale": ac_metrics.get(
+                                            "success_return_shaping_scale", 0.0
+                                        ),
+                                        "train_success_return_mean": ac_metrics.get("success_return_mean", 0.0),
+                                        "train_success_return_delta_mean": ac_metrics.get(
+                                            "success_return_delta_mean", 0.0
+                                        ),
+                                        "train_success_return_delta_std": ac_metrics.get(
+                                            "success_return_delta_std", 0.0
+                                        ),
                                         "train_continue_mean": ac_metrics.get("continue_mean", 1.0),
                                         "train_value_mean": ac_metrics["value_mean"],
                                         "train_critic_target_mean": ac_metrics.get("critic_target_mean", 0.0),
@@ -1135,9 +1397,24 @@ class DreamerVLAWorkspace(BaseWorkspace):
                                         "train_imagine_weight_mean": ac_metrics.get("imagine_weight_mean", 1.0),
                                         "train_actor_grad_norm": ac_metrics["actor_grad_norm"],
                                         "train_critic_grad_norm": ac_metrics["critic_grad_norm"],
+                                        "train_ppo_update_epochs": ac_metrics.get("ppo_update_epochs", 1.0),
+                                        "train_ppo_ratio_mean": ac_metrics.get("ppo_ratio_mean", 1.0),
+                                        "train_ppo_ratio_min": ac_metrics.get("ppo_ratio_min", 1.0),
+                                        "train_ppo_ratio_max": ac_metrics.get("ppo_ratio_max", 1.0),
+                                        "train_ppo_clipfrac": ac_metrics.get("ppo_clipfrac", 0.0),
+                                        "train_real_relabel_applied": ac_metrics.get("real_relabel_applied", 0.0),
+                                        "train_real_relabel_loss": ac_metrics.get("real_relabel_loss", 0.0),
+                                        "train_real_relabel_term": ac_metrics.get("real_relabel_term", 0.0),
+                                        "train_real_relabel_ratio_mean": ac_metrics.get("real_relabel_ratio_mean", 1.0),
+                                        "train_real_relabel_clipfrac": ac_metrics.get("real_relabel_clipfrac", 0.0),
+                                        "train_real_relabel_advantage_mean": ac_metrics.get(
+                                            "real_relabel_advantage_mean", 0.0
+                                        ),
                                     })
                                     for name, value in ac_metrics.items():
-                                        if name.startswith("actor_grad_norm_"):
+                                        if (
+                                            name.startswith("actor_grad_norm_") or name.startswith("tdmpc_")
+                                        ) and isinstance(value, (int, float)):
                                             local_metrics[f"train_{name}"] = value
                                     policy_lr_scheduler.step()
                                     critic_lr_scheduler.step()

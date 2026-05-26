@@ -1,0 +1,71 @@
+_target_: src.workspace.OpenVLAOFTWorkspace
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+trainer:
+  device: auto
+  debug: false
+
+training:
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/openvla_oft_goal
+  resume: false
+  distributed_strategy: ddp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  max_train_steps: 1000
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  checkpoint_every: 500
+  save_components_every: 500
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+
+policy:
+  _target_: src.models.encoder.OpenVLAOFTPolicy
+  model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
+  component_ckpt_dir: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
+  resume_step: 50000
+  torch_dtype: bf16
+  num_images_in_input: 2
+  use_lora: true
+  lora_rank: 32
+  lora_dropout: 0.0
+  use_l1_regression: true
+  use_diffusion: false
+  use_proprio: true
+  use_film: false
+  freeze_vla_backbone: false
+
+dataset:
+  _target_: src.dataloader.OpenVLAOFTRLDSDatasetFactory
+  data_root_dir: /mnt/data/spoil/workspace/DreamerVLA/data/rlds/modified_libero_rlds
+  dataset_name: libero_goal_no_noops
+  shuffle_buffer_size: 100000
+  image_aug: true
+  use_wrist_image: true
+  use_proprio: true
+  batch_size: 1
+  num_workers: 0
+
+optim:
+  grad_clip_norm: 4.0
+  zero_grad_set_to_none: true
+  policy:
+    name: adamw
+    lr: 5.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.0
+
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    monitor_key: train_loss_value
+    mode: min
+    k: 3
+    format_str: 'step={global_step:08d}-train_loss={train_loss_value:.4f}.ckpt'

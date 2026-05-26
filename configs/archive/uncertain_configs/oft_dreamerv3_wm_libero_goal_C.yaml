@@ -1,0 +1,130 @@
+_target_: src.workspace.ActionHiddenWMWorkspace
+training:
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/oft_dreamerv3_wm/libero_goal_C
+  device: cuda:0
+  distributed_strategy: ddp
+  data_parallel: false
+  seed: 7
+  max_steps: 10000
+  num_epochs: null
+  log_every: 20
+  save_every: 1000
+  tqdm_interval_sec: 1.0
+  resume: false
+  resume_path: null
+  resume_strict: true
+  resume_skip_optimizer: false
+  encoder_chunk_size: 8
+  save_final: true
+
+init:
+  vla_ckpt_path: null
+
+encoder:
+  _target_: src.models.encoder.OFTActionHiddenEncoder
+  oft_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
+  resolution: 224
+  action_dim: 7
+  time_horizon: 8
+  action_head_type: oft_l1_regression
+  pool: none
+  freeze_backbone: true
+
+dataset:
+  _target_: src.dataloader.libero_pixel_rynn_hidden_sequence_dataset.LIBEROPixelRynnHiddenSequenceDataset
+  hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
+  hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_oft_action_hidden_c_h8
+  expected_model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
+  expected_encoder_state_ckpt: null
+  expected_time_horizon: 8
+  expected_action_head_type: oft_l1_regression
+  expected_obs_hidden_source: oft_mlpresnet_fc1_relu
+  expected_prompt_style: oft_default
+  expected_history: 0
+  expected_include_state: true
+  expected_rotate_images_180: false
+  sequence_length: 32
+  image_size: 64
+  image_keys:
+  - agentview_rgb
+  - eye_in_hand_rgb
+  hidden_key: obs_embedding
+  load_actor_sequence: false
+  actor_sequence_length: null
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 96
+  num_workers: 8
+  pin_memory: true
+  drop_last: true
+  persistent_workers: true
+  prefetch_factor: 2
+  multiprocessing_context: null
+
+world_model:
+  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
+  obs_dim: 32768
+  action_dim: 7
+  image_channels: 6
+  image_size: 64
+  embed_dim: null
+  encoder_hidden: 2048
+  encoder_layers: 2
+  deter: 8192
+  hidden: 1024
+  stoch: 32
+  classes: 64
+  blocks: 8
+  depth: 64
+  mults:
+  - 2
+  - 3
+  - 4
+  - 4
+  kernel: 5
+  act: silu
+  unimix: 0.01
+  free_nats: 1.0
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  rec_scale: 1.0
+  rew_scale: 1.0
+  con_scale: 1.0
+  hidden_rec_scale: 100.0
+  full_hidden_rec_scale: 0.0
+  actor_sequence_length: 0
+  sequence_decoder_query_dim: 1024
+  sequence_decoder_layers: 1
+  sequence_decoder_units: 2048
+  hidden_decoder_kind: pi0_time_broadcast
+  hidden_decoder_layers: 1
+  hidden_decoder_units: 4096
+  hidden_decoder_d_model: 1024
+  hidden_decoder_nhead: 8
+  hidden_decoder_mem_tokens: 8
+  hidden_decoder_n_time_queries: 8
+  hidden_decoder_joint_broadcast: 1
+  hidden_decoder_token_dim: 4096
+  hidden_decoder_dropout: 0.0
+  reward_bins: 255
+
+optim:
+  lr: 4e-5
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-20
+  weight_decay: 0.0
+  warmup: 1000
+  grad_clip: 100.0
+
+viz:
+  enabled: true
+  every_n_steps: 100
+  num_samples: 2
+  cell_size: 160
+  view_labels: [third, wrist]
+  channels_per_view: 3

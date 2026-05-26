@@ -1,0 +1,17 @@
+# SECONDARY / ABLATION ROUTE:
+#   Chameleon / LaDiWM-style WM is retained for comparison.
+#   Current mainline uses pi0 action-hidden DreamerV3 WM.
+defaults:
+  - archive/libero10_legacy/chameleon_latent_action_wm_libero_10
+  - _self_
+
+_target_: src.workspace.ChameleonLatentWMWorkspace
+training:
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/chameleon_latent_action_wm_libero_goal
+
+init:
+  vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+
+encoder:
+  model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  time_horizon: 5

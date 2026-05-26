@@ -36,8 +36,8 @@ class ChameleonLatentActionWMWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = ("encoder",)
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = "/home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
-    default_output_dir = "/home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/debug"
+    default_vla_init_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/debug"
 
     @staticmethod
     def _first_finite_metric(metrics: dict[str, Any], *keys: str) -> float | None:

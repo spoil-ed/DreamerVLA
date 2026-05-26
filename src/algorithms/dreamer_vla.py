@@ -78,8 +78,9 @@ def world_model_pretrain_step(
         "done",
         "next_obs_image_hiddens", "next_obs_image_token_ids",
         # DreamerV3 sequence WM batches.
-        "images", "tokens", "actions", "rewards", "dones", "is_first",
+        "images", "tokens", "actions", "current_actions", "rewards", "dones", "is_first",
         "is_terminal", "is_last",
+        "success_to_go", "return_to_go", "return_targets",
     ):
         value = batch.get(key)
         if isinstance(value, torch.Tensor):
@@ -112,6 +113,10 @@ def world_model_pretrain_step(
         "rep_kl": _f("rep_kl"),
         "transition_loss": _f("transition_loss"),
         "reward_loss": _f("reward_loss"),
+        "success_return_loss": _f("success_return_loss"),
+        "success_return_pred_mean": _f("success_return_pred_mean"),
+        "success_return_target_mean": _f("success_return_target_mean"),
+        "success_return_mse": _f("success_return_mse"),
         "delta_latent_loss": _f("delta_latent_loss"),
         "action_margin_loss": _f("action_margin_loss"),
         "image_recon_ce_loss": _f("image_recon_ce_loss"),
@@ -181,6 +186,16 @@ def _world_model_critic_input(world_model: nn.Module, latent: Any) -> torch.Tens
         if "critic_input" not in message and "Unknown" not in message:
             raise
     return _world_model_actor_input(world_model, latent)
+
+
+def _world_model_success_return(world_model: nn.Module, latent: Any) -> torch.Tensor:
+    try:
+        return world_model({"mode": "success_return", "latent": latent})
+    except ValueError as exc:
+        message = str(exc)
+        if "success_return" not in message and "Unknown" not in message:
+            raise
+    return world_model({"mode": "return", "latent": latent})
 
 
 def _latent_time_dim(value: Any) -> int:
@@ -464,6 +479,10 @@ def imagine_actor_critic_step(
     actor_bc_ref_scale = float(algorithm_cfg.get("actor_bc_to_ref_scale", 0.0))
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     kl_penalty_kind = str(algorithm_cfg.get("kl_penalty_kind", "kl")).lower()
+    success_return_shaping_scale = float(algorithm_cfg.get("success_return_shaping_scale", 0.0))
+    success_return_shaping_discount = float(
+        algorithm_cfg.get("success_return_shaping_discount", algorithm_cfg.get("ppo_gamma", 1.0))
+    )
     # WMPO-style second KL: π_new vs π_prev (snapshot before previous update step).
     prev_kl_coef = float(algorithm_cfg.get("prev_kl_coef", 0.0))
     use_ref_kl = (ref_policy is not None) and (kl_coef > 0.0)
@@ -675,6 +694,22 @@ def imagine_actor_critic_step(
                 dim=1,
             )
             reward_stack_raw = reward_stack.detach().clone()  # pre-KL WM reward
+            success_return_stack: torch.Tensor | None = None
+            success_return_delta: torch.Tensor | None = None
+            if success_return_shaping_scale != 0.0:
+                success_return_stack = torch.stack(
+                    [_world_model_success_return(world_model, latent).detach().float() for latent in latents],
+                    dim=1,
+                )
+                success_return_delta = (
+                    float(success_return_shaping_discount) * success_return_stack[:, 1:]
+                    - success_return_stack[:, :-1]
+                )
+                reward_stack = reward_stack.clone()
+                reward_stack[:, 1:] = (
+                    reward_stack[:, 1:]
+                    + float(success_return_shaping_scale) * success_return_delta
+                )
             kl_stack_raw: torch.Tensor | None = None
             kl_penalty_mean = torch.zeros((), device=device, dtype=reward_stack.dtype)
             if use_ref_kl and ref_kls:
@@ -1003,6 +1038,23 @@ def imagine_actor_critic_step(
         "reward_post_p10": float(reward_stack[:, :-1].detach().quantile(0.1).cpu()),
         "reward_post_p50": float(reward_stack[:, :-1].detach().quantile(0.5).cpu()),
         "reward_post_p90": float(reward_stack[:, :-1].detach().quantile(0.9).cpu()),
+        "success_return_shaping_scale": float(success_return_shaping_scale),
+        "success_return_shaping_discount": float(success_return_shaping_discount),
+        "success_return_mean": (
+            float(success_return_stack[:, 1:].detach().mean().cpu())
+            if success_return_stack is not None
+            else 0.0
+        ),
+        "success_return_delta_mean": (
+            float(success_return_delta.detach().mean().cpu())
+            if success_return_delta is not None
+            else 0.0
+        ),
+        "success_return_delta_std": (
+            float(success_return_delta.detach().std().cpu())
+            if success_return_delta is not None
+            else 0.0
+        ),
         "kl_p10": float(kl_stack_raw.quantile(0.1).cpu()) if kl_stack_raw is not None else 0.0,
         "kl_p50": float(kl_stack_raw.quantile(0.5).cpu()) if kl_stack_raw is not None else 0.0,
         "kl_p90": float(kl_stack_raw.quantile(0.9).cpu()) if kl_stack_raw is not None else 0.0,
@@ -1047,6 +1099,12 @@ def imagine_actor_critic_step(
             torch.save({
                 "reward_raw": reward_stack_raw.cpu(),
                 "reward_post_kl": reward_stack.detach().cpu(),
+                "success_return": (
+                    success_return_stack.cpu() if success_return_stack is not None else None
+                ),
+                "success_return_delta": (
+                    success_return_delta.cpu() if success_return_delta is not None else None
+                ),
                 "kl": (kl_stack_raw.cpu() if kl_stack_raw is not None else None),
                 "kl_coef": float(kl_coef),
                 "advantages": advantages.detach().cpu(),

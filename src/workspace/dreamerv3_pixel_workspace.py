@@ -189,19 +189,32 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         elif skip_optimizer:
             self._print("[dreamerv3-pixel] skipping optimizer state (training.resume_skip_optimizer=true)")
 
-        self.global_step = int(payload.get("global_step", self.global_step))
-        self.epoch = int(payload.get("epoch", self.epoch))
-        rng = payload.get("rng")
-        if isinstance(rng, dict):
-            torch_state = rng.get("torch")
-            if isinstance(torch_state, torch.Tensor):
-                torch.set_rng_state(torch_state)
-            cuda_state = rng.get("cuda")
-            if torch.cuda.is_available() and isinstance(cuda_state, list) and cuda_state:
-                try:
-                    torch.cuda.set_rng_state_all(cuda_state)
-                except Exception as exc:
-                    self._print(f"[dreamerv3-pixel] warning: could not restore CUDA RNG: {exc}")
+        # ``resume_reset_step`` = warm-start a NEW training run from the ckpt's
+        # model weights only.  global_step / epoch / RNG stay at their
+        # initial (fresh-seed) values so the lr warmup, save-every cadence,
+        # and max_steps budget all behave as a fresh run.  Use this when the
+        # training objective or model topology has changed (e.g. switching
+        # per-step teacher forcing -> chunk_loss with a new mask_obs_token).
+        reset_step = bool(OmegaConf.select(self.cfg, "training.resume_reset_step", default=False))
+        if reset_step:
+            self._print(
+                "[dreamerv3-pixel] resume_reset_step=true: keeping fresh "
+                f"global_step={self.global_step} epoch={self.epoch} and RNG"
+            )
+        else:
+            self.global_step = int(payload.get("global_step", self.global_step))
+            self.epoch = int(payload.get("epoch", self.epoch))
+            rng = payload.get("rng")
+            if isinstance(rng, dict):
+                torch_state = rng.get("torch")
+                if isinstance(torch_state, torch.Tensor):
+                    torch.set_rng_state(torch_state)
+                cuda_state = rng.get("cuda")
+                if torch.cuda.is_available() and isinstance(cuda_state, list) and cuda_state:
+                    try:
+                        torch.cuda.set_rng_state_all(cuda_state)
+                    except Exception as exc:
+                        self._print(f"[dreamerv3-pixel] warning: could not restore CUDA RNG: {exc}")
         self._print(f"[dreamerv3-pixel] resumed at global_step={self.global_step} epoch={self.epoch}")
         return True
 
@@ -325,6 +338,17 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         dist.all_reduce(values, op=dist.ReduceOp.SUM)
         values /= float(self.world_size)
         return {key: float(value) for key, value in zip(keys, values.detach().cpu().tolist())}
+
+    def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:
+        return {
+            "step": f"{self.global_step}/{max_steps}",
+            "wm": float(row["loss"]),
+            "rec": float(row.get("rec_loss", 0.0)),
+            "dyn": float(row.get("dyn_loss", 0.0)),
+            "rep": float(row.get("rep_loss", 0.0)),
+            "mse": float(row.get("image_mse", 0.0)),
+            "psnr": float(row.get("image_psnr", 0.0)),
+        }
 
     def run(self) -> None:
         if self.is_main_process:
@@ -450,16 +474,7 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                                 if k != "_loss"
                             }),
                         }
-                        tepoch.set_postfix(
-                            refresh=False,
-                            step=f"{self.global_step}/{max_steps}",
-                            wm=float(row["loss"]),
-                            rec=float(row["rec_loss"]),
-                            dyn=float(row["dyn_loss"]),
-                            rep=float(row["rep_loss"]),
-                            mse=float(row["image_mse"]),
-                            psnr=float(row["image_psnr"]),
-                        )
+                        tepoch.set_postfix(self._progress_postfix(row, max_steps), refresh=False)
                         if (
                             self.is_main_process
                             and log_handle is not None

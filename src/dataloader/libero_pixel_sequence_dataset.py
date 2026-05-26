@@ -39,6 +39,7 @@ class LIBEROPixelSequenceDataset(BaseDataset):
 
       images:    [T, C, H, W] float32 in the uint8 range [0, 255]
       actions:   [T, A] previous-action convention, actions[0] is zero
+      current_actions: [T, A] action executed from this observation
       rewards:   [T]
       dones:     [T]
       is_first:  [T], always true at the first item of each sampled window
@@ -174,6 +175,7 @@ class LIBEROPixelSequenceDataset(BaseDataset):
         if self.sequence_length > 1:
             prev_actions[1:] = raw_actions[start : end - 1]
         actions = torch.from_numpy(prev_actions)
+        current_actions = torch.from_numpy(raw_actions[start:end].copy())
 
         rewards = torch.from_numpy(np.asarray(demo["rewards"][start:end], dtype=np.float32))
         dones = torch.from_numpy(np.asarray(demo["dones"][start:end], dtype=np.float32))
@@ -183,6 +185,7 @@ class LIBEROPixelSequenceDataset(BaseDataset):
         return {
             "images": images,
             "actions": actions,
+            "current_actions": current_actions,
             "rewards": rewards,
             "dones": dones,
             "is_first": is_first,

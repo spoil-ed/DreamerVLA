@@ -1,0 +1,75 @@
+# LatentSuccessClassifier on LIBERO-goal real pi0 hidden — WMPO-aligned default.
+#
+# Architecture: src.workspace.LatentClassifierWorkspace
+#   ─ dataset: src.dataloader.wmpo_aligned_latent_dataset  (1 pos + 1 neg per demo)
+#   ─ model:   src.models.reward.LatentSuccessClassifier   (head_type = linear)
+#
+# Default head is **linear** (0.57M params, ≈ sklearn LR) because:
+#   * ceiling test 2026-05-25 showed LR / kNN / small MLP all converge to
+#     F1 ≈ 0.91 on this task — see [[dreamervla-classifier-ceiling]].
+#   * 137M Transformer head is a known PAC-Bayes failure mode at n≈1000.
+#
+# Use this config for the production reward model. For the small-Transformer
+# overfit ablation see configs/latent_classifier_libero_goal_small_tf.yaml.
+#
+# Launch:
+#   bash scripts/train_latent_classifier.sh
+# or directly:
+#   CUDA_VISIBLE_DEVICES=6 python -m src.cli.train \
+#       --config-name latent_classifier_libero_goal
+
+_target_: src.workspace.LatentClassifierWorkspace
+
+classifier:
+  latent_dim: 35840
+  window: 8
+  head_type: linear              # linear (default) | mlp2 | transformer
+  # transformer-only knobs — unused for linear but kept for parity with the
+  # LatentSuccessClassifierConfig dataclass (extras are filtered in setup()).
+  hidden_dim: 256
+  num_layers: 4
+  num_heads: 4
+  mlp_ratio: 2.0
+  dropout: 0.3
+
+data:
+  success_dir_raw: data/processed_data/libero_goal_no_noops_t_256
+  success_dir_hidden: data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  failure_dir_raw: data/processed_data/libero_goal_no_noops_t_256_failures
+  failure_dir_hidden: data/processed_data/libero_goal_no_noops_t_256_failures_pi0_legacy_action_hidden_vla_policy_h2
+  window: 8
+  stride_train: 8     # WMPO STRIDE_TRAIN=8: random earlier window ∈ {T-8, T-16, ...}
+  stride_val: 1       # WMPO STRIDE_VAL=1: all stride-1 earlier windows
+
+training:
+  out_dir: data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_linear
+  device: cuda
+  seed: 0
+  resume: false
+
+  # ---- optimization ----
+  max_steps: 4000
+  batch_size: 32                 # ~1:1.3 in-batch pos:neg given dataset composition
+  val_batch_size: 256
+  num_workers: 2
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  label_smoothing: 0.0
+  class_balanced: false          # WMPO uses unweighted CE; flip to true if you need
+                                 # to push toward the rare-positive class.
+
+  # ---- cadence ----
+  eval_every: 200
+  ckpt_every: 500
+  log_every: 50
+
+  # ---- window-level F1 (WMPO _evaluate_terminal_model sweep) ----
+  thresh_min: 0.3
+  thresh_max: 1.0
+  thresh_steps: 20
+
+  # ---- episode-level F1 (WMPO predict_success: stride-1 + any-positive) ----
+  episode_eval_enabled: true
+  episode_eval_min_steps: 64
+  episode_eval_stride: 1
+  episode_eval_batch: 256

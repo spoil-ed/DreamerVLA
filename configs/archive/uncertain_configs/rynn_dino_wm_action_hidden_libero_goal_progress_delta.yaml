@@ -1,0 +1,126 @@
+# Fine-tune the m1024 RynnDino WM with a continuous progress-delta reward head.
+#
+# Initialised from the existing m1024 binary-reward checkpoint at
+#   data/outputs/worldmodel/rynn_dino_wm/.../ckpt/latest.ckpt
+# but writes to a NEW output directory so the original m1024 ckpt is preserved.
+#
+# Key differences from rynn_dino_wm_action_hidden_libero_goal.yaml:
+#   * dataset.hdf5_dir -> *_pi06_progress_delta (telescoping success-to-go deltas, Σr=1.0 per success)
+#   * dataset.reward_mode -> from_hdf5 (pass-through, do not synthesize per_window_dense)
+#   * world_model.model_dim -> 1024 (match the m1024 init ckpt; default config is 384)
+#   * world_model.reward_head_type -> scalar (MSE regression in [0,1] instead of BCE 0/1)
+#   * world_model.reward_loss_scale -> 2000.0 (compensate for small absolute target magnitude ~0.007)
+#   * world_model.freeze_input_embeddings -> true (encoder fixed; predictor + reward head adapt)
+#   * training.resume -> true, resume_path -> m1024 step_00002000.ckpt, resume_skip_optimizer -> true
+#   * training.max_steps -> 4000 (= 2000 original + 2000 fine-tune steps after resume)
+_target_: src.workspace.RynnDinoWMWorkspace
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+training:
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_action_hidden/action_hidden_libero_goal_m1024_progress_delta/manual
+  device: cuda:0
+  distributed_strategy: single
+  data_parallel: false
+  seed: 7
+  # global_step is preserved across resume; we want 2000 fine-tune steps on top
+  # of the 2000-step m1024 init, so set the absolute cap to 4000.
+  max_steps: 4000
+  num_epochs: null
+  log_every: 20
+  save_every: 200
+  tqdm_interval_sec: 1.0
+  resume: true
+  resume_path: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_fullhidden/m1024_d6_rollout8_reward32_bs80/fixed_branch_20260523_195333/ckpt/step_00002000.ckpt
+  # Non-strict: the m1024 ckpt was trained with reward_head_type=binary which
+  # registered a `reward_pos_weight` buffer. We're switching to scalar (MSE)
+  # head which doesn't need that buffer. All other shared params load fine.
+  resume_strict: false
+  resume_skip_optimizer: true
+  save_final: true
+
+dataset:
+  _target_: src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_progress_delta
+  hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  expected_model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
+  expected_encoder_state_ckpt: null
+  expected_time_horizon: 5
+  expected_action_head_type: legacy
+  expected_obs_hidden_source: action_query
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  # NEW: pass-through HDF5 rewards (per-step delta-progress signal already shaped).
+  reward_mode: from_hdf5
+  balanced_length: 50000
+  balanced_seed: 0
+  sequence_length: 32
+  image_size: 64
+  image_keys: [agentview_rgb, eye_in_hand_rgb]
+  hidden_key: obs_embedding
+  load_actor_sequence: false
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+  persistent_workers: true
+  prefetch_factor: 2
+  multiprocessing_context: null
+
+world_model:
+  _target_: src.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel
+  obs_dim: 35840
+  action_dim: 7
+  token_count: 35
+  token_dim: 1024
+  # MUST match the m1024 init ckpt's hidden dim.
+  model_dim: 1024
+  depth: 6
+  heads: 8
+  mlp_dim: 2048
+  dropout: 0.1
+  num_hist: 3
+  num_pred: 1
+  max_seq_len: 128
+  hidden_loss_scale: 1.0
+  cosine_loss_scale: 0.1
+  rollout_loss_scale: 1.0
+  rollout_horizon: 8
+  rollout_context: null
+  # NEW: scalar MSE regression to continuous [0,1] delta-progress reward.
+  reward_head_type: scalar
+  # Target mean ~ 0.007 -> MSE landscape is tiny. Scale up so reward
+  # gradients are on par with the per-step latent/rollout losses
+  # (which are O(1e-2)) and dominate fine-tuning.
+  reward_loss_scale: 2000.0
+  reward_hidden_dim: 1024
+  # No special init for scalar regression; bias starts at 0 (mean target ~ 0.007 so close).
+  reward_init_logit: 0.0
+  reward_pos_weight: null
+  # NEW: freeze obs/action projection + position embedding, leave predictor + reward head trainable.
+  freeze_input_embeddings: true
+  return_predictions: false
+
+optim:
+  # Lower LR for fine-tuning (5x smaller than the 5e-5 used in pre-training).
+  lr: 1e-5
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-20
+  weight_decay: 0.0
+  warmup: 200
+  grad_clip: 100.0
+
+viz:
+  enabled: false

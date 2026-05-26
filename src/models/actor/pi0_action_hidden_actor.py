@@ -213,20 +213,31 @@ class Pi0ActionHiddenActor(BaseActor):
         hidden = batch["hidden"]
         action_chunk = self._action_chunk(hidden)
         dist, mean, std = self._normal_from_action_chunk(action_chunk)
+        chunk_dist, mean_chunk, std_chunk = self._normal_from_full_action_chunk(action_chunk)
         if mode == "sample":
             deterministic = bool(batch.get("deterministic", False))
             if bool(batch.get("return_chunk", False)):
-                action = action_chunk if deterministic else action_chunk
-                log_prob = torch.zeros(mean.shape[0], device=mean.device, dtype=mean.dtype)
-                return action, log_prob, {"mean": mean, "std": std, "action_chunk": action_chunk}
+                action = mean_chunk if deterministic else chunk_dist.rsample()
+                log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
+                return action, log_prob, {
+                    "mean": mean,
+                    "std": std,
+                    "mean_chunk": mean_chunk,
+                    "std_chunk": std_chunk,
+                    "action_chunk": mean_chunk,
+                }
             action = mean if deterministic else dist.rsample()
             log_prob = dist.log_prob(action).sum(dim=-1)
-            return action, log_prob, {"mean": mean, "std": std, "action_chunk": action_chunk}
+            return action, log_prob, {"mean": mean, "std": std, "action_chunk": mean_chunk}
         if mode == "evaluate":
             action = batch["action"]
+            if action.ndim == 3:
+                log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
+                entropy = chunk_dist.entropy().sum(dim=(-1, -2))
+                return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
             log_prob = dist.log_prob(action).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1)
-            return log_prob, entropy, {"mean": mean, "std": std}
+            return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
         raise ValueError(f"Unknown Pi0ActionHiddenActor forward mode: {mode!r}")
 
 

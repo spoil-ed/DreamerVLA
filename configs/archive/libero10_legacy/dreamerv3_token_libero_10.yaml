@@ -1,7 +1,7 @@
 # @package _global_
 _target_: src.workspace.TokenWMWorkspace
 training:
-  out_dir: /home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_token/dreamerv3_token_libero_10
+  out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_token/dreamerv3_token_libero_10
   device: cuda:0
   data_parallel: true
   seed: 7
@@ -17,8 +17,8 @@ training:
 
 dataset:
   _target_: src.dataloader.libero_token_sequence_dataset.LIBEROTokenSequenceDataset
-  config_path: /home/user01/liops/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq.yaml
-  vocab_config_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10/config.json
+  config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_seq.yaml
+  vocab_config_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_10/config.json
   history: 1
   batch_length: 31
   replay_context: 1
@@ -88,6 +88,6 @@ viz:
   num_samples: 4
   cell_size: 192
   view_labels: [third, wrist]
-  vqgan_config_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
-  vqgan_ckpt_path: /home/user01/liops/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+  vqgan_config_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml
+  vqgan_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt
   device: null

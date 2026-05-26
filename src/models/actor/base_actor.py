@@ -25,6 +25,16 @@ class BaseActor(nn.Module, ABC):
         std = log_std.exp()
         return Normal(mean, std), mean, std
 
+    def _normal_from_full_action_chunk(self, action_chunk: torch.Tensor) -> tuple[Normal, torch.Tensor, torch.Tensor]:
+        mean = action_chunk.float()
+        log_std = (
+            self.log_std.clamp(min=self.min_log_std, max=self.max_log_std)
+            .view(1, 1, -1)
+            .expand_as(mean)
+        )
+        std = log_std.exp()
+        return Normal(mean, std), mean, std
+
     @abstractmethod
     def forward(self, batch: dict[str, Any]) -> Any:
         raise NotImplementedError

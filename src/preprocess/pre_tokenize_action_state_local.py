@@ -274,6 +274,11 @@ if __name__ == "__main__":
             "the full image list as one frame."
         ),
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-tokenize samples even when the output pkl already exists.",
+    )
     args = parser.parse_args()
 
     item_processor = ItemProcessor(target_size=args.target_size, tokenizer=args.tokenizer)
@@ -291,22 +296,31 @@ if __name__ == "__main__":
 
     num_per_rank = math.ceil(num / splits)
 
-    try:
-        with open(os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "r") as f:
-            start_idx = int(f.read()) + 1
-        print(f"resume from {start_idx}")
-    except Exception:
-        start_idx = num_per_rank * rank
-        print(f"start from {start_idx}")
-
+    rank_start_idx = num_per_rank * rank
     end_idx = min(num_per_rank * (rank + 1), len(ori_contents))
+    progress_path = os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt")
+    try:
+        with open(progress_path, "r") as f:
+            progress = f.read().strip()
+        if progress == "finished":
+            print(f"rank {rank}: progress is finished; scan existing pkl only")
+        else:
+            print(f"rank {rank}: previous progress={progress}; scan existing pkl for holes")
+    except Exception:
+        print(f"rank {rank}: no progress file; scan existing pkl from {rank_start_idx}")
+
     derived_count = 0
-    for i in range(start_idx, end_idx):
+    skipped_existing = 0
+    for i in range(rank_start_idx, end_idx):
         if i % 10 == 0:
             print(f"{i}/{end_idx}  (next_obs derived so far: {derived_count})")
 
         record = None
         pkl_path = os.path.join(save_dir, f"{i}.pkl")
+        if os.path.exists(pkl_path) and not args.overwrite:
+            skipped_existing += 1
+            continue
+
         try:
             raw_item = ori_contents[i]
 
@@ -401,4 +415,15 @@ if __name__ == "__main__":
             else:
                 f.write(f"{i}")
 
-    print(f"rank {rank}: done. derived next_obs for {derived_count} samples out of {end_idx - start_idx}.")
+    missing_after = [
+        i
+        for i in range(rank_start_idx, end_idx)
+        if not os.path.exists(os.path.join(save_dir, f"{i}.pkl"))
+    ]
+    with open(progress_path, "w") as f:
+        f.write("finished" if not missing_after else str(max(rank_start_idx - 1, missing_after[0] - 1)))
+
+    print(
+        f"rank {rank}: done. skipped existing {skipped_existing}; "
+        f"remaining missing {len(missing_after)}; derived next_obs for {derived_count} samples."
+    )
