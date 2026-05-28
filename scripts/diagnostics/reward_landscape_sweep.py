@@ -33,11 +33,11 @@ from scripts.training.train_frozen_wm_actor_critic import (
     actor_critic_obs,
     build_offline_loader,
 )
-from src.algorithms.dreamer_vla import imagine_actor_critic_step
-from src.models.critic.twohot_critic import ReturnPercentileTracker
-from src.utils.optim import build_optimizer
-from src.utils.seed import set_seed
-from src.utils.torch_utils import freeze_module
+from dreamer_vla.algorithms.dreamer_vla import imagine_actor_critic_step
+from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamer_vla.utils.optim import build_optimizer
+from dreamer_vla.utils.seed import set_seed
+from dreamer_vla.utils.torch_utils import freeze_module
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml"
         ),
     )
     p.add_argument("--world-model-ckpt", required=True)

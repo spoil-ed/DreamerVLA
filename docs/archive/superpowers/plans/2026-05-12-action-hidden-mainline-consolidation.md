@@ -67,7 +67,7 @@ Add comments to the most visible secondary entry points so shell/config users se
 Run:
 
 ```bash
-python -m src.cli.train --config-name rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed --help
+python -m dreamer_vla.cli.train --config-name rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed --help
 ```
 
 Expected: exits successfully or prints Hydra/CLI usage without requiring long training.

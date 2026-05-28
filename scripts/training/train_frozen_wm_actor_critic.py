@@ -27,16 +27,16 @@ from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa
     obs_to_action_hidden,
     save_checkpoint,
 )
-from src.algorithms.dreamer_vla import (  # noqa: E402
+from dreamer_vla.algorithms.dreamer_vla import (  # noqa: E402
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
-from src.env.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
-from src.models.critic.twohot_critic import ReturnPercentileTracker  # noqa: E402
-from src.utils.fixed_step_video import FixedStepVideoRecorder  # noqa: E402
-from src.utils.optim import build_optimizer  # noqa: E402
-from src.utils.seed import set_seed  # noqa: E402
-from src.utils.torch_utils import freeze_module  # noqa: E402
+from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
+from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker  # noqa: E402
+from dreamer_vla.utils.fixed_step_video import FixedStepVideoRecorder  # noqa: E402
+from dreamer_vla.utils.optim import build_optimizer  # noqa: E402
+from dreamer_vla.utils.seed import set_seed  # noqa: E402
+from dreamer_vla.utils.torch_utils import freeze_module  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
         ),
     )
     parser.add_argument("--out-dir", required=True)
@@ -236,11 +236,11 @@ def build_offline_loader(
     # If WMPO-style balanced sampler requested, swap dataset class to the
     # terminal-aware variant that exposes positive_indices / negative_indices.
     if bool(getattr(args, "use_balanced_sampler", False)):
-        cfg.dataset._target_ = "src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+        cfg.dataset._target_ = "dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
     dataset = hydra.utils.instantiate(cfg.dataset)
     use_balanced = bool(getattr(args, "use_balanced_sampler", False))
     if use_balanced:
-        from src.dataloader.libero_balanced_terminal_dataset import (
+        from dreamer_vla.dataset.libero_balanced_terminal_dataset import (
             BalancedTerminalSampler,
         )
 

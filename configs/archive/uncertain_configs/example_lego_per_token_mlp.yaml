@@ -6,13 +6,13 @@
 # Run with: --config-name example_lego_per_token_mlp
 #
 # Why this style:
-#   * Building blocks (src/models/world_model/blocks/) are atomic and reusable
+#   * Building blocks (dreamer_vla/models/world_model/blocks/) are atomic and reusable
 #   * Swap a slot by changing only the cfg, no Python code change
 #   * Old block classes are preserved forever — adding a new block doesn't
 #     modify existing ones (LEGO discipline)
 
 defaults: []
-_target_: src.workspace.JointDreamerVLAWorkspace
+_target_: dreamer_vla.runners.JointDreamerVLARunner
 seed: 7
 
 # (truncated) — see configs/dreamer_vla_libero_goal_pi0_legacy_action_hidden_head_actor_v4b.yaml
@@ -20,7 +20,7 @@ seed: 7
 # This file only demonstrates the WM block-composition pattern.
 
 world_model:
-  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
+  _target_: dreamer_vla.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
   obs_dim: 35840          # 5×7×1024 = pi0 legacy action_hidden
   action_dim: 7
   image_channels: 6
@@ -62,7 +62,7 @@ world_model:
   # Swap this whole block with a different _target_ to change the decoder.
   # The WM constructor receives an nn.Module directly and uses it.
   hidden_decoder:
-    _target_: src.models.world_model.dreamerv3_torch.PerTokenMLPHead
+    _target_: dreamer_vla.models.world_model.dreamerv3_torch.PerTokenMLPHead
     in_dim: 10240         # = deter (8192) + stoch*classes (32*64=2048)
     n_tokens: 35
     token_dim: 1024
@@ -75,7 +75,7 @@ world_model:
 #
 # ResMLPHead (wider ResNet):
 #   hidden_decoder:
-#     _target_: src.models.world_model.common.ResMLPHead
+#     _target_: dreamer_vla.models.world_model.common.ResMLPHead
 #     in_dim: 10240
 #     out_dim: 35840
 #     layers: 4
@@ -84,7 +84,7 @@ world_model:
 #
 # Pi0-style transformer decoder:
 #   hidden_decoder:
-#     _target_: src.models.world_model.dreamerv3_torch.Pi0StyleHiddenDecoder
+#     _target_: dreamer_vla.models.world_model.dreamerv3_torch.Pi0StyleHiddenDecoder
 #     in_dim: 10240
 #     out_dim: 35840
 #     layers: 4

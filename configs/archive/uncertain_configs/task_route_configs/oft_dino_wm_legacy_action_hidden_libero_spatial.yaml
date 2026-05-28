@@ -1,5 +1,5 @@
 defaults:
-  - oft_dino_wm_legacy_action_hidden_libero_goal
+  - /archive/uncertain_configs/oft_dino_wm_legacy_action_hidden_libero_goal
   - _self_
 
 training:

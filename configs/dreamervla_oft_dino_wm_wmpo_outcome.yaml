@@ -3,7 +3,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: src.workspace.JointDreamerVLAWorkspace
+_target_: dreamer_vla.runners.JointDreamerVLARunner
 seed: 7
 
 hydra:
@@ -51,7 +51,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.openvla_oft.hdf5_reward_dir}
   hidden_dir: ${task.openvla_oft.action_hidden_dir}
   expected_model_path: ${task.openvla_oft.ckpt_path}

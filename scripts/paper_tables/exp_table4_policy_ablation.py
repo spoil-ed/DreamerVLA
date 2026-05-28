@@ -73,12 +73,12 @@ def _imagined_return(payload: dict) -> float | None:
 def cmd_plan(args: argparse.Namespace) -> int:
     for key, spec in VARIANTS.items():
         env = {
-            "CONFIG_NAME": args.config,
+            "CONFIG": args.config,
             "OUT_DIR": str(Path(args.out_dir) / key),
             **spec["env"],
         }
         code = run_or_print(
-            ["bash", "scripts/train_dreamer_vla.sh", *spec["overrides"]],
+            ["bash", "scripts/train_dreamervla.sh", *spec["overrides"]],
             env=env,
             execute=args.execute,
         )

@@ -24,7 +24,7 @@ echo "===== ${RUN} start ====="; date
 echo "init from: ${WM_INIT}"
 echo "OUT:       ${OUT}"
 
-python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 --master-port=29502 -m src.cli.train \
+python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 --master-port=29502 -m dreamer_vla.cli.train \
   --config-name dreamer_vla_libero_goal_pi0_legacy_action_hidden_head_actor \
   training.out_dir="$OUT" \
   training.run_actor_critic_phase=false \

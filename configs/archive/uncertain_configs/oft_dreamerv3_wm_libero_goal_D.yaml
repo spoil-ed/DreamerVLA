@@ -1,4 +1,4 @@
-_target_: src.workspace.ActionHiddenWMWorkspace
+_target_: dreamer_vla.runners.ActionHiddenWMRunner
 training:
   out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/oft_dreamerv3_wm/libero_goal_D
   device: cuda:0
@@ -21,7 +21,7 @@ init:
   vla_ckpt_path: null
 
 encoder:
-  _target_: src.models.encoder.OFTActionHiddenEncoder
+  _target_: dreamer_vla.models.encoder.OFTActionHiddenEncoder
   oft_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
   resolution: 224
   action_dim: 7
@@ -31,7 +31,7 @@ encoder:
   freeze_backbone: true
 
 dataset:
-  _target_: src.dataloader.libero_pixel_rynn_hidden_sequence_dataset.LIBEROPixelRynnHiddenSequenceDataset
+  _target_: dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset.LIBEROPixelRynnHiddenSequenceDataset
   hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
   hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_oft_action_hidden_d_h8
   expected_model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
@@ -66,7 +66,7 @@ dataloader:
   multiprocessing_context: null
 
 world_model:
-  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
+  _target_: dreamer_vla.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
   obs_dim: 32768
   action_dim: 7
   image_channels: 6

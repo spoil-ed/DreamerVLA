@@ -21,7 +21,7 @@ Single GPU. Usage example::
     CUDA_VISIBLE_DEVICES=7 \\
         /home/user01/miniconda3/envs/dreamervla/bin/python -u \\
         scripts/collect_online_rollouts_for_classifier.py \\
-            --config configs/dreamervla_pi0_action_hidden_head_actor.yaml \\
+            --config configs/online_wmpo_outcome_libero_goal.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
             --vla-ckpt-path data/ckpts/VLA_model_256/libero_goal \\
             --encoder-state-ckpt data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt \\
@@ -54,10 +54,10 @@ from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa
     load_world_model_state,
     obs_to_action_hidden,
 )
-from src.dataloader.online_rollout_dumper import RolloutDumper  # noqa: E402
-from src.env.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
-from src.utils.seed import set_seed  # noqa: E402
-from src.utils.torch_utils import freeze_module  # noqa: E402
+from dreamer_vla.dataset.online_rollout_dumper import RolloutDumper  # noqa: E402
+from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
+from dreamer_vla.utils.seed import set_seed  # noqa: E402
+from dreamer_vla.utils.torch_utils import freeze_module  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

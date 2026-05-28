@@ -37,10 +37,10 @@ from scripts.training.train_online_pi0_action_hidden_dreamervla import (
     load_world_model_state,
     obs_to_action_hidden,
 )
-from src.env.train_env import DreamerVLAOnlineTrainEnv
-from src.utils.seed import set_seed
-from src.utils.torch_utils import freeze_module
-from src.models.world_model.dreamerv3_torch import DreamerV3LatentState
+from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv
+from dreamer_vla.utils.seed import set_seed
+from dreamer_vla.utils.torch_utils import freeze_module
+from dreamer_vla.models.world_model.dreamerv3_torch import DreamerV3LatentState
 
 
 def parse_args():
@@ -48,7 +48,7 @@ def parse_args():
     p.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml"
         ),
     )
     p.add_argument(

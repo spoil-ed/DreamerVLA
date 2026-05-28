@@ -59,15 +59,14 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
                               │
                               ▼
 ┌──────────────── Stage 1: pi0 VLA action head SFT ────────────────┐
-│ Config:   pretokenize_vla_libero_goal_pi0_query.yaml             │
-│ Script:   scripts/pretokenize_train_vla.sh                       │
+│ Config:   vla_pi0_query.yaml                                     │
+│ Script:   scripts/train_vla.sh                                   │
 │ 输出:     frozen VLA ckpt, action_head_type=pi0_query             │
 └───────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────── Stage 2: 预计算 action-hidden sidecar ───────────────┐
-│ Script: scripts/run_pi0_query_hidden_pipeline.sh                 │
-│        PIPELINE_STAGE=preprocess                                 │
+│ Script: scripts/preprocess/preprocess_rynn_pixel_hidden.py       │
 │ obs + language + state                                           │
 │   -> shared VLA backbone + pi0 action-query block                │
 │   -> action_hidden [H, 1024]                                     │
@@ -76,13 +75,11 @@ Dreamer-VLA 是一个结合 VLA（Vision-Language-Action）编码器与 Dreamer 
                               │
                               ▼
 ┌──────────── Stage 3: frozen action-hidden DreamerV3 WM ──────────┐
-│ Config:    rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_ │
-│            precomputed.yaml                                      │
-│ Script:    scripts/train_pi0_action_hidden_dreamerv3_wm.sh       │
-│ Workspace: ActionHiddenWMWorkspace                               │
-│ Model:     DreamerV3PixelRynnBackboneWorldModel                  │
-│ 学习:      RSSM posterior/transition, hidden decoder, reward,     │
-│            continue, optional image decoder                       │
+│ Config:    world_model_dinowm_chunk.yaml                         │
+│ Script:    scripts/train_wm.sh                                   │
+│ Runner: RynnDinoWMRunner                                   │
+│ Model:     ChunkAwareRynnDinoWMWorldModel                        │
+│ 学习:      chunk transition, hidden reconstruction, reward        │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,7 +95,7 @@ joint finetune 需要让 WM loss 和 VLA action loss 同时作用到共享 backb
 
 **3. DreamerVLA actor-critic 当前走 action-hidden head**
 
-当前 actor 配置是 `configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml`，脚本入口是 `scripts/run_pi0_action_hidden_reconstruct_actor.sh` 或 `scripts/train_dreamer_vla.sh`。
+当前 actor 配置是 `configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml`，脚本入口是 `scripts/train_dreamervla.sh`。
 
 **4. pixel WM / token WM / LaDiWM 是 secondary**
 
@@ -112,13 +109,13 @@ joint finetune 需要让 WM loss 和 VLA action loss 同时作用到共享 backb
 
 ```text
 DreamerVLA/
+├── dreamer_vla/    # Python 源码包；runner/model/dataset/algorithm 都在这里
 ├── configs/        # Hydra 实验配置；当前主线和历史 ablation 见 configs/README.md
 ├── scripts/        # 训练、评估、预处理、诊断入口；稳定入口见 scripts/README.md
-├── src/            # Python 源码包；workspace/model/dataloader/algorithm 都在这里
+├── tests/          # unit_tests / e2e_tests
 ├── docs/           # 架构说明、实验结论、发布结构说明
 ├── data/           # 运行时数据、权重、输出；被 gitignore 忽略
-├── LIBERO/         # 本地 LIBERO checkout；被 gitignore 忽略
-└── dependencies/   # 本地第三方依赖 checkout / wheel；被 gitignore 忽略
+└── third_party/    # LIBERO / OpenVLA-OFT / robosuite 等本地依赖；被 gitignore 忽略
 ```
 
 当前 LIBERO-goal / pi0 action-hidden 主线要求 VLA base、pi0 VLA action head、action-hidden sidecar、`action_head_type=pi0_query` 和 `time_horizon` 完全一致；具体路径和约束见 `configs/README.md`。
@@ -126,45 +123,40 @@ DreamerVLA/
 ```text
 DreamerVLA/
 ├── configs/                        # 实验配置 (Hydra YAML)
-│   ├── pretokenize_vla_libero_goal.yaml
-│   ├── pretokenize_vla_libero_goal_pi0_query.yaml
-│   ├── rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml
+│   ├── vla_pi0_query.yaml
+│   ├── world_model_dinowm_chunk.yaml
+│   ├── dreamervla_rynn_dino_wm_wmpo_outcome.yaml
 │   ├── eval_libero_vla.yaml
 │   └── ...
 ├── data/                           # 运行时数据（不入 git）
 │   ├── ckpts/                      # 模型权重
-│   ├── configs/                    # 预处理生成的训练配置
-│   ├── libero/                     # LIBERO 原始数据集
-│   ├── processed_data/             # 预处理中间产物
+│   ├── dataset/                    # LIBERO / CALVIN / 预处理数据 / metainfo
 │   └── outputs/                    # 训练输出（checkpoint, log）
 ├── docs/                           # 技术文档
-├── LIBERO/                         # LIBERO 基准本地 checkout
+├── third_party/                    # 本地第三方 checkout / wheel
+│   ├── LIBERO/                      # LIBERO 基准本地 checkout
+│   ├── openvla-oft/                # 官方 OpenVLA-OFT 评估代码
+│   └── openvla-oft-lightweight/    # DreamerVLA 内部轻量兼容导入树
 ├── scripts/                        # 训练 / 预处理 / 评估入口脚本（薄 wrapper）
-│   ├── eval_libero.sh              # LIBERO 评估
 │   ├── eval_libero_vla.sh          # VLA / Dreamer checkpoint LIBERO 评估
-│   ├── prepare_data.sh             # 一键数据预处理
-│   ├── download_hf.sh              # 权重下载脚本
-│   ├── install.sh                  # 环境安装脚本
-│   ├── pretokenize_train_vla.sh    # VLA 训练
 │   ├── train_wm.sh                 # 统一 World Model 训练入口
-│   ├── train_dreamer_vla.sh        # Dreamer-VLA 训练
+│   ├── train_dreamervla.sh         # Dreamer-VLA 训练
 │   └── preprocess/                 # 各步骤预处理脚本
-├── src/                            # 源代码
+├── dreamer_vla/                            # 源代码
 │   ├── algorithms/                 # Dreamer-VLA, PPO/GRPO
 │   ├── cli/                        # scripts/ 对应的命令行实现
-│   ├── dataloader/                 # 数据集加载器
-│   ├── env/                        # LIBERO 环境封装
+│   ├── dataset/                    # 数据集加载器和在线 rollout dumper
+│   ├── envs/                       # LIBERO 环境封装
 │   ├── models/                     # 模型定义
+│   │   ├── actor/                  # Actor / policy 网络
 │   │   ├── chameleon_model/        # Chameleon 视觉语言模型
 │   │   ├── encoder/                # RynnVLA 编码器封装
 │   │   ├── world_model/            # DreamerV3 / Chameleon WM
-│   │   ├── critic/                 # Critic 网络
-│   │   └── vla_policy.py           # Actor 策略网络
-│   ├── preprocess/                 # 数据预处理逻辑
+│   │   └── critic/                 # Critic 网络
+│   ├── preprocess/                 # 数据预处理逻辑和 xllmx 预处理适配
 │   ├── trainer/                    # 分布式训练器
 │   ├── utils/                      # 工具函数
-│   ├── workspace/                  # 实验 Workspace
-│   └── xllmx/                      # 外部 LLM 集成模块
+│   └── runners/                    # 实验 Runner
 ├── pyproject.toml                  # 包配置
 ├── requirements.txt                # Python 依赖
 └── README.md                       # 本文件
@@ -247,8 +239,8 @@ pip install -r requirements.txt
 **解决方法**：
 
 ```bash
-# 如果 WMPO 仓库中有 dependencies/egl_probe 目录，则从那里安装
-cd /home/user01/yuxinglei/workspace/WMPO/dependencies/egl_probe
+# 如果 WMPO 仓库中有 third_party/egl_probe 目录，则从那里安装
+cd /home/user01/yuxinglei/workspace/WMPO/third_party/egl_probe
 
 # 修复 cmake 版本要求
 sed -i 's/cmake_minimum_required(VERSION 2.8.12)/cmake_minimum_required(VERSION 3.5)/' \
@@ -290,12 +282,12 @@ pip install flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x
 # ColossalAI
 pip install colossalai
 
-# TensorNVMe（如果 WMPO 仓库中有 dependencies/TensorNVMe）
-cd /home/user01/yuxinglei/workspace/WMPO/dependencies/TensorNVMe
+# TensorNVMe（如果 WMPO 仓库中有 third_party/TensorNVMe）
+cd /home/user01/yuxinglei/workspace/WMPO/third_party/TensorNVMe
 pip install -e .
 
 # NVIDIA APEX（从源码编译）
-cd /home/user01/yuxinglei/workspace/WMPO/dependencies
+cd /home/user01/yuxinglei/workspace/WMPO/third_party
 git clone https://github.com/NVIDIA/apex.git
 cd apex
 pip install -v --no-build-isolation .
@@ -303,12 +295,12 @@ pip install -v --no-build-isolation .
 
 ### 8. 安装 LIBERO
 
-本仓库自带一个 LIBERO 的本地 checkout（位于 `LIBERO/` 目录），已修复了上游的 editable-install 问题（[Issue #31](https://github.com/Lifelong-Robot-Learning/LIBERO/issues/31)）。
+本仓库自带一个 LIBERO 的本地 checkout（位于 `third_party/LIBERO/` 目录），已修复了上游的 editable-install 问题（[Issue #31](https://github.com/Lifelong-Robot-Learning/LIBERO/issues/31)）。
 
 #### 安装
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA/LIBERO
+cd /mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO
 python -m pip install --no-build-isolation -e .
 ```
 
@@ -355,7 +347,7 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available(), tor
 python -c "import h5py, hydra, omegaconf, transformers; print('python deps ok')"
 
 # 编码器 import
-python -c "from src.models.encoder.rynnvla_encoder import RynnVLAEncoder; print('encoder import ok')"
+python -c "from dreamer_vla.models.encoder.rynnvla_encoder import RynnVLAEncoder; print('encoder import ok')"
 
 # LIBERO
 python -c "import libero; print('libero ok')"
@@ -427,12 +419,7 @@ hf download Alibaba-DAMO-Academy/RynnVLA-002 \
   --include "Action_World_model_512/libero_goal/*"
 ```
 
-也可以直接使用仓库自带脚本（需要先确认路径正确）：
-
-```bash
-cd /mnt/data/spoil/workspace/DreamerVLA
-bash scripts/download_hf.sh
-```
+如需批量下载，建议把上面的 `hf download` 命令整理成你自己的本地脚本；当前仓库不再保留活动的下载 shell wrapper。
 
 ### 3. 验证权重文件
 
@@ -476,102 +463,34 @@ LIBERO 数据集为 HDF5 格式。推荐使用 Hugging Face 源下载：
 cd /mnt/data/spoil/workspace/DreamerVLA
 
 # 下载全部数据集（libero_goal, libero_spatial, libero_object, libero_100）
-python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
+python third_party/LIBERO/benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
 
 # 或只下载特定子集
-python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets libero_goal --use-huggingface
+python third_party/LIBERO/benchmark_scripts/download_libero_datasets.py --datasets libero_goal --use-huggingface
 ```
 
-默认下载到 `LIBERO/libero/datasets/` 目录下。也可以通过 `--download-dir` 指定其他路径。
+默认下载到 `third_party/LIBERO/libero/datasets/` 目录下。也可以通过 `--download-dir` 指定其他路径。
 
 > **提示**：如果已经在 RynnVLA-002 仓库中下载过 LIBERO 数据集，可以直接创建软链接而无需重复下载：
 > ```bash
-> ln -s /home/user01/yuxinglei/workspace/RynnVLA-002/LIBERO/libero/datasets \
+> ln -s /home/user01/yuxinglei/workspace/RynnVLA-002/third_party/LIBERO/libero/datasets \
 >       /mnt/data/spoil/workspace/DreamerVLA/data/libero/datasets
 > ```
 
 ### 2. 数据预处理管线
 
-DreamerVLA 沿用 RynnVLA-002 的数据预处理流程，分为以下五步：
-
-**Step 1 — 过滤 no-op 动作**
-
-从原始 HDF5 中移除无操作帧：
+当前活动预处理入口放在 `scripts/preprocess/`，预处理实现放在
+`dreamer_vla/preprocess/`。常用入口包括：
 
 ```bash
-LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 \
-  bash scripts/preprocess/processed_data_no_op.sh
+python scripts/preprocess/preprocess_rynn_pixel_hidden.py --help
+python scripts/preprocess/preprocess_oft_action_hidden.py --help
+python scripts/preprocess/preprocess_remaining_steps_reward.py --help
+python scripts/preprocess/build_classifier_shards_from_demos.py --help
 ```
 
-输出目录：`data/processed_data/libero_goal_no_noops_t_256/`
-
-**Step 2 — 提取图像 / 动作 / 状态**
-
-将 HDF5 数据拆分为独立的图像、动作和机器人状态文件：
-
-```bash
-LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 \
-  bash scripts/preprocess/processed_data_save_img_action_state_wrist.sh
-```
-
-输出目录：`data/processed_data/libero_goal_image_state_action_t_256/`
-
-**Step 3 — 生成对话 JSON**
-
-将图像/动作/状态组织为训练所需的对话格式（包含 `<|state|>`, `<|image|>`, `<|action|>` 等特殊 token）：
-
-```bash
-LIBERO_TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
-  bash scripts/preprocess/processed_data_generate_convs.sh
-```
-
-输出目录：`data/processed_data/convs/`
-
-**Step 4 — Pretokenize + 合并 manifest**
-
-将对话 JSON 预先编码为 token 序列，并合并为单一 manifest 文件：
-
-```bash
-TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
-  bash scripts/preprocess/processed_data_pretokenize.sh
-```
-
-输出目录：`data/processed_data/tokens/` 和 `data/processed_data/concate_tokens/`
-
-> **EOT 补全（自动发生于 Step 4）**：当 `current_frame + ACTION_HORIZON` 越过 trajectory 末尾时，管线不会丢弃该样本，而是退化到仍可达的 `effective_horizon ∈ [1, ACTION_HORIZON]`，并生成 padding 掩码。每条 pkl 新增字段：
->
-> - `wm_action_mask`：长度为 `full_horizon` 的 `list[bool]`，前 `effective_horizon` 位为 `True`，其余 `False`
-> - `effective_horizon` / `full_horizon`：真实步数 / 期望步数
-> - `is_eot_padded`：`effective_horizon < full_horizon` 时为 `True`
->
-> 下游消费：`PretokenizeDataset.collate_fn` 把 `wm_action_mask` 合进 batch 的 `action_mask`；World Model 在 `compute_loss_dict` 里用 `action_mask` 对 action chunk 做加权平均，**padding 位不参与训练**。源码：`src/preprocess/pre_tokenize_action_state_local.py::build_wm_action_mask / derive_next_obs_from_paths`。
-
-**Step 5 — 生成训练配置 YAML**
-
-自动生成 pretokenize 和 nopretokenize 两种训练配置：
-
-```bash
-LIBERO_TASK_SUITE=libero_goal TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 \
-  bash scripts/preprocess/prepare_train_configs.sh
-```
-
-输出目录：`data/configs/libero_goal/`
-
-### 3. 一键预处理
-
-上述五步可以用一条命令完成：
-
-```bash
-cd /mnt/data/spoil/workspace/DreamerVLA
-bash scripts/prepare_data.sh
-```
-
-通过环境变量覆盖默认参数：
-
-```bash
-LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=goal \
-  bash scripts/prepare_data.sh
-```
+历史五步 shell 管线已经移到 `scripts/archive/uncertain_shells/`。不要把归档脚本作为新实验默认入口；新的训练 route 应直接复用
+`configs/task/*.yaml` 中的数据路径和 sidecar 约束。
 
 ---
 
@@ -581,9 +500,9 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 
 | 文件 | 需更新的字段 |
 |------|-------------|
-| `configs/pretokenize_vla_libero_goal.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.config_path` |
-| `configs/rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml` | `init.vla_ckpt_path`, `encoder.model_path`, `dataset.hidden_dir`, `dataset.expected_*` |
-| `configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon` |
+| `configs/vla_pi0_query.yaml` | `training.out_dir`, `init.vla_ckpt_path`, `encoder.*_path`, `dataset.*` |
+| `configs/world_model_dinowm_chunk.yaml` | `init.*`, `dataset.hidden_dir`, `dataset.expected_*`, `world_model.*` |
+| `configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon`, `algorithm.*` |
 
 通用规则：将所有 `/mnt/data/spoil/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
 
@@ -599,7 +518,7 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 | **输出** | `obs_embedding`, `action`, `reward` 等连续张量 | `input_ids`, `labels` 等 token ID |
 | **用途** | World Model 训练 | VLA token-level SFT 训练 |
 | **数据集** | `preencode_sft_dataset.py` | `pretokenize_dataset.py` |
-| **Workspace** | 旧 preencode 分支已移除 | `pretokenize_vla_workspace.py` / `VLASFTWorkspace` |
+| **Runner** | 旧 preencode 分支已移除 | `pretokenize_vla_runner.py` / `VLASFTRunner` |
 
 **判断规则**：batch 里是 `obs_embedding` 等连续特征 → preencode；是 `input_ids/labels` → pretokenize。
 
@@ -618,13 +537,11 @@ conda activate dreamervla
 cd /mnt/data/spoil/workspace/DreamerVLA
 
 # 当前 pi0 action-query VLA head
-ACTION_HEAD_TYPE=pi0_query CONFIG_NAME=pretokenize_vla_libero_goal_pi0_query \
-  bash scripts/pretokenize_train_vla.sh
+CONFIG=vla_pi0_query bash scripts/train_vla.sh
 
 # 自定义 GPU 数量和配置
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 ACTION_HEAD_TYPE=pi0_query \
-  CONFIG_NAME=pretokenize_vla_libero_goal_pi0_query \
-  bash scripts/pretokenize_train_vla.sh
+NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 CONFIG=vla_pi0_query \
+  bash scripts/train_vla.sh
 ```
 
 ### World Model 训练
@@ -633,36 +550,36 @@ NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 ACTION_HEAD_TYPE=pi0_query \
 
 ```bash
 # 1. 预计算 pi0 action-hidden sidecar
-PIPELINE_STAGE=preprocess bash scripts/run_pi0_query_hidden_pipeline.sh
+python scripts/preprocess/preprocess_rynn_pixel_hidden.py --help
 
-# 2. 用 frozen action hidden 训练 DreamerV3 RSSM
-PIPELINE_STAGE=wm bash scripts/run_pi0_query_hidden_pipeline.sh
+# 2. 用 frozen action hidden 训练 chunk-aware DINO-WM
+CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh
 ```
 
 也可以直接调用 WM wrapper：
 
 ```bash
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-  bash scripts/train_pi0_action_hidden_dreamerv3_wm.sh
+NGPU=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh
 ```
 
-`scripts/train_wm.sh` 仍是统一 WM wrapper。当前支持 `action_hidden`、
-`dreamerv3_token`、`dreamerv3_pixel`、`chameleon` 四类入口。
+`scripts/train_wm.sh` 是统一 WM wrapper。当前活动入口见
+`configs/README.md`。
 
 ### Dreamer-VLA 完整训练
 
 Action-hidden route 的 DreamerVLA actor-critic stage 使用 pi0 action-hidden head：
 
 ```bash
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
-  bash scripts/run_pi0_action_hidden_reconstruct_actor.sh
+NGPU=4 CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh
 ```
 
 如果只想调用通用 wrapper：
 
 ```bash
-CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor \
-  bash scripts/train_dreamer_vla.sh
+CONFIG=dreamervla_rynn_dino_wm_actor_critic \
+  bash scripts/train_dreamervla.sh
 ```
 
 ---
@@ -675,11 +592,11 @@ CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor \
 conda activate dreamervla
 cd /mnt/data/spoil/workspace/DreamerVLA
 
-bash scripts/eval_libero.sh \
-    --ckpt_path data/outputs/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \
-    --task_suite libero_goal \
-    --num_episodes 10 \
-    --device cuda:0
+bash scripts/eval_libero_vla.sh \
+    eval.ckpt_path=data/outputs/vla/checkpoints/example.ckpt \
+    eval.task_suite_name=libero_goal \
+    eval.num_episodes_per_task=10 \
+    training.device=cuda:0
 ```
 
 ---

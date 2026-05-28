@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from src.models.actor.pi0_action_hidden_actor import Pi0ActionHiddenActor
+from dreamer_vla.models.actor.pi0_action_hidden_actor import Pi0ActionHiddenActor
 
 
 def test_pi0_actor_samples_and_evaluates_full_action_chunks() -> None:

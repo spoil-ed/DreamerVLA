@@ -35,9 +35,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.env import get_libero_dummy_action, get_libero_env, get_libero_image
-from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
-from src.algorithms.dreamer_vla import (
+from dreamer_vla.envs import get_libero_dummy_action, get_libero_env, get_libero_image
+from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+from dreamer_vla.algorithms.dreamer_vla import (
     _actor_action_for_world_model,
     _detach_latent,
     _world_model_actor_input,
@@ -100,7 +100,7 @@ def copy_cfg(cfg: Any) -> DictConfig:
     raise TypeError(f"Unsupported cfg type: {type(cfg).__name__}")
 
 
-def _build_workspace(args: argparse.Namespace) -> EvalLiberoVLAWorkspace:
+def _build_runner(args: argparse.Namespace) -> EvalLiberoVLARunner:
     overrides = [
         f"training.out_dir={args.out_dir}",
         f"eval.ckpt_path={args.ckpt}",
@@ -117,10 +117,10 @@ def _build_workspace(args: argparse.Namespace) -> EvalLiberoVLAWorkspace:
         config_dir=str(PROJECT_ROOT / "configs"), version_base=None
     ):
         eval_cfg = compose(config_name="eval_libero_vla", overrides=overrides)
-    bootstrap = EvalLiberoVLAWorkspace(eval_cfg)
+    bootstrap = EvalLiberoVLARunner(eval_cfg)
     payload = bootstrap._load_checkpoint_payload(str(args.ckpt))
     cfg = _merge_dreamer_eval_cfg(eval_cfg, payload)
-    ws = EvalLiberoVLAWorkspace(cfg)
+    ws = EvalLiberoVLARunner(cfg)
     ws._dreamer_eval = True
     ws._dreamer_deterministic = True
     ws._dreamer_action_repeat = 1
@@ -158,7 +158,7 @@ def _padded_history(
 
 
 def _observe(
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     item_processor: Any,
     obs: dict[str, Any],
     frame_history: list[tuple[Image.Image, Image.Image]],
@@ -185,7 +185,7 @@ def _observe(
 
 
 def _sft_action(
-    ws: EvalLiberoVLAWorkspace, input_ids: list[int]
+    ws: EvalLiberoVLARunner, input_ids: list[int]
 ) -> tuple[np.ndarray, np.ndarray]:
     backbone = ws.encoder.backbone
     generation_config = GenerationConfig(
@@ -213,7 +213,7 @@ def _sft_action(
 
 
 def _dreamer_action_from_latent(
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     latent: Any,
     deterministic: bool,
 ) -> tuple[torch.Tensor, np.ndarray, np.ndarray, torch.Tensor]:
@@ -234,7 +234,7 @@ def _dreamer_action_from_latent(
 
 
 def _imagine_candidates(
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     latent: Any,
     num_candidates: int,
     horizon: int,
@@ -280,7 +280,7 @@ def _imagine_candidates(
 
 
 def _rollout_with_forced_first_action(
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     env: Any,
     initial_state: Any,
     task_description: str,
@@ -388,7 +388,7 @@ def main() -> None:
     np.random.seed(int(args.seed))
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    ws = _build_workspace(args)
+    ws = _build_runner(args)
     item_processor = ws.encoder._build_processor(ws.device)
     benchmark_dict = libero_benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.task_suite]()

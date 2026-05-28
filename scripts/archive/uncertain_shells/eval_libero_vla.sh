@@ -54,7 +54,7 @@ echo "MUJOCO_GL=${MUJOCO_GL}  PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-<unset>}  E
 # file even when Python aborts without a traceback (SIGABRT, double free,
 # etc.).
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
-python -u -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=1 --module src.cli.train \
+python -u -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=1 --module dreamer_vla.cli.train \
   --config-name "${CONFIG_NAME}" \
   training.out_dir="${OUT_DIR}" \
   "$@" 2>&1 | tee "${FULL_LOG}"

@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-from src.models.world_model import dreamerv3_torch, tssm_torch
-from src.models.world_model.base_world_model import (
+import inspect
+
+import pytest
+
+from dreamer_vla.models.encoder.base_encoder import BaseEncoder
+from dreamer_vla.models.world_model import dreamerv3_torch, tssm_torch
+from dreamer_vla.models.world_model.base_world_model import (
     BaseWorldModel,
     DreamerV3LatentState,
     DreamerV3Loss,
 )
-from src.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
+from dreamer_vla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
     DreamerV3PixelRynnBackboneWorldModel,
 )
-from src.models.world_model.dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
-from src.models.world_model.dreamer_v3_token_from_pixel_world_model import (
+from dreamer_vla.models.world_model.dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
+from dreamer_vla.models.world_model.dreamer_v3_token_from_pixel_world_model import (
     DreamerV3TokenFromPixelWorldModel,
 )
-from src.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
-from src.models.world_model.tssm_rynn_backbone_world_model import (
+from dreamer_vla.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
+from dreamer_vla.models.world_model.tssm_rynn_backbone_world_model import (
     TSSMRynnBackboneWorldModel,
 )
-from src.models.world_model.tssm_token_rynn_backbone_world_model import (
+from dreamer_vla.models.world_model.tssm_token_rynn_backbone_world_model import (
     TSSMTokenRynnBackboneWorldModel,
 )
 
@@ -31,6 +36,15 @@ def test_split_world_model_modules_export_classes() -> None:
     assert issubclass(TSSMTokenRynnBackboneWorldModel, BaseWorldModel)
     assert DreamerV3LatentState.__name__ == "DreamerV3LatentState"
     assert DreamerV3Loss.__name__ == "DreamerV3Loss"
+
+
+def test_model_base_interfaces_are_abstract() -> None:
+    assert inspect.isabstract(BaseEncoder)
+    assert inspect.isabstract(BaseWorldModel)
+    with pytest.raises(TypeError):
+        BaseEncoder()
+    with pytest.raises(TypeError):
+        BaseWorldModel()
 
 
 def test_legacy_modules_reexport_split_world_model_classes() -> None:

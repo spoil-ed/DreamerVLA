@@ -57,19 +57,19 @@ bash scripts/run_pi0_action_hidden_reconstruct_actor.sh
 ### Pixel DreamerV3 WM
 
 - Config: `configs/dreamerv3_pixel_libero_goal.yaml`
-- Workspace: `src.workspace.PixelWMWorkspace`
+- Runner: `dreamer_vla.runners.PixelWMRunner`
 - Script: `scripts/train_dreamerv3_pixel.sh`
 
 ### Token DreamerV3 WM
 
 - Config: `configs/dreamerv3_token_libero_goal.yaml`
-- Workspace: `src.workspace.TokenWMWorkspace`
+- Runner: `dreamer_vla.runners.TokenWMRunner`
 - Script: `scripts/train_dreamerv3_token.sh`
 
 ### Chameleon / LaDiWM-Style WM
 
 - Config: `configs/chameleon_latent_action_wm_libero_goal.yaml`
-- Workspace: `src.workspace.ChameleonLatentWMWorkspace`
+- Runner: `dreamer_vla.runners.ChameleonLatentWMRunner`
 - Script: `scripts/train_chameleon_ladiwm_wm.sh`
 
 ## Removed Routes

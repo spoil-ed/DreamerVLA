@@ -6,7 +6,7 @@ training:
   out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/openvla_oft_hdf5_goal
 
 dataset:
-  _target_: src.dataloader.OpenVLAOFTHDF5DatasetFactory
+  _target_: dreamer_vla.dataset.OpenVLAOFTHDF5DatasetFactory
   hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
   dataset_statistics_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal/dataset_statistics.json
   dataset_statistics_key: libero_goal_no_noops

@@ -190,8 +190,8 @@ def _load_oft_components(
             "The lightweight OpenVLA-OFT loader does not support 8-bit or 4-bit loading."
         )
 
-    from src.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
-    from src.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamer_vla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     cfg = SimpleNamespace(
@@ -640,7 +640,8 @@ def parse_args() -> argparse.Namespace:
         description="Precompute OpenVLA-OFT action hidden C/D sidecars for LIBERO HDF5."
     )
     parser.add_argument(
-        "--openvla-oft-dir", default=str(PROJECT_ROOT / "src/openvla-oft")
+        "--openvla-oft-dir",
+        default=str(PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"),
     )
     parser.add_argument(
         "--hdf5-dir",

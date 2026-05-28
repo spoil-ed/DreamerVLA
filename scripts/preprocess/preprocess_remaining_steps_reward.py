@@ -150,13 +150,13 @@ def _copy_file_with_remaining_rewards(
     reward_sum = 0.0
 
     with (
-        h5py.File(source_path, "r", swmr=True, libver="latest") as src,
+        h5py.File(source_path, "r", swmr=True, libver="latest") as source_h5,
         h5py.File(tmp_path, "w", libver="latest") as dst,
     ):
-        for key, value in src.attrs.items():
+        for key, value in source_h5.attrs.items():
             dst.attrs[key] = value
-        for key in src.keys():
-            src.copy(key, dst)
+        for key in source_h5.keys():
+            source_h5.copy(key, dst)
 
         data = dst["data"]
         for demo_key in sorted(data.keys(), key=_demo_sort_key):

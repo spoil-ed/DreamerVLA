@@ -65,7 +65,7 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 from sklearn.model_selection import train_test_split  # noqa: E402
 from sklearn.neighbors import KNeighborsClassifier  # noqa: E402
 
-from src.dataloader.wm_replay_classifier_dataset import _find_demo_pairs  # noqa: E402
+from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Data loading

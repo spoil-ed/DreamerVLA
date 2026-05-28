@@ -1,4 +1,4 @@
-# Workspace Interface Unification Implementation Plan
+# Runner Interface Unification Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -7,51 +7,51 @@
 **2026-05-13 update:** The large-module workspace direction was reverted.
 Public configs again target route-specific workspace classes directly.
 
-**Architecture:** Add a `src.workspace` public package with unified class names and metadata. Keep existing implementation files in place, because they contain large training loops and active uncommitted work. Update active configs and docs to target the public classes; keep old implementation class names runnable for archive configs.
+**Architecture:** Add a `dreamer_vla.runners` public package with unified class names and metadata. Keep existing implementation files in place, because they contain large training loops and active uncommitted work. Update active configs and docs to target the public classes; keep old implementation class names runnable for archive configs.
 
 **Tech Stack:** Python namespace package, Hydra `_target_`, pytest.
 
 ---
 
-### Task 1: Public Workspace API
+### Task 1: Public Runner API
 
 **Files:**
-- Create: `src/workspace/__init__.py`
-- Modify: `src/workspace/base_workspace.py`
-- Test: `tests/test_workspace_public_api.py`
+- Create: `dreamer_vla/runners/__init__.py`
+- Modify: `dreamer_vla/runners/base_runner.py`
+- Test: `tests/test_runner_public_api.py`
 
 - [ ] **Step 1: Write public API tests**
 
-Test that `src.workspace` exports the canonical workspace names and every class has the lifecycle methods `setup`, `execute`, `run`, and `teardown`.
+Test that `dreamer_vla.runners` exports the canonical workspace names and every class has the lifecycle methods `setup`, `execute`, `run`, and `teardown`.
 
 - [ ] **Step 2: Run the test and verify it fails**
 
 Run:
 
 ```bash
-/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/test_workspace_public_api.py -q
+/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/test_runner_public_api.py -q
 ```
 
-Expected: fails because `src.workspace` has no public canonical API yet.
+Expected: fails because `dreamer_vla.runners` has no public canonical API yet.
 
 - [ ] **Step 3: Implement canonical workspace exports**
 
 Add route-specific public classes:
 
 ```text
-ActionHiddenWMWorkspace
-PooledHiddenWMWorkspace
-PixelWMWorkspace
-TokenWMWorkspace
-PretokenizedWMWorkspace
-VLASFTWorkspace
-JointDreamerVLAWorkspace
-LiberoEvalWorkspace
-ChameleonLatentWMWorkspace
-SemanticBottleneckWMWorkspace
+ActionHiddenWMRunner
+PooledHiddenWMRunner
+PixelWMRunner
+TokenWMRunner
+PretokenizedWMRunner
+VLASFTRunner
+JointDreamerVLARunner
+LiberoEvalRunner
+ChameleonLatentWMRunner
+SemanticBottleneckWMRunner
 ```
 
-- [ ] **Step 4: Add lifecycle methods to `BaseWorkspace`**
+- [ ] **Step 4: Add lifecycle methods to `BaseRunner`**
 
 Expose `setup`, `execute`, and `teardown` on every workspace through inheritance. Existing `run` methods remain the execution body.
 
@@ -63,7 +63,7 @@ Expose `setup`, `execute`, and `teardown` on every workspace through inheritance
 
 - [ ] **Step 1: Update active config `_target_` values**
 
-Point active configs to public `src.workspace.<CanonicalName>` targets.
+Point active configs to public `dreamer_vla.runners.<CanonicalName>` targets.
 
 - [ ] **Step 2: Verify Hydra composes representative configs**
 

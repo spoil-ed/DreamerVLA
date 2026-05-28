@@ -1,8 +1,8 @@
 # LatentSuccessClassifier on LIBERO-goal real pi0 hidden — WMPO-aligned default.
 #
-# Architecture: src.workspace.LatentClassifierWorkspace
-#   ─ dataset: src.dataloader.wmpo_aligned_latent_dataset  (1 pos + 1 neg per demo)
-#   ─ model:   src.models.reward.LatentSuccessClassifier   (head_type = linear)
+# Architecture: dreamer_vla.runners.LatentClassifierRunner
+#   ─ dataset: dreamer_vla.dataset.wmpo_aligned_latent_dataset  (1 pos + 1 neg per demo)
+#   ─ model:   dreamer_vla.models.reward.LatentSuccessClassifier   (head_type = linear)
 #
 # Default head is **linear** (0.57M params, ≈ sklearn LR) because:
 #   * ceiling test 2026-05-25 showed LR / kNN / small MLP all converge to
@@ -15,10 +15,10 @@
 # Launch:
 #   bash scripts/train_latent_classifier.sh
 # or directly:
-#   CUDA_VISIBLE_DEVICES=6 python -m src.cli.train \
+#   CUDA_VISIBLE_DEVICES=6 python -m dreamer_vla.cli.train \
 #       --config-name latent_classifier_libero_goal
 
-_target_: src.workspace.LatentClassifierWorkspace
+_target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   latent_dim: 35840

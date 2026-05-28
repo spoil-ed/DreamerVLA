@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.env.train_env import DreamerVLAOnlineTrainEnv
+from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv
 
 from scripts.training.train_online_pi0_action_hidden_dreamervla_multienv import (
     OnlineReplay,

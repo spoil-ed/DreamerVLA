@@ -9,13 +9,13 @@
 ## Entry Point Investigation
 
 - `rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml` still configures `world_model.action_dim: 7` and uses RSSM-style per-step `actions`.
-- `ChameleonLatentActionWMWorkspace` builds `action_seq` from pretokenized sequence batches and feeds it to the WM as a multi-step action chunk.
-- `configs/chameleon_latent_action_wm_libero_goal.yaml` targets `src.workspace.ChameleonLatentWMWorkspace` and inherits the action-sequence model from the LIBERO-10 legacy config, adapted to LIBERO-goal.
+- `ChameleonLatentActionWMRunner` builds `action_seq` from pretokenized sequence batches and feeds it to the WM as a multi-step action chunk.
+- `configs/chameleon_latent_action_wm_libero_goal.yaml` targets `dreamer_vla.runners.ChameleonLatentWMRunner` and inherits the action-sequence model from the LIBERO-10 legacy config, adapted to LIBERO-goal.
 - Correction: user clarified the desired route is DINO-WM-based. The Chameleon smoke path was aborted and no Chameleon training is running.
 
 ## DINO-WM Action-Chunk Route
 
-- `/mnt/data/spoil/workspace/DreamerVLA` contains the source-complete DINO-WM implementation; this checkout has `src/models/world_model/rynn_dino_wm.py`, `src/models/world_model/rynn_dino_wm_chunk.py`, and `src/workspace/rynn_dino_wm_workspace.py`.
+- `/mnt/data/spoil/workspace/DreamerVLA` contains the source-complete DINO-WM implementation; this checkout has `dreamer_vla/models/world_model/rynn_dino_wm.py`, `dreamer_vla/models/world_model/rynn_dino_wm_chunk.py`, and `dreamer_vla/runners/rynn_dino_wm_runner.py`.
 - `ChunkAwareRynnDinoWMWorldModel` adds `predict_next_chunk()` over a fixed `chunk_size` and does not add trainable parameters relative to `RynnDinoWMWorldModel`, so existing m1024/d6 checkpoints load directly.
 - Reused the completed 10k m1024/d6 checkpoint:
   `/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/latest.ckpt`.
@@ -25,10 +25,10 @@
 
 - User requested the LIBERO-goal single-trajectory VLA-SFT task on "45卡" and said WM and classifier need to be trained first.
 - GPU check showed GPUs 4 and 5 free, while 6 and 7 were occupied; use `CUDA_VISIBLE_DEVICES=4,5`.
-- WM config: `configs/world_model_dinowm_chunk.yaml`, target `src.workspace.RynnDinoWMWorkspace`, `ChunkAwareRynnDinoWMWorldModel`, `chunk_rollout_chunks=4`, `chunk_rollout_loss_scale=1.0`.
+- WM config: `configs/world_model_dinowm_chunk.yaml`, target `dreamer_vla.runners.RynnDinoWMRunner`, `ChunkAwareRynnDinoWMWorldModel`, `chunk_rollout_chunks=4`, `chunk_rollout_loss_scale=1.0`.
 - Existing WM checkpoint available for continuation:
   `data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/latest.ckpt` at approximately step 15000, with logs showing `rollout_chunks: 4.0`.
-- Classifier config: `configs/latent_classifier_libero_goal_chunk.yaml`, target `src.workspace.LatentClassifierWorkspace`, chunk granularity with `chunk_size=5`, `window=8`, and current native-chunk `episode_eval_min_steps=7`.
+- Classifier config: `configs/latent_classifier_libero_goal_chunk.yaml`, target `dreamer_vla.runners.LatentClassifierRunner`, chunk granularity with `chunk_size=5`, `window=8`, and current native-chunk `episode_eval_min_steps=7`.
 - The older strong classifier checkpoint is under `wmpo_aligned_small_tf_chunk_minsteps32`, but the current config's default `wmpo_aligned_small_tf_chunk` path has no matching completed run yet, so a fresh classifier stage is appropriate.
 - VLA-SFT wrapper: `scripts/train_vla_one_traj_45.sh libero_goal`, config `vla_sft_one_trajectory`, one trajectory per task with `trajectory_offset=0`.
 - The safe launch pattern for this multi-stage run is a small `run_pipeline.sh` under the run log directory. A direct nested `tmux new-session "bash -lc ..."` string failed because embedded quotes in the expanded script broke the outer shell command.
@@ -40,7 +40,7 @@
 - The earlier complete-experiment checkpoint remains intact at `data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/latest.ckpt` with its paired `step_00015000.ckpt`.
 - Fresh pipeline root cause/fix: the first fresh tmux launch used base Python and failed before training with `ModuleNotFoundError: No module named 'hydra'`; exporting the `dreamervla` env bin and `PYTHON` in `run_pipeline.sh` fixed the launcher.
 - The corrected fresh WM launch is verified no-resume because the log shows `training.resume=false`, `training.resume_path=null`, and progress beginning at `step=0/20000`.
-- Eval compatibility fix: VLA checkpoints saved under DDP can store encoder keys as `backbone.module.*`, while `EvalLiberoVLAWorkspace` builds an unwrapped encoder. Normalizing those keys to `backbone.*` lets the completed VLA checkpoint load for single-process LIBERO eval.
+- Eval compatibility fix: VLA checkpoints saved under DDP can store encoder keys as `backbone.module.*`, while `EvalLiberoVLARunner` builds an unwrapped encoder. Normalizing those keys to `backbone.*` lets the completed VLA checkpoint load for single-process LIBERO eval.
 - LIBERO-goal eval resource finding: GPUs 6 and 7 were not fully free; each had an existing preprocessing job using about 38GB. The VLA eval worker allocates about 13.7GB, so a safe concurrency limit on those GPUs is 2 eval workers per GPU, not 4.
 - Completed VLA checkpoint eval result on LIBERO-goal: all tasks evaluated with 10 episodes/task and `eval.action_steps=5`; every task reported `0/10`, for an aggregate `0/100` success rate.
 - Fresh no-resume pipeline result: WM completed from scratch to 20000 steps, classifier completed to 8000 steps with `best_episode_f1=0.9704545454545455`, and one-trajectory VLA-SFT completed 20 epochs with final logged `train_vla_loss=3.2240`, `val_val_ind_loss=1.2874`, and `val_val_ood_loss=1.4889`.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.utils.episode_end import resolve_episode_end
+from dreamer_vla.utils.episode_end import resolve_episode_end
 
 
 def test_episode_end_marks_success_as_terminal_not_timeout() -> None:
@@ -22,14 +22,14 @@ def test_episode_end_marks_max_steps_failure_as_timeout_not_terminal() -> None:
 
 
 def test_online_env_wrappers_use_shared_episode_end_logic() -> None:
-    repo = Path(__file__).resolve().parents[1]
-    train_env = (repo / "src/env/train_env.py").read_text(encoding="utf-8")
-    libero_online_env = (repo / "src/env/libero_online_env.py").read_text(
+    repo = Path(__file__).resolve().parents[2]
+    train_env = (repo / "dreamer_vla/envs/train_env.py").read_text(encoding="utf-8")
+    libero_online_env = (repo / "dreamer_vla/envs/libero_online_env.py").read_text(
         encoding="utf-8"
     )
 
-    assert "from src.utils.episode_end import resolve_episode_end" in train_env
-    assert "from src.utils.episode_end import resolve_episode_end" in libero_online_env
+    assert "from dreamer_vla.utils.episode_end import resolve_episode_end" in train_env
+    assert "from dreamer_vla.utils.episode_end import resolve_episode_end" in libero_online_env
     assert "episode_end = resolve_episode_end" in train_env
     assert "episode_end = resolve_episode_end" in libero_online_env
 
@@ -37,10 +37,10 @@ def test_online_env_wrappers_use_shared_episode_end_logic() -> None:
 def test_online_training_script_separates_episode_horizon_from_training_budget() -> (
     None
 ):
-    repo = Path(__file__).resolve().parents[1]
-    script = (repo / "scripts/train_online_pi0_action_hidden_dreamervla.py").read_text(
-        encoding="utf-8"
-    )
+    repo = Path(__file__).resolve().parents[2]
+    script = (
+        repo / "scripts/training/train_online_pi0_action_hidden_dreamervla.py"
+    ).read_text(encoding="utf-8")
 
     assert "--episode-horizon" in script
     assert "--total-env-steps" in script

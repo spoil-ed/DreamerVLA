@@ -14,7 +14,7 @@
 
 **Files:**
 - Test: `tests/test_tssm_transdreamer_compat.py`
-- Modify: `src/models/world_model/tssm_torch.py`
+- Modify: `dreamer_vla/models/world_model/tssm_torch.py`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -42,7 +42,7 @@ Run the same pytest command and confirm it passes.
 
 **Files:**
 - Test: `tests/test_tssm_transdreamer_compat.py`
-- Modify: `src/models/world_model/tssm_torch.py`
+- Modify: `dreamer_vla/models/world_model/tssm_torch.py`
 
 - [ ] **Step 1: Write failing wrapper tests**
 
@@ -74,7 +74,7 @@ Set the TSSM configs closer to original TransDreamer: `act: elu`, `free_nats: 0.
 
 - [ ] **Step 2: Verify config composition**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/test_workspace_public_api.py::test_all_configs_compose_and_resolve_route_specific_workspace_targets -q`
+Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/test_runner_public_api.py::test_all_configs_compose_and_resolve_route_specific_runner_targets -q`
 
 Expected: config composition passes.
 

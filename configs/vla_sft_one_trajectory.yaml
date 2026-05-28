@@ -6,7 +6,7 @@ training:
   out_dir: ${oc.env:OUT_DIR,data/outputs/vla/pi0_query_one_trajectory/${task.name}/${now:%Y%m%d_%H%M%S}}
 
 dataset:
-  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
   config_path: ${task.pretokenize_config_path}
   action_horizon: ${task.action_horizon}
   trajectories_per_task: 1
@@ -15,7 +15,7 @@ dataset:
   strict: true
 
 dataset_val_ind:
-  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
   config_path: ${task.pretokenize_val_ind_config_path}
   action_horizon: ${task.action_horizon}
   trajectories_per_task: 1
@@ -24,7 +24,7 @@ dataset_val_ind:
   strict: true
 
 dataset_val_ood:
-  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
   config_path: ${task.pretokenize_val_ood_config_path}
   action_horizon: ${task.action_horizon}
   trajectories_per_task: 1

@@ -6,10 +6,9 @@
 #  config (default: libero_goal). Override anything on the Hydra CLI.
 #
 #  Available CONFIGs:
-#    dreamervla_pi0_action_hidden_head_actor   (default)   RSSM + pi0 head actor
-#    dreamervla_rynn_dino_wm_actor_critic                  DINO-WM + DreamerV3 AC
-#    dreamervla_rynn_dino_wm_wmpo_outcome                  DINO-WM + WMPO outcome PPO
-#    dreamervla_oft_dino_wm_wmpo_outcome                   OpenVLA-OFT DINO-WM + WMPO outcome PPO
+#    dreamervla_rynn_dino_wm_wmpo_outcome (default) DINO-WM + WMPO outcome PPO
+#    dreamervla_rynn_dino_wm_actor_critic           DINO-WM + DreamerV3 AC
+#    dreamervla_oft_dino_wm_wmpo_outcome            OpenVLA-OFT DINO-WM + WMPO outcome PPO
 #
 #  The OFT variant requires a pre-trained classifier checkpoint:
 #    1. CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh   → produces .ckpt
@@ -28,7 +27,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # ---- defaults --------------------------------------------------------------
-CONFIG="${CONFIG:-dreamervla_pi0_action_hidden_head_actor}"
+CONFIG="${CONFIG:-dreamervla_rynn_dino_wm_wmpo_outcome}"
 NGPU="${NGPU:-1}"
 PYTHON="${PYTHON:-python}"
 MASTER_PORT="${MASTER_PORT:-29502}"
@@ -46,7 +45,7 @@ echo "[train_dreamervla] extra hydra args: $*"
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m src.cli.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
 else
-  exec "${PYTHON}" -m src.cli.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
 fi

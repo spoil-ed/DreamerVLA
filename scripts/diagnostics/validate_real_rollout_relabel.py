@@ -36,13 +36,13 @@ from libero.libero import benchmark as libero_benchmark
 
 from scripts.diagnostics.diagnose_ppo_imagine_vs_real import (
     _array_stats,
-    _build_workspace,
+    _build_runner,
     _dreamer_action_from_latent,
     _observe,
     _sft_action,
 )
-from src.algorithms.dreamer_vla import _world_model_state_reward
-from src.env import TASK_MAX_STEPS, get_libero_dummy_action, get_libero_env
+from dreamer_vla.algorithms.dreamer_vla import _world_model_state_reward
+from dreamer_vla.envs import TASK_MAX_STEPS, get_libero_dummy_action, get_libero_env
 
 try:
     import faulthandler
@@ -536,7 +536,7 @@ def main() -> None:
     np.random.seed(int(args.seed))
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    ws = _build_workspace(args)
+    ws = _build_runner(args)
     item_processor = ws.encoder._build_processor(ws.device)
     benchmark_dict = libero_benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.task_suite]()

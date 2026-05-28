@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_official_openvla_oft_launcher_uses_per_task_osmesa_eval() -> None:
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     launcher = project_root / "scripts" / "eval" / "launch_openvla_oft_official_libero_eval.sh"
 
     text = launcher.read_text(encoding="utf-8")
@@ -23,3 +23,4 @@ def test_official_openvla_oft_launcher_uses_per_task_osmesa_eval() -> None:
     assert '--task-ids "${tid}"' in text
     assert "--no-use-proprio" in text
     assert "--policy-mode" in text
+    assert 'OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${ROOT}/third_party/openvla-oft}"' in text

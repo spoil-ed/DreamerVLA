@@ -24,12 +24,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.algorithms.dreamer_vla import (
+from dreamer_vla.algorithms.dreamer_vla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
-from src.algorithms.ppo import dino_wmpo_dense_chunk_step, dino_wmpo_outcome_step
-from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamer_vla.algorithms.ppo import dino_wmpo_dense_chunk_step, dino_wmpo_outcome_step
+from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
 def _init_distributed() -> tuple[int, int, int, bool]:
@@ -53,14 +53,13 @@ def _unwrap(module: torch.nn.Module) -> torch.nn.Module:
     return module.module if isinstance(module, DDP) else module
 
 
-from src.dataloader.online_rollout_dumper import RolloutDumper
-from src.env.train_env import DreamerVLAOnlineTrainEnv
-from src.models.critic.twohot_critic import ReturnPercentileTracker
-from src.models.encoder import RynnVLAEncoder
-from src.utils.fixed_step_video import FixedStepVideoRecorder
-from src.utils.optim import build_optimizer
-from src.utils.seed import set_seed
-from src.utils.torch_utils import freeze_module
+from dreamer_vla.dataset.online_rollout_dumper import RolloutDumper
+from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamer_vla.models.encoder import RynnVLAEncoder
+from dreamer_vla.utils.fixed_step_video import FixedStepVideoRecorder
+from dreamer_vla.utils.optim import build_optimizer
+from dreamer_vla.utils.seed import set_seed
+from dreamer_vla.utils.torch_utils import freeze_module
 
 
 def _json_safe(value: Any) -> Any:
@@ -87,9 +86,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
-        ),
+        default=str(PROJECT_ROOT / "configs/online_wmpo_outcome_libero_goal.yaml"),
     )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--world-model-ckpt", required=True)
@@ -1489,6 +1486,8 @@ def main() -> None:
 
     # Per-rank env seed: different rollouts on each rank gives 4× online data
     # diversity for the shared (DDP-synced) policy gradient updates.
+    from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv
+
     env_seed = int(args.seed) + rank * 1000
     env = DreamerVLAOnlineTrainEnv(
         task_suite_name=args.task_suite,

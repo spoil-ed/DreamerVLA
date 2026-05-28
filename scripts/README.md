@@ -1,7 +1,7 @@
 # Script Entry Points
 
-Scripts are thin wrappers around `python -m src.cli.train` or small diagnostic
-tools. Keep durable logic in `src/`; keep scripts as reproducible launch
+Scripts are thin wrappers around `python -m dreamer_vla.cli.train` or small diagnostic
+tools. Keep durable logic in `dreamer_vla/`; keep scripts as reproducible launch
 recipes.
 
 ## Data Preparation
@@ -12,14 +12,14 @@ metadata from `configs/task/*.yaml`.
 
 ## Training
 
-| Script | Main Config | Public Workspace | Purpose |
+| Script | Main Config | Public Runner | Purpose |
 | --- | --- | --- | --- |
-| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `src.workspace.*` target from config | VLA SFT, including one trajectory per task |
-| `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTWorkspace` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
-| `train_wm.sh` | `world_model_rssm_step`, `world_model_dinowm_step`, `world_model_dinowm_chunk` | route-specific `src.workspace.*` target from config | WM training |
-| `train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_rynn_dino_wm_wmpo_outcome` | `JointDreamerVLAWorkspace` | DreamerVLA training |
+| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `dreamer_vla.runners.*` target from config | VLA SFT, including one trajectory per task |
+| `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTRunner` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
+| `train_wm.sh` | `world_model_dinowm_chunk`, `world_model_dinowm_step`, `oft_world_model_dinowm_chunk` | route-specific `dreamer_vla.runners.*` target from config | WM training |
+| `train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_oft_dino_wm_wmpo_outcome` | `JointDreamerVLARunner` | DreamerVLA training |
 
-Configs point directly at the route-specific workspace class.
+Configs point directly at the route-specific runner class.
 
 Most wrappers accept standard environment variables:
 
@@ -59,8 +59,6 @@ CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
 | Script | Purpose |
 | --- | --- |
 | `eval_libero_vla.sh` | Single-process LIBERO rollout eval for VLA or Dreamer checkpoints |
-| `eval_libero.sh` | Legacy LIBERO eval wrapper |
-| `evals_libero/*.sh` | Task-suite specific eval wrappers |
 
 For Dreamer checkpoints, `eval_libero_vla.sh` supports:
 

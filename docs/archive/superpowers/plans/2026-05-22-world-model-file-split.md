@@ -4,7 +4,7 @@
 
 **Goal:** Split monolithic world-model implementations into snake_case files while keeping old imports working.
 
-**Architecture:** Move shared world-model adapter types into `base_world_model.py`. Move each WorldModel class body into its own snake_case module under `src/models/world_model/`. Keep `dreamerv3_torch.py` and `tssm_torch.py` as compatibility aggregation modules for existing Hydra targets and scripts.
+**Architecture:** Move shared world-model adapter types into `base_world_model.py`. Move each WorldModel class body into its own snake_case module under `dreamer_vla/models/world_model/`. Keep `dreamerv3_torch.py` and `tssm_torch.py` as compatibility aggregation modules for existing Hydra targets and scripts.
 
 **Tech Stack:** Python, PyTorch, Hydra import targets, pytest.
 
@@ -19,14 +19,14 @@
 - [ ] **Step 1: Write the failing test**
 
 ```python
-from src.models.world_model.base_world_model import BaseWorldModel, DreamerV3LatentState, DreamerV3Loss
-from src.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import DreamerV3PixelRynnBackboneWorldModel
-from src.models.world_model.dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
-from src.models.world_model.dreamer_v3_token_from_pixel_world_model import DreamerV3TokenFromPixelWorldModel
-from src.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
-from src.models.world_model.tssm_rynn_backbone_world_model import TSSMRynnBackboneWorldModel
-from src.models.world_model.tssm_token_rynn_backbone_world_model import TSSMTokenRynnBackboneWorldModel
-from src.models.world_model import dreamerv3_torch, tssm_torch
+from dreamer_vla.models.world_model.base_world_model import BaseWorldModel, DreamerV3LatentState, DreamerV3Loss
+from dreamer_vla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import DreamerV3PixelRynnBackboneWorldModel
+from dreamer_vla.models.world_model.dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
+from dreamer_vla.models.world_model.dreamer_v3_token_from_pixel_world_model import DreamerV3TokenFromPixelWorldModel
+from dreamer_vla.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
+from dreamer_vla.models.world_model.tssm_rynn_backbone_world_model import TSSMRynnBackboneWorldModel
+from dreamer_vla.models.world_model.tssm_token_rynn_backbone_world_model import TSSMTokenRynnBackboneWorldModel
+from dreamer_vla.models.world_model import dreamerv3_torch, tssm_torch
 
 
 def test_split_world_model_modules_export_classes() -> None:
@@ -57,16 +57,16 @@ Expected: FAIL with `ModuleNotFoundError` for the new split modules.
 ### Task 2: Split Production Modules
 
 **Files:**
-- Create: `src/models/world_model/base_world_model.py`
-- Create: `src/models/world_model/dreamer_v3_pixel_world_model.py`
-- Create: `src/models/world_model/dreamer_v3_token_world_model.py`
-- Create: `src/models/world_model/dreamer_v3_token_from_pixel_world_model.py`
-- Create: `src/models/world_model/dreamer_v3_pixel_rynn_backbone_world_model.py`
-- Create: `src/models/world_model/tssm_rynn_backbone_world_model.py`
-- Create: `src/models/world_model/tssm_token_rynn_backbone_world_model.py`
-- Modify: `src/models/world_model/dreamerv3_torch.py`
-- Modify: `src/models/world_model/tssm_torch.py`
-- Modify: `src/models/world_model/__init__.py`
+- Create: `dreamer_vla/models/world_model/base_world_model.py`
+- Create: `dreamer_vla/models/world_model/dreamer_v3_pixel_world_model.py`
+- Create: `dreamer_vla/models/world_model/dreamer_v3_token_world_model.py`
+- Create: `dreamer_vla/models/world_model/dreamer_v3_token_from_pixel_world_model.py`
+- Create: `dreamer_vla/models/world_model/dreamer_v3_pixel_rynn_backbone_world_model.py`
+- Create: `dreamer_vla/models/world_model/tssm_rynn_backbone_world_model.py`
+- Create: `dreamer_vla/models/world_model/tssm_token_rynn_backbone_world_model.py`
+- Modify: `dreamer_vla/models/world_model/dreamerv3_torch.py`
+- Modify: `dreamer_vla/models/world_model/tssm_torch.py`
+- Modify: `dreamer_vla/models/world_model/__init__.py`
 
 - [ ] **Step 1: Move shared adapter types**
 

@@ -53,8 +53,8 @@ import torch
 from omegaconf import OmegaConf
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-from src.dataloader.wm_replay_classifier_dataset import _find_demo_pairs
-from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
+from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
 def _parse_ckpt_arg(raw: str) -> tuple[str, Path]:

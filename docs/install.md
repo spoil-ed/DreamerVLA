@@ -38,7 +38,7 @@ This repository uses the same fix direction as upstream `PR #84`:
 ### Install / Reinstall
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA/LIBERO
+cd /mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO
 python -m pip install --no-build-isolation -e .
 ```
 
@@ -56,7 +56,7 @@ python -c "import libero; print(libero.__path__)"
 Then verify the dataset integrity script can run directly:
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA/LIBERO
+cd /mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO
 python scripts/check_dataset_integrity.py
 ```
 
@@ -84,5 +84,5 @@ The built-in checks mean:
 For the current machine, the validated dataset path is:
 
 ```bash
-/mnt/data/spoil/workspace/DreamerVLA/LIBERO/libero/datasets
+/mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO/libero/datasets
 ```

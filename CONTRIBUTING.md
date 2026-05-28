@@ -77,11 +77,11 @@ Here documents the general guidelines that all contributors should follow to ens
 
 * **Error Handling**: All assertions and exceptions should be accompanied with a clear and meaningful error messages. Empty messages and messages that reiterate the assertion itself like `xxx != yyy` is unacceptable. Add assertion to check for invalid inputs and states as early as possible, e.g., before performing division or array indexing.
 
-* **Logging**: Use logging instead of print statements for logging information, warnings, and errors. When you are in `Worker`, use `self.log_info`, `self.log_warning`, and `self.log_error` methods for logging. Outside of `Worker`, you can use the following pattern:
+* **Logging**: Use logging instead of print statements for logging information, warnings, and errors. Training routes should use the runner logger / `dreamer_vla.utils.json_logger` path where available. For module-level logging, use the standard library logger:
   ```python
-  from src.utils.logging import get_logger
+  import logging
 
-  logger = get_logger()
+  logger = logging.getLogger(__name__)
   logger.info("This is an info message.")
   logger.warning("This is a warning message.")
   logger.error("This is an error message.")

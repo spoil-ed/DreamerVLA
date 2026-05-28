@@ -21,7 +21,7 @@
 #   CONFIG=latent_classifier_libero_goal_chunk NGPU=1 CUDA_VISIBLE_DEVICES=4 \
 #     bash scripts/train_wm.sh
 
-_target_: src.workspace.LatentClassifierWorkspace
+_target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   latent_dim: 35840

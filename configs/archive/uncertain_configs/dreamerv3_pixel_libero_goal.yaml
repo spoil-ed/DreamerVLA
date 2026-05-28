@@ -1,7 +1,7 @@
 defaults:
-  - archive/libero10_legacy/dreamerv3_pixel_libero_10
+  - /archive/libero10_legacy/dreamerv3_pixel_libero_10
   - _self_
 
-_target_: src.workspace.PixelWMWorkspace
+_target_: dreamer_vla.runners.PixelWMRunner
 training:
   out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_goal

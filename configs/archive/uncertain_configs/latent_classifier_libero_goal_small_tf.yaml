@@ -31,7 +31,7 @@
 # Launch:
 #   bash scripts/train_latent_classifier.sh latent_classifier_libero_goal_small_tf
 
-_target_: src.workspace.LatentClassifierWorkspace
+_target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   latent_dim: 35840

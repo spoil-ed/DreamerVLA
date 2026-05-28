@@ -81,8 +81,7 @@ def _open_loop_metrics(payload: Mapping[str, Any]) -> dict[str, float | None]:
 def cmd_plan(args: argparse.Namespace) -> int:
     for key, spec in VARIANTS.items():
         env = {
-            "WM_KIND": "rynn_dino",
-            "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal",
+            "CONFIG": "world_model_dinowm_chunk",
         }
         env.update(spec.get("env", {}))
         env["OUT_DIR"] = str(Path(args.out_dir) / key)

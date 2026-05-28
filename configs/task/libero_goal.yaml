@@ -69,13 +69,13 @@ openvla_oft:
   token_dim: 4096
   chunk_size: 8
   latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
-  sft_policy_target: src.models.encoder.OpenVLAOFTPolicy
-  sft_dataset_target: src.dataloader.OpenVLAOFTHDF5DatasetFactory
-  wm_target: src.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
-  classifier_target: src.models.reward.LatentSuccessClassifier
-  actor_target: src.models.actor.Pi0ActionHiddenActor
+  sft_policy_target: dreamer_vla.models.encoder.OpenVLAOFTPolicy
+  sft_dataset_target: dreamer_vla.dataset.OpenVLAOFTHDF5DatasetFactory
+  wm_target: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  classifier_target: dreamer_vla.models.reward.LatentSuccessClassifier
+  actor_target: dreamer_vla.models.actor.Pi0ActionHiddenActor
   actor_head_type: legacy
   actor_adapter_type: residual_mlp
   actor_adapter_hidden_dim: 1024
   actor_freeze_output_projection: false
-  critic_target: src.models.critic.twohot_critic.TwohotCritic
+  critic_target: dreamer_vla.models.critic.twohot_critic.TwohotCritic

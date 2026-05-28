@@ -27,22 +27,19 @@ VARIANTS = {
     "dino_visual": {
         "label": "DINO visual embedding",
         "env": {
-            "WM_KIND": "dreamerv3_pixel",
-            "CONFIG_NAME": "dreamerv3_pixel_libero_goal",
+            "CONFIG": "world_model_dinowm_step",
         },
     },
     "pi0_query": {
         "label": "pi0 query hidden",
         "env": {
-            "WM_KIND": "oft_dino",
-            "CONFIG_NAME": "oft_dino_wm_action_hidden_libero_goal_C",
+            "CONFIG": "oft_world_model_dinowm_chunk",
         },
     },
     "full_action": {
         "label": "Full action hidden",
         "env": {
-            "WM_KIND": "rynn_dino",
-            "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal",
+            "CONFIG": "world_model_dinowm_chunk",
         },
     },
 }

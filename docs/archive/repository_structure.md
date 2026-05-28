@@ -1,7 +1,7 @@
 # Repository Structure
 
 This document is the publishable map of the DreamerVLA repository. The rule is:
-source code lives in `src/`, launch recipes live in `scripts/`, experiment
+source code lives in `dreamer_vla/`, launch recipes live in `scripts/`, experiment
 configuration lives in `configs/`, and all generated artifacts live under
 `data/`.
 
@@ -15,20 +15,20 @@ DreamerVLA/
 ├── requirements.txt          # Runtime dependencies
 ├── configs/                  # Hydra configs
 ├── scripts/                  # Public launch / eval / diagnostic entry points
-├── src/                      # Python package source
+├── dreamer_vla/                      # Python package source
 ├── docs/                     # Architecture and experiment documentation
 ├── data/                     # Ignored runtime artifacts: ckpts, datasets, outputs
-├── LIBERO/                   # Ignored local LIBERO checkout
-└── dependencies/             # Ignored third-party local checkouts / wheels
+├── third_party/LIBERO/                   # Ignored local LIBERO checkout
+└── third_party/             # Ignored third-party local checkouts / wheels
 ```
 
-`data/`, `LIBERO/`, and `dependencies/` are intentionally ignored by git. A
+`data/`, `third_party/LIBERO/`, and `third_party/` are intentionally ignored by git. A
 release should document how to obtain them, not commit them.
 
 ## Source Package
 
 ```text
-src/
+dreamer_vla/
 ├── algorithms/               # Dreamer actor-critic / imagination algorithms
 ├── cli/                      # Hydra CLI entry points
 ├── dataloader/               # LIBERO, token, pixel, and Rynn-hidden datasets
@@ -45,9 +45,9 @@ The stable execution path is:
 
 ```text
 scripts/*.sh
-  -> python -m src.cli.train --config-name <config>
-  -> src/workspace/<workspace>.py
-  -> src/models/, src/algorithms/, src/dataloader/
+  -> python -m dreamer_vla.cli.train --config-name <config>
+  -> dreamer_vla/runners/<workspace>.py
+  -> dreamer_vla/models/, dreamer_vla/algorithms/, dreamer_vla/dataset/
 ```
 
 ## Current Research Mainline
@@ -121,16 +121,16 @@ configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml
 configs/eval_libero_vla.yaml                # rollout eval
 ```
 
-Active configs should target the public workspace API in `src.workspace`:
+Active configs should target the public workspace API in `dreamer_vla.runners`:
 
 ```text
-ActionHiddenWMWorkspace      # current pi0 action-hidden WM
-PixelWMWorkspace             # pixel DreamerV3 baseline
-TokenWMWorkspace             # token DreamerV3 baseline
-ChameleonLatentWMWorkspace   # Chameleon / LaDiWM-style baseline
-VLASFTWorkspace              # VLA action-head SFT
-JointDreamerVLAWorkspace     # current action-hidden actor route
-LiberoEvalWorkspace          # LIBERO rollout eval
+ActionHiddenWMRunner      # current pi0 action-hidden WM
+PixelWMRunner             # pixel DreamerV3 baseline
+TokenWMRunner             # token DreamerV3 baseline
+ChameleonLatentWMRunner   # Chameleon / LaDiWM-style baseline
+VLASFTRunner              # VLA action-head SFT
+JointDreamerVLARunner     # current action-hidden actor route
+LiberoEvalRunner          # LIBERO rollout eval
 ```
 
 Each config points directly at a route-specific workspace class.
@@ -138,9 +138,9 @@ Each config points directly at a route-specific workspace class.
 Physical layout follows the same boundary:
 
 ```text
-src/workspace/__init__.py        # public workspace exports
-src/workspace/base_workspace.py  # shared lifecycle/checkpoint helpers
-src/workspace/*_workspace.py     # route-specific workspace implementations
+dreamer_vla/runners/__init__.py        # public workspace exports
+dreamer_vla/runners/base_runner.py  # shared lifecycle/checkpoint helpers
+dreamer_vla/runners/*_runner.py     # route-specific workspace implementations
 ```
 
 See `configs/README.md` for the active registry and historical configs.

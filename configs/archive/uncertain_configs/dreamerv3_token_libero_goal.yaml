@@ -1,8 +1,8 @@
 defaults:
-  - archive/libero10_legacy/dreamerv3_token_libero_10
+  - /archive/libero10_legacy/dreamerv3_token_libero_10
   - _self_
 
-_target_: src.workspace.TokenWMWorkspace
+_target_: dreamer_vla.runners.TokenWMRunner
 training:
   out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_token/dreamerv3_token_libero_goal
 

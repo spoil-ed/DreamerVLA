@@ -80,19 +80,19 @@ predictive.
 
 The repo was then cleaned into a more stable shape:
 
-- source code under `src/`
+- source code under `dreamer_vla/`
 - launch and diagnostic entry points under `scripts/`
 - Hydra configs under `configs/`
 - generated data and checkpoints under `data/`
-- route-specific workspace classes exported through `src.workspace`
+- route-specific workspace classes exported through `dreamer_vla.runners`
 
 The public execution path became:
 
 ```text
 scripts/*.sh
-  -> python -m src.cli.train --config-name <config>
-  -> src/workspace/<workspace>.py
-  -> src/models/, src/algorithms/, src/dataloader/
+  -> python -m dreamer_vla.cli.train --config-name <config>
+  -> dreamer_vla/runners/<workspace>.py
+  -> dreamer_vla/models/, dreamer_vla/algorithms/, dreamer_vla/dataset/
 ```
 
 This made it easier to compare routes without mixing old workspaces, configs,

@@ -3,7 +3,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: src.workspace.LatentClassifierWorkspace
+_target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   _target_: ${task.openvla_oft.classifier_target}

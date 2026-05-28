@@ -31,10 +31,10 @@ from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa
     load_world_model_state,
     obs_to_action_hidden,
 )
-from src.env.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
-from src.utils.policy_chunk_queue import PolicyChunkActionQueue  # noqa: E402
-from src.utils.seed import set_seed  # noqa: E402
-from src.utils.torch_utils import freeze_module  # noqa: E402
+from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
+from dreamer_vla.utils.policy_chunk_queue import PolicyChunkActionQueue  # noqa: E402
+from dreamer_vla.utils.seed import set_seed  # noqa: E402
+from dreamer_vla.utils.torch_utils import freeze_module  # noqa: E402
 
 
 def load_eval_checkpoint(
@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
         ),
     )
     p.add_argument("--out-dir", required=True)

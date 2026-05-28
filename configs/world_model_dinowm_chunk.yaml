@@ -19,7 +19,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: src.workspace.RynnDinoWMWorkspace
+_target_: dreamer_vla.runners.RynnDinoWMRunner
 
 hydra:
   run:
@@ -53,7 +53,7 @@ dataset:
   # has a valid `rewards` field per window (per_window_dense: +1 across every
   # frame of a terminal-ending window).  sequence_length must be >= H + K = 8;
   # we keep 32 for parity with the per-step ckpt training run.
-  _target_: src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
   hidden_dir: ${task.pi0_legacy_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
@@ -89,7 +89,7 @@ dataloader:
 
 world_model:
   # True Plan B: chunk-as-one-input transition with learned mask_obs_token.
-  _target_: src.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  _target_: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   # Close-loop multi-chunk rollout loss to cure WM-internal autoregressive drift.
   # N=4 means chunks 1..3 are rolled forward from chunk 0's predicted hidden

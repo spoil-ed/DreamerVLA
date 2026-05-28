@@ -48,8 +48,8 @@ from omegaconf import OmegaConf
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-from src.dataloader.wm_replay_classifier_dataset import _find_demo_pairs
-from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
+from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
 def _load_demo_real_hidden(

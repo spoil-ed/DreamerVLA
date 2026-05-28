@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from src.models.world_model.dreamerv3_torch import _act
-from src.models.world_model.tssm_torch import (
+from dreamer_vla.models.world_model.dreamerv3_torch import _act
+from dreamer_vla.models.world_model.tssm_torch import (
     TSSMDynamic,
     TSSMRynnBackboneWorldModel,
     TSSMTokenDynamic,

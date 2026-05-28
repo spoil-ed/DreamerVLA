@@ -3,7 +3,7 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
-from scripts.preprocess_remaining_steps_reward import (
+from scripts.preprocess.preprocess_remaining_steps_reward import (
     SCHEME_NAME,
     _copy_file_with_remaining_rewards,
     remaining_steps_reward,

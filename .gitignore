@@ -12,9 +12,8 @@ dist/
 venv/
 .DS_Store
 
-# Third-party local checkout (installed in editable mode)
-LIBERO/
-dependencies/
+# Third-party local checkouts/wheels (installed in editable mode)
+third_party/
 
 # Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
 # Everything under data/ is generated or downloaded per README; nothing here is source.

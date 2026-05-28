@@ -22,7 +22,7 @@ export MPLCONFIGDIR=/tmp/matplotlib-${RUN}
 mkdir -p "$MPLCONFIGDIR" "$OUT"
 
 echo "===== ${RUN} start ====="; date
-python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 --master-port=29521 -m src.cli.train \
+python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 --master-port=29521 -m dreamer_vla.cli.train \
   --config-name dreamer_vla_libero_goal_pi0_legacy_action_hidden_head_actor \
   training.out_dir="$OUT" \
   training.run_actor_critic_phase=false \

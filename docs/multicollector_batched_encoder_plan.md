@@ -4,7 +4,7 @@
 
 当前在线 PPO 的瓶颈主要不是 PPO 本身，而是真实环境采样阶段：
 
-- `LIBERO/robosuite env.step()` 是串行模拟器调用。
+- `third_party/LIBERO/robosuite env.step()` 是串行模拟器调用。
 - VLA encoder 每个真实 env step 都要把两路图像、state、task description 编成 `35*1024` hidden。
 - 已经修成真实执行 5-step chunk 后，actor forward 从每 step 一次降到每 5 step 一次，但 collect fps 仍大约 `1.0-1.2 env-step/s`。
 - 实验版“一个进程里串行多个 env + batched encoder”能跑，但没有明显提速，因为多个 env 仍然在同一个 Python 进程里串行 `env.step()`。

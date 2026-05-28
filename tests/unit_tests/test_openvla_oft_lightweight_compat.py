@@ -7,8 +7,8 @@ import numpy as np
 import torch
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VENDORED_OPENVLA_OFT = PROJECT_ROOT / "src" / "openvla-oft"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+VENDORED_OPENVLA_OFT = PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"
 
 
 class _TinyTokenizer:
@@ -24,7 +24,7 @@ class _TinyTokenizer:
 
 
 def test_openvla_oft_path_prefers_vendored_lightweight_tree() -> None:
-    from src.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     selected = ensure_openvla_oft_on_path()
 
@@ -32,8 +32,14 @@ def test_openvla_oft_path_prefers_vendored_lightweight_tree() -> None:
     assert (selected / "openvla_oft").is_dir()
 
 
+def test_official_openvla_oft_default_root_lives_under_third_party() -> None:
+    from scripts.eval.openvla_oft_obs_action_policy import default_openvla_oft_root
+
+    assert default_openvla_oft_root() == PROJECT_ROOT / "third_party" / "openvla-oft"
+
+
 def test_prismatic_compat_imports_resolve_to_vendored_lightweight_tree() -> None:
-    from src.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     modules = [
@@ -56,7 +62,7 @@ def test_prismatic_compat_imports_resolve_to_vendored_lightweight_tree() -> None
 
 
 def test_lightweight_action_tokenizer_action_head_and_collator_interfaces() -> None:
-    from src.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     from prismatic.models.action_heads import L1RegressionActionHead

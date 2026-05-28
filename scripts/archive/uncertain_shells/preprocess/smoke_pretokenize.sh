@@ -51,7 +51,7 @@ echo "[1/5] Extracting from raw HDF5 ..."
 rm -rf "${IMG_DIR}"
 mkdir -p "${IMG_DIR}"
 
-python -m src.preprocess.smoke_extract_hdf5 \
+python -m dreamer_vla.preprocess.smoke_extract_hdf5 \
     --hdf5 "${HDF5_FILE}" \
     --save_dir "${IMG_DIR}" \
     --max_demos "${MAX_DEMOS}" \
@@ -123,5 +123,5 @@ echo "========================================="
 echo " Smoke pretokenize pipeline complete!"
 echo ""
 echo " To run smoke VLA training with this generated data config:"
-echo "   python -m src.cli.train --config-name pretokenize_vla_libero_goal dataset.config_path=${CONFIG_DIR}/smoke_pretokenize.yaml dataset_val_ind=null dataset_val_ood=null training.num_epochs=1 training.max_train_steps=2"
+echo "   python -m dreamer_vla.cli.train --config-name pretokenize_vla_libero_goal dataset.config_path=${CONFIG_DIR}/smoke_pretokenize.yaml dataset_val_ind=null dataset_val_ood=null training.num_epochs=1 training.max_train_steps=2"
 echo "========================================="

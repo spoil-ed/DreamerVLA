@@ -3,7 +3,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: src.workspace.OpenVLAOFTWorkspace
+_target_: dreamer_vla.runners.OpenVLAOFTRunner
 seed: 7
 
 hydra:

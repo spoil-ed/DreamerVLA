@@ -1,6 +1,6 @@
 # Graveyard 候选清单 — 2026-05-27
 
-**用途：** 在执行 `mv → graveyard/` 之前，列出全部候选项并附证据，供人工 review。
+**用途：** 在执行 `mv → docs/archive/graveyard/` 之前，列出全部候选项并附证据，供人工 review。
 未列入此清单的文件 / 模块均判定为活跃，保持原状。
 
 **孤儿的判定标准（5 条同时成立）：**
@@ -24,7 +24,7 @@
 
 ---
 
-## 2. docs/ — **2 个候选 → graveyard/docs/**
+## 2. docs/ — **2 个候选 → docs/archive/graveyard/docs/**
 
 | 文件 | 证据 | 候选理由 |
 |---|---|---|
@@ -36,12 +36,12 @@
 
 ---
 
-## 3. src/ — **1 个候选 + 1 个待定**
+## 3. dreamer_vla/ — **1 个候选 + 1 个待定**
 
 | 模块 | 状态 | 证据 |
 |---|---|---|
-| `src/models/xllmx/model/tokenizer.py` | **orphan-candidate** | `src/models/xllmx/model/__init__.py` 是空文件无再导出；`grep "xllmx.model.tokenizer\|xllmx.model import"` → 0 命中 |
-| `src/models/xllmx/data/data_reader.py` | **待定 — 关联到一个 bug** | `src/preprocess/item_processor.py:19` 写的是 `from src.xllmx.data.data_reader import ...`，但模块实际在 `src.models.xllmx.data.data_reader` — **import 路径是断的**。如果 `item_processor.py` 本身就跑不通，那 `data_reader` 也算孤儿；如果 `item_processor.py` 是活跃的需要修 import — 这超出本次清理范围（CLAUDE.local.md "外科手术式改动"）|
+| `dreamer_vla/models/xllmx/model/tokenizer.py` | **orphan-candidate** | `dreamer_vla/models/xllmx/model/__init__.py` 是空文件无再导出；`grep "xllmx.model.tokenizer\|xllmx.model import"` → 0 命中 |
+| `dreamer_vla/models/xllmx/data/data_reader.py` | **待定 — 关联到一个 bug** | `dreamer_vla/preprocess/item_processor.py:19` 写的是 `from dreamer_vla.xllmx.data.data_reader import ...`，但模块实际在 `dreamer_vla.models.xllmx.data.data_reader` — **import 路径是断的**。如果 `item_processor.py` 本身就跑不通，那 `data_reader` 也算孤儿；如果 `item_processor.py` 是活跃的需要修 import — 这超出本次清理范围（CLAUDE.local.md "外科手术式改动"）|
 
 **建议：** 仅移 `tokenizer.py` 到 graveyard；`data_reader.py` 留原地，把 `item_processor.py` 的 import bug 加到 `docs/TODO.md` 让你后续单独决定（要么修 import 路径，要么连 `data_reader.py` 一起归档）。
 
@@ -56,7 +56,7 @@
 | `scripts/chain_libero_object_after_10.sh` | 仅自引用注释；无其它 shell/py/md 引用 |
 | `scripts/run_libero_missing_data_45.sh` | 0 引用；包装 `process_all_libero_data.sh` 但自身没人调 |
 | `scripts/run_vla_nongoal_after_data_45.sh` | 0 引用；包装 `train_vla_nongoal_45.sh` 但自身没人调 |
-| `scripts/eval/eval_dreamerv3_token_action.py` | 0 外部引用（含此次刚从 `src/cli/` 搬过来的脚本 — 见 memory obs 4627）|
+| `scripts/eval/eval_dreamerv3_token_action.py` | 0 外部引用（含此次刚从 `dreamer_vla/cli/` 搬过来的脚本 — 见 memory obs 4627）|
 | `scripts/eval/eval_action_diff_wm_vs_sft.py` | 仅 `configs/archive/**` 间接相关；活跃区零引用 |
 | `scripts/eval/run_eval_ppo_alltasks_g67_8proc.sh` | 仅自身 header 注释；无其它引用 |
 | `scripts/training/train_chameleon_latent_flow_wm.py` | 0 引用 |
@@ -84,7 +84,7 @@
 | `scripts/diagnostics/validate_oft_rynn_style_sidecar.py` | 0 引用 |
 | `scripts/eval/eval_frozen_wm_actor.py` | 0 引用 |
 | `scripts/training/train_frozen_wm_actor_critic.py` | 0 引用（虽 import 了活跃训练脚本，但自己没人调）|
-| `scripts/preprocess/build_classifier_shards_from_demos.py` | 仅 `src/dataloader/libero_sim_rollout_shards.py` 的 docstring 提到 |
+| `scripts/preprocess/build_classifier_shards_from_demos.py` | 仅 `dreamer_vla/dataset/libero_sim_rollout_shards.py` 的 docstring 提到 |
 
 **两种处理方式可选：**
 - 保守：4b 全部留原地，只移 4a（共 9 项）
@@ -96,11 +96,11 @@
 
 共找到 9 处 `# legacy` / `# Legacy aliases` / `# DO NOT USE in new code` 标记，分布在：
 
-- `src/algorithms/__init__.py`、`src/algorithms/ppo/__init__.py` — 4 个 `dino_wmpo_*_step` 函数别名，**仍在 `__all__` 中导出且被外部使用**
-- `src/algorithms/dino_wmpo.py`、`src/algorithms/dino_wmpo_chunk.py` — 整个文件是 legacy alias shim，**仍在 `__init__` 中导出**
-- `src/dataloader/wm_replay_classifier_dataset.py:237` — 老数据格式兼容分支
-- `src/models/world_model/tssm_rynn_backbone_world_model.py:58` — `tssm_window` 参数 "legacy / unused but kept for cfg-compat"
-- `src/models/chameleon_model/chameleon/modeling_chameleon.py:473` — flash-attn 版本 workaround `TODO`
+- `dreamer_vla/algorithms/__init__.py`、`dreamer_vla/algorithms/ppo/__init__.py` — 4 个 `dino_wmpo_*_step` 函数别名，**仍在 `__all__` 中导出且被外部使用**
+- `dreamer_vla/algorithms/dino_wmpo.py`、`dreamer_vla/algorithms/dino_wmpo_chunk.py` — 整个文件是 legacy alias shim，**仍在 `__init__` 中导出**
+- `dreamer_vla/dataset/wm_replay_classifier_dataset.py:237` — 老数据格式兼容分支
+- `dreamer_vla/models/world_model/tssm_rynn_backbone_world_model.py:58` — `tssm_window` 参数 "legacy / unused but kept for cfg-compat"
+- `dreamer_vla/models/chameleon_model/chameleon/modeling_chameleon.py:473` — flash-attn 版本 workaround `TODO`
 
 这些都是**活跃维护中的 back-compat shim**，移走会破坏现有 import。CLAUDE.local.md 第 3 条"don't remove pre-existing dead code unless asked"明确说不要碰这种已存在但仍用的代码。**保持原状。**
 
@@ -111,10 +111,10 @@
 ## 汇总
 
 - **configs/**: 0 项
-- **docs/**: 2 项 → `graveyard/docs/`
-- **src/**: 1 项 → `graveyard/src/models/xllmx/model/`
-- **scripts/ (4a 明确孤儿)**: 9 项 → `graveyard/scripts/...`
+- **docs/**: 2 项 → `docs/archive/graveyard/docs/`
+- **dreamer_vla/**: 1 项 → `docs/archive/graveyard/src/models/xllmx/model/`
+- **scripts/ (4a 明确孤儿)**: 9 项 → `docs/archive/graveyard/scripts/...`
 - **scripts/ (4b 借界诊断)**: 16 项 — **等你决定**
 - **代码块标记**: 0 项移动（按 CLAUDE.local.md 保留）
 
-**目录布局**：在 `DreamerVLA/graveyard/` 下按原始路径镜像存放，便于追溯。
+**目录布局**：在 `DreamerVLA/docs/archive/graveyard/` 下按原始路径镜像存放，便于追溯。

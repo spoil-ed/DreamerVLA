@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dreamer-vla"
+version = "0.1.0"
+description = "Dreamer-style world-model and VLA training framework for LIBERO."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "hydra-core",
+    "omegaconf",
+]
+
+[tool.setuptools.packages.find]
+include = ["dreamer_vla*"]

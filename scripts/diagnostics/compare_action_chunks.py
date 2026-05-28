@@ -1,7 +1,7 @@
 """Compare action chunks: trained policy vs frozen pi0-SFT baseline.
 
 Both policies are VLAActionHeadActor instances built from the same config
-(``configs/dreamervla_pi0_action_hidden_head_actor.yaml``):
+(``configs/dreamervla_rynn_dino_wm_actor_critic.yaml``):
 
   - baseline: only the pi0 SFT warm-start via init_action_head_ckpt
               (adapter random-init, never updated)
@@ -58,7 +58,7 @@ def fmt_row(label: str, vec: torch.Tensor) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", default="configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+        "--config", default="configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
     )
     parser.add_argument(
         "--encoder-ckpt",
@@ -107,7 +107,8 @@ def main() -> None:
 
     # ── fixed-seed deterministic WM-like inputs (random gaussian here) ────
     torch.manual_seed(args.seed)
-    hidden = torch.randn(args.n_inputs, 5120, device=args.device)
+    hidden_dim = int(OmegaConf.select(cfg, "policy.hidden_dim", default=5120))
+    hidden = torch.randn(args.n_inputs, hidden_dim, device=args.device)
 
     bc = get_chunk(baseline, hidden)
     tc = get_chunk(trained, hidden)

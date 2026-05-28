@@ -1,5 +1,5 @@
 defaults:
-  - dreamer_vla_libero_goal_rynn_dino_wm_actor_critic
+  - /archive/uncertain_configs/dreamer_vla_libero_goal_rynn_dino_wm_dense_chunk
   - _self_
 
 training:

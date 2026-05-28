@@ -3,7 +3,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: src.workspace.VLASFTWorkspace
+_target_: dreamer_vla.runners.VLASFTRunner
 seed: 7
 
 hydra:
@@ -45,7 +45,7 @@ init:
   vla_ckpt_path: ${task.vla_ckpt_path}
 
 encoder:
-  _target_: src.models.encoder.RynnVLAEncoder
+  _target_: dreamer_vla.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
   tokenizer_path: ${task.tokenizer_path}
   text_tokenizer_path: ${task.text_tokenizer_path}
@@ -58,17 +58,17 @@ encoder:
   pool: mean
 
 dataset:
-  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.pretokenize_dataset.PretokenizeActionChunkDataset
   config_path: ${task.pretokenize_config_path}
   action_horizon: ${task.action_horizon}
 
 dataset_val_ind:
-  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.pretokenize_dataset.PretokenizeActionChunkDataset
   config_path: ${task.pretokenize_val_ind_config_path}
   action_horizon: ${task.action_horizon}
 
 dataset_val_ood:
-  _target_: src.dataloader.pretokenize_dataset.PretokenizeActionChunkDataset
+  _target_: dreamer_vla.dataset.pretokenize_dataset.PretokenizeActionChunkDataset
   config_path: ${task.pretokenize_val_ood_config_path}
   action_horizon: ${task.action_horizon}
 

@@ -1,4 +1,4 @@
-_target_: src.workspace.OpenVLAOFTWorkspace
+_target_: dreamer_vla.runners.OpenVLAOFTRunner
 seed: 7
 
 hydra:
@@ -25,7 +25,7 @@ training:
   lr_warmup_steps: 0
 
 policy:
-  _target_: src.models.encoder.OpenVLAOFTPolicy
+  _target_: dreamer_vla.models.encoder.OpenVLAOFTPolicy
   model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
   component_ckpt_dir: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal
   resume_step: 50000
@@ -41,7 +41,7 @@ policy:
   freeze_vla_backbone: false
 
 dataset:
-  _target_: src.dataloader.OpenVLAOFTRLDSDatasetFactory
+  _target_: dreamer_vla.dataset.OpenVLAOFTRLDSDatasetFactory
   data_root_dir: /mnt/data/spoil/workspace/DreamerVLA/data/rlds/modified_libero_rlds
   dataset_name: libero_goal_no_noops
   shuffle_buffer_size: 100000

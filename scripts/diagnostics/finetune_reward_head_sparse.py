@@ -37,12 +37,12 @@ from torch.utils.data import DataLoader
 from scripts.training.train_online_pi0_action_hidden_dreamervla import (
     load_world_model_state,
 )
-from src.dataloader.libero_balanced_terminal_dataset import (
+from dreamer_vla.dataset.libero_balanced_terminal_dataset import (
     BalancedTerminalSampler,
     LIBEROBalancedTerminalDataset,
 )
-from src.models.world_model.dreamerv3_torch import BinaryRewardHead
-from src.utils.seed import set_seed
+from dreamer_vla.models.world_model.dreamerv3_torch import BinaryRewardHead
+from dreamer_vla.utils.seed import set_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml"
         ),
     )
     p.add_argument("--world-model-ckpt", required=True)
@@ -156,7 +156,7 @@ def main() -> None:
     cfg.init.world_model_state_ckpt = args.world_model_ckpt
     # Force dataset → balanced-terminal variant; reuse existing dataset target's args.
     cfg.dataset._target_ = (
-        "src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+        "dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
     )
     cfg.dataset.sequence_length = int(args.sequence_length)
 
@@ -223,7 +223,7 @@ def main() -> None:
     print(f"[finetune] loss_mode = {loss_mode}", flush=True)
 
     if loss_mode == "per_window":
-        from src.models.world_model.dreamerv3_torch import BinaryRewardHead as _BRH
+        from dreamer_vla.models.world_model.dreamerv3_torch import BinaryRewardHead as _BRH
 
         if not isinstance(world_model.reward_head, _BRH):
             raise RuntimeError(

@@ -30,8 +30,8 @@ from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 
-from src.dataloader.libero_sim_rollout_shards import LatentSuccessShardDataset
-from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamer_vla.dataset.libero_sim_rollout_shards import LatentSuccessShardDataset
+from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
 def _collate(batch):

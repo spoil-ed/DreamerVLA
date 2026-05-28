@@ -187,7 +187,7 @@ Ordered by expected impact-to-effort ratio. Confidence tag in brackets.
 
 Implemented as variant **v4-F** (`pi0_time_broadcast`):
 
-- New class `Pi0TimeBroadcastDecoder` in `src/models/world_model/dreamerv3_torch.py`.
+- New class `Pi0TimeBroadcastDecoder` in `dreamer_vla/models/world_model/dreamerv3_torch.py`.
 - 5 learned time queries; transformer over `[8 memory; 5 queries]` (seq=13
   vs 43 in the old `pi0_transformer`).
 - Output `[B, 5, 1024]` is repeated along the joint axis to

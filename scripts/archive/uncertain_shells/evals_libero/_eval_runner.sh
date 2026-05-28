@@ -101,7 +101,7 @@ fi
 
 CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
 python -u -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=1 \
-  --module src.cli.train \
+  --module dreamer_vla.cli.train \
   --config-name eval_libero_vla \
   training.out_dir="$OUT_DIR" \
   "eval.ckpt_path=\"$CKPT_PATH\"" \

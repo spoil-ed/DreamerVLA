@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from src.models.world_model.dreamerv3_torch import (
+from dreamer_vla.models.world_model.dreamerv3_torch import (
     DreamerV3LatentState,
     DreamerV3PixelRynnBackboneWorldModel,
     DreamerV3RSSM,

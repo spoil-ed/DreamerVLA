@@ -7,9 +7,8 @@
 #  the Hydra CLI as trailing args.
 #
 #  Available CONFIGs:
-#    world_model_dinowm_step          (default)   DINO-WM, per-frame predictor
-#    world_model_dinowm_chunk                     DINO-WM, K-step chunk predictor
-#    world_model_rssm_step                        RSSM action-hidden WM
+#    world_model_dinowm_chunk        (default)   DINO-WM, K-step chunk predictor
+#    world_model_dinowm_step                     DINO-WM, per-frame predictor
 #    oft_world_model_dinowm_chunk                 OpenVLA-OFT hidden (56x4096), chunk WM
 #    latent_classifier_libero_goal_chunk          chunk latent success classifier
 #    oft_latent_classifier_chunk                  OpenVLA-OFT chunk latent classifier
@@ -27,7 +26,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # ---- defaults --------------------------------------------------------------
-CONFIG="${CONFIG:-world_model_dinowm_step}"
+CONFIG="${CONFIG:-world_model_dinowm_chunk}"
 NGPU="${NGPU:-1}"
 PYTHON="${PYTHON:-python}"
 MASTER_PORT="${MASTER_PORT:-29500}"
@@ -45,7 +44,7 @@ echo "[train_wm] extra hydra args: $*"
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m src.cli.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
 else
-  exec "${PYTHON}" -m src.cli.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
 fi

@@ -1,6 +1,6 @@
 # Dreamer actor-critic on the DINO-WM-style full RynnVLA action-hidden world model.
 # WM target/action hidden shape per step: 5 * 7 * 1024 = 35840.
-_target_: src.workspace.JointDreamerVLAWorkspace
+_target_: dreamer_vla.runners.JointDreamerVLARunner
 seed: 7
 
 hydra:
@@ -49,7 +49,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
   hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
   expected_model_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
@@ -89,7 +89,7 @@ world_model:
   # so an m1024 ckpt trained with RynnDinoWMWorldModel loads directly.
   # predict_next_chunk advances K env-steps per call (K must match
   # policy.time_horizon and algorithm.wmpo.chunk_size).
-  _target_: src.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  _target_: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
   chunk_size: 5
   obs_dim: 35840
   action_dim: 7
@@ -117,7 +117,7 @@ world_model:
   freeze_backbone: true
 
 policy:
-  _target_: src.models.vla_actor.Pi0ActionHiddenActor
+  _target_: dreamer_vla.models.vla_actor.Pi0ActionHiddenActor
   hidden_dim: 35840
   action_hidden_dim: 1024
   action_dim: 7
@@ -133,7 +133,7 @@ policy:
   init_action_head_ckpt: ${init.vla_ckpt_path}
 
 critic:
-  _target_: src.models.critic.twohot_critic.TwohotCritic
+  _target_: dreamer_vla.models.critic.twohot_critic.TwohotCritic
   hidden_dim: 1024
   critic_hidden_dim: 1024
   critic_layers: 3
@@ -145,10 +145,10 @@ critic:
   bin_max: 20.0
 
 algorithm:
-  # Mainline: PPO/WMPO-style imagined-trajectory actor update (src/algorithms/dino_wmpo.py).
-  # The dreamer-style lambda-return AC path (src/algorithms/dreamer_vla.py:imagine_actor_critic_step)
+  # Mainline: PPO/WMPO-style imagined-trajectory actor update (dreamer_vla/algorithms/dino_wmpo.py).
+  # The dreamer-style lambda-return AC path (dreamer_vla/algorithms/dreamer_vla.py:imagine_actor_critic_step)
   # is preserved as an optional fallback: set `update_type=dreamer` to use it.
-  # Dispatch is in src/workspace/dreamer_vla_workspace.py:~1105.
+  # Dispatch is in dreamer_vla/runners/dreamer_vla_runner.py:~1105.
   update_type: wmpo_dense_chunk
   wmpo:
     # K must equal world_model.chunk_size and policy.time_horizon.

@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT="${ROOT:-/mnt/data/spoil/workspace/DreamerVLA}"
 PYTHON_BIN="${PYTHON_BIN:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
-OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-/mnt/data/spoil/workspace/openvla-oft}"
+OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${ROOT}/third_party/openvla-oft}"
 
 SUITE="${SUITE:-libero_goal}"
 case "${SUITE}" in

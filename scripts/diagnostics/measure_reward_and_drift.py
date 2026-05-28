@@ -28,7 +28,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from src.models.world_model.dreamerv3_torch import DreamerV3LatentState
+from dreamer_vla.models.world_model.dreamerv3_torch import DreamerV3LatentState
 
 
 def parse_args():
@@ -143,7 +143,7 @@ def main() -> None:
             logits = world_model.reward_head(flat_feat)
             reward_curve = world_model.reward_head.pred(logits).float().cpu().numpy()
         else:
-            from src.models.world_model.dreamerv3_torch import _reward_pred
+            from dreamer_vla.models.world_model.dreamerv3_torch import _reward_pred
 
             pred = world_model.reward_head(flat_feat)
             reward_curve = (

@@ -7,12 +7,12 @@ import torch
 from torch import nn
 from omegaconf import OmegaConf
 
-from src.dataloader.libero_pixel_rynn_hidden_sequence_dataset import (
+from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from src.models.vla_actor import Pi0ActionHiddenActor, VLAActionHeadActor
-from src.workspace.dreamer_vla_workspace import DreamerVLAWorkspace
-from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
+from dreamer_vla.models.vla_actor import Pi0ActionHiddenActor, VLAActionHeadActor
+from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner
+from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
 
 
 def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
@@ -120,7 +120,7 @@ def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> Non
 
 
 def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
-    workspace = EvalLiberoVLAWorkspace.__new__(EvalLiberoVLAWorkspace)
+    workspace = EvalLiberoVLARunner.__new__(EvalLiberoVLARunner)
     workspace.cfg = OmegaConf.create(
         {
             "eval": {"obs_hidden_source": "action_query", "target_token_id": 10004},
@@ -156,7 +156,7 @@ def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
 
 
 def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
-    cfg = EvalLiberoVLAWorkspace._checkpoint_cfg_from_payload(
+    cfg = EvalLiberoVLARunner._checkpoint_cfg_from_payload(
         {
             "cfg": {
                 "training": {"out_dir": "/tmp/eval"},
@@ -268,7 +268,7 @@ def test_dreamervla_init_loader_filters_and_remaps_compatible_state() -> None:
 
             return Ctx()
 
-    workspace = DreamerVLAWorkspace.__new__(DreamerVLAWorkspace)
+    workspace = DreamerVLARunner.__new__(DreamerVLARunner)
     workspace.world_model = nn.Module()
     workspace.world_model.module = TinyWorldModel()
     workspace.distributed = DummyDistributed()

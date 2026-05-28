@@ -11,8 +11,9 @@ checkpoint paths, output tags, and smoke-test limits.
 | VLA training | `scripts/train_vla.sh` | `vla_pi0_query` |
 | VLA one-trajectory SFT | `CONFIG=vla_sft_one_trajectory scripts/train_vla.sh` | `vla_sft_one_trajectory` |
 | OpenVLA-OFT one-trajectory SFT | `CONFIG=openvla_oft_hdf5_one_trajectory scripts/train_vla.sh` | `openvla_oft_hdf5_one_trajectory` |
-| WM training | `scripts/train_wm.sh` | `world_model_rssm_step` |
-| DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor` |
+| WM training | `scripts/train_wm.sh` | `world_model_dinowm_chunk` |
+| DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Formal Configs
 
@@ -22,12 +23,13 @@ checkpoint paths, output tags, and smoke-test limits.
 | VLA one-trajectory SFT | `vla_sft_one_trajectory` |
 | OpenVLA-OFT HDF5 SFT | `openvla_oft_hdf5` |
 | OpenVLA-OFT LM-head one-trajectory SFT | `openvla_oft_hdf5_one_trajectory` |
-| WM RSSM step | `world_model_rssm_step` |
 | WM DINO step | `world_model_dinowm_step` |
 | WM DINO chunk | `world_model_dinowm_chunk` |
-| DreamerVLA RSSM | `dreamervla_pi0_action_hidden_head_actor` |
 | DreamerVLA PPO, DINO-WM step | `dreamervla_rynn_dino_wm_actor_critic` |
 | DreamerVLA PPO, DINO-WM chunk/outcome | `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| DreamerVLA PPO, OpenVLA-OFT chunk/outcome | `dreamervla_oft_dino_wm_wmpo_outcome` |
+| Online DreamerVLA WMPO outcome | `online_wmpo_outcome_libero_goal` |
+| LIBERO rollout eval | `eval_libero_vla` |
 
 Formal configs use Hydra defaults to include the task config:
 
@@ -39,7 +41,7 @@ defaults:
 
 Keep concrete dataset task paths, horizons, sidecar expectations, and
 task-specific dimensions in `task/*.yaml`. The training configs define the
-workspace, model, optimizer, and algorithm route.
+runner, model, optimizer, and algorithm route.
 
 ## Task Configs
 
@@ -57,7 +59,7 @@ Switch tasks with Hydra, for example:
 ```bash
 bash scripts/train_vla.sh task=libero_object
 CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
-WM_KIND=dinowm bash scripts/train_wm.sh task=libero_spatial
+CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_spatial
 ```
 
 ## Archive

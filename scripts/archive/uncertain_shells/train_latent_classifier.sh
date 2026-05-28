@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Thin wrapper around `python -m src.cli.train` for the LatentSuccessClassifier
+# Thin wrapper around `python -m dreamer_vla.cli.train` for the LatentSuccessClassifier
 # workspace. Picks env defaults; the heavy lifting lives in the Hydra config.
 #
 # Usage:
@@ -11,7 +11,7 @@
 # Outputs land under cfg.training.out_dir:
 #   ├── ckpt/best_window_f1{F}_th{T}.ckpt       ← best window-level
 #   ├── ckpt/best_episode_f1{F}_th{T}.ckpt      ← best episode-level (WMPO any-positive)
-#   ├── ckpt/latest.ckpt + final.ckpt           ← BaseWorkspace standard tags
+#   ├── ckpt/latest.ckpt + final.ckpt           ← BaseRunner standard tags
 #   ├── log/train_log.jsonl                     ← per-step + per-eval events
 #   └── summary.json                            ← terminal-state best F1s
 
@@ -31,4 +31,4 @@ echo "[train_latent_classifier] config=${CONFIG_NAME}"
 echo "[train_latent_classifier] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "[train_latent_classifier] overrides: $*"
 
-exec "${PY}" -m src.cli.train --config-name "${CONFIG_NAME}" "$@"
+exec "${PY}" -m dreamer_vla.cli.train --config-name "${CONFIG_NAME}" "$@"

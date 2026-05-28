@@ -1,5 +1,5 @@
 defaults:
-  - rynn_dino_wm_action_hidden_libero_goal
+  - /world_model_dinowm_chunk
   - _self_
 
 training:

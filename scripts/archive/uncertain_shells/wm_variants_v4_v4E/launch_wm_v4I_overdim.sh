@@ -39,7 +39,7 @@ if [[ -n "$WM_INIT" && "$WM_INIT" != "null" ]]; then
 fi
 
 echo "===== ${RUN} start ====="; date
-python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="$NUM_GPUS" --master-port="$MASTER_PORT" -m src.cli.train \
+python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="$NUM_GPUS" --master-port="$MASTER_PORT" -m dreamer_vla.cli.train \
   --config-name dreamer_vla_libero_goal_pi0_legacy_action_hidden_head_actor_v4i_overdim \
   training.out_dir="$OUT" \
   dataloader.batch_size="$BATCH_SIZE" \

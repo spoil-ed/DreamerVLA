@@ -1,13 +1,13 @@
 import torch
 from omegaconf import OmegaConf
 
-from src.algorithms.dreamer_vla import (
+from dreamer_vla.algorithms.dreamer_vla import (
     _actor_action_to_env_scale,
     _actor_action_for_world_model,
     compute_replay_lambda_returns,
     normalize_returns_for_actor_critic,
 )
-from src.models.critic.twohot_critic import (
+from dreamer_vla.models.critic.twohot_critic import (
     ReturnPercentileTracker,
     TwohotCritic,
     symexp,

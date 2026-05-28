@@ -21,14 +21,14 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.env import (
+from dreamer_vla.envs import (
     get_libero_dummy_action,
     get_libero_env,
     get_libero_image,
     quat2axisangle,
 )
-from src.models.vla_actor import Pi0ActionHiddenActor
-from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
+from dreamer_vla.models.actor import Pi0ActionHiddenActor
+from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
 
 
 def _load_eval_cfg(overrides: list[str]) -> DictConfig:
@@ -44,7 +44,7 @@ def _hydra_quote(value: str) -> str:
 
 
 def _merge_train_eval_cfg(
-    ws: EvalLiberoVLAWorkspace, eval_cfg: DictConfig, ckpt_path: str
+    ws: EvalLiberoVLARunner, eval_cfg: DictConfig, ckpt_path: str
 ) -> tuple[DictConfig, dict[str, Any]]:
     payload = ws._load_checkpoint_payload(
         str(pathlib.Path(ckpt_path).expanduser().resolve())
@@ -78,10 +78,10 @@ def _merge_train_eval_cfg(
     return train_cfg, payload
 
 
-def _init_workspace(
+def _init_runner(
     train_cfg: DictConfig, payload: dict[str, Any], output_dir: str
-) -> EvalLiberoVLAWorkspace:
-    ws = EvalLiberoVLAWorkspace(train_cfg, output_dir=output_dir)
+) -> EvalLiberoVLARunner:
+    ws = EvalLiberoVLARunner(train_cfg, output_dir=output_dir)
     ws.cfg = train_cfg
     ws.config = train_cfg
     ws._dreamer_eval = True
@@ -213,7 +213,7 @@ def _add_latent_stats(
         collector.add(f"{prefix}/post_max_prob_per_stoch", probs.max(dim=-1).values)
 
 
-def _make_original_pi0_actor(ws: EvalLiberoVLAWorkspace) -> Pi0ActionHiddenActor:
+def _make_original_pi0_actor(ws: EvalLiberoVLARunner) -> Pi0ActionHiddenActor:
     cfg = ws.cfg
     actor = Pi0ActionHiddenActor(
         hidden_dim=int(OmegaConf.select(cfg, "policy.hidden_dim", default=5120)),
@@ -246,7 +246,7 @@ def _actor_action_chunk(actor: torch.nn.Module, hidden: torch.Tensor) -> torch.T
 
 
 def _env_action_chunk(
-    ws: EvalLiberoVLAWorkspace, raw_chunk: torch.Tensor
+    ws: EvalLiberoVLARunner, raw_chunk: torch.Tensor
 ) -> torch.Tensor:
     raw = raw_chunk.detach().float().cpu().numpy().reshape(-1, raw_chunk.shape[-1])
     env = [
@@ -259,7 +259,7 @@ def _env_action_chunk(
 def _add_action_stats(
     prefix: str,
     collector: Collector,
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     raw_chunk: torch.Tensor,
 ) -> None:
     raw = raw_chunk.detach().float().cpu()
@@ -272,7 +272,7 @@ def _add_action_stats(
 
 @torch.no_grad()
 def collect_offline(
-    ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: int, batch_size: int
+    ws: EvalLiberoVLARunner, train_cfg: DictConfig, batches: int, batch_size: int
 ) -> dict[str, Any]:
     dataset_cfg = copy.deepcopy(train_cfg.dataset)
     dataset = hydra.utils.instantiate(
@@ -341,7 +341,7 @@ def collect_offline(
 
 @torch.no_grad()
 def collect_online(
-    ws: EvalLiberoVLAWorkspace,
+    ws: EvalLiberoVLARunner,
     task_ids: list[int],
     episodes_per_task: int,
     max_steps: int,
@@ -689,11 +689,11 @@ def main() -> None:
     ]
     eval_cfg = _load_eval_cfg(overrides)
     output_dir = str(
-        pathlib.Path(args.out).expanduser().resolve().parent / "_workspace"
+        pathlib.Path(args.out).expanduser().resolve().parent / "_runner"
     )
-    ws0 = EvalLiberoVLAWorkspace(eval_cfg, output_dir=output_dir)
+    ws0 = EvalLiberoVLARunner(eval_cfg, output_dir=output_dir)
     train_cfg, payload = _merge_train_eval_cfg(ws0, eval_cfg, args.ckpt)
-    ws = _init_workspace(train_cfg, payload, output_dir=output_dir)
+    ws = _init_runner(train_cfg, payload, output_dir=output_dir)
     tasks = [int(x) for x in str(args.tasks).split(",") if x.strip()]
 
     result = {

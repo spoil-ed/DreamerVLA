@@ -35,12 +35,12 @@ from omegaconf import OmegaConf
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 
-from src.dataloader.wm_replay_classifier_dataset import (
+from dreamer_vla.dataset.wm_replay_classifier_dataset import (
     WMReplayClassifierDataset,
     _find_demo_pairs,
 )
-from src.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
-from src.models.world_model.rynn_dino_wm_chunk import ChunkAwareRynnDinoWMWorldModel
+from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamer_vla.models.world_model.rynn_dino_wm_chunk import ChunkAwareRynnDinoWMWorldModel
 
 
 def _collate(batch):

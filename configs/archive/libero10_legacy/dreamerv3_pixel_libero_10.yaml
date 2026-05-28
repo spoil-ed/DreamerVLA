@@ -1,5 +1,5 @@
 # @package _global_
-_target_: src.workspace.PixelWMWorkspace
+_target_: dreamer_vla.runners.PixelWMRunner
 training:
   out_dir: /mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dreamerv3_pixel/dreamerv3_pixel_libero_10
   device: cuda:0
@@ -19,7 +19,7 @@ training:
   resume_skip_optimizer: false
 
 dataset:
-  _target_: src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset
+  _target_: dreamer_vla.dataset.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset
   hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
   sequence_length: 32
   image_size: 64
@@ -39,7 +39,7 @@ dataloader:
   persistent_workers: true
 
 world_model:
-  _target_: src.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel
+  _target_: dreamer_vla.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel
   action_dim: 7
   image_channels: 6
   image_size: 64

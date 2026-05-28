@@ -26,7 +26,7 @@ def default_openvla_oft_root() -> Path:
     env_root = os.environ.get("OPENVLA_OFT_ROOT")
     if env_root:
         return Path(env_root).expanduser().resolve()
-    return Path(__file__).resolve().parents[3] / "openvla-oft"
+    return Path(__file__).resolve().parents[2] / "third_party" / "openvla-oft"
 
 
 def set_runtime_env(gpu_id: str | int | None = None) -> None:

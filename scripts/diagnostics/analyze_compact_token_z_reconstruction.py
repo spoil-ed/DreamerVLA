@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from src.models.world_model.dreamerv3_torch import CompactTokenSequenceAutoencoder
+from dreamer_vla.models.world_model.dreamerv3_torch import CompactTokenSequenceAutoencoder
 
 
 class FullseqFrameDataset(Dataset[dict[str, torch.Tensor]]):

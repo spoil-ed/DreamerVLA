@@ -29,7 +29,7 @@ echo "[openvla-oft] gpus:   ${CUDA_VISIBLE_DEVICES:-all visible} (nproc=${NUM_GP
   --standalone \
   --nnodes=1 \
   --nproc-per-node="${NUM_GPUS}" \
-  --module src.cli.train \
+  --module dreamer_vla.cli.train \
   --config-name "${CONFIG_NAME}" \
   training.out_dir="${OUT_DIR}" \
   "$@"

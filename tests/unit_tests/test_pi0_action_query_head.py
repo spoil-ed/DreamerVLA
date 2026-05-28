@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
+from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     Pi0StyleActionQueryHead,
 )
 

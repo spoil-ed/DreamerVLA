@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
-import pickle
 import sys
 import types
 from pathlib import Path
 
 
 if "h5py" not in sys.modules:
-    h5py_stub = types.ModuleType("h5py")
-    h5py_stub.File = object
-    h5py_stub.Group = object
-    sys.modules["h5py"] = h5py_stub
+    try:
+        import h5py  # noqa: F401
+    except ImportError:
+        h5py_stub = types.ModuleType("h5py")
+        h5py_stub.File = object
+        h5py_stub.Group = object
+        sys.modules["h5py"] = h5py_stub
+
+import pickle
 
 
 def _write_payload(
@@ -51,7 +55,7 @@ def _write_payload(
 def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(
     tmp_path: Path,
 ) -> None:
-    from src.dataloader.one_trajectory_pretokenize_dataset import (
+    from dreamer_vla.dataset.one_trajectory_pretokenize_dataset import (
         OneTrajectoryPretokenizeActionChunkDataset,
     )
 
@@ -98,7 +102,7 @@ def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(
 
 
 def test_one_trajectory_action_chunk_dataset_can_select_offset(tmp_path: Path) -> None:
-    from src.dataloader.one_trajectory_pretokenize_dataset import (
+    from dreamer_vla.dataset.one_trajectory_pretokenize_dataset import (
         OneTrajectoryPretokenizeActionChunkDataset,
     )
 

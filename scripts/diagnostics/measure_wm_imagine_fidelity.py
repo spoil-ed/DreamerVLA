@@ -28,7 +28,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
-from src.models.world_model.dreamerv3_torch import DreamerV3LatentState
+from dreamer_vla.models.world_model.dreamerv3_torch import DreamerV3LatentState
 
 
 def parse_args():
@@ -136,7 +136,7 @@ def main():
         post_reward = world_model.reward_head(
             post_feat.reshape(T, -1).to(dtype=torch.bfloat16)
         )
-        from src.models.world_model.dreamerv3_torch import _reward_pred
+        from dreamer_vla.models.world_model.dreamerv3_torch import _reward_pred
 
         post_reward = (
             _reward_pred(world_model.reward_head, post_reward)
