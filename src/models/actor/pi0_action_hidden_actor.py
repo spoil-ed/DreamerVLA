@@ -57,7 +57,9 @@ class Pi0ActionHiddenActor(BaseActor):
                 f"{self.action_hidden_dim} = {expected_flat}"
             )
         if self.adapter_type not in {"identity", "mlp", "residual_mlp"}:
-            raise ValueError("adapter_type must be one of {'identity', 'mlp', 'residual_mlp'}")
+            raise ValueError(
+                "adapter_type must be one of {'identity', 'mlp', 'residual_mlp'}"
+            )
 
         if self.adapter_type == "identity":
             self.adapter = nn.Identity()
@@ -118,7 +120,13 @@ class Pi0ActionHiddenActor(BaseActor):
         if _os.path.isfile(index_path):
             with open(index_path, "r") as fh:
                 index = _json.load(fh).get("weight_map", {})
-            files = sorted({_os.path.join(model_dir, p) for k, p in index.items() if k.startswith(prefix)})
+            files = sorted(
+                {
+                    _os.path.join(model_dir, p)
+                    for k, p in index.items()
+                    if k.startswith(prefix)
+                }
+            )
         else:
             files = sorted(_glob.glob(_os.path.join(model_dir, "*.safetensors")))
         output_projection_sd: dict[str, torch.Tensor] = {}
@@ -126,12 +134,12 @@ class Pi0ActionHiddenActor(BaseActor):
             tensors = _load_safetensors(path)
             for k, v in tensors.items():
                 if k.startswith(prefix):
-                    output_projection_sd[k[len(prefix):]] = v.to(dtype=torch.float32)
+                    output_projection_sd[k[len(prefix) :]] = v.to(dtype=torch.float32)
         if not output_projection_sd:
-            raise RuntimeError(
-                f"No '{prefix}' tensors found in HF dir: {model_dir}"
-            )
-        missing, unexpected = self.output_projection.load_state_dict(output_projection_sd, strict=False)
+            raise RuntimeError(f"No '{prefix}' tensors found in HF dir: {model_dir}")
+        missing, unexpected = self.output_projection.load_state_dict(
+            output_projection_sd, strict=False
+        )
         print(
             f"[Pi0ActionHiddenActor] loaded {len(output_projection_sd)} output_projection tensors "
             f"from HF dir {model_dir}; missing={len(missing)} unexpected={len(unexpected)}"
@@ -143,6 +151,26 @@ class Pi0ActionHiddenActor(BaseActor):
 
     def _load_output_projection_from_vla_ckpt(self, ckpt_path: str) -> None:
         payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        direct_sd = self._extract_direct_action_head_state_dict(payload)
+        if direct_sd:
+            missing, unexpected = self.output_projection.load_state_dict(
+                direct_sd, strict=False
+            )
+            print(
+                f"[Pi0ActionHiddenActor] loaded {len(direct_sd)} output_projection tensors "
+                f"from standalone action-head ckpt {ckpt_path}; "
+                f"missing={len(missing)} unexpected={len(unexpected)}"
+            )
+            if missing:
+                print(
+                    f"[Pi0ActionHiddenActor] WARN missing output_projection tensors (first 5): {missing[:5]}"
+                )
+            if unexpected:
+                print(
+                    f"[Pi0ActionHiddenActor] WARN unexpected output_projection tensors (first 5): {unexpected[:5]}"
+                )
+            return
+
         encoder_sd = payload.get("state_dicts", {}).get("encoder")
         if encoder_sd is None:
             raise RuntimeError(
@@ -150,7 +178,7 @@ class Pi0ActionHiddenActor(BaseActor):
             )
         prefix = "backbone.action_head.output_projection."
         output_projection_sd = {
-            key[len(prefix):]: value
+            key[len(prefix) :]: value
             for key, value in encoder_sd.items()
             if key.startswith(prefix)
         }
@@ -158,16 +186,61 @@ class Pi0ActionHiddenActor(BaseActor):
             raise RuntimeError(
                 f"Pi0 action-hidden actor checkpoint has no '{prefix}' output_projection tensors: {ckpt_path}"
             )
-        missing, unexpected = self.output_projection.load_state_dict(output_projection_sd, strict=False)
+        missing, unexpected = self.output_projection.load_state_dict(
+            output_projection_sd, strict=False
+        )
         print(
             f"[Pi0ActionHiddenActor] loaded {len(output_projection_sd)} output_projection tensors "
             f"from VLA ckpt; missing={len(missing)} unexpected={len(unexpected)}"
         )
         if missing:
-            print(f"[Pi0ActionHiddenActor] WARN missing output_projection tensors (first 5): {missing[:5]}")
+            print(
+                f"[Pi0ActionHiddenActor] WARN missing output_projection tensors (first 5): {missing[:5]}"
+            )
         if unexpected:
-            print(f"[Pi0ActionHiddenActor] WARN unexpected output_projection tensors (first 5): {unexpected[:5]}")
+            print(
+                f"[Pi0ActionHiddenActor] WARN unexpected output_projection tensors (first 5): {unexpected[:5]}"
+            )
         del payload
+
+    def _extract_direct_action_head_state_dict(
+        self, payload: Any
+    ) -> dict[str, torch.Tensor]:
+        """Extract a plain action-head state_dict, e.g. OpenVLA-OFT component ckpts."""
+        if not isinstance(payload, dict):
+            return {}
+
+        candidates: list[dict[str, Any]] = []
+        for key in ("state_dict", "model"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+        candidates.append(payload)
+
+        expected_keys = set(self.output_projection.state_dict().keys())
+        prefixes = ("module.", "output_projection.", "action_head.")
+        for candidate in candidates:
+            if not candidate or not all(
+                isinstance(k, str) and isinstance(v, torch.Tensor)
+                for k, v in candidate.items()
+            ):
+                continue
+            normalized: dict[str, torch.Tensor] = {}
+            for key, value in candidate.items():
+                normalized_key = key
+                changed = True
+                while changed:
+                    changed = False
+                    for prefix in prefixes:
+                        if normalized_key.startswith(prefix):
+                            normalized_key = normalized_key[len(prefix) :]
+                            changed = True
+                            break
+                if normalized_key in expected_keys:
+                    normalized[normalized_key] = value.to(dtype=torch.float32)
+            if normalized:
+                return normalized
+        return {}
 
     def _reshape_action_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim == 3:
@@ -183,9 +256,13 @@ class Pi0ActionHiddenActor(BaseActor):
                 raise ValueError(
                     f"Pi0ActionHiddenActor hidden dim mismatch: got {hidden.shape[-1]}, expected {self.hidden_dim}"
                 )
-            action_hidden = hidden.reshape(hidden.shape[0], self.token_count, self.action_hidden_dim)
+            action_hidden = hidden.reshape(
+                hidden.shape[0], self.token_count, self.action_hidden_dim
+            )
         else:
-            raise ValueError(f"Unsupported Pi0ActionHiddenActor hidden shape: {tuple(hidden.shape)}")
+            raise ValueError(
+                f"Unsupported Pi0ActionHiddenActor hidden shape: {tuple(hidden.shape)}"
+            )
 
         param_dtype = next(self.output_projection.parameters()).dtype
         return action_hidden.to(dtype=param_dtype)
@@ -200,44 +277,76 @@ class Pi0ActionHiddenActor(BaseActor):
     def _action_chunk(self, hidden: torch.Tensor) -> torch.Tensor:
         action_hidden = self._action_hidden(hidden)
         actions = self.output_projection(action_hidden)
-        return actions.reshape(action_hidden.shape[0], self.time_horizon, self.action_dim).float()
+        return actions.reshape(
+            action_hidden.shape[0], self.time_horizon, self.action_dim
+        ).float()
 
     def reference_action_chunk(self, hidden: torch.Tensor) -> torch.Tensor:
         """Original frozen VLA head output before the trainable actor adapter."""
         action_hidden = self._reshape_action_hidden(hidden)
         actions = self.output_projection(action_hidden)
-        return actions.reshape(action_hidden.shape[0], self.time_horizon, self.action_dim).float()
+        return actions.reshape(
+            action_hidden.shape[0], self.time_horizon, self.action_dim
+        ).float()
 
     def forward(self, batch: dict[str, Any]) -> Any:
         mode = batch.get("mode")
         hidden = batch["hidden"]
         action_chunk = self._action_chunk(hidden)
         dist, mean, std = self._normal_from_action_chunk(action_chunk)
-        chunk_dist, mean_chunk, std_chunk = self._normal_from_full_action_chunk(action_chunk)
+        chunk_dist, mean_chunk, std_chunk = self._normal_from_full_action_chunk(
+            action_chunk
+        )
         if mode == "sample":
             deterministic = bool(batch.get("deterministic", False))
             if bool(batch.get("return_chunk", False)):
                 action = mean_chunk if deterministic else chunk_dist.rsample()
                 log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
-                return action, log_prob, {
-                    "mean": mean,
-                    "std": std,
-                    "mean_chunk": mean_chunk,
-                    "std_chunk": std_chunk,
-                    "action_chunk": mean_chunk,
-                }
+                return (
+                    action,
+                    log_prob,
+                    {
+                        "mean": mean,
+                        "std": std,
+                        "mean_chunk": mean_chunk,
+                        "std_chunk": std_chunk,
+                        "action_chunk": mean_chunk,
+                    },
+                )
             action = mean if deterministic else dist.rsample()
             log_prob = dist.log_prob(action).sum(dim=-1)
-            return action, log_prob, {"mean": mean, "std": std, "action_chunk": mean_chunk}
+            return (
+                action,
+                log_prob,
+                {"mean": mean, "std": std, "action_chunk": mean_chunk},
+            )
         if mode == "evaluate":
             action = batch["action"]
             if action.ndim == 3:
                 log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
                 entropy = chunk_dist.entropy().sum(dim=(-1, -2))
-                return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
+                return (
+                    log_prob,
+                    entropy,
+                    {
+                        "mean": mean,
+                        "std": std,
+                        "mean_chunk": mean_chunk,
+                        "std_chunk": std_chunk,
+                    },
+                )
             log_prob = dist.log_prob(action).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1)
-            return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
+            return (
+                log_prob,
+                entropy,
+                {
+                    "mean": mean,
+                    "std": std,
+                    "mean_chunk": mean_chunk,
+                    "std_chunk": std_chunk,
+                },
+            )
         raise ValueError(f"Unknown Pi0ActionHiddenActor forward mode: {mode!r}")
 
 

@@ -9,6 +9,7 @@ the two PPO routes is the **reward form** (dense per-step state-reward vs
 sparse outcome reward from LatentSuccessClassifier), not step vs chunk and
 not single-frame vs window WM input.
 """
+
 from src.algorithms.ppo import dino_wmpo_dense_step
 
 # Legacy aliases.

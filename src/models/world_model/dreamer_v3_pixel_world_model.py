@@ -3,7 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from src.models.world_model.base_world_model import DreamerV3ActorAdapterMixin, DreamerV3Loss
+from src.models.world_model.base_world_model import (
+    DreamerV3ActorAdapterMixin,
+    DreamerV3Loss,
+)
 from src.models.world_model.dreamerv3_torch import (
     DreamerV3PixelDecoder,
     DreamerV3PixelEncoder,
@@ -52,7 +55,9 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin):
         con_scale: float = 1.0,
     ) -> None:
         super().__init__()
-        self.encoder = DreamerV3PixelEncoder(image_channels, image_size, depth, mults, kernel, act)
+        self.encoder = DreamerV3PixelEncoder(
+            image_channels, image_size, depth, mults, kernel, act
+        )
         self.rssm = DreamerV3RSSM(
             action_dim=action_dim,
             deter=deter,
@@ -96,7 +101,9 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin):
         self.horizon = int(horizon)
 
     def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat([seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)], dim=-1)
+        return torch.cat(
+            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)], dim=-1
+        )
 
     def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
         images = batch["images"]
@@ -137,7 +144,9 @@ class DreamerV3PixelWorldModel(DreamerV3ActorAdapterMixin):
             "rep_loss": kls["rep"].detach(),
             "reward_loss": reward_loss.detach(),
             "continue_loss": cont_loss.detach(),
-            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
+            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach())
+            .mean()
+            .detach(),
             "image_mse": mse.detach(),
             "image_psnr": (-10.0 * torch.log10(mse.clamp_min(1e-8))).detach(),
             "dyn_entropy": kls["dyn_entropy"].detach(),

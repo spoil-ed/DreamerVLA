@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any, Mapping
 
 from exp_common import (
@@ -106,14 +105,20 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--ckpt", required=True)
     plan.add_argument("--hidden-hdf5-dir", required=True)
     plan.add_argument("--reward-hdf5-dir", required=True)
-    plan.add_argument("--actor-cfg", default="configs/dreamervla_rynn_dino_wm_actor_critic.yaml")
+    plan.add_argument(
+        "--actor-cfg", default="configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
+    )
     plan.add_argument("--out-json", default="outputs/wm_rollout_diagnostics_raw.json")
     plan.add_argument("--execute", action="store_true")
     plan.set_defaults(func=cmd_plan)
     collect = sub.add_parser("collect")
     collect.add_argument("--input-json", required=True)
-    collect.add_argument("--out-json", default=str(DEFAULT_OUTPUTS_DIR / "wm_rollout_diagnostics.json"))
-    collect.add_argument("--out-tex", default=str(DEFAULT_TABLES_DIR / "wm_rollout_diagnostics.tex"))
+    collect.add_argument(
+        "--out-json", default=str(DEFAULT_OUTPUTS_DIR / "wm_rollout_diagnostics.json")
+    )
+    collect.add_argument(
+        "--out-tex", default=str(DEFAULT_TABLES_DIR / "wm_rollout_diagnostics.tex")
+    )
     collect.set_defaults(func=cmd_collect)
     return parser
 
@@ -125,4 +130,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

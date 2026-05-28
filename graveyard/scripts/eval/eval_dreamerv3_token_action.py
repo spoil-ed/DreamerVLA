@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from torch.utils.data import DataLoader
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _resolve_config(path_or_name: str) -> Path:
@@ -43,14 +46,20 @@ def _strip_module_prefix(state: dict[str, torch.Tensor]) -> dict[str, torch.Tens
     return {key.removeprefix("module."): value for key, value in state.items()}
 
 
-def _load_model(cfg: Any, ckpt_path: Path, device: torch.device) -> tuple[torch.nn.Module, dict[str, Any]]:
+def _load_model(
+    cfg: Any, ckpt_path: Path, device: torch.device
+) -> tuple[torch.nn.Module, dict[str, Any]]:
     model = hydra.utils.instantiate(cfg.world_model)
     payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = payload.get("model", payload.get("state_dict", payload))
     if not isinstance(state, dict):
         raise ValueError(f"Unsupported checkpoint format in {ckpt_path}")
     state = _strip_module_prefix(state)
-    load_info: dict[str, Any] = {"strict": True, "missing_keys": [], "unexpected_keys": []}
+    load_info: dict[str, Any] = {
+        "strict": True,
+        "missing_keys": [],
+        "unexpected_keys": [],
+    }
     try:
         model.load_state_dict(state, strict=True)
     except RuntimeError:
@@ -70,7 +79,9 @@ def _load_model(cfg: Any, ckpt_path: Path, device: torch.device) -> tuple[torch.
 def _move_batch(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in batch.items():
-        out[key] = value.to(device, non_blocking=True) if torch.is_tensor(value) else value
+        out[key] = (
+            value.to(device, non_blocking=True) if torch.is_tensor(value) else value
+        )
     return out
 
 
@@ -137,7 +148,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     cfg = OmegaConf.load(cfg_path)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     dataset = hydra.utils.instantiate(cfg.dataset)
-    batch_size = int(args.batch_size or OmegaConf.select(cfg, "dataloader.batch_size", default=4))
+    batch_size = int(
+        args.batch_size or OmegaConf.select(cfg, "dataloader.batch_size", default=4)
+    )
     num_workers = int(args.num_workers)
     loader = DataLoader(
         dataset,
@@ -171,11 +184,15 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         if seq_len < 2:
             continue
 
-        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=autocast_enabled):
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=autocast_enabled
+        ):
             enc = model.encoder(tokens)
             seq = model.rssm.observe(enc, actions.to(dtype=enc.dtype), is_first)
             prev_deter = seq["deter"][:, :-1].reshape(-1, model.rssm.deter)
-            prev_stoch = seq["stoch"][:, :-1].reshape(-1, model.rssm.stoch, model.rssm.classes)
+            prev_stoch = seq["stoch"][:, :-1].reshape(
+                -1, model.rssm.stoch, model.rssm.classes
+            )
             target_post_logits = seq["post_logits"][:, 1:].reshape(
                 -1, model.rssm.stoch, model.rssm.classes
             )
@@ -183,7 +200,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             actions_next = actions[:, 1:].to(device=device, dtype=enc.dtype)
             flat_actions_real = actions_next.reshape(-1, actions_next.shape[-1])
 
-            real_action = _variant_actions(actions_next, "real").reshape(-1, actions_next.shape[-1])
+            real_action = _variant_actions(actions_next, "real").reshape(
+                -1, actions_next.shape[-1]
+            )
             real_deter = model.rssm._core(prev_deter, prev_stoch, real_action)
             real_prior_logits = model.rssm._prior(real_deter)
             real_prior_probs = model.rssm._probs(real_prior_logits).float()
@@ -197,7 +216,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 prior_stoch = model.rssm._probs(prior_logits)
                 logits = model.decoder(
                     pred_deter.reshape(bsz, seq_len - 1, -1),
-                    prior_stoch.reshape(bsz, seq_len - 1, model.rssm.stoch, model.rssm.classes),
+                    prior_stoch.reshape(
+                        bsz, seq_len - 1, model.rssm.stoch, model.rssm.classes
+                    ),
                 )
                 ce = F.cross_entropy(
                     logits.reshape(-1, logits.shape[-1]).float(),
@@ -209,10 +230,23 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 kl = model.rssm._kl(target_post_logits, prior_logits)
                 entropy = model.rssm._entropy(prior_logits)
                 prior_probs = model.rssm._probs(prior_logits).float()
-                prob_l2 = (prior_probs - real_prior_probs).pow(2).sum(dim=(-1, -2)).sqrt()
-                deter_l2 = (pred_deter.float() - real_deter.float()).pow(2).mean(dim=-1).sqrt()
-                argmatch = (prior_logits.argmax(dim=-1) == real_prior_argmax).float().mean(dim=-1)
-                action_l2 = (flat_action.float() - flat_actions_real.float()).pow(2).mean(dim=-1).sqrt()
+                prob_l2 = (
+                    (prior_probs - real_prior_probs).pow(2).sum(dim=(-1, -2)).sqrt()
+                )
+                deter_l2 = (
+                    (pred_deter.float() - real_deter.float()).pow(2).mean(dim=-1).sqrt()
+                )
+                argmatch = (
+                    (prior_logits.argmax(dim=-1) == real_prior_argmax)
+                    .float()
+                    .mean(dim=-1)
+                )
+                action_l2 = (
+                    (flat_action.float() - flat_actions_real.float())
+                    .pow(2)
+                    .mean(dim=-1)
+                    .sqrt()
+                )
 
                 cur = stats[variant]
                 cur["ce_sum"] += float(ce.sum().detach().cpu())
@@ -223,7 +257,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 cur["prior_entropy_sum"] += float(entropy.float().sum().detach().cpu())
                 cur["prob_l2_to_real_sum"] += float(prob_l2.sum().detach().cpu())
                 cur["deter_l2_to_real_sum"] += float(deter_l2.sum().detach().cpu())
-                cur["prior_argmax_match_real_sum"] += float(argmatch.sum().detach().cpu())
+                cur["prior_argmax_match_real_sum"] += float(
+                    argmatch.sum().detach().cpu()
+                )
                 cur["action_l2_to_real_sum"] += float(action_l2.sum().detach().cpu())
         batches += 1
 
@@ -259,7 +295,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate DreamerV3-token action sensitivity.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate DreamerV3-token action sensitivity."
+    )
     parser.add_argument("--config-name", default="dreamerv3_token_libero_10")
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--out-dir", default=None)
@@ -283,7 +321,9 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     result = evaluate(args)
     metrics_path = out_dir / "metrics.json"
-    metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    metrics_path.write_text(
+        json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     print(f"[eval] wrote {metrics_path}")
 

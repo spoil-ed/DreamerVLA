@@ -63,7 +63,9 @@ def _compression(name: str | None) -> str | None:
     return normalized
 
 
-def _metainfo_success(metainfo: dict[str, Any], source_path: Path, demo_key: str) -> bool | None:
+def _metainfo_success(
+    metainfo: dict[str, Any], source_path: Path, demo_key: str
+) -> bool | None:
     if not metainfo:
         return None
     task_key = _task_key_from_file(source_path)
@@ -147,7 +149,10 @@ def _copy_file_with_remaining_rewards(
     reward_max = float("-inf")
     reward_sum = 0.0
 
-    with h5py.File(source_path, "r", swmr=True, libver="latest") as src, h5py.File(tmp_path, "w", libver="latest") as dst:
+    with (
+        h5py.File(source_path, "r", swmr=True, libver="latest") as src,
+        h5py.File(tmp_path, "w", libver="latest") as dst,
+    ):
         for key, value in src.attrs.items():
             dst.attrs[key] = value
         for key in src.keys():
@@ -184,7 +189,9 @@ def _copy_file_with_remaining_rewards(
             reward_dset.attrs["failure_value"] = float(args.failure_value)
             reward_dset.attrs["success"] = bool(info["success"])
             reward_dset.attrs["success_index"] = int(info["success_index"])
-            reward_dset.attrs["source_positive_rewards"] = int(info["source_positive_rewards"])
+            reward_dset.attrs["source_positive_rewards"] = int(
+                info["source_positive_rewards"]
+            )
             demo.attrs["reward_scheme"] = SCHEME_NAME
             demo.attrs["reward_success"] = bool(info["success"])
             demo.attrs["reward_success_index"] = int(info["success_index"])
@@ -226,18 +233,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256"),
+        default=str(
+            PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256"
+        ),
     )
     parser.add_argument(
         "--output-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256_pi06_remaining_reward"),
+        default=str(
+            PROJECT_ROOT
+            / "data"
+            / "processed_data"
+            / "libero_goal_no_noops_t_256_pi06_remaining_reward"
+        ),
     )
     parser.add_argument("--metainfo-json", default=None)
     parser.add_argument("--success-threshold", type=float, default=0.5)
     parser.add_argument("--failure-value", type=float, default=0.0)
     parser.add_argument("--min-value", type=float, default=0.0)
     parser.add_argument("--max-value", type=float, default=1.0)
-    parser.add_argument("--compression", default="none", choices=["none", "lzf", "gzip"])
+    parser.add_argument(
+        "--compression", default="none", choices=["none", "lzf", "gzip"]
+    )
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -261,7 +277,9 @@ def main() -> None:
     for source_path in tqdm(files, desc="remaining-step rewards"):
         output_path = output_dir / source_path.name
         if output_path.exists() and not args.overwrite:
-            raise FileExistsError(f"output exists, pass --overwrite to replace: {output_path}")
+            raise FileExistsError(
+                f"output exists, pass --overwrite to replace: {output_path}"
+            )
         if output_path.exists():
             output_path.unlink()
         records.append(
@@ -282,8 +300,12 @@ def main() -> None:
         "successes": sum(int(r["successes"]) for r in records),
         "failures": sum(int(r["failures"]) for r in records),
         "frames": sum(int(r["frames"]) for r in records),
-        "reward_min": min(float(r["reward_min"]) for r in records if r["reward_min"] is not None),
-        "reward_max": max(float(r["reward_max"]) for r in records if r["reward_max"] is not None),
+        "reward_min": min(
+            float(r["reward_min"]) for r in records if r["reward_min"] is not None
+        ),
+        "reward_max": max(
+            float(r["reward_max"]) for r in records if r["reward_max"] is not None
+        ),
         "reward_mean": (
             sum(float(r["reward_mean"]) * int(r["frames"]) for r in records)
             / max(sum(int(r["frames"]) for r in records), 1)

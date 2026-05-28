@@ -19,22 +19,26 @@ def test_pi0_actor_samples_and_evaluates_full_action_chunks() -> None:
     )
     hidden = torch.randn(5, 12)
 
-    action_chunk, log_prob, extra = actor({
-        "mode": "sample",
-        "hidden": hidden,
-        "deterministic": False,
-        "return_chunk": True,
-    })
+    action_chunk, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": hidden,
+            "deterministic": False,
+            "return_chunk": True,
+        }
+    )
 
     assert action_chunk.shape == (5, 3, 2)
     assert log_prob.shape == (5,)
     assert not torch.allclose(action_chunk, extra["mean_chunk"])
 
-    eval_log_prob, entropy, _ = actor({
-        "mode": "evaluate",
-        "hidden": hidden,
-        "action": action_chunk,
-    })
+    eval_log_prob, entropy, _ = actor(
+        {
+            "mode": "evaluate",
+            "hidden": hidden,
+            "action": action_chunk,
+        }
+    )
 
     assert eval_log_prob.shape == (5,)
     assert entropy.shape == (5,)

@@ -21,7 +21,9 @@ class Conversation:
                     pieces.append({"data": turn, "predict": False})
             else:
                 # generation prompt
-                assert i == len(self.messages) - 1 and role == self.roles[1], "only last assistant message can be None"
+                assert i == len(self.messages) - 1 and role == self.roles[1], (
+                    "only last assistant message can be None"
+                )
 
         result = {
             "conv": ret,  # text involving the complete conversation

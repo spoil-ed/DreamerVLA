@@ -32,7 +32,6 @@ Example:
 import argparse
 import json
 import os
-import time
 
 import h5py
 import numpy as np
@@ -52,7 +51,10 @@ def is_noop(action, prev_action=None, threshold=1e-4):
         return np.linalg.norm(action[:-1]) < threshold
     gripper_action = action[-1]
     prev_gripper_action = prev_action[-1]
-    return np.linalg.norm(action[:-1]) < threshold and gripper_action == prev_gripper_action
+    return (
+        np.linalg.norm(action[:-1]) < threshold
+        and gripper_action == prev_gripper_action
+    )
 
 
 def _load_metainfo(path: str) -> dict:
@@ -89,7 +91,7 @@ def main(args):
     num_tasks_in_suite = task_suite.n_tasks
     num_demos_attempted = 0
     num_demos_written = 0
-    num_done_at_replay = 0   # sanity: should be 0 if metainfo+seeding are deterministic
+    num_done_at_replay = 0  # sanity: should be 0 if metainfo+seeding are deterministic
     num_noops = 0
 
     summary = {
@@ -113,7 +115,10 @@ def main(args):
             for demo_key, info in metainfo[task_key].items():
                 if isinstance(info, dict) and info.get("success") is False:
                     task_failure_keys.append(demo_key)
-        task_failure_keys = sorted(task_failure_keys, key=lambda k: int(k.split("_")[-1]) if k.startswith("demo_") else 10**9)
+        task_failure_keys = sorted(
+            task_failure_keys,
+            key=lambda k: int(k.split("_")[-1]) if k.startswith("demo_") else 10**9,
+        )
 
         per_task = {
             "metainfo_failures": len(task_failure_keys),
@@ -124,12 +129,16 @@ def main(args):
         }
 
         if not task_failure_keys:
-            print(f"[task {task_id}] {task_description}: no failure demos in metainfo, skipping")
+            print(
+                f"[task {task_id}] {task_description}: no failure demos in metainfo, skipping"
+            )
             summary["tasks"][task_key] = per_task
             continue
 
         # Open raw source for actions/states
-        orig_data_path = os.path.join(args.libero_raw_data_dir, f"{task.name}_demo.hdf5")
+        orig_data_path = os.path.join(
+            args.libero_raw_data_dir, f"{task.name}_demo.hdf5"
+        )
         if not os.path.exists(orig_data_path):
             print(f"[task {task_id}] missing raw data {orig_data_path}, skipping")
             per_task["skipped_missing_raw"] = len(task_failure_keys)
@@ -147,7 +156,9 @@ def main(args):
         grp.attrs["suite"] = args.libero_task_suite
         grp.attrs["task_description"] = task_description
 
-        for demo_key in tqdm.tqdm(task_failure_keys, desc=f"  failures in task_{task_id}", leave=False):
+        for demo_key in tqdm.tqdm(
+            task_failure_keys, desc=f"  failures in task_{task_id}", leave=False
+        ):
             if demo_key not in orig_data:
                 print(f"  [{demo_key}] missing in raw HDF5, skipping")
                 continue
@@ -185,7 +196,13 @@ def main(args):
                 else:
                     states.append(env.sim.get_state().flatten())
                     robot_states.append(
-                        np.concatenate([obs["robot0_gripper_qpos"], obs["robot0_eef_pos"], obs["robot0_eef_quat"]])
+                        np.concatenate(
+                            [
+                                obs["robot0_gripper_qpos"],
+                                obs["robot0_eef_pos"],
+                                obs["robot0_eef_quat"],
+                            ]
+                        )
                     )
 
                 actions.append(action)
@@ -193,7 +210,12 @@ def main(args):
                     gripper_states.append(obs["robot0_gripper_qpos"])
                 joint_states.append(obs["robot0_joint_pos"])
                 ee_states.append(
-                    np.hstack((obs["robot0_eef_pos"], T.quat2axisangle(obs["robot0_eef_quat"])))
+                    np.hstack(
+                        (
+                            obs["robot0_eef_pos"],
+                            T.quat2axisangle(obs["robot0_eef_quat"]),
+                        )
+                    )
                 )
                 agentview_images.append(obs["agentview_image"])
                 eye_in_hand_images.append(obs["robot0_eye_in_hand_image"])
@@ -219,19 +241,25 @@ def main(args):
                 continue
 
             dones = np.zeros(n, dtype=np.uint8)
-            dones[-1] = 1                          # mark terminal step
+            dones[-1] = 1  # mark terminal step
             rewards = np.zeros(n, dtype=np.uint8)  # failure: no positive reward ever
 
             ep = grp.create_group(demo_key)
             obs_grp = ep.create_group("obs")
             if gripper_states:
-                obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
+                obs_grp.create_dataset(
+                    "gripper_states", data=np.stack(gripper_states, axis=0)
+                )
             obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
             obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
             obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
             obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
-            obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
-            obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
+            obs_grp.create_dataset(
+                "agentview_rgb", data=np.stack(agentview_images, axis=0)
+            )
+            obs_grp.create_dataset(
+                "eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0)
+            )
             ep.create_dataset("actions", data=actions)
             ep.create_dataset("states", data=np.stack(states))
             ep.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
@@ -277,14 +305,27 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--libero_task_suite", type=str,
-                        choices=["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"],
-                        required=True)
+    parser.add_argument(
+        "--libero_task_suite",
+        type=str,
+        choices=[
+            "libero_spatial",
+            "libero_object",
+            "libero_goal",
+            "libero_10",
+            "libero_90",
+        ],
+        required=True,
+    )
     parser.add_argument("--libero_raw_data_dir", type=str, required=True)
     parser.add_argument("--libero_target_dir", type=str, required=True)
-    parser.add_argument("--libero_metainfo_json", type=str, required=True,
-                        help="Path to <suite>_metainfo.json written by the original "
-                             "regenerate_libero_dataset_filter_no_op.py run.")
+    parser.add_argument(
+        "--libero_metainfo_json",
+        type=str,
+        required=True,
+        help="Path to <suite>_metainfo.json written by the original "
+        "regenerate_libero_dataset_filter_no_op.py run.",
+    )
     parser.add_argument("--image_resolution", type=int, default=256)
     args = parser.parse_args()
     main(args)

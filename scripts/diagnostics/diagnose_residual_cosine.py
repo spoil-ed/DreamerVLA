@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Section 5.1 follow-up: residual cosine across token pairs.
 
 For each frame n and token pair (i, j), compute cosine of the residuals
@@ -21,7 +22,9 @@ DATA_DIR = Path(
     "/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/"
     "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
 )
-OUT_DIR = Path("/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure")
+OUT_DIR = Path(
+    "/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure"
+)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 N_TOKENS = 35
@@ -98,11 +101,15 @@ cross_mask = np.zeros((N_TOKENS, N_TOKENS), dtype=bool)
 for i in range(N_TOKENS):
     ti, ji = i // J, i % J
     for j in range(N_TOKENS):
-        if i == j: continue
+        if i == j:
+            continue
         tj, jj = j // J, j % J
-        if ti == tj: same_t_mask[i, j] = True
-        elif ji == jj: same_j_mask[i, j] = True
-        else: cross_mask[i, j] = True
+        if ti == tj:
+            same_t_mask[i, j] = True
+        elif ji == jj:
+            same_j_mask[i, j] = True
+        else:
+            cross_mask[i, j] = True
 
 same_t = cos_per_frame[:, same_t_mask]
 same_j = cos_per_frame[:, same_j_mask]
@@ -110,9 +117,15 @@ cross = cos_per_frame[:, cross_mask]
 
 print("\n=== Residual cosine by block ===")
 print(f"{'group':12s}  {'mean':>8s}  {'median':>8s}  {'p25':>8s}  {'p75':>8s}")
-print(f"{'same t (jj)':12s}  {same_t.mean():8.4f}  {np.median(same_t):8.4f}  {np.percentile(same_t,25):8.4f}  {np.percentile(same_t,75):8.4f}")
-print(f"{'same j (tt)':12s}  {same_j.mean():8.4f}  {np.median(same_j):8.4f}  {np.percentile(same_j,25):8.4f}  {np.percentile(same_j,75):8.4f}")
-print(f"{'cross':12s}  {cross.mean():8.4f}  {np.median(cross):8.4f}  {np.percentile(cross,25):8.4f}  {np.percentile(cross,75):8.4f}")
+print(
+    f"{'same t (jj)':12s}  {same_t.mean():8.4f}  {np.median(same_t):8.4f}  {np.percentile(same_t, 25):8.4f}  {np.percentile(same_t, 75):8.4f}"
+)
+print(
+    f"{'same j (tt)':12s}  {same_j.mean():8.4f}  {np.median(same_j):8.4f}  {np.percentile(same_j, 25):8.4f}  {np.percentile(same_j, 75):8.4f}"
+)
+print(
+    f"{'cross':12s}  {cross.mean():8.4f}  {np.median(cross):8.4f}  {np.percentile(cross, 25):8.4f}  {np.percentile(cross, 75):8.4f}"
+)
 
 # Token-pair mean residual cosine matrix
 mean_cos_pair = cos_per_frame.mean(axis=0)  # [35, 35]
@@ -143,8 +156,10 @@ with open(OUT_DIR / "residual_cosine_summary.json", "w") as fp:
 
 # Save figure
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 fig, axes = plt.subplots(1, 2, figsize=(11, 5))
 im = axes[0].imshow(mean_cos_pair, vmin=-0.2, vmax=1.0, cmap="RdBu_r")
 axes[0].set_title("mean residual cosine per (i,j)\nrow/col index = t*7 + j")
@@ -153,7 +168,9 @@ for t in range(1, T):
     axes[0].axhline(t * J - 0.5, color="white", lw=0.6, alpha=0.6)
     axes[0].axvline(t * J - 0.5, color="white", lw=0.6, alpha=0.6)
 
-axes[1].hist(off.flatten()[::100], bins=80, color="steelblue", alpha=0.75, label="all off-diag")
+axes[1].hist(
+    off.flatten()[::100], bins=80, color="steelblue", alpha=0.75, label="all off-diag"
+)
 axes[1].hist(same_t.flatten()[::20], bins=80, color="green", alpha=0.5, label="same t")
 axes[1].hist(same_j.flatten()[::50], bins=80, color="orange", alpha=0.5, label="same j")
 axes[1].set_xlabel("cosine of residuals")

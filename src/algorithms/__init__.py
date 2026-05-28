@@ -22,6 +22,7 @@ Internal modules used to build these routes (e.g. anything under
 ``src.algorithms.ppo.{grpo,relabel,tdmpc_critic,dense,outcome}``) are
 implementation detail; depend on the route entrypoints above.
 """
+
 from .dreamer_vla import (
     compute_lambda_returns,
     compute_replay_lambda_returns,
@@ -33,8 +34,8 @@ from .ppo import (
     dino_wmpo_dense_step,
     dino_wmpo_frame_step,  # legacy alias
     dino_wmpo_outcome_step,
-    dino_wmpo_ppo_step,    # legacy alias
-    dino_wmpo_window_step, # legacy alias
+    dino_wmpo_ppo_step,  # legacy alias
+    dino_wmpo_window_step,  # legacy alias
 )
 
 __all__ = [

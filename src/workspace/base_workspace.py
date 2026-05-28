@@ -76,7 +76,10 @@ class BaseWorkspace(ABC):
         # Encoder config
         encoder_cfg = copy.deepcopy(cfg.encoder)
         init_model_path = OmegaConf.select(cfg, "init.vla_ckpt_path")
-        if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
+        if (
+            init_model_path is not None
+            and OmegaConf.select(encoder_cfg, "model_path") is None
+        ):
             encoder_cfg.model_path = str(init_model_path)
         return encoder_cfg
 
@@ -129,7 +132,11 @@ class BaseWorkspace(ABC):
         if sanitize_worker_kwargs:
             dataloader_kwargs = self._sanitize_worker_kwargs(dataloader_kwargs)
 
-        effective_shuffle = bool(dataloader_kwargs.get("shuffle", True)) if shuffle is None else bool(shuffle)
+        effective_shuffle = (
+            bool(dataloader_kwargs.get("shuffle", True))
+            if shuffle is None
+            else bool(shuffle)
+        )
         effective_drop_last = (
             bool(dataloader_kwargs.get("drop_last", False))
             if drop_last is None
@@ -239,8 +246,12 @@ class BaseWorkspace(ABC):
 
         hidden_dim = fallback_hidden_dim
         if hidden_dim is None:
-            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
-        return torch.zeros(batch_size, int(hidden_dim), device=device, dtype=torch.float32)
+            hidden_dim = int(
+                OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1)
+            )
+        return torch.zeros(
+            batch_size, int(hidden_dim), device=device, dtype=torch.float32
+        )
 
     def attach_encoder_outputs(
         self,
@@ -270,21 +281,31 @@ class BaseWorkspace(ABC):
                         fallback_hidden_dim=fallback_hidden_dim,
                     )
                 except ValueError:
-                    if "obs_embedding" in batch and isinstance(batch["obs_embedding"], torch.Tensor):
-                        batch["next_obs_embedding"] = batch["obs_embedding"].detach().clone()
+                    if "obs_embedding" in batch and isinstance(
+                        batch["obs_embedding"], torch.Tensor
+                    ):
+                        batch["next_obs_embedding"] = (
+                            batch["obs_embedding"].detach().clone()
+                        )
             return batch
 
         with torch.no_grad():
             if isinstance(obs, Mapping):
                 obs_embedding = encoder.encode(obs)
-                batch["obs_embedding"] = obs_embedding.detach() if detach else obs_embedding
+                batch["obs_embedding"] = (
+                    obs_embedding.detach() if detach else obs_embedding
+                )
             if isinstance(next_obs, Mapping):
                 next_obs_embedding = encoder.encode(next_obs)
-                batch["next_obs_embedding"] = next_obs_embedding.detach() if detach else next_obs_embedding
+                batch["next_obs_embedding"] = (
+                    next_obs_embedding.detach() if detach else next_obs_embedding
+                )
         return batch
 
     @staticmethod
-    def slice_batch_mapping(mapping: Mapping[str, Any], indices: torch.Tensor) -> dict[str, Any]:
+    def slice_batch_mapping(
+        mapping: Mapping[str, Any], indices: torch.Tensor
+    ) -> dict[str, Any]:
         # Indexed slice for one mapping level plus one nested mapping level.
         sliced: dict[str, Any] = {}
         index_list = indices.tolist()
@@ -304,9 +325,13 @@ class BaseWorkspace(ABC):
                     if isinstance(nested_value, torch.Tensor):
                         nested[nested_key] = nested_value.index_select(0, indices)
                     elif isinstance(nested_value, list):
-                        nested[nested_key] = [nested_value[int(idx)] for idx in index_list]
+                        nested[nested_key] = [
+                            nested_value[int(idx)] for idx in index_list
+                        ]
                     elif isinstance(nested_value, tuple):
-                        nested[nested_key] = tuple(nested_value[int(idx)] for idx in index_list)
+                        nested[nested_key] = tuple(
+                            nested_value[int(idx)] for idx in index_list
+                        )
                     else:
                         nested[nested_key] = nested_value
                 sliced[key] = nested
@@ -389,7 +414,9 @@ class BaseWorkspace(ABC):
             include_keys = tuple(self.include_keys) + ("_output_dir",)
 
         distributed = getattr(self, "distributed", None)
-        is_main_process = True if distributed is None else bool(distributed.is_main_process)
+        is_main_process = (
+            True if distributed is None else bool(distributed.is_main_process)
+        )
         requires_collective = (
             False
             if distributed is None
@@ -438,12 +465,20 @@ class BaseWorkspace(ABC):
         if include_keys is None:
             include_keys = tuple(pickles.keys())
             if not bool(getattr(self, "checkpoint_restore_output_dir", False)):
-                include_keys = tuple(key for key in include_keys if key != "_output_dir")
+                include_keys = tuple(
+                    key for key in include_keys if key != "_output_dir"
+                )
 
         # State restore
         for key, value in state_dicts.items():
-            if key not in exclude_keys and key in self.__dict__ and self.__dict__[key] is not None:
-                self._load_state_dict_from_checkpoint(key, self.__dict__[key], value, **kwargs)
+            if (
+                key not in exclude_keys
+                and key in self.__dict__
+                and self.__dict__[key] is not None
+            ):
+                self._load_state_dict_from_checkpoint(
+                    key, self.__dict__[key], value, **kwargs
+                )
 
         # Pickle restore
         for key in include_keys:

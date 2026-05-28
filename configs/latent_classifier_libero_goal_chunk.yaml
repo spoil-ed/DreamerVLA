@@ -77,18 +77,11 @@ training:
   thresh_steps: 20
 
   # ---- episode-level eval ----
-  # episode_eval_min_steps in ENV-STEP units. Workspace remaps to chunks via
-  # ceil(min_steps / K). The effective eligibility gate is:
-  #   first_end_env = max(W * K, ceil(min_steps / K) * K + W * K)
-  # For W=8 chunks + K=5, first_end_env = max(40, ceil(min_steps/5)*5 + 40).
-  # We want gate ≈ 72 env-step to match the action-level small_tf baseline
-  # (which had W=8 env-step + min_steps=64 → first_end_env=72). With W=8
-  # chunks the window-coverage is 40 env-step inherent, so we deliberately
-  # LOWER min_steps to 32 (ceil(32/5)=7 chunks → first_end=15 chunks=75 env)
-  # to give the chunk classifier the same wall-clock eligibility window as
-  # small_tf. Otherwise success demos finishing before env-step ~105 are
-  # structurally false-negative regardless of model quality.
+  # CHUNK units (native).  Effective gate: first_end_chunk = max(W, min_steps + W)
+  # = max(8, 7 + 8) = 15 chunks → 75 env-step (K=5).  Matches action-level
+  # small_tf baseline (W=8 env-step + min_steps=64 → first_end=72 env-step).
+  # Lower min_steps would false-negative success demos finishing early.
   episode_eval_enabled: true
-  episode_eval_min_steps: 32
-  episode_eval_stride: 1
+  episode_eval_min_steps: 7  # CHUNK units (was 32 env-step / K=5, ceil → 7)
+  episode_eval_stride: 1     # CHUNK units
   episode_eval_batch: 256

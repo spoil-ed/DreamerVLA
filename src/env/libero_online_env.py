@@ -10,6 +10,7 @@ formatted for the two DreamerVLA routes:
 * token/VLA route: ``obs["frame_history"]`` contains PIL image pairs and
   ``obs["state"]`` contains the VLA proprio state used by the tokenizer.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -106,7 +107,9 @@ class LIBEROOnlineEnv:
         if task_sampling not in {"sequential", "random"}:
             raise ValueError("task_sampling must be one of {'sequential', 'random'}")
         if init_state_sampling not in {"sequential", "random"}:
-            raise ValueError("init_state_sampling must be one of {'sequential', 'random'}")
+            raise ValueError(
+                "init_state_sampling must be one of {'sequential', 'random'}"
+            )
 
         self.cfg = LIBEROOnlineEnvConfig(
             task_suite_name=str(task_suite_name),
@@ -130,11 +133,15 @@ class LIBEROOnlineEnv:
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         if self.cfg.task_suite_name not in benchmark_dict:
             valid = ", ".join(sorted(benchmark_dict))
-            raise ValueError(f"Unknown LIBERO task suite {self.cfg.task_suite_name!r}; valid: {valid}")
+            raise ValueError(
+                f"Unknown LIBERO task suite {self.cfg.task_suite_name!r}; valid: {valid}"
+            )
         self.task_suite = benchmark_dict[self.cfg.task_suite_name]()
         self.num_tasks = int(getattr(self.task_suite, "n_tasks", 0))
         if self.num_tasks <= 0:
-            raise RuntimeError(f"LIBERO suite {self.cfg.task_suite_name} reports no tasks")
+            raise RuntimeError(
+                f"LIBERO suite {self.cfg.task_suite_name} reports no tasks"
+            )
 
         self.rng = np.random.default_rng(self.cfg.seed)
         self._task_cycle_idx = 0
@@ -153,7 +160,9 @@ class LIBEROOnlineEnv:
         self.set_task(self.cfg.task_id)
 
     @classmethod
-    def from_config(cls, cfg: LIBEROOnlineEnvConfig | dict[str, Any]) -> "LIBEROOnlineEnv":
+    def from_config(
+        cls, cfg: LIBEROOnlineEnvConfig | dict[str, Any]
+    ) -> "LIBEROOnlineEnv":
         if isinstance(cfg, LIBEROOnlineEnvConfig):
             return cls(**cfg.__dict__)
         return cls(**dict(cfg))
@@ -173,7 +182,9 @@ class LIBEROOnlineEnv:
     def set_task(self, task_id: int) -> None:
         task_id = int(task_id)
         if task_id < 0 or task_id >= self.num_tasks:
-            raise ValueError(f"task_id={task_id} out of range for {self.cfg.task_suite_name} ({self.num_tasks} tasks)")
+            raise ValueError(
+                f"task_id={task_id} out of range for {self.cfg.task_suite_name} ({self.num_tasks} tasks)"
+            )
         if self.env is not None and task_id == self.task_id:
             return
         self.close()
@@ -182,8 +193,12 @@ class LIBEROOnlineEnv:
         self.task = self.task_suite.get_task(self.task_id)
         self.initial_states = self.task_suite.get_task_init_states(self.task_id)
         if len(self.initial_states) <= 0:
-            raise RuntimeError(f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states")
-        self.env, self.task_description = get_libero_env(self.task, resolution=self.cfg.resolution)
+            raise RuntimeError(
+                f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states"
+            )
+        self.env, self.task_description = get_libero_env(
+            self.task, resolution=self.cfg.resolution
+        )
         self.env.seed(self.cfg.seed + self.task_id)
         self.max_steps = int(
             self.cfg.max_steps
@@ -227,13 +242,17 @@ class LIBEROOnlineEnv:
         )
         return obs, info
 
-    def step(self, action: np.ndarray | Sequence[float]) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: np.ndarray | Sequence[float]
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         if self.env is None:
             raise RuntimeError("LIBEROOnlineEnv is closed or was not initialised")
         action_arr = self._prepare_action(action)
         raw_obs, raw_reward, raw_done, raw_info = self.env.step(action_arr.tolist())
         self._elapsed_steps += 1
-        success = self._is_success(raw_done=raw_done, reward=float(raw_reward), info=raw_info)
+        success = self._is_success(
+            raw_done=raw_done, reward=float(raw_reward), info=raw_info
+        )
         episode_end = resolve_episode_end(
             success=success,
             elapsed_steps=self._elapsed_steps,
@@ -241,11 +260,17 @@ class LIBEROOnlineEnv:
         )
         terminated = episode_end.terminated
         truncated = episode_end.truncated
-        reward = float(1.0 if success else 0.0) if self.cfg.sparse_success_reward else float(raw_reward)
+        reward = (
+            float(1.0 if success else 0.0)
+            if self.cfg.sparse_success_reward
+            else float(raw_reward)
+        )
 
         self._raw_obs = raw_obs
         is_last = episode_end.done
-        obs = self._format_obs(raw_obs, is_first=False, is_last=is_last, is_terminal=terminated)
+        obs = self._format_obs(
+            raw_obs, is_first=False, is_last=is_last, is_terminal=terminated
+        )
         info = self._make_info(
             raw_info=raw_info,
             reward=reward,
@@ -269,9 +294,15 @@ class LIBEROOnlineEnv:
         if self._raw_obs is None:
             raise RuntimeError("render_frame called before reset")
         if view == "third":
-            return self._camera_image(self._raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180)
+            return self._camera_image(
+                self._raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180
+            )
         if view == "wrist":
-            return self._camera_image(self._raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.vla_rotate_180)
+            return self._camera_image(
+                self._raw_obs,
+                "robot0_eye_in_hand_image",
+                rotate_180=self.cfg.vla_rotate_180,
+            )
         raise ValueError("view must be one of {'third', 'wrist'}")
 
     def make_transition(
@@ -324,13 +355,17 @@ class LIBEROOnlineEnv:
         else:
             action_arr = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
         if action_arr.shape[0] != 7:
-            raise ValueError(f"LIBERO action must have 7 values, got shape {tuple(action_arr.shape)}")
+            raise ValueError(
+                f"LIBERO action must have 7 values, got shape {tuple(action_arr.shape)}"
+            )
         if self.cfg.clip_actions:
             action_arr = np.clip(action_arr, ACTION_LOW, ACTION_HIGH)
         return action_arr.astype(np.float32, copy=False)
 
     @staticmethod
-    def _camera_image(raw_obs: dict[str, Any], key: str, rotate_180: bool) -> np.ndarray:
+    def _camera_image(
+        raw_obs: dict[str, Any], key: str, rotate_180: bool
+    ) -> np.ndarray:
         if key not in raw_obs:
             raise KeyError(f"LIBERO observation missing camera key {key!r}")
         img = np.asarray(raw_obs[key], dtype=np.uint8)
@@ -346,7 +381,10 @@ class LIBEROOnlineEnv:
             resample = Image.Resampling.BILINEAR
         except AttributeError:
             resample = Image.BILINEAR
-        return np.asarray(Image.fromarray(image).resize((size, size), resample=resample), dtype=np.uint8)
+        return np.asarray(
+            Image.fromarray(image).resize((size, size), resample=resample),
+            dtype=np.uint8,
+        )
 
     def _format_obs(
         self,
@@ -356,29 +394,44 @@ class LIBEROOnlineEnv:
         is_last: bool,
         is_terminal: bool,
     ) -> dict[str, Any]:
-        pixel_third = self._camera_image(raw_obs, "agentview_image", rotate_180=self.cfg.pixel_rotate_180)
-        pixel_wrist = self._camera_image(raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.pixel_rotate_180)
+        pixel_third = self._camera_image(
+            raw_obs, "agentview_image", rotate_180=self.cfg.pixel_rotate_180
+        )
+        pixel_wrist = self._camera_image(
+            raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.pixel_rotate_180
+        )
         pixel_third_small = self._resize_hwc_uint8(pixel_third, self.cfg.image_size)
         pixel_wrist_small = self._resize_hwc_uint8(pixel_wrist, self.cfg.image_size)
         dreamer_image = np.concatenate(
-            [pixel_third_small.transpose(2, 0, 1), pixel_wrist_small.transpose(2, 0, 1)],
+            [
+                pixel_third_small.transpose(2, 0, 1),
+                pixel_wrist_small.transpose(2, 0, 1),
+            ],
             axis=0,
         ).astype(np.uint8, copy=False)
 
-        vla_third = self._camera_image(raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180)
-        vla_wrist = self._camera_image(raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.vla_rotate_180)
+        vla_third = self._camera_image(
+            raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180
+        )
+        vla_wrist = self._camera_image(
+            raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.vla_rotate_180
+        )
         third_pil = Image.fromarray(vla_third)
         wrist_pil = Image.fromarray(vla_wrist)
         self._frame_history.append((third_pil, wrist_pil))
         if len(self._frame_history) > self.cfg.history_length:
-            self._frame_history = self._frame_history[-self.cfg.history_length:]
+            self._frame_history = self._frame_history[-self.cfg.history_length :]
         history_pad = self.cfg.history_length - len(self._frame_history)
-        frame_history = [self._frame_history[0]] * history_pad + list(self._frame_history)
+        frame_history = [self._frame_history[0]] * history_pad + list(
+            self._frame_history
+        )
 
         state = np.concatenate(
             [
                 np.asarray(raw_obs["robot0_eef_pos"], dtype=np.float32),
-                quat2axisangle(np.asarray(raw_obs["robot0_eef_quat"], dtype=np.float32)).astype(np.float32),
+                quat2axisangle(
+                    np.asarray(raw_obs["robot0_eef_quat"], dtype=np.float32)
+                ).astype(np.float32),
                 np.asarray(raw_obs["robot0_gripper_qpos"], dtype=np.float32),
             ],
             axis=0,

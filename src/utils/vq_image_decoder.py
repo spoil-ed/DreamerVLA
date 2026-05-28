@@ -24,12 +24,11 @@ Reference:
     ImageTokenizer.pil_from_img_toks()
         src/models/chameleon_model/chameleon_vae_ori/image_tokenizer.py:117
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
 
-import numpy as np
 import torch
 import yaml
 from PIL import Image
@@ -62,7 +61,7 @@ def load_vq_model(
         config = yaml.safe_load(f)
 
     params = config["model"]["params"]
-    params.pop("lossconfig", None)          # not needed for inference
+    params.pop("lossconfig", None)  # not needed for inference
     params["ckpt_path"] = str(ckpt_path)
 
     model = VQModel(**params)
@@ -72,6 +71,7 @@ def load_vq_model(
 
 
 # ── BPE → VQ index mapping ────────────────────────────────────────────────────
+
 
 def build_bpe2vq_tensor(vocabulary_mapping) -> torch.Tensor:
     """
@@ -117,6 +117,7 @@ def bpe_to_vq(
 
 # ── Core reconstruction ───────────────────────────────────────────────────────
 
+
 def vq_tokens_to_pixels(
     vq_ids: torch.Tensor,
     vq_model: VQModel,
@@ -139,7 +140,7 @@ def vq_tokens_to_pixels(
     vq_ids = vq_ids.to(next(vq_model.parameters()).device)
 
     B = vq_ids.shape[0]
-    flat_ids = vq_ids.reshape(-1)               # [B * h_lat * w_lat]
+    flat_ids = vq_ids.reshape(-1)  # [B * h_lat * w_lat]
     embed_dim = vq_model.quantize.embedding.weight.shape[-1]
 
     # codebook lookup → [B, embed_dim, h_lat, w_lat]
@@ -150,7 +151,7 @@ def vq_tokens_to_pixels(
 
     # CNN decoder → pixels
     with torch.no_grad():
-        pixels = vq_model.decode(quant)         # [B, 3, H, W],  range [-1, 1]
+        pixels = vq_model.decode(quant)  # [B, 3, H, W],  range [-1, 1]
 
     return pixels
 
@@ -184,13 +185,14 @@ def bpe_tokens_to_pixels(
 
 # ── Tensor → PIL helper ───────────────────────────────────────────────────────
 
+
 def tensor_to_pil(chw: torch.Tensor) -> Image.Image:
     """
     Convert a single [3, H, W] float tensor in [-1, 1] to a PIL RGB image.
     """
     arr = chw.detach().cpu().clamp(-1.0, 1.0)
-    arr = ((arr + 1.0) / 2.0 * 255.0).byte()   # → [0, 255]
-    arr = arr.permute(1, 2, 0).numpy()           # [H, W, 3]
+    arr = ((arr + 1.0) / 2.0 * 255.0).byte()  # → [0, 255]
+    arr = arr.permute(1, 2, 0).numpy()  # [H, W, 3]
     return Image.fromarray(arr, mode="RGB")
 
 
@@ -202,6 +204,7 @@ def pixels_to_pil(pixels: torch.Tensor) -> list[Image.Image]:
 
 
 # ── Convenience wrapper ───────────────────────────────────────────────────────
+
 
 class ChameleonImageReconstructor:
     """

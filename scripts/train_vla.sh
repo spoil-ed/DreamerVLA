@@ -6,8 +6,10 @@
 #  (default: libero_goal). Override anything on the Hydra CLI.
 #
 #  Available CONFIGs:
-#    vla_pi0_query   (default)   pi0_query head, pretokenize SFT
-#    vla_sft_one_trajectory      pi0_query head, one demo trajectory per task
+#    vla_pi0_query                       (default)   pi0_query head, pretokenize SFT
+#    vla_sft_one_trajectory                          pi0_query head, one demo trajectory per task
+#    openvla_oft_hdf5                                OpenVLA-OFT SFT on raw HDF5
+#    openvla_oft_hdf5_one_trajectory                 OpenVLA-OFT LM-head action-token SFT, one random demo per task
 #
 #  Examples:
 #    bash scripts/train_vla.sh
@@ -16,6 +18,8 @@
 #    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
 #    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh \
 #        dataset.trajectory_offset=3
+#    CONFIG=openvla_oft_hdf5 bash scripts/train_vla.sh task=libero_goal
+#    CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_goal
 #    OUT_DIR=data/outputs/vla/pi0_query/libero_object_run1 \
 #        bash scripts/train_vla.sh task=libero_object
 # ============================================================================

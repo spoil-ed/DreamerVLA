@@ -4,9 +4,10 @@ Mirrors the VideoMAE classifier in WMPO/reward_model/videomae.py at the
 interface level — sliding W-frame window over a [T, latent_dim] sequence,
 earliest window with p(success) >= threshold defines finish_step.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -52,7 +53,9 @@ class LatentSuccessClassifier(nn.Module):
         - ``mlp2``: Linear(L*W, hidden_dim) → GELU → Dropout → Linear(hidden_dim, 2)
     """
 
-    def __init__(self, cfg: Optional[LatentSuccessClassifierConfig] = None, **kwargs) -> None:
+    def __init__(
+        self, cfg: Optional[LatentSuccessClassifierConfig] = None, **kwargs
+    ) -> None:
         super().__init__()
         if cfg is None:
             cfg = LatentSuccessClassifierConfig(**kwargs)
@@ -62,14 +65,20 @@ class LatentSuccessClassifier(nn.Module):
             raise ValueError(f"unknown granularity: {gran!r} (action|chunk)")
         if gran == "chunk":
             if int(cfg.chunk_size) < 1:
-                raise ValueError(f"chunk granularity requires chunk_size >= 1, got {cfg.chunk_size}")
+                raise ValueError(
+                    f"chunk granularity requires chunk_size >= 1, got {cfg.chunk_size}"
+                )
             if str(cfg.chunk_pool) not in ("last", "first", "mean"):
-                raise ValueError(f"chunk_pool must be last|first|mean, got {cfg.chunk_pool!r}")
+                raise ValueError(
+                    f"chunk_pool must be last|first|mean, got {cfg.chunk_pool!r}"
+                )
         ht = str(getattr(cfg, "head_type", "transformer"))
         if ht == "transformer":
             self.input_proj = nn.Linear(cfg.latent_dim, cfg.hidden_dim)
             self.cls_token = nn.Parameter(torch.zeros(1, 1, cfg.hidden_dim))
-            self.pos_embed = nn.Parameter(torch.zeros(1, cfg.window + 1, cfg.hidden_dim))
+            self.pos_embed = nn.Parameter(
+                torch.zeros(1, cfg.window + 1, cfg.hidden_dim)
+            )
             layer = nn.TransformerEncoderLayer(
                 d_model=cfg.hidden_dim,
                 nhead=cfg.num_heads,
@@ -113,15 +122,11 @@ class LatentSuccessClassifier(nn.Module):
         flat = latent_window.reshape(B, -1).to(next(self.head.parameters()).dtype)
         return self.head(flat)
 
-    def _chunk_aggregate(self, latent_video: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _chunk_aggregate(self, latent_video: torch.Tensor) -> torch.Tensor:
         """Subsample / pool an env-step granular video to chunk granularity.
 
-        Returns:
-            chunk_video: ``[B, T_chunk, latent_dim]`` where ``T_chunk = T // K``.
-            chunk_end_env_step: ``[T_chunk]`` long — for each chunk index ``c``,
-                the env-step index that chunk ``c`` ends at (i.e. ``(c+1)*K-1``).
-                Used to translate chunk-unit finish_step back to env-step units
-                so downstream code sees a consistent env-step index.
+        Returns ``[B, T_chunk, latent_dim]`` where ``T_chunk = T // K``.
+        Pooling is controlled by ``self.cfg.chunk_pool`` (last|first|mean).
         """
         B, T, D = latent_video.shape
         K = int(self.cfg.chunk_size)
@@ -134,15 +139,10 @@ class LatentSuccessClassifier(nn.Module):
         usable = T_chunk * K
         reshaped = latent_video[:, :usable].reshape(B, T_chunk, K, D)
         if pool == "last":
-            chunk_video = reshaped[:, :, -1]
-        elif pool == "first":
-            chunk_video = reshaped[:, :, 0]
-        else:  # mean
-            chunk_video = reshaped.mean(dim=2)
-        chunk_end_env_step = torch.arange(
-            K - 1, usable, K, device=latent_video.device, dtype=torch.long
-        )
-        return chunk_video, chunk_end_env_step
+            return reshaped[:, :, -1]
+        if pool == "first":
+            return reshaped[:, :, 0]
+        return reshaped.mean(dim=2)
 
     @torch.no_grad()
     def predict_success(
@@ -154,67 +154,56 @@ class LatentSuccessClassifier(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Earliest-window success scan over a latent video.
 
+        Unit convention: ``min_steps``, ``stride``, and the returned
+        ``finish_step`` are ALL in the classifier's NATIVE unit:
+            - action granularity → env-step
+            - chunk granularity  → chunk (one chunk = ``chunk_size`` env-steps)
+
+        ``latent_video`` is always env-step granular (callers don't need to
+        pre-pool); chunk classifiers pool internally via
+        ``self.cfg.chunk_size`` + ``self.cfg.chunk_pool``. Callers that need
+        env-step finish_step must convert at the boundary
+        (``finish_chunk * chunk_size + (chunk_size - 1)`` for ``chunk_pool=last``).
+
         Args:
-            latent_video: [B, T, latent_dim] in ENV-STEP granularity. For
-                chunk-level classifiers the video is subsampled internally
-                using ``self.cfg.chunk_size`` + ``self.cfg.chunk_pool`` so
-                callers never have to know about granularity.
-            threshold: probability threshold for the success class.
-            stride: window stride (in classifier's NATIVE unit: env-step for
-                action granularity, chunk for chunk granularity).
-            min_steps: earliest window-end position in ENV-STEP units (so the
-                online WMPO config can keep one consistent number across both
-                granularities).  For chunk classifiers this is converted to
-                ``ceil(min_steps / chunk_size)`` chunk units.
+            latent_video: ``[B, T, latent_dim]``, ENV-STEP granular.
+            threshold:    p(success) threshold for the positive class.
+            stride:       window stride, NATIVE unit.
+            min_steps:    earliest window-end position, NATIVE unit.
 
         Returns:
-            dict with:
-                ``complete``: [B] bool
-                ``finish_step``: [B] long — earliest window-end index that
-                    fired in ENV-STEP units; ``T - 1`` if no window fired.
+            ``complete``    : ``[B]`` bool
+            ``finish_step`` : ``[B]`` long — earliest window-end index in
+                              NATIVE unit; ``T_scan - 1`` if no window fired
+                              (``T_scan = T // chunk_size`` for chunk,
+                               ``T`` for action).
         """
         B, T, _ = latent_video.shape
         W = self.cfg.window
         device = latent_video.device
         gran = str(getattr(self.cfg, "granularity", "action"))
-
-        if gran == "chunk":
-            scan_video, chunk_end_env_step = self._chunk_aggregate(latent_video)
-            K = int(self.cfg.chunk_size)
-            scan_min_steps = (int(min_steps) + K - 1) // K
-        else:
-            scan_video = latent_video
-            chunk_end_env_step = None
-            scan_min_steps = int(min_steps)
+        scan_video = (
+            self._chunk_aggregate(latent_video) if gran == "chunk" else latent_video
+        )
 
         T_scan = scan_video.shape[1]
         complete = torch.zeros(B, dtype=torch.bool, device=device)
-        finish_step_scan = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
+        finish_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
 
-        first_end = max(W, scan_min_steps + W)
-        ends = list(range(first_end, T_scan + 1, stride))
-        for end in ends:
+        first_end = max(W, int(min_steps) + W)
+        for end in range(first_end, T_scan + 1, stride):
             window = scan_video[:, end - W : end]
             logits = self.forward(window)
             probs = torch.softmax(logits, dim=-1)[:, 1]
             hit = (probs >= threshold) & (~complete)
             if hit.any():
-                finish_step_scan = torch.where(
-                    hit, torch.full_like(finish_step_scan, end - 1), finish_step_scan
+                finish_step = torch.where(
+                    hit, torch.full_like(finish_step, end - 1), finish_step
                 )
                 complete = complete | hit
                 if complete.all():
                     break
-
-        if gran == "chunk":
-            # Map chunk-index finish_step back to env-step index using the
-            # chunk-end env-step lookup. Unfired entries keep T - 1.
-            assert chunk_end_env_step is not None
-            unfired = ~complete
-            finish_env = chunk_end_env_step[finish_step_scan.clamp(max=chunk_end_env_step.shape[0] - 1)]
-            finish_env = torch.where(unfired, torch.full_like(finish_env, T - 1), finish_env)
-            return {"complete": complete, "finish_step": finish_env}
-        return {"complete": complete, "finish_step": finish_step_scan}
+        return {"complete": complete, "finish_step": finish_step}
 
 
 __all__ = ["LatentSuccessClassifier", "LatentSuccessClassifierConfig"]

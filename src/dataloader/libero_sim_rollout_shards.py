@@ -9,6 +9,7 @@ Shard schema (built by scripts/build_classifier_shards_from_demos.py):
     <key>.latent.npy  shape [T, latent_dim], float16/float32
     <key>.meta.json   {"finish_step": int, "complete": bool, ...}
 """
+
 from __future__ import annotations
 
 import io

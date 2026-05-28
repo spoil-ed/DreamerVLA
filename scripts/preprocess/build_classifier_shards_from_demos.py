@@ -13,13 +13,12 @@ SuccessWindowDataset scheme.
 To add failure-class negatives, a follow-up script must run pi0 SFT in
 LIBERO sim and append failed episodes (complete=False, finish_step=max_steps-1).
 """
+
 from __future__ import annotations
 
 import argparse
-import glob
 import io
 import json
-import os
 from pathlib import Path
 
 import h5py
@@ -83,11 +82,13 @@ def main() -> None:
                     "demo_id": demo_name,
                     "source_file": hdf5_path.name,
                 }
-                sink.write({
-                    "__key__": f"{args.prefix}_{shard_idx:06d}_{key_idx:06d}",
-                    "latent.npy": latent_buf.getvalue(),
-                    "meta.json": json.dumps(meta).encode(),
-                })
+                sink.write(
+                    {
+                        "__key__": f"{args.prefix}_{shard_idx:06d}_{key_idx:06d}",
+                        "latent.npy": latent_buf.getvalue(),
+                        "meta.json": json.dumps(meta).encode(),
+                    }
+                )
                 key_idx += 1
                 total += 1
                 if complete:
@@ -98,13 +99,17 @@ def main() -> None:
                     sink.close()
                     shard_idx += 1
                     key_idx = 0
-                    sink = wds.TarWriter(str(out_dir / f"{args.prefix}_{shard_idx:06d}.tar"))
+                    sink = wds.TarWriter(
+                        str(out_dir / f"{args.prefix}_{shard_idx:06d}.tar")
+                    )
             task_id += 1
     finally:
         sink.close()
 
-    print(f"wrote {total} samples across {shard_idx + 1} shards "
-          f"({success_count} success / {fail_count} failed)")
+    print(
+        f"wrote {total} samples across {shard_idx + 1} shards "
+        f"({success_count} success / {fail_count} failed)"
+    )
 
 
 if __name__ == "__main__":

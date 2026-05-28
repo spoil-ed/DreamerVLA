@@ -14,7 +14,7 @@ metadata from `configs/task/*.yaml`.
 
 | Script | Main Config | Public Workspace | Purpose |
 | --- | --- | --- | --- |
-| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory` | `VLASFTWorkspace` | VLA SFT, including one trajectory per task |
+| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `src.workspace.*` target from config | VLA SFT, including one trajectory per task |
 | `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTWorkspace` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
 | `train_wm.sh` | `world_model_rssm_step`, `world_model_dinowm_step`, `world_model_dinowm_chunk` | route-specific `src.workspace.*` target from config | WM training |
 | `train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_rynn_dino_wm_wmpo_outcome` | `JointDreamerVLAWorkspace` | DreamerVLA training |
@@ -49,7 +49,10 @@ One-trajectory SFT keeps one demonstration trajectory per LIBERO task:
 ```bash
 CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
 CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
+CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
 ```
+
+`openvla_oft_hdf5_one_trajectory` uses the OpenVLA-OFT LLaMA LM head for action-token SFT (`policy.use_l1_regression=false`) and samples one demo per task file with `dataset.demo_selection_seed`.
 
 ## Evaluation
 
@@ -71,18 +74,78 @@ These switches are useful for actor and hidden ablations.
 
 ## Diagnostics
 
+Core diagnostics (`scripts/diagnostics/`):
+
 | Script | Purpose |
 | --- | --- |
 | `analyze_rynn_hidden_action_metrics.py` | Offline hidden/action mismatch metrics |
 | `monitor_dreamer_vla_metrics.py` | Summarize training log trends |
 | `visualize_dreamervla_reward.py` | Reward-model visualization helper |
-| `smoke_libero_online_env.py` | Smoke test for online LIBERO env wiring |
+| `smoke_libero_online_env.py` | Smoke test for online LIBERO env wiring (lives in `scripts/smoke/`) |
+
+Hidden-token structure (paper §5.1 analysis):
+
+| Script | Purpose |
+| --- | --- |
+| `diagnose_hidden_token_structure.py` | Phase 1 statistics on 35×1024 action_hidden over time / joint axes |
+| `diagnose_residual_cosine.py` | Cross-token residual cosine; tests per-sample redundancy vs LayerNorm bias |
+| `analyze_compact_token_z_reconstruction.py` | Reconstruction quality of `CompactTokenSequenceAutoencoder` |
+
+Classifier ceiling estimation:
+
+| Script | Purpose |
+| --- | --- |
+| `estimate_classifier_ceiling.py` | LR / kNN / small-MLP triangulation of LatentSuccessClassifier Bayes ceiling |
+| `finetune_reward_head_sparse.py` | Fine-tune only WM reward head as terminal-success classifier (WMPO recipe) |
+
+WM imagine fidelity:
+
+| Script | Purpose |
+| --- | --- |
+| `measure_wm_imagine_fidelity.py` | Faithfulness of WM-imagined trajectory under demo actions (feature / reward) |
+| `measure_wm_imagine_actor.py` | Same, but under trained / SFT-init / demo actions (OOD test) |
+| `measure_recon_and_action_delta.py` | hidden_decoder reconstruction quality + SFT actor sensitivity to recon |
+| `measure_reward_and_drift.py` | Reward curve on success demo + SFT-direction reward peak + action drift |
+
+Policy comparison:
+
+| Script | Purpose |
+| --- | --- |
+| `compare_action_chunks.py` | Trained policy vs frozen pi0-SFT baseline action_chunks on shared WM features |
+| `compare_policy_trace_runs.py` | Compare `policy_trace.jsonl` from VLA and DreamerVLA rollouts |
+| `diagnose_dreamervla_latent_distribution.py` | DreamerVLA latent distribution diagnostics |
+
+Data validation:
+
+| Script | Purpose |
+| --- | --- |
+| `validate_oft_rynn_style_sidecar.py` | Validate OFT / rynn-style sidecar HDF5 schema |
 
 Diagnostic outputs should go under:
 
 ```text
 data/outputs/eval/
 ```
+
+## Frozen-WM actor / critic route
+
+Frozen-WM is a non-mainline ablation route where the world model is held
+constant and only the actor / critic are trained.
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/training/train_frozen_wm_actor_critic.py` | Train actor / critic with the WM frozen (reuses `OnlineReplay` from the live training script) |
+| `scripts/eval/eval_frozen_wm_actor.py` | Deterministic LIBERO rollout eval for checkpoints saved by the above; emits MP4s + JSON summary |
+
+## Preprocess
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/preprocess/preprocess_oft_action_hidden.py` | Build OFT action-hidden sidecar from raw demos |
+| `scripts/preprocess/preprocess_remaining_steps_reward.py` | Precompute `remaining_steps`-style dense reward labels |
+| `scripts/preprocess/preprocess_rynn_pixel_hidden.py` | Build rynn pixel / hidden sidecar |
+| `scripts/preprocess/build_classifier_shards_from_demos.py` | Pack demo action-hiddens into WebDataset shards for the LatentSuccessClassifier (positives only; failure-class negatives must be appended separately) |
+| `scripts/preprocess/collect_online_rollouts_for_classifier.py` | Roll out pi0 SFT in LIBERO sim to collect failure-class negatives for the classifier |
 
 ## Script Hygiene
 

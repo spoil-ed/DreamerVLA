@@ -1,7 +1,7 @@
 """VLA-only training workspace with LIBERO rollout evaluation after each epoch."""
+
 from __future__ import annotations
 
-import contextlib
 import copy
 import gc
 import os
@@ -34,19 +34,35 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
-    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
+    default_vla_init_dir = (
+        "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    )
+    default_output_dir = (
+        "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
+    )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
-            output_dir = str(OmegaConf.select(config, "training.out_dir", default=self.default_output_dir))
+            output_dir = str(
+                OmegaConf.select(
+                    config, "training.out_dir", default=self.default_output_dir
+                )
+            )
         super().__init__(config, output_dir=output_dir)
 
         self.distributed = NopretokenizeSFTDistributedHelper.initialize(
-            strategy=str(OmegaConf.select(config, "training.distributed_strategy", default="ddp")),
-            fsdp_mixed_precision=str(OmegaConf.select(config, "training.fsdp_mixed_precision", default="bf16")),
+            strategy=str(
+                OmegaConf.select(config, "training.distributed_strategy", default="ddp")
+            ),
+            fsdp_mixed_precision=str(
+                OmegaConf.select(
+                    config, "training.fsdp_mixed_precision", default="bf16"
+                )
+            ),
             enable_activation_checkpointing=bool(
-                OmegaConf.select(config, "training.enable_activation_checkpointing", default=True)
+                OmegaConf.select(
+                    config, "training.enable_activation_checkpointing", default=True
+                )
             ),
         )
         self.rank = self.distributed.rank
@@ -64,7 +80,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         encoder_cfg = self.build_encoder_cfg(cfg)
         with open_dict(encoder_cfg):
             encoder_cfg.model_path = self._resolve_vla_init_path()
-            train_encoder_backbone = bool(OmegaConf.select(cfg, "training.train_encoder_backbone", default=True))
+            train_encoder_backbone = bool(
+                OmegaConf.select(cfg, "training.train_encoder_backbone", default=True)
+            )
             encoder_cfg.freeze_backbone = not train_encoder_backbone
         return encoder_cfg
 
@@ -85,8 +103,14 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         if key == "encoder" and self.encoder is not None:
             with self.distributed.model_state_dict_context(self.encoder.backbone):
                 return self.encoder.state_dict()
-        if key == "vla_optimizer" and self.vla_optimizer is not None and self.encoder is not None:
-            return self.distributed.optimizer_state_dict(self.encoder.backbone, self.vla_optimizer)
+        if (
+            key == "vla_optimizer"
+            and self.vla_optimizer is not None
+            and self.encoder is not None
+        ):
+            return self.distributed.optimizer_state_dict(
+                self.encoder.backbone, self.vla_optimizer
+            )
         return value.state_dict()
 
     def _load_state_dict_from_checkpoint(
@@ -100,15 +124,23 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             with self.distributed.model_state_dict_context(self.encoder.backbone):
                 value.load_state_dict(state_dict, **kwargs)
             return
-        if key == "vla_optimizer" and self.vla_optimizer is not None and self.encoder is not None:
-            self.distributed.load_optimizer_state_dict(self.encoder.backbone, self.vla_optimizer, state_dict)
+        if (
+            key == "vla_optimizer"
+            and self.vla_optimizer is not None
+            and self.encoder is not None
+        ):
+            self.distributed.load_optimizer_state_dict(
+                self.encoder.backbone, self.vla_optimizer, state_dict
+            )
             return
         value.load_state_dict(state_dict, **kwargs)
 
     # ---- Validation loss evaluation (FSDP-compatible) ----
 
     @torch.no_grad()
-    def evaluate_val_loss(self, val_dataloader: DataLoader, split_name: str) -> dict[str, float]:
+    def evaluate_val_loss(
+        self, val_dataloader: DataLoader, split_name: str
+    ) -> dict[str, float]:
         """Compute VLA loss on a validation set. Runs on all ranks (FSDP-safe)."""
         self.encoder.eval()
         val_losses: list[float] = []
@@ -116,7 +148,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         val_action_losses: list[float] = []
 
         for batch in val_dataloader:
-            has_tokenized = isinstance(batch.get("input_ids"), list) and isinstance(batch.get("labels"), list)
+            has_tokenized = isinstance(batch.get("input_ids"), list) and isinstance(
+                batch.get("labels"), list
+            )
             if not has_tokenized:
                 continue
             vla_loss_dict = self.encoder.compute_action_sft_loss_from_tokenized(
@@ -134,14 +168,23 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         count = max(self.distributed.reduce_sum(len(val_losses)), 1.0)
         metrics = {
-            f"val_{split_name}_loss": self.distributed.reduce_sum(sum(val_losses)) / count,
-            f"val_{split_name}_token_loss": self.distributed.reduce_sum(sum(val_token_losses)) / count,
-            f"val_{split_name}_action_loss": self.distributed.reduce_sum(sum(val_action_losses)) / count,
+            f"val_{split_name}_loss": self.distributed.reduce_sum(sum(val_losses))
+            / count,
+            f"val_{split_name}_token_loss": self.distributed.reduce_sum(
+                sum(val_token_losses)
+            )
+            / count,
+            f"val_{split_name}_action_loss": self.distributed.reduce_sum(
+                sum(val_action_losses)
+            )
+            / count,
         }
         if self.distributed.is_main_process:
-            print(f"  [Val {split_name}] loss={metrics[f'val_{split_name}_loss']:.4f} "
-                  f"token={metrics[f'val_{split_name}_token_loss']:.4f} "
-                  f"action={metrics[f'val_{split_name}_action_loss']:.4f}")
+            print(
+                f"  [Val {split_name}] loss={metrics[f'val_{split_name}_loss']:.4f} "
+                f"token={metrics[f'val_{split_name}_token_loss']:.4f} "
+                f"action={metrics[f'val_{split_name}_action_loss']:.4f}"
+            )
         return metrics
 
     # ---- LIBERO rollout evaluation (single-GPU only) ----
@@ -164,7 +207,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         # Skip eval under FSDP — model is sharded, can't do single-rank inference
         if self.distributed.uses_fsdp:
             if epoch == -1:
-                print("  [Eval] Skipping baseline eval under FSDP. Use scripts/eval_libero.sh on saved checkpoints.")
+                print(
+                    "  [Eval] Skipping baseline eval under FSDP. Use scripts/eval_libero.sh on saved checkpoints."
+                )
             return {}
 
         from libero.libero import benchmark as libero_benchmark
@@ -177,20 +222,29 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             TASK_MAX_STEPS,
         )
 
-        task_suite_name = str(OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal"))
-        num_episodes = int(OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10))
+        task_suite_name = str(
+            OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
+        )
+        num_episodes = int(
+            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10)
+        )
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=10))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
         # History length must match training (`his` in processed_data_generate_convs.sh).
         # Training builds img_c = [prev_third, prev_wrist, cur_third, cur_wrist] (his=2).
         history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
         save_video = bool(OmegaConf.select(eval_cfg, "save_video", default=False))
-        video_max_episodes = int(OmegaConf.select(eval_cfg, "video_max_episodes", default=1))
+        video_max_episodes = int(
+            OmegaConf.select(eval_cfg, "video_max_episodes", default=1)
+        )
         video_dir = os.path.join(self.output_dir, "videos")
 
         item_processor = self.encoder._build_processor(self.device)
 
-        print(f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...", flush=True)
+        print(
+            f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...",
+            flush=True,
+        )
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         total_tasks = int(task_suite.n_tasks)
@@ -200,12 +254,22 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         else:
             task_start = int(OmegaConf.select(eval_cfg, "task_start", default=0))
             max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
-            task_stop = total_tasks if max_tasks is None else min(total_tasks, task_start + int(max_tasks))
+            task_stop = (
+                total_tasks
+                if max_tasks is None
+                else min(total_tasks, task_start + int(max_tasks))
+            )
             task_ids = list(range(task_start, task_stop))
         if not task_ids:
-            raise ValueError("LIBERO eval selected no tasks; check eval.task_ids/task_start/max_tasks.")
+            raise ValueError(
+                "LIBERO eval selected no tasks; check eval.task_ids/task_start/max_tasks."
+            )
         max_steps_cfg = OmegaConf.select(eval_cfg, "max_steps", default=None)
-        max_steps = int(max_steps_cfg if max_steps_cfg is not None else TASK_MAX_STEPS.get(task_suite_name, 300))
+        max_steps = int(
+            max_steps_cfg
+            if max_steps_cfg is not None
+            else TASK_MAX_STEPS.get(task_suite_name, 300)
+        )
         print(
             f"  [Eval] suite='{task_suite_name}' tasks={task_ids} "
             f"episodes_per_task={num_episodes} max_steps={max_steps} "
@@ -225,7 +289,7 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             env, task_description = get_libero_env(task, resolution=resolution)
             n_eps = min(num_episodes, len(initial_states))
             print(
-                f"  [Eval] >>> Task {task_id} ({task_index+1}/{len(task_ids)}) start: \"{task_description}\" "
+                f'  [Eval] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}) start: "{task_description}" '
                 f"(episodes={n_eps})",
                 flush=True,
             )
@@ -255,9 +319,15 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     img = get_libero_image(obs, resolution)
                     if should_record:
                         rollout_images.append(img)
-                    wrist_img = get_libero_image(obs, resolution, "robot0_eye_in_hand_image")
+                    wrist_img = get_libero_image(
+                        obs, resolution, "robot0_eye_in_hand_image"
+                    )
                     state = np.concatenate(
-                        (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+                        (
+                            obs["robot0_eef_pos"],
+                            quat2axisangle(obs["robot0_eef_quat"]),
+                            obs["robot0_gripper_qpos"],
+                        )
                     )
 
                     third_pil = Image.fromarray(img)
@@ -269,7 +339,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     if len(actions_buffer) == 0:
                         # Pad with the oldest available frame when history is shorter
                         # than `history_length` (first action_steps steps of episode).
-                        padded = [frame_history[0]] * (history_length - len(frame_history)) + frame_history
+                        padded = [frame_history[0]] * (
+                            history_length - len(frame_history)
+                        ) + frame_history
                         # Eval subclasses can use the raw simulator observation for
                         # non-VLA inputs (for example pixel DreamerV3 rollout) while
                         # keeping the VLA PIL history path unchanged.
@@ -283,15 +355,23 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                             "task_description": str(task_description),
                         }
                         predicted = self._generate_actions(
-                            backbone, item_processor,
-                            padded, state, task_description, action_steps,
+                            backbone,
+                            item_processor,
+                            padded,
+                            state,
+                            task_description,
+                            action_steps,
                         )
                         actions_buffer = predicted
 
                     if len(actions_buffer) == 0:
                         break
                     action = actions_buffer.pop(0)
-                    if bool(OmegaConf.select(self.cfg, "eval.empty_cuda_cache_each_step", default=False)):
+                    if bool(
+                        OmegaConf.select(
+                            self.cfg, "eval.empty_cuda_cache_each_step", default=False
+                        )
+                    ):
                         gc.collect()
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
@@ -320,16 +400,21 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                 # Without this the EGL context grows ~500MB per episode and
                 # eventually triggers a silent SIGABRT inside the driver.
                 import gc as _gc
+
                 _gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                gpu_mb = (torch.cuda.memory_allocated() // (1024 * 1024)) if torch.cuda.is_available() else 0
+                gpu_mb = (
+                    (torch.cuda.memory_allocated() // (1024 * 1024))
+                    if torch.cuda.is_available()
+                    else 0
+                )
                 print(
-                    f"  [Eval]   ep {episode_idx+1}/{n_eps} {tag} "
+                    f"  [Eval]   ep {episode_idx + 1}/{n_eps} {tag} "
                     f"steps={steps_taken} time={ep_dt:5.1f}s "
-                    f"task_succ={task_successes}/{episode_idx+1} "
+                    f"task_succ={task_successes}/{episode_idx + 1} "
                     f"total_succ={total_successes}/{total_episodes} "
-                    f"({total_successes / max(total_episodes,1):.1%})  "
+                    f"({total_successes / max(total_episodes, 1):.1%})  "
                     f"gpu_alloc={gpu_mb}MB"
                     f"{' video=' + video_path if video_path else ''}",
                     flush=True,
@@ -339,10 +424,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             rate = task_successes / max(n_eps, 1)
             task_dt = time.time() - task_t0
             print(
-                f"  [Eval] <<< Task {task_id} ({task_index+1}/{len(task_ids)}) done: \"{task_description}\" "
+                f'  [Eval] <<< Task {task_id} ({task_index + 1}/{len(task_ids)}) done: "{task_description}" '
                 f"success={rate:.1%} ({task_successes}/{n_eps}) "
                 f"time={task_dt:.1f}s   running_total={total_successes}/{total_episodes} "
-                f"({total_successes / max(total_episodes,1):.1%})",
+                f"({total_successes / max(total_episodes, 1):.1%})",
                 flush=True,
             )
 
@@ -379,7 +464,11 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         img_c: list[Image.Image] = []
         for third_pil, wrist_pil in frame_history:
             img_c.extend([third_pil, wrist_pil])
-        human_val = f"Finish the task: {task_description}." + "<|state|>" * 1 + "<|image|>" * len(img_c)
+        human_val = (
+            f"Finish the task: {task_description}."
+            + "<|state|>" * 1
+            + "<|image|>" * len(img_c)
+        )
 
         conv = {
             "conversations": [{"from": "human", "value": human_val}],
@@ -391,7 +480,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         if isinstance(tokens, tuple):
             tokens = tokens[0]
 
-        input_ids = torch.tensor(tokens, dtype=torch.int64, device=self.device).unsqueeze(0)
+        input_ids = torch.tensor(
+            tokens, dtype=torch.int64, device=self.device
+        ).unsqueeze(0)
 
         # generate_action_head: generate one token (trigger), then use the
         # action MLP head to predict a full action sequence.  Only needs 1
@@ -424,7 +515,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         )
         if hasattr(backbone, "generate_dis_ma"):
             try:
-                action_sequences = backbone.generate_dis_ma(input_ids, generation_config_ma)
+                action_sequences = backbone.generate_dis_ma(
+                    input_ids, generation_config_ma
+                )
                 results = []
                 for seq in action_sequences:
                     if isinstance(seq, torch.Tensor):
@@ -441,7 +534,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
     @staticmethod
     def _unnorm_action(action: np.ndarray) -> np.ndarray:
-        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+        min_values = np.array(
+            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
+        )
         max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
         if action.shape[0] > 7:
             action = action[:7]
@@ -449,7 +544,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
     @staticmethod
     def _unnorm_actions(actions: np.ndarray) -> np.ndarray:
-        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+        min_values = np.array(
+            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
+        )
         max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
         if actions.ndim == 2 and actions.shape[1] > 7:
             actions = actions[:, :7]
@@ -466,7 +563,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
         dataset_action_horizon = getattr(dataset, "action_horizon", None)
-        encoder_time_horizon = int(OmegaConf.select(cfg, "encoder.time_horizon", default=0) or 0)
+        encoder_time_horizon = int(
+            OmegaConf.select(cfg, "encoder.time_horizon", default=0) or 0
+        )
         if dataset_action_horizon is not None and encoder_time_horizon:
             if int(dataset_action_horizon) != encoder_time_horizon:
                 raise ValueError(
@@ -474,8 +573,10 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     f"({int(dataset_action_horizon)} != {encoder_time_horizon})."
                 )
             if self.distributed.is_main_process:
-                print(f"  VLA action horizon: {encoder_time_horizon} "
-                      f"(dataset={type(dataset).__name__})")
+                print(
+                    f"  VLA action horizon: {encoder_time_horizon} "
+                    f"(dataset={type(dataset).__name__})"
+                )
 
         train_dataloader = self.make_distributed_dataloader(dataset, cfg.dataloader)
 
@@ -484,10 +585,16 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
 
         encoder_cfg = self._build_trainable_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        if bool(OmegaConf.select(cfg, "training.vla_train_action_head_only", default=False)):
-            matched = self._set_trainable_encoder_parameters(self.encoder, patterns=["action_head"])
+        if bool(
+            OmegaConf.select(cfg, "training.vla_train_action_head_only", default=False)
+        ):
+            matched = self._set_trainable_encoder_parameters(
+                self.encoder, patterns=["action_head"]
+            )
             if matched == 0:
-                raise ValueError("No trainable parameters matched pattern `action_head`.")
+                raise ValueError(
+                    "No trainable parameters matched pattern `action_head`."
+                )
         self.distributed.wrap_encoder(self.encoder)
         vla_optim_cfg = OmegaConf.select(cfg, "optim.vla")
         if vla_optim_cfg is None:
@@ -495,11 +602,16 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         self.vla_optimizer = build_optimizer(self.encoder, vla_optim_cfg)
 
         # configure ema
-        if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.vla_ema is None:
+        if (
+            bool(OmegaConf.select(cfg, "training.use_ema", default=False))
+            and self.vla_ema is None
+        ):
             self.vla_ema = EMAHelper(
                 self.encoder,
                 decay=float(OmegaConf.select(cfg, "ema.decay", default=0.9999)),
-                update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
+                update_after_step=int(
+                    OmegaConf.select(cfg, "ema.update_after_step", default=0)
+                ),
             )
 
         # resume training
@@ -508,7 +620,9 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
             self.epoch += 1
             self.global_step += 1
             if self.distributed.is_main_process:
-                print(f"  [resume] advanced to epoch={self.epoch} global_step={self.global_step}")
+                print(
+                    f"  [resume] advanced to epoch={self.epoch} global_step={self.global_step}"
+                )
 
         # After optimizer state restore, param_groups may lack `initial_lr`
         # (LambdaLR requires it when last_epoch > -1).
@@ -519,10 +633,11 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
         lr_scheduler = get_scheduler(
             str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant")),
             optimizer=self.vla_optimizer,
-            num_warmup_steps=int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)),
-            num_training_steps=(
-                len(train_dataloader) * int(cfg.training.num_epochs)
-            ) // int(cfg.training.gradient_accumulate_every),
+            num_warmup_steps=int(
+                OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
+            ),
+            num_training_steps=(len(train_dataloader) * int(cfg.training.num_epochs))
+            // int(cfg.training.gradient_accumulate_every),
             last_epoch=self.global_step - 1,
         )
 
@@ -565,33 +680,49 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         mininterval=cfg.training.tqdm_interval_sec,
                     ) as tepoch:
                         for batch_idx, batch in enumerate(tepoch):
-                            has_tokenized = isinstance(batch.get("input_ids"), list) and isinstance(
-                                batch.get("labels"), list
-                            )
+                            has_tokenized = isinstance(
+                                batch.get("input_ids"), list
+                            ) and isinstance(batch.get("labels"), list)
                             if not has_tokenized:
                                 continue
 
-                            vla_loss_dict = self.encoder.compute_action_sft_loss_from_tokenized(
-                                input_ids_list=batch["input_ids"],
-                                labels_list=batch["labels"],
-                                token_loss_coef=float(
-                                    OmegaConf.select(cfg, "training.vla_token_loss_coef", default=1.0)
-                                ),
-                                action_loss_coef=float(
-                                    OmegaConf.select(cfg, "training.vla_action_loss_coef", default=1.0)
-                                ),
+                            vla_loss_dict = (
+                                self.encoder.compute_action_sft_loss_from_tokenized(
+                                    input_ids_list=batch["input_ids"],
+                                    labels_list=batch["labels"],
+                                    token_loss_coef=float(
+                                        OmegaConf.select(
+                                            cfg,
+                                            "training.vla_token_loss_coef",
+                                            default=1.0,
+                                        )
+                                    ),
+                                    action_loss_coef=float(
+                                        OmegaConf.select(
+                                            cfg,
+                                            "training.vla_action_loss_coef",
+                                            default=1.0,
+                                        )
+                                    ),
+                                )
                             )
                             vla_raw_loss = vla_loss_dict["loss"]
-                            vla_loss = vla_raw_loss / cfg.training.gradient_accumulate_every
+                            vla_loss = (
+                                vla_raw_loss / cfg.training.gradient_accumulate_every
+                            )
                             vla_loss.backward()
 
                             grad_clip_norm = cfg.optim.get("grad_clip_norm")
                             if grad_clip_norm is not None:
-                                self.distributed.clip_grad_norm(self.encoder.backbone, float(grad_clip_norm))
+                                self.distributed.clip_grad_norm(
+                                    self.encoder.backbone, float(grad_clip_norm)
+                                )
 
                             self.vla_optimizer.step()
                             self.vla_optimizer.zero_grad(
-                                set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
+                                set_to_none=bool(
+                                    cfg.optim.get("zero_grad_set_to_none", True)
+                                )
                             )
                             lr_scheduler.step()
 
@@ -600,26 +731,43 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                                 self.vla_ema.step(self.encoder)
 
                             train_vla_losses.append(float(vla_raw_loss.item()))
-                            train_vla_token_losses.append(float(vla_loss_dict["token_loss"].item()))
-                            train_vla_action_losses.append(float(vla_loss_dict["action_loss"].item()))
+                            train_vla_token_losses.append(
+                                float(vla_loss_dict["token_loss"].item())
+                            )
+                            train_vla_action_losses.append(
+                                float(vla_loss_dict["action_loss"].item())
+                            )
 
                             local_step_metrics = {
                                 "train_vla_loss": float(vla_raw_loss.item()),
-                                "train_vla_token_loss": float(vla_loss_dict["token_loss"].item()),
-                                "train_vla_action_loss": float(vla_loss_dict["action_loss"].item()),
+                                "train_vla_token_loss": float(
+                                    vla_loss_dict["token_loss"].item()
+                                ),
+                                "train_vla_action_loss": float(
+                                    vla_loss_dict["action_loss"].item()
+                                ),
                                 "lr": float(lr_scheduler.get_last_lr()[0]),
                             }
-                            reduced = self.distributed.reduce_mean_dict(local_step_metrics)
-                            step_log = {**reduced, "global_step": self.global_step, "epoch": self.epoch}
-                            tepoch.set_postfix(refresh=False, vla=float(step_log["train_vla_loss"]))
+                            reduced = self.distributed.reduce_mean_dict(
+                                local_step_metrics
+                            )
+                            step_log = {
+                                **reduced,
+                                "global_step": self.global_step,
+                                "epoch": self.epoch,
+                            }
+                            tepoch.set_postfix(
+                                refresh=False, vla=float(step_log["train_vla_loss"])
+                            )
 
                             is_last_batch = batch_idx == (len(train_dataloader) - 1)
                             if not is_last_batch:
                                 train_json_logger.log(step_log)
                                 self.global_step += 1
 
-                            if cfg.training.max_train_steps is not None and batch_idx >= (
-                                cfg.training.max_train_steps - 1
+                            if (
+                                cfg.training.max_train_steps is not None
+                                and batch_idx >= (cfg.training.max_train_steps - 1)
                             ):
                                 reached_max_steps = True
                                 break
@@ -629,17 +777,25 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                         self.epoch += 1
                         continue
 
-                    vla_count = max(self.distributed.reduce_sum(len(train_vla_losses)), 1.0)
-                    step_log["train_vla_loss"] = self.distributed.reduce_sum(sum(train_vla_losses)) / vla_count
+                    vla_count = max(
+                        self.distributed.reduce_sum(len(train_vla_losses)), 1.0
+                    )
+                    step_log["train_vla_loss"] = (
+                        self.distributed.reduce_sum(sum(train_vla_losses)) / vla_count
+                    )
                     step_log["train_vla_token_loss"] = (
-                        self.distributed.reduce_sum(sum(train_vla_token_losses)) / vla_count
+                        self.distributed.reduce_sum(sum(train_vla_token_losses))
+                        / vla_count
                     )
                     step_log["train_vla_action_loss"] = (
-                        self.distributed.reduce_sum(sum(train_vla_action_losses)) / vla_count
+                        self.distributed.reduce_sum(sum(train_vla_action_losses))
+                        / vla_count
                     )
 
                     # ---- Validation loss eval at end of epoch ----
-                    eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
+                    eval_every = int(
+                        OmegaConf.select(cfg, "eval.eval_every", default=1)
+                    )
                     if val_dataloaders and (self.epoch % eval_every) == 0:
                         for split_name, val_dl in val_dataloaders.items():
                             val_metrics = self.evaluate_val_loss(val_dl, split_name)
@@ -650,11 +806,16 @@ class PretokenizeVLAWorkspace(BaseWorkspace):
                     if (self.epoch % cfg.training.checkpoint_every) == 0:
                         if cfg.checkpoint.save_last_ckpt:
                             self.save_checkpoint()
-                        metric_dict = {key.replace("/", "_"): value for key, value in step_log.items()}
+                        metric_dict = {
+                            key.replace("/", "_"): value
+                            for key, value in step_log.items()
+                        }
                         topk_ckpt_path = None
                         if self.distributed.is_main_process:
                             topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-                        topk_ckpt_path = self.distributed.broadcast_object(topk_ckpt_path)
+                        topk_ckpt_path = self.distributed.broadcast_object(
+                            topk_ckpt_path
+                        )
                         if topk_ckpt_path is not None:
                             self.save_checkpoint(path=topk_ckpt_path)
 

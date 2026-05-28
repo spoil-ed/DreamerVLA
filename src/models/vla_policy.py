@@ -45,15 +45,19 @@ class VLAPolicy(nn.Module):
         layers: list[nn.Module] = []
         cur = self.hidden_dim
         for _ in range(max(int(num_layers), 1)):
-            layers.extend([
-                nn.LayerNorm(cur),
-                nn.Linear(cur, int(policy_head_hidden_dim)),
-                activation,
-            ])
+            layers.extend(
+                [
+                    nn.LayerNorm(cur),
+                    nn.Linear(cur, int(policy_head_hidden_dim)),
+                    activation,
+                ]
+            )
             cur = int(policy_head_hidden_dim)
         layers.append(nn.Linear(cur, self.action_dim))
         self.policy_head = nn.Sequential(*layers)
-        self.log_std = nn.Parameter(torch.full((self.action_dim,), float(initial_log_std)))
+        self.log_std = nn.Parameter(
+            torch.full((self.action_dim,), float(initial_log_std))
+        )
         self.embedding: SharedObservationEmbedding | None = None
 
     def _reduce_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -87,16 +91,24 @@ class VLAPolicy(nn.Module):
         task_id = obs.get("task_id")
         if isinstance(task_id, torch.Tensor) and task_id.ndim >= 1:
             batch_size = int(task_id.shape[0])
-        return torch.zeros(batch_size, self.hidden_dim, device=self.log_std.device, dtype=torch.float32)
+        return torch.zeros(
+            batch_size, self.hidden_dim, device=self.log_std.device, dtype=torch.float32
+        )
 
-    def _distribution_from_hidden(self, hidden: torch.Tensor) -> tuple[Normal, torch.Tensor, torch.Tensor]:
+    def _distribution_from_hidden(
+        self, hidden: torch.Tensor
+    ) -> tuple[Normal, torch.Tensor, torch.Tensor]:
         # Match the param dtype: under FSDP MixedPrecision the gathered weights
         # are cast to bf16 inside the FSDP forward, so an fp32 input to a
         # LayerNorm holding bf16 weights triggers `expected Float, got BFloat16`.
         param_dtype = self.policy_head[0].weight.dtype
         hidden = self._reduce_hidden(hidden).to(dtype=param_dtype)
         mean = self.policy_head(hidden)
-        log_std = self.log_std.clamp(min=self.min_log_std, max=self.max_log_std).unsqueeze(0).expand_as(mean)
+        log_std = (
+            self.log_std.clamp(min=self.min_log_std, max=self.max_log_std)
+            .unsqueeze(0)
+            .expand_as(mean)
+        )
         std = log_std.exp()
         # Distribution math is sensitive to precision — promote outputs to fp32.
         mean = mean.float()
@@ -115,7 +127,8 @@ class VLAPolicy(nn.Module):
         mode = batch.get("mode")
         if mode == "sample":
             return self.sample_action_from_embedding(
-                batch["hidden"], deterministic=bool(batch.get("deterministic", False)),
+                batch["hidden"],
+                deterministic=bool(batch.get("deterministic", False)),
             )
         if mode == "evaluate":
             return self.evaluate_action_from_embedding(batch["hidden"], batch["action"])

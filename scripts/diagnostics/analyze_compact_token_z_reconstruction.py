@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import random
 from pathlib import Path
-from typing import Any
 
 import h5py
 import numpy as np
@@ -16,13 +15,20 @@ from src.models.world_model.dreamerv3_torch import CompactTokenSequenceAutoencod
 
 
 class FullseqFrameDataset(Dataset[dict[str, torch.Tensor]]):
-    def __init__(self, sidecar_dir: str | Path, max_files: int | None = None, max_frames: int | None = None) -> None:
+    def __init__(
+        self,
+        sidecar_dir: str | Path,
+        max_files: int | None = None,
+        max_frames: int | None = None,
+    ) -> None:
         self.sidecar_dir = Path(sidecar_dir).expanduser().resolve()
         paths = sorted(self.sidecar_dir.glob("*.hdf5"))
         if max_files is not None:
             paths = paths[: int(max_files)]
         if not paths:
-            raise FileNotFoundError(f"No complete .hdf5 fullseq sidecar files found under {self.sidecar_dir}")
+            raise FileNotFoundError(
+                f"No complete .hdf5 fullseq sidecar files found under {self.sidecar_dir}"
+            )
         self.paths = paths
         self._files: dict[int, h5py.File] = {}
         self.index: list[tuple[int, str, int]] = []
@@ -35,7 +41,9 @@ class FullseqFrameDataset(Dataset[dict[str, torch.Tensor]]):
                     length = int(group["actor_hidden_states"].shape[0])
                     for frame_idx in range(length):
                         self.index.append((file_idx, demo_key, frame_idx))
-                        if max_frames is not None and len(self.index) >= int(max_frames):
+                        if max_frames is not None and len(self.index) >= int(
+                            max_frames
+                        ):
                             return
         if not self.index:
             raise RuntimeError(f"No actor_hidden_states found under {self.sidecar_dir}")
@@ -55,7 +63,9 @@ class FullseqFrameDataset(Dataset[dict[str, torch.Tensor]]):
         group = self._file(file_idx)["data"][demo_key]
         hidden = np.asarray(group["actor_hidden_states"][frame_idx], dtype=np.float32)
         if "actor_attention_mask" in group:
-            mask = np.asarray(group["actor_attention_mask"][frame_idx][:-1], dtype=np.bool_)
+            mask = np.asarray(
+                group["actor_attention_mask"][frame_idx][:-1], dtype=np.bool_
+            )
             mask = mask[: hidden.shape[0]]
         elif "actor_seq_lens" in group:
             valid = int(group["actor_seq_lens"][frame_idx])
@@ -81,13 +91,17 @@ def collate_fullseq(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Ten
     return {"hidden": hidden, "mask": mask}
 
 
-def masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def masked_mse(
+    pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
     mask_f = mask.to(dtype=pred.dtype).unsqueeze(-1)
     denom = mask_f.sum().clamp_min(1.0) * pred.shape[-1]
     return ((pred - target).square() * mask_f).sum() / denom
 
 
-def masked_cosine_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def masked_cosine_loss(
+    pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
     pred_n = F.normalize(pred.float(), dim=-1)
     target_n = F.normalize(target.float(), dim=-1)
     per = 1.0 - (pred_n * target_n).sum(dim=-1)
@@ -96,7 +110,9 @@ def masked_cosine_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Ten
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a compact token-z autoencoder on VLA full hidden sequences.")
+    parser = argparse.ArgumentParser(
+        description="Train a compact token-z autoencoder on VLA full hidden sequences."
+    )
     parser.add_argument("--sidecar-dir", required=True)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -117,7 +133,9 @@ def main() -> None:
     args = parse_args()
     random.seed(int(args.seed))
     torch.manual_seed(int(args.seed))
-    dataset = FullseqFrameDataset(args.sidecar_dir, max_files=args.max_files, max_frames=args.max_frames)
+    dataset = FullseqFrameDataset(
+        args.sidecar_dir, max_files=args.max_files, max_frames=args.max_frames
+    )
     loader = DataLoader(
         dataset,
         batch_size=int(args.batch_size),
@@ -127,7 +145,9 @@ def main() -> None:
         collate_fn=collate_fullseq,
     )
     first = dataset[0]["hidden"]
-    device = torch.device(args.device if torch.cuda.is_available() or str(args.device) == "cpu" else "cpu")
+    device = torch.device(
+        args.device if torch.cuda.is_available() or str(args.device) == "cpu" else "cpu"
+    )
     model = CompactTokenSequenceAutoencoder(
         in_dim=int(first.shape[-1]),
         latent_tokens=int(args.latent_tokens),
@@ -152,7 +172,9 @@ def main() -> None:
         mask = batch["mask"].to(device)
         out = model(hidden, mask)
         loss = masked_mse(out["reconstruction"], out["target"], out["target_mask"])
-        cos = masked_cosine_loss(out["reconstruction"], out["target"], out["target_mask"])
+        cos = masked_cosine_loss(
+            out["reconstruction"], out["target"], out["target_mask"]
+        )
         if step > 0:
             optim.zero_grad(set_to_none=True)
             (loss + 0.1 * cos).backward()

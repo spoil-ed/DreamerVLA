@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import glob
 import json
-import math
 import time
 from pathlib import Path
 
@@ -26,7 +25,9 @@ DATA_DIR = Path(
     "/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/"
     "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
 )
-OUT_DIR = Path("/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure")
+OUT_DIR = Path(
+    "/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure"
+)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 N_TOKENS = 35
@@ -44,7 +45,9 @@ def iter_demo_arrays(files: list[str]):
     for f in files:
         with h5py.File(f, "r") as h:
             for k in h["data"].keys():
-                arr = np.asarray(h["data"][k]["action_hidden_states"][...], dtype=np.float32)
+                arr = np.asarray(
+                    h["data"][k]["action_hidden_states"][...], dtype=np.float32
+                )
                 yield f, k, arr
 
 
@@ -65,7 +68,10 @@ def streaming_stats(files: list[str]) -> dict:
         n_total += n_i
         n_demos += 1
         if _f != last_f:
-            print(f"  streaming: {Path(_f).name}  cum_frames={n_total}  cum_demos={n_demos}", flush=True)
+            print(
+                f"  streaming: {Path(_f).name}  cum_frames={n_total}  cum_demos={n_demos}",
+                flush=True,
+            )
             last_f = _f
     elapsed = time.time() - t0
     mean_td = sum_td / max(n_total, 1)
@@ -77,7 +83,7 @@ def streaming_stats(files: list[str]) -> dict:
         "n_demos": int(n_demos),
         "elapsed_streaming_sec": float(elapsed),
         "mean_td": mean_td,  # [35, 1024]
-        "std_td": std_td,    # [35, 1024]
+        "std_td": std_td,  # [35, 1024]
     }
 
 
@@ -183,7 +189,10 @@ def per_token_pca(X: np.ndarray) -> dict:
         var = np.maximum(eigvals[::-1], 0.0)
         total = var.sum()
         if total <= 0:
-            out_pr.append(0.0); out_r99.append(0); out_r95.append(0); out_total_var.append(0.0)
+            out_pr.append(0.0)
+            out_r99.append(0)
+            out_r95.append(0)
+            out_total_var.append(0.0)
             continue
         pr = float((var.sum() ** 2) / max((var * var).sum(), 1e-12))
         cum = np.cumsum(var / total)
@@ -193,7 +202,10 @@ def per_token_pca(X: np.ndarray) -> dict:
         out_r99.append(r99)
         out_r95.append(r95)
         out_total_var.append(float(total))
-        print(f"    token {ti:2d} (t={ti//J}, j={ti%J}): pr={pr:.1f}  r99={r99}  total_var={total:.2f}", flush=True)
+        print(
+            f"    token {ti:2d} (t={ti // J}, j={ti % J}): pr={pr:.1f}  r99={r99}  total_var={total:.2f}",
+            flush=True,
+        )
     return {
         "per_token_participation_ratio": out_pr,
         "per_token_effective_rank_95": out_r95,
@@ -221,11 +233,13 @@ def main():
     s = streaming_stats(files)
     mean_td = s["mean_td"]  # [35, 1024] fp64
     std_td = s["std_td"]
-    print(f"  N={s['n_total']} frames, {s['n_demos']} demos, {s['elapsed_streaming_sec']:.1f}s")
+    print(
+        f"  N={s['n_total']} frames, {s['n_demos']} demos, {s['elapsed_streaming_sec']:.1f}s"
+    )
 
     # Per-token scalar stats
     per_token_mean_scalar = mean_td.mean(axis=1)  # [35]
-    per_token_std_scalar = std_td.mean(axis=1)    # [35]
+    per_token_std_scalar = std_td.mean(axis=1)  # [35]
     per_token_norm = np.linalg.norm(mean_td, axis=1)  # [35]
 
     # Pairwise cosine on per-token mean vectors
@@ -237,7 +251,7 @@ def main():
     cos_stds = (std_td @ std_td.T) / (snrm @ snrm.T)
 
     # Pairwise Fréchet (diag) between (mu_i, var_i) and (mu_j, var_j)
-    var_td = std_td ** 2
+    var_td = std_td**2
     frechet = np.zeros((N_TOKENS, N_TOKENS), dtype=np.float64)
     for i in range(N_TOKENS):
         for j in range(i + 1, N_TOKENS):
@@ -257,7 +271,9 @@ def main():
     Xflat = X.reshape(X.shape[0], N_TOKENS * D)
     pca_flat = pca_via_gram(Xflat, k_top=200)
     print(f"  flat PCA done in {time.time() - t0:.1f}s")
-    print(f"  flat eff-rank 90/95/99 = {pca_flat['effective_rank_90']}/{pca_flat['effective_rank_95']}/{pca_flat['effective_rank_99']}")
+    print(
+        f"  flat eff-rank 90/95/99 = {pca_flat['effective_rank_90']}/{pca_flat['effective_rank_95']}/{pca_flat['effective_rank_99']}"
+    )
     print(f"  flat participation ratio = {pca_flat['participation_ratio']:.1f}")
 
     # Per-token PCA
@@ -274,12 +290,16 @@ def main():
     m = per_token_mean_scalar.reshape(T, J)
     s_ = per_token_std_scalar.reshape(T, J)
     im0 = axes[0].imshow(m, aspect="auto", cmap="viridis")
-    axes[0].set_title("per-token feature-mean (avg over 1024 dims)\nrows=t (0..4), cols=joint (0..6)")
-    axes[0].set_xlabel("joint"); axes[0].set_ylabel("t")
+    axes[0].set_title(
+        "per-token feature-mean (avg over 1024 dims)\nrows=t (0..4), cols=joint (0..6)"
+    )
+    axes[0].set_xlabel("joint")
+    axes[0].set_ylabel("t")
     plt.colorbar(im0, ax=axes[0])
     im1 = axes[1].imshow(s_, aspect="auto", cmap="magma")
     axes[1].set_title("per-token feature-std (avg over 1024 dims)")
-    axes[1].set_xlabel("joint"); axes[1].set_ylabel("t")
+    axes[1].set_xlabel("joint")
+    axes[1].set_ylabel("t")
     plt.colorbar(im1, ax=axes[1])
     plt.tight_layout()
     plt.savefig(OUT_DIR / "fig1_per_token_mean_std.png", dpi=120)
@@ -304,7 +324,9 @@ def main():
     # Fig 3: Fréchet (diag) distance matrix
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(frechet, cmap="magma")
-    ax.set_title("Gaussian Fréchet distance (diagonal Σ)\nbetween token marginal distributions")
+    ax.set_title(
+        "Gaussian Fréchet distance (diagonal Σ)\nbetween token marginal distributions"
+    )
     plt.colorbar(im, ax=ax)
     for t in range(1, T):
         ax.axhline(t * J - 0.5, color="white", lw=0.6, alpha=0.6)
@@ -319,7 +341,8 @@ def main():
     axes[0].plot(np.arange(1, len(pca_flat["top_k_var"]) + 1), pca_flat["top_k_var"])
     axes[0].set_yscale("log")
     axes[0].set_title("flat PCA: top-200 eigenvalue spectrum (log)")
-    axes[0].set_xlabel("component"); axes[0].set_ylabel("variance")
+    axes[0].set_xlabel("component")
+    axes[0].set_ylabel("variance")
     axes[1].plot(np.arange(1, len(cum) + 1), cum)
     axes[1].axhline(0.9, color="gray", ls="--", lw=0.7)
     axes[1].axhline(0.95, color="gray", ls="--", lw=0.7)
@@ -328,7 +351,8 @@ def main():
         f"flat PCA: cumulative explained variance\n"
         f"eff-rank 90/95/99 = {pca_flat['effective_rank_90']}/{pca_flat['effective_rank_95']}/{pca_flat['effective_rank_99']}"
     )
-    axes[1].set_xlabel("component"); axes[1].set_ylabel("cum ratio")
+    axes[1].set_xlabel("component")
+    axes[1].set_ylabel("cum ratio")
     plt.tight_layout()
     plt.savefig(OUT_DIR / "fig4_flat_pca.png", dpi=120)
     plt.close()
@@ -338,12 +362,16 @@ def main():
     pr = np.array(per_tok["per_token_participation_ratio"]).reshape(T, J)
     r99 = np.array(per_tok["per_token_effective_rank_99"]).reshape(T, J)
     im0 = axes[0].imshow(pr, aspect="auto", cmap="viridis")
-    axes[0].set_title("per-token participation ratio\n(higher = uses more of 1024 dims)")
-    axes[0].set_xlabel("joint"); axes[0].set_ylabel("t")
+    axes[0].set_title(
+        "per-token participation ratio\n(higher = uses more of 1024 dims)"
+    )
+    axes[0].set_xlabel("joint")
+    axes[0].set_ylabel("t")
     plt.colorbar(im0, ax=axes[0])
     im1 = axes[1].imshow(r99, aspect="auto", cmap="viridis")
     axes[1].set_title("per-token PCA 99% eff-rank\n(out of min(N, 1024))")
-    axes[1].set_xlabel("joint"); axes[1].set_ylabel("t")
+    axes[1].set_xlabel("joint")
+    axes[1].set_ylabel("t")
     plt.colorbar(im1, ax=axes[1])
     plt.tight_layout()
     plt.savefig(OUT_DIR / "fig5_per_token_pca.png", dpi=120)
@@ -398,11 +426,19 @@ def main():
         "cos_means_block_avg": cos_means_blocks,
         "cos_stds_block_avg": cos_stds_blocks,
         "frechet_block_avg": frechet_blocks,
-        "flat_pca": {k: v for k, v in pca_flat.items() if k not in ("top_k_var", "top_k_ratio")},
+        "flat_pca": {
+            k: v for k, v in pca_flat.items() if k not in ("top_k_var", "top_k_ratio")
+        },
         "per_token_pca_summary": {
-            "participation_ratio_mean": float(np.mean(per_tok["per_token_participation_ratio"])),
-            "participation_ratio_min": float(np.min(per_tok["per_token_participation_ratio"])),
-            "participation_ratio_max": float(np.max(per_tok["per_token_participation_ratio"])),
+            "participation_ratio_mean": float(
+                np.mean(per_tok["per_token_participation_ratio"])
+            ),
+            "participation_ratio_min": float(
+                np.min(per_tok["per_token_participation_ratio"])
+            ),
+            "participation_ratio_max": float(
+                np.max(per_tok["per_token_participation_ratio"])
+            ),
             "eff_rank_99_mean": float(np.mean(per_tok["per_token_effective_rank_99"])),
             "eff_rank_99_min": int(np.min(per_tok["per_token_effective_rank_99"])),
             "eff_rank_99_max": int(np.max(per_tok["per_token_effective_rank_99"])),
@@ -421,7 +457,9 @@ def main():
         cos_means=cos_means.astype(np.float32),
         cos_stds=cos_stds.astype(np.float32),
         frechet=frechet.astype(np.float32),
-        per_token_pr=np.array(per_tok["per_token_participation_ratio"], dtype=np.float32),
+        per_token_pr=np.array(
+            per_tok["per_token_participation_ratio"], dtype=np.float32
+        ),
         per_token_r99=np.array(per_tok["per_token_effective_rank_99"], dtype=np.int32),
         flat_top_k_var=np.array(pca_flat["top_k_var"], dtype=np.float32),
     )

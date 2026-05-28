@@ -8,6 +8,7 @@ The dataset also rewrites the ``rewards`` field with ``sparse_rewards`` (typical
 0 everywhere except a single 1 at the terminal step) so the WM reward head can
 be retrained as a "success-terminal classifier" in the WMPO style.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -101,12 +102,16 @@ class LIBEROBalancedTerminalDataset(LIBEROPixelRynnHiddenSequenceDataset):
         end = start + self.sequence_length
         is_positive = bool(end == entry.episode_length)
         if "sparse_rewards" in demo:
-            sparse_rewards = np.asarray(demo["sparse_rewards"][start:end], dtype=np.float32)
+            sparse_rewards = np.asarray(
+                demo["sparse_rewards"][start:end], dtype=np.float32
+            )
         else:
             sparse_rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
         if self.reward_mode == "per_window_dense":
             # WMPO-style: every step in a positive window labeled 1; negative window all 0
-            rewards = np.full((self.sequence_length,), float(is_positive), dtype=np.float32)
+            rewards = np.full(
+                (self.sequence_length,), float(is_positive), dtype=np.float32
+            )
         elif self.reward_mode == "from_hdf5":
             # Pass-through HDF5 rewards (shaped per-step, e.g. progress-delta).
             # Falls back to sparse_rewards when no separate rewards field exists.

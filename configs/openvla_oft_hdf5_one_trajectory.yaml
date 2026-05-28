@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - openvla_oft_hdf5
+  - _self_
+
+training:
+  out_dir: ${oc.env:OUT_DIR,data/outputs/vla/openvla_oft_lm_head_one_trajectory/${task.name}/${now:%Y%m%d_%H%M%S}}
+
+policy:
+  use_l1_regression: false
+
+dataset:
+  max_demos_per_file: null
+  demos_per_task: 1
+  demo_selection_seed: ${seed}

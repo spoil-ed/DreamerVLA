@@ -19,6 +19,7 @@ freeze-bug in the original implementation.
 This script intentionally does NOT touch the running A/B/C training
 runs, and runs on CPU (small enough; ~44M params, batch=2).
 """
+
 from __future__ import annotations
 
 import copy
@@ -32,12 +33,14 @@ from src.models.vla_actor import VLAActionHeadActor
 
 
 def chunk_from(actor: VLAActionHeadActor, wm_feat: torch.Tensor) -> torch.Tensor:
-    out = actor({
-        "mode": "sample",
-        "hidden": wm_feat,
-        "deterministic": True,
-        "return_chunk": True,
-    })
+    out = actor(
+        {
+            "mode": "sample",
+            "hidden": wm_feat,
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
     _, _, extra = out
     return extra["action_chunk"]
 
@@ -59,7 +62,9 @@ def main() -> None:
     n_train = sum(p.numel() for p in actor.parameters() if p.requires_grad)
     n_frozen = sum(p.numel() for p in frozen.parameters() if p.requires_grad)
     print(f"trained actor: trainable params = {n_train:,}")
-    print(f"frozen  actor: trainable params = {n_frozen:,}  (deepcopy, requires_grad=False)")
+    print(
+        f"frozen  actor: trainable params = {n_frozen:,}  (deepcopy, requires_grad=False)"
+    )
     print()
 
     eval_feat = torch.randn(2, 768, device=device)

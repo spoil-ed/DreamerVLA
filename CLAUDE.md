@@ -1,107 +1,120 @@
 # CLAUDE.md
 
-DreamerVLA — frozen pi0 VLA encoder + DreamerV3 RSSM world model + actor-critic on LIBERO.
+This file is the Claude entrypoint for repository guidance.
 
-## 1. Data flow
+For the canonical agent instructions, repository orientation, and workflow expectations, see [AGENTS.md](AGENTS.md).
 
-```
-data/libero/           →   src/preprocess/*   →   data/processed_data/<variant>/   →   dataloader
-(raw HDF5, input only)                            (sidecars consumed downstream)
-```
+For full contribution flow, code style, and PR process, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Downstream stages never read `data/libero/` directly. Sidecar naming: `<suite>_<filter>_t_<timesteps>_<backbone>_<hidden_kind>_<prompt_style>_h<history>`.
+Keeping the detailed guidance in `AGENTS.md` avoids duplication and prevents the two files from drifting out of sync.
 
-## 2. Workflow
-
-Three layers, strictly separated:
-
-- **`scripts/*.sh`** — thin shell wrappers (env vars + GPU defaults), one per experiment.
-- **`src/cli/train.py` / `eval.py`** — model-agnostic entry points. Load a Hydra config and dispatch to the workspace named by `_target_`. Lifecycle: `setup() → execute() → teardown()`.
-- **`src/workspace/*.py`** — orchestrates a run by composing prebuilt blocks (`dataloader`, `env`, `model`, `algorithm`, `trainer`, `logger`). Wires components; does not implement them.
-
-Dispatch uses Hydra `_target_` (single underscore). Example:
-
-```yaml
-_target_: src.workspace.JointDreamerVLAWorkspace
-dataset:   { _target_: src.dataloader.libero_pixel_rynn_hidden_sequence_dataset.LIBEROPixelRynnHiddenSequenceDataset, ... }
-model:     { _target_: src.models.world_model.dreamerv3_pixel_rynn_backbone_wm.DreamerV3PixelRynnBackboneWorldModel, ... }
-```
-
-New route = new workspace + new config + new shell wrapper. Don't bypass.
-
-### Shell wrappers are dumb on purpose
-
-The three canonical shells at `scripts/` root (`train_wm.sh`, `train_vla.sh`,
-`train_dreamervla.sh`) must stay ≤ ~35 lines. Their only job:
-
-1. `cd` to repo root, set `PYTHON` / `NGPU` / `CONFIG` / `MASTER_PORT`
-2. Branch single-GPU vs `torchrun`
-3. `exec python -m src.cli.train --config-name "$CONFIG" "$@"`
-
-**Things that do NOT belong in the shell** (history lesson — `train_wm.sh`
-once bloated to 466 lines doing all of these):
-
-- Default hyperparameters (`BATCH_SIZE`, `LR`, `WEIGHT_DECAY`, `WARMUP`,
-  `GRAD_CLIP`, etc.). These live in the YAML.
-- Per-kind `KIND_OVERRIDES` that re-set YAML defaults via env vars.
-  Same value in two places = bug magnet.
-- DDP toggles (`training.distributed_strategy=ddp`, `data_parallel=false`).
-  `src/cli/train.py::_auto_apply_distributed` reads `RANK` / `WORLD_SIZE` from
-  the env and applies them automatically when launched under `torchrun`.
-- Output-dir construction. Each YAML's `training.out_dir` uses
-  `${oc.env:OUT_DIR,data/outputs/<bucket>/<arch>/${now:%Y%m%d_%H%M%S}}` — set
-  `OUT_DIR=...` to override, otherwise a timestamped default is generated.
-- Legacy env-var alias chains (`RYNN_PIXEL_DDP / RYNN_BACKBONE_DDP /
-  ACTION_HIDDEN_DDP / DDP`). Pick one name and stick to it; rename via
-  `git mv`, do not fallback-chain.
-- Smoke flags. Just pass the overrides on the CLI:
-  `bash scripts/train_wm.sh training.max_steps=1 dataloader.num_workers=0 viz.enabled=false`.
-
-If a value needs to change per-run, it goes on the Hydra CLI (`task=libero_object`,
-`dataloader.batch_size=8`). If it needs to change per-config-route, it goes in
-the YAML. The shell only sees `CONFIG`, `NGPU`, `OUT_DIR`, and pass-through `$@`.
-
-## 3. File layout
-
-| Path | Role |
-|---|---|
-| `src/` | All model + pipeline implementations (`workspace/`, `dataloader/`, `models/`, `algorithms/`, `env/`, `trainer/`, `preprocess/`, `utils/`, `cli/`). |
-| `scripts/` | Experiment launchers (bash) + standalone diagnostic/measurement Python. Glue only. |
-| `configs/` | Hydra configs, one per run. `_target_` picks the workspace and nested components. |
-| `data/` | All inputs and outputs (raw, processed, ckpts, outputs, logs). Gitignored. |
-| `docs/` | Writeups, paper drafts, history, TODOs. |
-| `dependencies/` | Source-built / vendored deps used by the install script. |
-
-## 4. `data/outputs/` structure
-
-```
-data/outputs/
-├── dreamervla/   ├── vla/   ├── worldmodel/   ├── eval/   ├── logs/   └── README.md
-```
-
-Per-bucket convention: `<architecture>/<implementation_variant>/<param_or_experiment_tag>/`. Each run folder has `ckpt/`, run log, resolved Hydra config, and TB/wandb traces. `data/outputs/README.md` is the authoritative index of retained reference runs.
+**Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon + pi0 action-query head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Workspace** pattern as the training unit. Distributed runs use **torchrun** (DDP) or **FSDP**; there is no Ray, no multi-node cluster. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
 
 ---
 
-## Environment
+## Code structure
 
-- Repo at `/mnt/data/spoil/workspace/DreamerVLA` (migrated from `/home/user01/liops/...` on 2026-05-25; older paths may linger).
-- Conda env `dreamervla` — `/home/user01/miniconda3/envs/dreamervla/bin/python` (Python 3.11, torch 2.5.1+cu124).
-- `/home` is ~99% full — new artifacts under `/mnt/data/spoil/`. `/dev/shm` (1 TB) for hot scratch.
-- Multi-GPU H100/H800/A100 with parallel `tmux` sessions — check `nvidia-smi` and `tmux ls` first.
-- Pinned: `transformers==4.40.1`, `numpy==1.26.4`, `torch==2.5.1`, `xformers==v0.0.28.post3`. LIBERO needs `MUJOCO_GL=osmesa`.
+- **`src/`** – Main package (installed as `dreamer_vla`):
+  - `algorithms/` – PPO, GRPO, DINO-WMPO, TD-MPC; actor, critic, reward.
+  - `cli/` – Hydra entrypoints for training and evaluation.
+  - `dataloader/` – Offline datasets (LIBERO, OpenVLA-OFT) and online rollout dumpers.
+  - `env/` – LIBERO sim and online env wrappers.
+  - `models/` – Encoder, world model, VLA backbones.
+  - `workspace/` – `BaseWorkspace` + VLA SFT, world model, classifier, DreamerVLA, eval.
+  - `trainer/` – Shared DDP / FSDP helper.
+  - `preprocess/`, `utils/` – Preprocessing and training infrastructure (checkpoint, logger, optim, EMA, visualization).
+- **`configs/`** – Hydra configs, one top-level YAML per training route (VLA, WM, DreamerVLA, OFT, classifier, eval); tasks under `task/libero_*.yaml`.
+- **`scripts/`** – Shell launchers and Python tools for training, evaluation, preprocessing, diagnostics, smoke.
+- **`tests/`** – `unit_tests/`, `e2e_tests/` (VLA, WM, DreamerVLA, OFT, classifier); e2e configs under `e2e_tests/<route>/*.yaml`.
+- **`dependencies/`** – Vendored third-party libraries (LIBERO, OpenVLA-OFT, robosuite, opensora, apex, etc.).
+- **`data/`** – Runtime inputs, outputs, and intermediate artifacts:
+  - `dataset/` – LIBERO, CALVIN, preprocessed data, task metainfo.
+  - `ckpts/` – Pretrained weights.
+- **`docs/`** – Repository structure, install notes, history, plans, findings, write-ups, paper draft.
+- **`LIBERO/`** – Top-level vendored upstream (editable install).
+- **`requirements.txt`** – Python deps; PyTorch, flash-attn, ColossalAI installed separately.
 
-## Common commands
+---
 
-```bash
-python -m src.cli.train --config-name <config> [overrides ...]    # universal entry
-bash scripts/<launcher>.sh                                        # wraps the above
-bash scripts/eval_libero_vla.sh --ckpt_path <ckpt> --task_suite libero_goal --num_episodes 10
-python -m pytest tests/<file>.py -xvs
-```
+## How Dreamer-VLA runs
 
-Common env vars: `CUDA_VISIBLE_DEVICES`, `NUM_GPUS`, `BATCH_SIZE`, `RUN_TAG`, `DETACH=1`, `DRY_RUN=1`, `WM_SMOKE=1`.
+You launch one Hydra config (e.g. `python -m src.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `src/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Workspace** class and runs `setup → execute → teardown`. The workspace owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate runner / worker / scheduler layer. Online RL uses an in-process `LiberoOnlineEnv` (or the multi-proc variant in `scripts/training/train_online_pi0_action_hidden_dreamervla_multiproc.py`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
 
-## Doc index
+---
 
-`README.md` (setup), `docs/TODO.md`, `progress.md` / `findings.md` (running notes), `scripts/README.md`, `configs/README.md`, `data/outputs/README.md`.
+## Configuration guides
+
+- **Route, not knob:** pick one top-level config and override task + run-tag + GPU count; don't recombine fields by hand. Registry in [configs/README.md](configs/README.md).
+- **Task switch:** `task=libero_goal | libero_object | libero_spatial | libero_10` (or any `configs/task/*.yaml`) via Hydra; task YAMLs hold dataset paths, horizons, sidecar expectations, task-specific dims.
+- **One-trajectory SFT:** `CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal`; `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which demo.
+- **OOM:** tune `dataset.batch_size`, `dataset.num_workers`, `training.gradient_accumulate_every`, `training.enable_activation_checkpointing`, FSDP mixed precision; for online RL also `env.num_envs` and chunk length. For VLA SFT, `training.vla_train_action_head_only=true` freezes the backbone.
+- **Resume:** workspaces respect `training.resume` + `resume_dir` under `data/outputs/.../checkpoints/`; `training.resume_advance_epoch` controls the epoch counter on resume.
+
+---
+
+## Metrics, checkpoints, and evaluation
+
+- **Metrics:** workspaces use `src/utils/json_logger.py` plus optional wandb / tensorboard. Online RL emits chunk-credit, KL (k1 estimator), advantage, value, action-clipping; see `src/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
+- **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`.
+- **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `scripts/diagnostics/measure_wm_*.py` and `diagnose_ppo_imagine_vs_real.py`.
+
+---
+
+## When things go wrong
+
+Install (LIBERO editable install, flash-attn wheel, ColossalAI / TensorNVMe / APEX, egl_probe): see [docs/install.md](docs/install.md). Rendering: set `MUJOCO_GL=egl`; smoke-test via `scripts/smoke/smoke_libero_online_env.py`. NCCL / CUDA timeouts under DDP are usually one rank diverging (NaN, mismatched batch) — read the rank-0 log before assuming network; the DDP synchronization guards in `src/algorithms/ppo/outcome.py` exist for a reason, don't remove them. 
+
+---
+
+## Key ideas and plugging in
+
+**Config** (`configs/*.yaml`): each top-level YAML carries a `_target_` pointing at a workspace class. New route = new YAML + new workspace; do not add boolean switches to fork existing workspaces.
+
+**Workspace** (`src/workspace/`): the training unit. Subclass the base workspace and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per workspace.
+
+**Algorithms** (`src/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so workspaces compose them without conditional branching.
+
+**Models** (`src/models/`): three trainable building blocks — encoder, world model, VLA backbone — each behind a protocol so a workspace can swap implementations without changing the algorithm.
+
+**Dataloaders** (`src/dataloader/`): must expose a stable public API enforced by a test in `tests/`.
+
+**Envs** (`src/env/`): split between offline (dataset-driven) and online (rollout-driven) wrappers.
+
+---
+
+## Extending Dreamer-VLA
+
+### New training route
+
+Add a workspace class under `src/workspace/` subclassing the base workspace; export it from the package init; add a YAML in `configs/` with a `_target_` pointing at the new class and `defaults: - /task: libero_<suite>`. Add a shell launcher in `scripts/` only if the invocation differs from `python -m src.cli.train --config-name=<my_route>`.
+
+### New PPO variant
+
+Add a module under `src/algorithms/ppo/` matching the existing kwargs / return signature; wire it into the relevant workspace. Do not branch existing variants with `if algorithm == "my_variant"`. Add regression tests in `tests/` covering the invariants the variant must hold.
+
+### New world model
+
+Add a module under `src/models/world_model/` subclassing the base world model; document the forward / imagine contract; reward heads stay in the shared module; wire into a workspace + YAML rather than branching existing WM modules.
+
+### New encoder / actor
+
+Implement the encoder protocol or subclass the base actor in their respective `src/models/` subdirectories; do not create a parallel hierarchy.
+
+### New env (beyond LIBERO)
+
+Not a stable extension surface. The data path and reward labels assume LIBERO HDF5 + task metainfo. Open an issue before starting; expect a parallel env module, parallel dataloader, per-suite metainfo, and online-RL action / observation plumbing changes.
+
+---
+
+## Style and contributing
+
+Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `src/utils/json_logger.py` or workspace loggers. Config YAML: static only, no computed fields; derive in the workspace. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `scripts/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Further reading
+
+- [Repository structure](docs/repository_structure.md) · [Install](docs/install.md) · [Script registry](scripts/README.md) · [Config registry](configs/README.md)
+- [Write-up](docs/dreamer_vla_writeup.md) · [Findings](docs/findings.md) · [History](docs/history.md) · [Task plan](docs/task_plan.md) · [TODO](docs/TODO.md)
+- [Classifier revision plan](docs/classifier_revision_plan.md) · [Multicollector batched encoder plan](docs/multicollector_batched_encoder_plan.md)
+- [README](README.md) · [中文 README](README.zh-CN.md) · [Git workflow tutorial](tutorial_of_git.md) · [Behavioral guidelines](CLAUDE.local.md)

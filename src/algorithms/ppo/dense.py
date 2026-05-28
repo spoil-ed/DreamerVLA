@@ -26,6 +26,7 @@ Optional add-ons:
   * ``real_rollout_relabel``: a side PPO loss on cached real-env samples.
   * ``tdmpc_ac``: terminal-value bootstrap and a TD-MPC critic side-update.
 """
+
 from __future__ import annotations
 
 from typing import Any, Mapping
@@ -84,7 +85,9 @@ def dino_wmpo_dense_step(
     update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
-    entropy_coef = float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
+    entropy_coef = float(
+        algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0))
+    )
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     actor_bc_ref_scale = float(algorithm_cfg.get("actor_bc_to_ref_scale", 0.0))
     real_relabel_cfg = algorithm_cfg.get("real_rollout_relabel", {}) or {}
@@ -92,7 +95,9 @@ def dino_wmpo_dense_step(
     tdmpc_ac_cfg = algorithm_cfg.get("tdmpc_ac", {}) or {}
     tdmpc_ac_enabled = bool(tdmpc_ac_cfg.get("enabled", False))
     tdmpc_value_mode = _tdmpc_value_mode(tdmpc_ac_cfg)
-    tdmpc_critic_action_dim = _tdmpc_action_dim(tdmpc_ac_cfg, int(algorithm_cfg.get("rssm_action_dim", 7)))
+    tdmpc_critic_action_dim = _tdmpc_action_dim(
+        tdmpc_ac_cfg, int(algorithm_cfg.get("rssm_action_dim", 7))
+    )
     tdmpc_ac_ready = (
         tdmpc_ac_enabled
         and critic is not None
@@ -104,8 +109,14 @@ def dino_wmpo_dense_step(
     tdmpc_imagined_critic_loss_scale = float(
         tdmpc_ac_cfg.get("imagined_critic_loss_scale", tdmpc_critic_loss_scale)
     )
-    tdmpc_replay_critic_loss_scale = float(tdmpc_ac_cfg.get("replay_critic_loss_scale", 1.0))
-    tdmpc_target_tau = float(tdmpc_ac_cfg.get("target_critic_tau", algorithm_cfg.get("target_critic_tau", 0.02)))
+    tdmpc_replay_critic_loss_scale = float(
+        tdmpc_ac_cfg.get("replay_critic_loss_scale", 1.0)
+    )
+    tdmpc_target_tau = float(
+        tdmpc_ac_cfg.get(
+            "target_critic_tau", algorithm_cfg.get("target_critic_tau", 0.02)
+        )
+    )
     gamma = float(algorithm_cfg.get("ppo_gamma", 1.0))
     adv_eps = float(algorithm_cfg.get("advantage_eps", 1.0e-6))
     zero_grad = bool(optim_cfg.get("zero_grad_set_to_none", True))
@@ -126,7 +137,9 @@ def dino_wmpo_dense_step(
         latent_seq = _detach_latent(_world_model_observe_sequence(world_model, obs))
         seq_len = _latent_time_dim(latent_seq)
         starts = min(imag_last if imag_last > 0 else seq_len, seq_len)
-        current_latent = _repeat_latent(_flatten_last_steps(latent_seq, starts), group_size)
+        current_latent = _repeat_latent(
+            _flatten_last_steps(latent_seq, starts), group_size
+        )
 
     latents: list[Any] = [current_latent]
     actor_feats: list[torch.Tensor] = []
@@ -143,9 +156,13 @@ def dino_wmpo_dense_step(
     with _temporarily_freeze(world_model):
         for step in range(horizon):
             del step
-            actor_feat = _world_model_actor_input(world_model, current_latent).detach().float()
+            actor_feat = (
+                _world_model_actor_input(world_model, current_latent).detach().float()
+            )
             with torch.no_grad():
-                action, old_log_prob_t, extra = policy({"mode": "sample", "hidden": actor_feat, "deterministic": False})
+                action, old_log_prob_t, extra = policy(
+                    {"mode": "sample", "hidden": actor_feat, "deterministic": False}
+                )
             action_detached = action.detach()
             actor_feats.append(actor_feat)
             actions.append(action_detached)
@@ -153,23 +170,35 @@ def dino_wmpo_dense_step(
 
             if use_ref:
                 with torch.no_grad():
-                    ref_log_prob_t, _, ref_extra_eval = ref_policy({
-                        "mode": "evaluate",
-                        "hidden": actor_feat,
-                        "action": action_detached,
-                    })
+                    ref_log_prob_t, _, ref_extra_eval = ref_policy(
+                        {
+                            "mode": "evaluate",
+                            "hidden": actor_feat,
+                            "action": action_detached,
+                        }
+                    )
                 ref_kls.append((old_log_prob_t.detach() - ref_log_prob_t).detach())
                 del ref_extra_eval
 
             with torch.no_grad():
-                wm_action = _actor_action_for_world_model(action_detached, algorithm_cfg)
-                current_latent = _detach_latent(world_model({
-                    "mode": "predict_next",
-                    "latent": current_latent,
-                    "actions": wm_action,
-                }))
+                wm_action = _actor_action_for_world_model(
+                    action_detached, algorithm_cfg
+                )
+                current_latent = _detach_latent(
+                    world_model(
+                        {
+                            "mode": "predict_next",
+                            "latent": current_latent,
+                            "actions": wm_action,
+                        }
+                    )
+                )
                 latents.append(current_latent)
-                rewards.append(_world_model_state_reward(world_model, current_latent).detach().float())
+                rewards.append(
+                    _world_model_state_reward(world_model, current_latent)
+                    .detach()
+                    .float()
+                )
 
     if not actor_feats:
         raise RuntimeError("DINO-WM PPO requires at least one imagined actor step.")
@@ -177,47 +206,71 @@ def dino_wmpo_dense_step(
     new_log_probs: list[torch.Tensor] = []
     entropies: list[torch.Tensor] = []
     for actor_feat, action_detached in zip(actor_feats, actions, strict=True):
-        log_prob_t, entropy_t, _ = policy({
-            "mode": "evaluate",
-            "hidden": actor_feat,
-            "action": action_detached,
-        })
+        log_prob_t, entropy_t, _ = policy(
+            {
+                "mode": "evaluate",
+                "hidden": actor_feat,
+                "action": action_detached,
+            }
+        )
         new_log_probs.append(log_prob_t)
         entropies.append(entropy_t)
 
-        _, _, extra = policy({
-            "mode": "sample",
-            "hidden": actor_feat,
-            "deterministic": True,
-            "return_chunk": True,
-        })
+        _, _, extra = policy(
+            {
+                "mode": "sample",
+                "hidden": actor_feat,
+                "deterministic": True,
+                "return_chunk": True,
+            }
+        )
         action_chunk = extra.get("action_chunk")
         if use_ref:
             if isinstance(action_chunk, torch.Tensor):
                 with torch.no_grad():
-                    _, _, ref_extra = ref_policy({
-                        "mode": "sample",
-                        "hidden": actor_feat,
-                        "deterministic": True,
-                        "return_chunk": True,
-                    })
+                    _, _, ref_extra = ref_policy(
+                        {
+                            "mode": "sample",
+                            "hidden": actor_feat,
+                            "deterministic": True,
+                            "return_chunk": True,
+                        }
+                    )
                 ref_action_chunk = ref_extra.get("action_chunk")
                 if isinstance(ref_action_chunk, torch.Tensor):
                     action_chunk_f = action_chunk.float()
                     ref_chunk_f = ref_action_chunk.detach().float()
                     bc_ref_losses.append((action_chunk_f - ref_chunk_f).square().mean())
-                    drift_raw_mses.append((action_chunk_f.detach() - ref_chunk_f).square().mean())
-                    action_env = _actor_action_to_env_scale(action_chunk_f.detach(), algorithm_cfg, clip=False)
-                    ref_env = _actor_action_to_env_scale(ref_chunk_f, algorithm_cfg, clip=False)
-                    action_env_clip = _actor_action_to_env_scale(action_chunk_f.detach(), algorithm_cfg, clip=True)
-                    ref_env_clip = _actor_action_to_env_scale(ref_chunk_f, algorithm_cfg, clip=True)
+                    drift_raw_mses.append(
+                        (action_chunk_f.detach() - ref_chunk_f).square().mean()
+                    )
+                    action_env = _actor_action_to_env_scale(
+                        action_chunk_f.detach(), algorithm_cfg, clip=False
+                    )
+                    ref_env = _actor_action_to_env_scale(
+                        ref_chunk_f, algorithm_cfg, clip=False
+                    )
+                    action_env_clip = _actor_action_to_env_scale(
+                        action_chunk_f.detach(), algorithm_cfg, clip=True
+                    )
+                    ref_env_clip = _actor_action_to_env_scale(
+                        ref_chunk_f, algorithm_cfg, clip=True
+                    )
                     drift_env_mses.append((action_env - ref_env).square().mean())
-                    drift_env_clip_mses.append((action_env_clip - ref_env_clip).square().mean())
+                    drift_env_clip_mses.append(
+                        (action_env_clip - ref_env_clip).square().mean()
+                    )
                     drift_env_maes.append((action_env - ref_env).abs().mean())
         else:
             reference_chunk = _policy_reference_action_chunk(policy, actor_feat)
-            if isinstance(action_chunk, torch.Tensor) and isinstance(reference_chunk, torch.Tensor):
-                bc_ref_losses.append((action_chunk.float() - reference_chunk.detach().float()).square().mean())
+            if isinstance(action_chunk, torch.Tensor) and isinstance(
+                reference_chunk, torch.Tensor
+            ):
+                bc_ref_losses.append(
+                    (action_chunk.float() - reference_chunk.detach().float())
+                    .square()
+                    .mean()
+                )
 
     log_prob_stack = torch.stack(new_log_probs, dim=1)
     old_log_prob_stack = torch.stack(old_log_probs, dim=1)
@@ -248,13 +301,19 @@ def dino_wmpo_dense_step(
         with torch.no_grad():
             terminal_action = None
             if tdmpc_value_mode == "state_action":
-                terminal_actor_feat = _world_model_actor_input(world_model, latents[-1]).detach().float()
-                terminal_action, _, _ = policy({
-                    "mode": "sample",
-                    "hidden": terminal_actor_feat,
-                    "deterministic": True,
-                })
-                terminal_action = _actor_action_for_world_model(terminal_action.detach(), algorithm_cfg)
+                terminal_actor_feat = (
+                    _world_model_actor_input(world_model, latents[-1]).detach().float()
+                )
+                terminal_action, _, _ = policy(
+                    {
+                        "mode": "sample",
+                        "hidden": terminal_actor_feat,
+                        "deterministic": True,
+                    }
+                )
+                terminal_action = _actor_action_for_world_model(
+                    terminal_action.detach(), algorithm_cfg
+                )
             terminal_feat = _tdmpc_critic_hidden(
                 world_model,
                 latents[-1],
@@ -262,19 +321,38 @@ def dino_wmpo_dense_step(
                 value_mode=tdmpc_value_mode,
                 action_dim=tdmpc_critic_action_dim,
             )
-            tdmpc_terminal_value = target_critic({"mode": "value", "hidden": terminal_feat}).detach().to(dtype=traj_score.dtype)
+            tdmpc_terminal_value = (
+                target_critic({"mode": "value", "hidden": terminal_feat})
+                .detach()
+                .to(dtype=traj_score.dtype)
+            )
             tdmpc_terminal_value = tdmpc_terminal_value.reshape_as(traj_score)
         if tdmpc_terminal_value_scale != 0.0:
-            traj_score = traj_score + (float(gamma) ** horizon) * tdmpc_terminal_value_scale * tdmpc_terminal_value
+            traj_score = (
+                traj_score
+                + (float(gamma) ** horizon)
+                * tdmpc_terminal_value_scale
+                * tdmpc_terminal_value
+            )
     advantages = _group_advantage(traj_score.detach(), group_size, adv_eps)
 
     log_prob_traj = log_prob_stack.sum(dim=1)
     old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
     ratio = torch.exp(log_prob_traj - old_log_prob_traj)
     ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-    actor_pg_loss = torch.maximum(-advantages * ratio, -advantages * ratio_clipped).mean()
-    actor_entropy_loss = -(entropy_coef * entropy_stack.sum(dim=1)).mean() if entropy_coef else actor_pg_loss.new_zeros(())
-    bc_ref_loss = torch.stack(bc_ref_losses).mean() if bc_ref_losses else actor_pg_loss.new_zeros(())
+    actor_pg_loss = torch.maximum(
+        -advantages * ratio, -advantages * ratio_clipped
+    ).mean()
+    actor_entropy_loss = (
+        -(entropy_coef * entropy_stack.sum(dim=1)).mean()
+        if entropy_coef
+        else actor_pg_loss.new_zeros(())
+    )
+    bc_ref_loss = (
+        torch.stack(bc_ref_losses).mean()
+        if bc_ref_losses
+        else actor_pg_loss.new_zeros(())
+    )
     real_relabel_loss, real_relabel_metrics = _real_relabel_ppo_loss(
         policy=policy,
         real_relabel_batch=real_relabel_batch,
@@ -293,36 +371,53 @@ def dino_wmpo_dense_step(
     actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
     actor_output_projection_grad_norm = _named_grad_norm(policy, "output_projection")
     actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
-    actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
+    actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+        policy.parameters(), max_norm=grad_clip
+    )
     actor_optimizer.step()
 
-    if tdmpc_ac_ready and (tdmpc_imagined_critic_loss_scale > 0.0 or tdmpc_replay_critic_loss_scale > 0.0):
+    if tdmpc_ac_ready and (
+        tdmpc_imagined_critic_loss_scale > 0.0 or tdmpc_replay_critic_loss_scale > 0.0
+    ):
         if tdmpc_imagined_critic_loss_scale > 0.0:
             with torch.no_grad():
-                target_return = tdmpc_terminal_value_scale * tdmpc_terminal_value.detach()
+                target_return = (
+                    tdmpc_terminal_value_scale * tdmpc_terminal_value.detach()
+                )
                 returns_reversed: list[torch.Tensor] = []
                 for step in reversed(range(horizon)):
-                    target_return = adjusted_reward[:, step].detach() + float(gamma) * target_return
+                    target_return = (
+                        adjusted_reward[:, step].detach() + float(gamma) * target_return
+                    )
                     returns_reversed.append(target_return)
                 returns_reversed.reverse()
                 tdmpc_targets = torch.stack(returns_reversed, dim=1)
-                critic_feat_stack = torch.stack([
-                    _tdmpc_critic_hidden(
-                        world_model,
-                        latent,
-                        _actor_action_for_world_model(action, algorithm_cfg) if tdmpc_value_mode == "state_action" else None,
-                        value_mode=tdmpc_value_mode,
-                        action_dim=tdmpc_critic_action_dim,
-                    )
-                    for latent, action in zip(latents[:-1], actions, strict=True)
-                ], dim=1)
+                critic_feat_stack = torch.stack(
+                    [
+                        _tdmpc_critic_hidden(
+                            world_model,
+                            latent,
+                            _actor_action_for_world_model(action, algorithm_cfg)
+                            if tdmpc_value_mode == "state_action"
+                            else None,
+                            value_mode=tdmpc_value_mode,
+                            action_dim=tdmpc_critic_action_dim,
+                        )
+                        for latent, action in zip(latents[:-1], actions, strict=True)
+                    ],
+                    dim=1,
+                )
             B, H, D = critic_feat_stack.shape
-            tdmpc_log_probs = critic({
-                "mode": "log_prob",
-                "hidden": critic_feat_stack.reshape(B * H, D),
-                "values": tdmpc_targets.reshape(B * H),
-            })
-            tdmpc_imagined_critic_loss = -tdmpc_log_probs.view(B, H).mean() * tdmpc_imagined_critic_loss_scale
+            tdmpc_log_probs = critic(
+                {
+                    "mode": "log_prob",
+                    "hidden": critic_feat_stack.reshape(B * H, D),
+                    "values": tdmpc_targets.reshape(B * H),
+                }
+            )
+            tdmpc_imagined_critic_loss = (
+                -tdmpc_log_probs.view(B, H).mean() * tdmpc_imagined_critic_loss_scale
+            )
 
         replay_rewards = _sequence_field(
             obs,
@@ -348,8 +443,12 @@ def dino_wmpo_dense_step(
             if replay_last is None:
                 replay_last = replay_terminal
             replay_actions = obs.get("actions")
-            if tdmpc_value_mode == "state_action" and not isinstance(replay_actions, torch.Tensor):
-                raise KeyError("TD-MPC state-action replay critic requires obs['actions'].")
+            if tdmpc_value_mode == "state_action" and not isinstance(
+                replay_actions, torch.Tensor
+            ):
+                raise KeyError(
+                    "TD-MPC state-action replay critic requires obs['actions']."
+                )
             replay_critic_feat = _tdmpc_critic_hidden(
                 world_model,
                 latent_seq,
@@ -381,18 +480,30 @@ def dino_wmpo_dense_step(
                         next_latent = latent_seq
                         if isinstance(latent_seq, dict):
                             next_latent = {
-                                key: value[:, -replay_steps:][:, 1:] if isinstance(value, torch.Tensor) and value.ndim >= 3 else value
+                                key: value[:, -replay_steps:][:, 1:]
+                                if isinstance(value, torch.Tensor) and value.ndim >= 3
+                                else value
                                 for key, value in latent_seq.items()
                             }
                         elif isinstance(latent_seq, torch.Tensor):
                             next_latent = latent_seq[:, -replay_steps:][:, 1:]
-                        next_actor_feat = _world_model_actor_input(world_model, next_latent).detach().float()
-                        next_action, _, _ = policy({
-                            "mode": "sample",
-                            "hidden": next_actor_feat.reshape(B_rep * (T_rep - 1), -1),
-                            "deterministic": True,
-                        })
-                        next_action = _actor_action_for_world_model(next_action.detach(), algorithm_cfg)
+                        next_actor_feat = (
+                            _world_model_actor_input(world_model, next_latent)
+                            .detach()
+                            .float()
+                        )
+                        next_action, _, _ = policy(
+                            {
+                                "mode": "sample",
+                                "hidden": next_actor_feat.reshape(
+                                    B_rep * (T_rep - 1), -1
+                                ),
+                                "deterministic": True,
+                            }
+                        )
+                        next_action = _actor_action_for_world_model(
+                            next_action.detach(), algorithm_cfg
+                        )
                         next_action = next_action.reshape(B_rep, T_rep - 1, -1)
                         next_feat = _tdmpc_critic_hidden(
                             world_model,
@@ -402,25 +513,37 @@ def dino_wmpo_dense_step(
                             action_dim=tdmpc_critic_action_dim,
                         )
                         replay_next_feat = next_feat
-                    replay_next_value = target_critic({
-                        "mode": "value",
-                        "hidden": replay_next_feat.reshape(B_rep * (T_rep - 1), D_rep),
-                    }).view(B_rep, T_rep - 1)
-                    replay_target = replay_rewards[:, 1:] + float(gamma) * (
-                        1.0 - replay_terminal[:, 1:].float()
-                    ) * replay_next_value
+                    replay_next_value = target_critic(
+                        {
+                            "mode": "value",
+                            "hidden": replay_next_feat.reshape(
+                                B_rep * (T_rep - 1), D_rep
+                            ),
+                        }
+                    ).view(B_rep, T_rep - 1)
+                    replay_target = (
+                        replay_rewards[:, 1:]
+                        + float(gamma)
+                        * (1.0 - replay_terminal[:, 1:].float())
+                        * replay_next_value
+                    )
                     replay_mask = (1.0 - replay_last[:, :-1].float()).clamp_min(0.0)
                     tdmpc_replay_reward_mean = replay_rewards[:, 1:].detach().mean()
                     tdmpc_replay_target_mean = replay_target.detach().mean()
                     tdmpc_replay_value_mean = replay_next_value.detach().mean()
-                replay_log_probs = critic({
-                    "mode": "log_prob",
-                    "hidden": replay_current_feat.reshape(B_rep * (T_rep - 1), D_rep),
-                    "values": replay_target.detach().reshape(B_rep * (T_rep - 1)),
-                })
+                replay_log_probs = critic(
+                    {
+                        "mode": "log_prob",
+                        "hidden": replay_current_feat.reshape(
+                            B_rep * (T_rep - 1), D_rep
+                        ),
+                        "values": replay_target.detach().reshape(B_rep * (T_rep - 1)),
+                    }
+                )
                 replay_loss_per_step = -replay_log_probs.view(B_rep, T_rep - 1)
                 tdmpc_replay_critic_loss = (
-                    (replay_loss_per_step * replay_mask).sum() / replay_mask.sum().clamp_min(1.0)
+                    (replay_loss_per_step * replay_mask).sum()
+                    / replay_mask.sum().clamp_min(1.0)
                 ) * tdmpc_replay_critic_loss_scale
                 tdmpc_replay_value_applied = True
 
@@ -428,7 +551,9 @@ def dino_wmpo_dense_step(
         if tdmpc_critic_loss.requires_grad:
             critic_optimizer.zero_grad(set_to_none=zero_grad)
             tdmpc_critic_loss.backward()
-            tdmpc_critic_grad_norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=grad_clip)
+            tdmpc_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                critic.parameters(), max_norm=grad_clip
+            )
             critic_optimizer.step()
             soft_update(target_critic, critic, tau=tdmpc_target_tau)
             tdmpc_ac_applied = True
@@ -442,56 +567,92 @@ def dino_wmpo_dense_step(
         drift_env_clip_mses = []
         drift_env_maes = []
         for actor_feat, action_detached in zip(actor_feats, actions, strict=True):
-            log_prob_t, entropy_t, _ = policy({
-                "mode": "evaluate",
-                "hidden": actor_feat,
-                "action": action_detached,
-            })
+            log_prob_t, entropy_t, _ = policy(
+                {
+                    "mode": "evaluate",
+                    "hidden": actor_feat,
+                    "action": action_detached,
+                }
+            )
             new_log_probs.append(log_prob_t)
             entropies.append(entropy_t)
 
-            _, _, extra = policy({
-                "mode": "sample",
-                "hidden": actor_feat,
-                "deterministic": True,
-                "return_chunk": True,
-            })
+            _, _, extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": actor_feat,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )
             action_chunk = extra.get("action_chunk")
             if use_ref:
                 if isinstance(action_chunk, torch.Tensor):
                     with torch.no_grad():
-                        _, _, ref_extra = ref_policy({
-                            "mode": "sample",
-                            "hidden": actor_feat,
-                            "deterministic": True,
-                            "return_chunk": True,
-                        })
+                        _, _, ref_extra = ref_policy(
+                            {
+                                "mode": "sample",
+                                "hidden": actor_feat,
+                                "deterministic": True,
+                                "return_chunk": True,
+                            }
+                        )
                     ref_action_chunk = ref_extra.get("action_chunk")
                     if isinstance(ref_action_chunk, torch.Tensor):
                         action_chunk_f = action_chunk.float()
                         ref_chunk_f = ref_action_chunk.detach().float()
-                        bc_ref_losses.append((action_chunk_f - ref_chunk_f).square().mean())
-                        drift_raw_mses.append((action_chunk_f.detach() - ref_chunk_f).square().mean())
-                        action_env = _actor_action_to_env_scale(action_chunk_f.detach(), algorithm_cfg, clip=False)
-                        ref_env = _actor_action_to_env_scale(ref_chunk_f, algorithm_cfg, clip=False)
-                        action_env_clip = _actor_action_to_env_scale(action_chunk_f.detach(), algorithm_cfg, clip=True)
-                        ref_env_clip = _actor_action_to_env_scale(ref_chunk_f, algorithm_cfg, clip=True)
+                        bc_ref_losses.append(
+                            (action_chunk_f - ref_chunk_f).square().mean()
+                        )
+                        drift_raw_mses.append(
+                            (action_chunk_f.detach() - ref_chunk_f).square().mean()
+                        )
+                        action_env = _actor_action_to_env_scale(
+                            action_chunk_f.detach(), algorithm_cfg, clip=False
+                        )
+                        ref_env = _actor_action_to_env_scale(
+                            ref_chunk_f, algorithm_cfg, clip=False
+                        )
+                        action_env_clip = _actor_action_to_env_scale(
+                            action_chunk_f.detach(), algorithm_cfg, clip=True
+                        )
+                        ref_env_clip = _actor_action_to_env_scale(
+                            ref_chunk_f, algorithm_cfg, clip=True
+                        )
                         drift_env_mses.append((action_env - ref_env).square().mean())
-                        drift_env_clip_mses.append((action_env_clip - ref_env_clip).square().mean())
+                        drift_env_clip_mses.append(
+                            (action_env_clip - ref_env_clip).square().mean()
+                        )
                         drift_env_maes.append((action_env - ref_env).abs().mean())
             else:
                 reference_chunk = _policy_reference_action_chunk(policy, actor_feat)
-                if isinstance(action_chunk, torch.Tensor) and isinstance(reference_chunk, torch.Tensor):
-                    bc_ref_losses.append((action_chunk.float() - reference_chunk.detach().float()).square().mean())
+                if isinstance(action_chunk, torch.Tensor) and isinstance(
+                    reference_chunk, torch.Tensor
+                ):
+                    bc_ref_losses.append(
+                        (action_chunk.float() - reference_chunk.detach().float())
+                        .square()
+                        .mean()
+                    )
 
         log_prob_stack = torch.stack(new_log_probs, dim=1)
         entropy_stack = torch.stack(entropies, dim=1)
         log_prob_traj = log_prob_stack.sum(dim=1)
         ratio = torch.exp(log_prob_traj - old_log_prob_traj)
         ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-        actor_pg_loss = torch.maximum(-advantages * ratio, -advantages * ratio_clipped).mean()
-        actor_entropy_loss = -(entropy_coef * entropy_stack.sum(dim=1)).mean() if entropy_coef else actor_pg_loss.new_zeros(())
-        bc_ref_loss = torch.stack(bc_ref_losses).mean() if bc_ref_losses else actor_pg_loss.new_zeros(())
+        actor_pg_loss = torch.maximum(
+            -advantages * ratio, -advantages * ratio_clipped
+        ).mean()
+        actor_entropy_loss = (
+            -(entropy_coef * entropy_stack.sum(dim=1)).mean()
+            if entropy_coef
+            else actor_pg_loss.new_zeros(())
+        )
+        bc_ref_loss = (
+            torch.stack(bc_ref_losses).mean()
+            if bc_ref_losses
+            else actor_pg_loss.new_zeros(())
+        )
         real_relabel_loss, real_relabel_metrics = _real_relabel_ppo_loss(
             policy=policy,
             real_relabel_batch=real_relabel_batch,
@@ -502,14 +663,23 @@ def dino_wmpo_dense_step(
             real_relabel_term = actor_pg_loss.new_zeros(())
         else:
             real_relabel_term = float(real_relabel_scale) * real_relabel_loss
-        actor_loss = actor_pg_loss + actor_entropy_loss + actor_bc_ref_scale * bc_ref_loss + real_relabel_term
+        actor_loss = (
+            actor_pg_loss
+            + actor_entropy_loss
+            + actor_bc_ref_scale * bc_ref_loss
+            + real_relabel_term
+        )
 
         actor_optimizer.zero_grad(set_to_none=zero_grad)
         actor_loss.backward()
         actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
-        actor_output_projection_grad_norm = _named_grad_norm(policy, "output_projection")
+        actor_output_projection_grad_norm = _named_grad_norm(
+            policy, "output_projection"
+        )
         actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
-        actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+            policy.parameters(), max_norm=grad_clip
+        )
         actor_optimizer.step()
 
     def _mean_or_zero(items: list[torch.Tensor]) -> float:
@@ -540,15 +710,23 @@ def dino_wmpo_dense_step(
         "reward_mean": float(reward_stack.detach().mean().cpu()),
         "reward_raw_mean": float(reward_stack.detach().mean().cpu()),
         "reward_raw_std": float(reward_stack.detach().std().cpu()),
-        "ref_kl_mean": float(kl_stack.detach().mean().cpu()) if kl_stack is not None else 0.0,
+        "ref_kl_mean": float(kl_stack.detach().mean().cpu())
+        if kl_stack is not None
+        else 0.0,
         "kl_coef": float(kl_coef),
         "continue_mean": 1.0,
-        "value_mean": float(tdmpc_terminal_value.detach().mean().cpu()) if tdmpc_ac_ready else 0.0,
+        "value_mean": float(tdmpc_terminal_value.detach().mean().cpu())
+        if tdmpc_ac_ready
+        else 0.0,
         "critic_target_mean": float(traj_score.detach().mean().cpu()),
         "actor_grad_norm": float(torch.as_tensor(actor_grad_norm).detach().cpu()),
-        "critic_grad_norm": float(torch.as_tensor(tdmpc_critic_grad_norm).detach().cpu()),
+        "critic_grad_norm": float(
+            torch.as_tensor(tdmpc_critic_grad_norm).detach().cpu()
+        ),
         "tdmpc_ac_applied": float(tdmpc_ac_applied),
-        "tdmpc_terminal_value_mean": float(tdmpc_terminal_value.detach().mean().cpu()) if tdmpc_ac_ready else 0.0,
+        "tdmpc_terminal_value_mean": float(tdmpc_terminal_value.detach().mean().cpu())
+        if tdmpc_ac_ready
+        else 0.0,
         "tdmpc_terminal_value_scale": float(tdmpc_terminal_value_scale),
         "tdmpc_critic_loss_scale": float(tdmpc_critic_loss_scale),
         "tdmpc_value_mode": tdmpc_value_mode,
@@ -571,7 +749,12 @@ def dino_wmpo_dense_step(
         "ppo_ratio_mean": float(ratio.detach().mean().cpu()),
         "ppo_ratio_min": float(ratio.detach().min().cpu()),
         "ppo_ratio_max": float(ratio.detach().max().cpu()),
-        "ppo_clipfrac": float(((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high)).float().mean().cpu()),
+        "ppo_clipfrac": float(
+            ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high))
+            .float()
+            .mean()
+            .cpu()
+        ),
         "log_prob_mean": float(log_prob_stack.detach().mean().cpu()),
         "log_prob_std": float(log_prob_stack.detach().std().cpu()),
         **real_relabel_metrics,

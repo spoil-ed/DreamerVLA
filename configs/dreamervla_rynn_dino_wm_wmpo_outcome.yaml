@@ -74,7 +74,7 @@ dataset:
   reward_mode: per_window_dense
   balanced_length: 50000
   balanced_seed: 0
-  sequence_length: 32
+  sequence_length: 24  # H + N*K + 1 = 3 + 4*5 + 1 for 4-chunk open-loop rollout
   image_size: ${task.image_size}
   image_keys: ${task.image_keys}
   hidden_key: ${task.hidden_key}
@@ -118,9 +118,10 @@ world_model:
   max_seq_len: 128
   hidden_loss_scale: 1.0
   cosine_loss_scale: 0.1
-  rollout_loss_scale: 1.0
-  rollout_horizon: 8
-  rollout_context: null
+  # chunk WM ignores parent's rollout_* (loss() overrides to chunk_loss only).
+  # Anti-drift is controlled by chunk_rollout_chunks/scale below.
+  chunk_rollout_chunks: 4
+  chunk_rollout_loss_scale: 1.0
   reward_head_type: binary
   reward_loss_scale: 32.0
   reward_hidden_dim: 1024
@@ -170,11 +171,11 @@ algorithm:
     # T_max = max imagined env-steps per outcome-style rollout. The number of
     # chunks is episode_max_steps // chunk_size.
     # (real env episode_horizon=200; classifier evaluates earlier success).
-    episode_max_steps: 200
+    episode_max_steps: 300  # LIBERO official horizon
     # min_steps for classifier sliding-window sweep: windows ending before this
     # env-step are skipped (no early false positives). WMPO uses 100 for ~256-step
     # episodes; T_max//15 ≈ 13 for libero_goal.
-    classifier_min_steps: 20
+    classifier_min_steps: 4  # CHUNK units (was 20 env-step / K=5, ceil → 4)
     # Skip GRPO groups with no within-group variance — they produce zero
     # advantage anyway and waste compute on forward passes.
     filter_zero_variance_groups: true

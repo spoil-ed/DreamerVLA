@@ -9,7 +9,9 @@ import torch
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Merge partitioned precompute manifests into a single manifest.")
+    parser = argparse.ArgumentParser(
+        description="Merge partitioned precompute manifests into a single manifest."
+    )
     parser.add_argument("--root-output-dir", type=Path, required=True)
     parser.add_argument("--expected-parts", type=int, default=None)
     parser.add_argument("--cleanup-parts", action="store_true")
@@ -45,7 +47,9 @@ def main() -> None:
     hidden_dim = int(first_manifest.get("hidden_dim", 0))
     shard_counter = 0
 
-    for part_dir, manifest in sorted(part_manifests, key=lambda item: int(item[1].get("partition_index", 0))):
+    for part_dir, manifest in sorted(
+        part_manifests, key=lambda item: int(item[1].get("partition_index", 0))
+    ):
         if int(manifest.get("hidden_dim", hidden_dim)) != hidden_dim:
             raise ValueError(f"Hidden dim mismatch in {part_dir / 'manifest.pt'}")
         for shard in manifest["shards"]:
@@ -77,7 +81,9 @@ def main() -> None:
             "num_samples": int(manifest["num_samples"]),
             "manifest": str(Path(part_dir.name) / "manifest.pt"),
         }
-        for part_dir, manifest in sorted(part_manifests, key=lambda item: int(item[1].get("partition_index", 0)))
+        for part_dir, manifest in sorted(
+            part_manifests, key=lambda item: int(item[1].get("partition_index", 0))
+        )
     ]
 
     merged_manifest_path = root_output_dir / "manifest.pt"

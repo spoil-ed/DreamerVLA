@@ -7,13 +7,18 @@
 #  the Hydra CLI as trailing args.
 #
 #  Available CONFIGs:
-#    world_model_dinowm_step   (default)   DINO-WM, per-frame predictor
-#    world_model_dinowm_chunk              DINO-WM, K-step chunk predictor
-#    world_model_rssm_step                 RSSM action-hidden WM
+#    world_model_dinowm_step          (default)   DINO-WM, per-frame predictor
+#    world_model_dinowm_chunk                     DINO-WM, K-step chunk predictor
+#    world_model_rssm_step                        RSSM action-hidden WM
+#    oft_world_model_dinowm_chunk                 OpenVLA-OFT hidden (56x4096), chunk WM
+#    latent_classifier_libero_goal_chunk          chunk latent success classifier
+#    oft_latent_classifier_chunk                  OpenVLA-OFT chunk latent classifier
 #
 #  Examples:
 #    bash scripts/train_wm.sh
 #    CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh
+#    CONFIG=oft_world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal
+#    CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh task=libero_goal
 #    NGPU=4 bash scripts/train_wm.sh task=libero_object
 #    OUT_DIR=/tmp/smoke bash scripts/train_wm.sh \
 #        training.max_steps=1 dataloader.num_workers=0

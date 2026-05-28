@@ -15,7 +15,9 @@ class BaseActor(nn.Module, ABC):
     min_log_std: float
     max_log_std: float
 
-    def _normal_from_action_chunk(self, action_chunk: torch.Tensor) -> tuple[Normal, torch.Tensor, torch.Tensor]:
+    def _normal_from_action_chunk(
+        self, action_chunk: torch.Tensor
+    ) -> tuple[Normal, torch.Tensor, torch.Tensor]:
         mean = action_chunk[:, 0, :].float()
         log_std = (
             self.log_std.clamp(min=self.min_log_std, max=self.max_log_std)
@@ -25,7 +27,9 @@ class BaseActor(nn.Module, ABC):
         std = log_std.exp()
         return Normal(mean, std), mean, std
 
-    def _normal_from_full_action_chunk(self, action_chunk: torch.Tensor) -> tuple[Normal, torch.Tensor, torch.Tensor]:
+    def _normal_from_full_action_chunk(
+        self, action_chunk: torch.Tensor
+    ) -> tuple[Normal, torch.Tensor, torch.Tensor]:
         mean = action_chunk.float()
         log_std = (
             self.log_std.clamp(min=self.min_log_std, max=self.max_log_std)

@@ -54,7 +54,9 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
         if nested_files:
             if task_suite_name == "all":
                 return nested_files
-            filtered = [path for path in nested_files if path.parent.name == task_suite_name]
+            filtered = [
+                path for path in nested_files if path.parent.name == task_suite_name
+            ]
             if filtered:
                 return filtered
 
@@ -69,7 +71,9 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
 
     @classmethod
     def list_demo_keys(cls, data_group: h5py.Group) -> list[str]:
-        demo_keys = [key for key in data_group.keys() if cls.extract_demo_index(key) >= 0]
+        demo_keys = [
+            key for key in data_group.keys() if cls.extract_demo_index(key) >= 0
+        ]
         return sorted(demo_keys, key=cls.extract_demo_index)
 
     @staticmethod
@@ -77,9 +81,13 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
         return Image.fromarray(rgb_frame[::-1, ::-1].astype(np.uint8))
 
     @staticmethod
-    def pad_action_batch(actions: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def pad_action_batch(
+        actions: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         max_steps = max((int(action.shape[0]) for action in actions), default=0)
-        action_dim = max((int(action.shape[-1]) for action in actions if action.ndim == 2), default=0)
+        action_dim = max(
+            (int(action.shape[-1]) for action in actions if action.ndim == 2), default=0
+        )
         padded = torch.zeros(len(actions), max_steps, action_dim, dtype=torch.float32)
         mask = torch.zeros(len(actions), max_steps, dtype=torch.bool)
         for idx, action in enumerate(actions):
@@ -91,7 +99,9 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
         return padded, mask
 
     @staticmethod
-    def pad_state_batch(states: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def pad_state_batch(
+        states: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         max_dim = max((int(state.numel()) for state in states), default=0)
         padded = torch.zeros(len(states), max_dim, dtype=torch.float32)
         mask = torch.zeros(len(states), max_dim, dtype=torch.bool)

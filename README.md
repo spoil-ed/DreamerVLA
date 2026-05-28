@@ -208,7 +208,7 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available(), tor
 ### 3. 安装本仓库
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 pip install --upgrade pip setuptools wheel
 pip install -e .
 ```
@@ -308,7 +308,7 @@ pip install -v --no-build-isolation .
 #### 安装
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA/LIBERO
+cd /mnt/data/spoil/workspace/DreamerVLA/LIBERO
 python -m pip install --no-build-isolation -e .
 ```
 
@@ -346,7 +346,7 @@ cat ~/.libero/config.yaml
 完成上述所有步骤后，运行以下检查：
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 
 # 基础环境
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
@@ -383,7 +383,7 @@ hf auth login
 这些权重来自 `Alibaba-DAMO-Academy/WorldVLA`，包括 tokenizer、base model 和 starting point：
 
 ```bash
-CKPT_DIR=/home/user01/liops/workspace/DreamerVLA/data/ckpts
+CKPT_DIR=/mnt/data/spoil/workspace/DreamerVLA/data/ckpts
 
 # Chameleon Tokenizer（text_tokenizer.json, vqgan.yaml, vqgan.ckpt）
 hf download Alibaba-DAMO-Academy/WorldVLA \
@@ -412,7 +412,7 @@ hf download Alpha-VLLM/Lumina-mGPT-7B-768 \
 ### 2. 下载 RynnVLA-002 VLA / World Model 权重
 
 ```bash
-CKPT_DIR=/home/user01/liops/workspace/DreamerVLA/data/ckpts
+CKPT_DIR=/mnt/data/spoil/workspace/DreamerVLA/data/ckpts
 
 # VLA 模型权重（256 分辨率，当前主线使用 libero_goal）
 hf download Alibaba-DAMO-Academy/RynnVLA-002 \
@@ -430,7 +430,7 @@ hf download Alibaba-DAMO-Academy/RynnVLA-002 \
 也可以直接使用仓库自带脚本（需要先确认路径正确）：
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 bash scripts/download_hf.sh
 ```
 
@@ -473,7 +473,7 @@ ls data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/
 LIBERO 数据集为 HDF5 格式。推荐使用 Hugging Face 源下载：
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 
 # 下载全部数据集（libero_goal, libero_spatial, libero_object, libero_100）
 python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
@@ -487,7 +487,7 @@ python LIBERO/benchmark_scripts/download_libero_datasets.py --datasets libero_go
 > **提示**：如果已经在 RynnVLA-002 仓库中下载过 LIBERO 数据集，可以直接创建软链接而无需重复下载：
 > ```bash
 > ln -s /home/user01/yuxinglei/workspace/RynnVLA-002/LIBERO/libero/datasets \
->       /home/user01/liops/workspace/DreamerVLA/data/libero/datasets
+>       /mnt/data/spoil/workspace/DreamerVLA/data/libero/datasets
 > ```
 
 ### 2. 数据预处理管线
@@ -562,7 +562,7 @@ LIBERO_TASK_SUITE=libero_goal TASK_NAME=goal IMAGE_RESOLUTION=256 ACTION_HORIZON
 上述五步可以用一条命令完成：
 
 ```bash
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 bash scripts/prepare_data.sh
 ```
 
@@ -585,7 +585,7 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 | `configs/rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed.yaml` | `init.vla_ckpt_path`, `encoder.model_path`, `dataset.hidden_dir`, `dataset.expected_*` |
 | `configs/dreamer_vla_libero_goal_pi0_action_hidden_head_actor.yaml` | `init.*`, `dataset.hidden_dir`, `policy.time_horizon` |
 
-通用规则：将所有 `/home/user01/liops/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
+通用规则：将所有 `/mnt/data/spoil/workspace/DreamerVLA` 替换为你的实际项目根目录即可。
 
 ---
 
@@ -615,7 +615,7 @@ LIBERO_TASK_SUITE=libero_goal IMAGE_RESOLUTION=256 ACTION_HORIZON=5 TASK_NAME=go
 
 ```bash
 conda activate dreamervla
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 
 # 当前 pi0 action-query VLA head
 ACTION_HEAD_TYPE=pi0_query CONFIG_NAME=pretokenize_vla_libero_goal_pi0_query \
@@ -673,7 +673,7 @@ CONFIG_NAME=dreamer_vla_libero_goal_pi0_action_hidden_head_actor \
 
 ```bash
 conda activate dreamervla
-cd /home/user01/liops/workspace/DreamerVLA
+cd /mnt/data/spoil/workspace/DreamerVLA
 
 bash scripts/eval_libero.sh \
     --ckpt_path data/outputs/pretokenize_vla/checkpoints/epoch=005-train_vla_loss=1.234.ckpt \

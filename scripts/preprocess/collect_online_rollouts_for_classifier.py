@@ -31,6 +31,7 @@ Single GPU. Usage example::
             --out-hidden-dir data/processed_data/libero_goal_online_rollouts_pi0_sft_hidden \\
             --deterministic-collect
 """
+
 from __future__ import annotations
 
 import argparse
@@ -67,16 +68,19 @@ def parse_args() -> argparse.Namespace:
         "--config",
         default=str(PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"),
         help="Defaults to the legacy 35840-dim action-hidden config that matches the m1024 chunk WM "
-             "and the *_pi0_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
-             "WMReplayClassifierDataset.",
+        "and the *_pi0_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
+        "WMReplayClassifierDataset.",
     )
     parser.add_argument("--world-model-ckpt", required=True)
-    parser.add_argument("--vla-ckpt-path", default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"))
+    parser.add_argument(
+        "--vla-ckpt-path",
+        default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"),
+    )
     parser.add_argument(
         "--encoder-state-ckpt",
         default="",
         help="Optional separate encoder state ckpt. Legacy 35840-dim extraction does NOT need this; "
-             "leave empty to use the base SFT VLA backbone directly.",
+        "leave empty to use the base SFT VLA backbone directly.",
     )
     parser.add_argument(
         "--actor-ckpt",
@@ -89,8 +93,8 @@ def parse_args() -> argparse.Namespace:
         default="legacy",
         choices=["legacy", "pi0_query"],
         help="Encoder action-head variant. ``legacy`` produces 35840-dim hidden matching the "
-             "m1024 chunk WM and the *_pi0_legacy_action_hidden_vla_policy_h2 sidecars used by "
-             "WMReplayClassifierDataset. ``pi0_query`` is the 5120-dim head (needs a smaller WM).",
+        "m1024 chunk WM and the *_pi0_legacy_action_hidden_vla_policy_h2 sidecars used by "
+        "WMReplayClassifierDataset. ``pi0_query`` is the 5120-dim head (needs a smaller WM).",
     )
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument(
@@ -118,14 +122,14 @@ def parse_args() -> argparse.Namespace:
         "--deterministic-collect",
         action="store_true",
         help="Sample actions deterministically (Gaussian mean). Recommended for stable rollout "
-             "distributions; flip off if you want exploration noise in the corpus.",
+        "distributions; flip off if you want exploration noise in the corpus.",
     )
     parser.add_argument(
         "--allow-tiny-trainable",
         action="store_true",
         help="Silent-freeze guard; mirrors the training script. Collection itself doesn't "
-             "update parameters, but the silent-freeze trap still implies a degenerate actor "
-             "so we abort by default.",
+        "update parameters, but the silent-freeze trap still implies a degenerate actor "
+        "so we abort by default.",
     )
     parser.add_argument("--out-raw-dir", required=True)
     parser.add_argument("--out-hidden-dir", required=True)
@@ -142,11 +146,15 @@ def _coerce_task_ids(raw: str) -> list[int]:
 
 
 def _build_policy_and_wm(cfg: Any, args: argparse.Namespace, device: torch.device):
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
     load_world_model_state(
         world_model,
         args.world_model_ckpt,
-        reset_reward_head=bool(OmegaConf.select(cfg, "init.reset_world_model_reward_head", default=False)),
+        reset_reward_head=bool(
+            OmegaConf.select(cfg, "init.reset_world_model_reward_head", default=False)
+        ),
     )
     world_model.eval()
     freeze_module(world_model)
@@ -169,7 +177,10 @@ def _build_policy_and_wm(cfg: Any, args: argparse.Namespace, device: torch.devic
     # silent-freeze sanity (collection doesn't train, but a degenerate actor
     # still wastes rollout budget on a useless policy).
     n_trainable_total = sum(p.numel() for p in policy.parameters())
-    print(f"[policy] {type(policy).__name__} total_params={n_trainable_total:,}", flush=True)
+    print(
+        f"[policy] {type(policy).__name__} total_params={n_trainable_total:,}",
+        flush=True,
+    )
     return world_model, policy
 
 
@@ -233,37 +244,54 @@ def main() -> None:
             is_first = bool(obs.get("is_first", False)) or latent is None
             with torch.no_grad():
                 if is_first:
-                    latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
+                    latent = world_model(
+                        {"mode": "encode_latent", "hidden": obs_embedding}
+                    )
                 else:
                     assert prev_wm_action is not None
-                    latent = world_model({
-                        "mode": "observe_next",
-                        "latent": latent,
-                        "hidden": obs_embedding,
-                        "actions": prev_wm_action,
-                        "is_first": False,
-                    })
+                    latent = world_model(
+                        {
+                            "mode": "observe_next",
+                            "latent": latent,
+                            "hidden": obs_embedding,
+                            "actions": prev_wm_action,
+                            "is_first": False,
+                        }
+                    )
                 feat = world_model({"mode": "actor_input", "latent": latent}).float()
-                action_chunk, _log_prob, _extra = policy({
-                    "mode": "sample",
-                    "hidden": feat,
-                    "deterministic": bool(args.deterministic_collect),
-                    "return_chunk": True,
-                })
+                action_chunk, _log_prob, _extra = policy(
+                    {
+                        "mode": "sample",
+                        "hidden": feat,
+                        "deterministic": bool(args.deterministic_collect),
+                        "return_chunk": True,
+                    }
+                )
                 policy_action = (
                     action_chunk.reshape(-1, action_chunk.shape[-1])[0, :7]
-                    .detach().cpu().float().numpy()
+                    .detach()
+                    .cpu()
+                    .float()
+                    .numpy()
                 )
 
             next_obs, reward, terminated, truncated, info = env.step(policy_action)
             done = bool(terminated or truncated)
-            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[:7]
-            episode_steps.append({
-                "obs_embedding": obs_embedding.squeeze(0).detach().cpu().numpy().astype(np.float32),
-                "wm_action": wm_action_np.astype(np.float32),
-                "reward": float(reward),
-                "done": 1.0 if done else 0.0,
-            })
+            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[
+                :7
+            ]
+            episode_steps.append(
+                {
+                    "obs_embedding": obs_embedding.squeeze(0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32),
+                    "wm_action": wm_action_np.astype(np.float32),
+                    "reward": float(reward),
+                    "done": 1.0 if done else 0.0,
+                }
+            )
             prev_wm_action = (
                 torch.from_numpy(wm_action_np)
                 .to(device=device, dtype=obs_embedding.dtype)

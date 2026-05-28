@@ -22,7 +22,6 @@ Usage:
 import argparse
 import json
 import os
-import time
 
 import h5py
 import numpy as np
@@ -58,7 +57,10 @@ def is_noop(action, prev_action=None, threshold=1e-4):
     # Normal case: Check both criteria (1) and (2)
     gripper_action = action[-1]
     prev_gripper_action = prev_action[-1]
-    return np.linalg.norm(action[:-1]) < threshold and gripper_action == prev_gripper_action
+    return (
+        np.linalg.norm(action[:-1]) < threshold
+        and gripper_action == prev_gripper_action
+    )
 
 
 def main(args):
@@ -66,8 +68,10 @@ def main(args):
 
     # Create target directory
     if os.path.isdir(args.libero_target_dir):
-        user_input = input(f"Target directory already exists at path: {args.libero_target_dir}\nEnter 'y' to overwrite the directory, or anything else to exit: ")
-        if user_input != 'y':
+        user_input = input(
+            f"Target directory already exists at path: {args.libero_target_dir}\nEnter 'y' to overwrite the directory, or anything else to exit: "
+        )
+        if user_input != "y":
             exit()
     os.makedirs(args.libero_target_dir, exist_ok=True)
 
@@ -97,8 +101,12 @@ def main(args):
         env, task_description = get_libero_env(task, resolution=IMAGE_RESOLUTION)
 
         # Get dataset for task
-        orig_data_path = os.path.join(args.libero_raw_data_dir, f"{task.name}_demo.hdf5")
-        assert os.path.exists(orig_data_path), f"Cannot find raw data file {orig_data_path}."
+        orig_data_path = os.path.join(
+            args.libero_raw_data_dir, f"{task.name}_demo.hdf5"
+        )
+        assert os.path.exists(orig_data_path), (
+            f"Cannot find raw data file {orig_data_path}."
+        )
         orig_data_file = h5py.File(orig_data_path, "r")
         orig_data = orig_data_file["data"]
 
@@ -106,7 +114,7 @@ def main(args):
         new_data_path = os.path.join(args.libero_target_dir, f"{task.name}_demo.hdf5")
         new_data_file = h5py.File(new_data_path, "w")
         grp = new_data_file.create_group("data")
-        
+
         for i in range(len(orig_data.keys())):
             # Get demo data
             demo_data = orig_data[f"demo_{i}"]
@@ -128,7 +136,7 @@ def main(args):
             robot_states = []
             agentview_images = []
             eye_in_hand_images = []
-            
+
             # Replay original demo actions in environment and record observations
             for _, action in enumerate(orig_actions):
                 # Skip transitions with no-op actions
@@ -147,7 +155,13 @@ def main(args):
                     # For all other timesteps, get state from environment and record it
                     states.append(env.sim.get_state().flatten())
                     robot_states.append(
-                        np.concatenate([obs["robot0_gripper_qpos"], obs["robot0_eef_pos"], obs["robot0_eef_quat"]])
+                        np.concatenate(
+                            [
+                                obs["robot0_gripper_qpos"],
+                                obs["robot0_eef_pos"],
+                                obs["robot0_eef_quat"],
+                            ]
+                        )
                     )
 
                 # Record original action (from demo)
@@ -170,7 +184,7 @@ def main(args):
 
                 # Execute demo action in environment
                 obs, reward, done, info = env.step(action.tolist())
-                
+
             # At end of episode, save replayed trajectories to new HDF5 files (only keep successes)
             if done:
                 dones = np.zeros(len(actions)).astype(np.uint8)
@@ -181,16 +195,30 @@ def main(args):
 
                 ep_data_grp = grp.create_group(f"demo_{i}")
                 obs_grp = ep_data_grp.create_group("obs")
-                obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
-                obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
+                obs_grp.create_dataset(
+                    "gripper_states", data=np.stack(gripper_states, axis=0)
+                )
+                obs_grp.create_dataset(
+                    "joint_states", data=np.stack(joint_states, axis=0)
+                )
                 obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
-                obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
-                obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
-                obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
-                obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
+                obs_grp.create_dataset(
+                    "ee_pos", data=np.stack(ee_states, axis=0)[:, :3]
+                )
+                obs_grp.create_dataset(
+                    "ee_ori", data=np.stack(ee_states, axis=0)[:, 3:]
+                )
+                obs_grp.create_dataset(
+                    "agentview_rgb", data=np.stack(agentview_images, axis=0)
+                )
+                obs_grp.create_dataset(
+                    "eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0)
+                )
                 ep_data_grp.create_dataset("actions", data=actions)
                 ep_data_grp.create_dataset("states", data=np.stack(states))
-                ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
+                ep_data_grp.create_dataset(
+                    "robot_states", data=np.stack(robot_states, axis=0)
+                )
                 ep_data_grp.create_dataset("rewards", data=rewards)
                 ep_data_grp.create_dataset("dones", data=dones)
 
@@ -206,7 +234,9 @@ def main(args):
             if episode_key not in metainfo_json_dict[task_key]:
                 metainfo_json_dict[task_key][episode_key] = {}
             metainfo_json_dict[task_key][episode_key]["success"] = bool(done)
-            metainfo_json_dict[task_key][episode_key]["initial_state"] = orig_states[0].tolist()
+            metainfo_json_dict[task_key][episode_key]["initial_state"] = orig_states[
+                0
+            ].tolist()
 
             # Write metainfo dict to JSON file
             # (We repeatedly overwrite, rather than doing this once at the end, just in case the script crashes midway)
@@ -224,23 +254,50 @@ def main(args):
         # Close HDF5 files
         orig_data_file.close()
         new_data_file.close()
-        print(f"Saved regenerated demos for task '{task_description}' at: {new_data_path}")
+        print(
+            f"Saved regenerated demos for task '{task_description}' at: {new_data_path}"
+        )
 
-    print(f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}")
+    print(
+        f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}"
+    )
     print(f"Saved metainfo JSON at: {metainfo_json_out_path}")
 
 
 if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("--libero_task_suite", type=str, choices=["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"],
-                        help="LIBERO task suite. Example: libero_spatial", required=True)
-    parser.add_argument("--libero_raw_data_dir", type=str,
-                        help="Path to directory containing raw HDF5 dataset. Example: ./LIBERO/libero/datasets/libero_spatial", required=True)
-    parser.add_argument("--libero_target_dir", type=str,
-                        help="Path to regenerated dataset directory. Example: ./LIBERO/libero/datasets/slibero_spatial_no_noop", required=True)
-    parser.add_argument("--image_resolution", type=int,
-                        help="image resolution, 256 or 512", required=True)
+    parser.add_argument(
+        "--libero_task_suite",
+        type=str,
+        choices=[
+            "libero_spatial",
+            "libero_object",
+            "libero_goal",
+            "libero_10",
+            "libero_90",
+        ],
+        help="LIBERO task suite. Example: libero_spatial",
+        required=True,
+    )
+    parser.add_argument(
+        "--libero_raw_data_dir",
+        type=str,
+        help="Path to directory containing raw HDF5 dataset. Example: ./LIBERO/libero/datasets/libero_spatial",
+        required=True,
+    )
+    parser.add_argument(
+        "--libero_target_dir",
+        type=str,
+        help="Path to regenerated dataset directory. Example: ./LIBERO/libero/datasets/slibero_spatial_no_noop",
+        required=True,
+    )
+    parser.add_argument(
+        "--image_resolution",
+        type=int,
+        help="image resolution, 256 or 512",
+        required=True,
+    )
     args = parser.parse_args()
 
     # Start data regeneration

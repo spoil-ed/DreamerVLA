@@ -14,7 +14,9 @@ from src.models.world_model.dreamer_v3_token_from_pixel_world_model import (
     DreamerV3TokenFromPixelWorldModel,
 )
 from src.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
-from src.models.world_model.tssm_rynn_backbone_world_model import TSSMRynnBackboneWorldModel
+from src.models.world_model.tssm_rynn_backbone_world_model import (
+    TSSMRynnBackboneWorldModel,
+)
 from src.models.world_model.tssm_token_rynn_backbone_world_model import (
     TSSMTokenRynnBackboneWorldModel,
 )
@@ -34,7 +36,13 @@ def test_split_world_model_modules_export_classes() -> None:
 def test_legacy_modules_reexport_split_world_model_classes() -> None:
     assert dreamerv3_torch.DreamerV3PixelWorldModel is DreamerV3PixelWorldModel
     assert dreamerv3_torch.DreamerV3TokenWorldModel is DreamerV3TokenWorldModel
-    assert dreamerv3_torch.DreamerV3TokenFromPixelWorldModel is DreamerV3TokenFromPixelWorldModel
-    assert dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel is DreamerV3PixelRynnBackboneWorldModel
+    assert (
+        dreamerv3_torch.DreamerV3TokenFromPixelWorldModel
+        is DreamerV3TokenFromPixelWorldModel
+    )
+    assert (
+        dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
+        is DreamerV3PixelRynnBackboneWorldModel
+    )
     assert tssm_torch.TSSMRynnBackboneWorldModel is TSSMRynnBackboneWorldModel
     assert tssm_torch.TSSMTokenRynnBackboneWorldModel is TSSMTokenRynnBackboneWorldModel

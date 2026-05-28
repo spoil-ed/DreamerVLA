@@ -8,6 +8,7 @@ back through `symexp`. The training target is a two-hot encoding of
 This matches Hafner et al., "Mastering Diverse Domains through World Models"
 (DreamerV3), §B.2.
 """
+
 from __future__ import annotations
 
 import torch
@@ -96,7 +97,9 @@ class TwohotCritic(nn.Module):
     def logits(self, hidden: Tensor) -> Tensor:
         # Match param dtype (FSDP MixedPrecision casts gathered Linear weights
         # to bf16 inside forward).
-        first_linear = next(module for module in self.backbone if isinstance(module, nn.Linear))
+        first_linear = next(
+            module for module in self.backbone if isinstance(module, nn.Linear)
+        )
         weight_dtype = first_linear.weight.dtype
         hidden = hidden.to(dtype=weight_dtype)
         return self.backbone(hidden)
@@ -134,7 +137,9 @@ class TwohotCritic(nn.Module):
         denom = (upper_bin - lower_bin).clamp_min(1e-8)
         weight_upper = ((sym_values - lower_bin) / denom).clamp(0.0, 1.0)
         weight_lower = 1.0 - weight_upper
-        targets = torch.zeros(*values.shape, self.num_bins, device=values.device, dtype=values.dtype)
+        targets = torch.zeros(
+            *values.shape, self.num_bins, device=values.device, dtype=values.dtype
+        )
         targets.scatter_(-1, idx_lower.unsqueeze(-1), weight_lower.unsqueeze(-1))
         targets.scatter_add_(-1, idx_upper.unsqueeze(-1), weight_upper.unsqueeze(-1))
         return targets
@@ -153,7 +158,9 @@ class ReturnPercentileTracker:
     normalised returns as (return - P5) / S.
     """
 
-    def __init__(self, decay: float = 0.99, low: float = 0.05, high: float = 0.95) -> None:
+    def __init__(
+        self, decay: float = 0.99, low: float = 0.05, high: float = 0.95
+    ) -> None:
         self.decay = float(decay)
         self.low = float(low)
         self.high = float(high)
@@ -186,8 +193,13 @@ class ReturnPercentileTracker:
         return self.offset(), self.scale()
 
     def state_dict(self) -> dict:
-        return {"decay": self.decay, "low": self.low, "high": self.high,
-                "low_ema": self._low_ema, "high_ema": self._high_ema}
+        return {
+            "decay": self.decay,
+            "low": self.low,
+            "high": self.high,
+            "low_ema": self._low_ema,
+            "high_ema": self._high_ema,
+        }
 
     def load_state_dict(self, state: dict) -> None:
         self.decay = float(state.get("decay", self.decay))

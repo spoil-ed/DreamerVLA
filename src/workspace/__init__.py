@@ -4,12 +4,22 @@ from src.workspace.base_workspace import BaseWorkspace
 from src.workspace.chameleon_latent_action_wm_workspace import (
     ChameleonLatentActionWMWorkspace as _ChameleonLatentActionWMWorkspace,
 )
-from src.workspace.dreamer_vla_workspace import DreamerVLAWorkspace as _DreamerVLAWorkspace
-from src.workspace.dreamerv3_pixel_workspace import DreamerV3PixelWorkspace as _DreamerV3PixelWorkspace
-from src.workspace.dreamerv3_token_workspace import DreamerV3TokenWorkspace as _DreamerV3TokenWorkspace
-from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace as _EvalLiberoVLAWorkspace
+from src.workspace.dreamer_vla_workspace import (
+    DreamerVLAWorkspace as _DreamerVLAWorkspace,
+)
+from src.workspace.dreamerv3_pixel_workspace import (
+    DreamerV3PixelWorkspace as _DreamerV3PixelWorkspace,
+)
+from src.workspace.dreamerv3_token_workspace import (
+    DreamerV3TokenWorkspace as _DreamerV3TokenWorkspace,
+)
+from src.workspace.eval_libero_vla_workspace import (
+    EvalLiberoVLAWorkspace as _EvalLiberoVLAWorkspace,
+)
 from src.workspace.vla_sft_workspace import VLASFTWorkspace as _VLASFTWorkspace
-from src.workspace.openvla_oft_workspace import OpenVLAOFTTrainingWorkspace as _OpenVLAOFTTrainingWorkspace
+from src.workspace.openvla_oft_workspace import (
+    OpenVLAOFTTrainingWorkspace as _OpenVLAOFTTrainingWorkspace,
+)
 from src.workspace.rynn_backbone_dreamerv3_wm_workspace import (
     RynnBackboneDreamerV3WMWorkspace as _RynnBackboneDreamerV3WMWorkspace,
 )

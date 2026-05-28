@@ -10,6 +10,7 @@ checkpoint paths, output tags, and smoke-test limits.
 | --- | --- | --- |
 | VLA training | `scripts/train_vla.sh` | `vla_pi0_query` |
 | VLA one-trajectory SFT | `CONFIG=vla_sft_one_trajectory scripts/train_vla.sh` | `vla_sft_one_trajectory` |
+| OpenVLA-OFT one-trajectory SFT | `CONFIG=openvla_oft_hdf5_one_trajectory scripts/train_vla.sh` | `openvla_oft_hdf5_one_trajectory` |
 | WM training | `scripts/train_wm.sh` | `world_model_rssm_step` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_pi0_action_hidden_head_actor` |
 
@@ -19,6 +20,8 @@ checkpoint paths, output tags, and smoke-test limits.
 | --- | --- |
 | VLA | `vla_pi0_query` |
 | VLA one-trajectory SFT | `vla_sft_one_trajectory` |
+| OpenVLA-OFT HDF5 SFT | `openvla_oft_hdf5` |
+| OpenVLA-OFT LM-head one-trajectory SFT | `openvla_oft_hdf5_one_trajectory` |
 | WM RSSM step | `world_model_rssm_step` |
 | WM DINO step | `world_model_dinowm_step` |
 | WM DINO chunk | `world_model_dinowm_chunk` |

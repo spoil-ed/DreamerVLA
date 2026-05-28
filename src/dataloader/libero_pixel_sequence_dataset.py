@@ -101,9 +101,13 @@ class LIBEROPixelSequenceDataset(BaseDataset):
                     last_start = episode_length - self.sequence_length
                     for start in range(0, last_start + 1, self.stride):
                         self._entries.append(
-                            _WindowEntry(str(file_path), demo_key, start, episode_length)
+                            _WindowEntry(
+                                str(file_path), demo_key, start, episode_length
+                            )
                         )
-                        if max_windows is not None and len(self._entries) >= int(max_windows):
+                        if max_windows is not None and len(self._entries) >= int(
+                            max_windows
+                        ):
                             stop = True
                             break
                     if stop:
@@ -171,13 +175,17 @@ class LIBEROPixelSequenceDataset(BaseDataset):
         images = self._resize_images(torch.cat(frames, dim=1)).contiguous()
 
         raw_actions = np.asarray(demo["actions"], dtype=np.float32)
-        prev_actions = np.zeros((self.sequence_length, raw_actions.shape[-1]), dtype=np.float32)
+        prev_actions = np.zeros(
+            (self.sequence_length, raw_actions.shape[-1]), dtype=np.float32
+        )
         if self.sequence_length > 1:
             prev_actions[1:] = raw_actions[start : end - 1]
         actions = torch.from_numpy(prev_actions)
         current_actions = torch.from_numpy(raw_actions[start:end].copy())
 
-        rewards = torch.from_numpy(np.asarray(demo["rewards"][start:end], dtype=np.float32))
+        rewards = torch.from_numpy(
+            np.asarray(demo["rewards"][start:end], dtype=np.float32)
+        )
         dones = torch.from_numpy(np.asarray(demo["dones"][start:end], dtype=np.float32))
         is_first = torch.zeros(self.sequence_length, dtype=torch.bool)
         is_first[0] = True

@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Train LatentSuccessClassifier on libero_goal classifier shards.
 
 Single-GPU by default (Phase 3 v1 data fits in one GPU easily — 299
@@ -9,12 +10,12 @@ Usage:
         scripts/train_latent_success_classifier.py \
         --config configs/wmpo_classifier_libero_goal.yaml
 """
+
 from __future__ import annotations
 
 import argparse
 import glob
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -54,7 +55,9 @@ def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device, cfg) -
         return {"metrics": {}, "best": {"f1": 0.0, "thresh": 0.5}, "n_val": 0}
     metrics: dict = {}
     best = {"f1": -1.0, "thresh": 0.5}
-    thresholds = np.linspace(cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps))
+    thresholds = np.linspace(
+        cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps)
+    )
     for th in thresholds:
         preds = (probs >= th).astype(int)
         f1 = float(f1_score(ys, preds, zero_division=0))
@@ -80,27 +83,43 @@ def main() -> None:
     val_shards = sorted(glob.glob(cfg.data.val_glob))
     print(f"train_shards={len(train_shards)} val_shards={len(val_shards)}")
     if not train_shards or not val_shards:
-        raise SystemExit(f"shards missing: train glob={cfg.data.train_glob} val glob={cfg.data.val_glob}")
+        raise SystemExit(
+            f"shards missing: train glob={cfg.data.train_glob} val glob={cfg.data.val_glob}"
+        )
 
     device = torch.device(args.device)
     tr_ds = LatentSuccessShardDataset(
-        train_shards, window=cfg.classifier.window, stride=cfg.data.stride_train, mode="train",
+        train_shards,
+        window=cfg.classifier.window,
+        stride=cfg.data.stride_train,
+        mode="train",
         use_resample=True,
     )
     va_ds = LatentSuccessShardDataset(
-        val_shards, window=cfg.classifier.window, stride=cfg.data.stride_val, mode="val",
+        val_shards,
+        window=cfg.classifier.window,
+        stride=cfg.data.stride_val,
+        mode="val",
         use_resample=False,
     )
     tr_ld = DataLoader(
-        tr_ds, batch_size=int(cfg.train.batch_size),
-        num_workers=int(cfg.data.num_workers), collate_fn=_collate, pin_memory=True,
+        tr_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=int(cfg.data.num_workers),
+        collate_fn=_collate,
+        pin_memory=True,
     )
     va_ld = DataLoader(
-        va_ds, batch_size=int(cfg.train.batch_size),
-        num_workers=int(cfg.data.num_workers), collate_fn=_collate, pin_memory=True,
+        va_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=int(cfg.data.num_workers),
+        collate_fn=_collate,
+        pin_memory=True,
     )
 
-    classifier_cfg = LatentSuccessClassifierConfig(**OmegaConf.to_container(cfg.classifier))
+    classifier_cfg = LatentSuccessClassifierConfig(
+        **OmegaConf.to_container(cfg.classifier)
+    )
     model = LatentSuccessClassifier(classifier_cfg).to(device)
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(
@@ -156,7 +175,9 @@ def main() -> None:
                     },
                     ckpt_dir / "best.ckpt",
                 )
-                print(f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir/'best.ckpt'}")
+                print(
+                    f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir / 'best.ckpt'}"
+                )
 
     print(f"done. best_f1={best_f1:.4f}")
 

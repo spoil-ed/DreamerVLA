@@ -9,8 +9,12 @@ from pathlib import Path
 
 def main() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    parser = argparse.ArgumentParser(description="Train LaDiWM-style Chameleon latent-flow WM.")
-    parser.add_argument("--gpus", default="0", help="CUDA_VISIBLE_DEVICES value, e.g. '0' or '0,1'.")
+    parser = argparse.ArgumentParser(
+        description="Train LaDiWM-style Chameleon latent-flow WM."
+    )
+    parser.add_argument(
+        "--gpus", default="0", help="CUDA_VISIBLE_DEVICES value, e.g. '0' or '0,1'."
+    )
     parser.add_argument("--config-name", default="chameleon_latent_action_wm_libero_10")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--output-dir", default=None)

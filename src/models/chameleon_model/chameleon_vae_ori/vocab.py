@@ -53,15 +53,25 @@ class VocabInfo:
 
     @cached_property
     def image_tokens(self) -> list[int]:
-        return sorted([val for name, val in self.name2val.items() if name.startswith("IMGIMG")])
+        return sorted(
+            [val for name, val in self.name2val.items() if name.startswith("IMGIMG")]
+        )
 
     @cached_property
     def special_tokens(self) -> list[int]:
-        return sorted([val for name, val in self.name2val.items() if name.startswith("<") and name != "<"])
+        return sorted(
+            [
+                val
+                for name, val in self.name2val.items()
+                if name.startswith("<") and name != "<"
+            ]
+        )
 
     @cached_property
     def text_tokens(self) -> list[int]:
-        return sorted(set(self.all_tokens) - set(self.image_tokens) - set(self.special_tokens))
+        return sorted(
+            set(self.all_tokens) - set(self.image_tokens) - set(self.special_tokens)
+        )
 
 
 class VocabTranslation:
@@ -74,9 +84,14 @@ class VocabTranslation:
         img_tkn_chr_mapping = {chr(ord("A") + i): str(i) for i in range(10)}
 
         def remap(old_name: str) -> str:
-            return "".join(img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1])
+            return "".join(
+                img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1]
+            )
 
-        return {tok: int(remap(self._vocab.val2name[tok])) for tok in self._vocab.image_tokens}
+        return {
+            tok: int(remap(self._vocab.val2name[tok]))
+            for tok in self._vocab.image_tokens
+        }
 
     @cached_property
     def img2bpe(self) -> dict[int, int]:

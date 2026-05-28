@@ -81,7 +81,9 @@ def _small_batch(obs_dim: int, action_dim: int) -> dict[str, torch.Tensor]:
     batch_size = 2
     steps = 5
     return {
-        "images": torch.randint(0, 256, (batch_size, steps, 3, 64, 64), dtype=torch.uint8),
+        "images": torch.randint(
+            0, 256, (batch_size, steps, 3, 64, 64), dtype=torch.uint8
+        ),
         "obs_embedding": torch.randn(batch_size, steps, obs_dim),
         "actions": torch.randn(batch_size, steps, action_dim),
         "rewards": torch.zeros(batch_size, steps),

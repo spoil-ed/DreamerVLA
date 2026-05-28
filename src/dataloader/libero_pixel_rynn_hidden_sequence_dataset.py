@@ -65,10 +65,14 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         )
         self.hidden_dir = self.resolve_project_path(hidden_dir)
         if not self.hidden_dir.exists():
-            raise FileNotFoundError(f"Rynn hidden sidecar directory does not exist: {self.hidden_dir}")
+            raise FileNotFoundError(
+                f"Rynn hidden sidecar directory does not exist: {self.hidden_dir}"
+            )
         self.hidden_key = str(hidden_key)
         self.load_actor_sequence = bool(load_actor_sequence)
-        self.actor_sequence_length = int(actor_sequence_length) if actor_sequence_length is not None else None
+        self.actor_sequence_length = (
+            int(actor_sequence_length) if actor_sequence_length is not None else None
+        )
         self.actor_hidden_key = str(actor_hidden_key)
         self.actor_input_ids_key = str(actor_input_ids_key)
         self.actor_attention_mask_key = str(actor_attention_mask_key)
@@ -87,11 +91,27 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             require_preprocess_config=bool(require_preprocess_config),
         )
 
-    @staticmethod
-    def _same_path(left: str | None, right: str | None) -> bool:
+    _PATH_MIGRATION_PREFIXES: tuple[tuple[str, str], ...] = (
+        (
+            "/home/user01/liops/workspace/DreamerVLA",
+            "/mnt/data/spoil/workspace/DreamerVLA",
+        ),
+    )
+
+    @classmethod
+    def _canonical_path(cls, value: str) -> str:
+        resolved = str(Path(value).expanduser().resolve())
+        for old_prefix, new_prefix in cls._PATH_MIGRATION_PREFIXES:
+            if resolved.startswith(old_prefix):
+                resolved = new_prefix + resolved[len(old_prefix) :]
+                break
+        return resolved
+
+    @classmethod
+    def _same_path(cls, left: str | None, right: str | None) -> bool:
         if not left or not right:
             return left == right
-        return str(Path(left).expanduser().resolve()) == str(Path(right).expanduser().resolve())
+        return cls._canonical_path(left) == cls._canonical_path(right)
 
     @staticmethod
     def _as_bool(value: Any) -> bool:
@@ -123,7 +143,9 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         with config_path.open("r", encoding="utf-8") as handle:
             config = json.load(handle)
         errors: list[str] = []
-        if expected_model_path and not self._same_path(config.get("model_path"), expected_model_path):
+        if expected_model_path and not self._same_path(
+            config.get("model_path"), expected_model_path
+        ):
             errors.append(
                 f"model_path mismatch: sidecar={config.get('model_path')!r}, expected={expected_model_path!r}"
             )
@@ -138,7 +160,9 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         if expected_time_horizon is not None:
             got = config.get("time_horizon")
             if got is None or int(got) != int(expected_time_horizon):
-                errors.append(f"time_horizon mismatch: sidecar={got!r}, expected={int(expected_time_horizon)}")
+                errors.append(
+                    f"time_horizon mismatch: sidecar={got!r}, expected={int(expected_time_horizon)}"
+                )
         if expected_action_head_type:
             got = str(config.get("action_head_type", "legacy"))
             if got != str(expected_action_head_type):
@@ -154,16 +178,22 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         if expected_prompt_style:
             got = str(config.get("prompt_style", "legacy"))
             if got != str(expected_prompt_style):
-                errors.append(f"prompt_style mismatch: sidecar={got!r}, expected={expected_prompt_style!r}")
+                errors.append(
+                    f"prompt_style mismatch: sidecar={got!r}, expected={expected_prompt_style!r}"
+                )
         if expected_history is not None:
             got = config.get("history")
             if got is None or int(got) != int(expected_history):
-                errors.append(f"history mismatch: sidecar={got!r}, expected={int(expected_history)}")
+                errors.append(
+                    f"history mismatch: sidecar={got!r}, expected={int(expected_history)}"
+                )
         if expected_include_state is not None:
             got = self._as_bool(config.get("include_state", False))
             expected = self._as_bool(expected_include_state)
             if got != expected:
-                errors.append(f"include_state mismatch: sidecar={got!r}, expected={expected!r}")
+                errors.append(
+                    f"include_state mismatch: sidecar={got!r}, expected={expected!r}"
+                )
         if expected_rotate_images_180 is not None:
             got = self._as_bool(config.get("rotate_images_180", False))
             expected = self._as_bool(expected_rotate_images_180)
@@ -178,7 +208,9 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
                 f"Rynn hidden sidecar metadata does not match this run: {self.hidden_dir}\n"
                 f"  - {joined}"
             )
-        if self.load_actor_sequence and not bool(config.get("save_actor_sequence", False)):
+        if self.load_actor_sequence and not bool(
+            config.get("save_actor_sequence", False)
+        ):
             raise ValueError(
                 f"Rynn hidden sidecar was not generated with --save-actor-sequence: {self.hidden_dir}"
             )
@@ -200,7 +232,12 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         return handle
 
     @staticmethod
-    def _pad_or_truncate_array(array: np.ndarray, target_length: int, axis: int, pad_value: int | float | bool = 0) -> np.ndarray:
+    def _pad_or_truncate_array(
+        array: np.ndarray,
+        target_length: int,
+        axis: int,
+        pad_value: int | float | bool = 0,
+    ) -> np.ndarray:
         current = int(array.shape[axis])
         if current == int(target_length):
             return array
@@ -237,7 +274,9 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             try:
                 actor_hidden = np.asarray(demo[self.actor_hidden_key][start:end])
                 actor_input_ids = np.asarray(demo[self.actor_input_ids_key][start:end])
-                actor_attention_mask = np.asarray(demo[self.actor_attention_mask_key][start:end])
+                actor_attention_mask = np.asarray(
+                    demo[self.actor_attention_mask_key][start:end]
+                )
                 actor_seq_lens = np.asarray(demo[self.actor_seq_lens_key][start:end])
             except KeyError as exc:
                 raise KeyError(
@@ -251,19 +290,31 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
                 )
             if self.actor_sequence_length is not None:
                 seq_len = int(self.actor_sequence_length)
-                actor_hidden = self._pad_or_truncate_array(actor_hidden, seq_len, axis=1, pad_value=0)
-                actor_input_ids = self._pad_or_truncate_array(actor_input_ids, seq_len + 1, axis=1, pad_value=0)
+                actor_hidden = self._pad_or_truncate_array(
+                    actor_hidden, seq_len, axis=1, pad_value=0
+                )
+                actor_input_ids = self._pad_or_truncate_array(
+                    actor_input_ids, seq_len + 1, axis=1, pad_value=0
+                )
                 actor_attention_mask = self._pad_or_truncate_array(
                     actor_attention_mask,
                     seq_len + 1,
                     axis=1,
                     pad_value=False,
                 )
-                actor_seq_lens = np.minimum(actor_seq_lens, seq_len).astype(np.int32, copy=False)
+                actor_seq_lens = np.minimum(actor_seq_lens, seq_len).astype(
+                    np.int32, copy=False
+                )
             item["actor_hidden_states"] = torch.from_numpy(actor_hidden)
-            item["actor_input_ids"] = torch.from_numpy(actor_input_ids.astype(np.int64, copy=False))
-            item["actor_attention_mask"] = torch.from_numpy(actor_attention_mask.astype(np.bool_, copy=False))
-            item["actor_seq_lens"] = torch.from_numpy(actor_seq_lens.astype(np.int64, copy=False))
+            item["actor_input_ids"] = torch.from_numpy(
+                actor_input_ids.astype(np.int64, copy=False)
+            )
+            item["actor_attention_mask"] = torch.from_numpy(
+                actor_attention_mask.astype(np.bool_, copy=False)
+            )
+            item["actor_seq_lens"] = torch.from_numpy(
+                actor_seq_lens.astype(np.int64, copy=False)
+            )
         item["hidden_path"] = str(self._hidden_path_for_source(entry.file_path))
         return item
 

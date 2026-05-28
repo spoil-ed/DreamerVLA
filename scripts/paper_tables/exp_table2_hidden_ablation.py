@@ -26,15 +26,24 @@ from exp_common import (
 VARIANTS = {
     "dino_visual": {
         "label": "DINO visual embedding",
-        "env": {"WM_KIND": "dreamerv3_pixel", "CONFIG_NAME": "dreamerv3_pixel_libero_goal"},
+        "env": {
+            "WM_KIND": "dreamerv3_pixel",
+            "CONFIG_NAME": "dreamerv3_pixel_libero_goal",
+        },
     },
     "pi0_query": {
         "label": "pi0 query hidden",
-        "env": {"WM_KIND": "oft_dino", "CONFIG_NAME": "oft_dino_wm_action_hidden_libero_goal_C"},
+        "env": {
+            "WM_KIND": "oft_dino",
+            "CONFIG_NAME": "oft_dino_wm_action_hidden_libero_goal_C",
+        },
     },
     "full_action": {
         "label": "Full action hidden",
-        "env": {"WM_KIND": "rynn_dino", "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal"},
+        "env": {
+            "WM_KIND": "rynn_dino",
+            "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal",
+        },
     },
 }
 
@@ -59,7 +68,9 @@ def _wm_metrics(payload: Mapping[str, Any]) -> dict[str, float | None]:
         return {"rollout_mse": mean(mses), "rollout_cosine": mean(cosines)}
     return {
         "rollout_mse": as_float(payload.get("rollout_mse", payload.get("mse"))),
-        "rollout_cosine": as_float(payload.get("rollout_cosine", payload.get("cosine"))),
+        "rollout_cosine": as_float(
+            payload.get("rollout_cosine", payload.get("cosine"))
+        ),
     }
 
 
@@ -73,7 +84,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 "OUT_DIR": str(Path(args.out_dir) / key),
             }
         )
-        code = run_or_print(["bash", "scripts/train_wm.sh"], env=env, execute=args.execute)
+        code = run_or_print(
+            ["bash", "scripts/train_wm.sh"], env=env, execute=args.execute
+        )
         if code:
             return code
     return 0
@@ -93,19 +106,23 @@ def cmd_collect(args: argparse.Namespace) -> int:
         else:
             raise SystemExit("Table 2 --result KIND must be 'wm' or 'long'")
 
-    out_json = write_json(args.out_json, {labels.get(k, k): v for k, v in rows_by_variant.items()})
+    out_json = write_json(
+        args.out_json, {labels.get(k, k): v for k, v in rows_by_variant.items()}
+    )
     order = [key for key in VARIANTS if key in rows_by_variant] + [
         key for key in rows_by_variant if key not in VARIANTS
     ]
     tex_rows = []
     for key in order:
         row = rows_by_variant[key]
-        tex_rows.append([
-            labels.get(key, key),
-            format_metric(row.get("rollout_mse"), precision=4),
-            format_metric(row.get("rollout_cosine"), precision=3),
-            format_metric(row.get("long_success"), pct=True),
-        ])
+        tex_rows.append(
+            [
+                labels.get(key, key),
+                format_metric(row.get("rollout_mse"), precision=4),
+                format_metric(row.get("rollout_cosine"), precision=3),
+                format_metric(row.get("long_success"), pct=True),
+            ]
+        )
     out_tex = write_latex_table(
         args.out_tex,
         caption="Hidden-state ablation with matched world-model training settings.",
@@ -124,14 +141,22 @@ def build_parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("plan")
     plan.add_argument("--rollout-horizon", type=int, default=8)
     plan.add_argument("--rollout-loss-scale", type=float, default=1.0)
-    plan.add_argument("--out-dir", default="data/outputs/worldmodel/table2_hidden_ablation")
+    plan.add_argument(
+        "--out-dir", default="data/outputs/worldmodel/table2_hidden_ablation"
+    )
     plan.add_argument("--execute", action="store_true")
     plan.set_defaults(func=cmd_plan)
 
     collect = sub.add_parser("collect")
-    collect.add_argument("--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON"))
-    collect.add_argument("--out-json", default=str(DEFAULT_OUTPUTS_DIR / "hidden_ablation.json"))
-    collect.add_argument("--out-tex", default=str(DEFAULT_TABLES_DIR / "hidden_ablation.tex"))
+    collect.add_argument(
+        "--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON")
+    )
+    collect.add_argument(
+        "--out-json", default=str(DEFAULT_OUTPUTS_DIR / "hidden_ablation.json")
+    )
+    collect.add_argument(
+        "--out-tex", default=str(DEFAULT_TABLES_DIR / "hidden_ablation.tex")
+    )
     collect.set_defaults(func=cmd_collect)
     return parser
 
@@ -143,4 +168,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

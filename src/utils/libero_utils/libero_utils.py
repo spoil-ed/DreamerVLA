@@ -5,6 +5,7 @@ import os
 
 import imageio
 import numpy as np
+
 # import tensorflow as tf
 from libero.libero import get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
@@ -14,16 +15,26 @@ from libero.libero.envs import OffScreenRenderEnv
 #     DATE_TIME,
 # )
 import time
+
 DATE = time.strftime("%Y_%m_%d")
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
+
 
 def get_libero_env(task, resolution=256):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
-    task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+    task_bddl_file = os.path.join(
+        get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
+    )
+    env_args = {
+        "bddl_file_name": task_bddl_file,
+        "camera_heights": resolution,
+        "camera_widths": resolution,
+    }
     env = OffScreenRenderEnv(**env_args)
-    env.seed(0)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    env.seed(
+        0
+    )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
 
 
@@ -59,6 +70,7 @@ def get_libero_dummy_action():
 #     img = resize_image(img, resize_size)
 #     return img
 
+
 def get_libero_image(obs, resize_size, image_view="agentview_image"):
     """Extracts image from observations and preprocesses it."""
     assert isinstance(resize_size, int) or isinstance(resize_size, tuple)
@@ -85,10 +97,16 @@ def get_libero_image(obs, resize_size, image_view="agentview_image"):
 #         log_file.write(f"Saved rollout MP4 at path {mp4_path}\n")
 #     return mp4_path
 
+
 def save_rollout_video(rollout_dir, rollout_images, idx, success, task_description):
     """Saves an MP4 replay of an episode."""
     os.makedirs(rollout_dir, exist_ok=True)
-    processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
+    processed_task_description = (
+        task_description.lower()
+        .replace(" ", "_")
+        .replace("\n", "_")
+        .replace(".", "_")[:50]
+    )
     mp4_path = f"{rollout_dir}/{DATE_TIME}--episode={idx}--success={success}--task={processed_task_description}.mp4"
     video_writer = imageio.get_writer(mp4_path, fps=30)
     for img in rollout_images:

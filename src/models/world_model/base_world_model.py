@@ -58,7 +58,9 @@ class DreamerV3LatentState:
     logits: torch.Tensor | None = None
 
     def feature(self) -> torch.Tensor:
-        return torch.cat([self.deter, self.stoch.reshape(*self.stoch.shape[:-2], -1)], dim=-1)
+        return torch.cat(
+            [self.deter, self.stoch.reshape(*self.stoch.shape[:-2], -1)], dim=-1
+        )
 
 
 class DreamerV3ActorAdapterMixin(BaseWorldModel):
@@ -72,13 +74,17 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
                 return hidden[:, None]
             if hidden.ndim == 4 and hidden.shape[1] == 1:
                 return hidden
-            raise ValueError(f"Unsupported DreamerV3 token observation shape: {tuple(hidden.shape)}")
+            raise ValueError(
+                f"Unsupported DreamerV3 token observation shape: {tuple(hidden.shape)}"
+            )
 
         if hidden.ndim == 4:
             return hidden[:, None]
         if hidden.ndim == 5 and hidden.shape[1] == 1:
             return hidden
-        raise ValueError(f"Unsupported DreamerV3 single observation shape: {tuple(hidden.shape)}")
+        raise ValueError(
+            f"Unsupported DreamerV3 single observation shape: {tuple(hidden.shape)}"
+        )
 
     def _feature_dim(self) -> int:
         return int(self.rssm.deter + self.rssm.stoch * self.rssm.classes)
@@ -93,7 +99,11 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
         return DreamerV3LatentState(deter=deter, stoch=stoch)
 
     def encode_latent(self, hidden: torch.Tensor) -> DreamerV3LatentState:
-        if hidden.ndim == 2 and hidden.shape[-1] == self._feature_dim() and torch.is_floating_point(hidden):
+        if (
+            hidden.ndim == 2
+            and hidden.shape[-1] == self._feature_dim()
+            and torch.is_floating_point(hidden)
+        ):
             return self._latent_from_feature(hidden)
 
         device = _module_device(self, hidden.device)
@@ -101,7 +111,9 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
         enc = self.encoder(obs)
         batch_size = enc.shape[0]
         dtype = enc.dtype
-        actions = torch.zeros(batch_size, 1, self.rssm.action_dim, device=device, dtype=dtype)
+        actions = torch.zeros(
+            batch_size, 1, self.rssm.action_dim, device=device, dtype=dtype
+        )
         is_first = torch.ones(batch_size, 1, device=device, dtype=torch.bool)
         seq = self.rssm.observe(enc, actions, is_first)
         return DreamerV3LatentState(
@@ -110,7 +122,9 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
             logits=seq["post_logits"][:, 0],
         )
 
-    def predict_next(self, latent: DreamerV3LatentState, actions: torch.Tensor) -> DreamerV3LatentState:
+    def predict_next(
+        self, latent: DreamerV3LatentState, actions: torch.Tensor
+    ) -> DreamerV3LatentState:
         device = _module_device(self, actions.device)
         dtype = latent.deter.dtype
         action = actions.to(device=device, dtype=dtype)
@@ -193,7 +207,9 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
             )
         if mode == "reward":
             if "next_latent" in batch:
-                return self.reward(batch["latent"], batch.get("actions"), batch["next_latent"])
+                return self.reward(
+                    batch["latent"], batch.get("actions"), batch["next_latent"]
+                )
             return self.state_reward(batch["latent"])
         if mode == "continue":
             return self.continue_prob(batch["latent"])
@@ -201,7 +217,9 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
             return self.actor_input(batch["latent"])
         if mode == "actor_input_sequence":
             if not hasattr(self, "actor_input_sequence"):
-                raise ValueError("actor_input_sequence is not implemented for this world model")
+                raise ValueError(
+                    "actor_input_sequence is not implemented for this world model"
+                )
             return self.actor_input_sequence(batch["latent"])
         if mode == "critic_input":
             return self.critic_input(batch["latent"])
@@ -229,7 +247,9 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
         if "reward_pred_mean" in result:
             result.setdefault("predicted_reward_mean", result["reward_pred_mean"])
         result.setdefault("transition_loss", zero)
-        result.setdefault("kl_loss", result.get("dyn_loss", zero) + result.get("rep_loss", zero))
+        result.setdefault(
+            "kl_loss", result.get("dyn_loss", zero) + result.get("rep_loss", zero)
+        )
         result.setdefault("delta_latent_loss", zero)
         result.setdefault("action_margin_loss", zero)
         return result

@@ -7,12 +7,20 @@ from src.algorithms.dreamer_vla import (
     compute_replay_lambda_returns,
     normalize_returns_for_actor_critic,
 )
-from src.models.critic.twohot_critic import ReturnPercentileTracker, TwohotCritic, symexp
+from src.models.critic.twohot_critic import (
+    ReturnPercentileTracker,
+    TwohotCritic,
+    symexp,
+)
 
 
 def test_twohot_critic_predicts_softmax_bin_expectation():
-    critic = TwohotCritic(hidden_dim=2, num_bins=3, bin_min=-1.0, bin_max=1.0, critic_layers=0)
-    final = next(module for module in critic.backbone if isinstance(module, torch.nn.Linear))
+    critic = TwohotCritic(
+        hidden_dim=2, num_bins=3, bin_min=-1.0, bin_max=1.0, critic_layers=0
+    )
+    final = next(
+        module for module in critic.backbone if isinstance(module, torch.nn.Linear)
+    )
     with torch.no_grad():
         final.weight.zero_()
         final.bias.copy_(torch.tensor([-1.0, 0.0, 1.0]))
@@ -29,14 +37,16 @@ def test_twohot_critic_predicts_softmax_bin_expectation():
 def test_dreamerv3_return_normalization_keeps_value_targets_raw():
     returns = torch.tensor([[0.0, 10.0], [2.0, 8.0]])
     values = torch.tensor([[1.0, 3.0], [4.0, 6.0]])
-    cfg = OmegaConf.create({
-        "return_normalization": {
-            "mode": "dreamerv3",
-            "low": 0.0,
-            "high": 1.0,
-            "eps": 1.0e-6,
+    cfg = OmegaConf.create(
+        {
+            "return_normalization": {
+                "mode": "dreamerv3",
+                "low": 0.0,
+                "high": 1.0,
+                "eps": 1.0e-6,
+            }
         }
-    })
+    )
 
     out = normalize_returns_for_actor_critic(returns, values, cfg)
 
@@ -84,15 +94,19 @@ def test_actor_actions_default_to_libero_env_scale_for_world_model():
 
     rssm_action = _actor_action_for_world_model(raw_action, OmegaConf.create({}))
 
-    expected = torch.tensor([[
-        -0.9375,
-        0.0,
-        0.9375,
-        0.053035713732242584,
-        0.1875,
-        -0.17946428060531616,
-        1.0,
-    ]])
+    expected = torch.tensor(
+        [
+            [
+                -0.9375,
+                0.0,
+                0.9375,
+                0.053035713732242584,
+                0.1875,
+                -0.17946428060531616,
+                1.0,
+            ]
+        ]
+    )
     assert torch.allclose(rssm_action, expected, atol=1.0e-6)
 
 
@@ -106,5 +120,13 @@ def test_actor_env_scale_helper_can_report_unclipped_and_clipped_drift():
     assert unclipped[0, 0] > 0.9375
     assert unclipped[0, 1] < -0.9375
     assert unclipped[0, 6] > 1.0
-    assert torch.all(clipped <= torch.tensor([[0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0]]))
-    assert torch.all(clipped >= torch.tensor([[-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]]))
+    assert torch.all(
+        clipped
+        <= torch.tensor([[0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0]])
+    )
+    assert torch.all(
+        clipped
+        >= torch.tensor(
+            [[-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]]
+        )
+    )

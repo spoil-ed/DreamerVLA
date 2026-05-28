@@ -48,9 +48,9 @@ Three optional data sources can be combined freely:
    finish_step are derived per-demo from rewards/dones. This is the
    closest analog to WMPO's SFT-rollout corpus.
 """
+
 from __future__ import annotations
 
-import os
 import random
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -62,7 +62,9 @@ import torch.nn as nn
 from torch.utils.data import IterableDataset
 
 
-def _find_demo_pairs(raw_dir: str | Path, hidden_dir: str | Path) -> list[tuple[Path, Path, str]]:
+def _find_demo_pairs(
+    raw_dir: str | Path, hidden_dir: str | Path
+) -> list[tuple[Path, Path, str]]:
     """Match raw demos (actions) with precomputed obs_embedding by filename.
 
     Returns a list of (raw_path, hidden_path, demo_key) — demo_key like
@@ -133,7 +135,9 @@ class WMReplayClassifierDataset(IterableDataset):
         if mode not in {"train", "val"}:
             raise ValueError(f"mode must be train/val, got {mode}")
         if neg_method not in {"swap", "noise", "random"}:
-            raise ValueError(f"neg_method must be one of swap/noise/random, got {neg_method}")
+            raise ValueError(
+                f"neg_method must be one of swap/noise/random, got {neg_method}"
+            )
         self.K = int(K)
         self.W = int(W)
         self.num_hist = int(num_hist)
@@ -149,7 +153,10 @@ class WMReplayClassifierDataset(IterableDataset):
 
         # Chunk WM must be moved to device by the caller; we just hold the ref.
         self.chunk_wm = chunk_wm
-        if hasattr(self.chunk_wm, "chunk_size") and int(self.chunk_wm.chunk_size) != self.K:
+        if (
+            hasattr(self.chunk_wm, "chunk_size")
+            and int(self.chunk_wm.chunk_size) != self.K
+        ):
             raise ValueError(
                 f"chunk_wm.chunk_size={self.chunk_wm.chunk_size} != dataset K={self.K}"
             )
@@ -158,7 +165,9 @@ class WMReplayClassifierDataset(IterableDataset):
         if max_demos is not None:
             self.pairs = self.pairs[: int(max_demos)]
         if not self.pairs:
-            raise RuntimeError(f"no demo pairs found under raw={raw_dir}, hidden={hidden_dir}")
+            raise RuntimeError(
+                f"no demo pairs found under raw={raw_dir}, hidden={hidden_dir}"
+            )
 
         self.failure_pairs: list[tuple[Path, Path, str]] = []
         if failure_raw_dir is not None and failure_hidden_dir is not None:
@@ -176,13 +185,19 @@ class WMReplayClassifierDataset(IterableDataset):
         # carry a parallel list of (complete, finish_step_imag) — both used by
         # the window yielder so that the "end" window matches WMPO's
         # meta["finish_step"] semantics rather than the full imagined length.
-        self._pos_trajs: list[np.ndarray] | None = None       # imagined from success demos
+        self._pos_trajs: list[np.ndarray] | None = None  # imagined from success demos
         self._pos_meta: list[tuple[bool, int]] = []
-        self._neg_trajs: list[np.ndarray] | None = None       # swap-perturbed neg per success demo
+        self._neg_trajs: list[np.ndarray] | None = (
+            None  # swap-perturbed neg per success demo
+        )
         self._neg_meta: list[tuple[bool, int]] = []
-        self._failure_trajs: list[np.ndarray] | None = None   # imagined from failure demos (real failures)
+        self._failure_trajs: list[np.ndarray] | None = (
+            None  # imagined from failure demos (real failures)
+        )
         self._failure_meta: list[tuple[bool, int]] = []
-        self._rollout_trajs: list[np.ndarray] | None = None   # imagined from real policy rollouts (mixed)
+        self._rollout_trajs: list[np.ndarray] | None = (
+            None  # imagined from real policy rollouts (mixed)
+        )
         self._rollout_meta: list[tuple[bool, int]] = []
 
     # ─── Data loading ──────────────────────────────────────────────────────
@@ -231,15 +246,21 @@ class WMReplayClassifierDataset(IterableDataset):
     ) -> np.ndarray:
         T = int(actions.shape[0])
         if self.neg_method == "noise":
-            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(np.float32)
+            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(
+                np.float32
+            )
         if self.neg_method == "random":
             low = actions.min(axis=0, keepdims=True)
             high = actions.max(axis=0, keepdims=True)
-            return rng.uniform(low=low, high=high, size=actions.shape).astype(np.float32)
+            return rng.uniform(low=low, high=high, size=actions.shape).astype(
+                np.float32
+            )
         # swap: random other demo, swap from random fraction onward
         if len(self.pairs) <= 1:
             # degenerate: fall back to noise
-            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(np.float32)
+            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(
+                np.float32
+            )
         other_idx = int(rng.integers(0, len(self.pairs)))
         attempts = 0
         while other_idx == idx_self and attempts < 8:
@@ -294,21 +315,23 @@ class WMReplayClassifierDataset(IterableDataset):
         obs_t = torch.from_numpy(obs).to(device=device, dtype=torch.float32)
         act_t = torch.from_numpy(actions).to(device=device, dtype=torch.float32)
 
-        obs_init = obs_t[:H].unsqueeze(0)         # [1, H, obs_dim]
-        act_init = act_t[:H].unsqueeze(0)         # [1, H, A]
+        obs_init = obs_t[:H].unsqueeze(0)  # [1, H, obs_dim]
+        act_init = act_t[:H].unsqueeze(0)  # [1, H, A]
         # observe_sequence returns history/actions of shape [B, steps, num_hist, ...].
         # predict_next* expects single-step latents of shape [B, num_hist, ...] —
         # so squeeze the per-step time dim by taking the LAST step.
-        out = self.chunk_wm({
-            "mode": "observe_sequence",
-            "obs_embedding": obs_init,
-            "actions": act_init,
-        })
+        out = self.chunk_wm(
+            {
+                "mode": "observe_sequence",
+                "obs_embedding": obs_init,
+                "actions": act_init,
+            }
+        )
         latent_seq = out["latent"] if isinstance(out, dict) and "latent" in out else out
         latent = {
-            "hidden": latent_seq["hidden"][:, -1],            # [B, obs_dim]
-            "history": latent_seq["history"][:, -1],          # [B, num_hist, obs_dim]
-            "actions": latent_seq["actions"][:, -1],          # [B, num_hist, A]
+            "hidden": latent_seq["hidden"][:, -1],  # [B, obs_dim]
+            "history": latent_seq["history"][:, -1],  # [B, num_hist, obs_dim]
+            "actions": latent_seq["actions"][:, -1],  # [B, num_hist, A]
         }
 
         imagined: list[torch.Tensor] = [obs_t[H - 1 : H]]  # last real history frame
@@ -316,12 +339,14 @@ class WMReplayClassifierDataset(IterableDataset):
         num_chunks = T_apply // K
         for c in range(num_chunks):
             chunk_actions = act_t[H + c * K : H + (c + 1) * K].unsqueeze(0)  # [1, K, A]
-            out = self.chunk_wm({
-                "mode": "predict_next_chunk",
-                "latent": latent,
-                "actions": chunk_actions,
-            })
-            imagined.append(out["hidden_seq"].squeeze(0))   # [K, obs_dim]
+            out = self.chunk_wm(
+                {
+                    "mode": "predict_next_chunk",
+                    "latent": latent,
+                    "actions": chunk_actions,
+                }
+            )
+            imagined.append(out["hidden_seq"].squeeze(0))  # [K, obs_dim]
             latent = {
                 "history": out["history"],
                 "actions": out["actions"],
@@ -361,7 +386,9 @@ class WMReplayClassifierDataset(IterableDataset):
                 neg_meta.append((False, int(fs_imag_neg)))
             if verbose and (i + 1) % 25 == 0:
                 last_neg_T = neg_trajs[-1].shape[0] if neg_trajs else 0
-                print(f"  imagine_all (success): {i + 1}/{len(self.pairs)} pos_T={pos.shape[0]} neg_T={last_neg_T} fs_imag={fs_imag}")
+                print(
+                    f"  imagine_all (success): {i + 1}/{len(self.pairs)} pos_T={pos.shape[0]} neg_T={last_neg_T} fs_imag={fs_imag}"
+                )
 
         failure_trajs: list[np.ndarray] = []
         failure_meta: list[tuple[bool, int]] = []
@@ -372,7 +399,9 @@ class WMReplayClassifierDataset(IterableDataset):
             failure_trajs.append(f_traj)
             failure_meta.append((bool(complete), int(fs_imag)))
             if verbose and (i + 1) % 10 == 0:
-                print(f"  imagine_all (failure): {i + 1}/{len(self.failure_pairs)} fail_T={f_traj.shape[0]} fs_imag={fs_imag}")
+                print(
+                    f"  imagine_all (failure): {i + 1}/{len(self.failure_pairs)} fail_T={f_traj.shape[0]} fs_imag={fs_imag}"
+                )
 
         rollout_trajs: list[np.ndarray] = []
         rollout_meta: list[tuple[bool, int]] = []
@@ -408,16 +437,24 @@ class WMReplayClassifierDataset(IterableDataset):
         """
         out: list[tuple[np.ndarray, bool, int]] = []
         if self._pos_trajs is not None:
-            for traj, (complete, fs) in zip(self._pos_trajs, self._pos_meta, strict=True):
+            for traj, (complete, fs) in zip(
+                self._pos_trajs, self._pos_meta, strict=True
+            ):
                 out.append((traj, bool(complete), int(fs)))
         if self._neg_trajs is not None:
-            for traj, (complete, fs) in zip(self._neg_trajs, self._neg_meta, strict=True):
+            for traj, (complete, fs) in zip(
+                self._neg_trajs, self._neg_meta, strict=True
+            ):
                 out.append((traj, bool(complete), int(fs)))
         if self._failure_trajs is not None:
-            for traj, (complete, fs) in zip(self._failure_trajs, self._failure_meta, strict=True):
+            for traj, (complete, fs) in zip(
+                self._failure_trajs, self._failure_meta, strict=True
+            ):
                 out.append((traj, bool(complete), int(fs)))
         if self._rollout_trajs is not None:
-            for traj, (complete, fs) in zip(self._rollout_trajs, self._rollout_meta, strict=True):
+            for traj, (complete, fs) in zip(
+                self._rollout_trajs, self._rollout_meta, strict=True
+            ):
                 out.append((traj, bool(complete), int(fs)))
         return out
 
@@ -435,7 +472,9 @@ class WMReplayClassifierDataset(IterableDataset):
             indices = list(range(len(all_trajs)))[wid::nw]
 
         if self.mode == "train":
-            rng = random.Random((self.seed + (worker_info.id if worker_info else 0)) * 9973)
+            rng = random.Random(
+                (self.seed + (worker_info.id if worker_info else 0)) * 9973
+            )
             rng.shuffle(indices)
             for it in self._train_yield(all_trajs, indices, rng):
                 yield it

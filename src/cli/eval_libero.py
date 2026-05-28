@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Standalone LIBERO rollout evaluation for saved VLA checkpoints.
 
 Usage:
@@ -8,6 +9,7 @@ Usage:
         --num_episodes 10 \
         --device cuda:0
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,19 +29,34 @@ from transformers import GenerationConfig
 from src.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     ChameleonXLLMXForConditionalGeneration_ck_action_head,
 )
-from src.models.encoder.rynnvla_encoder import RynnVLAEncoder
-from src.env import get_libero_env, get_libero_dummy_action, get_libero_image, quat2axisangle, TASK_MAX_STEPS
+from src.env import (
+    get_libero_env,
+    get_libero_dummy_action,
+    get_libero_image,
+    quat2axisangle,
+    TASK_MAX_STEPS,
+)
 
 
 DEFAULT_VLA_CKPT = str(PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_10")
-DEFAULT_TOKENIZER = str(PROJECT_ROOT / "data" / "ckpts" / "models--Alpha-VLLM--Lumina-mGPT-7B-768")
-DEFAULT_TEXT_TOKENIZER = str(PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "text_tokenizer.json")
-DEFAULT_VQGAN_CFG = str(PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "vqgan.yaml")
-DEFAULT_VQGAN_CKPT = str(PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "vqgan.ckpt")
+DEFAULT_TOKENIZER = str(
+    PROJECT_ROOT / "data" / "ckpts" / "models--Alpha-VLLM--Lumina-mGPT-7B-768"
+)
+DEFAULT_TEXT_TOKENIZER = str(
+    PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "text_tokenizer.json"
+)
+DEFAULT_VQGAN_CFG = str(
+    PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "vqgan.yaml"
+)
+DEFAULT_VQGAN_CKPT = str(
+    PROJECT_ROOT / "data" / "ckpts" / "chameleon" / "tokenizer" / "vqgan.ckpt"
+)
 
 
 def unnorm_action(action: np.ndarray) -> np.ndarray:
-    min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+    min_values = np.array(
+        [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
+    )
     max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
     if action.shape[0] > 7:
         action = action[:7]
@@ -47,16 +64,31 @@ def unnorm_action(action: np.ndarray) -> np.ndarray:
 
 
 def unnorm_actions(actions: np.ndarray) -> np.ndarray:
-    min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+    min_values = np.array(
+        [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
+    )
     max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
     if actions.ndim == 2 and actions.shape[1] > 7:
         actions = actions[:, :7]
     return (actions + 1) / 2 * (max_values - min_values + 1e-8) + min_values
 
 
-def generate_actions(backbone, item_processor, cur_img, cur_wrist_img, state, task_description, action_steps, device):
+def generate_actions(
+    backbone,
+    item_processor,
+    cur_img,
+    cur_wrist_img,
+    state,
+    task_description,
+    action_steps,
+    device,
+):
     img_c = [cur_img, cur_wrist_img]
-    human_val = f"Finish the task: {task_description}." + "<|state|>" * 1 + "<|image|>" * len(img_c)
+    human_val = (
+        f"Finish the task: {task_description}."
+        + "<|state|>" * 1
+        + "<|image|>" * len(img_c)
+    )
 
     conv = {
         "conversations": [{"from": "human", "value": human_val}],
@@ -100,7 +132,11 @@ def generate_actions(backbone, item_processor, cur_img, cur_wrist_img, state, ta
             action_sequences = backbone.generate_dis_ma(input_ids, generation_config_ma)
             results = []
             for seq in action_sequences:
-                a = seq.cpu().float().detach().numpy() if isinstance(seq, torch.Tensor) else np.asarray(seq, dtype=np.float32)
+                a = (
+                    seq.cpu().float().detach().numpy()
+                    if isinstance(seq, torch.Tensor)
+                    else np.asarray(seq, dtype=np.float32)
+                )
                 if a.shape[0] == 7:
                     results.append(unnorm_action(a))
             return results
@@ -111,15 +147,36 @@ def generate_actions(backbone, item_processor, cur_img, cur_wrist_img, state, ta
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Standalone LIBERO eval for VLA checkpoints")
-    parser.add_argument("--ckpt_path", type=str, default=None, help="Path to training checkpoint (.ckpt). If None, eval the initial pretrained model.")
-    parser.add_argument("--model_path", type=str, default=DEFAULT_VLA_CKPT, help="Pretrained model directory (HF format)")
+    parser = argparse.ArgumentParser(
+        description="Standalone LIBERO eval for VLA checkpoints"
+    )
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=None,
+        help="Path to training checkpoint (.ckpt). If None, eval the initial pretrained model.",
+    )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default=DEFAULT_VLA_CKPT,
+        help="Pretrained model directory (HF format)",
+    )
     parser.add_argument("--tokenizer_path", type=str, default=DEFAULT_TOKENIZER)
-    parser.add_argument("--text_tokenizer_path", type=str, default=DEFAULT_TEXT_TOKENIZER)
+    parser.add_argument(
+        "--text_tokenizer_path", type=str, default=DEFAULT_TEXT_TOKENIZER
+    )
     parser.add_argument("--vqgan_cfg", type=str, default=DEFAULT_VQGAN_CFG)
     parser.add_argument("--vqgan_ckpt", type=str, default=DEFAULT_VQGAN_CKPT)
-    parser.add_argument("--task_suite", type=str, default="libero_goal", choices=list(TASK_MAX_STEPS.keys()))
-    parser.add_argument("--num_episodes", type=int, default=10, help="Episodes per task")
+    parser.add_argument(
+        "--task_suite",
+        type=str,
+        default="libero_goal",
+        choices=list(TASK_MAX_STEPS.keys()),
+    )
+    parser.add_argument(
+        "--num_episodes", type=int, default=10, help="Episodes per task"
+    )
     parser.add_argument("--action_steps", type=int, default=10)
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--device", type=str, default="cuda:0")
@@ -130,7 +187,9 @@ def main():
     # Load model
     print(f"Loading model from {args.model_path} ...")
     backbone = ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
-        args.model_path, torch_dtype=torch.bfloat16, device_map="cpu",
+        args.model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
     )
 
     # Load checkpoint weights if provided
@@ -147,6 +206,7 @@ def main():
 
     # Build item processor
     from src.models.encoder.rynnvla_runtime import FlexARItemProcessorActionState
+
     item_processor = FlexARItemProcessorActionState(
         tokenizer_path=args.tokenizer_path,
         text_tokenizer_path=args.text_tokenizer_path,
@@ -158,6 +218,7 @@ def main():
 
     # Run LIBERO eval
     from libero.libero import benchmark as libero_benchmark
+
     benchmark_dict = libero_benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.task_suite]()
     num_tasks = task_suite.n_tasks
@@ -184,16 +245,27 @@ def main():
                     continue
 
                 img = get_libero_image(obs, args.resolution)
-                wrist_img = get_libero_image(obs, args.resolution, "robot0_eye_in_hand_image")
+                wrist_img = get_libero_image(
+                    obs, args.resolution, "robot0_eye_in_hand_image"
+                )
                 state = np.concatenate(
-                    (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+                    (
+                        obs["robot0_eef_pos"],
+                        quat2axisangle(obs["robot0_eef_quat"]),
+                        obs["robot0_gripper_qpos"],
+                    )
                 )
 
                 if len(actions_buffer) == 0:
                     actions_buffer = generate_actions(
-                        backbone, item_processor,
-                        Image.fromarray(img), Image.fromarray(wrist_img),
-                        state, task_description, args.action_steps, device,
+                        backbone,
+                        item_processor,
+                        Image.fromarray(img),
+                        Image.fromarray(wrist_img),
+                        state,
+                        task_description,
+                        args.action_steps,
+                        device,
                     )
 
                 if len(actions_buffer) == 0:
@@ -210,7 +282,9 @@ def main():
         env.close()
 
         rate = task_successes / max(args.num_episodes, 1)
-        print(f"Task {task_id} ({task_description}): {rate:.1%} ({task_successes}/{args.num_episodes})")
+        print(
+            f"Task {task_id} ({task_description}): {rate:.1%} ({task_successes}/{args.num_episodes})"
+        )
 
     avg = total_successes / max(total_episodes, 1)
     print(f"\nOverall: {avg:.1%} ({total_successes}/{total_episodes})")

@@ -1,4 +1,5 @@
 """Group-relative advantage and GRPO helpers shared by step + chunk PPO loops."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,12 +27,28 @@ def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.
     """Group-relative z-score normalization of per-rollout returns (GRPO).
 
     Each group of ``group_size`` consecutive rollouts shares a common prompt;
-    the advantage is ``(score - group_mean) / group_std``. When the batch is
-    too small for grouping, falls back to a single global normalization.
+    the advantage is ``(score - group_mean) / group_std``.
+
+    Raises:
+        ValueError: If ``score.numel()`` is not a positive multiple of
+            ``group_size``.  GRPO requires the batch to be partitionable into
+            equal-sized groups; silently falling back to global normalization
+            (former behavior) hides DDP shard / filter / config bugs and makes
+            the advantage scale incomparable across batches.  Set
+            ``group_size=1`` if a global normalization is genuinely intended.
     """
-    if int(group_size) <= 1 or score.numel() < int(group_size):
+    g = int(group_size)
+    n = int(score.numel())
+    if g <= 1:
         return (score - score.mean()) / score.std(unbiased=False).clamp_min(float(eps))
-    groups = score.reshape(-1, int(group_size))
+    if n < g or n % g != 0:
+        raise ValueError(
+            f"_group_advantage: score.numel()={n} is not a positive multiple of "
+            f"group_size={g}. GRPO requires `B_eff = B * group_size`. Check "
+            f"dataloader.batch_size, ppo_rollouts_per_start, and per-rank DDP "
+            f"shard sizes."
+        )
+    groups = score.reshape(-1, g)
     mean = groups.mean(dim=1, keepdim=True)
     std = groups.std(dim=1, unbiased=False, keepdim=True).clamp_min(float(eps))
     return ((groups - mean) / std).reshape_as(score)

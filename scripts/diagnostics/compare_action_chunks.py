@@ -12,11 +12,11 @@ Then we dump action_chunks on a fixed set of WM-feat inputs sampled
 from the offline LIBERO dataset (after WM.hidden_decoder), so the
 comparison is grounded in realistic features, not random noise.
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
@@ -40,12 +40,14 @@ def build_actor(cfg, device: str):
 def get_chunk(actor, hidden: torch.Tensor) -> torch.Tensor:
     actor.eval()
     with torch.no_grad():
-        _, _, extra = actor({
-            "mode": "sample",
-            "hidden": hidden,
-            "deterministic": True,
-            "return_chunk": True,
-        })
+        _, _, extra = actor(
+            {
+                "mode": "sample",
+                "hidden": hidden,
+                "deterministic": True,
+                "return_chunk": True,
+            }
+        )
     return extra["action_chunk"]
 
 
@@ -55,7 +57,9 @@ def fmt_row(label: str, vec: torch.Tensor) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/dreamervla_pi0_action_hidden_head_actor.yaml")
+    parser.add_argument(
+        "--config", default="configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+    )
     parser.add_argument(
         "--encoder-ckpt",
         default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt",
@@ -81,21 +85,25 @@ def main() -> None:
 
     # ── build baseline (pi0 SFT only) and trained policies ────────────────
     # Use the SAME torch seed before each build so adapter random init matches.
-    print(f"[compare] building baseline (pi0 SFT warm-start, no training) ...")
+    print("[compare] building baseline (pi0 SFT warm-start, no training) ...")
     torch.manual_seed(args.seed)
     baseline = build_actor(cfg, args.device)
     if args.baseline_ckpt:
         print(f"[compare] overriding baseline state from: {args.baseline_ckpt}")
         sd = load_policy_state_from_training_ckpt(args.baseline_ckpt)
         missing, unexpected = baseline.load_state_dict(sd, strict=False)
-        print(f"  baseline non-strict load: missing={list(missing)[:6]} unexpected={list(unexpected)[:6]}")
+        print(
+            f"  baseline non-strict load: missing={list(missing)[:6]} unexpected={list(unexpected)[:6]}"
+        )
 
     print(f"[compare] building trained (loading {args.trained_ckpt}) ...")
     torch.manual_seed(args.seed)
     trained = build_actor(cfg, args.device)
     sd = load_policy_state_from_training_ckpt(args.trained_ckpt)
     missing, unexpected = trained.load_state_dict(sd, strict=False)
-    print(f"  trained non-strict load: missing={list(missing)[:6]} unexpected={list(unexpected)[:6]}")
+    print(
+        f"  trained non-strict load: missing={list(missing)[:6]} unexpected={list(unexpected)[:6]}"
+    )
 
     # ── fixed-seed deterministic WM-like inputs (random gaussian here) ────
     torch.manual_seed(args.seed)
@@ -109,32 +117,42 @@ def main() -> None:
     print(f"trained vs baseline (over {args.n_inputs} fixed inputs):")
     print(f"  mean |Δaction|        = {float(diff_abs.mean()):.6f}")
     print(f"  max  |Δaction|        = {float(diff_abs.max()):.6f}")
-    print(f"  per-input mean |Δ|    = {[round(float(d), 6) for d in diff_abs.flatten(1).mean(dim=1)]}")
-    print(f"  per-action-dim mean |Δ| (across all inputs+timesteps):")
+    print(
+        f"  per-input mean |Δ|    = {[round(float(d), 6) for d in diff_abs.flatten(1).mean(dim=1)]}"
+    )
+    print("  per-action-dim mean |Δ| (across all inputs+timesteps):")
     pd_mean = diff_abs.flatten(0, 1).mean(dim=0)
     for i, v in enumerate(pd_mean.tolist()):
         print(f"     dim {i}: {v:.6f}")
     print()
-    print(f"--- sample chunks for input[0] ---")
+    print("--- sample chunks for input[0] ---")
     for t in range(min(2, tc.shape[1])):
         print(f"  t={t}")
-        print(f"    " + fmt_row("baseline", bc[0, t]))
-        print(f"    " + fmt_row("trained ", tc[0, t]))
-        print(f"    diff:      [" + ", ".join(f"{v:+.4f}" for v in (tc[0, t] - bc[0, t]).tolist()) + "]")
+        print("    " + fmt_row("baseline", bc[0, t]))
+        print("    " + fmt_row("trained ", tc[0, t]))
+        print(
+            "    diff:      ["
+            + ", ".join(f"{v:+.4f}" for v in (tc[0, t] - bc[0, t]).tolist())
+            + "]"
+        )
 
     # parameter-level diff
     print()
     n_changed = 0
     n_same = 0
     total_diff_norm = 0.0
-    for (n, pb), (_, pt) in zip(baseline.named_parameters(), trained.named_parameters()):
+    for (n, pb), (_, pt) in zip(
+        baseline.named_parameters(), trained.named_parameters()
+    ):
         d = (pt - pb).detach()
         if torch.allclose(pb.detach(), pt.detach()):
             n_same += 1
         else:
             n_changed += 1
             total_diff_norm += float(d.norm())
-    print(f"param-level: {n_changed} tensors changed, {n_same} unchanged, sum-of-norms = {total_diff_norm:.4f}")
+    print(
+        f"param-level: {n_changed} tensors changed, {n_same} unchanged, sum-of-norms = {total_diff_norm:.4f}"
+    )
 
 
 if __name__ == "__main__":

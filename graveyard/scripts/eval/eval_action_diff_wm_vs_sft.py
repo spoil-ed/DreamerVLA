@@ -15,6 +15,7 @@ Usage (single GPU):
     --config <v4b cfg> --world-model-ckpt <v4-B best> --out-dir <out> \\
     --task-ids 0 --num-episodes 3 --episode-horizon 200
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,6 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 import hydra
 import imageio.v2 as imageio
@@ -47,7 +47,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", required=True)
     p.add_argument("--out-dir", required=True)
     p.add_argument("--world-model-ckpt", required=True)
-    p.add_argument("--vla-ckpt-path", default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"))
+    p.add_argument(
+        "--vla-ckpt-path",
+        default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"),
+    )
     p.add_argument("--encoder-state-ckpt", default="")
     p.add_argument("--task-suite", default="libero_goal")
     p.add_argument("--task-ids", default="0")
@@ -55,7 +58,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--episode-horizon", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda:0")
-    p.add_argument("--action-head-type", default="legacy", choices=["legacy", "pi0_query"])
+    p.add_argument(
+        "--action-head-type", default="legacy", choices=["legacy", "pi0_query"]
+    )
     p.add_argument("--policy-adapter-type", default="identity")
     p.add_argument("--target-token-id", type=int, default=10004)
     p.add_argument("--rssm-action-scale", default="env")
@@ -70,9 +75,14 @@ def parse_args() -> argparse.Namespace:
         choices=["recompute", "chunk_replay"],
         default="chunk_replay",
         help="recompute: call actor each step, take chunk[0]. chunk_replay: call actor once per "
-             "chunk_size steps, replay chunk[0..chunk_size-1] sequentially. eval_libero uses replay.",
+        "chunk_size steps, replay chunk[0..chunk_size-1] sequentially. eval_libero uses replay.",
     )
-    p.add_argument("--chunk-size", type=int, default=5, help="Actions per chunk (Pi0 time_horizon=5).")
+    p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=5,
+        help="Actions per chunk (Pi0 time_horizon=5).",
+    )
     return p.parse_args()
 
 
@@ -87,7 +97,9 @@ def main() -> None:
 
     cfg = OmegaConf.load(args.config)
     cfg.init.vla_ckpt_path = args.vla_ckpt_path
-    cfg.init.encoder_state_ckpt = args.encoder_state_ckpt if args.encoder_state_ckpt else None
+    cfg.init.encoder_state_ckpt = (
+        args.encoder_state_ckpt if args.encoder_state_ckpt else None
+    )
     cfg.init.world_model_state_ckpt = args.world_model_ckpt
     cfg.algorithm.rssm_action_scale = str(args.rssm_action_scale)
     cfg.policy.adapter_type = str(args.policy_adapter_type)
@@ -97,7 +109,9 @@ def main() -> None:
     print(f"[diff] step_with={args.step_with}", flush=True)
 
     # ---- world model ----
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
     load_world_model_state(world_model, args.world_model_ckpt, reset_reward_head=False)
     world_model.eval()
 
@@ -111,7 +125,9 @@ def main() -> None:
     processor = encoder._build_processor(device)
 
     # ---- env ----
-    task_ids = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
+    task_ids = tuple(
+        int(item) for item in str(args.task_ids).split(",") if item.strip()
+    )
     env = DreamerVLAOnlineTrainEnv(
         task_suite_name=args.task_suite,
         task_id=task_ids[0],
@@ -148,68 +164,90 @@ def main() -> None:
         # Chunk-replay buffers: the chunks active for playback this round.
         # Refreshed every chunk_size env steps in chunk_replay mode.
         sft_playback: np.ndarray | None = None  # shape (chunk_size, 7)
-        wm_playback: np.ndarray | None = None   # shape (chunk_size, 7)
+        wm_playback: np.ndarray | None = None  # shape (chunk_size, 7)
         chunk_pos = 0
         for t in range(int(args.episode_horizon)):
-            real_hidden = obs_to_action_hidden(encoder, processor, obs, device, args.target_token_id)
+            real_hidden = obs_to_action_hidden(
+                encoder, processor, obs, device, args.target_token_id
+            )
 
             is_first = bool(obs.get("is_first", False)) or latent is None
             if is_first:
                 latent = world_model({"mode": "encode_latent", "hidden": real_hidden})
             else:
                 assert prev_wm_action is not None
-                latent = world_model({
-                    "mode": "observe_next",
-                    "latent": latent,
-                    "hidden": real_hidden,
-                    "actions": prev_wm_action,
-                    "is_first": False,
-                })
+                latent = world_model(
+                    {
+                        "mode": "observe_next",
+                        "latent": latent,
+                        "hidden": real_hidden,
+                        "actions": prev_wm_action,
+                        "is_first": False,
+                    }
+                )
             wm_hidden = world_model({"mode": "actor_input", "latent": latent}).float()
 
             # SFT action (actor on real hidden)
-            sft_chunk, _, _ = policy({
-                "mode": "sample",
-                "hidden": real_hidden.float(),
-                "deterministic": True,
-                "return_chunk": True,
-            })
+            sft_chunk, _, _ = policy(
+                {
+                    "mode": "sample",
+                    "hidden": real_hidden.float(),
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )
             # WM-wrapped action (actor on WM-reconstructed hidden)
-            wm_chunk, _, _ = policy({
-                "mode": "sample",
-                "hidden": wm_hidden,
-                "deterministic": True,
-                "return_chunk": True,
-            })
+            wm_chunk, _, _ = policy(
+                {
+                    "mode": "sample",
+                    "hidden": wm_hidden,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )
 
             # ---- diff stats (always on fresh chunks for measurement) ----
-            sft_chunk_np = sft_chunk.reshape(-1, sft_chunk.shape[-1]).detach().float().cpu().numpy()  # (chunk_size, 7)
-            wm_chunk_np = wm_chunk.reshape(-1, wm_chunk.shape[-1]).detach().float().cpu().numpy()
+            sft_chunk_np = (
+                sft_chunk.reshape(-1, sft_chunk.shape[-1])
+                .detach()
+                .float()
+                .cpu()
+                .numpy()
+            )  # (chunk_size, 7)
+            wm_chunk_np = (
+                wm_chunk.reshape(-1, wm_chunk.shape[-1]).detach().float().cpu().numpy()
+            )
             sft_act = sft_chunk_np[0, :7]
             wm_act = wm_chunk_np[0, :7]
             sft_flat = sft_chunk.reshape(-1).detach().float().cpu().numpy()
             wm_flat = wm_chunk.reshape(-1).detach().float().cpu().numpy()
             real_flat = real_hidden.float().reshape(-1).detach().cpu().numpy()
             wm_h_flat = wm_hidden.reshape(-1).detach().cpu().numpy()
-            denom = (np.linalg.norm(real_flat) * np.linalg.norm(wm_h_flat) + 1e-12)
+            denom = np.linalg.norm(real_flat) * np.linalg.norm(wm_h_flat) + 1e-12
             hidden_cos = float(np.dot(real_flat, wm_h_flat) / denom)
             hidden_mse = float(np.mean((real_flat - wm_h_flat) ** 2))
             chunk_l1 = float(np.mean(np.abs(sft_flat - wm_flat)))
-            chunk_cos = float(np.dot(sft_flat, wm_flat) / (np.linalg.norm(sft_flat) * np.linalg.norm(wm_flat) + 1e-12))
+            chunk_cos = float(
+                np.dot(sft_flat, wm_flat)
+                / (np.linalg.norm(sft_flat) * np.linalg.norm(wm_flat) + 1e-12)
+            )
             first_act_l1 = float(np.mean(np.abs(sft_act - wm_act)))
             per_dim = (sft_act - wm_act).tolist()
 
-            per_step_stats.append({
-                "ep": ep, "t": t,
-                "hidden_cos": hidden_cos,
-                "hidden_mse": hidden_mse,
-                "chunk_l1": chunk_l1,
-                "chunk_cos": chunk_cos,
-                "first_act_l1": first_act_l1,
-                "per_dim": per_dim,
-                "sft_act": sft_act.tolist(),
-                "wm_act": wm_act.tolist(),
-            })
+            per_step_stats.append(
+                {
+                    "ep": ep,
+                    "t": t,
+                    "hidden_cos": hidden_cos,
+                    "hidden_mse": hidden_mse,
+                    "chunk_l1": chunk_l1,
+                    "chunk_cos": chunk_cos,
+                    "first_act_l1": first_act_l1,
+                    "per_dim": per_dim,
+                    "sft_act": sft_act.tolist(),
+                    "wm_act": wm_act.tolist(),
+                }
+            )
             ep_sft_act_diff_l1.append(first_act_l1)
             ep_hidden_cos.append(hidden_cos)
             ep_hidden_mse.append(hidden_mse)
@@ -236,8 +274,14 @@ def main() -> None:
             ep_ret += float(reward)
             ep_len += 1
             # For WM update next step, use the env_action that was actually applied (info["wm_action"])
-            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[:7]
-            prev_wm_action = torch.from_numpy(wm_action_np).to(device=device, dtype=real_hidden.dtype).unsqueeze(0)
+            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[
+                :7
+            ]
+            prev_wm_action = (
+                torch.from_numpy(wm_action_np)
+                .to(device=device, dtype=real_hidden.dtype)
+                .unsqueeze(0)
+            )
             obs = next_obs
             if bool(terminated) or bool(truncated):
                 succ = bool(terminated)
@@ -253,7 +297,10 @@ def main() -> None:
             flush=True,
         )
         if frames:
-            video_path = videos_dir / f"ep{ep:02d}_task{task_ids[0]}_step{args.step_with}_succ{int(succ)}_len{ep_len:03d}.mp4"
+            video_path = (
+                videos_dir
+                / f"ep{ep:02d}_task{task_ids[0]}_step{args.step_with}_succ{int(succ)}_len{ep_len:03d}.mp4"
+            )
             try:
                 imageio.mimsave(str(video_path), frames, fps=20)
                 print(f"[video] saved {video_path}", flush=True)
@@ -271,12 +318,18 @@ def main() -> None:
         "successes": int(sum(successes)),
         "success_rate": float(np.mean(successes)),
         "hidden_cos_mean": float(np.mean([r["hidden_cos"] for r in per_step_stats])),
-        "hidden_cos_p10": float(np.percentile([r["hidden_cos"] for r in per_step_stats], 10)),
+        "hidden_cos_p10": float(
+            np.percentile([r["hidden_cos"] for r in per_step_stats], 10)
+        ),
         "hidden_mse_mean": float(np.mean([r["hidden_mse"] for r in per_step_stats])),
         "chunk_l1_mean": float(np.mean([r["chunk_l1"] for r in per_step_stats])),
         "chunk_cos_mean": float(np.mean([r["chunk_cos"] for r in per_step_stats])),
-        "first_act_l1_mean": float(np.mean([r["first_act_l1"] for r in per_step_stats])),
-        "first_act_l1_p90": float(np.percentile([r["first_act_l1"] for r in per_step_stats], 90)),
+        "first_act_l1_mean": float(
+            np.mean([r["first_act_l1"] for r in per_step_stats])
+        ),
+        "first_act_l1_p90": float(
+            np.percentile([r["first_act_l1"] for r in per_step_stats], 90)
+        ),
         "step_with": args.step_with,
         "wm_ckpt": args.world_model_ckpt,
         "wall_seconds": time.time() - t0,

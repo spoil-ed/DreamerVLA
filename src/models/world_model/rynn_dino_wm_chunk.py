@@ -39,7 +39,9 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         if int(chunk_size) < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if int(chunk_rollout_chunks) < 1:
-            raise ValueError(f"chunk_rollout_chunks must be >= 1, got {chunk_rollout_chunks}")
+            raise ValueError(
+                f"chunk_rollout_chunks must be >= 1, got {chunk_rollout_chunks}"
+            )
         if float(chunk_rollout_loss_scale) < 0:
             raise ValueError(
                 f"chunk_rollout_loss_scale must be >= 0, got {chunk_rollout_loss_scale}"
@@ -93,7 +95,9 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         if K > 1:
             future_chunk_actions = future_chunk_actions.to(device=device, dtype=dtype)
             mask = self.mask_obs_token.to(device=device, dtype=dtype)
-            mask = mask.view(1, 1, self.token_count, self.model_dim).expand(bsz, K - 1, -1, -1)
+            mask = mask.view(1, 1, self.token_count, self.model_dim).expand(
+                bsz, K - 1, -1, -1
+            )
             obs_emb = torch.cat([obs_emb_real, mask], dim=1)
             all_actions = torch.cat([action_history, future_chunk_actions], dim=1)
         else:
@@ -157,7 +161,9 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         next_hidden = hidden_seq[:, -1]
 
         all_hidden = torch.cat([history, hidden_seq], dim=1)
-        new_history = all_hidden[:, -H:].contiguous() if H >= 1 else next_hidden[:, None]
+        new_history = (
+            all_hidden[:, -H:].contiguous() if H >= 1 else next_hidden[:, None]
+        )
 
         if K > 1:
             combined_actions = torch.cat([action_history, future_chunk_actions], dim=1)
@@ -196,10 +202,12 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         H = self.num_hist
         K = self.chunk_size
         if obs.ndim != 3:
-            raise ValueError(f"obs_embedding must be [B,T,obs_dim], got {tuple(obs.shape)}")
+            raise ValueError(
+                f"obs_embedding must be [B,T,obs_dim], got {tuple(obs.shape)}"
+            )
         T = int(obs.shape[1])
         if T < H + K:
-            raise ValueError(f"chunk_loss requires T >= H+K = {H+K}, got T={T}")
+            raise ValueError(f"chunk_loss requires T >= H+K = {H + K}, got T={T}")
         if actions.shape[1] < H - 1 + K:
             raise ValueError(
                 f"actions length {actions.shape[1]} too short for chunk loss (need >= {H - 1 + K})"
@@ -214,7 +222,11 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         hidden_target = obs[:, H : H + K].detach()
 
         action_history = torch.zeros(
-            bsz, H, self.action_dim, device=self._module_device(), dtype=self._module_dtype()
+            bsz,
+            H,
+            self.action_dim,
+            device=self._module_device(),
+            dtype=self._module_dtype(),
         )
         if H > 1:
             action_history[:, : H - 1] = actions[:, : H - 1]
@@ -228,7 +240,9 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         out = self.predict_next_chunk(latent, chunk_actions)
         hidden_pred = out["hidden_seq"]
 
-        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(hidden_pred, hidden_target)
+        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
+            hidden_pred, hidden_target
+        )
 
         # --- Close-loop multi-chunk rollout loss (anti-drift) ---
         # Continue rolling forward N-1 MORE chunks from chunk 0's output, feeding
@@ -257,8 +271,8 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
                     "history": out_c["history"],
                     "actions": out_c["actions"],
                 }
-            rollout_pred = torch.cat(rollout_preds, dim=1)                       # [B, (N-1)*K, obs_dim]
-            rollout_target = obs[:, H + K : H + N * K].detach()                  # [B, (N-1)*K, obs_dim]
+            rollout_pred = torch.cat(rollout_preds, dim=1)  # [B, (N-1)*K, obs_dim]
+            rollout_target = obs[:, H + K : H + N * K].detach()  # [B, (N-1)*K, obs_dim]
             rollout_loss_total, rollout_mse, rollout_cosine = self._hidden_loss_terms(
                 rollout_pred, rollout_target
             )
@@ -287,10 +301,18 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
                 else batch.get("return_to_go", batch.get("return_targets"))
             )
             if success_to_go is None:
-                raise KeyError("success_return_loss_scale > 0 requires batch['success_to_go']")
+                raise KeyError(
+                    "success_return_loss_scale > 0 requires batch['success_to_go']"
+                )
             success_chunk = self._slice_per_frame_signal(success_to_go, T)
-            success_return_out = self._success_return_loss_terms(hidden_target, success_chunk)
-            loss = loss + self.success_return_loss_scale * success_return_out["success_return_loss"]
+            success_return_out = self._success_return_loss_terms(
+                hidden_target, success_chunk
+            )
+            loss = (
+                loss
+                + self.success_return_loss_scale
+                * success_return_out["success_return_loss"]
+            )
 
         zero = loss.new_zeros(())
         out_dict: dict[str, torch.Tensor] = {
@@ -328,9 +350,15 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         if success_return_out:
             out_dict.update(
                 {
-                    "success_return_loss": success_return_out["success_return_loss"].detach(),
-                    "success_return_pred_mean": success_return_out["success_return_pred_mean"],
-                    "success_return_target_mean": success_return_out["success_return_target_mean"],
+                    "success_return_loss": success_return_out[
+                        "success_return_loss"
+                    ].detach(),
+                    "success_return_pred_mean": success_return_out[
+                        "success_return_pred_mean"
+                    ],
+                    "success_return_target_mean": success_return_out[
+                        "success_return_target_mean"
+                    ],
                     "success_return_mse": success_return_out["success_return_mse"],
                 }
             )
@@ -348,7 +376,9 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         if signal.ndim == 3 and signal.shape[-1] == 1:
             signal = signal.squeeze(-1)
         if signal.ndim != 2:
-            raise ValueError(f"per-frame signal must be [B,T] or [B,T,1], got {tuple(signal.shape)}")
+            raise ValueError(
+                f"per-frame signal must be [B,T] or [B,T,1], got {tuple(signal.shape)}"
+            )
         if signal.shape[1] == T:
             return signal[:, H : H + K]
         if signal.shape[1] == K:
@@ -356,7 +386,7 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         if signal.shape[1] == K + 1:
             return signal[:, 1:]
         raise ValueError(
-            f"per-frame signal length {signal.shape[1]} not aligned with T={T}, K={K}, K+1={K+1}"
+            f"per-frame signal length {signal.shape[1]} not aligned with T={T}, K={K}, K+1={K + 1}"
         )
 
     # ------------------------------------------------------------------ #

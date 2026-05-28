@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# ruff: noqa: E402
 """Sweep small Gaussian perturbations to the SFT policy's output_projection
 weights and measure WM-imagined raw reward at each perturbed point.
 
@@ -6,6 +7,7 @@ Goal: test whether SFT init sits on a local peak in the WM reward landscape.
 If the SFT raw reward is higher than every perturbation, REINFORCE will see
 "every direction looks worse" and drift via noise.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,7 +18,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import argparse
-import copy
 import json
 import numpy as np
 import torch
@@ -24,17 +25,13 @@ import hydra
 from omegaconf import OmegaConf
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from scripts.training.train_frozen_wm_actor_critic import (
     actor_critic_obs,
     build_offline_loader,
-    choose_batch,
-    infinite_batches,
-)
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (
-    load_world_model_state,
 )
 from src.algorithms.dreamer_vla import imagine_actor_critic_step
 from src.models.critic.twohot_critic import ReturnPercentileTracker
@@ -45,7 +42,12 @@ from src.utils.torch_utils import freeze_module
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--config", default=str(PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"))
+    p.add_argument(
+        "--config",
+        default=str(
+            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+        ),
+    )
     p.add_argument("--world-model-ckpt", required=True)
     p.add_argument("--n-perturbations", type=int, default=40)
     p.add_argument("--sigmas", default="0.001,0.003,0.01,0.03,0.1")
@@ -56,14 +58,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--num-batches", type=int, default=4,
-                   help="average reward across this many fixed offline batches")
-    p.add_argument("--reward-head-type", default=None,
-                   help="override cfg.world_model.reward_head_type (e.g. 'binary' for per_window ckpts)")
+    p.add_argument(
+        "--num-batches",
+        type=int,
+        default=4,
+        help="average reward across this many fixed offline batches",
+    )
+    p.add_argument(
+        "--reward-head-type",
+        default=None,
+        help="override cfg.world_model.reward_head_type (e.g. 'binary' for per_window ckpts)",
+    )
     return p.parse_args()
 
 
-def perturb_output_projection(policy: torch.nn.Module, sft_state: dict, sigma: float, seed: int) -> None:
+def perturb_output_projection(
+    policy: torch.nn.Module, sft_state: dict, sigma: float, seed: int
+) -> None:
     """Restore SFT params, then add seeded Gaussian noise to every
     output_projection tensor (in-place on policy)."""
     policy.load_state_dict(sft_state)
@@ -72,15 +83,27 @@ def perturb_output_projection(policy: torch.nn.Module, sft_state: dict, sigma: f
         for name, p in policy.named_parameters():
             if "output_projection" not in name:
                 continue
-            noise = torch.randn(p.shape, generator=gen, dtype=torch.float32).to(p.device)
+            noise = torch.randn(p.shape, generator=gen, dtype=torch.float32).to(
+                p.device
+            )
             # scale noise by sigma * ||p|| / sqrt(numel)  → relative perturbation
             scale = sigma * (p.detach().abs().mean().item() + 1e-9)
             p.add_(noise.to(p.dtype) * scale)
 
 
 def measure_imagined_reward(
-    *, policy, world_model, critic, target_critic, policy_optimizer, critic_optimizer,
-    return_tracker, batches, device, algorithm_cfg, optim_cfg,
+    *,
+    policy,
+    world_model,
+    critic,
+    target_critic,
+    policy_optimizer,
+    critic_optimizer,
+    return_tracker,
+    batches,
+    device,
+    algorithm_cfg,
+    optim_cfg,
 ) -> dict:
     """Run imagine_actor_critic_step on a list of fixed batches and average
     raw-reward metrics."""
@@ -133,17 +156,24 @@ def main() -> None:
     cfg.algorithm.kl_coef = 0.0  # we want raw WM reward only
     if args.reward_head_type is not None:
         cfg.world_model.reward_head_type = str(args.reward_head_type)
-        print(f"[landscape] cfg.world_model.reward_head_type → {cfg.world_model.reward_head_type}", flush=True)
+        print(
+            f"[landscape] cfg.world_model.reward_head_type → {cfg.world_model.reward_head_type}",
+            flush=True,
+        )
 
     print(f"[landscape] out_dir={out_dir}", flush=True)
 
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
     # Try standard format first (state_dicts.world_model / model), then fall back to
     # our finetune format (top-level "world_model" key).
     payload = torch.load(args.world_model_ckpt, map_location="cpu", weights_only=False)
-    state = (payload.get("state_dicts", {}).get("world_model")
-             or payload.get("model")
-             or payload.get("world_model"))
+    state = (
+        payload.get("state_dicts", {}).get("world_model")
+        or payload.get("model")
+        or payload.get("world_model")
+    )
     if state is None:
         raise RuntimeError(f"no usable state dict in {args.world_model_ckpt}")
     cleaned = {}
@@ -153,9 +183,14 @@ def main() -> None:
         target = world_model.state_dict().get(key)
         if target is None or tuple(value.shape) != tuple(target.shape):
             continue
-        cleaned[key] = value.to(dtype=dtype) if torch.is_floating_point(value) else value
+        cleaned[key] = (
+            value.to(dtype=dtype) if torch.is_floating_point(value) else value
+        )
     missing, unexpected = world_model.load_state_dict(cleaned, strict=False)
-    print(f"[landscape] WM loaded: kept={len(cleaned)} missing={len(missing)} unexpected={len(unexpected)}", flush=True)
+    print(
+        f"[landscape] WM loaded: kept={len(cleaned)} missing={len(missing)} unexpected={len(unexpected)}",
+        flush=True,
+    )
     freeze_module(world_model)
     world_model.eval()
 
@@ -167,9 +202,13 @@ def main() -> None:
     policy_optimizer = build_optimizer(policy, cfg.optim.policy)
     critic_optimizer = build_optimizer(critic, cfg.optim.critic)
     return_tracker = ReturnPercentileTracker(
-        decay=float(OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)),
+        decay=float(
+            OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)
+        ),
         low=float(OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)),
-        high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
+        high=float(
+            OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)
+        ),
     )
 
     # Build offline loader and draw a small fixed batch set we'll reuse.
@@ -178,6 +217,7 @@ def main() -> None:
         sequence_length = args.sequence_length
         num_workers = args.num_workers
         max_offline_windows = None
+
     loader, infinite = build_offline_loader(cfg, _MiniArgs())
     print(f"[landscape] offline_windows={len(loader.dataset)}", flush=True)
 
@@ -185,8 +225,10 @@ def main() -> None:
     for _ in range(int(args.num_batches)):
         b = next(infinite)
         fixed_obs.append(actor_critic_obs(b))
-    print(f"[landscape] fixed {len(fixed_obs)} batches  (B={args.batch_size}, T={args.sequence_length})",
-          flush=True)
+    print(
+        f"[landscape] fixed {len(fixed_obs)} batches  (B={args.batch_size}, T={args.sequence_length})",
+        flush=True,
+    )
 
     # Snapshot SFT policy state
     sft_state = {k: v.detach().clone() for k, v in policy.state_dict().items()}
@@ -194,13 +236,22 @@ def main() -> None:
     # Baseline reward at SFT
     policy.load_state_dict(sft_state)
     sft_metrics = measure_imagined_reward(
-        policy=policy, world_model=world_model, critic=critic, target_critic=target_critic,
-        policy_optimizer=policy_optimizer, critic_optimizer=critic_optimizer,
-        return_tracker=return_tracker, batches=fixed_obs, device=device,
-        algorithm_cfg=cfg.algorithm, optim_cfg=cfg.optim,
+        policy=policy,
+        world_model=world_model,
+        critic=critic,
+        target_critic=target_critic,
+        policy_optimizer=policy_optimizer,
+        critic_optimizer=critic_optimizer,
+        return_tracker=return_tracker,
+        batches=fixed_obs,
+        device=device,
+        algorithm_cfg=cfg.algorithm,
+        optim_cfg=cfg.optim,
     )
-    print(f"[landscape] SFT baseline: mean={sft_metrics['mean']:.4f}  p50={sft_metrics['p50']:.4f}",
-          flush=True)
+    print(
+        f"[landscape] SFT baseline: mean={sft_metrics['mean']:.4f}  p50={sft_metrics['p50']:.4f}",
+        flush=True,
+    )
 
     sigmas = [float(s) for s in str(args.sigmas).split(",") if s.strip()]
     rows = []
@@ -210,25 +261,39 @@ def main() -> None:
             seed_k = int(rng_master.randint(0, 10**8))
             perturb_output_projection(policy, sft_state, sigma=sigma, seed=seed_k)
             m = measure_imagined_reward(
-                policy=policy, world_model=world_model, critic=critic, target_critic=target_critic,
-                policy_optimizer=policy_optimizer, critic_optimizer=critic_optimizer,
-                return_tracker=return_tracker, batches=fixed_obs, device=device,
-                algorithm_cfg=cfg.algorithm, optim_cfg=cfg.optim,
+                policy=policy,
+                world_model=world_model,
+                critic=critic,
+                target_critic=target_critic,
+                policy_optimizer=policy_optimizer,
+                critic_optimizer=critic_optimizer,
+                return_tracker=return_tracker,
+                batches=fixed_obs,
+                device=device,
+                algorithm_cfg=cfg.algorithm,
+                optim_cfg=cfg.optim,
             )
             row = {"sigma": float(sigma), "seed": int(seed_k), **m}
             rows.append(row)
-            print(f"[landscape] sigma={sigma:.4f} k={k:02d} mean={m['mean']:.4f}  Δ={m['mean']-sft_metrics['mean']:+.4f}",
-                  flush=True)
+            print(
+                f"[landscape] sigma={sigma:.4f} k={k:02d} mean={m['mean']:.4f}  Δ={m['mean'] - sft_metrics['mean']:+.4f}",
+                flush=True,
+            )
 
     # Restore SFT before exit
     policy.load_state_dict(sft_state)
 
     # Persist summary
-    summary = {"sft": sft_metrics, "perturbations": rows, "sigmas": sigmas,
-               "n_perturbations": int(args.n_perturbations),
-               "batch_size": int(args.batch_size), "seq_len": int(args.sequence_length),
-               "imag_h": int(args.imagination_horizon),
-               "num_batches_avg": int(args.num_batches)}
+    summary = {
+        "sft": sft_metrics,
+        "perturbations": rows,
+        "sigmas": sigmas,
+        "n_perturbations": int(args.n_perturbations),
+        "batch_size": int(args.batch_size),
+        "seq_len": int(args.sequence_length),
+        "imag_h": int(args.imagination_horizon),
+        "num_batches_avg": int(args.num_batches),
+    }
     (out_dir / "landscape_summary.json").write_text(json.dumps(summary, indent=2))
 
     # Plot
@@ -237,7 +302,9 @@ def main() -> None:
     # Left: histogram of perturbed mean rewards
     for s, vals in by_sigma.items():
         axes[0].hist(vals, bins=15, alpha=0.45, label=f"σ={s}")
-    axes[0].axvline(sft_metrics["mean"], color="k", linestyle="--", linewidth=2, label="SFT")
+    axes[0].axvline(
+        sft_metrics["mean"], color="k", linestyle="--", linewidth=2, label="SFT"
+    )
     axes[0].set_xlabel("imagined raw reward (mean)")
     axes[0].set_ylabel("count")
     axes[0].set_title("WM raw reward at SFT vs random perturbations")
@@ -263,8 +330,10 @@ def main() -> None:
     n_above = sum(1 for m in all_means if m > sft_m)
     n_below = sum(1 for m in all_means if m < sft_m)
     pct_below = 100.0 * n_below / len(all_means)
-    print(f"\n[verdict] of {len(all_means)} perturbations:  {n_below} below SFT ({pct_below:.1f}%),  {n_above} above SFT",
-          flush=True)
+    print(
+        f"\n[verdict] of {len(all_means)} perturbations:  {n_below} below SFT ({pct_below:.1f}%),  {n_above} above SFT",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

@@ -53,7 +53,9 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def finite_metric(rows: list[dict[str, Any]], key: str) -> tuple[list[int], list[float]]:
+def finite_metric(
+    rows: list[dict[str, Any]], key: str
+) -> tuple[list[int], list[float]]:
     steps: list[int] = []
     values: list[float] = []
     for row in rows:
@@ -97,8 +99,12 @@ def summarize(rows: list[dict[str, Any]], window: int) -> dict[str, Any]:
         "metrics": {},
     }
     for key, _label in METRICS:
-        first_vals = [float(x[key]) for x in first if key in x and math.isfinite(float(x[key]))]
-        last_vals = [float(x[key]) for x in last if key in x and math.isfinite(float(x[key]))]
+        first_vals = [
+            float(x[key]) for x in first if key in x and math.isfinite(float(x[key]))
+        ]
+        last_vals = [
+            float(x[key]) for x in last if key in x and math.isfinite(float(x[key]))
+        ]
         if first_vals and last_vals:
             summary["metrics"][key] = {
                 "first_mean": sum(first_vals) / len(first_vals),
@@ -108,7 +114,9 @@ def summarize(rows: list[dict[str, Any]], window: int) -> dict[str, Any]:
     return summary
 
 
-def render(rows: list[dict[str, Any]], out_dir: Path, window: int, save_step_copy: bool) -> Path:
+def render(
+    rows: list[dict[str, Any]], out_dir: Path, window: int, save_step_copy: bool
+) -> Path:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -145,7 +153,9 @@ def render(rows: list[dict[str, Any]], out_dir: Path, window: int, save_step_cop
     plt.close(fig)
 
     summary_path = out_dir / "metrics_summary_latest.json"
-    summary_path.write_text(json.dumps(summarize(rows, window), indent=2), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(summarize(rows, window), indent=2), encoding="utf-8"
+    )
     return latest_path
 
 
@@ -159,7 +169,8 @@ def main() -> None:
             latest_step = int(rows[-1]["global_step"])
             should_render = (
                 last_rendered_step is None
-                or latest_step // args.step_interval > last_rendered_step // args.step_interval
+                or latest_step // args.step_interval
+                > last_rendered_step // args.step_interval
             )
             if should_render:
                 path = render(rows, out_dir, args.window, args.save_step_copy)

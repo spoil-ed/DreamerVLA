@@ -3,7 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from src.models.world_model.base_world_model import DreamerV3ActorAdapterMixin, DreamerV3Loss
+from src.models.world_model.base_world_model import (
+    DreamerV3ActorAdapterMixin,
+    DreamerV3Loss,
+)
 from src.models.world_model.dreamerv3_torch import (
     DreamerV3RSSM,
     DreamerV3TokenDecoder,
@@ -167,7 +170,9 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin):
             probs = log_probs.exp()
             pred_entropy = -(probs * log_probs).sum(dim=-1).mean()
             flat_pred = pred.reshape(pred.shape[0] * pred.shape[1], -1)
-            flat_gt = tokens.to(device=pred.device).reshape(tokens.shape[0] * tokens.shape[1], -1)
+            flat_gt = tokens.to(device=pred.device).reshape(
+                tokens.shape[0] * tokens.shape[1], -1
+            )
             pred_unique = torch.tensor(
                 [int(torch.unique(row).numel()) for row in flat_pred],
                 dtype=logits.dtype,
@@ -187,7 +192,9 @@ class DreamerV3TokenFromPixelWorldModel(DreamerV3ActorAdapterMixin):
             "dyn_loss": kls["dyn"].detach(),
             "rep_loss": kls["rep"].detach(),
             "reward_loss": reward_loss.detach(),
-            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach()).mean().detach(),
+            "reward_pred_mean": _reward_pred(self.reward_head, reward_logits.detach())
+            .mean()
+            .detach(),
             "continue_loss": cont_loss.detach(),
             "pred_entropy": pred_entropy.detach(),
             "pred_unique_tokens": pred_unique.detach(),

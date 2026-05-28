@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Sklearn LogisticRegression baseline — the "LR ceiling" for LatentSuccessClassifier.
 
 CLAUDE.md records that a sklearn LogisticRegression(C=0.01) on real pi0 hidden
@@ -28,6 +29,7 @@ Usage:
         --out data/outputs/dreamervla/outcome_classifier/libero_goal/lr_ceiling \\
         --C 0.01 --stride-train 8 --stride-val 1
 """
+
 from __future__ import annotations
 
 import argparse
@@ -121,7 +123,10 @@ def _build_dataset(
             X.append(win)
             y.append(lab)
         if (i + 1) % 50 == 0:
-            print(f"  [{label}] loaded {i+1}/{len(pairs)} demos, windows={len(X)}", flush=True)
+            print(
+                f"  [{label}] loaded {i + 1}/{len(pairs)} demos, windows={len(X)}",
+                flush=True,
+            )
     if not X:
         return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.int64)
     return np.stack(X).astype(np.float32), np.asarray(y, dtype=np.int64)
@@ -148,18 +153,32 @@ def _f1_sweep(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True,
-                        help="A wmpo_classifier_libero_goal_*.yaml — we read paths "
-                             "and classifier.window/latent_dim from it.")
-    parser.add_argument("--out", required=True,
-                        help="Output dir; receives best.ckpt + train_log.jsonl + config.yaml")
-    parser.add_argument("--C", type=float, default=0.01,
-                        help="sklearn LogisticRegression inverse-of-regularization. "
-                             "0.01 matches CLAUDE.md's recorded F1 ≈ 0.87 setting.")
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="A wmpo_classifier_libero_goal_*.yaml — we read paths "
+        "and classifier.window/latent_dim from it.",
+    )
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="Output dir; receives best.ckpt + train_log.jsonl + config.yaml",
+    )
+    parser.add_argument(
+        "--C",
+        type=float,
+        default=0.01,
+        help="sklearn LogisticRegression inverse-of-regularization. "
+        "0.01 matches CLAUDE.md's recorded F1 ≈ 0.87 setting.",
+    )
     parser.add_argument("--stride-train", type=int, default=8)
     parser.add_argument("--stride-val", type=int, default=1)
-    parser.add_argument("--max-iter", type=int, default=200,
-                        help="sklearn LR max_iter (default 200 is enough for L=286720).")
+    parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=200,
+        help="sklearn LR max_iter (default 200 is enough for L=286720).",
+    )
     parser.add_argument("--thresh-steps", type=int, default=30)
     args = parser.parse_args()
 
@@ -179,37 +198,74 @@ def main() -> None:
 
     # ----- pair discovery (mirror v3 train script split) -----------------
     success_pairs = _find_demo_pairs(cfg.wm_replay.raw_dir, cfg.wm_replay.hidden_dir)
-    failure_pairs = _find_demo_pairs(cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir)
+    failure_pairs = _find_demo_pairs(
+        cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir
+    )
     val_succ_tail = int(cfg.wm_replay.val_demos_tail)
     val_fail_tail = int(cfg.wm_replay.val_failure_tail)
     tr_succ = success_pairs[:-val_succ_tail]
     va_succ = success_pairs[-val_succ_tail:]
-    tr_fail = failure_pairs[:-val_fail_tail] if len(failure_pairs) > val_fail_tail else failure_pairs[:]
-    va_fail = failure_pairs[-val_fail_tail:] if len(failure_pairs) > val_fail_tail else []
-    log({"event": "split",
-         "tr_succ": len(tr_succ), "va_succ": len(va_succ),
-         "tr_fail": len(tr_fail), "va_fail": len(va_fail)})
+    tr_fail = (
+        failure_pairs[:-val_fail_tail]
+        if len(failure_pairs) > val_fail_tail
+        else failure_pairs[:]
+    )
+    va_fail = (
+        failure_pairs[-val_fail_tail:] if len(failure_pairs) > val_fail_tail else []
+    )
+    log(
+        {
+            "event": "split",
+            "tr_succ": len(tr_succ),
+            "va_succ": len(va_succ),
+            "tr_fail": len(tr_fail),
+            "va_fail": len(va_fail),
+        }
+    )
 
     # ----- build flat (X, y) over real hidden ----------------------------
     print(f"[1/4] building train set (W={W}, stride={args.stride_train})", flush=True)
     X_succ_tr, y_succ_tr = _build_dataset(tr_succ, W, args.stride_train, "succ_tr")
     X_fail_tr, y_fail_tr = _build_dataset(tr_fail, W, args.stride_train, "fail_tr")
-    X_tr = np.concatenate([X_succ_tr, X_fail_tr], axis=0) if len(X_fail_tr) else X_succ_tr
-    y_tr = np.concatenate([y_succ_tr, y_fail_tr], axis=0) if len(y_fail_tr) else y_succ_tr
-    log({"event": "train_built", "n_train": int(len(y_tr)),
-         "pos_train": int((y_tr == 1).sum()), "neg_train": int((y_tr == 0).sum())})
+    X_tr = (
+        np.concatenate([X_succ_tr, X_fail_tr], axis=0) if len(X_fail_tr) else X_succ_tr
+    )
+    y_tr = (
+        np.concatenate([y_succ_tr, y_fail_tr], axis=0) if len(y_fail_tr) else y_succ_tr
+    )
+    log(
+        {
+            "event": "train_built",
+            "n_train": int(len(y_tr)),
+            "pos_train": int((y_tr == 1).sum()),
+            "neg_train": int((y_tr == 0).sum()),
+        }
+    )
 
     print(f"[2/4] building val set (W={W}, stride={args.stride_val})", flush=True)
     X_succ_va, y_succ_va = _build_dataset(va_succ, W, args.stride_val, "succ_va")
     X_fail_va, y_fail_va = _build_dataset(va_fail, W, args.stride_val, "fail_va")
-    X_va = np.concatenate([X_succ_va, X_fail_va], axis=0) if len(X_fail_va) else X_succ_va
-    y_va = np.concatenate([y_succ_va, y_fail_va], axis=0) if len(y_fail_va) else y_succ_va
-    log({"event": "val_built", "n_val": int(len(y_va)),
-         "pos_val": int((y_va == 1).sum()), "neg_val": int((y_va == 0).sum())})
+    X_va = (
+        np.concatenate([X_succ_va, X_fail_va], axis=0) if len(X_fail_va) else X_succ_va
+    )
+    y_va = (
+        np.concatenate([y_succ_va, y_fail_va], axis=0) if len(y_fail_va) else y_succ_va
+    )
+    log(
+        {
+            "event": "val_built",
+            "n_val": int(len(y_va)),
+            "pos_val": int((y_va == 1).sum()),
+            "neg_val": int((y_va == 0).sum()),
+        }
+    )
 
     # ----- fit sklearn LR -----------------------------------------------
-    print(f"[3/4] fitting LogisticRegression(C={args.C}, class_weight=balanced, "
-          f"max_iter={args.max_iter}, lbfgs) on X_tr shape={X_tr.shape}", flush=True)
+    print(
+        f"[3/4] fitting LogisticRegression(C={args.C}, class_weight=balanced, "
+        f"max_iter={args.max_iter}, lbfgs) on X_tr shape={X_tr.shape}",
+        flush=True,
+    )
     lr = LogisticRegression(
         C=float(args.C),
         class_weight="balanced",
@@ -219,10 +275,14 @@ def main() -> None:
         verbose=1,
     )
     lr.fit(X_tr, y_tr)
-    log({"event": "lr_fit_done",
-         "n_iter": int(lr.n_iter_[0]),
-         "coef_norm": float(np.linalg.norm(lr.coef_)),
-         "intercept": float(lr.intercept_[0])})
+    log(
+        {
+            "event": "lr_fit_done",
+            "n_iter": int(lr.n_iter_[0]),
+            "coef_norm": float(np.linalg.norm(lr.coef_)),
+            "intercept": float(lr.intercept_[0]),
+        }
+    )
 
     # per-window threshold sweep on val
     probs_va = lr.predict_proba(X_va)[:, 1]
@@ -236,11 +296,13 @@ def main() -> None:
     log({"event": "train_window_f1", "best": best_tr, "n_train": int(len(y_tr))})
 
     # ----- pack as LatentSuccessClassifier(head_type=linear) ckpt --------
-    print(f"[4/4] packing as LatentSuccessClassifier(head_type=linear) ckpt", flush=True)
-    coef = lr.coef_[0]                # [L*W]
+    print("[4/4] packing as LatentSuccessClassifier(head_type=linear) ckpt", flush=True)
+    coef = lr.coef_[0]  # [L*W]
     intercept = float(lr.intercept_[0])
     # Make logits[1] = coef·x + b, logits[0] = 0 so softmax recovers sklearn proba.
-    weight = np.stack([np.zeros_like(coef), coef], axis=0).astype(np.float32)  # [2, L*W]
+    weight = np.stack([np.zeros_like(coef), coef], axis=0).astype(
+        np.float32
+    )  # [2, L*W]
     bias = np.array([0.0, intercept], dtype=np.float32)
 
     cfg_dict = OmegaConf.to_container(cfg.classifier, resolve=True)
@@ -262,7 +324,13 @@ def main() -> None:
             torch_probs = torch.softmax(torch_logits, dim=-1)[:, 1].numpy()
         sklearn_probs = lr.predict_proba(X_va[:sample_n])[:, 1]
         max_abs_err = float(np.max(np.abs(torch_probs - sklearn_probs)))
-        log({"event": "torch_pack_sanity", "n": int(sample_n), "max_abs_err": max_abs_err})
+        log(
+            {
+                "event": "torch_pack_sanity",
+                "n": int(sample_n),
+                "max_abs_err": max_abs_err,
+            }
+        )
         if max_abs_err > 5e-4:
             print(f"WARNING: torch/sklearn disagreement {max_abs_err:.6g}", flush=True)
 
@@ -290,13 +358,20 @@ def main() -> None:
     cfg_save.classifier.head_type = "linear"
     OmegaConf.save(cfg_save, out_dir / "config.yaml")
 
-    log({"event": "done",
-         "ckpt": str(ckpt_path),
-         "best_val": best_va,
-         "best_train": best_tr})
+    log(
+        {
+            "event": "done",
+            "ckpt": str(ckpt_path),
+            "best_val": best_va,
+            "best_train": best_tr,
+        }
+    )
     log_f.close()
-    print(f"\n[done] best val F1={best_va['f1']:.4f} thresh={best_va['thresh']:.2f}"
-          f"  →  {ckpt_path}", flush=True)
+    print(
+        f"\n[done] best val F1={best_va['f1']:.4f} thresh={best_va['thresh']:.2f}"
+        f"  →  {ckpt_path}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

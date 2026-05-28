@@ -81,13 +81,19 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(ckpt["cfg"])
-    step = ckpt.get('update_step', ckpt.get('epoch', 'NA'))
+    step = ckpt.get("update_step", ckpt.get("epoch", "NA"))
     print(f"[load] {Path(args.ckpt).parent.parent.name} step={step}")
 
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
-    state_dict, mismatched = prepare_world_model_state_dict(world_model, ckpt["state_dicts"]["world_model"])
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
+    state_dict, mismatched = prepare_world_model_state_dict(
+        world_model, ckpt["state_dicts"]["world_model"]
+    )
     missing, unexpected = world_model.load_state_dict(state_dict, strict=False)
-    print(f"[load] tensors={len(state_dict)} missing={len(missing)} unexpected={len(unexpected)} mismatched={len(mismatched)}")
+    print(
+        f"[load] tensors={len(state_dict)} missing={len(missing)} unexpected={len(unexpected)} mismatched={len(mismatched)}"
+    )
     if missing:
         print(f"[load] missing sample: {missing[:5]}")
     if unexpected:
@@ -95,7 +101,8 @@ def main():
     if mismatched:
         print(f"[load] mismatched sample: {mismatched[:5]}")
     world_model.eval()
-    for p in world_model.parameters(): p.requires_grad = False
+    for p in world_model.parameters():
+        p.requires_grad = False
 
     with h5py.File(args.hidden_hdf5, "r") as fh, h5py.File(args.reward_hdf5, "r") as fr:
         obs_emb = fh["data"][args.demo_key]["obs_embedding"][:]
@@ -104,22 +111,44 @@ def main():
     T = int(obs_emb.shape[0])
     print(f"[demo] T={T} success={bool(sparse[-1])}")
 
-    obs_t = torch.from_numpy(obs_emb).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
-    act_t = torch.from_numpy(actions).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
-    is_first = torch.zeros(1, T, dtype=torch.bool, device=device); is_first[0, 0] = True
+    obs_t = (
+        torch.from_numpy(obs_emb).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
+    )
+    act_t = (
+        torch.from_numpy(actions).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
+    )
+    is_first = torch.zeros(1, T, dtype=torch.bool, device=device)
+    is_first[0, 0] = True
 
     # 1. Full posterior
     with torch.no_grad():
-        observed = world_model({"mode": "observe_sequence",
-                                "obs_embedding": obs_t, "actions": act_t, "is_first": is_first})
-    post_latent = observed["latent"]                                   # [1, T, ...]
-    post_feat = post_latent.feature().float()                          # [1, T, D]
+        observed = world_model(
+            {
+                "mode": "observe_sequence",
+                "obs_embedding": obs_t,
+                "actions": act_t,
+                "is_first": is_first,
+            }
+        )
+    post_latent = observed["latent"]  # [1, T, ...]
+    post_feat = post_latent.feature().float()  # [1, T, D]
     with torch.no_grad():
-        post_reward = world_model.reward_head(post_feat.reshape(T, -1).to(dtype=torch.bfloat16))
+        post_reward = world_model.reward_head(
+            post_feat.reshape(T, -1).to(dtype=torch.bfloat16)
+        )
         from src.models.world_model.dreamerv3_torch import _reward_pred
-        post_reward = _reward_pred(world_model.reward_head, post_reward).squeeze(-1).float().cpu().numpy()
 
-    print(f"\n[posterior reward curve]  t=0:{post_reward[0]:.4f}  T/2:{post_reward[T//2]:.4f}  T-8:{post_reward[T-8]:.4f}  T-1:{post_reward[T-1]:.4f}")
+        post_reward = (
+            _reward_pred(world_model.reward_head, post_reward)
+            .squeeze(-1)
+            .float()
+            .cpu()
+            .numpy()
+        )
+
+    print(
+        f"\n[posterior reward curve]  t=0:{post_reward[0]:.4f}  T/2:{post_reward[T // 2]:.4f}  T-8:{post_reward[T - 8]:.4f}  T-1:{post_reward[T - 1]:.4f}"
+    )
 
     # 2. Imagine from each start step using demo actions
     records = []
@@ -133,44 +162,65 @@ def main():
         for t in range(start, T - 1):
             a_t = act_t[:, t, :].to(dtype=cur_latent.deter.dtype)
             with torch.no_grad():
-                cur_latent = world_model({"mode": "predict_next",
-                                          "latent": cur_latent, "actions": a_t})
+                cur_latent = world_model(
+                    {"mode": "predict_next", "latent": cur_latent, "actions": a_t}
+                )
             imag_feats.append(cur_latent.feature().float().cpu())
             imag_rewards.append(reward_of(world_model, cur_latent))
-        imag_feats_t = torch.cat(imag_feats, dim=0)                    # [T-start, D]
-        post_feats_for_window = post_feat[0, start:T, :].cpu()         # [T-start, D]
+        imag_feats_t = torch.cat(imag_feats, dim=0)  # [T-start, D]
+        post_feats_for_window = post_feat[0, start:T, :].cpu()  # [T-start, D]
         # Divergence: per-step feature MSE and cosine
         mse_per_step = (imag_feats_t - post_feats_for_window).square().mean(-1).numpy()
-        cos_per_step = F.cosine_similarity(imag_feats_t, post_feats_for_window, dim=-1).numpy()
+        cos_per_step = F.cosine_similarity(
+            imag_feats_t, post_feats_for_window, dim=-1
+        ).numpy()
         imag_rewards = np.array(imag_rewards)
         post_rewards_window = post_reward[start:T]
 
-        print(f"\n──────────── imagine start={start} (horizon={T-start-1} steps) ────────────")
+        print(
+            f"\n──────────── imagine start={start} (horizon={T - start - 1} steps) ────────────"
+        )
         # Sample every ~15% of horizon
         L = imag_rewards.shape[0]
-        idxs = sorted(set([0, L//8, L//4, L//2, 3*L//4, L-8, L-4, L-1]))
-        print(f"{'step_in_traj':>14} {'h':>4} {'feat_mse':>10} {'cosine':>8} {'imag_r':>8} {'post_r':>8}  Δr")
+        idxs = sorted(set([0, L // 8, L // 4, L // 2, 3 * L // 4, L - 8, L - 4, L - 1]))
+        print(
+            f"{'step_in_traj':>14} {'h':>4} {'feat_mse':>10} {'cosine':>8} {'imag_r':>8} {'post_r':>8}  Δr"
+        )
         for i in idxs:
-            if i < 0 or i >= L: continue
-            print(f"{start+i:>14} {i:>4} {mse_per_step[i]:>10.3g} {cos_per_step[i]:>8.4f} "
-                  f"{imag_rewards[i]:>8.4f} {post_rewards_window[i]:>8.4f}  {imag_rewards[i]-post_rewards_window[i]:+.4f}")
+            if i < 0 or i >= L:
+                continue
+            print(
+                f"{start + i:>14} {i:>4} {mse_per_step[i]:>10.3g} {cos_per_step[i]:>8.4f} "
+                f"{imag_rewards[i]:>8.4f} {post_rewards_window[i]:>8.4f}  {imag_rewards[i] - post_rewards_window[i]:+.4f}"
+            )
         # Saturation point: where does imagine reward "fire"?
         try:
-            fire_imag = int(np.argmax(imag_rewards > 0.5)) if (imag_rewards > 0.5).any() else -1
-            fire_post = int(np.argmax(post_rewards_window > 0.5)) if (post_rewards_window > 0.5).any() else -1
+            fire_imag = (
+                int(np.argmax(imag_rewards > 0.5)) if (imag_rewards > 0.5).any() else -1
+            )
+            fire_post = (
+                int(np.argmax(post_rewards_window > 0.5))
+                if (post_rewards_window > 0.5).any()
+                else -1
+            )
         except Exception:
-            fire_imag = -1; fire_post = -1
-        print(f"  fire_step (r>0.5): imagine={fire_imag}  posterior={fire_post}  (diff={fire_imag-fire_post if fire_imag>=0 and fire_post>=0 else 'NA'})")
-        records.append({
-            "start": int(start),
-            "horizon": int(T - start - 1),
-            "feat_mse": mse_per_step.tolist(),
-            "cosine": cos_per_step.tolist(),
-            "imag_reward": imag_rewards.tolist(),
-            "post_reward": post_rewards_window.tolist(),
-            "fire_step_imag": fire_imag,
-            "fire_step_post": fire_post,
-        })
+            fire_imag = -1
+            fire_post = -1
+        print(
+            f"  fire_step (r>0.5): imagine={fire_imag}  posterior={fire_post}  (diff={fire_imag - fire_post if fire_imag >= 0 and fire_post >= 0 else 'NA'})"
+        )
+        records.append(
+            {
+                "start": int(start),
+                "horizon": int(T - start - 1),
+                "feat_mse": mse_per_step.tolist(),
+                "cosine": cos_per_step.tolist(),
+                "imag_reward": imag_rewards.tolist(),
+                "post_reward": post_rewards_window.tolist(),
+                "fire_step_imag": fire_imag,
+                "fire_step_post": fire_post,
+            }
+        )
 
     out = {
         "ckpt": args.ckpt,
@@ -179,7 +229,11 @@ def main():
         "post_reward_curve": post_reward.tolist(),
         "starts": records,
     }
-    out_json = Path(args.out_json) if args.out_json else Path(args.ckpt).parent.parent / "wm_imagine_fidelity.json"
+    out_json = (
+        Path(args.out_json)
+        if args.out_json
+        else Path(args.ckpt).parent.parent / "wm_imagine_fidelity.json"
+    )
     out_json.write_text(json.dumps(out, indent=2))
     print(f"\n[save] {out_json}")
 

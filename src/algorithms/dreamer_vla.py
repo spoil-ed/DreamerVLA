@@ -18,6 +18,7 @@ imagination rollout trains the actor and value head:
     DreamerV3 action entropy term; imagined states are stop-gradient by
     default (`ac_grads: False` in the official config).
 """
+
 from __future__ import annotations
 
 import os
@@ -74,13 +75,27 @@ def world_model_pretrain_step(
     del policy  # batch is already encoded by the workspace; nothing to do here.
     flat_batch: dict[str, Any] = {}
     for key in (
-        "obs_embedding", "next_obs_embedding", "action", "action_mask", "reward",
+        "obs_embedding",
+        "next_obs_embedding",
+        "action",
+        "action_mask",
+        "reward",
         "done",
-        "next_obs_image_hiddens", "next_obs_image_token_ids",
+        "next_obs_image_hiddens",
+        "next_obs_image_token_ids",
         # DreamerV3 sequence WM batches.
-        "images", "tokens", "actions", "current_actions", "rewards", "dones", "is_first",
-        "is_terminal", "is_last",
-        "success_to_go", "return_to_go", "return_targets",
+        "images",
+        "tokens",
+        "actions",
+        "current_actions",
+        "rewards",
+        "dones",
+        "is_first",
+        "is_terminal",
+        "is_last",
+        "success_to_go",
+        "return_to_go",
+        "return_targets",
     ):
         value = batch.get(key)
         if isinstance(value, torch.Tensor):
@@ -104,7 +119,9 @@ def world_model_pretrain_step(
 
     def _f(key: str, default: float = 0.0) -> float:
         v = losses.get(key)
-        return float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(default)
+        return (
+            float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(default)
+        )
 
     return {
         "loss": float(loss_tensor.detach().cpu()),
@@ -151,7 +168,10 @@ def _detach_latent(value: Any) -> Any:
     if is_dataclass(value):
         return replace(
             value,
-            **{field.name: _detach_latent(getattr(value, field.name)) for field in fields(value)}
+            **{
+                field.name: _detach_latent(getattr(value, field.name))
+                for field in fields(value)
+            },
         )
     if isinstance(value, dict):
         return {key: _detach_latent(item) for key, item in value.items()}
@@ -168,14 +188,18 @@ def _world_model_actor_input(world_model: nn.Module, latent: Any) -> torch.Tenso
     return latent.feature()
 
 
-def _world_model_actor_input_sequence(world_model: nn.Module, latent: Any) -> torch.Tensor:
+def _world_model_actor_input_sequence(
+    world_model: nn.Module, latent: Any
+) -> torch.Tensor:
     try:
         return world_model({"mode": "actor_input_sequence", "latent": latent})
     except ValueError as exc:
         message = str(exc)
         if "actor_input_sequence" not in message and "Unknown" not in message:
             raise
-    raise RuntimeError("Configured actor_input_mode=sequence, but world_model has no actor_input_sequence.")
+    raise RuntimeError(
+        "Configured actor_input_mode=sequence, but world_model has no actor_input_sequence."
+    )
 
 
 def _world_model_critic_input(world_model: nn.Module, latent: Any) -> torch.Tensor:
@@ -201,7 +225,9 @@ def _world_model_success_return(world_model: nn.Module, latent: Any) -> torch.Te
 def _latent_time_dim(value: Any) -> int:
     if isinstance(value, torch.Tensor):
         if value.ndim < 2:
-            raise ValueError(f"Expected latent sequence tensor with [B,T,...], got {tuple(value.shape)}")
+            raise ValueError(
+                f"Expected latent sequence tensor with [B,T,...], got {tuple(value.shape)}"
+            )
         return int(value.shape[1])
     if is_dataclass(value):
         for field in fields(value):
@@ -215,7 +241,9 @@ def _latent_time_dim(value: Any) -> int:
 def _latent_batch_dim(value: Any) -> int:
     if isinstance(value, torch.Tensor):
         if value.ndim < 2:
-            raise ValueError(f"Expected latent sequence tensor with [B,T,...], got {tuple(value.shape)}")
+            raise ValueError(
+                f"Expected latent sequence tensor with [B,T,...], got {tuple(value.shape)}"
+            )
         return int(value.shape[0])
     if is_dataclass(value):
         for field in fields(value):
@@ -234,7 +262,10 @@ def _slice_last_steps(value: Any, steps: int) -> Any:
     if is_dataclass(value):
         return replace(
             value,
-            **{field.name: _slice_last_steps(getattr(value, field.name), steps) for field in fields(value)}
+            **{
+                field.name: _slice_last_steps(getattr(value, field.name), steps)
+                for field in fields(value)
+            },
         )
     if isinstance(value, dict):
         return {key: _slice_last_steps(item, steps) for key, item in value.items()}
@@ -251,21 +282,30 @@ def _flatten_last_steps(value: Any, steps: int) -> Any:
     if is_dataclass(value):
         return replace(
             value,
-            **{field.name: _flatten_last_steps(getattr(value, field.name), steps) for field in fields(value)}
+            **{
+                field.name: _flatten_last_steps(getattr(value, field.name), steps)
+                for field in fields(value)
+            },
         )
     if isinstance(value, dict):
         return {key: _flatten_last_steps(item, steps) for key, item in value.items()}
     return value
 
 
-def _world_model_observe_sequence(world_model: nn.Module, obs: Mapping[str, Any]) -> Any:
+def _world_model_observe_sequence(
+    world_model: nn.Module, obs: Mapping[str, Any]
+) -> Any:
     observed = world_model({"mode": "observe_sequence", **obs})
     if not isinstance(observed, Mapping) or "latent" not in observed:
-        raise TypeError("world_model observe_sequence must return a mapping with key 'latent'")
+        raise TypeError(
+            "world_model observe_sequence must return a mapping with key 'latent'"
+        )
     return observed["latent"]
 
 
-def _world_model_observe_starts(world_model: nn.Module, obs: Mapping[str, Any], imag_last: int) -> Any:
+def _world_model_observe_starts(
+    world_model: nn.Module, obs: Mapping[str, Any], imag_last: int
+) -> Any:
     latent_seq = _world_model_observe_sequence(world_model, obs)
     seq_len = _latent_time_dim(latent_seq)
     starts = min(int(imag_last) if int(imag_last) > 0 else seq_len, seq_len)
@@ -276,7 +316,9 @@ def _world_model_state_reward(world_model: nn.Module, latent: Any) -> torch.Tens
     return world_model({"mode": "reward", "latent": latent})
 
 
-def _world_model_continue(world_model: nn.Module, latent: Any, like: torch.Tensor) -> torch.Tensor:
+def _world_model_continue(
+    world_model: nn.Module, latent: Any, like: torch.Tensor
+) -> torch.Tensor:
     try:
         return world_model({"mode": "continue", "latent": latent})
     except ValueError as exc:
@@ -309,13 +351,19 @@ def _actor_action_to_env_scale(
         dtype=action.dtype,
     )
     mapped = (action + 1.0) * 0.5 * (high - low) + low
-    do_clip = bool(algorithm_cfg.get("rssm_action_clip", True)) if clip is None else bool(clip)
+    do_clip = (
+        bool(algorithm_cfg.get("rssm_action_clip", True))
+        if clip is None
+        else bool(clip)
+    )
     if do_clip:
         mapped = torch.maximum(torch.minimum(mapped, high), low)
     return mapped
 
 
-def _actor_action_for_world_model(action: torch.Tensor, algorithm_cfg: DictConfig) -> torch.Tensor:
+def _actor_action_for_world_model(
+    action: torch.Tensor, algorithm_cfg: DictConfig
+) -> torch.Tensor:
     scale = str(algorithm_cfg.get("rssm_action_scale", "env")).lower()
     if scale in {"policy", "raw", "identity", ""}:
         return action
@@ -324,7 +372,9 @@ def _actor_action_for_world_model(action: torch.Tensor, algorithm_cfg: DictConfi
     return _actor_action_to_env_scale(action, algorithm_cfg)
 
 
-def _policy_reference_action_chunk(policy: nn.Module, hidden: torch.Tensor) -> torch.Tensor | None:
+def _policy_reference_action_chunk(
+    policy: nn.Module, hidden: torch.Tensor
+) -> torch.Tensor | None:
     module: Any = policy
     visited: set[int] = set()
     while module is not None and id(module) not in visited:
@@ -382,7 +432,9 @@ def compute_replay_lambda_returns(
     removes environment continuation. `boot` is the imagined return seeded from
     each replay posterior state, exactly like DreamerV3's `repval_loss`.
     """
-    if not (last.shape == terminal.shape == rewards.shape == values.shape == boot.shape):
+    if not (
+        last.shape == terminal.shape == rewards.shape == values.shape == boot.shape
+    ):
         raise ValueError(
             "replay lambda_return expects equal [B,T] shapes, got "
             f"{tuple(last.shape)}, {tuple(terminal.shape)}, {tuple(rewards.shape)}, "
@@ -474,14 +526,24 @@ def imagine_actor_critic_step(
     if actor_input_mode not in {"pooled", "sequence"}:
         raise ValueError("algorithm.actor_input_mode must be one of: pooled, sequence")
     lam = float(algorithm_cfg.lam)
-    entropy_coef = float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 3.0e-4)))
-    actor_bc_scale = float(algorithm_cfg.get("actor_bc_to_vla_scale", algorithm_cfg.get("actor_bc_scale", 0.0)))
+    entropy_coef = float(
+        algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 3.0e-4))
+    )
+    actor_bc_scale = float(
+        algorithm_cfg.get(
+            "actor_bc_to_vla_scale", algorithm_cfg.get("actor_bc_scale", 0.0)
+        )
+    )
     actor_bc_ref_scale = float(algorithm_cfg.get("actor_bc_to_ref_scale", 0.0))
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     kl_penalty_kind = str(algorithm_cfg.get("kl_penalty_kind", "kl")).lower()
-    success_return_shaping_scale = float(algorithm_cfg.get("success_return_shaping_scale", 0.0))
+    success_return_shaping_scale = float(
+        algorithm_cfg.get("success_return_shaping_scale", 0.0)
+    )
     success_return_shaping_discount = float(
-        algorithm_cfg.get("success_return_shaping_discount", algorithm_cfg.get("ppo_gamma", 1.0))
+        algorithm_cfg.get(
+            "success_return_shaping_discount", algorithm_cfg.get("ppo_gamma", 1.0)
+        )
     )
     # WMPO-style second KL: π_new vs π_prev (snapshot before previous update step).
     prev_kl_coef = float(algorithm_cfg.get("prev_kl_coef", 0.0))
@@ -496,8 +558,12 @@ def imagine_actor_critic_step(
     slowreg = float(algorithm_cfg.get("slowreg", 1.0))
     repl_cfg = algorithm_cfg.get("repl_loss", {})
     repl_lam = float(repl_cfg.get("lam", lam)) if hasattr(repl_cfg, "get") else lam
-    repl_slowtar = bool(repl_cfg.get("slowtar", slowtar)) if hasattr(repl_cfg, "get") else slowtar
-    repl_slowreg = float(repl_cfg.get("slowreg", slowreg)) if hasattr(repl_cfg, "get") else slowreg
+    repl_slowtar = (
+        bool(repl_cfg.get("slowtar", slowtar)) if hasattr(repl_cfg, "get") else slowtar
+    )
+    repl_slowreg = (
+        float(repl_cfg.get("slowreg", slowreg)) if hasattr(repl_cfg, "get") else slowreg
+    )
     repval_enabled = bool(algorithm_cfg.get("repval_loss", True))
     repval_scale = float(algorithm_cfg.get("repval_scale", 0.3))
     grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
@@ -553,69 +619,108 @@ def imagine_actor_critic_step(
     with _temporarily_freeze(world_model):
         for _ in range(horizon):
             if actor_input_mode == "sequence":
-                current_actor_seq = _world_model_actor_input_sequence(world_model, current_latent).detach().float()
-                action, _, extra = policy({
-                    "mode": "sample",
-                    "hidden_states": current_actor_seq,
-                    "input_ids": actor_input_ids,
-                    "attention_mask": actor_attention_mask,
-                    "deterministic": False,
-                })
+                current_actor_seq = (
+                    _world_model_actor_input_sequence(world_model, current_latent)
+                    .detach()
+                    .float()
+                )
+                action, _, extra = policy(
+                    {
+                        "mode": "sample",
+                        "hidden_states": current_actor_seq,
+                        "input_ids": actor_input_ids,
+                        "attention_mask": actor_attention_mask,
+                        "deterministic": False,
+                    }
+                )
             else:
-                current_actor_feat = _world_model_actor_input(world_model, current_latent).detach().float()
-                action, _, extra = policy({"mode": "sample", "hidden": current_actor_feat, "deterministic": False})
+                current_actor_feat = (
+                    _world_model_actor_input(world_model, current_latent)
+                    .detach()
+                    .float()
+                )
+                action, _, extra = policy(
+                    {
+                        "mode": "sample",
+                        "hidden": current_actor_feat,
+                        "deterministic": False,
+                    }
+                )
                 action_chunk = extra.get("action_chunk")
-                reference_chunk = _policy_reference_action_chunk(policy, current_actor_feat)
+                reference_chunk = _policy_reference_action_chunk(
+                    policy, current_actor_feat
+                )
                 if actor_bc_scale > 0.0:
                     if reference_chunk is None:
                         raise RuntimeError(
                             "algorithm.actor_bc_to_vla_scale requires policy.reference_action_chunk(hidden)."
                         )
                     if not isinstance(action_chunk, torch.Tensor):
-                        raise RuntimeError("policy sample output must include extra['action_chunk'] for BC anchoring.")
-                    actor_bc_losses.append((action_chunk.float() - reference_chunk.float()).square().mean())
+                        raise RuntimeError(
+                            "policy sample output must include extra['action_chunk'] for BC anchoring."
+                        )
+                    actor_bc_losses.append(
+                        (action_chunk.float() - reference_chunk.float()).square().mean()
+                    )
                 if use_ref_bc and isinstance(action_chunk, torch.Tensor):
                     with torch.no_grad():
-                        _, _, ref_extra = ref_policy({
-                            "mode": "sample",
-                            "hidden": current_actor_feat,
-                            "deterministic": True,
-                            "return_chunk": True,
-                        })
+                        _, _, ref_extra = ref_policy(
+                            {
+                                "mode": "sample",
+                                "hidden": current_actor_feat,
+                                "deterministic": True,
+                                "return_chunk": True,
+                            }
+                        )
                     ref_action_chunk = ref_extra.get("action_chunk")
                     if not isinstance(ref_action_chunk, torch.Tensor):
                         raise RuntimeError(
                             "algorithm.actor_bc_to_ref_scale requires ref_policy sample extra to include 'action_chunk'."
                         )
                     actor_bc_ref_losses.append(
-                        (action_chunk.float() - ref_action_chunk.detach().float()).square().mean()
+                        (action_chunk.float() - ref_action_chunk.detach().float())
+                        .square()
+                        .mean()
                     )
                 # Drift is monitoring-only (never in loss). Compute against the
                 # startup-time frozen ref_policy snapshot — not policy.reference_action_chunk()
                 # which is broken under adapter_type=identity (both branches use the
                 # same trainable output_projection and yield drift==0 by construction).
-                if (
-                    ref_policy is not None
-                    and isinstance(action_chunk, torch.Tensor)
-                ):
+                if ref_policy is not None and isinstance(action_chunk, torch.Tensor):
                     with torch.no_grad():
-                        _, _, _drift_extra = ref_policy({
-                            "mode": "sample",
-                            "hidden": current_actor_feat,
-                            "deterministic": True,
-                            "return_chunk": True,
-                        })
+                        _, _, _drift_extra = ref_policy(
+                            {
+                                "mode": "sample",
+                                "hidden": current_actor_feat,
+                                "deterministic": True,
+                                "return_chunk": True,
+                            }
+                        )
                     drift_ref_chunk = _drift_extra.get("action_chunk")
                     if isinstance(drift_ref_chunk, torch.Tensor):
                         action_chunk_f = action_chunk.detach().float()
                         drift_ref_chunk_f = drift_ref_chunk.detach().float()
-                        actor_drift_raw_mses.append((action_chunk_f - drift_ref_chunk_f).square().mean())
-                        action_env = _actor_action_to_env_scale(action_chunk_f, algorithm_cfg, clip=False)
-                        ref_env = _actor_action_to_env_scale(drift_ref_chunk_f, algorithm_cfg, clip=False)
-                        action_env_clip = _actor_action_to_env_scale(action_chunk_f, algorithm_cfg, clip=True)
-                        ref_env_clip = _actor_action_to_env_scale(drift_ref_chunk_f, algorithm_cfg, clip=True)
-                        actor_drift_env_mses.append((action_env - ref_env).square().mean())
-                        actor_drift_env_clip_mses.append((action_env_clip - ref_env_clip).square().mean())
+                        actor_drift_raw_mses.append(
+                            (action_chunk_f - drift_ref_chunk_f).square().mean()
+                        )
+                        action_env = _actor_action_to_env_scale(
+                            action_chunk_f, algorithm_cfg, clip=False
+                        )
+                        ref_env = _actor_action_to_env_scale(
+                            drift_ref_chunk_f, algorithm_cfg, clip=False
+                        )
+                        action_env_clip = _actor_action_to_env_scale(
+                            action_chunk_f, algorithm_cfg, clip=True
+                        )
+                        ref_env_clip = _actor_action_to_env_scale(
+                            drift_ref_chunk_f, algorithm_cfg, clip=True
+                        )
+                        actor_drift_env_mses.append(
+                            (action_env - ref_env).square().mean()
+                        )
+                        actor_drift_env_clip_mses.append(
+                            (action_env_clip - ref_env_clip).square().mean()
+                        )
                         actor_drift_env_maes.append((action_env - ref_env).abs().mean())
             if extra.get("std") is not None:
                 dist = Normal(extra["mean"], extra["std"])
@@ -626,20 +731,24 @@ def imagine_actor_critic_step(
                 if use_ref_kl:
                     with torch.no_grad():
                         if actor_input_mode == "sequence":
-                            ref_log_prob_t, _, _ = ref_policy({
-                                "mode": "evaluate",
-                                "hidden_states": current_actor_seq,
-                                "input_ids": actor_input_ids,
-                                "attention_mask": actor_attention_mask,
-                                "action": action.detach(),
-                            })
+                            ref_log_prob_t, _, _ = ref_policy(
+                                {
+                                    "mode": "evaluate",
+                                    "hidden_states": current_actor_seq,
+                                    "input_ids": actor_input_ids,
+                                    "attention_mask": actor_attention_mask,
+                                    "action": action.detach(),
+                                }
+                            )
                         else:
-                            ref_log_prob_t, _, _ = ref_policy({
-                                "mode": "evaluate",
-                                "hidden": current_actor_feat,
-                                "action": action.detach(),
-                            })
-                    kl_raw = (log_prob_t.detach() - ref_log_prob_t)
+                            ref_log_prob_t, _, _ = ref_policy(
+                                {
+                                    "mode": "evaluate",
+                                    "hidden": current_actor_feat,
+                                    "action": action.detach(),
+                                }
+                            )
+                    kl_raw = log_prob_t.detach() - ref_log_prob_t
                     if kl_penalty_kind == "abs":
                         kl_t = kl_raw.abs()
                     elif kl_penalty_kind == "mse":
@@ -651,20 +760,24 @@ def imagine_actor_critic_step(
                 if use_prev_kl:
                     with torch.no_grad():
                         if actor_input_mode == "sequence":
-                            prev_log_prob_t, _, _ = prev_policy({
-                                "mode": "evaluate",
-                                "hidden_states": current_actor_seq,
-                                "input_ids": actor_input_ids,
-                                "attention_mask": actor_attention_mask,
-                                "action": action.detach(),
-                            })
+                            prev_log_prob_t, _, _ = prev_policy(
+                                {
+                                    "mode": "evaluate",
+                                    "hidden_states": current_actor_seq,
+                                    "input_ids": actor_input_ids,
+                                    "attention_mask": actor_attention_mask,
+                                    "action": action.detach(),
+                                }
+                            )
                         else:
-                            prev_log_prob_t, _, _ = prev_policy({
-                                "mode": "evaluate",
-                                "hidden": current_actor_feat,
-                                "action": action.detach(),
-                            })
-                    prev_kl_raw = (log_prob_t.detach() - prev_log_prob_t)
+                            prev_log_prob_t, _, _ = prev_policy(
+                                {
+                                    "mode": "evaluate",
+                                    "hidden": current_actor_feat,
+                                    "action": action.detach(),
+                                }
+                            )
+                    prev_kl_raw = log_prob_t.detach() - prev_log_prob_t
                     if kl_penalty_kind == "abs":
                         prev_kl_t = prev_kl_raw.abs()
                     elif kl_penalty_kind == "mse":
@@ -674,23 +787,37 @@ def imagine_actor_critic_step(
                     prev_kls.append(prev_kl_t.detach())
 
             with torch.no_grad():
-                rssm_action = _actor_action_for_world_model(action.detach(), algorithm_cfg)
-                next_latent = world_model({
-                    "mode": "predict_next", "latent": current_latent, "actions": rssm_action,
-                })
+                rssm_action = _actor_action_for_world_model(
+                    action.detach(), algorithm_cfg
+                )
+                next_latent = world_model(
+                    {
+                        "mode": "predict_next",
+                        "latent": current_latent,
+                        "actions": rssm_action,
+                    }
+                )
                 current_latent = _detach_latent(next_latent)
                 latents.append(current_latent)
 
         if not log_probs:
-            raise RuntimeError("DreamerV3 actor loss requires stochastic policy log_probs.")
+            raise RuntimeError(
+                "DreamerV3 actor loss requires stochastic policy log_probs."
+            )
 
         with torch.no_grad():
             critic_feat_stack = torch.stack(
-                [_world_model_critic_input(world_model, latent).detach().float() for latent in latents],
+                [
+                    _world_model_critic_input(world_model, latent).detach().float()
+                    for latent in latents
+                ],
                 dim=1,
             )  # [B*K,H+1,D]
             reward_stack = torch.stack(
-                [_world_model_state_reward(world_model, latent).detach().float() for latent in latents],
+                [
+                    _world_model_state_reward(world_model, latent).detach().float()
+                    for latent in latents
+                ],
                 dim=1,
             )
             reward_stack_raw = reward_stack.detach().clone()  # pre-KL WM reward
@@ -698,7 +825,12 @@ def imagine_actor_critic_step(
             success_return_delta: torch.Tensor | None = None
             if success_return_shaping_scale != 0.0:
                 success_return_stack = torch.stack(
-                    [_world_model_success_return(world_model, latent).detach().float() for latent in latents],
+                    [
+                        _world_model_success_return(world_model, latent)
+                        .detach()
+                        .float()
+                        for latent in latents
+                    ],
                     dim=1,
                 )
                 success_return_delta = (
@@ -719,17 +851,23 @@ def imagine_actor_critic_step(
                 reward_stack = reward_stack.clone()
                 reward_stack[:, :-1] = reward_stack[:, :-1] - kl_coef * kl_stack
                 kl_penalty_mean = kl_stack.mean().detach()
-            prev_kl_penalty_mean = torch.zeros((), device=device, dtype=reward_stack.dtype)
-            prev_kl_stack_raw: torch.Tensor | None = None
+            prev_kl_penalty_mean = torch.zeros(
+                (), device=device, dtype=reward_stack.dtype
+            )
             if use_prev_kl and prev_kls:
-                prev_kl_stack = torch.stack(prev_kls, dim=1).to(dtype=reward_stack.dtype)
-                prev_kl_stack_raw = prev_kl_stack.detach().clone()
+                prev_kl_stack = torch.stack(prev_kls, dim=1).to(
+                    dtype=reward_stack.dtype
+                )
                 reward_stack = reward_stack.clone()
-                reward_stack[:, :-1] = reward_stack[:, :-1] - prev_kl_coef * prev_kl_stack
+                reward_stack[:, :-1] = (
+                    reward_stack[:, :-1] - prev_kl_coef * prev_kl_stack
+                )
                 prev_kl_penalty_mean = prev_kl_stack.mean().detach()
             continue_stack = torch.stack(
                 [
-                    _world_model_continue(world_model, latent, reward_stack[:, idx]).detach().float()
+                    _world_model_continue(world_model, latent, reward_stack[:, idx])
+                    .detach()
+                    .float()
                     for idx, latent in enumerate(latents)
                 ],
                 dim=1,
@@ -737,8 +875,12 @@ def imagine_actor_critic_step(
 
             BKHp1, Hp1, D = critic_feat_stack.shape
             flat_feats = critic_feat_stack.reshape(BKHp1 * Hp1, D)
-            critic_values = critic({"mode": "value", "hidden": flat_feats}).view(BKHp1, Hp1)
-            slow_values = target_critic({"mode": "value", "hidden": flat_feats}).view(BKHp1, Hp1)
+            critic_values = critic({"mode": "value", "hidden": flat_feats}).view(
+                BKHp1, Hp1
+            )
+            slow_values = target_critic({"mode": "value", "hidden": flat_feats}).view(
+                BKHp1, Hp1
+            )
             target_values = slow_values if slowtar else critic_values
             returns = compute_lambda_returns(
                 reward_stack,
@@ -751,7 +893,9 @@ def imagine_actor_critic_step(
 
         raw_returns = returns
         raw_baseline_values = target_values[:, :-1]
-        normalized = normalize_returns_for_actor_critic(raw_returns, raw_baseline_values, algorithm_cfg)
+        normalized = normalize_returns_for_actor_critic(
+            raw_returns, raw_baseline_values, algorithm_cfg
+        )
         returns = raw_returns
         baseline_values = raw_baseline_values
 
@@ -763,28 +907,41 @@ def imagine_actor_critic_step(
             norm_low, norm_high = normalized.low, normalized.high
             scale = 1.0
             offset = 0.0
-        scale_tensor = torch.as_tensor(scale, device=device, dtype=returns.dtype).clamp_min(1.0)
+        scale_tensor = torch.as_tensor(
+            scale, device=device, dtype=returns.dtype
+        ).clamp_min(1.0)
         offset_tensor = torch.as_tensor(offset, device=device, dtype=returns.dtype)
         ret_normed = (returns - offset_tensor) / scale_tensor
         weights = torch.cumprod(float(disc) * continue_stack, dim=1) / float(disc)
         weights = weights[:, :-1]
         advantages = (returns - baseline_values) / scale_tensor
 
-        log_prob_stack = torch.stack(log_probs, dim=1)              # [B*K,H]
-        entropy_stack = torch.stack(entropies, dim=1) if entropies else torch.zeros_like(log_prob_stack)
+        log_prob_stack = torch.stack(log_probs, dim=1)  # [B*K,H]
+        entropy_stack = (
+            torch.stack(entropies, dim=1)
+            if entropies
+            else torch.zeros_like(log_prob_stack)
+        )
         # Split actor loss into named components so each gradient contribution can be measured.
-        actor_pg_loss = (weights.detach() * -(log_prob_stack * advantages.detach())).mean()
+        actor_pg_loss = (
+            weights.detach() * -(log_prob_stack * advantages.detach())
+        ).mean()
         if entropy_coef != 0.0:
-            actor_entropy_loss = (weights.detach() * -(entropy_coef * entropy_stack)).mean()
+            actor_entropy_loss = (
+                weights.detach() * -(entropy_coef * entropy_stack)
+            ).mean()
         else:
-            actor_entropy_loss = torch.zeros((), device=device, dtype=actor_pg_loss.dtype)
+            actor_entropy_loss = torch.zeros(
+                (), device=device, dtype=actor_pg_loss.dtype
+            )
         actor_bc_loss = (
             torch.stack(actor_bc_losses).mean()
             if actor_bc_losses
             else torch.zeros((), device=device, dtype=actor_pg_loss.dtype)
         )
         actor_bc_loss_scaled = (
-            actor_bc_scale * actor_bc_loss if actor_bc_scale > 0.0
+            actor_bc_scale * actor_bc_loss
+            if actor_bc_scale > 0.0
             else torch.zeros((), device=device, dtype=actor_pg_loss.dtype)
         )
         actor_bc_ref_loss = (
@@ -793,11 +950,15 @@ def imagine_actor_critic_step(
             else torch.zeros((), device=device, dtype=actor_pg_loss.dtype)
         )
         actor_bc_ref_loss_scaled = (
-            actor_bc_ref_scale * actor_bc_ref_loss if actor_bc_ref_scale > 0.0
+            actor_bc_ref_scale * actor_bc_ref_loss
+            if actor_bc_ref_scale > 0.0
             else torch.zeros((), device=device, dtype=actor_pg_loss.dtype)
         )
         actor_loss = (
-            actor_pg_loss + actor_entropy_loss + actor_bc_loss_scaled + actor_bc_ref_loss_scaled
+            actor_pg_loss
+            + actor_entropy_loss
+            + actor_bc_loss_scaled
+            + actor_bc_ref_loss_scaled
         )
 
         # ── Per-component actor-gradient instrumentation ─────────────────────
@@ -816,7 +977,11 @@ def imagine_actor_critic_step(
                 return None
             try:
                 grads = torch.autograd.grad(
-                    loss_t, actor_params, retain_graph=True, allow_unused=True, create_graph=False,
+                    loss_t,
+                    actor_params,
+                    retain_graph=True,
+                    allow_unused=True,
+                    create_graph=False,
                 )
             except RuntimeError:
                 return None
@@ -824,7 +989,9 @@ def imagine_actor_critic_step(
             has_any = False
             for g, p in zip(grads, actor_params):
                 if g is None:
-                    pieces.append(torch.zeros(p.numel(), device=p.device, dtype=p.dtype))
+                    pieces.append(
+                        torch.zeros(p.numel(), device=p.device, dtype=p.dtype)
+                    )
                 else:
                     pieces.append(g.detach().reshape(-1))
                     has_any = True
@@ -833,7 +1000,9 @@ def imagine_actor_critic_step(
             return torch.cat(pieces)
 
         g_pg = _flat_grad(actor_pg_loss)
-        g_bcref = _flat_grad(actor_bc_ref_loss_scaled) if actor_bc_ref_scale > 0.0 else None
+        g_bcref = (
+            _flat_grad(actor_bc_ref_loss_scaled) if actor_bc_ref_scale > 0.0 else None
+        )
         g_ent = _flat_grad(actor_entropy_loss) if entropy_coef != 0.0 else None
         g_bcvla = _flat_grad(actor_bc_loss_scaled) if actor_bc_scale > 0.0 else None
 
@@ -859,32 +1028,42 @@ def imagine_actor_critic_step(
         actor_loss.backward()
         actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
         actor_action_head_grad_norm = _named_grad_norm(policy, "action")
-        actor_output_projection_grad_norm = _named_grad_norm(policy, "output_projection")
+        actor_output_projection_grad_norm = _named_grad_norm(
+            policy, "output_projection"
+        )
         actor_policy_head_grad_norm = _named_grad_norm(policy, "policy_head")
         actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
-        actor_grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+            policy.parameters(), max_norm=grad_clip
+        )
         actor_optimizer.step()
 
     # ── 3. Value loss, matching DreamerV3 value target from imagined returns.
-    feat_stack_h = critic_feat_stack[:, :-1].detach()                # [B*K,H,D]
+    feat_stack_h = critic_feat_stack[:, :-1].detach()  # [B*K,H,D]
     B2, H, D2 = feat_stack_h.shape
-    log_probs_critic = critic({
-        "mode": "log_prob",
-        "hidden": feat_stack_h.reshape(B2 * H, D2),
-        "values": returns.detach().reshape(B2 * H),
-    })
+    log_probs_critic = critic(
+        {
+            "mode": "log_prob",
+            "hidden": feat_stack_h.reshape(B2 * H, D2),
+            "values": returns.detach().reshape(B2 * H),
+        }
+    )
     value_loss = -log_probs_critic.view(B2, H)
     if slowreg > 0:
         with torch.no_grad():
-            slow_targets = target_critic({
-                "mode": "value",
+            slow_targets = target_critic(
+                {
+                    "mode": "value",
+                    "hidden": feat_stack_h.reshape(B2 * H, D2),
+                }
+            ).view(B2, H)
+        slow_log_probs = critic(
+            {
+                "mode": "log_prob",
                 "hidden": feat_stack_h.reshape(B2 * H, D2),
-            }).view(B2, H)
-        slow_log_probs = critic({
-            "mode": "log_prob",
-            "hidden": feat_stack_h.reshape(B2 * H, D2),
-            "values": slow_targets.detach().reshape(B2 * H),
-        })
+                "values": slow_targets.detach().reshape(B2 * H),
+            }
+        )
         value_loss = value_loss + slowreg * (-slow_log_probs.view(B2, H))
     critic_loss = (weights.detach() * value_loss).mean()
 
@@ -892,6 +1071,7 @@ def imagine_actor_critic_step(
     repval_weight_mean = torch.zeros((), device=device)
     repval_applied = False
     if repval_enabled and repval_scale > 0.0 and starts > 1:
+
         def _sequence_field(*keys: str) -> torch.Tensor | None:
             for key in keys:
                 value = obs.get(key)
@@ -900,7 +1080,9 @@ def imagine_actor_critic_step(
                     if tensor.ndim == 3 and tensor.shape[-1] == 1:
                         tensor = tensor.squeeze(-1)
                     if tensor.ndim != 2:
-                        raise ValueError(f"obs.{key} must be [B,T] for replay value loss, got {tuple(value.shape)}")
+                        raise ValueError(
+                            f"obs.{key} must be [B,T] for replay value loss, got {tuple(value.shape)}"
+                        )
                     return tensor[:, -starts:].to(device=device, dtype=returns.dtype)
             return None
 
@@ -913,7 +1095,11 @@ def imagine_actor_critic_step(
             if replay_last is None:
                 replay_last = replay_terminal
             with torch.no_grad():
-                replay_critic_feat = _world_model_critic_input(world_model, replay_latent).detach().float()
+                replay_critic_feat = (
+                    _world_model_critic_input(world_model, replay_latent)
+                    .detach()
+                    .float()
+                )
                 if replay_critic_feat.ndim != 3:
                     raise ValueError(
                         "Replay value loss expects critic replay features [B,K,D], "
@@ -926,9 +1112,15 @@ def imagine_actor_critic_step(
                         f"B={B_rep}, K={K_rep}, expected B={replay_batch_size}, K={starts}"
                     )
                 replay_flat = replay_critic_feat.reshape(B_rep * K_rep, D_rep)
-                replay_values = critic({"mode": "value", "hidden": replay_flat}).view(B_rep, K_rep)
-                replay_slow_values = target_critic({"mode": "value", "hidden": replay_flat}).view(B_rep, K_rep)
-                replay_target_values = replay_slow_values if repl_slowtar else replay_values
+                replay_values = critic({"mode": "value", "hidden": replay_flat}).view(
+                    B_rep, K_rep
+                )
+                replay_slow_values = target_critic(
+                    {"mode": "value", "hidden": replay_flat}
+                ).view(B_rep, K_rep)
+                replay_target_values = (
+                    replay_slow_values if repl_slowtar else replay_values
+                )
                 replay_boot = raw_returns[:, 0].reshape(B_rep, K_rep)
                 replay_returns = compute_replay_lambda_returns(
                     last=replay_last,
@@ -942,23 +1134,31 @@ def imagine_actor_critic_step(
 
             replay_feat_h = replay_critic_feat[:, :-1].detach()
             B_rep, K_minus_1, D_rep = replay_feat_h.shape
-            replay_log_probs = critic({
-                "mode": "log_prob",
-                "hidden": replay_feat_h.reshape(B_rep * K_minus_1, D_rep),
-                "values": replay_returns.detach().reshape(B_rep * K_minus_1),
-            })
+            replay_log_probs = critic(
+                {
+                    "mode": "log_prob",
+                    "hidden": replay_feat_h.reshape(B_rep * K_minus_1, D_rep),
+                    "values": replay_returns.detach().reshape(B_rep * K_minus_1),
+                }
+            )
             replay_value_loss = -replay_log_probs.view(B_rep, K_minus_1)
             if repl_slowreg > 0:
                 with torch.no_grad():
-                    replay_slow_targets = target_critic({
-                        "mode": "value",
+                    replay_slow_targets = target_critic(
+                        {
+                            "mode": "value",
+                            "hidden": replay_feat_h.reshape(B_rep * K_minus_1, D_rep),
+                        }
+                    ).view(B_rep, K_minus_1)
+                replay_slow_log_probs = critic(
+                    {
+                        "mode": "log_prob",
                         "hidden": replay_feat_h.reshape(B_rep * K_minus_1, D_rep),
-                    }).view(B_rep, K_minus_1)
-                replay_slow_log_probs = critic({
-                    "mode": "log_prob",
-                    "hidden": replay_feat_h.reshape(B_rep * K_minus_1, D_rep),
-                    "values": replay_slow_targets.detach().reshape(B_rep * K_minus_1),
-                })
+                        "values": replay_slow_targets.detach().reshape(
+                            B_rep * K_minus_1
+                        ),
+                    }
+                )
                 replay_value_loss = replay_value_loss + repl_slowreg * (
                     -replay_slow_log_probs.view(B_rep, K_minus_1)
                 )
@@ -970,7 +1170,9 @@ def imagine_actor_critic_step(
 
     critic_optimizer.zero_grad(set_to_none=zero_grad)
     critic_loss.backward()
-    critic_grad_norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=grad_clip)
+    critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+        critic.parameters(), max_norm=grad_clip
+    )
     critic_optimizer.step()
 
     # ── 8. Polyak-average target critic ────────────────────────────────────
@@ -1023,7 +1225,9 @@ def imagine_actor_critic_step(
         "return_scale": float(scale),
         "ret_normed_min": float(ret_normed.detach().min().cpu()),
         "ret_normed_max": float(ret_normed.detach().max().cpu()),
-        "ret_normed_rate": float((ret_normed.detach().abs() >= 1.0).float().mean().cpu()),
+        "ret_normed_rate": float(
+            (ret_normed.detach().abs() >= 1.0).float().mean().cpu()
+        ),
         "reward_mean": float(reward_stack[:, 1:].detach().mean().cpu()),
         # Reward distribution diagnostics (over imagine horizon × batch).
         "reward_raw_mean": float(reward_stack_raw[:, :-1].mean().cpu()),
@@ -1055,9 +1259,15 @@ def imagine_actor_critic_step(
             if success_return_delta is not None
             else 0.0
         ),
-        "kl_p10": float(kl_stack_raw.quantile(0.1).cpu()) if kl_stack_raw is not None else 0.0,
-        "kl_p50": float(kl_stack_raw.quantile(0.5).cpu()) if kl_stack_raw is not None else 0.0,
-        "kl_p90": float(kl_stack_raw.quantile(0.9).cpu()) if kl_stack_raw is not None else 0.0,
+        "kl_p10": float(kl_stack_raw.quantile(0.1).cpu())
+        if kl_stack_raw is not None
+        else 0.0,
+        "kl_p50": float(kl_stack_raw.quantile(0.5).cpu())
+        if kl_stack_raw is not None
+        else 0.0,
+        "kl_p90": float(kl_stack_raw.quantile(0.9).cpu())
+        if kl_stack_raw is not None
+        else 0.0,
         "kl_max": float(kl_stack_raw.max().cpu()) if kl_stack_raw is not None else 0.0,
         "continue_mean": float(continue_stack[:, 1:].detach().mean().cpu()),
         "value_mean": float(critic_values[:, :-1].detach().mean().cpu()),
@@ -1096,24 +1306,34 @@ def imagine_actor_critic_step(
         _dump_path.mkdir(parents=True, exist_ok=True)
         _marker = _dump_path / ".dumped"
         if not _marker.exists():
-            torch.save({
-                "reward_raw": reward_stack_raw.cpu(),
-                "reward_post_kl": reward_stack.detach().cpu(),
-                "success_return": (
-                    success_return_stack.cpu() if success_return_stack is not None else None
-                ),
-                "success_return_delta": (
-                    success_return_delta.cpu() if success_return_delta is not None else None
-                ),
-                "kl": (kl_stack_raw.cpu() if kl_stack_raw is not None else None),
-                "kl_coef": float(kl_coef),
-                "advantages": advantages.detach().cpu(),
-                "returns": returns.detach().cpu(),
-                "value": critic_values.detach().cpu(),
-                "log_prob": log_prob_stack.detach().cpu(),
-            }, _dump_path / "reward_snapshot.pt")
+            torch.save(
+                {
+                    "reward_raw": reward_stack_raw.cpu(),
+                    "reward_post_kl": reward_stack.detach().cpu(),
+                    "success_return": (
+                        success_return_stack.cpu()
+                        if success_return_stack is not None
+                        else None
+                    ),
+                    "success_return_delta": (
+                        success_return_delta.cpu()
+                        if success_return_delta is not None
+                        else None
+                    ),
+                    "kl": (kl_stack_raw.cpu() if kl_stack_raw is not None else None),
+                    "kl_coef": float(kl_coef),
+                    "advantages": advantages.detach().cpu(),
+                    "returns": returns.detach().cpu(),
+                    "value": critic_values.detach().cpu(),
+                    "log_prob": log_prob_stack.detach().cpu(),
+                },
+                _dump_path / "reward_snapshot.pt",
+            )
             _marker.write_text("ok")
-            print(f"[reward-dump] snapshot written to {_dump_path / 'reward_snapshot.pt'}", flush=True)
+            print(
+                f"[reward-dump] snapshot written to {_dump_path / 'reward_snapshot.pt'}",
+                flush=True,
+            )
 
     return _metrics
 

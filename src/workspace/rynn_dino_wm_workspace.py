@@ -20,11 +20,17 @@ class RynnDinoWMTrainingWorkspace(DreamerV3PixelWorkspace):
         self.log_path = self.out_dir / "rynn_dino_wm_logs.json.txt"
 
     @torch.no_grad()
-    def _maybe_save_viz(self, model_core: torch.nn.Module, batch: dict[str, Any]) -> None:
+    def _maybe_save_viz(
+        self, model_core: torch.nn.Module, batch: dict[str, Any]
+    ) -> None:
         del model_core, batch
-        if self.is_main_process and bool(OmegaConf.select(self.cfg, "viz.enabled", default=False)):
+        if self.is_main_process and bool(
+            OmegaConf.select(self.cfg, "viz.enabled", default=False)
+        ):
             if self.global_step == 0:
-                self._print("[rynn-dino-wm] viz is disabled for hidden-only predictor training.")
+                self._print(
+                    "[rynn-dino-wm] viz is disabled for hidden-only predictor training."
+                )
 
     def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:
         postfix: dict[str, Any] = {

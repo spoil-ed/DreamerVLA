@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """
 Scan every conv JSON under ``data/processed_data/convs/`` (or a user-supplied
 path) and check — without running the tokenizer — that each sample's files
@@ -22,6 +23,7 @@ Run:
 
 Reports per split + an aggregate.  Exits non-zero if any broken_* count > 0.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,7 +38,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.preprocess.pre_tokenize_action_state_local import (
     derive_next_obs_from_paths,
-    ensure_next_obs,
 )
 
 
@@ -57,10 +58,9 @@ def _categorise(raw_item: dict, image_views_per_frame: int) -> tuple[str, list[s
             return "broken_inputs", [f"{label}: {p}" for p in missing]
 
     original = raw_item.get("next_obs")
-    original_has_content = (
-        isinstance(original, dict)
-        and (list((original or {}).get("image", []) or [])
-             or list((original or {}).get("state", []) or []))
+    original_has_content = isinstance(original, dict) and (
+        list((original or {}).get("image", []) or [])
+        or list((original or {}).get("state", []) or [])
     )
 
     if original_has_content:
@@ -68,9 +68,13 @@ def _categorise(raw_item: dict, image_views_per_frame: int) -> tuple[str, list[s
         nst_ok, nst_missing = _all_exist(list(original.get("state", []) or []))
         if nimg_ok and nst_ok:
             return "ok_existing_next_obs", []
-        return "broken_next_obs", [f"next_obs.image: {p}" for p in nimg_missing] + [f"next_obs.state: {p}" for p in nst_missing]
+        return "broken_next_obs", [f"next_obs.image: {p}" for p in nimg_missing] + [
+            f"next_obs.state: {p}" for p in nst_missing
+        ]
 
-    derived = derive_next_obs_from_paths(raw_item, image_views_per_frame=image_views_per_frame)
+    derived = derive_next_obs_from_paths(
+        raw_item, image_views_per_frame=image_views_per_frame
+    )
     derived_has_content = bool(derived.get("image") or derived.get("state"))
     if not derived_has_content:
         return "eot_empty_next_obs", []
@@ -79,7 +83,9 @@ def _categorise(raw_item: dict, image_views_per_frame: int) -> tuple[str, list[s
     nst_ok, nst_missing = _all_exist(list(derived.get("state", []) or []))
     if nimg_ok and nst_ok:
         return "ok_derived_next_obs", []
-    return "broken_next_obs", [f"derived next_obs.image: {p}" for p in nimg_missing] + [f"derived next_obs.state: {p}" for p in nst_missing]
+    return "broken_next_obs", [f"derived next_obs.image: {p}" for p in nimg_missing] + [
+        f"derived next_obs.state: {p}" for p in nst_missing
+    ]
 
 
 def validate_split(
@@ -177,8 +183,7 @@ def main() -> None:
         broken = counts["broken_inputs"] + counts["broken_next_obs"]
         any_broken += broken
 
-        print(f"── {path.name} "
-              f"(total={totals['num_total']}, checked={checked}) ──")
+        print(f"── {path.name} (total={totals['num_total']}, checked={checked}) ──")
         for bucket in (
             "ok_existing_next_obs",
             "ok_derived_next_obs",

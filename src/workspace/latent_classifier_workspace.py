@@ -31,14 +31,15 @@ Reproduction sanity peg (verified 2026-05-25 via
 with the per-demo (1 end + 1 random earlier) protocol hits **F1 ≈ 0.91**. That
 is the working ceiling — see [[dreamervla-classifier-ceiling]] memory.
 """
+
 from __future__ import annotations
 
 import json
-import math
 import pathlib
 import time
-from typing import Any, Iterator
+from typing import Any
 
+import hydra
 import numpy as np
 import torch
 import torch.nn as nn
@@ -58,6 +59,7 @@ from src.workspace.base_workspace import BaseWorkspace
 # Workspace
 # ---------------------------------------------------------------------------
 
+
 class LatentClassifierWorkspace(BaseWorkspace):
     """Single-GPU step-based trainer for LatentSuccessClassifier.
 
@@ -71,7 +73,9 @@ class LatentClassifierWorkspace(BaseWorkspace):
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
-        self.device = torch.device(str(OmegaConf.select(self.cfg, "training.device") or "cuda"))
+        self.device = torch.device(
+            str(OmegaConf.select(self.cfg, "training.device") or "cuda")
+        )
         self.train_ds: WMPOAlignedLatentTrainDataset | None = None
         self.val_ds: WMPOAlignedLatentValDataset | None = None
         self.train_loader: DataLoader | None = None
@@ -96,10 +100,16 @@ class LatentClassifierWorkspace(BaseWorkspace):
         # truncate at startup so reruns don't pollute the file
         self._log_path.write_text("")
 
-        self._log({"event": "setup_begin",
-                   "output_dir": str(self.output_dir),
-                   "device": str(self.device),
-                   "head_type": str(OmegaConf.select(self.cfg, "classifier.head_type") or "linear")})
+        self._log(
+            {
+                "event": "setup_begin",
+                "output_dir": str(self.output_dir),
+                "device": str(self.device),
+                "head_type": str(
+                    OmegaConf.select(self.cfg, "classifier.head_type") or "linear"
+                ),
+            }
+        )
 
         # ----- datasets ---------------------------------------------------
         d = self.cfg.data
@@ -143,7 +153,7 @@ class LatentClassifierWorkspace(BaseWorkspace):
         self.val_loader = DataLoader(
             self.val_ds,
             batch_size=int(OmegaConf.select(tr, "val_batch_size") or 256),
-            num_workers=0,                       # val data is in-RAM; workers add overhead
+            num_workers=0,  # val data is in-RAM; workers add overhead
             pin_memory=True,
             collate_fn=self.val_ds.collate_fn,
             shuffle=False,
@@ -179,13 +189,23 @@ class LatentClassifierWorkspace(BaseWorkspace):
             raise ValueError(
                 f"data.chunk_subsample={chunk_subsample} requires classifier.granularity='chunk'"
             )
-        self.model = LatentSuccessClassifier(cls_cfg).to(self.device)
+        classifier_target = OmegaConf.select(
+            self.cfg, "classifier._target_", default=None
+        )
+        if classifier_target:
+            self.model = hydra.utils.instantiate(self.cfg.classifier).to(self.device)
+        else:
+            self.model = LatentSuccessClassifier(cls_cfg).to(self.device)
         n_params = sum(p.numel() for p in self.model.parameters())
         n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        self._log({"event": "model_built",
-                   "head_type": str(cls_cfg.head_type),
-                   "n_params": int(n_params),
-                   "n_trainable": int(n_trainable)})
+        self._log(
+            {
+                "event": "model_built",
+                "head_type": str(cls_cfg.head_type),
+                "n_params": int(n_params),
+                "n_trainable": int(n_trainable),
+            }
+        )
 
         # ----- optimizer + (optional) scheduler --------------------------
         self.optim = torch.optim.AdamW(
@@ -198,7 +218,7 @@ class LatentClassifierWorkspace(BaseWorkspace):
         if bool(OmegaConf.select(tr, "resume") or False):
             try:
                 self.resume(self.cfg)
-            except Exception as exc:                                     # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 self._log({"event": "resume_failed", "error": repr(exc)})
 
         self._log({"event": "setup_done"})
@@ -225,7 +245,12 @@ class LatentClassifierWorkspace(BaseWorkspace):
             n_pos = n_succ
             n_neg = n_succ + 2 * n_fail
             cw = torch.tensor([1.0, n_neg / max(n_pos, 1)], device=self.device)
-            self._log({"event": "class_balanced", "class_weight": [1.0, float(n_neg / max(n_pos, 1))]})
+            self._log(
+                {
+                    "event": "class_balanced",
+                    "class_weight": [1.0, float(n_neg / max(n_pos, 1))],
+                }
+            )
         else:
             cw = None
         loss_fn = nn.CrossEntropyLoss(weight=cw, label_smoothing=label_smoothing)
@@ -251,7 +276,9 @@ class LatentClassifierWorkspace(BaseWorkspace):
             loss = loss_fn(logits, ys)
             self.optim.zero_grad(set_to_none=True)
             loss.backward()
-            grad_norm = float(torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0))
+            grad_norm = float(
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+            )
             self.optim.step()
 
             with torch.no_grad():
@@ -263,14 +290,16 @@ class LatentClassifierWorkspace(BaseWorkspace):
             self.global_step += 1
 
             if self.global_step % log_every == 0:
-                self._log({
-                    "event": "train_step",
-                    "step": self.global_step,
-                    "loss": running_loss / log_every,
-                    "acc": running_correct / max(running_total, 1),
-                    "grad_norm": grad_norm,
-                    "wall_s": time.time() - t0,
-                })
+                self._log(
+                    {
+                        "event": "train_step",
+                        "step": self.global_step,
+                        "loss": running_loss / log_every,
+                        "acc": running_correct / max(running_total, 1),
+                        "grad_norm": grad_norm,
+                        "wall_s": time.time() - t0,
+                    }
+                )
                 running_loss = 0.0
                 running_correct = 0
                 running_total = 0
@@ -278,7 +307,9 @@ class LatentClassifierWorkspace(BaseWorkspace):
             # ---- periodic eval ---------------------------------------
             if self.global_step % eval_every == 0:
                 w_metrics = self._evaluate_window_level()
-                self._log({"event": "val_window", "step": self.global_step, **w_metrics})
+                self._log(
+                    {"event": "val_window", "step": self.global_step, **w_metrics}
+                )
                 if w_metrics["best_f1"] > self.best_window_f1:
                     self.best_window_f1 = float(w_metrics["best_f1"])
                     self._save_named(
@@ -288,7 +319,9 @@ class LatentClassifierWorkspace(BaseWorkspace):
 
                 if bool(OmegaConf.select(tr, "episode_eval_enabled") or False):
                     e_metrics = self._evaluate_episode_level()
-                    self._log({"event": "val_episode", "step": self.global_step, **e_metrics})
+                    self._log(
+                        {"event": "val_episode", "step": self.global_step, **e_metrics}
+                    )
                     if e_metrics["best_f1"] > self.best_episode_f1:
                         self.best_episode_f1 = float(e_metrics["best_f1"])
                         self._save_named(
@@ -352,10 +385,12 @@ class LatentClassifierWorkspace(BaseWorkspace):
         ``min_steps + W`` to ``finish_step``). Use ``max`` over windows as the
         episode-level score, sweep thresholds, return best F1.
 
-        Chunk-level classifier: the env-step trajectory is pooled to chunk
-        granularity (T_chunk = T // K via ``chunk_pool``) once per episode,
-        then windows of W chunks are slid over it. ``min_steps`` and
-        ``stride`` are reinterpreted in classifier-native units.
+        Unit convention: ``episode_eval_min_steps`` and
+        ``episode_eval_stride`` are in the classifier's NATIVE unit
+        (env-step for action granularity, chunk for chunk granularity).
+        The dataset's pooling K only affects how the env-step obs is folded
+        to chunks for the sliding window; the gate values themselves are
+        already chunk-unit in chunk configs.
         """
         assert self.model is not None and self.val_ds is not None
         tr = self.cfg.training
@@ -366,10 +401,6 @@ class LatentClassifierWorkspace(BaseWorkspace):
 
         K = int(getattr(self.val_ds, "K", 1))
         chunk_pool = str(getattr(self.val_ds, "chunk_pool", "last"))
-        if K > 1:
-            # min_steps in episode-eval config is env-step units; remap to
-            # chunk units (ceil) so the gate has the same wall-clock meaning.
-            min_steps = (min_steps + K - 1) // K
 
         self.model.eval()
         ep_max_prob: list[float] = []
@@ -379,7 +410,9 @@ class LatentClassifierWorkspace(BaseWorkspace):
         # with episode idx; aggregate max per episode.
         flat_xs: list[np.ndarray] = []
         flat_ep: list[int] = []
-        for ep_idx, (obs, complete, finish_step, _eid) in enumerate(self.val_ds.trajectories()):
+        for ep_idx, (obs, complete, finish_step, _eid) in enumerate(
+            self.val_ds.trajectories()
+        ):
             T_env = int(min(finish_step, obs.shape[0]))
             if K > 1:
                 T_chunk = T_env // K
@@ -403,16 +436,16 @@ class LatentClassifierWorkspace(BaseWorkspace):
             if T < first_end or obs_pooled is None:
                 ep_max_prob.append(0.0)
                 continue
-            ep_max_prob.append(-1.0)                                       # placeholder; updated below
+            ep_max_prob.append(-1.0)  # placeholder; updated below
             for end in range(first_end, T + 1, stride):
-                flat_xs.append(obs_pooled[end - W: end])
+                flat_xs.append(obs_pooled[end - W : end])
                 flat_ep.append(ep_idx)
 
         if flat_xs:
             i = 0
             n = len(flat_xs)
             while i < n:
-                chunk = np.stack(flat_xs[i: i + ep_batch])
+                chunk = np.stack(flat_xs[i : i + ep_batch])
                 logits = self.model(torch.from_numpy(chunk).float().to(self.device))
                 p = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
                 for j, pj in enumerate(p):
@@ -466,14 +499,17 @@ class LatentClassifierWorkspace(BaseWorkspace):
                 "f1": f1,
                 "step": int(self.global_step),
                 "config": {
-                    "classifier": OmegaConf.to_container(self.cfg.classifier, resolve=True),
+                    "classifier": OmegaConf.to_container(
+                        self.cfg.classifier, resolve=True
+                    ),
                 },
                 "extra": extra or {},
             },
             path,
         )
-        self._log({"event": "ckpt_named", "path": str(path),
-                   "f1": f1, "threshold": threshold})
+        self._log(
+            {"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold}
+        )
 
     def _log(self, payload: dict) -> None:
         payload = {"ts": time.strftime("%H:%M:%S"), **payload}
@@ -494,7 +530,10 @@ class LatentClassifierWorkspace(BaseWorkspace):
 # Threshold sweep
 # ---------------------------------------------------------------------------
 
-def _sweep_metrics(probs: np.ndarray, ys: np.ndarray, thresholds: np.ndarray, tag: str) -> dict[str, Any]:
+
+def _sweep_metrics(
+    probs: np.ndarray, ys: np.ndarray, thresholds: np.ndarray, tag: str
+) -> dict[str, Any]:
     best_f1 = -1.0
     best_thresh = float(thresholds[0])
     rows: dict[str, dict[str, float]] = {}

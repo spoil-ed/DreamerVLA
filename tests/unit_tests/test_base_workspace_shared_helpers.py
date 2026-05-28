@@ -19,7 +19,9 @@ class _ConcreteWorkspace(BaseWorkspace):
         return None
 
 
-def test_base_workspace_resolves_vla_init_path_and_frozen_encoder_cfg(tmp_path: Path) -> None:
+def test_base_workspace_resolves_vla_init_path_and_frozen_encoder_cfg(
+    tmp_path: Path,
+) -> None:
     ckpt_root = tmp_path / "vla_ckpt"
     nested = ckpt_root / "checkpoint-1"
     nested.mkdir(parents=True)
@@ -29,7 +31,11 @@ def test_base_workspace_resolves_vla_init_path_and_frozen_encoder_cfg(tmp_path: 
         {
             "training": {"out_dir": str(tmp_path / "out")},
             "init": {"vla_ckpt_path": str(ckpt_root)},
-            "encoder": {"model_path": None, "freeze_backbone": False, "time_horizon": 5},
+            "encoder": {
+                "model_path": None,
+                "freeze_backbone": False,
+                "time_horizon": 5,
+            },
             "world_model": {"hidden_dim": 4},
         }
     )
@@ -62,13 +68,22 @@ class _FakeDistributed:
     def __init__(self) -> None:
         self.sampler_calls: list[tuple[bool, bool]] = []
 
-    def maybe_make_sampler(self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool) -> None:
+    def maybe_make_sampler(
+        self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool
+    ) -> None:
         self.sampler_calls.append((shuffle, drop_last))
         return None
 
 
-def test_base_workspace_builds_distributed_dataloader_with_dataset_collate(tmp_path: Path) -> None:
-    cfg = OmegaConf.create({"training": {"out_dir": str(tmp_path / "out")}, "world_model": {"hidden_dim": 4}})
+def test_base_workspace_builds_distributed_dataloader_with_dataset_collate(
+    tmp_path: Path,
+) -> None:
+    cfg = OmegaConf.create(
+        {
+            "training": {"out_dir": str(tmp_path / "out")},
+            "world_model": {"hidden_dim": 4},
+        }
+    )
     workspace = _ConcreteWorkspace(cfg)
     workspace.distributed = _FakeDistributed()
 
@@ -109,13 +124,20 @@ class _SamplerDistributed(_FakeDistributed):
         super().__init__()
         self.sampler = sampler
 
-    def maybe_make_sampler(self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool) -> _EpochSampler:
+    def maybe_make_sampler(
+        self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool
+    ) -> _EpochSampler:
         super().maybe_make_sampler(dataset, shuffle=shuffle, drop_last=drop_last)
         return self.sampler
 
 
 def test_base_workspace_wires_and_advances_distributed_sampler(tmp_path: Path) -> None:
-    cfg = OmegaConf.create({"training": {"out_dir": str(tmp_path / "out")}, "world_model": {"hidden_dim": 4}})
+    cfg = OmegaConf.create(
+        {
+            "training": {"out_dir": str(tmp_path / "out")},
+            "world_model": {"hidden_dim": 4},
+        }
+    )
     workspace = _ConcreteWorkspace(cfg)
     sampler = _EpochSampler()
     workspace.distributed = _SamplerDistributed(sampler)
@@ -159,7 +181,12 @@ class _HookWorkspace(_ConcreteWorkspace):
 
 
 def test_base_workspace_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
-    cfg = OmegaConf.create({"training": {"out_dir": str(tmp_path / "out")}, "world_model": {"hidden_dim": 4}})
+    cfg = OmegaConf.create(
+        {
+            "training": {"out_dir": str(tmp_path / "out")},
+            "world_model": {"hidden_dim": 4},
+        }
+    )
     workspace = _HookWorkspace(cfg)
     workspace.distributed = _FakeDistributed()
 
@@ -171,13 +198,17 @@ def test_base_workspace_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None
     assert torch.equal(payload["state_dicts"]["module"]["custom"], torch.tensor([7.0]))
     assert pickle.loads(payload["pickles"]["marker"]) == "saved"
 
-    workspace.load_payload({"state_dicts": {"module": {"custom": torch.tensor([3.0])}}, "pickles": {}})
+    workspace.load_payload(
+        {"state_dicts": {"module": {"custom": torch.tensor([3.0])}}, "pickles": {}}
+    )
     assert workspace.loaded_keys == ["module"]
     assert workspace.marker == "loaded_3.0"
 
 
 def test_vla_family_workspaces_inherit_shared_base_helpers() -> None:
-    from src.workspace.chameleon_latent_action_wm_workspace import ChameleonLatentActionWMWorkspace
+    from src.workspace.chameleon_latent_action_wm_workspace import (
+        ChameleonLatentActionWMWorkspace,
+    )
     from src.workspace.dreamer_vla_workspace import DreamerVLAWorkspace
     from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
     from src.workspace.pretokenize_vla_workspace import PretokenizeVLAWorkspace

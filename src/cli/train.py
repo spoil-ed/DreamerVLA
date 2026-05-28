@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import os
@@ -55,9 +56,6 @@ def run(cfg: DictConfig) -> None:
         workspace.teardown()
 
 
-main = run
-
-
 def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
     config_name = "world_model_rssm_step"
     overrides: list[str] = []
@@ -89,8 +87,12 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    config_name, overrides = _parse_hydra_like_args(list(sys.argv[1:] if argv is None else argv))
-    with initialize_config_dir(config_dir=str(PROJECT_ROOT / "configs"), version_base=None):
+    config_name, overrides = _parse_hydra_like_args(
+        list(sys.argv[1:] if argv is None else argv)
+    )
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs"), version_base=None
+    ):
         cfg = compose(config_name=config_name, overrides=overrides)
     run(cfg)
 

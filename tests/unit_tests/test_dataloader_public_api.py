@@ -57,12 +57,19 @@ def test_configs_use_only_retained_dataloader_targets() -> None:
     }
 
     config_dir = Path(__file__).resolve().parents[1] / "configs"
-    config_names = sorted(str(path.relative_to(config_dir).with_suffix("")) for path in config_dir.rglob("*.yaml"))
+    config_names = sorted(
+        str(path.relative_to(config_dir).with_suffix(""))
+        for path in config_dir.rglob("*.yaml")
+    )
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         for config_name in config_names:
             cfg = compose(config_name=config_name)
             for section in ("dataset", "dataset_val_ind", "dataset_val_ood"):
-                target = cfg.get(section, {}).get("_target_") if cfg.get(section) is not None else None
+                target = (
+                    cfg.get(section, {}).get("_target_")
+                    if cfg.get(section) is not None
+                    else None
+                )
                 if target is not None:
                     assert str(target) in retained_targets

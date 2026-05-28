@@ -28,12 +28,13 @@ Run:
 
 The walk is read-only.  Use --sample-every N for a spot-check.
 """
+
 from __future__ import annotations
 
 import argparse
 import pickle
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -99,9 +100,11 @@ def _categorise_pkl(pkl_path: Path, check_files: bool) -> tuple[str, str, list[s
     if not token:
         return "empty_token", "wm_next_unknown", []
     if len(token) != len(label):
-        return "length_mismatch", "wm_next_unknown", [
-            f"token_len={len(token)} label_len={len(label)}"
-        ]
+        return (
+            "length_mismatch",
+            "wm_next_unknown",
+            [f"token_len={len(token)} label_len={len(label)}"],
+        )
 
     wm_obs = list(item.get("wm_obs_input_ids") or [])
     wm_next = list(item.get("wm_next_obs_input_ids") or [])
@@ -146,7 +149,9 @@ def validate_split(
     check_files: bool,
 ) -> tuple[Counter, Counter, dict[str, int], list[tuple[Path, str, list[str]]]]:
     files_dir = split_dir / "files"
-    pkl_paths = sorted(files_dir.glob("*.pkl"), key=lambda p: int(p.stem) if p.stem.isdigit() else 0)
+    pkl_paths = sorted(
+        files_dir.glob("*.pkl"), key=lambda p: int(p.stem) if p.stem.isdigit() else 0
+    )
 
     main_counts: Counter = Counter()
     wm_next_counts: Counter = Counter()
@@ -158,7 +163,9 @@ def validate_split(
             continue
         if limit is not None and checked >= limit:
             break
-        main_bucket, wm_next_bucket, missing = _categorise_pkl(pkl, check_files=check_files)
+        main_bucket, wm_next_bucket, missing = _categorise_pkl(
+            pkl, check_files=check_files
+        )
         main_counts[main_bucket] += 1
         wm_next_counts[wm_next_bucket] += 1
         if main_bucket != "ok":
@@ -235,7 +242,8 @@ def main() -> None:
 
     tokens_dir = Path(args.tokens_dir).expanduser().resolve()
     split_dirs = sorted(
-        d for d in tokens_dir.glob(args.pattern)
+        d
+        for d in tokens_dir.glob(args.pattern)
         if d.is_dir() and (d / "files").is_dir()
     )
     if not split_dirs:
@@ -268,8 +276,14 @@ def main() -> None:
         agg_totals["num_checked"] += totals["num_checked"]
         any_bad += sum(
             main_counts[b]
-            for b in ("unpickle_failed", "missing_keys", "empty_token",
-                      "length_mismatch", "no_image_in_obs", "broken_paths")
+            for b in (
+                "unpickle_failed",
+                "missing_keys",
+                "empty_token",
+                "length_mismatch",
+                "no_image_in_obs",
+                "broken_paths",
+            )
         )
 
     print("── aggregate ──")

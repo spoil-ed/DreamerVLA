@@ -1,10 +1,10 @@
 #!/usr/bin/env python
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
 import copy
 import json
-import os
 import pathlib
 import sys
 from typing import Any
@@ -21,7 +21,12 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.env import get_libero_dummy_action, get_libero_env, get_libero_image, quat2axisangle
+from src.env import (
+    get_libero_dummy_action,
+    get_libero_env,
+    get_libero_image,
+    quat2axisangle,
+)
 from src.models.vla_actor import Pi0ActionHiddenActor
 from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
 
@@ -38,8 +43,12 @@ def _hydra_quote(value: str) -> str:
     return json.dumps(str(value))
 
 
-def _merge_train_eval_cfg(ws: EvalLiberoVLAWorkspace, eval_cfg: DictConfig, ckpt_path: str) -> tuple[DictConfig, dict[str, Any]]:
-    payload = ws._load_checkpoint_payload(str(pathlib.Path(ckpt_path).expanduser().resolve()))
+def _merge_train_eval_cfg(
+    ws: EvalLiberoVLAWorkspace, eval_cfg: DictConfig, ckpt_path: str
+) -> tuple[DictConfig, dict[str, Any]]:
+    payload = ws._load_checkpoint_payload(
+        str(pathlib.Path(ckpt_path).expanduser().resolve())
+    )
     train_cfg = copy.deepcopy(payload.get("cfg"))
     if train_cfg is None:
         raise RuntimeError(f"{ckpt_path} has no saved cfg")
@@ -52,11 +61,16 @@ def _merge_train_eval_cfg(ws: EvalLiberoVLAWorkspace, eval_cfg: DictConfig, ckpt
             train_cfg.init.vla_ckpt_path = eval_vla_path
             if OmegaConf.select(train_cfg, "encoder", default=None) is not None:
                 train_cfg.encoder.model_path = eval_vla_path
-        eval_encoder_ckpt = OmegaConf.select(eval_cfg, "init.encoder_state_ckpt", default=None)
+        eval_encoder_ckpt = OmegaConf.select(
+            eval_cfg, "init.encoder_state_ckpt", default=None
+        )
         if eval_encoder_ckpt is not None:
             train_cfg.init.encoder_state_ckpt = eval_encoder_ckpt
         eval_horizon = OmegaConf.select(eval_cfg, "encoder.time_horizon", default=None)
-        if eval_horizon is not None and OmegaConf.select(train_cfg, "encoder", default=None) is not None:
+        if (
+            eval_horizon is not None
+            and OmegaConf.select(train_cfg, "encoder", default=None) is not None
+        ):
             train_cfg.encoder.time_horizon = eval_horizon
         train_cfg.training.distributed_strategy = "ddp"
         train_cfg.training.enable_activation_checkpointing = False
@@ -64,17 +78,29 @@ def _merge_train_eval_cfg(ws: EvalLiberoVLAWorkspace, eval_cfg: DictConfig, ckpt
     return train_cfg, payload
 
 
-def _init_workspace(train_cfg: DictConfig, payload: dict[str, Any], output_dir: str) -> EvalLiberoVLAWorkspace:
+def _init_workspace(
+    train_cfg: DictConfig, payload: dict[str, Any], output_dir: str
+) -> EvalLiberoVLAWorkspace:
     ws = EvalLiberoVLAWorkspace(train_cfg, output_dir=output_dir)
     ws.cfg = train_cfg
     ws.config = train_cfg
     ws._dreamer_eval = True
     ws._dreamer_deterministic = True
-    ws._dreamer_action_repeat = int(OmegaConf.select(train_cfg, "eval.dreamer_action_repeat", default=1))
-    ws._dreamer_clip_actions = bool(OmegaConf.select(train_cfg, "eval.dreamer_clip_actions", default=True))
-    ws._dreamer_rollout_mode = str(OmegaConf.select(train_cfg, "eval.dreamer_rollout_mode", default="online_rssm"))
-    ws._dreamer_actor_input_source = str(OmegaConf.select(train_cfg, "eval.dreamer_actor_input_source", default="rssm"))
-    ws._dreamer_policy_source = str(OmegaConf.select(train_cfg, "eval.dreamer_policy_source", default="ckpt"))
+    ws._dreamer_action_repeat = int(
+        OmegaConf.select(train_cfg, "eval.dreamer_action_repeat", default=1)
+    )
+    ws._dreamer_clip_actions = bool(
+        OmegaConf.select(train_cfg, "eval.dreamer_clip_actions", default=True)
+    )
+    ws._dreamer_rollout_mode = str(
+        OmegaConf.select(train_cfg, "eval.dreamer_rollout_mode", default="online_rssm")
+    )
+    ws._dreamer_actor_input_source = str(
+        OmegaConf.select(train_cfg, "eval.dreamer_actor_input_source", default="rssm")
+    )
+    ws._dreamer_policy_source = str(
+        OmegaConf.select(train_cfg, "eval.dreamer_policy_source", default="ckpt")
+    )
     ws._hidden_noise_std = 0.0
     ws._hidden_noise_seed = 0
     ws._hidden_noise_generator = torch.Generator(device=ws.device)
@@ -119,7 +145,9 @@ class Collector:
             }
             if x.ndim == 2 and 1 < x.shape[1] <= 16:
                 out[key]["per_dim_mean"] = [float(v) for v in x.mean(dim=0)]
-                out[key]["per_dim_std"] = [float(v) for v in x.std(dim=0, unbiased=False)]
+                out[key]["per_dim_std"] = [
+                    float(v) for v in x.std(dim=0, unbiased=False)
+                ]
                 out[key]["per_dim_abs_mean"] = [float(v) for v in x.abs().mean(dim=0)]
                 out[key]["per_dim_min"] = [float(v) for v in x.min(dim=0).values]
                 out[key]["per_dim_max"] = [float(v) for v in x.max(dim=0).values]
@@ -167,9 +195,13 @@ class PairCollector:
         return out
 
 
-def _add_latent_stats(prefix: str, collector: Collector, world_model: torch.nn.Module, latent: Any) -> None:
+def _add_latent_stats(
+    prefix: str, collector: Collector, world_model: torch.nn.Module, latent: Any
+) -> None:
     collector.add(f"{prefix}/deter_h", latent.deter)
-    collector.add(f"{prefix}/stoch_z_flat", latent.stoch.reshape(*latent.stoch.shape[:-2], -1))
+    collector.add(
+        f"{prefix}/stoch_z_flat", latent.stoch.reshape(*latent.stoch.shape[:-2], -1)
+    )
     collector.add(f"{prefix}/feature_hz", latent.feature())
     actor_in = world_model({"mode": "actor_input", "latent": latent})
     collector.add(f"{prefix}/actor_input", actor_in)
@@ -185,7 +217,9 @@ def _make_original_pi0_actor(ws: EvalLiberoVLAWorkspace) -> Pi0ActionHiddenActor
     cfg = ws.cfg
     actor = Pi0ActionHiddenActor(
         hidden_dim=int(OmegaConf.select(cfg, "policy.hidden_dim", default=5120)),
-        action_hidden_dim=int(OmegaConf.select(cfg, "policy.action_hidden_dim", default=1024)),
+        action_hidden_dim=int(
+            OmegaConf.select(cfg, "policy.action_hidden_dim", default=1024)
+        ),
         action_dim=int(OmegaConf.select(cfg, "policy.action_dim", default=7)),
         time_horizon=int(OmegaConf.select(cfg, "policy.time_horizon", default=5)),
         adapter_type="identity",
@@ -200,22 +234,34 @@ def _make_original_pi0_actor(ws: EvalLiberoVLAWorkspace) -> Pi0ActionHiddenActor
 
 @torch.no_grad()
 def _actor_action_chunk(actor: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
-    action, _, _ = actor({
-        "mode": "sample",
-        "hidden": hidden,
-        "deterministic": True,
-        "return_chunk": True,
-    })
+    action, _, _ = actor(
+        {
+            "mode": "sample",
+            "hidden": hidden,
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
     return action.detach().float()
 
 
-def _env_action_chunk(ws: EvalLiberoVLAWorkspace, raw_chunk: torch.Tensor) -> torch.Tensor:
+def _env_action_chunk(
+    ws: EvalLiberoVLAWorkspace, raw_chunk: torch.Tensor
+) -> torch.Tensor:
     raw = raw_chunk.detach().float().cpu().numpy().reshape(-1, raw_chunk.shape[-1])
-    env = [ws._dreamer_policy_raw_to_env_action(np.asarray(row[:7], dtype=np.float32)) for row in raw]
+    env = [
+        ws._dreamer_policy_raw_to_env_action(np.asarray(row[:7], dtype=np.float32))
+        for row in raw
+    ]
     return torch.from_numpy(np.stack(env, axis=0).astype(np.float32))
 
 
-def _add_action_stats(prefix: str, collector: Collector, ws: EvalLiberoVLAWorkspace, raw_chunk: torch.Tensor) -> None:
+def _add_action_stats(
+    prefix: str,
+    collector: Collector,
+    ws: EvalLiberoVLAWorkspace,
+    raw_chunk: torch.Tensor,
+) -> None:
     raw = raw_chunk.detach().float().cpu()
     env = _env_action_chunk(ws, raw_chunk)
     collector.add(f"{prefix}/raw_action", raw)
@@ -225,9 +271,13 @@ def _add_action_stats(prefix: str, collector: Collector, ws: EvalLiberoVLAWorksp
 
 
 @torch.no_grad()
-def collect_offline(ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: int, batch_size: int) -> dict[str, Any]:
+def collect_offline(
+    ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: int, batch_size: int
+) -> dict[str, Any]:
     dataset_cfg = copy.deepcopy(train_cfg.dataset)
-    dataset = hydra.utils.instantiate(dataset_cfg, max_windows=max(batches * batch_size, batch_size))
+    dataset = hydra.utils.instantiate(
+        dataset_cfg, max_windows=max(batches * batch_size, batch_size)
+    )
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     collector = Collector()
     for idx, batch in enumerate(loader):
@@ -240,7 +290,9 @@ def collect_offline(ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: 
         }
         collector.add("offline/obs_embedding", model_batch["obs_embedding"])
         observed = ws.world_model({"mode": "observe_sequence", **model_batch})
-        _add_latent_stats("offline/posterior", collector, ws.world_model, observed["latent"])
+        _add_latent_stats(
+            "offline/posterior", collector, ws.world_model, observed["latent"]
+        )
     original_actor = _make_original_pi0_actor(ws)
     pair = PairCollector()
     for idx, batch in enumerate(loader):
@@ -253,7 +305,9 @@ def collect_offline(ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: 
             "is_first": batch["is_first"].to(ws.device),
         }
         observed = ws.world_model({"mode": "observe_sequence", **model_batch})
-        actor_input = ws.world_model({"mode": "actor_input", "latent": observed["latent"]})
+        actor_input = ws.world_model(
+            {"mode": "actor_input", "latent": observed["latent"]}
+        )
         live = obs_embedding.reshape(-1, obs_embedding.shape[-1])
         recon = actor_input.reshape(-1, actor_input.shape[-1])
         original_live = _actor_action_chunk(original_actor, live)
@@ -265,9 +319,21 @@ def collect_offline(ws: EvalLiberoVLAWorkspace, train_cfg: DictConfig, batches: 
         _add_action_stats("offline_actor/trained_live", collector, ws, trained_live)
         _add_action_stats("offline_actor/trained_recon", collector, ws, trained_recon)
         pair.add("offline_pair/hidden_live_vs_recon", live, recon)
-        pair.add("offline_pair/action_original_live_vs_trained_recon_raw", original_live, trained_recon)
-        pair.add("offline_pair/action_original_live_vs_original_recon_raw", original_live, original_recon)
-        pair.add("offline_pair/action_original_live_vs_trained_live_raw", original_live, trained_live)
+        pair.add(
+            "offline_pair/action_original_live_vs_trained_recon_raw",
+            original_live,
+            trained_recon,
+        )
+        pair.add(
+            "offline_pair/action_original_live_vs_original_recon_raw",
+            original_live,
+            original_recon,
+        )
+        pair.add(
+            "offline_pair/action_original_live_vs_trained_live_raw",
+            original_live,
+            trained_live,
+        )
     summary = collector.summary()
     summary.update(pair.summary())
     return summary
@@ -283,7 +349,9 @@ def collect_online(
     from libero.libero import benchmark as libero_benchmark
 
     eval_cfg = OmegaConf.select(ws.cfg, "eval")
-    task_suite_name = str(OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal"))
+    task_suite_name = str(
+        OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
+    )
     resolution = int(OmegaConf.select(ws.cfg, "encoder.resolution", default=256))
     history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
     action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=5))
@@ -312,14 +380,22 @@ def collect_online(
             rssm_actions_buffer: list[np.ndarray] = []
             for step_idx in range(int(max_steps)):
                 img = get_libero_image(obs, resolution)
-                wrist_img = get_libero_image(obs, resolution, "robot0_eye_in_hand_image")
+                wrist_img = get_libero_image(
+                    obs, resolution, "robot0_eye_in_hand_image"
+                )
                 state = np.concatenate(
-                    (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+                    (
+                        obs["robot0_eef_pos"],
+                        quat2axisangle(obs["robot0_eef_quat"]),
+                        obs["robot0_gripper_qpos"],
+                    )
                 )
                 frame_history.append((Image.fromarray(img), Image.fromarray(wrist_img)))
                 if len(frame_history) > history_length:
                     frame_history = frame_history[-history_length:]
-                padded = [frame_history[0]] * (history_length - len(frame_history)) + frame_history
+                padded = [frame_history[0]] * (
+                    history_length - len(frame_history)
+                ) + frame_history
                 ws._libero_current_raw_obs = obs
                 obs_embedding, input_ids = ws._dreamer_obs_embedding_from_eval_inputs(
                     item_processor,
@@ -330,35 +406,70 @@ def collect_online(
                 collector.add("online/obs_embedding", obs_embedding)
                 latent = ws._dreamer_online_update_latent(obs_embedding)
                 _add_latent_stats("online/posterior", collector, ws.world_model, latent)
-                actor_input = ws.world_model({"mode": "actor_input", "latent": latent}).float()
+                actor_input = ws.world_model(
+                    {"mode": "actor_input", "latent": latent}
+                ).float()
                 live_flat = obs_embedding.reshape(obs_embedding.shape[0], -1)
                 recon_flat = actor_input.reshape(actor_input.shape[0], -1)
                 original_live = _actor_action_chunk(original_actor, live_flat)
                 original_recon = _actor_action_chunk(original_actor, recon_flat)
                 trained_live = _actor_action_chunk(ws.policy, live_flat)
                 trained_recon = _actor_action_chunk(ws.policy, recon_flat)
-                _add_action_stats("online_actor/original_live", collector, ws, original_live)
-                _add_action_stats("online_actor/original_recon", collector, ws, original_recon)
-                _add_action_stats("online_actor/trained_live", collector, ws, trained_live)
-                _add_action_stats("online_actor/trained_recon", collector, ws, trained_recon)
-                pair_collector.add("online_pair/hidden_live_vs_recon", live_flat, recon_flat)
-                pair_collector.add("online_pair/action_original_live_vs_trained_recon_raw", original_live, trained_recon)
-                pair_collector.add("online_pair/action_original_live_vs_original_recon_raw", original_live, original_recon)
-                pair_collector.add("online_pair/action_original_live_vs_trained_live_raw", original_live, trained_live)
+                _add_action_stats(
+                    "online_actor/original_live", collector, ws, original_live
+                )
+                _add_action_stats(
+                    "online_actor/original_recon", collector, ws, original_recon
+                )
+                _add_action_stats(
+                    "online_actor/trained_live", collector, ws, trained_live
+                )
+                _add_action_stats(
+                    "online_actor/trained_recon", collector, ws, trained_recon
+                )
+                pair_collector.add(
+                    "online_pair/hidden_live_vs_recon", live_flat, recon_flat
+                )
+                pair_collector.add(
+                    "online_pair/action_original_live_vs_trained_recon_raw",
+                    original_live,
+                    trained_recon,
+                )
+                pair_collector.add(
+                    "online_pair/action_original_live_vs_original_recon_raw",
+                    original_live,
+                    original_recon,
+                )
+                pair_collector.add(
+                    "online_pair/action_original_live_vs_trained_live_raw",
+                    original_live,
+                    trained_live,
+                )
                 if not env_actions_buffer:
-                    env_actions_buffer, rssm_actions_buffer = ws._dreamer_action_chunk_from_latent(
-                        latent,
-                        input_ids=input_ids,
-                        action_steps=action_steps,
-                        live_hidden=obs_embedding,
+                    env_actions_buffer, rssm_actions_buffer = (
+                        ws._dreamer_action_chunk_from_latent(
+                            latent,
+                            input_ids=input_ids,
+                            action_steps=action_steps,
+                            live_hidden=obs_embedding,
+                        )
                     )
                 if not env_actions_buffer:
                     break
                 action = env_actions_buffer.pop(0)
-                rssm_action = rssm_actions_buffer.pop(0) if rssm_actions_buffer else action
-                action_collector.add("online/env_action", torch.from_numpy(np.asarray(action, dtype=np.float32)))
+                rssm_action = (
+                    rssm_actions_buffer.pop(0) if rssm_actions_buffer else action
+                )
+                action_collector.add(
+                    "online/env_action",
+                    torch.from_numpy(np.asarray(action, dtype=np.float32)),
+                )
                 obs, _, done, _ = env.step(action.tolist())
-                ws._dreamer_online_prev_action = torch.from_numpy(np.asarray(rssm_action, dtype=np.float32)).to(ws.device).reshape(1, -1)
+                ws._dreamer_online_prev_action = (
+                    torch.from_numpy(np.asarray(rssm_action, dtype=np.float32))
+                    .to(ws.device)
+                    .reshape(1, -1)
+                )
                 if done:
                     break
     summary = collector.summary()
@@ -373,7 +484,11 @@ def _compare(offline: dict[str, Any], online: dict[str, Any]) -> dict[str, Any]:
         ("deter_h", "offline/posterior/deter_h", "online/posterior/deter_h"),
         ("stoch_z", "offline/posterior/stoch_z_flat", "online/posterior/stoch_z_flat"),
         ("feature_hz", "offline/posterior/feature_hz", "online/posterior/feature_hz"),
-        ("actor_input", "offline/posterior/actor_input", "online/posterior/actor_input"),
+        (
+            "actor_input",
+            "offline/posterior/actor_input",
+            "online/posterior/actor_input",
+        ),
     ]
     out: dict[str, Any] = {}
     for name, off_key, on_key in pairs:
@@ -384,8 +499,10 @@ def _compare(offline: dict[str, Any], online: dict[str, Any]) -> dict[str, Any]:
         out[name] = {
             "mean_delta": on["mean"] - off["mean"],
             "std_ratio_online_over_offline": on["std"] / max(off["std"], 1e-12),
-            "row_norm_ratio_online_over_offline": on["row_norm_mean"] / max(off["row_norm_mean"], 1e-12),
-            "centered_norm_ratio_online_over_offline": on["centered_row_norm_mean"] / max(off["centered_row_norm_mean"], 1e-12),
+            "row_norm_ratio_online_over_offline": on["row_norm_mean"]
+            / max(off["row_norm_mean"], 1e-12),
+            "centered_norm_ratio_online_over_offline": on["centered_row_norm_mean"]
+            / max(off["centered_row_norm_mean"], 1e-12),
         }
     return out
 
@@ -407,7 +524,9 @@ def _pair(section: dict[str, Any], key: str, suffix: str) -> Any:
     return _metric(section, f"{key}/{suffix}", "mean")
 
 
-def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pathlib.Path:
+def _write_markdown_report(
+    result: dict[str, Any], out_path: pathlib.Path
+) -> pathlib.Path:
     report_path = out_path.with_suffix(".md")
     offline = result.get("offline", {})
     online = result.get("online", {})
@@ -423,7 +542,9 @@ def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pa
     lines.append("")
     lines.append("## 1. Input And Latent Alignment")
     lines.append("")
-    lines.append("| signal | mean_delta | std_ratio online/offline | norm_ratio online/offline | centered_norm_ratio |")
+    lines.append(
+        "| signal | mean_delta | std_ratio online/offline | norm_ratio online/offline | centered_norm_ratio |"
+    )
     lines.append("| --- | ---: | ---: | ---: | ---: |")
     for name in ["obs_embedding", "deter_h", "stoch_z", "feature_hz", "actor_input"]:
         row = compare.get(name, {})
@@ -436,7 +557,9 @@ def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pa
     lines.append("")
     lines.append("## 2. Action Hidden Reconstruction")
     lines.append("")
-    lines.append("| split | hidden live-vs-recon cos | hidden live-vs-recon mse | original actor live-vs-recon cos | original actor live-vs-recon mse |")
+    lines.append(
+        "| split | hidden live-vs-recon cos | hidden live-vs-recon mse | original actor live-vs-recon cos | original actor live-vs-recon mse |"
+    )
     lines.append("| --- | ---: | ---: | ---: | ---: |")
     for split, section in [("offline", offline), ("online", online)]:
         lines.append(
@@ -449,12 +572,20 @@ def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pa
     lines.append("")
     lines.append("## 3. Original Actor Vs Trained Actor")
     lines.append("")
-    lines.append("| split | comparison | raw_action cos | raw_action mse | raw_action l2 |")
+    lines.append(
+        "| split | comparison | raw_action cos | raw_action mse | raw_action l2 |"
+    )
     lines.append("| --- | --- | ---: | ---: | ---: |")
     for split, section in [("offline", offline), ("online", online)]:
         for label, key in [
-            ("original_live vs trained_live", f"{split}_pair/action_original_live_vs_trained_live_raw"),
-            ("original_live vs trained_recon", f"{split}_pair/action_original_live_vs_trained_recon_raw"),
+            (
+                "original_live vs trained_live",
+                f"{split}_pair/action_original_live_vs_trained_live_raw",
+            ),
+            (
+                "original_live vs trained_recon",
+                f"{split}_pair/action_original_live_vs_trained_recon_raw",
+            ),
         ]:
             lines.append(
                 f"| {split} | {label} | "
@@ -465,10 +596,17 @@ def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pa
     lines.append("")
     lines.append("## 4. Action Distribution")
     lines.append("")
-    lines.append("| split | actor/input | env_abs_mean | env_std | env_norm | saturation_gt_0.95 |")
+    lines.append(
+        "| split | actor/input | env_abs_mean | env_std | env_norm | saturation_gt_0.95 |"
+    )
     lines.append("| --- | --- | ---: | ---: | ---: | ---: |")
     for split, section in [("offline", offline), ("online", online)]:
-        for actor_name in ["original_live", "original_recon", "trained_live", "trained_recon"]:
+        for actor_name in [
+            "original_live",
+            "original_recon",
+            "trained_live",
+            "trained_recon",
+        ]:
             prefix = f"{split}_actor/{actor_name}"
             lines.append(
                 f"| {split} | {actor_name} | "
@@ -482,15 +620,34 @@ def _write_markdown_report(result: dict[str, Any], out_path: pathlib.Path) -> pa
     lines.append("")
     lines.append("| actor/input | " + " | ".join(action_labels) + " |")
     lines.append("| --- | " + " | ".join(["---:"] * len(action_labels)) + " |")
-    for actor_name in ["original_live", "original_recon", "trained_live", "trained_recon"]:
-        values = _metric(online, f"online_actor/{actor_name}/env_action", "per_dim_mean", [])
-        lines.append("| " + actor_name + " | " + " | ".join(_fmt(v, 3) for v in values[:7]) + " |")
+    for actor_name in [
+        "original_live",
+        "original_recon",
+        "trained_live",
+        "trained_recon",
+    ]:
+        values = _metric(
+            online, f"online_actor/{actor_name}/env_action", "per_dim_mean", []
+        )
+        lines.append(
+            "| "
+            + actor_name
+            + " | "
+            + " | ".join(_fmt(v, 3) for v in values[:7])
+            + " |"
+        )
     lines.append("")
     lines.append("## Required Interpretation")
     lines.append("")
-    lines.append("- Input alignment is acceptable when `obs_embedding` std/norm ratios are near 1.0 and prompt/history settings match the sidecar attrs.")
-    lines.append("- Action hidden reconstruction is acceptable when offline live-vs-recon hidden cosine is high and original actor live-vs-recon action MSE is low.")
-    lines.append("- A trained actor is suspect when its raw actions diverge strongly from original actor outputs or its env actions saturate/freeze dimensions.")
+    lines.append(
+        "- Input alignment is acceptable when `obs_embedding` std/norm ratios are near 1.0 and prompt/history settings match the sidecar attrs."
+    )
+    lines.append(
+        "- Action hidden reconstruction is acceptable when offline live-vs-recon hidden cosine is high and original actor live-vs-recon action MSE is low."
+    )
+    lines.append(
+        "- A trained actor is suspect when its raw actions diverge strongly from original actor outputs or its env actions saturate/freeze dimensions."
+    )
     lines.append("")
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report_path
@@ -500,7 +657,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--encoder-ckpt", required=True)
-    parser.add_argument("--out", default=str(PROJECT_ROOT / "data/outputs/diagnostics/dreamervla_latent_distribution.json"))
+    parser.add_argument(
+        "--out",
+        default=str(
+            PROJECT_ROOT
+            / "data/outputs/diagnostics/dreamervla_latent_distribution.json"
+        ),
+    )
     parser.add_argument("--tasks", default="0,3,6,8")
     parser.add_argument("--episodes-per-task", type=int, default=1)
     parser.add_argument("--online-steps", type=int, default=20)
@@ -525,7 +688,9 @@ def main() -> None:
         "eval.log_action_stats=false",
     ]
     eval_cfg = _load_eval_cfg(overrides)
-    output_dir = str(pathlib.Path(args.out).expanduser().resolve().parent / "_workspace")
+    output_dir = str(
+        pathlib.Path(args.out).expanduser().resolve().parent / "_workspace"
+    )
     ws0 = EvalLiberoVLAWorkspace(eval_cfg, output_dir=output_dir)
     train_cfg, payload = _merge_train_eval_cfg(ws0, eval_cfg, args.ckpt)
     ws = _init_workspace(train_cfg, payload, output_dir=output_dir)
@@ -535,7 +700,9 @@ def main() -> None:
         "ckpt": str(pathlib.Path(args.ckpt).expanduser().resolve()),
         "encoder_ckpt": str(pathlib.Path(args.encoder_ckpt).expanduser().resolve()),
         "tasks": tasks,
-        "offline": collect_offline(ws, train_cfg, args.offline_batches, args.offline_batch_size),
+        "offline": collect_offline(
+            ws, train_cfg, args.offline_batches, args.offline_batch_size
+        ),
         "online": collect_online(ws, tasks, args.episodes_per_task, args.online_steps),
     }
     result["compare"] = _compare(result["offline"], result["online"])

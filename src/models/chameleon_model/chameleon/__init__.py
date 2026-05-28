@@ -13,7 +13,12 @@
 # limitations under the License.
 from typing import TYPE_CHECKING
 
-from transformers.utils import OptionalDependencyNotAvailable, _LazyModule, is_torch_available, is_vision_available
+from transformers.utils import (
+    OptionalDependencyNotAvailable,
+    _LazyModule,
+    is_torch_available,
+    is_vision_available,
+)
 
 _import_structure = {
     "configuration_chameleon": ["ChameleonConfig", "ChameleonVQVAEConfig"],
@@ -45,8 +50,11 @@ else:
 
 
 if TYPE_CHECKING:
-    from .configuration_chameleon import ChameleonConfig, ChameleonVQVAEConfig
-    from .processing_chameleon import ChameleonProcessor
+    from .configuration_chameleon import (
+        ChameleonConfig as ChameleonConfig,
+        ChameleonVQVAEConfig as ChameleonVQVAEConfig,
+    )
+    from .processing_chameleon import ChameleonProcessor as ChameleonProcessor
 
     try:
         if not is_torch_available():
@@ -55,11 +63,11 @@ if TYPE_CHECKING:
         pass
     else:
         from .modeling_chameleon import (
-            ChameleonForConditionalGeneration,
-            ChameleonForConditionalGeneration_ContinuousHead,
-            ChameleonModel,
-            ChameleonPreTrainedModel,
-            ChameleonVQVAE,
+            ChameleonForConditionalGeneration as ChameleonForConditionalGeneration,
+            ChameleonForConditionalGeneration_ContinuousHead as ChameleonForConditionalGeneration_ContinuousHead,
+            ChameleonModel as ChameleonModel,
+            ChameleonPreTrainedModel as ChameleonPreTrainedModel,
+            ChameleonVQVAE as ChameleonVQVAE,
         )
 
     try:
@@ -68,10 +76,14 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         pass
     else:
-        from .image_processing_chameleon import ChameleonImageProcessor
+        from .image_processing_chameleon import (
+            ChameleonImageProcessor as ChameleonImageProcessor,
+        )
 
 
 else:
     import sys
 
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+    sys.modules[__name__] = _LazyModule(
+        __name__, globals()["__file__"], _import_structure, module_spec=__spec__
+    )

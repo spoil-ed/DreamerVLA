@@ -25,9 +25,13 @@ def build_optimizer(module: nn.Module, optim_cfg: DictConfig) -> torch.optim.Opt
     if eps is not None:
         optimizer_kwargs["eps"] = float(eps)
     # Optimizer build
-    trainable_parameters = [parameter for parameter in module.parameters() if parameter.requires_grad]
+    trainable_parameters = [
+        parameter for parameter in module.parameters() if parameter.requires_grad
+    ]
     if not trainable_parameters:
-        raise ValueError(f"Module `{module.__class__.__name__}` does not expose any trainable parameters.")
+        raise ValueError(
+            f"Module `{module.__class__.__name__}` does not expose any trainable parameters."
+        )
     if name == "adamw":
         return torch.optim.AdamW(trainable_parameters, **optimizer_kwargs)
     return torch.optim.Adam(trainable_parameters, **optimizer_kwargs)

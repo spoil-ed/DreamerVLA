@@ -37,8 +37,12 @@ def cmd_list() -> int:
     print("  6 / reward_mismatch          -> outputs/reward_mismatch.json")
     print("")
     print("Examples:")
-    print("  python scripts/exp_tables.py 1 collect --result DreamerVLA goal path/to/eval_libero_metrics.json")
-    print("  python scripts/exp_tables.py 5 plan --ckpt path/to/wm.ckpt --hidden-hdf5-dir ... --reward-hdf5-dir ...")
+    print(
+        "  python scripts/exp_tables.py 1 collect --result DreamerVLA goal path/to/eval_libero_metrics.json"
+    )
+    print(
+        "  python scripts/exp_tables.py 5 plan --ckpt path/to/wm.ckpt --hidden-hdf5-dir ... --reward-hdf5-dir ..."
+    )
     return 0
 
 

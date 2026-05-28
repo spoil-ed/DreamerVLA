@@ -72,7 +72,9 @@ class ChameleonLatentActionWorldModel(nn.Module):
             nn.Linear(self.action_dim, self.model_dim),
             nn.GELU(),
         )
-        self.action_pos = nn.Parameter(torch.zeros(1, int(max_action_steps), self.model_dim))
+        self.action_pos = nn.Parameter(
+            torch.zeros(1, int(max_action_steps), self.model_dim)
+        )
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.model_dim,
             nhead=int(action_heads),
@@ -107,9 +109,13 @@ class ChameleonLatentActionWorldModel(nn.Module):
     def encode_actions(self, action_seq: torch.Tensor) -> torch.Tensor:
         """Encode a k-step action sequence into one summary vector [B, D]."""
         if action_seq.ndim != 3:
-            raise ValueError(f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}")
+            raise ValueError(
+                f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}"
+            )
         if action_seq.shape[-1] != self.action_dim:
-            raise ValueError(f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}")
+            raise ValueError(
+                f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}"
+            )
         K = int(action_seq.shape[1])
         if K < 1:
             raise ValueError("action_seq must contain at least one action")
@@ -126,13 +132,17 @@ class ChameleonLatentActionWorldModel(nn.Module):
 
     def predict(self, latent: torch.Tensor, action_seq: torch.Tensor) -> torch.Tensor:
         if latent.shape[-1] != self.latent_dim:
-            raise ValueError(f"latent dim mismatch: got {latent.shape[-1]}, expected {self.latent_dim}")
+            raise ValueError(
+                f"latent dim mismatch: got {latent.shape[-1]}, expected {self.latent_dim}"
+            )
         action_summary = self.encode_actions(action_seq)
         z = self.latent_proj(latent)
         if latent.ndim == 3:
             action_summary = action_summary[:, None, :].expand(-1, latent.shape[1], -1)
         elif latent.ndim != 2:
-            raise ValueError(f"latent must be [B,C] or [B,N,C], got {tuple(latent.shape)}")
+            raise ValueError(
+                f"latent must be [B,C] or [B,N,C], got {tuple(latent.shape)}"
+            )
         delta_or_pred = self.fuse(torch.cat([z, action_summary], dim=-1))
         return latent + delta_or_pred if self.residual else delta_or_pred
 
@@ -171,9 +181,14 @@ class ChameleonLatentActionWorldModel(nn.Module):
                 "latent_norm": latent.float().flatten(start_dim=1).norm(dim=-1).mean(),
                 "target_norm": target.float().flatten(start_dim=1).norm(dim=-1).mean(),
                 "pred_norm": pred.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_delta_norm": target_delta.flatten(start_dim=1).norm(dim=-1).mean(),
+                "target_delta_norm": target_delta.flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
                 "pred_delta_norm": pred_delta.flatten(start_dim=1).norm(dim=-1).mean(),
-                "action_norm": action_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
+                "action_norm": action_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
             }
         return {"pred_latent": pred, "target_latent": target, "loss": loss, **metrics}
 
@@ -189,7 +204,9 @@ class _TimestepEmbedder(nn.Module):
         )
 
     @staticmethod
-    def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000) -> torch.Tensor:
+    def timestep_embedding(
+        t: torch.Tensor, dim: int, max_period: int = 10000
+    ) -> torch.Tensor:
         half = dim // 2
         freqs = torch.exp(
             -torch.log(torch.tensor(float(max_period), device=t.device))
@@ -203,7 +220,11 @@ class _TimestepEmbedder(nn.Module):
         return emb
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size).to(next(self.parameters()).dtype))
+        return self.mlp(
+            self.timestep_embedding(t, self.frequency_embedding_size).to(
+                next(self.parameters()).dtype
+            )
+        )
 
 
 class ChameleonLatentFlowWorldModel(nn.Module):
@@ -279,8 +300,12 @@ class ChameleonLatentFlowWorldModel(nn.Module):
             num_layers=int(action_layers),
             enable_nested_tensor=False,
         )
-        self.action_pos = nn.Parameter(torch.zeros(1, int(max_action_steps), self.model_dim))
-        self.time_embed = _TimestepEmbedder(self.model_dim, frequency_embedding_size=int(time_embed_dim))
+        self.action_pos = nn.Parameter(
+            torch.zeros(1, int(max_action_steps), self.model_dim)
+        )
+        self.time_embed = _TimestepEmbedder(
+            self.model_dim, frequency_embedding_size=int(time_embed_dim)
+        )
 
         self.cond_type = nn.Parameter(torch.zeros(1, 1, self.model_dim))
         self.latent_type = nn.Parameter(torch.zeros(1, 1, self.model_dim))
@@ -304,7 +329,12 @@ class ChameleonLatentFlowWorldModel(nn.Module):
         self._init_weights()
 
     def _init_weights(self) -> None:
-        for param in (self.action_pos, self.cond_type, self.latent_type, self.noisy_type):
+        for param in (
+            self.action_pos,
+            self.cond_type,
+            self.latent_type,
+            self.noisy_type,
+        ):
             nn.init.normal_(param, std=0.02)
         for module in self.modules():
             if isinstance(module, nn.Linear):
@@ -321,56 +351,91 @@ class ChameleonLatentFlowWorldModel(nn.Module):
 
     def encode_actions(self, action_seq: torch.Tensor) -> torch.Tensor:
         if action_seq.ndim != 3:
-            raise ValueError(f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}")
+            raise ValueError(
+                f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}"
+            )
         if action_seq.shape[-1] != self.action_dim:
-            raise ValueError(f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}")
+            raise ValueError(
+                f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}"
+            )
         K = int(action_seq.shape[1])
         if not (1 <= K <= self.action_pos.shape[1]):
-            raise ValueError(f"action horizon K={K} outside [1,{self.action_pos.shape[1]}]")
+            raise ValueError(
+                f"action horizon K={K} outside [1,{self.action_pos.shape[1]}]"
+            )
         x = self.action_proj(action_seq)
         x = x + self.action_pos[:, :K].to(dtype=x.dtype, device=x.device)
         return self.action_encoder(x)[:, -1]
 
     def encode_action_sequence(self, action_seq: torch.Tensor) -> torch.Tensor:
         if action_seq.ndim != 3:
-            raise ValueError(f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}")
+            raise ValueError(
+                f"action_seq must be [B,K,A], got {tuple(action_seq.shape)}"
+            )
         if action_seq.shape[-1] != self.action_dim:
-            raise ValueError(f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}")
+            raise ValueError(
+                f"action dim mismatch: got {action_seq.shape[-1]}, expected {self.action_dim}"
+            )
         K = int(action_seq.shape[1])
         if not (1 <= K <= self.action_pos.shape[1]):
-            raise ValueError(f"action horizon K={K} outside [1,{self.action_pos.shape[1]}]")
+            raise ValueError(
+                f"action horizon K={K} outside [1,{self.action_pos.shape[1]}]"
+            )
         x = self.action_proj(action_seq)
         x = x + self.action_pos[:, :K].to(dtype=x.dtype, device=x.device)
         return self.action_encoder(x)
 
-    def predict_C(self, latent: torch.Tensor, noisy_delta: torch.Tensor, action_seq: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def predict_C(
+        self,
+        latent: torch.Tensor,
+        noisy_delta: torch.Tensor,
+        action_seq: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
         latent_tokens, squeezed = self._as_tokens(latent)
         noisy_tokens, noisy_squeezed = self._as_tokens(noisy_delta)
-        if squeezed != noisy_squeezed or latent_tokens.shape[:2] != noisy_tokens.shape[:2]:
+        if (
+            squeezed != noisy_squeezed
+            or latent_tokens.shape[:2] != noisy_tokens.shape[:2]
+        ):
             raise ValueError("latent and noisy_delta must have matching token layout")
         action_cond = self.encode_actions(action_seq)
         time_cond = self.time_embed(t.to(device=latent.device))
-        cond = (action_cond + time_cond)[:, None, :] + self.cond_type.to(dtype=latent.dtype, device=latent.device)
-        z = self.latent_proj(latent_tokens) + self.latent_type.to(dtype=latent.dtype, device=latent.device)
-        x = self.noisy_delta_proj(noisy_tokens) + self.noisy_type.to(dtype=latent.dtype, device=latent.device)
+        cond = (action_cond + time_cond)[:, None, :] + self.cond_type.to(
+            dtype=latent.dtype, device=latent.device
+        )
+        z = self.latent_proj(latent_tokens) + self.latent_type.to(
+            dtype=latent.dtype, device=latent.device
+        )
+        x = self.noisy_delta_proj(noisy_tokens) + self.noisy_type.to(
+            dtype=latent.dtype, device=latent.device
+        )
         tokens = torch.cat([cond, z, x], dim=1)
         tokens = self.transformer(tokens)
         pred_tokens = tokens[:, 1 + z.shape[1] :]
         pred_C = self.out(self.out_norm(pred_tokens))
         return pred_C[:, 0] if squeezed else pred_C
 
-    def _flatten_latent_sequence(self, x: torch.Tensor) -> tuple[torch.Tensor, tuple[int, ...]]:
+    def _flatten_latent_sequence(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, tuple[int, ...]]:
         if x.ndim == 3:
             B, T, C = x.shape
             if C != self.latent_dim:
-                raise ValueError(f"latent dim mismatch: got {C}, expected {self.latent_dim}")
+                raise ValueError(
+                    f"latent dim mismatch: got {C}, expected {self.latent_dim}"
+                )
             return x, (B, T)
         if x.ndim == 4:
             B, T, N, C = x.shape
             if C != self.latent_dim:
-                raise ValueError(f"latent dim mismatch: got {C}, expected {self.latent_dim}")
+                raise ValueError(
+                    f"latent dim mismatch: got {C}, expected {self.latent_dim}"
+                )
             return x.reshape(B, T * N, C), (B, T, N)
-        raise ValueError(f"latent_seq must be [B,T,C] or [B,T,N,C], got {tuple(x.shape)}")
+        raise ValueError(
+            f"latent_seq must be [B,T,C] or [B,T,N,C], got {tuple(x.shape)}"
+        )
 
     def predict_C_sequence(
         self,
@@ -402,11 +467,15 @@ class ChameleonLatentFlowWorldModel(nn.Module):
             delta_cond = delta_cond + time_cond[:, None, :]
 
         context = self.latent_proj(context_tokens)
-        context = context + self.latent_type.to(dtype=context.dtype, device=context.device)
+        context = context + self.latent_type.to(
+            dtype=context.dtype, device=context.device
+        )
         noisy = self.noisy_delta_proj(noisy_tokens)
         noisy = noisy + delta_cond.to(dtype=noisy.dtype, device=noisy.device)
         noisy = noisy + self.noisy_type.to(dtype=noisy.dtype, device=noisy.device)
-        global_cond = time_cond[:, None, :] + self.cond_type.to(dtype=context.dtype, device=context.device)
+        global_cond = time_cond[:, None, :] + self.cond_type.to(
+            dtype=context.dtype, device=context.device
+        )
         tokens = torch.cat([global_cond, context, noisy], dim=1)
         tokens = self.transformer(tokens)
         pred_tokens = tokens[:, 1 + context.shape[1] :]
@@ -433,7 +502,11 @@ class ChameleonLatentFlowWorldModel(nn.Module):
             )
 
         B = int(latent_seq.shape[0])
-        t = torch.rand(B, device=latent_seq.device, dtype=torch.float32) * (1.0 - self.eps) + self.eps
+        t = (
+            torch.rand(B, device=latent_seq.device, dtype=torch.float32)
+            * (1.0 - self.eps)
+            + self.eps
+        )
         t_view = t.reshape(B, *((1,) * (delta_seq.ndim - 1))).to(dtype=delta_seq.dtype)
         noise = torch.randn_like(delta_seq)
         noisy_delta = delta_seq + C * t_view + noise * t_view
@@ -474,12 +547,31 @@ class ChameleonLatentFlowWorldModel(nn.Module):
                 "variation_loss": variation_loss.detach(),
                 "pred_target_cos": cosine.detach(),
                 "endpoint_pred_target_cos": endpoint_cos.detach(),
-                "latent_norm": latent_seq[:, :context_frames].float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_norm": target_future.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_norm": pred_future.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_delta_norm": delta_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_delta_norm": pred_delta_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "action_norm": action_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
+                "latent_norm": latent_seq[:, :context_frames]
+                .float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "target_norm": target_future.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "pred_norm": pred_future.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "target_delta_norm": delta_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "pred_delta_norm": pred_delta_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "action_norm": action_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
                 "t_mean": t.mean(),
             }
         return {
@@ -500,11 +592,16 @@ class ChameleonLatentFlowWorldModel(nn.Module):
         target = batch["target_latent"]
         action_seq = batch["action_seq"]
         if latent.shape != target.shape:
-            raise ValueError(f"latent and target shape mismatch: {tuple(latent.shape)} vs {tuple(target.shape)}")
+            raise ValueError(
+                f"latent and target shape mismatch: {tuple(latent.shape)} vs {tuple(target.shape)}"
+            )
         delta = target - latent
         C = -delta
         B = int(latent.shape[0])
-        t = torch.rand(B, device=latent.device, dtype=torch.float32) * (1.0 - self.eps) + self.eps
+        t = (
+            torch.rand(B, device=latent.device, dtype=torch.float32) * (1.0 - self.eps)
+            + self.eps
+        )
         t_view = t.reshape(B, *((1,) * (delta.ndim - 1))).to(dtype=delta.dtype)
         noise = torch.randn_like(delta)
         noisy_delta = delta + C * t_view + noise * t_view
@@ -534,10 +631,23 @@ class ChameleonLatentFlowWorldModel(nn.Module):
                 "pred_target_cos": cosine.detach(),
                 "latent_norm": latent.float().flatten(start_dim=1).norm(dim=-1).mean(),
                 "target_norm": target.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_norm": pred_latent.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_delta_norm": delta.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_delta_norm": (-pred_C).float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "action_norm": action_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
+                "pred_norm": pred_latent.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "target_delta_norm": delta.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "pred_delta_norm": (-pred_C)
+                .float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "action_norm": action_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
                 "t_mean": t.mean(),
             }
         return {
@@ -550,11 +660,15 @@ class ChameleonLatentFlowWorldModel(nn.Module):
         }
 
 
-def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def _modulate(
+    x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+) -> torch.Tensor:
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
-def _modulate_tokens(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def _modulate_tokens(
+    x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+) -> torch.Tensor:
     return x * (1 + scale) + shift
 
 
@@ -580,7 +694,9 @@ class _CrossAttentionBlock(nn.Module):
 class _LaDiWMDiTBlock(nn.Module):
     """Two-stream DiT block, alternating LaDiWM-style spatial/temporal mixing."""
 
-    def __init__(self, dim: int, heads: int, mlp_ratio: float = 4.0, dropout: float = 0.0) -> None:
+    def __init__(
+        self, dim: int, heads: int, mlp_ratio: float = 4.0, dropout: float = 0.0
+    ) -> None:
         super().__init__()
         self.cross_attn1 = _CrossAttentionBlock(dim, heads, dropout=dropout)
         self.cross_attn2 = _CrossAttentionBlock(dim, heads, dropout=dropout)
@@ -588,10 +704,16 @@ class _LaDiWMDiTBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.norm3 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.norm4 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-        self.self_attn = nn.MultiheadAttention(dim, heads, dropout=dropout, batch_first=True)
+        self.self_attn = nn.MultiheadAttention(
+            dim, heads, dropout=dropout, batch_first=True
+        )
         hidden = int(dim * mlp_ratio)
-        self.mlp1 = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(approximate="tanh"), nn.Linear(hidden, dim))
-        self.mlp2 = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(approximate="tanh"), nn.Linear(hidden, dim))
+        self.mlp1 = nn.Sequential(
+            nn.Linear(dim, hidden), nn.GELU(approximate="tanh"), nn.Linear(hidden, dim)
+        )
+        self.mlp2 = nn.Sequential(
+            nn.Linear(dim, hidden), nn.GELU(approximate="tanh"), nn.Linear(hidden, dim)
+        )
         self.adaLN1 = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
         self.adaLN2 = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
 
@@ -614,30 +736,60 @@ class _LaDiWMDiTBlock(nn.Module):
             x1_m = x1.reshape(B, K, N, -1).reshape(B * K, N, -1)
             x2_m = x2.reshape(B, K, N, -1).reshape(B * K, N, -1)
             cond = (action_fea + time_fea[:, None, :]).reshape(B * K, -1)
-            shift1, scale1, gate_attn1, shift_mlp1, scale_mlp1, gate_mlp1 = self.adaLN1(cond).chunk(6, dim=-1)
-            shift2, scale2, gate_attn2, shift_mlp2, scale_mlp2, gate_mlp2 = self.adaLN2(cond).chunk(6, dim=-1)
+            shift1, scale1, gate_attn1, shift_mlp1, scale_mlp1, gate_mlp1 = self.adaLN1(
+                cond
+            ).chunk(6, dim=-1)
+            shift2, scale2, gate_attn2, shift_mlp2, scale_mlp2, gate_mlp2 = self.adaLN2(
+                cond
+            ).chunk(6, dim=-1)
             q1 = _modulate(self.norm1(x1_m), shift1, scale1)
             q2 = _modulate(self.norm2(x2_m), shift2, scale2)
-            mixed, _ = self.self_attn(torch.cat([q1, q2], dim=1), torch.cat([q1, q2], dim=1), torch.cat([q1, q2], dim=1), need_weights=False)
+            mixed, _ = self.self_attn(
+                torch.cat([q1, q2], dim=1),
+                torch.cat([q1, q2], dim=1),
+                torch.cat([q1, q2], dim=1),
+                need_weights=False,
+            )
             x1_m = x1_m + gate_attn1.unsqueeze(1) * mixed[:, :N]
             x2_m = x2_m + gate_attn2.unsqueeze(1) * mixed[:, N:]
-            x1_m = x1_m + gate_mlp1.unsqueeze(1) * self.mlp1(_modulate(self.norm3(x1_m), shift_mlp1, scale_mlp1))
-            x2_m = x2_m + gate_mlp2.unsqueeze(1) * self.mlp2(_modulate(self.norm4(x2_m), shift_mlp2, scale_mlp2))
+            x1_m = x1_m + gate_mlp1.unsqueeze(1) * self.mlp1(
+                _modulate(self.norm3(x1_m), shift_mlp1, scale_mlp1)
+            )
+            x2_m = x2_m + gate_mlp2.unsqueeze(1) * self.mlp2(
+                _modulate(self.norm4(x2_m), shift_mlp2, scale_mlp2)
+            )
             return x1_m.reshape(B, K * N, -1), x2_m.reshape(B, K * N, -1)
 
         if mode == "temporal":
             x1_m = x1.reshape(B, K, N, -1).permute(0, 2, 1, 3).reshape(B * N, K, -1)
             x2_m = x2.reshape(B, K, N, -1).permute(0, 2, 1, 3).reshape(B * N, K, -1)
-            cond = (action_fea + time_fea[:, None, :])[:, None, :, :].expand(B, N, K, -1).reshape(B * N, K, -1)
-            shift1, scale1, gate_attn1, shift_mlp1, scale_mlp1, gate_mlp1 = self.adaLN1(cond).chunk(6, dim=-1)
-            shift2, scale2, gate_attn2, shift_mlp2, scale_mlp2, gate_mlp2 = self.adaLN2(cond).chunk(6, dim=-1)
+            cond = (
+                (action_fea + time_fea[:, None, :])[:, None, :, :]
+                .expand(B, N, K, -1)
+                .reshape(B * N, K, -1)
+            )
+            shift1, scale1, gate_attn1, shift_mlp1, scale_mlp1, gate_mlp1 = self.adaLN1(
+                cond
+            ).chunk(6, dim=-1)
+            shift2, scale2, gate_attn2, shift_mlp2, scale_mlp2, gate_mlp2 = self.adaLN2(
+                cond
+            ).chunk(6, dim=-1)
             q1 = _modulate_tokens(self.norm1(x1_m), shift1, scale1)
             q2 = _modulate_tokens(self.norm2(x2_m), shift2, scale2)
-            mixed, _ = self.self_attn(torch.cat([q1, q2], dim=1), torch.cat([q1, q2], dim=1), torch.cat([q1, q2], dim=1), need_weights=False)
+            mixed, _ = self.self_attn(
+                torch.cat([q1, q2], dim=1),
+                torch.cat([q1, q2], dim=1),
+                torch.cat([q1, q2], dim=1),
+                need_weights=False,
+            )
             x1_m = x1_m + gate_attn1 * mixed[:, :K]
             x2_m = x2_m + gate_attn2 * mixed[:, K:]
-            x1_m = x1_m + gate_mlp1 * self.mlp1(_modulate_tokens(self.norm3(x1_m), shift_mlp1, scale_mlp1))
-            x2_m = x2_m + gate_mlp2 * self.mlp2(_modulate_tokens(self.norm4(x2_m), shift_mlp2, scale_mlp2))
+            x1_m = x1_m + gate_mlp1 * self.mlp1(
+                _modulate_tokens(self.norm3(x1_m), shift_mlp1, scale_mlp1)
+            )
+            x2_m = x2_m + gate_mlp2 * self.mlp2(
+                _modulate_tokens(self.norm4(x2_m), shift_mlp2, scale_mlp2)
+            )
             x1_m = x1_m.reshape(B, N, K, -1).permute(0, 2, 1, 3).reshape(B, K * N, -1)
             x2_m = x2_m.reshape(B, N, K, -1).permute(0, 2, 1, 3).reshape(B, K * N, -1)
             return x1_m, x2_m
@@ -656,7 +808,13 @@ class _LaDiWMFinalLayer(nn.Module):
         nn.init.constant_(self.linear.weight, 0)
         nn.init.constant_(self.linear.bias, 0)
 
-    def forward(self, x: torch.Tensor, time_fea: torch.Tensor, action_fea: torch.Tensor, shape: tuple[int, int, int]) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        time_fea: torch.Tensor,
+        action_fea: torch.Tensor,
+        shape: tuple[int, int, int],
+    ) -> torch.Tensor:
         B, K, N = shape
         x = x.reshape(B, K, N, -1).reshape(B * K, N, -1)
         cond = (action_fea + time_fea[:, None, :]).reshape(B * K, -1)
@@ -718,18 +876,31 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
         self.in2 = nn.Linear(self.stream2_dim, self.model_dim)
         self.context1 = nn.Linear(self.stream1_dim, self.model_dim)
         self.context2 = nn.Linear(self.stream2_dim, self.model_dim)
-        self.time_encoder = _TimestepEmbedder(self.model_dim, frequency_embedding_size=int(time_embed_dim))
+        self.time_encoder = _TimestepEmbedder(
+            self.model_dim, frequency_embedding_size=int(time_embed_dim)
+        )
         self.action_encoder = nn.Sequential(
             nn.LayerNorm(self.action_dim),
             nn.Linear(self.action_dim, self.model_dim),
             nn.SiLU(),
             nn.Linear(self.model_dim, self.model_dim),
         )
-        self.temporal_pos = nn.Parameter(torch.zeros(1, int(max_action_steps), 1, self.model_dim), requires_grad=False)
-        self.spatial_pos = nn.Parameter(torch.zeros(1, 1, int(max_image_tokens), self.model_dim), requires_grad=False)
+        self.temporal_pos = nn.Parameter(
+            torch.zeros(1, int(max_action_steps), 1, self.model_dim),
+            requires_grad=False,
+        )
+        self.spatial_pos = nn.Parameter(
+            torch.zeros(1, 1, int(max_image_tokens), self.model_dim),
+            requires_grad=False,
+        )
         self.blocks = nn.ModuleList(
             [
-                _LaDiWMDiTBlock(self.model_dim, int(heads), mlp_ratio=float(mlp_ratio), dropout=float(dropout))
+                _LaDiWMDiTBlock(
+                    self.model_dim,
+                    int(heads),
+                    mlp_ratio=float(mlp_ratio),
+                    dropout=float(dropout),
+                )
                 for _ in range(int(depth))
             ]
         )
@@ -765,18 +936,28 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
             return x[:, :, None, :], True
         if x.ndim == 4:
             return x, False
-        raise ValueError(f"latent_seq must be [B,T,C] or [B,T,N,C], got {tuple(x.shape)}")
+        raise ValueError(
+            f"latent_seq must be [B,T,C] or [B,T,N,C], got {tuple(x.shape)}"
+        )
 
     def _split(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-1] != self.latent_dim:
-            raise ValueError(f"latent dim mismatch: got {x.shape[-1]}, expected {self.latent_dim}")
+            raise ValueError(
+                f"latent dim mismatch: got {x.shape[-1]}, expected {self.latent_dim}"
+            )
         return x[..., : self.stream1_dim], x[..., self.stream1_dim :]
 
-    def _action_features(self, action_seq: torch.Tensor, K: int, dtype: torch.dtype) -> torch.Tensor:
+    def _action_features(
+        self, action_seq: torch.Tensor, K: int, dtype: torch.dtype
+    ) -> torch.Tensor:
         if action_seq.ndim != 3 or action_seq.shape[-1] != self.action_dim:
-            raise ValueError(f"action_seq must be [B,K,{self.action_dim}], got {tuple(action_seq.shape)}")
+            raise ValueError(
+                f"action_seq must be [B,K,{self.action_dim}], got {tuple(action_seq.shape)}"
+            )
         if action_seq.shape[1] != K:
-            raise ValueError(f"action horizon {action_seq.shape[1]} must match residual horizon {K}")
+            raise ValueError(
+                f"action horizon {action_seq.shape[1]} must match residual horizon {K}"
+            )
         return self.action_encoder(action_seq).to(dtype=dtype)
 
     def _add_pos(self, x: torch.Tensor) -> torch.Tensor:
@@ -806,13 +987,17 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
         context2 = self.context2(context2_raw).reshape(B, -1, self.model_dim)
         x1 = self._add_pos(self.in1(noisy1_raw)).reshape(B, K * N, self.model_dim)
         x2 = self._add_pos(self.in2(noisy2_raw)).reshape(B, K * N, self.model_dim)
-        time_fea = self.time_encoder(t.clamp_min(self.eps).log().to(device=noisy_delta_seq.device))
+        time_fea = self.time_encoder(
+            t.clamp_min(self.eps).log().to(device=noisy_delta_seq.device)
+        )
         action_fea = self._action_features(action_seq, K, dtype=x1.dtype)
 
         shape = (B, K, N)
         for idx, block in enumerate(self.blocks):
             mode = "spatial" if (idx % 2) == 0 else "temporal"
-            x1, x2 = block(x1, x2, context1, context2, time_fea, action_fea, shape, mode=mode)
+            x1, x2 = block(
+                x1, x2, context1, context2, time_fea, action_fea, shape, mode=mode
+            )
 
         y1 = self.final1(x1, time_fea, action_fea, shape)
         y2 = self.final2(x2, time_fea, action_fea, shape)
@@ -827,7 +1012,9 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         if "latent_seq" not in batch:
-            raise ValueError("ChameleonLaDiWMFlowWorldModel expects latent_seq from the reused sequence dataloader")
+            raise ValueError(
+                "ChameleonLaDiWMFlowWorldModel expects latent_seq from the reused sequence dataloader"
+            )
         latent_seq, squeezed = self._ensure_tokens(batch["latent_seq"])
         action_seq = batch["action_seq"]
         T = int(latent_seq.shape[1])
@@ -840,7 +1027,11 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
         delta_seq = target_future - prev_latents
         C = -delta_seq
         B = int(latent_seq.shape[0])
-        t = torch.rand(B, device=latent_seq.device, dtype=torch.float32) * (1.0 - self.eps) + self.eps
+        t = (
+            torch.rand(B, device=latent_seq.device, dtype=torch.float32)
+            * (1.0 - self.eps)
+            + self.eps
+        )
         t_view = t.reshape(B, *((1,) * (delta_seq.ndim - 1))).to(dtype=delta_seq.dtype)
         noise = torch.randn_like(delta_seq)
         noisy_delta = delta_seq + C * t_view + noise * t_view
@@ -851,7 +1042,9 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
             t=t,
         )
         pred_delta_seq = -pred_C
-        pred_future = latent_seq[:, context_frames - 1 : context_frames] + torch.cumsum(pred_delta_seq, dim=1)
+        pred_future = latent_seq[:, context_frames - 1 : context_frames] + torch.cumsum(
+            pred_delta_seq, dim=1
+        )
 
         flow_loss = F.mse_loss(pred_C.float(), C.float())
         aux_loss = F.mse_loss(aux_C.float(), C.float())
@@ -894,12 +1087,31 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
                 "variation_loss": variation_loss.detach(),
                 "pred_target_cos": cosine.detach(),
                 "endpoint_pred_target_cos": endpoint_cos.detach(),
-                "latent_norm": latent_seq[:, :context_frames].float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_norm": target_future.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_norm": pred_future.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "target_delta_norm": delta_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "pred_delta_norm": pred_delta_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
-                "action_norm": action_seq.float().flatten(start_dim=1).norm(dim=-1).mean(),
+                "latent_norm": latent_seq[:, :context_frames]
+                .float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "target_norm": target_future.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "pred_norm": pred_future.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "target_delta_norm": delta_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "pred_delta_norm": pred_delta_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
+                "action_norm": action_seq.float()
+                .flatten(start_dim=1)
+                .norm(dim=-1)
+                .mean(),
                 "t_mean": t.mean(),
             }
         return {
@@ -914,7 +1126,9 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
         }
 
     @torch.no_grad()
-    def action_sensitivity_metrics(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+    def action_sensitivity_metrics(
+        self, batch: dict[str, Any]
+    ) -> dict[str, torch.Tensor]:
         """Compare real / zero / shuffled actions under the same flow noise.
 
         This is the diagnostic that answers whether action is being used:
@@ -942,7 +1156,9 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
             # Keep t/noise fixed across action variants; otherwise the action
             # comparison is contaminated by flow-noise variance.
             t = torch.full((B,), 0.5, device=latent_seq.device, dtype=torch.float32)
-            t_view = t.reshape(B, *((1,) * (delta_seq.ndim - 1))).to(dtype=delta_seq.dtype)
+            t_view = t.reshape(B, *((1,) * (delta_seq.ndim - 1))).to(
+                dtype=delta_seq.dtype
+            )
             noise = torch.randn_like(delta_seq)
             noisy_delta = delta_seq + C * t_view + noise * t_view
 
@@ -957,7 +1173,9 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
 
             start = latent_seq[:, context_frames - 1 : context_frames]
 
-            def predict_future(actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            def predict_future(
+                actions: torch.Tensor,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
                 pred_C, _aux_C = self.predict_C_sequence(
                     context_latent=latent_seq[:, :context_frames],
                     noisy_delta_seq=noisy_delta,
@@ -971,7 +1189,12 @@ class ChameleonLaDiWMFlowWorldModel(nn.Module):
             shuffle_future, shuffle_C = predict_future(shuffled_action)
 
             def l2_error(pred: torch.Tensor) -> torch.Tensor:
-                return (pred.float() - target_future.float()).flatten(start_dim=1).norm(dim=-1).mean()
+                return (
+                    (pred.float() - target_future.float())
+                    .flatten(start_dim=1)
+                    .norm(dim=-1)
+                    .mean()
+                )
 
             real_error = l2_error(real_future)
             zero_error = l2_error(zero_future)

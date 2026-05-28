@@ -1,4 +1,5 @@
 """FSDP-compatible EMA helper (per-parameter shadows)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -53,7 +54,9 @@ class EMAHelper:
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self.decay = float(state_dict.get("decay", self.decay))
-        self.update_after_step = int(state_dict.get("update_after_step", self.update_after_step))
+        self.update_after_step = int(
+            state_dict.get("update_after_step", self.update_after_step)
+        )
         self.optimization_step = int(state_dict.get("optimization_step", 0))
         self.shadow = dict(state_dict.get("shadow", {}))
 

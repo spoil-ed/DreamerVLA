@@ -23,7 +23,9 @@ def test_fixed_step_video_recorder_saves_and_resets_buffer(tmp_path, monkeypatch
 
         def close(self) -> None:
             Path(self.path).write_text("fake video", encoding="utf-8")
-            writes.append({"path": self.path, "fps": self.fps, "frames": list(self.frames)})
+            writes.append(
+                {"path": self.path, "fps": self.fps, "frames": list(self.frames)}
+            )
 
     def get_writer(path: str, fps: int):
         return FakeWriter(path, fps)
@@ -38,7 +40,12 @@ def test_fixed_step_video_recorder_saves_and_resets_buffer(tmp_path, monkeypatch
     )
     for step in range(1, 3):
         recorder.capture({"third_image": np.full((4, 4, 3), step, dtype=np.uint8)})
-        assert recorder.maybe_save(env_step=step, episode_len=step, episode_return=0.0, task_id=2) is None
+        assert (
+            recorder.maybe_save(
+                env_step=step, episode_len=step, episode_return=0.0, task_id=2
+            )
+            is None
+        )
 
     recorder.capture({"third_image": np.full((4, 4, 3), 3, dtype=np.uint8)})
     saved = recorder.maybe_save(
@@ -65,4 +72,7 @@ def test_fixed_step_video_recorder_disabled(tmp_path):
     recorder.capture({"third_image": np.zeros((4, 4, 3), dtype=np.uint8)})
 
     assert recorder.num_frames == 0
-    assert recorder.maybe_save(env_step=1, episode_len=1, episode_return=0.0, task_id=0) is None
+    assert (
+        recorder.maybe_save(env_step=1, episode_len=1, episode_return=0.0, task_id=0)
+        is None
+    )

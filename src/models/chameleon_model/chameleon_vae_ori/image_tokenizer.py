@@ -58,7 +58,9 @@ class ImageTokenizer:
         # Calculate the alpha proportion for blending.
         alpha = vals_rgba[:, :, 3] / 255.0
         # Blend with white background.
-        vals_rgb = (1 - alpha[:, :, np.newaxis]) * 255 + alpha[:, :, np.newaxis] * vals_rgba[:, :, :3]
+        vals_rgb = (1 - alpha[:, :, np.newaxis]) * 255 + alpha[
+            :, :, np.newaxis
+        ] * vals_rgba[:, :, :3]
         return PIL.Image.fromarray(vals_rgb.astype("uint8"), "RGB")
 
     # def _vqgan_input_from(self, img: PIL.Image, target_image_size=512) -> torch.Tensor:
@@ -86,7 +88,11 @@ class ImageTokenizer:
         # Convert to tensor.
         np_img = np.array(img) / 255.0  # Normalize to [0, 1]
         np_img = np_img * 2 - 1  # Scale to [-1, 1]
-        img = torch.from_numpy(np_img).permute(2, 0, 1).to(self._vq_model.encoder.conv_in.weight)
+        img = (
+            torch.from_numpy(np_img)
+            .permute(2, 0, 1)
+            .to(self._vq_model.encoder.conv_in.weight)
+        )
         img = img.unsqueeze(0)
 
         _, _, [_, _, img_toks] = self._vq_model.encode(img)
@@ -97,7 +103,9 @@ class ImageTokenizer:
         detached_chw_tensor = chw_tensor.detach().cpu()
 
         # Normalize tensor to [0, 1] range from [-1, 1] range.
-        normalized_chw_tensor = (torch.clamp(detached_chw_tensor, -1.0, 1.0) + 1.0) / 2.0
+        normalized_chw_tensor = (
+            torch.clamp(detached_chw_tensor, -1.0, 1.0) + 1.0
+        ) / 2.0
 
         # Permute CHW tensor to HWC format and convert to NumPy array.
         hwc_array = normalized_chw_tensor.permute(1, 2, 0).numpy()
@@ -114,9 +122,13 @@ class ImageTokenizer:
 
         return pil_image
 
-    def pil_from_img_toks(self, tokens: torch.Tensor, h_latent_dim=32, w_latent_dim=32) -> PIL.Image:
+    def pil_from_img_toks(
+        self, tokens: torch.Tensor, h_latent_dim=32, w_latent_dim=32
+    ) -> PIL.Image:
         emb_dim = self._vq_model.quantize.embedding.weight.shape[-1]
-        codebook_entry = self._vq_model.quantize.get_codebook_entry(tokens, (1, h_latent_dim, w_latent_dim, emb_dim))
+        codebook_entry = self._vq_model.quantize.get_codebook_entry(
+            tokens, (1, h_latent_dim, w_latent_dim, emb_dim)
+        )
         pixels = self._vq_model.decode(codebook_entry)
         return self._pil_from_chw_tensor(pixels[0])
 
@@ -126,7 +138,9 @@ class ImageTokenizer:
         # Convert to tensor.
         np_img = np.array(img) / 255.0  # Normalize to [0, 1]
         np_img = np_img * 2 - 1  # Scale to [-1, 1]
-        img = torch.from_numpy(np_img).permute(2, 0, 1)  # (Channels, Height, Width) format.
+        img = torch.from_numpy(np_img).permute(
+            2, 0, 1
+        )  # (Channels, Height, Width) format.
         img = img.unsqueeze(0).to(self._vq_model.encoder.conv_in.weight)
         latent_embedding, _, _ = self._vq_model.encode(img)
         return latent_embedding

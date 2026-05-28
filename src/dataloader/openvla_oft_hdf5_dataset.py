@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,9 @@ class OpenVLAOFTHDF5Spec:
     action_horizon: int
     image_keys: tuple[str, ...]
     use_proprio: bool
+    one_trajectory_sft: bool = False
+    demos_per_task: int | None = None
+    demo_selection_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +42,12 @@ class _HDF5Sample:
 
 def _list_demo_keys(data_group: h5py.Group) -> list[str]:
     keys = list(data_group.keys())
-    return sorted(keys, key=lambda key: int(_DEMO_RE.match(key).group(1)) if _DEMO_RE.match(key) else key)
+    return sorted(
+        keys,
+        key=lambda key: int(_DEMO_RE.match(key).group(1))
+        if _DEMO_RE.match(key)
+        else key,
+    )
 
 
 def _task_from_path(path: str | Path) -> str:
@@ -50,7 +59,9 @@ def _task_from_path(path: str | Path) -> str:
     return stem.replace("_", " ").strip().lower()
 
 
-def _normalize_bounds_q99(values: np.ndarray, stats: dict[str, Any], mask_default: bool = True) -> np.ndarray:
+def _normalize_bounds_q99(
+    values: np.ndarray, stats: dict[str, Any], mask_default: bool = True
+) -> np.ndarray:
     values = values.astype(np.float32, copy=False)
     low = np.asarray(stats["q01"], dtype=np.float32)
     high = np.asarray(stats["q99"], dtype=np.float32)
@@ -69,6 +80,28 @@ def _libero_oft_action_transform(actions: np.ndarray) -> np.ndarray:
     return actions
 
 
+def _select_demo_keys(
+    demo_keys: Sequence[str],
+    *,
+    file_path: Path,
+    demos_per_task: int | None,
+    demo_selection_seed: int,
+    max_demos_per_file: int | None,
+) -> list[str]:
+    ordered = list(demo_keys)
+    if demos_per_task is not None:
+        count = int(demos_per_task)
+        if count < 1:
+            raise ValueError("demos_per_task must be >= 1 when set.")
+        rng = random.Random(f"{int(demo_selection_seed)}:{file_path.name}")
+        return sorted(
+            rng.sample(ordered, k=min(count, len(ordered))), key=ordered.index
+        )
+    if max_demos_per_file is not None:
+        return ordered[: int(max_demos_per_file)]
+    return ordered
+
+
 class OpenVLAOFTHDF5Dataset(Dataset):
     """Map-style LIBERO HDF5 dataset that emits OpenVLA-OFT training samples."""
 
@@ -84,6 +117,8 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         use_proprio: bool = True,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
+        demos_per_task: int | None = None,
+        demo_selection_seed: int = 0,
         max_samples: int | None = None,
     ) -> None:
         ensure_openvla_oft_on_path()
@@ -98,6 +133,8 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         self.image_keys = tuple(str(key) for key in image_keys)
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
+        self.demos_per_task = None if demos_per_task is None else int(demos_per_task)
+        self.demo_selection_seed = int(demo_selection_seed)
         self.prompt_builder_cls = PurePromptBuilder
         self.ignore_index = int(IGNORE_INDEX)
         self._hdf5_open_kwargs = {"mode": "r", "swmr": True, "libver": "latest"}
@@ -114,9 +151,13 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         for file_path in files:
             with h5py.File(file_path, **self._hdf5_open_kwargs) as handle:
                 data = handle["data"]
-                demo_keys = _list_demo_keys(data)
-                if max_demos_per_file is not None:
-                    demo_keys = demo_keys[: int(max_demos_per_file)]
+                demo_keys = _select_demo_keys(
+                    _list_demo_keys(data),
+                    file_path=file_path,
+                    demos_per_task=self.demos_per_task,
+                    demo_selection_seed=self.demo_selection_seed,
+                    max_demos_per_file=max_demos_per_file,
+                )
                 for demo_key in demo_keys:
                     demo = data[demo_key]
                     length = int(demo["actions"].shape[0])
@@ -125,8 +166,12 @@ class OpenVLAOFTHDF5Dataset(Dataset):
                         if key not in obs_group:
                             raise KeyError(f"{file_path}:{demo_key} missing obs/{key}")
                     for index in range(length):
-                        self.samples.append(_HDF5Sample(str(file_path), demo_key, index))
-                        if max_samples is not None and len(self.samples) >= int(max_samples):
+                        self.samples.append(
+                            _HDF5Sample(str(file_path), demo_key, index)
+                        )
+                        if max_samples is not None and len(self.samples) >= int(
+                            max_samples
+                        ):
                             stop = True
                             break
                     if stop:
@@ -141,6 +186,11 @@ class OpenVLAOFTHDF5Dataset(Dataset):
             action_horizon=self.action_horizon,
             image_keys=self.image_keys,
             use_proprio=self.use_proprio,
+            one_trajectory_sft=self.demos_per_task == 1,
+            demos_per_task=self.demos_per_task,
+            demo_selection_seed=self.demo_selection_seed
+            if self.demos_per_task is not None
+            else None,
         )
 
     @property
@@ -180,14 +230,24 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         task = _task_from_path(sample.file_path)
 
         images = [
-            Image.fromarray(np.asarray(obs_group[self.image_keys[0]][sample.index], dtype=np.uint8))
+            Image.fromarray(
+                np.asarray(obs_group[self.image_keys[0]][sample.index], dtype=np.uint8)
+            )
         ]
         if self.use_wrist_image:
-            images.append(Image.fromarray(np.asarray(obs_group[self.image_keys[1]][sample.index], dtype=np.uint8)))
+            images.append(
+                Image.fromarray(
+                    np.asarray(
+                        obs_group[self.image_keys[1]][sample.index], dtype=np.uint8
+                    )
+                )
+            )
         pixel_values = self.processor.image_processor.apply_transform(images[0])
         item: dict[str, Any] = {"pixel_values": pixel_values}
         if self.use_wrist_image:
-            item["pixel_values_wrist"] = self.processor.image_processor.apply_transform(images[1])
+            item["pixel_values_wrist"] = self.processor.image_processor.apply_transform(
+                images[1]
+            )
 
         actions = self._action_chunk(demo, sample.index)
         current_action_string = self.action_tokenizer(actions[0])
@@ -196,11 +256,17 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         action_chunk_len = len(action_chunk_string)
 
         prompt_builder = self.prompt_builder_cls("openvla")
-        prompt_builder.add_turn("human", f"What action should the robot take to {task}?")
+        prompt_builder.add_turn(
+            "human", f"What action should the robot take to {task}?"
+        )
         prompt_builder.add_turn("gpt", action_chunk_string)
-        input_ids = self.processor.tokenizer(prompt_builder.get_prompt(), add_special_tokens=True).input_ids
+        input_ids = self.processor.tokenizer(
+            prompt_builder.get_prompt(), add_special_tokens=True
+        ).input_ids
         labels = list(input_ids)
-        labels[: -(action_chunk_len + 1)] = [self.ignore_index] * (len(labels) - (action_chunk_len + 1))
+        labels[: -(action_chunk_len + 1)] = [self.ignore_index] * (
+            len(labels) - (action_chunk_len + 1)
+        )
 
         item.update(
             {
@@ -231,11 +297,17 @@ class OpenVLAOFTHDF5DatasetFactory:
         drop_last: bool = False,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
+        demos_per_task: int | None = None,
+        demo_selection_seed: int = 0,
         max_samples: int | None = None,
         **_unused_compat_kwargs: Any,
     ) -> None:
         self.hdf5_dir = str(Path(hdf5_dir).expanduser().resolve())
-        self.dataset_statistics_path = None if dataset_statistics_path is None else str(Path(dataset_statistics_path).expanduser().resolve())
+        self.dataset_statistics_path = (
+            None
+            if dataset_statistics_path is None
+            else str(Path(dataset_statistics_path).expanduser().resolve())
+        )
         self.dataset_statistics_key = str(dataset_statistics_key)
         self.action_horizon = int(action_horizon)
         self.image_keys = tuple(str(key) for key in image_keys)
@@ -247,6 +319,8 @@ class OpenVLAOFTHDF5DatasetFactory:
         self.drop_last = bool(drop_last)
         self.max_files = max_files
         self.max_demos_per_file = max_demos_per_file
+        self.demos_per_task = demos_per_task
+        self.demo_selection_seed = int(demo_selection_seed)
         self.max_samples = max_samples
 
     def _load_statistics(self, policy: Any) -> dict[str, Any]:
@@ -256,7 +330,9 @@ class OpenVLAOFTHDF5DatasetFactory:
         with Path(path).open("r", encoding="utf-8") as handle:
             stats = json.load(handle)
         if self.dataset_statistics_key not in stats:
-            raise KeyError(f"{path} does not contain dataset statistics key {self.dataset_statistics_key!r}")
+            raise KeyError(
+                f"{path} does not contain dataset statistics key {self.dataset_statistics_key!r}"
+            )
         return stats[self.dataset_statistics_key]
 
     def build(self, policy: Any, *, train: bool = True) -> Any:
@@ -278,6 +354,8 @@ class OpenVLAOFTHDF5DatasetFactory:
             use_proprio=self.use_proprio,
             max_files=self.max_files,
             max_demos_per_file=self.max_demos_per_file,
+            demos_per_task=self.demos_per_task,
+            demo_selection_seed=self.demo_selection_seed,
             max_samples=self.max_samples,
         )
         collator = PaddedCollatorForActionPrediction(
@@ -312,4 +390,8 @@ class OpenVLAOFTHDF5DatasetFactory:
         )
 
 
-__all__ = ["OpenVLAOFTHDF5Dataset", "OpenVLAOFTHDF5DatasetFactory", "OpenVLAOFTHDF5Spec"]
+__all__ = [
+    "OpenVLAOFTHDF5Dataset",
+    "OpenVLAOFTHDF5DatasetFactory",
+    "OpenVLAOFTHDF5Spec",
+]

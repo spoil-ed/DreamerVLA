@@ -32,7 +32,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
-        self.device = torch.device(OmegaConf.select(config, "training.device", default="cuda:0"))
+        self.device = torch.device(
+            OmegaConf.select(config, "training.device", default="cuda:0")
+        )
         self.out_dir = Path(self.output_dir)
         self.log_path = self.out_dir / "dreamerv3_token_logs.json.txt"
         self.ckpt_dir = self.out_dir / "ckpt"
@@ -41,12 +43,24 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
     def _make_loader(self, dataset: Any, *, shuffle: bool) -> DataLoader:
         return DataLoader(
             dataset,
-            batch_size=int(OmegaConf.select(self.cfg, "dataloader.batch_size", default=4)),
+            batch_size=int(
+                OmegaConf.select(self.cfg, "dataloader.batch_size", default=4)
+            ),
             shuffle=shuffle,
-            num_workers=int(OmegaConf.select(self.cfg, "dataloader.num_workers", default=4)),
-            pin_memory=bool(OmegaConf.select(self.cfg, "dataloader.pin_memory", default=True)),
-            drop_last=bool(OmegaConf.select(self.cfg, "dataloader.drop_last", default=True)),
-            persistent_workers=bool(OmegaConf.select(self.cfg, "dataloader.persistent_workers", default=True)),
+            num_workers=int(
+                OmegaConf.select(self.cfg, "dataloader.num_workers", default=4)
+            ),
+            pin_memory=bool(
+                OmegaConf.select(self.cfg, "dataloader.pin_memory", default=True)
+            ),
+            drop_last=bool(
+                OmegaConf.select(self.cfg, "dataloader.drop_last", default=True)
+            ),
+            persistent_workers=bool(
+                OmegaConf.select(
+                    self.cfg, "dataloader.persistent_workers", default=True
+                )
+            ),
             collate_fn=getattr(dataset, "collate_fn", None),
         )
 
@@ -63,7 +77,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             "epoch": self.epoch,
             "rng": {
                 "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+                "cuda": torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else [],
             },
             "cfg": OmegaConf.to_container(self.cfg, resolve=True),
         }
@@ -94,24 +110,36 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             return False
         path = self._resolve_resume_path()
         if not path.is_file():
-            raise FileNotFoundError(f"training.resume=true but checkpoint not found: {path}")
+            raise FileNotFoundError(
+                f"training.resume=true but checkpoint not found: {path}"
+            )
         print(f"[dreamerv3-token] resuming from {path}")
         payload = torch.load(path, map_location="cpu", weights_only=False)
         model_sd = payload.get("model")
         if model_sd is None and "state_dicts" in payload:
-            model_sd = payload["state_dicts"].get("model") or payload["state_dicts"].get("model_core")
+            model_sd = payload["state_dicts"].get("model") or payload[
+                "state_dicts"
+            ].get("model_core")
         if model_sd is None:
             raise KeyError(f"Checkpoint {path} does not contain a model state_dict")
-        strict = bool(OmegaConf.select(self.cfg, "training.resume_strict", default=True))
+        strict = bool(
+            OmegaConf.select(self.cfg, "training.resume_strict", default=True)
+        )
         missing, unexpected = model_core.load_state_dict(model_sd, strict=strict)
         if missing or unexpected:
-            print(f"[dreamerv3-token] resume model missing={len(missing)} unexpected={len(unexpected)}")
+            print(
+                f"[dreamerv3-token] resume model missing={len(missing)} unexpected={len(unexpected)}"
+            )
 
-        skip_optimizer = bool(OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False))
+        skip_optimizer = bool(
+            OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False)
+        )
         if not skip_optimizer and "optimizer" in payload:
             optimizer.load_state_dict(payload["optimizer"])
         elif skip_optimizer:
-            print("[dreamerv3-token] skipping optimizer state (training.resume_skip_optimizer=true)")
+            print(
+                "[dreamerv3-token] skipping optimizer state (training.resume_skip_optimizer=true)"
+            )
 
         self.global_step = int(payload.get("global_step", self.global_step))
         self.epoch = int(payload.get("epoch", self.epoch))
@@ -121,17 +149,27 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             if isinstance(torch_state, torch.Tensor):
                 torch.set_rng_state(torch_state)
             cuda_state = rng.get("cuda")
-            if torch.cuda.is_available() and isinstance(cuda_state, list) and cuda_state:
+            if (
+                torch.cuda.is_available()
+                and isinstance(cuda_state, list)
+                and cuda_state
+            ):
                 try:
                     torch.cuda.set_rng_state_all(cuda_state)
                 except Exception as exc:
-                    print(f"[dreamerv3-token] warning: could not restore CUDA RNG: {exc}")
-        print(f"[dreamerv3-token] resumed at global_step={self.global_step} epoch={self.epoch}")
+                    print(
+                        f"[dreamerv3-token] warning: could not restore CUDA RNG: {exc}"
+                    )
+        print(
+            f"[dreamerv3-token] resumed at global_step={self.global_step} epoch={self.epoch}"
+        )
         return True
 
     def _maybe_build_viz(self) -> None:
         viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
-        if viz_cfg is None or not bool(OmegaConf.select(viz_cfg, "enabled", default=False)):
+        if viz_cfg is None or not bool(
+            OmegaConf.select(viz_cfg, "enabled", default=False)
+        ):
             return
         cfg_path = OmegaConf.select(
             viz_cfg,
@@ -147,11 +185,19 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             from src.utils.vq_image_decoder import load_vq_model
 
             viz_device_cfg = OmegaConf.select(viz_cfg, "device", default=None)
-            viz_device = self.device if viz_device_cfg is None else torch.device(str(viz_device_cfg))
-            self.vq_model = load_vq_model(cfg_path=cfg_path, ckpt_path=ckpt_path, device=viz_device)
+            viz_device = (
+                self.device
+                if viz_device_cfg is None
+                else torch.device(str(viz_device_cfg))
+            )
+            self.vq_model = load_vq_model(
+                cfg_path=cfg_path, ckpt_path=ckpt_path, device=viz_device
+            )
             print(f"[dreamerv3-token][viz] VQGAN ready on {viz_device}")
         except Exception as exc:
-            print(f"[dreamerv3-token][viz] failed to build VQGAN visualizer, disabling: {exc}")
+            print(
+                f"[dreamerv3-token][viz] failed to build VQGAN visualizer, disabling: {exc}"
+            )
             self.vq_model = None
 
     @torch.no_grad()
@@ -168,25 +214,37 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         return tensor_to_pil(pixels[0])
 
     @staticmethod
-    def _save_viz_strip(path: Path, panels: list[tuple[str, Any]], cell_size: int) -> None:
+    def _save_viz_strip(
+        path: Path, panels: list[tuple[str, Any]], cell_size: int
+    ) -> None:
         from PIL import Image, ImageDraw
 
         header = 22
-        canvas = Image.new("RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32))
+        canvas = Image.new(
+            "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
+        )
         draw = ImageDraw.Draw(canvas)
         for idx, (label, image) in enumerate(panels):
             x0 = idx * cell_size
             if image is not None:
-                canvas.paste(image.convert("RGB").resize((cell_size, cell_size)), (x0, header))
+                canvas.paste(
+                    image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
+                )
             else:
-                draw.rectangle([x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20))
-                draw.text((x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230))
+                draw.rectangle(
+                    [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
+                )
+                draw.text(
+                    (x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
+                )
             draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
         path.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(path)
 
     @torch.no_grad()
-    def _maybe_save_viz(self, model_core: torch.nn.Module, batch: dict[str, Any]) -> None:
+    def _maybe_save_viz(
+        self, model_core: torch.nn.Module, batch: dict[str, Any]
+    ) -> None:
         viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
         if viz_cfg is None or self.vq_model is None:
             return
@@ -197,7 +255,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         tokens = batch.get("tokens")
         actions = batch.get("actions")
         is_first = batch.get("is_first")
-        if not isinstance(tokens, torch.Tensor) or not isinstance(actions, torch.Tensor):
+        if not isinstance(tokens, torch.Tensor) or not isinstance(
+            actions, torch.Tensor
+        ):
             return
         if not isinstance(is_first, torch.Tensor):
             return
@@ -218,8 +278,12 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             prior_deter1 = model_core.rssm._core(deter0, stoch0, action1)
             prior_logits1 = model_core.rssm._prior(prior_deter1)
             prior_idx1 = prior_logits1.argmax(dim=-1)
-            prior_stoch1 = F.one_hot(prior_idx1, model_core.rssm.classes).to(dtype=prior_logits1.dtype)
-            prior_dec_logits = model_core.decoder(prior_deter1[:, None], prior_stoch1[:, None])
+            prior_stoch1 = F.one_hot(prior_idx1, model_core.rssm.classes).to(
+                dtype=prior_logits1.dtype
+            )
+            prior_dec_logits = model_core.decoder(
+                prior_deter1[:, None], prior_stoch1[:, None]
+            )
             prior_pred = prior_dec_logits.argmax(dim=-1)[:, 0]
         finally:
             if was_training:
@@ -228,9 +292,13 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         b, _t, num_views, tokens_per_view = tokens.shape
         h, w = tuple(int(x) for x in model_core.encoder.spatial_grid)
         if h * w != tokens_per_view:
-            print(f"[dreamerv3-token][viz] skip: h*w={h*w} != tokens_per_view={tokens_per_view}")
+            print(
+                f"[dreamerv3-token][viz] skip: h*w={h * w} != tokens_per_view={tokens_per_view}"
+            )
             return
-        view_labels = list(OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"]))
+        view_labels = list(
+            OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"])
+        )
         if len(view_labels) != num_views:
             view_labels = [f"view{idx}" for idx in range(num_views)]
 
@@ -241,17 +309,41 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         for sample_idx in range(num_samples):
             panels: list[tuple[str, Any]] = []
             for view_idx, label in enumerate(view_labels):
-                panels.extend([
-                    (f"{label} cur", self._decode_token_view(tokens[sample_idx, 0, view_idx], h, w)),
-                    (f"{label} recon", self._decode_token_view(post_pred[sample_idx, 0, view_idx], h, w)),
-                    (f"{label} next", self._decode_token_view(tokens[sample_idx, 1, view_idx], h, w)),
-                    (f"{label} prior", self._decode_token_view(prior_pred[sample_idx, view_idx], h, w)),
-                ])
+                panels.extend(
+                    [
+                        (
+                            f"{label} cur",
+                            self._decode_token_view(
+                                tokens[sample_idx, 0, view_idx], h, w
+                            ),
+                        ),
+                        (
+                            f"{label} recon",
+                            self._decode_token_view(
+                                post_pred[sample_idx, 0, view_idx], h, w
+                            ),
+                        ),
+                        (
+                            f"{label} next",
+                            self._decode_token_view(
+                                tokens[sample_idx, 1, view_idx], h, w
+                            ),
+                        ),
+                        (
+                            f"{label} prior",
+                            self._decode_token_view(
+                                prior_pred[sample_idx, view_idx], h, w
+                            ),
+                        ),
+                    ]
+                )
             path = out_dir / f"step_{self.global_step:07d}_sample{sample_idx:02d}.png"
             self._save_viz_strip(path, panels, cell_size=cell_size)
             saved += 1
         if saved:
-            print(f"[dreamerv3-token][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}")
+            print(
+                f"[dreamerv3-token][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}"
+            )
 
     def run(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -276,7 +368,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
                 raise ValueError("training.data_parallel=true requires CUDA")
             if torch.cuda.device_count() > 1:
                 model = torch.nn.DataParallel(model_core)
-                print(f"[dreamerv3-token]   data parallel = {torch.cuda.device_count()} visible CUDA devices")
+                print(
+                    f"[dreamerv3-token]   data parallel = {torch.cuda.device_count()} visible CUDA devices"
+                )
         n_params = sum(p.numel() for p in model_core.parameters() if p.requires_grad)
         print(f"[dreamerv3-token]   trainable params = {n_params:,}")
         self._maybe_build_viz()
@@ -289,7 +383,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
                 float(OmegaConf.select(self.cfg, "optim.beta2", default=0.999)),
             ),
             eps=float(OmegaConf.select(self.cfg, "optim.eps", default=1e-20)),
-            weight_decay=float(OmegaConf.select(self.cfg, "optim.weight_decay", default=0.0)),
+            weight_decay=float(
+                OmegaConf.select(self.cfg, "optim.weight_decay", default=0.0)
+            ),
         )
 
         resumed = self._maybe_resume(model_core, optimizer)
@@ -303,8 +399,12 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
         else:
             max_steps = int(max_steps_cfg)
         log_every = int(OmegaConf.select(self.cfg, "training.log_every", default=20))
-        save_every = int(OmegaConf.select(self.cfg, "training.save_every", default=1000))
-        tqdm_interval_sec = float(OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0))
+        save_every = int(
+            OmegaConf.select(self.cfg, "training.save_every", default=1000)
+        )
+        tqdm_interval_sec = float(
+            OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0)
+        )
         warmup = int(OmegaConf.select(self.cfg, "optim.warmup", default=1000))
         base_lr = float(OmegaConf.select(self.cfg, "optim.lr", default=4e-5))
         grad_clip = float(OmegaConf.select(self.cfg, "optim.grad_clip", default=100.0))
@@ -328,7 +428,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
                         if self.global_step >= max_steps:
                             break
                         if warmup > 0:
-                            lr_scale = min(1.0, float(self.global_step + 1) / float(warmup))
+                            lr_scale = min(
+                                1.0, float(self.global_step + 1) / float(warmup)
+                            )
                             for group in optimizer.param_groups:
                                 group["lr"] = base_lr * lr_scale
 
@@ -344,7 +446,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
                         loss = out["_loss"].mean()
                         optimizer.zero_grad(set_to_none=True)
                         loss.backward()
-                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), grad_clip
+                        )
                         optimizer.step()
 
                         row = {
@@ -375,8 +479,14 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
 
                         self._maybe_save_viz(model_core, batch)
 
-                        if save_every > 0 and self.global_step > 0 and self.global_step % save_every == 0:
-                            self._save_ckpt(model_core, optimizer, self.ckpt_dir / "latest.ckpt")
+                        if (
+                            save_every > 0
+                            and self.global_step > 0
+                            and self.global_step % save_every == 0
+                        ):
+                            self._save_ckpt(
+                                model_core, optimizer, self.ckpt_dir / "latest.ckpt"
+                            )
                         self.global_step += 1
                         if self.global_step >= max_steps:
                             break
@@ -384,7 +494,9 @@ class DreamerV3TokenWorkspace(BaseWorkspace):
             log_handle.close()
 
         self._save_ckpt(model_core, optimizer, self.ckpt_dir / "latest.ckpt")
-        self._save_ckpt(model_core, optimizer, self.ckpt_dir / f"step_{self.global_step:08d}.ckpt")
+        self._save_ckpt(
+            model_core, optimizer, self.ckpt_dir / f"step_{self.global_step:08d}.ckpt"
+        )
         print("[dreamerv3-token] done")
         print(f"  log  = {self.log_path}")
         print(f"  ckpt = {self.ckpt_dir / 'latest.ckpt'}")

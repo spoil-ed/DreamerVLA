@@ -1,0 +1,82 @@
+# @package _global_
+defaults:
+  - _self_
+  - /task: libero_goal
+
+_target_: src.workspace.OpenVLAOFTWorkspace
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+trainer:
+  device: auto
+  debug: false
+
+training:
+  out_dir: ${oc.env:OUT_DIR,data/outputs/vla/openvla_oft_hdf5/${task.name}/${now:%Y%m%d_%H%M%S}}
+  resume: false
+  distributed_strategy: ddp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  max_train_steps: 1000
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  checkpoint_every: 500
+  save_components_every: 500
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+
+policy:
+  _target_: ${task.openvla_oft.sft_policy_target}
+  model_path: ${task.openvla_oft.ckpt_path}
+  component_ckpt_dir: ${task.openvla_oft.component_ckpt_dir}
+  resume_step: ${task.openvla_oft.resume_step}
+  torch_dtype: bf16
+  num_images_in_input: 2
+  use_lora: true
+  lora_rank: 32
+  lora_dropout: 0.0
+  use_l1_regression: true
+  use_diffusion: false
+  use_proprio: ${task.openvla_oft.use_proprio}
+  use_film: false
+  freeze_vla_backbone: false
+
+dataset:
+  _target_: ${task.openvla_oft.sft_dataset_target}
+  hdf5_dir: ${task.openvla_oft.hdf5_dir}
+  dataset_statistics_path: ${task.openvla_oft.dataset_statistics_path}
+  dataset_statistics_key: ${task.openvla_oft.dataset_statistics_key}
+  action_horizon: ${task.openvla_oft.action_horizon}
+  image_keys: ${task.image_keys}
+  use_wrist_image: ${task.openvla_oft.use_wrist_image}
+  use_proprio: ${task.openvla_oft.use_proprio}
+  batch_size: 1
+  num_workers: 0
+  shuffle: true
+  drop_last: false
+  max_files: null
+  max_demos_per_file: null
+  max_samples: null
+
+optim:
+  grad_clip_norm: 4.0
+  zero_grad_set_to_none: true
+  policy:
+    name: adamw
+    lr: 5.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.0
+
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    monitor_key: train_loss_value
+    mode: min
+    k: 3
+    format_str: 'step={global_step:08d}-train_loss={train_loss_value:.4f}.ckpt'

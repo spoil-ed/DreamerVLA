@@ -71,19 +71,25 @@ def test_online_replay_training_readiness_requires_each_task() -> None:
 
     replay.add_episode(_episode(task_id=2, length=10, success=True))
 
-    assert replay.ready_for_training(
-        min_transitions=3,
-        task_ids=(2, 9),
-        min_episodes_per_task=1,
-    ) is False
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(2, 9),
+            min_episodes_per_task=1,
+        )
+        is False
+    )
 
     replay.add_episode(_episode(task_id=9, length=10, success=False))
 
-    assert replay.ready_for_training(
-        min_transitions=3,
-        task_ids=(2, 9),
-        min_episodes_per_task=1,
-    ) is True
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(2, 9),
+            min_episodes_per_task=1,
+        )
+        is True
+    )
 
 
 def test_online_replay_reports_per_task_start_pool_stats() -> None:

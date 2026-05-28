@@ -52,7 +52,9 @@ class OpenVLAOFTRLDSDatasetFactory:
 
         processor = policy.processor
         if processor is None:
-            raise ValueError("OpenVLAOFTRLDSDatasetFactory requires a policy loaded from a real processor.")
+            raise ValueError(
+                "OpenVLAOFTRLDSDatasetFactory requires a policy loaded from a real processor."
+            )
         action_tokenizer = ActionTokenizer(processor.tokenizer)
         batch_transform = RLDSBatchTransform(
             action_tokenizer,

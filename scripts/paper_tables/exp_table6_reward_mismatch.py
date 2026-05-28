@@ -35,14 +35,21 @@ def _first_fire(curve: list[Any], threshold: float) -> int:
     return -1
 
 
-def _timing_metrics(payload: Mapping[str, Any], threshold: float) -> dict[str, float | None]:
+def _timing_metrics(
+    payload: Mapping[str, Any], threshold: float
+) -> dict[str, float | None]:
     pred_steps, real_steps, timing_errors, early = [], [], [], []
     records = payload.get("records")
     if isinstance(records, list):
         for record in records:
             if not isinstance(record, Mapping):
                 continue
-            for mode_name in ("closed_loop", "closed_loop_sft_actions", "true_sft_actions", "env_raw_actions"):
+            for mode_name in (
+                "closed_loop",
+                "closed_loop_sft_actions",
+                "true_sft_actions",
+                "env_raw_actions",
+            ):
                 mode = record.get(mode_name)
                 if not isinstance(mode, Mapping):
                     continue
@@ -86,17 +93,23 @@ def cmd_collect(args: argparse.Namespace) -> int:
         else:
             raise SystemExit("Table 6 --result KIND must be 'timing' or 'real'")
 
-    out_json = write_json(args.out_json, {labels.get(k, k): v for k, v in table.items()})
-    order = [key for key in VARIANTS if key in table] + [key for key in table if key not in VARIANTS]
+    out_json = write_json(
+        args.out_json, {labels.get(k, k): v for k, v in table.items()}
+    )
+    order = [key for key in VARIANTS if key in table] + [
+        key for key in table if key not in VARIANTS
+    ]
     rows = []
     for key in order:
         row = table[key]
-        rows.append([
-            labels.get(key, key),
-            format_metric(row.get("early_fire_rate"), pct=True),
-            format_metric(row.get("timing_error"), precision=1),
-            format_metric(row.get("real_success"), pct=True),
-        ])
+        rows.append(
+            [
+                labels.get(key, key),
+                format_metric(row.get("early_fire_rate"), pct=True),
+                format_metric(row.get("timing_error"), precision=1),
+                format_metric(row.get("real_success"), pct=True),
+            ]
+        )
     out_tex = write_latex_table(
         args.out_tex,
         caption="Reward timing mismatch diagnostics.",
@@ -113,10 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     collect = sub.add_parser("collect")
-    collect.add_argument("--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON"))
+    collect.add_argument(
+        "--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON")
+    )
     collect.add_argument("--threshold", type=float, default=0.5)
-    collect.add_argument("--out-json", default=str(DEFAULT_OUTPUTS_DIR / "reward_mismatch.json"))
-    collect.add_argument("--out-tex", default=str(DEFAULT_TABLES_DIR / "reward_mismatch.tex"))
+    collect.add_argument(
+        "--out-json", default=str(DEFAULT_OUTPUTS_DIR / "reward_mismatch.json")
+    )
+    collect.add_argument(
+        "--out-tex", default=str(DEFAULT_TABLES_DIR / "reward_mismatch.tex")
+    )
     collect.set_defaults(func=cmd_collect)
     return parser
 
@@ -128,4 +147,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

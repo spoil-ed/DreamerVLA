@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from torch import nn
 import torch.nn.functional as F
 
 from src.models.world_model.base_world_model import DreamerV3ActorAdapterMixin
@@ -125,13 +126,23 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
 
         # TSSM dynamics (token-based)
         self.tssm = TSSMTokenDynamic(
-            n_tokens=self.n_tokens, token_dim=self.token_dim, action_dim=action_dim,
-            hidden=hidden, stoch=stoch, classes=classes,
-            n_layers=tssm_layers, n_head=tssm_nhead, d_model=tssm_d_model,
-            d_inner=tssm_d_inner, d_ff_inner=tssm_d_ff_inner,
-            dropout=tssm_dropout, dropatt=tssm_dropatt,
-            pre_lnorm=tssm_pre_lnorm, gating=tssm_gating,
-            deter_type=tssm_deter_type, tssm_window=tssm_window,
+            n_tokens=self.n_tokens,
+            token_dim=self.token_dim,
+            action_dim=action_dim,
+            hidden=hidden,
+            stoch=stoch,
+            classes=classes,
+            n_layers=tssm_layers,
+            n_head=tssm_nhead,
+            d_model=tssm_d_model,
+            d_inner=tssm_d_inner,
+            d_ff_inner=tssm_d_ff_inner,
+            dropout=tssm_dropout,
+            dropatt=tssm_dropatt,
+            pre_lnorm=tssm_pre_lnorm,
+            gating=tssm_gating,
+            deter_type=tssm_deter_type,
+            tssm_window=tssm_window,
             free_nats=free_nats,
         )
         self.rssm = self.tssm  # alias for DreamerV3ActorAdapterMixin compatibility
@@ -144,10 +155,15 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
 
         # Pixel decoder (operates on aggregated deter; we treat aggregated deter as 'deter' input)
         self.decoder = DreamerV3PixelDecoder(
-            image_channels=image_channels, image_size=image_size,
+            image_channels=image_channels,
+            image_size=image_size,
             deter=self.deter_dim_total,
-            stoch=self.n_tokens * stoch, classes=classes,
-            depth=depth, mults=tuple(mults), kernel=kernel, act=act,
+            stoch=self.n_tokens * stoch,
+            classes=classes,
+            depth=depth,
+            mults=tuple(mults),
+            kernel=kernel,
+            act=act,
         )
 
         # Hidden decoder
@@ -155,17 +171,25 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
             # Per-token shared MLP: (deter_per_tok + flat_stoch) → token_dim
             per_tok_in = self.tssm.deter_per_token + self.tssm.flat_stoch
             self.hidden_decoder = _PerTokenMLPDecoder(
-                in_dim_per_tok=per_tok_in, out_dim_per_tok=self.token_dim,
-                n_tokens=self.n_tokens, layers=hidden_decoder_layers,
-                units=hidden_decoder_units, act=act,
+                in_dim_per_tok=per_tok_in,
+                out_dim_per_tok=self.token_dim,
+                n_tokens=self.n_tokens,
+                layers=hidden_decoder_layers,
+                units=hidden_decoder_units,
+                act=act,
             )
         else:
             self.hidden_decoder = _build_hidden_decoder(
-                hidden_decoder_kind, feat_dim, self.obs_dim,
-                layers=int(hidden_decoder_layers), units=int(hidden_decoder_units),
-                d_model=int(hidden_decoder_d_model), nhead=int(hidden_decoder_nhead),
+                hidden_decoder_kind,
+                feat_dim,
+                self.obs_dim,
+                layers=int(hidden_decoder_layers),
+                units=int(hidden_decoder_units),
+                d_model=int(hidden_decoder_d_model),
+                nhead=int(hidden_decoder_nhead),
                 mem_tokens=int(hidden_decoder_mem_tokens),
-                dropout=float(hidden_decoder_dropout), act=act,
+                dropout=float(hidden_decoder_dropout),
+                act=act,
             )
         self.hidden_decoder_kind = str(hidden_decoder_kind).lower()
 
@@ -174,16 +198,23 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         self.sequence_decoder: nn.Module | None = None
         if self.actor_sequence_length > 0:
             self.sequence_decoder = FullHiddenSequenceDecoder(
-                feat_dim, sequence_length=self.actor_sequence_length,
-                hidden_dim=self.obs_dim, query_dim=int(sequence_decoder_query_dim),
-                layers=int(sequence_decoder_layers), units=int(sequence_decoder_units),
+                feat_dim,
+                sequence_length=self.actor_sequence_length,
+                hidden_dim=self.obs_dim,
+                query_dim=int(sequence_decoder_query_dim),
+                layers=int(sequence_decoder_layers),
+                units=int(sequence_decoder_units),
                 act=act,
             )
 
         # reward & continue heads
         self.reward_head = _make_reward_head(
-            feat_dim=feat_dim, reward_bins=reward_bins, hidden=hidden, act=act,
-            reward_head_type=reward_head_type, reward_init_logit=reward_init_logit,
+            feat_dim=feat_dim,
+            reward_bins=reward_bins,
+            hidden=hidden,
+            act=act,
+            reward_head_type=reward_head_type,
+            reward_init_logit=reward_init_logit,
             reward_pos_weight=reward_pos_weight,
         )
         self.continue_head = MLPHead(feat_dim, 1, layers=1, units=hidden, act=act)
@@ -202,8 +233,12 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
 
     def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
         """Aggregate per-token (stoch, deter) into a flat per-step feat [B, T, feat_dim]."""
-        stoch_flat = seq["stoch"].reshape(*seq["stoch"].shape[:-3], self.flat_stoch_total)  # [B, T, N*stoch*classes]
-        deter_flat = seq["deter"].reshape(*seq["deter"].shape[:-2], self.deter_dim_total)   # [B, T, N*deter_per_tok]
+        stoch_flat = seq["stoch"].reshape(
+            *seq["stoch"].shape[:-3], self.flat_stoch_total
+        )  # [B, T, N*stoch*classes]
+        deter_flat = seq["deter"].reshape(
+            *seq["deter"].shape[:-2], self.deter_dim_total
+        )  # [B, T, N*deter_per_tok]
         return torch.cat([stoch_flat, deter_flat], dim=-1)
 
     def _feature_dim(self) -> int:
@@ -216,7 +251,9 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         """
         dtype = _module_dtype(self, obs_embedding.dtype)
         obs_embedding = obs_embedding.to(dtype=dtype)
-        return obs_embedding.reshape(*obs_embedding.shape[:-1], self.n_tokens, self.token_dim)
+        return obs_embedding.reshape(
+            *obs_embedding.shape[:-1], self.n_tokens, self.token_dim
+        )
 
     # ---- adapter mixin interface ----
 
@@ -230,12 +267,17 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         tok_emb = self.tssm.token_embed(obs_tokens)
         post_logits = self.tssm._logit_view(self.tssm.post_stoch_mlp(tok_emb).float())
         stoch = _onehot_st_sample(post_logits).to(dtype=obs_tokens.dtype)
-        deter = obs_tokens.new_zeros(obs_tokens.shape[0], self.n_tokens, self.tssm.deter_per_token)
+        deter = obs_tokens.new_zeros(
+            obs_tokens.shape[0], self.n_tokens, self.tssm.deter_per_token
+        )
         return TSSMTokenLatentState(stoch=stoch, deter=deter, logits=post_logits)
 
     def observe_next(
-        self, latent: TSSMTokenLatentState, hidden: torch.Tensor,
-        actions: torch.Tensor, is_first: torch.Tensor | bool | None = None,
+        self,
+        latent: TSSMTokenLatentState,
+        hidden: torch.Tensor,
+        actions: torch.Tensor,
+        is_first: torch.Tensor | bool | None = None,
     ) -> TSSMTokenLatentState:
         device = _module_device(self, hidden.device)
         hidden = hidden.to(device=device)
@@ -244,7 +286,9 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         obs_tokens = self._obs_to_tokens(hidden)
         return self.tssm.observe_next(latent, obs_tokens, actions, is_first=is_first)
 
-    def predict_next(self, latent: TSSMTokenLatentState, actions: torch.Tensor) -> TSSMTokenLatentState:
+    def predict_next(
+        self, latent: TSSMTokenLatentState, actions: torch.Tensor
+    ) -> TSSMTokenLatentState:
         action = actions if actions.ndim == 2 else actions[:, 0]
         prev_stoch_step = latent.stoch.unsqueeze(1)
         action_step = action.unsqueeze(1)
@@ -255,8 +299,8 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
             new_h_stoch = torch.cat([latent.history_stoch, prev_stoch_step], dim=1)
             new_h_action = torch.cat([latent.history_action, action_step], dim=1)
         if new_h_stoch.shape[1] > self.tssm.tssm_window:
-            new_h_stoch = new_h_stoch[:, -self.tssm.tssm_window:]
-            new_h_action = new_h_action[:, -self.tssm.tssm_window:]
+            new_h_stoch = new_h_stoch[:, -self.tssm.tssm_window :]
+            new_h_action = new_h_action[:, -self.tssm.tssm_window :]
         T = new_h_stoch.shape[1]
         B = new_h_stoch.shape[0]
         N = self.n_tokens
@@ -265,11 +309,16 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         mask = _Transformer.spatio_temporal_mask(T, N, action.device)
         o_t = self.tssm.cell(tx_in, attn_mask=mask)
         new_deter = self.tssm._per_token_aggregated(o_t, T, N)[:, -1]
-        prior_logits = self.tssm._logit_view(self.tssm.prior_stoch_mlp(new_deter).float())
+        prior_logits = self.tssm._logit_view(
+            self.tssm.prior_stoch_mlp(new_deter).float()
+        )
         new_stoch = _onehot_st_sample(prior_logits).to(dtype=new_deter.dtype)
         return TSSMTokenLatentState(
-            stoch=new_stoch, deter=new_deter, logits=prior_logits,
-            history_stoch=new_h_stoch, history_action=new_h_action,
+            stoch=new_stoch,
+            deter=new_deter,
+            logits=prior_logits,
+            history_stoch=new_h_stoch,
+            history_action=new_h_action,
         )
 
     def actor_input(self, latent: TSSMTokenLatentState) -> torch.Tensor:
@@ -277,9 +326,13 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
             return latent.feature()
         # hidden_decoder expects either per-token (per_token_mlp) or flat feat
         if isinstance(self.hidden_decoder, _PerTokenMLPDecoder):
-            stoch_flat = latent.stoch.reshape(*latent.stoch.shape[:-2], -1)  # [B, N, flat_stoch]
-            feat_per_tok = torch.cat([stoch_flat, latent.deter], dim=-1)      # [B, N, deter_per_tok+flat_stoch]
-            return self.hidden_decoder(feat_per_tok)                          # [B, obs_dim]
+            stoch_flat = latent.stoch.reshape(
+                *latent.stoch.shape[:-2], -1
+            )  # [B, N, flat_stoch]
+            feat_per_tok = torch.cat(
+                [stoch_flat, latent.deter], dim=-1
+            )  # [B, N, deter_per_tok+flat_stoch]
+            return self.hidden_decoder(feat_per_tok)  # [B, obs_dim]
         return self.hidden_decoder(latent.feature())
 
     def actor_input_sequence(self, latent: TSSMTokenLatentState) -> torch.Tensor:
@@ -298,7 +351,9 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         actions = batch["actions"].to(device=device, dtype=obs_tokens.dtype)
         is_first = batch["is_first"].to(device=device)
         seq = self.tssm.observe(obs_tokens, actions, is_first)
-        latent = TSSMTokenLatentState(deter=seq["deter"], stoch=seq["stoch"], logits=seq["post_logits"])
+        latent = TSSMTokenLatentState(
+            deter=seq["deter"], stoch=seq["stoch"], logits=seq["post_logits"]
+        )
         return {"latent": latent, "feat": self.feature(seq)}
 
     def state_reward(self, latent: TSSMTokenLatentState) -> torch.Tensor:
@@ -320,7 +375,12 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         if (height, width) == (self.image_size, self.image_size):
             return target
         flat = target.reshape(bsz * steps, channels, height, width)
-        flat = F.interpolate(flat, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
+        flat = F.interpolate(
+            flat,
+            size=(self.image_size, self.image_size),
+            mode="bilinear",
+            align_corners=False,
+        )
         return flat.reshape(bsz, steps, channels, self.image_size, self.image_size)
 
     def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
@@ -333,26 +393,40 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         is_first = batch["is_first"].to(device=actions.device)
 
         obs_tokens = self._obs_to_tokens(obs_embedding)  # [B, T, N, D_tok]
-        seq = self.tssm.observe(obs_tokens, actions.to(dtype=obs_tokens.dtype), is_first)
+        seq = self.tssm.observe(
+            obs_tokens, actions.to(dtype=obs_tokens.dtype), is_first
+        )
         kls = self.tssm.kl_loss(seq["post_logits"], seq["prior_logits"])
 
         # For pixel decoder: aggregate (stoch, deter) across N tokens
         B, T, N, _, _ = seq["stoch"].shape
         agg_deter = seq["deter"].reshape(B, T, self.deter_dim_total)
-        agg_stoch = seq["stoch"].reshape(B, T, self.n_tokens * self.tssm.stoch, self.tssm.classes)
+        agg_stoch = seq["stoch"].reshape(
+            B, T, self.n_tokens * self.tssm.stoch, self.tssm.classes
+        )
         recon = self.decoder(agg_deter, agg_stoch)
-        target = self._resize_target(images[:, 1:], dtype=recon.dtype, device=recon.device)
+        target = self._resize_target(
+            images[:, 1:], dtype=recon.dtype, device=recon.device
+        )
         rec_per = (recon - target).square().sum(dim=(-3, -2, -1))
         rec_loss = rec_per.mean()
 
         # hidden_decoder (per-token preferred)
         if isinstance(self.hidden_decoder, _PerTokenMLPDecoder):
-            stoch_flat = seq["stoch"].reshape(*seq["stoch"].shape[:-2], -1)        # [B, T, N, stoch*classes]
-            feat_per_tok = torch.cat([stoch_flat, seq["deter"]], dim=-1)            # [B, T, N, per_tok_in]
-            hidden_pred = self.hidden_decoder(feat_per_tok)                          # [B, T, obs_dim]
+            stoch_flat = seq["stoch"].reshape(
+                *seq["stoch"].shape[:-2], -1
+            )  # [B, T, N, stoch*classes]
+            feat_per_tok = torch.cat(
+                [stoch_flat, seq["deter"]], dim=-1
+            )  # [B, T, N, per_tok_in]
+            hidden_pred = self.hidden_decoder(feat_per_tok)  # [B, T, obs_dim]
         else:
             hidden_pred = self.hidden_decoder(self.feature(seq))
-        hidden_target = obs_embedding[:, 1:].to(device=hidden_pred.device, dtype=hidden_pred.dtype).detach()
+        hidden_target = (
+            obs_embedding[:, 1:]
+            .to(device=hidden_pred.device, dtype=hidden_pred.dtype)
+            .detach()
+        )
         hidden_mse = (hidden_pred.float() - hidden_target.float()).square().mean()
         hidden_pred_norm = F.normalize(hidden_pred.float(), dim=-1)
         hidden_target_norm = F.normalize(hidden_target.float(), dim=-1)
@@ -363,9 +437,13 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         feat = self.feature(seq)
         reward_logits = self.reward_head(feat)
         cont_logits = self.continue_head(feat).squeeze(-1)
-        reward_target = rewards[:, 1:].to(device=reward_logits.device, dtype=reward_logits.dtype)
+        reward_target = rewards[:, 1:].to(
+            device=reward_logits.device, dtype=reward_logits.dtype
+        )
         reward_loss = _reward_loss(self.reward_head, reward_logits, reward_target)
-        cont_target = 1.0 - dones[:, 1:].to(device=cont_logits.device, dtype=cont_logits.dtype)
+        cont_target = 1.0 - dones[:, 1:].to(
+            device=cont_logits.device, dtype=cont_logits.dtype
+        )
         if self.contdisc:
             cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
         cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target)
@@ -391,20 +469,32 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
             "hidden_rec_scaled_loss": (self.hidden_rec_scale * hidden_mse).detach(),
             "hidden_cosine_loss": hidden_cosine.detach(),
             "full_hidden_rec_loss": full_hidden_loss.detach(),
-            "full_hidden_rec_scaled_loss": (self.full_hidden_rec_scale * full_hidden_loss).detach(),
+            "full_hidden_rec_scaled_loss": (
+                self.full_hidden_rec_scale * full_hidden_loss
+            ).detach(),
             "full_hidden_cosine_loss": full_hidden_cosine.detach(),
             "hidden_pred_norm": hidden_pred.float().norm(dim=-1).mean().detach(),
             "hidden_target_norm": hidden_target.float().norm(dim=-1).mean().detach(),
             "image_decoder_loss": rec_per.mean().detach(),
             "image_recon_mse_loss": (recon - target).float().square().mean().detach(),
-            "predicted_reward_mean": _reward_pred(self.reward_head, reward_logits).mean().detach(),
-            "transition_loss": zero, "delta_latent_loss": zero, "action_margin_loss": zero,
-            "image_recon_ce_loss": zero, "image_static_ce_loss": zero,
-            "image_dynamic_ce_loss": zero, "image_recon_accuracy": zero,
-            "image_static_accuracy": zero, "image_dynamic_accuracy": zero,
-            "image_dynamic_fraction": zero, "pred_entropy": zero,
-            "pred_unique_tokens": zero, "gt_unique_tokens": zero,
-            "latent_norm": zero, "grad_norm": zero,
+            "predicted_reward_mean": _reward_pred(self.reward_head, reward_logits)
+            .mean()
+            .detach(),
+            "transition_loss": zero,
+            "delta_latent_loss": zero,
+            "action_margin_loss": zero,
+            "image_recon_ce_loss": zero,
+            "image_static_ce_loss": zero,
+            "image_dynamic_ce_loss": zero,
+            "image_recon_accuracy": zero,
+            "image_static_accuracy": zero,
+            "image_dynamic_accuracy": zero,
+            "image_dynamic_fraction": zero,
+            "pred_entropy": zero,
+            "pred_unique_tokens": zero,
+            "gt_unique_tokens": zero,
+            "latent_norm": zero,
+            "grad_norm": zero,
         }
         return DreamerV3Loss(loss=loss, metrics=metrics)
 

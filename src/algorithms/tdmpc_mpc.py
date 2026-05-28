@@ -4,6 +4,7 @@ This module is intentionally eval-only and standalone.  It does not replace the
 existing Dreamer/VLA rollout path; callers opt in through config and pass the
 loaded policy, world model, and optional target critic.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -56,7 +57,13 @@ def _repeat_latent(value: Any, repeats: int) -> Any:
     if isinstance(value, dict):
         return {key: _repeat_latent(item, repeats) for key, item in value.items()}
     if is_dataclass(value):
-        return replace(value, **{field.name: _repeat_latent(getattr(value, field.name), repeats) for field in fields(value)})
+        return replace(
+            value,
+            **{
+                field.name: _repeat_latent(getattr(value, field.name), repeats)
+                for field in fields(value)
+            },
+        )
     raise TypeError(f"Unsupported latent type for repeat: {type(value).__name__}")
 
 
@@ -155,13 +162,19 @@ class TDMPCMPCPlanner:
         actions = []
         for _ in range(int(self.cfg.horizon)):
             feat = _world_model_actor_input(world_model, z).float()
-            action, _log_prob, extra = policy({
-                "mode": "sample",
-                "hidden": feat,
-                "deterministic": bool(self.cfg.eval_mode),
-                "return_chunk": False,
-            })
-            if isinstance(extra, dict) and isinstance(extra.get("mean"), torch.Tensor) and bool(self.cfg.eval_mode):
+            action, _log_prob, extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": feat,
+                    "deterministic": bool(self.cfg.eval_mode),
+                    "return_chunk": False,
+                }
+            )
+            if (
+                isinstance(extra, dict)
+                and isinstance(extra.get("mean"), torch.Tensor)
+                and bool(self.cfg.eval_mode)
+            ):
                 action = extra["mean"]
             action = action[:, : int(self.cfg.action_dim)].float().clamp(-1.0, 1.0)
             actions.append(action)
@@ -191,18 +204,31 @@ class TDMPCMPCPlanner:
             discount = discount * float(self.cfg.gamma)
         if target_critic is not None and float(self.cfg.terminal_value_scale) != 0.0:
             terminal_action = None
-            if str(self.cfg.value_mode).lower() in {"state_action", "q", "q_za", "q(z,a)"}:
+            if str(self.cfg.value_mode).lower() in {
+                "state_action",
+                "q",
+                "q_za",
+                "q(z,a)",
+            }:
                 feat = _world_model_actor_input(world_model, z).float()
-                terminal_action, _log_prob, extra = policy({
-                    "mode": "sample",
-                    "hidden": feat,
-                    "deterministic": bool(self.cfg.eval_mode),
-                    "return_chunk": False,
-                })
-                if isinstance(extra, dict) and isinstance(extra.get("mean"), torch.Tensor) and bool(self.cfg.eval_mode):
+                terminal_action, _log_prob, extra = policy(
+                    {
+                        "mode": "sample",
+                        "hidden": feat,
+                        "deterministic": bool(self.cfg.eval_mode),
+                        "return_chunk": False,
+                    }
+                )
+                if (
+                    isinstance(extra, dict)
+                    and isinstance(extra.get("mean"), torch.Tensor)
+                    and bool(self.cfg.eval_mode)
+                ):
                     terminal_action = extra["mean"]
                 terminal_action = action_transform(
-                    terminal_action[:, : int(self.cfg.action_dim)].float().clamp(-1.0, 1.0)
+                    terminal_action[:, : int(self.cfg.action_dim)]
+                    .float()
+                    .clamp(-1.0, 1.0)
                 )
             critic_feat = _critic_hidden(
                 world_model,
@@ -211,7 +237,11 @@ class TDMPCMPCPlanner:
                 value_mode=self.cfg.value_mode,
                 action_dim=int(self.cfg.action_dim),
             )
-            terminal = target_critic({"mode": "value", "hidden": critic_feat}).reshape(num_samples).to(dtype=total.dtype)
+            terminal = (
+                target_critic({"mode": "value", "hidden": critic_feat})
+                .reshape(num_samples)
+                .to(dtype=total.dtype)
+            )
             total = total + discount * float(self.cfg.terminal_value_scale) * terminal
         return total
 
@@ -237,7 +267,11 @@ class TDMPCMPCPlanner:
         generator = self._generator_for(device)
 
         mean = torch.zeros(horizon, action_dim, device=device)
-        if bool(cfg.warm_start) and self._prev_mean is not None and tuple(self._prev_mean.shape) == tuple(mean.shape):
+        if (
+            bool(cfg.warm_start)
+            and self._prev_mean is not None
+            and tuple(self._prev_mean.shape) == tuple(mean.shape)
+        ):
             mean[:-1] = self._prev_mean[1:]
         std = torch.full_like(mean, float(cfg.max_std))
         actions = torch.empty(horizon, num_samples, action_dim, device=device)
@@ -255,7 +289,9 @@ class TDMPCMPCPlanner:
         elite_actions = actions[:, :num_elites]
         for _ in range(max(1, int(cfg.iterations))):
             if num_random > 0:
-                actions[:, num_pi_trajs:] = self._sample_random_actions(mean, std, num_random, generator)
+                actions[:, num_pi_trajs:] = self._sample_random_actions(
+                    mean, std, num_random, generator
+                )
             value = self._estimate_value(
                 policy=policy,
                 world_model=world_model,
@@ -271,7 +307,10 @@ class TDMPCMPCPlanner:
             score = torch.exp(float(cfg.temperature) * (elite_values - max_value))
             score = score / score.sum().clamp_min(1.0e-9)
             mean = (score.view(1, num_elites, 1) * elite_actions).sum(dim=1)
-            var = (score.view(1, num_elites, 1) * (elite_actions - mean.unsqueeze(1)).square()).sum(dim=1)
+            var = (
+                score.view(1, num_elites, 1)
+                * (elite_actions - mean.unsqueeze(1)).square()
+            ).sum(dim=1)
             std = var.sqrt().clamp(float(cfg.min_std), float(cfg.max_std))
 
         best_idx = torch.argmax(elite_values)

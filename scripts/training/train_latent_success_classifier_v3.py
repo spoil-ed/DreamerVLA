@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Train LatentSuccessClassifier — Phase 3 v3 / v4 (WM-replay + real failures + rollouts).
 
 Same pipeline as v2 train script but threads through up to three extra sources:
@@ -19,11 +20,11 @@ Single-GPU. Usage:
         scripts/train_latent_success_classifier_v3.py \
         --config configs/wmpo_classifier_libero_goal_v3_with_failures.yaml
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -67,7 +68,9 @@ def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device, cfg) -
         return {"metrics": {}, "best": {"f1": 0.0, "thresh": 0.5}, "n_val": 0}
     metrics: dict = {}
     best = {"f1": -1.0, "thresh": 0.5}
-    thresholds = np.linspace(cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps))
+    thresholds = np.linspace(
+        cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps)
+    )
     for th in thresholds:
         preds = (probs >= th).astype(int)
         f1 = float(f1_score(ys, preds, zero_division=0))
@@ -122,7 +125,7 @@ def _evaluate_episode_level(
             continue
         first_end = max(W, min_steps + W)
         for end in range(first_end, T + 1, stride):
-            flat_windows.append(torch.from_numpy(traj[end - W:end]).float())
+            flat_windows.append(torch.from_numpy(traj[end - W : end]).float())
             flat_ep_idx.append(ep_idx)
         ep_true.append(int(bool(complete)))
 
@@ -133,10 +136,10 @@ def _evaluate_episode_level(
     BATCH = 32
     ep_max_prob: dict[int, float] = {}
     for i in range(0, len(flat_windows), BATCH):
-        chunk = torch.stack(flat_windows[i:i + BATCH]).to(device, non_blocking=True)
+        chunk = torch.stack(flat_windows[i : i + BATCH]).to(device, non_blocking=True)
         logits = model(chunk)
         probs = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
-        for p, idx in zip(probs, flat_ep_idx[i:i + BATCH]):
+        for p, idx in zip(probs, flat_ep_idx[i : i + BATCH]):
             if p > ep_max_prob.get(idx, -1.0):
                 ep_max_prob[idx] = float(p)
 
@@ -233,6 +236,7 @@ def _replace_with_real_hidden(ds, tag: str = "ds") -> None:
 
     Clears _neg_trajs (swap-perturbed) since they have no real-hidden analog.
     """
+
     def _do(pairs):
         out_trajs, out_meta = [], []
         for pair in pairs:
@@ -263,37 +267,54 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     # ---- data ratio knobs (applied AFTER imagine_all) ----
     parser.add_argument(
-        "--fail-oversample", type=int, default=1,
+        "--fail-oversample",
+        type=int,
+        default=1,
         help="Duplicate failure trajs N times after imagine_all (default 1=no oversample). "
-             "Use >1 to push pos:neg ratio toward WMPO's ~1:5 regime.",
+        "Use >1 to push pos:neg ratio toward WMPO's ~1:5 regime.",
     )
     parser.add_argument(
-        "--rollout-oversample", type=int, default=1,
+        "--rollout-oversample",
+        type=int,
+        default=1,
         help="Duplicate rollout trajs N times after imagine_all.",
     )
     parser.add_argument(
-        "--succ-cap", type=int, default=None,
+        "--succ-cap",
+        type=int,
+        default=None,
         help="Cap the number of success trajs (and their paired swap-neg) used for training.",
     )
     parser.add_argument(
-        "--drop-swap-neg", action="store_true",
+        "--drop-swap-neg",
+        action="store_true",
         help="Empty _neg_trajs after imagine_all (kills the swap-perturbed negative class).",
     )
     # ---- ablate WM imagine drift ----
     parser.add_argument(
-        "--use-real-hidden", action="store_true",
+        "--use-real-hidden",
+        action="store_true",
         help="Bypass imagine_all and use REAL pi0 obs_embedding from HDF5 instead. "
-             "Lets us isolate imagine-drift as the failure source.",
+        "Lets us isolate imagine-drift as the failure source.",
     )
     # ---- WMPO-style episode-level eval ----
     parser.add_argument(
-        "--episode-eval", action="store_true",
+        "--episode-eval",
+        action="store_true",
         help="Also report WMPO-style episode-level F1 (any window >= threshold => success).",
     )
-    parser.add_argument("--episode-min-steps", type=int, default=100,
-                        help="WMPO predict_success gate: earliest window-end frame.")
-    parser.add_argument("--episode-stride", type=int, default=1,
-                        help="Sliding window stride for episode-level eval (WMPO default 1).")
+    parser.add_argument(
+        "--episode-min-steps",
+        type=int,
+        default=100,
+        help="WMPO predict_success gate: earliest window-end frame.",
+    )
+    parser.add_argument(
+        "--episode-stride",
+        type=int,
+        default=1,
+        help="Sliding window stride for episode-level eval (WMPO default 1).",
+    )
     parser.add_argument("--episode-thresh-min", type=float, default=0.3)
     parser.add_argument("--episode-thresh-max", type=float, default=0.99)
     parser.add_argument("--episode-thresh-steps", type=int, default=30)
@@ -303,14 +324,21 @@ def main() -> None:
 
     print(f"[1/4] loading chunk WM from {cfg.wm_replay.chunk_wm_ckpt}")
     chunk_wm = ChunkAwareRynnDinoWMWorldModel.from_rynn_dino_wm_ckpt(
-        cfg.wm_replay.chunk_wm_ckpt, chunk_size=int(cfg.wm_replay.K), device=device, strict=True
+        cfg.wm_replay.chunk_wm_ckpt,
+        chunk_size=int(cfg.wm_replay.K),
+        device=device,
+        strict=True,
     ).eval()
 
     print("[2/4] discovering demo pairs (success + failure + rollout)")
     success_pairs = _find_demo_pairs(cfg.wm_replay.raw_dir, cfg.wm_replay.hidden_dir)
-    failure_pairs = _find_demo_pairs(cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir)
+    failure_pairs = _find_demo_pairs(
+        cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir
+    )
     rollout_raw_dir = OmegaConf.select(cfg, "wm_replay.rollout_raw_dir", default=None)
-    rollout_hidden_dir = OmegaConf.select(cfg, "wm_replay.rollout_hidden_dir", default=None)
+    rollout_hidden_dir = OmegaConf.select(
+        cfg, "wm_replay.rollout_hidden_dir", default=None
+    )
     if rollout_raw_dir and rollout_hidden_dir:
         rollout_pairs = _find_demo_pairs(rollout_raw_dir, rollout_hidden_dir)
     else:
@@ -322,11 +350,19 @@ def main() -> None:
 
     val_succ_tail = int(cfg.wm_replay.val_demos_tail)
     val_fail_tail = int(cfg.wm_replay.val_failure_tail)
-    val_rollout_tail = int(OmegaConf.select(cfg, "wm_replay.val_rollout_tail", default=0) or 0)
+    val_rollout_tail = int(
+        OmegaConf.select(cfg, "wm_replay.val_rollout_tail", default=0) or 0
+    )
     train_succ = success_pairs[:-val_succ_tail]
     val_succ = success_pairs[-val_succ_tail:]
-    train_fail = failure_pairs[:-val_fail_tail] if len(failure_pairs) > val_fail_tail else failure_pairs[:]
-    val_fail = failure_pairs[-val_fail_tail:] if len(failure_pairs) > val_fail_tail else []
+    train_fail = (
+        failure_pairs[:-val_fail_tail]
+        if len(failure_pairs) > val_fail_tail
+        else failure_pairs[:]
+    )
+    val_fail = (
+        failure_pairs[-val_fail_tail:] if len(failure_pairs) > val_fail_tail else []
+    )
     if rollout_pairs and val_rollout_tail > 0 and len(rollout_pairs) > val_rollout_tail:
         train_rollout = rollout_pairs[:-val_rollout_tail]
         val_rollout = rollout_pairs[-val_rollout_tail:]
@@ -350,7 +386,9 @@ def main() -> None:
             W=int(cfg.classifier.window),
             num_hist=int(cfg.wm_replay.num_hist),
             mode=mode,
-            stride=int(cfg.train.stride_train if mode == "train" else cfg.train.stride_val),
+            stride=int(
+                cfg.train.stride_train if mode == "train" else cfg.train.stride_val
+            ),
             neg_method=str(cfg.wm_replay.neg_method),
             noise_std=float(cfg.wm_replay.noise_std),
             swap_min_frac=float(cfg.wm_replay.swap_min_frac),
@@ -374,7 +412,9 @@ def main() -> None:
     va_ds = _build_ds(val_succ, val_fail, val_rollout, mode="val", seed=43)
 
     if args.use_real_hidden:
-        print("[3/4] --use-real-hidden: SKIPPING imagine_all, loading REAL hidden directly")
+        print(
+            "[3/4] --use-real-hidden: SKIPPING imagine_all, loading REAL hidden directly"
+        )
         # imagine_all still has to run because _imagine_one initializes internal
         # buffers (and some setup state). But we immediately overwrite the trajs.
         tr_ds.imagine_all(verbose=False)
@@ -383,9 +423,9 @@ def main() -> None:
         _replace_with_real_hidden(va_ds, tag="val")
     else:
         print("[3/4] imagine_all() — running chunk WM (success + failure demos)")
-        print(f"  imagining train demos...")
+        print("  imagining train demos...")
         tr_ds.imagine_all(verbose=True)
-        print(f"  imagining val demos...")
+        print("  imagining val demos...")
         va_ds.imagine_all(verbose=True)
 
     # Apply ratio knobs ONLY to the training set; keep val composition unchanged
@@ -400,15 +440,23 @@ def main() -> None:
     )
 
     tr_ld = DataLoader(
-        tr_ds, batch_size=int(cfg.train.batch_size), num_workers=0,
-        collate_fn=_collate, pin_memory=True,
+        tr_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=0,
+        collate_fn=_collate,
+        pin_memory=True,
     )
     va_ld = DataLoader(
-        va_ds, batch_size=int(cfg.train.batch_size), num_workers=0,
-        collate_fn=_collate, pin_memory=True,
+        va_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=0,
+        collate_fn=_collate,
+        pin_memory=True,
     )
 
-    classifier_cfg = LatentSuccessClassifierConfig(**OmegaConf.to_container(cfg.classifier))
+    classifier_cfg = LatentSuccessClassifierConfig(
+        **OmegaConf.to_container(cfg.classifier)
+    )
     model = LatentSuccessClassifier(classifier_cfg).to(device)
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(
@@ -458,7 +506,9 @@ def main() -> None:
             ep_out = None
             if bool(args.episode_eval):
                 ep_out = _evaluate_episode_level(
-                    model, va_ds, device,
+                    model,
+                    va_ds,
+                    device,
                     W=int(cfg.classifier.window),
                     min_steps=int(args.episode_min_steps),
                     stride=int(args.episode_stride),
@@ -489,7 +539,9 @@ def main() -> None:
                 if ep_out is not None:
                     payload["episode_best"] = ep_out["best"]
                 torch.save(payload, ckpt_dir / "best.ckpt")
-                print(f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir/'best.ckpt'}")
+                print(
+                    f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir / 'best.ckpt'}"
+                )
     print(f"done. best_f1={best_f1:.4f}")
 
 

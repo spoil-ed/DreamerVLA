@@ -54,7 +54,9 @@ def test_workspace_directory_contains_route_specific_workspaces() -> None:
 def test_removed_legacy_compatibility_shims_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[1]
 
-    assert not (project_root / "src" / "dataloader" / "pretokenize_sequence_dataset.py").exists()
+    assert not (
+        project_root / "src" / "dataloader" / "pretokenize_sequence_dataset.py"
+    ).exists()
     assert not (project_root / "scripts" / "pretokenize_train_wm.sh").exists()
 
 
@@ -145,20 +147,34 @@ def test_root_configs_inherit_archive_defaults_at_global_package() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="dreamerv3_pixel_libero_goal")
         assert cfg._target_ == "src.workspace.PixelWMWorkspace"
-        assert cfg.dataset._target_ == "src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset"
-        assert cfg.world_model._target_ == "src.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel"
+        assert (
+            cfg.dataset._target_
+            == "src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset"
+        )
+        assert (
+            cfg.world_model._target_
+            == "src.models.world_model.dreamerv3_torch.DreamerV3PixelWorldModel"
+        )
         assert cfg.training.out_dir.endswith("dreamerv3_pixel_libero_goal")
 
-        archive_cfg = compose(config_name="archive/libero10_legacy/dreamerv3_pixel_libero_10")
+        archive_cfg = compose(
+            config_name="archive/libero10_legacy/dreamerv3_pixel_libero_10"
+        )
         assert archive_cfg._target_ == "src.workspace.PixelWMWorkspace"
-        assert archive_cfg.dataset._target_ == "src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset"
+        assert (
+            archive_cfg.dataset._target_
+            == "src.dataloader.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset"
+        )
 
 
 def test_cli_default_uses_current_public_workspace_target() -> None:
     from src.cli.train import _parse_hydra_like_args
 
     config_name, overrides = _parse_hydra_like_args([])
-    assert config_name == "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
+    assert (
+        config_name
+        == "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed"
+    )
     assert overrides == []
 
 
@@ -220,7 +236,10 @@ def test_all_configs_compose_and_resolve_route_specific_workspace_targets() -> N
     import src.workspace as workspace
 
     config_dir = Path(__file__).resolve().parents[1] / "configs"
-    config_names = sorted(str(path.relative_to(config_dir).with_suffix("")) for path in config_dir.rglob("*.yaml"))
+    config_names = sorted(
+        str(path.relative_to(config_dir).with_suffix(""))
+        for path in config_dir.rglob("*.yaml")
+    )
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         for config_name in config_names:

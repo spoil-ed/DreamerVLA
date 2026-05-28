@@ -1,4 +1,5 @@
 """Aligned online evaluation environment for DreamerVLA on LIBERO."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -97,7 +98,9 @@ class DreamerVLAOnlineEvalEnv(DreamerVLAOnlineTrainEnv):
             "terminated": bool(info.get("terminated", False)),
             "truncated": bool(info.get("truncated", False)),
             "task_id": int(info.get("task_id", self.task_id)),
-            "task_description": str(info.get("task_description", self.task_description)),
+            "task_description": str(
+                info.get("task_description", self.task_description)
+            ),
             "video_path": saved_video,
         }
 

@@ -34,7 +34,12 @@
 - [ ] 跑 LIBERO quick eval：先 1 episode/task，再 quick10。
 - [ ] 如果 quick10 接近历史强基线，再跑 official50，并和历史指标对齐记录。
 
-### 4. LatentSuccessClassifier 修正（详见 [classifier_revision_plan.md](classifier_revision_plan.md)）
+### 4. xllmx import 路径修复（2026-05-27 清理时发现）
+
+- [ ] `src/preprocess/item_processor.py:19` 写的是 `from src.xllmx.data.data_reader import read_general`，但模块实际在 `src/models/xllmx/data/data_reader.py`。这是断的 import 路径，会导致 `item_processor.py` 直接执行时 ImportError。
+- [ ] 决策：要么把 import 改为 `from src.models.xllmx.data.data_reader import read_general`；要么如果 `item_processor.py` 本身已经不再使用，把它和 `data_reader.py` 一起归档到 `graveyard/`。
+
+### 5. LatentSuccessClassifier 修正（详见 [classifier_revision_plan.md](classifier_revision_plan.md)）
 
 现状：v1/v2/v3 四版 window-level F1 ≤ 0.33，但 real hidden 上 sklearn LR 可达 0.87。问题在训练管线，不在表征也不在容量。
 

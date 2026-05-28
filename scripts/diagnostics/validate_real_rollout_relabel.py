@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Closed-loop real-rollout relabel diagnostic for DreamerVLA.
 
 This script is deliberately offline/diagnostic. It does not modify datasets,
@@ -7,6 +8,7 @@ rollouts, records WMPO-style outcome fields (`complete`, `finish_step`, `acc`),
 and exports sparse real-outcome labels that can later be used as hard positives
 or hard negatives for reward correction.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,7 +41,7 @@ from scripts.diagnostics.diagnose_ppo_imagine_vs_real import (
     _observe,
     _sft_action,
 )
-from src.algorithms.dreamer_vla import _detach_latent, _world_model_state_reward
+from src.algorithms.dreamer_vla import _world_model_state_reward
 from src.env import TASK_MAX_STEPS, get_libero_dummy_action, get_libero_env
 
 try:
@@ -69,7 +71,9 @@ def _safe_mean(values: list[float]) -> float:
     return float(np.mean(finite)) if finite else math.nan
 
 
-def _finish_sparse_rewards(success: bool, finish_step: int, max_steps: int) -> list[float]:
+def _finish_sparse_rewards(
+    success: bool, finish_step: int, max_steps: int
+) -> list[float]:
     length = max(1, min(int(finish_step), int(max_steps)))
     rewards = [0.0] * length
     if success:
@@ -77,7 +81,9 @@ def _finish_sparse_rewards(success: bool, finish_step: int, max_steps: int) -> l
     return rewards
 
 
-def _wmpo_group_filter(records: list[dict[str, Any]], lower: float, upper: float) -> dict[str, Any]:
+def _wmpo_group_filter(
+    records: list[dict[str, Any]], lower: float, upper: float
+) -> dict[str, Any]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         groups[str(record["prompt_key"])].append(record)
@@ -99,12 +105,16 @@ def _wmpo_group_filter(records: list[dict[str, Any]], lower: float, upper: float
             }
         )
 
-    kept_records = [row for row in records if str(row["prompt_key"]) in kept_prompt_keys]
+    kept_records = [
+        row for row in records if str(row["prompt_key"]) in kept_prompt_keys
+    ]
     return {
         "accuracy_lower_bound": float(lower),
         "accuracy_upper_bound": float(upper),
         "num_prompt_groups": len(group_rows),
-        "num_kept_prompt_groups": int(sum(int(row["keep_by_accuracy_band"]) for row in group_rows)),
+        "num_kept_prompt_groups": int(
+            sum(int(row["keep_by_accuracy_band"]) for row in group_rows)
+        ),
         "num_records": len(records),
         "num_kept_records": len(kept_records),
         "groups": group_rows,
@@ -124,7 +134,9 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _aggregate_records(args: argparse.Namespace, records: list[dict[str, Any]], elapsed_sec: float) -> dict[str, Any]:
+def _aggregate_records(
+    args: argparse.Namespace, records: list[dict[str, Any]], elapsed_sec: float
+) -> dict[str, Any]:
     policy_modes = sorted({str(row["policy_mode"]) for row in records})
     by_mode: dict[str, dict[str, Any]] = {}
     for mode in policy_modes:
@@ -132,11 +144,22 @@ def _aggregate_records(args: argparse.Namespace, records: list[dict[str, Any]], 
         by_mode[mode] = {
             "num_records": len(rows),
             "successes": int(sum(int(row["complete"]) for row in rows)),
-            "success_rate": float(np.mean([row["acc"] for row in rows])) if rows else 0.0,
+            "success_rate": float(np.mean([row["acc"] for row in rows]))
+            if rows
+            else 0.0,
             "finish_step_mean": _safe_mean([float(row["finish_step"]) for row in rows]),
-            "wm_reward_mean": _safe_mean([float(row["wm_reward_pred"]["mean"]) for row in rows]),
+            "wm_reward_mean": _safe_mean(
+                [float(row["wm_reward_pred"]["mean"]) for row in rows]
+            ),
             "action_mse_to_sft_mean": _safe_mean(
-                [float(row["action_compare"].get("mean_dreamer_vs_sft_env_action_mse", math.nan)) for row in rows]
+                [
+                    float(
+                        row["action_compare"].get(
+                            "mean_dreamer_vs_sft_env_action_mse", math.nan
+                        )
+                    )
+                    for row in rows
+                ]
             ),
         }
 
@@ -150,7 +173,9 @@ def _aggregate_records(args: argparse.Namespace, records: list[dict[str, Any]], 
         "rollout_mode": args.rollout_mode,
         "num_records": len(records),
         "successes": int(sum(int(row["complete"]) for row in records)),
-        "success_rate": float(np.mean([row["acc"] for row in records])) if records else 0.0,
+        "success_rate": float(np.mean([row["acc"] for row in records]))
+        if records
+        else 0.0,
         "by_policy_mode": by_mode,
         "wmpo_style_filter": _wmpo_group_filter(
             records,
@@ -169,10 +194,14 @@ def _aggregate_records(args: argparse.Namespace, records: list[dict[str, Any]], 
                 "wm_reward_mean": row["wm_reward_pred"]["mean"],
                 "wm_reward_max": row["wm_reward_pred"]["max"],
                 "first_ge_0p8_step": row["wm_reward_pred"]["first_ge_0p8_step"],
-                "action_mse_to_sft": row["action_compare"].get("mean_dreamer_vs_sft_env_action_mse", math.nan),
+                "action_mse_to_sft": row["action_compare"].get(
+                    "mean_dreamer_vs_sft_env_action_mse", math.nan
+                ),
             }
             for row in records
-            if (not row["complete"]) and float(row["wm_reward_pred"]["mean"]) >= float(args.high_reward_fail_threshold)
+            if (not row["complete"])
+            and float(row["wm_reward_pred"]["mean"])
+            >= float(args.high_reward_fail_threshold)
         ],
     }
 
@@ -187,17 +216,29 @@ def _run_isolated(args: argparse.Namespace) -> int:
 
     task_ids = _parse_ints(args.task_ids)
     episode_indices = _parse_ints(args.episode_indices)
-    policy_modes = [item.strip() for item in str(args.policy_modes).split(",") if item.strip()]
+    policy_modes = [
+        item.strip() for item in str(args.policy_modes).split(",") if item.strip()
+    ]
     all_records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
 
     for task_id in task_ids:
         for episode_idx in episode_indices:
             for policy_mode in policy_modes:
-                n_samples = 1 if policy_mode == "deterministic" else int(args.samples_per_init)
+                n_samples = (
+                    1 if policy_mode == "deterministic" else int(args.samples_per_init)
+                )
                 for sample_idx in range(n_samples):
-                    sample_seed = int(args.seed) + int(task_id) * 10000 + int(episode_idx) * 100 + sample_idx
-                    worker_dir = worker_root / f"task{task_id:02d}_ep{episode_idx:03d}_{policy_mode}_sample{sample_idx:03d}"
+                    sample_seed = (
+                        int(args.seed)
+                        + int(task_id) * 10000
+                        + int(episode_idx) * 100
+                        + sample_idx
+                    )
+                    worker_dir = (
+                        worker_root
+                        / f"task{task_id:02d}_ep{episode_idx:03d}_{policy_mode}_sample{sample_idx:03d}"
+                    )
                     if worker_dir.exists():
                         shutil.rmtree(worker_dir)
                     worker_dir.mkdir(parents=True, exist_ok=True)
@@ -259,7 +300,9 @@ def _run_isolated(args: argparse.Namespace) -> int:
                             stderr=subprocess.STDOUT,
                             text=True,
                         )
-                    worker_records = _load_jsonl(worker_dir / "real_rollout_relabel_records.jsonl")
+                    worker_records = _load_jsonl(
+                        worker_dir / "real_rollout_relabel_records.jsonl"
+                    )
                     if proc.returncode != 0 or not worker_records:
                         failures.append(
                             {
@@ -271,7 +314,10 @@ def _run_isolated(args: argparse.Namespace) -> int:
                                 "log_path": str(log_path),
                             }
                         )
-                        print(f"[isolate] failed returncode={proc.returncode} log={log_path}", flush=True)
+                        print(
+                            f"[isolate] failed returncode={proc.returncode} log={log_path}",
+                            flush=True,
+                        )
                     else:
                         all_records.extend(worker_records)
                         with records_path.open("a") as out:
@@ -285,7 +331,9 @@ def _run_isolated(args: argparse.Namespace) -> int:
                     summary = _aggregate_records(args, all_records, time.time() - t0)
                     summary["records_jsonl"] = str(records_path)
                     summary["worker_failures"] = failures
-                    summary_path.write_text(json.dumps(summary, indent=2, default=_json_default))
+                    summary_path.write_text(
+                        json.dumps(summary, indent=2, default=_json_default)
+                    )
 
     summary = _aggregate_records(args, all_records, time.time() - t0)
     summary["records_jsonl"] = str(records_path)
@@ -347,8 +395,15 @@ def _rollout_one(
             if args.rollout_mode == "online_rssm":
                 latent = ws._dreamer_online_update_latent(obs_embedding)
             else:
-                latent = ws.world_model({"mode": "encode_latent", "hidden": obs_embedding})
-            pred_reward = _world_model_state_reward(ws.world_model, latent).detach().float().reshape(-1)[0]
+                latent = ws.world_model(
+                    {"mode": "encode_latent", "hidden": obs_embedding}
+                )
+            pred_reward = (
+                _world_model_state_reward(ws.world_model, latent)
+                .detach()
+                .float()
+                .reshape(-1)[0]
+            )
 
         action_tensor, raw_action, env_action, wm_action = _dreamer_action_from_latent(
             ws,
@@ -362,10 +417,16 @@ def _rollout_one(
             _sft_raw, sft_env_action = _sft_action(ws, input_ids)
             compare_row = {
                 "step": int(step_idx),
-                "dreamer_env_action": env_action.tolist() if step_idx < trace_steps else None,
-                "sft_env_action": sft_env_action.tolist() if step_idx < trace_steps else None,
+                "dreamer_env_action": env_action.tolist()
+                if step_idx < trace_steps
+                else None,
+                "sft_env_action": sft_env_action.tolist()
+                if step_idx < trace_steps
+                else None,
             }
-            compare_row.update(_array_stats("dreamer_vs_sft_env_action", env_action, sft_env_action))
+            compare_row.update(
+                _array_stats("dreamer_vs_sft_env_action", env_action, sft_env_action)
+            )
             action_compare_rows.append(compare_row)
 
         obs, reward, done, _info = env.step(env_action.tolist())
@@ -390,11 +451,15 @@ def _rollout_one(
         "dreamer_vs_sft_env_action_max_abs",
         "dreamer_vs_sft_env_action_cos",
     ):
-        compare_summary[f"mean_{key}"] = _safe_mean([float(row[key]) for row in action_compare_rows])
+        compare_summary[f"mean_{key}"] = _safe_mean(
+            [float(row[key]) for row in action_compare_rows]
+        )
 
     finish_step = int(steps)
     sparse_rewards = _finish_sparse_rewards(success, finish_step, max_steps)
-    trajectory_id = f"task{task_id:02d}_ep{episode_idx:03d}_{policy_mode}_sample{sample_idx:03d}"
+    trajectory_id = (
+        f"task{task_id:02d}_ep{episode_idx:03d}_{policy_mode}_sample{sample_idx:03d}"
+    )
     prompt_key = f"task{task_id:02d}_ep{episode_idx:03d}_{policy_mode}"
     return {
         "trajectory_id": trajectory_id,
@@ -418,7 +483,9 @@ def _rollout_one(
             "mean": _safe_mean(reward_preds),
             "max": float(np.max(reward_preds)) if reward_preds else math.nan,
             "last": float(reward_preds[-1]) if reward_preds else math.nan,
-            "first_ge_0p8_step": next((idx for idx, val in enumerate(reward_preds) if val >= 0.8), -1),
+            "first_ge_0p8_step": next(
+                (idx for idx, val in enumerate(reward_preds) if val >= 0.8), -1
+            ),
             "trace": reward_preds[:trace_steps],
         },
         "action_norm_mean": _safe_mean(action_norms),
@@ -439,7 +506,9 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--action-steps", type=int, default=5)
     parser.add_argument("--history-length", type=int, default=2)
-    parser.add_argument("--rollout-mode", choices=["stateless", "online_rssm"], default="stateless")
+    parser.add_argument(
+        "--rollout-mode", choices=["stateless", "online_rssm"], default="stateless"
+    )
     parser.add_argument("--trace-steps", type=int, default=20)
     parser.add_argument("--sft-compare-steps", type=int, default=80)
     parser.add_argument("--accuracy-lower-bound", type=float, default=0.01)
@@ -456,7 +525,9 @@ def main() -> None:
 
     task_ids = _parse_ints(args.task_ids)
     episode_indices = _parse_ints(args.episode_indices)
-    policy_modes = [item.strip() for item in str(args.policy_modes).split(",") if item.strip()]
+    policy_modes = [
+        item.strip() for item in str(args.policy_modes).split(",") if item.strip()
+    ]
     invalid_modes = sorted(set(policy_modes) - {"deterministic", "sample"})
     if invalid_modes:
         raise ValueError(f"--policy-modes contains invalid values: {invalid_modes}")
@@ -486,13 +557,26 @@ def main() -> None:
             for episode_idx in episode_indices:
                 initial_state = initial_states[int(episode_idx)]
                 for policy_mode in policy_modes:
-                    n_samples = 1 if policy_mode == "deterministic" else int(args.samples_per_init)
+                    n_samples = (
+                        1
+                        if policy_mode == "deterministic"
+                        else int(args.samples_per_init)
+                    )
                     for sample_idx in range(n_samples):
-                        record_sample_idx = int(args.single_sample_idx) if args.single_sample_idx is not None else sample_idx
+                        record_sample_idx = (
+                            int(args.single_sample_idx)
+                            if args.single_sample_idx is not None
+                            else sample_idx
+                        )
                         if args.single_sample_idx is not None:
                             sample_seed = int(args.seed)
                         else:
-                            sample_seed = int(args.seed) + int(task_id) * 10000 + int(episode_idx) * 100 + record_sample_idx
+                            sample_seed = (
+                                int(args.seed)
+                                + int(task_id) * 10000
+                                + int(episode_idx) * 100
+                                + record_sample_idx
+                            )
                         torch.manual_seed(sample_seed)
                         np.random.seed(sample_seed)
                         print(
@@ -502,7 +586,11 @@ def main() -> None:
                         )
                         env, task_description = get_libero_env(
                             task,
-                            resolution=int(OmegaConf.select(ws.cfg, "encoder.resolution", default=256)),
+                            resolution=int(
+                                OmegaConf.select(
+                                    ws.cfg, "encoder.resolution", default=256
+                                )
+                            ),
                         )
                         try:
                             record = _rollout_one(
@@ -520,7 +608,9 @@ def main() -> None:
                         finally:
                             env.env.close()
                         records.append(record)
-                        records_file.write(json.dumps(record, default=_json_default) + "\n")
+                        records_file.write(
+                            json.dumps(record, default=_json_default) + "\n"
+                        )
                         records_file.flush()
                         print(
                             f"[rollout] done id={record['trajectory_id']} success={record['complete']} "
@@ -530,14 +620,20 @@ def main() -> None:
                         )
                         partial = {
                             "num_records": len(records),
-                            "success_rate": float(np.mean([row["acc"] for row in records])) if records else 0.0,
+                            "success_rate": float(
+                                np.mean([row["acc"] for row in records])
+                            )
+                            if records
+                            else 0.0,
                             "filter": _wmpo_group_filter(
                                 records,
                                 lower=float(args.accuracy_lower_bound),
                                 upper=float(args.accuracy_upper_bound),
                             ),
                         }
-                        partial_summary_path.write_text(json.dumps(partial, indent=2, default=_json_default))
+                        partial_summary_path.write_text(
+                            json.dumps(partial, indent=2, default=_json_default)
+                        )
 
     filter_summary = _wmpo_group_filter(
         records,
@@ -550,11 +646,22 @@ def main() -> None:
         by_mode[mode] = {
             "num_records": len(rows),
             "successes": int(sum(int(row["complete"]) for row in rows)),
-            "success_rate": float(np.mean([row["acc"] for row in rows])) if rows else 0.0,
+            "success_rate": float(np.mean([row["acc"] for row in rows]))
+            if rows
+            else 0.0,
             "finish_step_mean": _safe_mean([float(row["finish_step"]) for row in rows]),
-            "wm_reward_mean": _safe_mean([float(row["wm_reward_pred"]["mean"]) for row in rows]),
+            "wm_reward_mean": _safe_mean(
+                [float(row["wm_reward_pred"]["mean"]) for row in rows]
+            ),
             "action_mse_to_sft_mean": _safe_mean(
-                [float(row["action_compare"].get("mean_dreamer_vs_sft_env_action_mse", math.nan)) for row in rows]
+                [
+                    float(
+                        row["action_compare"].get(
+                            "mean_dreamer_vs_sft_env_action_mse", math.nan
+                        )
+                    )
+                    for row in rows
+                ]
             ),
         }
 
@@ -569,10 +676,14 @@ def main() -> None:
             "wm_reward_mean": row["wm_reward_pred"]["mean"],
             "wm_reward_max": row["wm_reward_pred"]["max"],
             "first_ge_0p8_step": row["wm_reward_pred"]["first_ge_0p8_step"],
-            "action_mse_to_sft": row["action_compare"].get("mean_dreamer_vs_sft_env_action_mse", math.nan),
+            "action_mse_to_sft": row["action_compare"].get(
+                "mean_dreamer_vs_sft_env_action_mse", math.nan
+            ),
         }
         for row in records
-        if (not row["complete"]) and float(row["wm_reward_pred"]["mean"]) >= float(args.high_reward_fail_threshold)
+        if (not row["complete"])
+        and float(row["wm_reward_pred"]["mean"])
+        >= float(args.high_reward_fail_threshold)
     ]
 
     summary = {
@@ -585,7 +696,9 @@ def main() -> None:
         "rollout_mode": args.rollout_mode,
         "num_records": len(records),
         "successes": int(sum(int(row["complete"]) for row in records)),
-        "success_rate": float(np.mean([row["acc"] for row in records])) if records else 0.0,
+        "success_rate": float(np.mean([row["acc"] for row in records]))
+        if records
+        else 0.0,
         "by_policy_mode": by_mode,
         "wmpo_style_filter": filter_summary,
         "records_jsonl": str(records_path),

@@ -1,5 +1,5 @@
 {
-  "ckpt": "/home/user01/liops/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_m1024_d6_resume14k_bs80_20k_gpu45/20260525_154649/ckpt/step_00020000.ckpt",
+  "ckpt": "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_m1024_d6_resume14k_bs80_20k_gpu45/20260525_154649/ckpt/step_00020000.ckpt",
   "ckpt_step": 20000,
   "model_dim": 1024,
   "files": [

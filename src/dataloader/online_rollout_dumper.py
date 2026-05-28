@@ -20,6 +20,7 @@ episode (terminal OR timeout); successful episodes additionally carry positive
 ``rewards`` at the success step, so ``complete`` will be True iff the rollout
 actually solved the task.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,11 +100,22 @@ class RolloutDumper:
         steps = list(episode)
         T = len(steps)
         if T == 0:
-            return {"shard": self._shard_idx, "demo_key": None, "length": 0, "success": False}
+            return {
+                "shard": self._shard_idx,
+                "demo_key": None,
+                "length": 0,
+                "success": False,
+            }
 
-        obs = np.stack([np.asarray(s["obs_embedding"], dtype=np.float32) for s in steps], axis=0)
+        obs = np.stack(
+            [np.asarray(s["obs_embedding"], dtype=np.float32) for s in steps], axis=0
+        )
         actions = np.stack(
-            [np.asarray(s["wm_action"], dtype=np.float32).reshape(-1)[:7] for s in steps], axis=0
+            [
+                np.asarray(s["wm_action"], dtype=np.float32).reshape(-1)[:7]
+                for s in steps
+            ],
+            axis=0,
         )
         rewards = np.array([float(s["reward"]) for s in steps], dtype=np.float32)
         dones = np.zeros((T,), dtype=np.uint8)
@@ -119,7 +131,9 @@ class RolloutDumper:
         assert self._raw_grp is not None and self._hidden_grp is not None
         self._write(self._raw_grp, demo_key, "actions", actions)
         self._write(self._raw_grp, demo_key, "dones", dones)
-        self._write(self._raw_grp, demo_key, "rewards", rewards.astype(np.uint8, copy=False))
+        self._write(
+            self._raw_grp, demo_key, "rewards", rewards.astype(np.uint8, copy=False)
+        )
         self._write(self._hidden_grp, demo_key, "obs_embedding", obs)
         assert self._raw_f is not None and self._hidden_f is not None
         self._raw_f.flush()
@@ -191,7 +205,9 @@ class RolloutDumper:
     # ─── internals ─────────────────────────────────────────────────────────
     def _open_shard(self) -> None:
         raw_path = self.raw_dir / f"{self.shard_prefix}_{self._shard_idx:03d}.hdf5"
-        hidden_path = self.hidden_dir / f"{self.shard_prefix}_{self._shard_idx:03d}.hdf5"
+        hidden_path = (
+            self.hidden_dir / f"{self.shard_prefix}_{self._shard_idx:03d}.hdf5"
+        )
         # If a previous run wrote this shard, append rather than truncate so
         # mid-training restarts don't clobber existing data.
         raw_mode = "a" if raw_path.exists() else "w"

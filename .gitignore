@@ -24,3 +24,7 @@ data/
 train.log
 *.log
 wandb/
+
+# other
+CLAUDE.local.md
+tutorial_of_git.md

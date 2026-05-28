@@ -10,14 +10,14 @@
 #   bash scripts/run_online_dreamervla_wmpo_alltasks_g67.sh
 #
 # Attach:
-#   tmux attach -t ppo_alltasks_legacy_g67
+#   tmux attach -t ppo_alltasks_trace_wmclf_g67
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 PYTHON="${PYTHON:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
-SESSION="${SESSION:-ppo_alltasks_legacy_g67}"
-MASTER_PORT="${MASTER_PORT:-29517}"
+SESSION="${SESSION:-ppo_alltasks_trace_wmclf_g67}"
+MASTER_PORT="${MASTER_PORT:-29519}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-6,7}"
 NGPU="${NGPU:-2}"
 
@@ -33,16 +33,18 @@ TOTAL_ENV_STEPS="${TOTAL_ENV_STEPS:-10000}"
 MAX_TRAIN_UPDATES="${MAX_TRAIN_UPDATES:-2200}"
 TRAIN_RATIO="${TRAIN_RATIO:-16}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
+REPLAY_SIZE="${REPLAY_SIZE:-3000}"
 MIN_REPLAY="${MIN_REPLAY:-64}"
 MIN_EPISODES_PER_TASK="${MIN_EPISODES_PER_TASK:-1}"
 WM_REFRESH_UPDATES_BEFORE_PPO="${WM_REFRESH_UPDATES_BEFORE_PPO:-75}"
-SAVE_EVERY="${SAVE_EVERY:-200}"
+SAVE_EVERY="${SAVE_EVERY:-100}"
 LOG_EVERY="${LOG_EVERY:-10}"
 BC_TO_REF="${BC_TO_REF:-0.1}"
+COLLECT_CHUNK_STEPS="${COLLECT_CHUNK_STEPS:-5}"
 
 TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR="${OUT_DIR:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla/online_wmpo_outcome/alltasks_frozenlegacy_ppo_g67_wmrefresh75_long300/${TS}}"
-LOG_FILE="${LOG_FILE:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/logs/ppo_alltasks_frozenlegacy_g67_${TS}.log}"
+OUT_DIR="${OUT_DIR:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla/online_wmpo_outcome/alltasks_frozenlegacy_ppo_g67_trace_wmclf_online_replay3k_freezeenc_globalcov_wmrefresh75_long300_chunk5/${TS}}"
+LOG_FILE="${LOG_FILE:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/logs/ppo_alltasks_trace_wmclf_replay3k_freezeenc_globalcov_chunk5_g67_${TS}.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -56,7 +58,7 @@ echo "[run_online_wmpo_alltasks] session=$SESSION"
 echo "[run_online_wmpo_alltasks] gpus=$CUDA_VISIBLE_DEVICES ngpu=$NGPU master_port=$MASTER_PORT"
 echo "[run_online_wmpo_alltasks] out_dir=$OUT_DIR"
 echo "[run_online_wmpo_alltasks] log_file=$LOG_FILE"
-echo "[run_online_wmpo_alltasks] task_ids=$TASK_IDS total_env_steps=$TOTAL_ENV_STEPS max_train_updates=$MAX_TRAIN_UPDATES"
+echo "[run_online_wmpo_alltasks] task_ids=$TASK_IDS total_env_steps=$TOTAL_ENV_STEPS max_train_updates=$MAX_TRAIN_UPDATES collect_chunk_steps=$COLLECT_CHUNK_STEPS"
 
 tmux new-session -d -s "$SESSION" -c "$PWD" \
   "PYTHONPATH=$PWD CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES MUJOCO_GL=osmesa $PYTHON -m torch.distributed.run \
@@ -76,15 +78,20 @@ tmux new-session -d -s "$SESSION" -c "$PWD" \
   --max-train-updates $MAX_TRAIN_UPDATES \
   --train-ratio $TRAIN_RATIO \
   --batch-size $BATCH_SIZE \
+  --replay-size $REPLAY_SIZE \
   --min-replay $MIN_REPLAY \
   --min-episodes-per-task $MIN_EPISODES_PER_TASK \
+  --global-coverage-train-start \
   --task-balanced-replay \
   --replay-capacity-mode per_task \
   --failure-prefix-steps 40 \
   --failure-prefix-ratio 0.2 \
   --wm-refresh-updates-before-ppo $WM_REFRESH_UPDATES_BEFORE_PPO \
-  --freeze-wm-after-refresh \
+  --no-freeze-wm-after-refresh \
+  --freeze-wm-encoder \
+  --update-classifier-online \
   --actor-update-kind outcome \
+  --collect-chunk-steps $COLLECT_CHUNK_STEPS \
   --log-every $LOG_EVERY \
   --save-every $SAVE_EVERY \
   --rssm-action-scale env \

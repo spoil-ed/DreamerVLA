@@ -32,9 +32,9 @@ discover ``(raw_path, hidden_path, demo_key)`` triples — the raw path is
 read for ``rewards`` / ``dones`` (to compute ``finish_step`` + ``complete``),
 the hidden path for ``obs_embedding``.
 """
+
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -51,13 +51,15 @@ from src.dataloader.wm_replay_classifier_dataset import _find_demo_pairs
 # Loading
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _DemoRecord:
     """One episode's frozen latent + label metadata."""
-    obs: np.ndarray         # [T, L] float16, the real pi0 obs_embedding
-    finish_step: int        # 1-based step where dones first fires (clamped to T)
-    complete: bool          # rewards.sum() > 0
-    eid: str                # stable episode id like "<file>/<demo_key>"
+
+    obs: np.ndarray  # [T, L] float16, the real pi0 obs_embedding
+    finish_step: int  # 1-based step where dones first fires (clamped to T)
+    complete: bool  # rewards.sum() > 0
+    eid: str  # stable episode id like "<file>/<demo_key>"
 
 
 def _load_demo(raw_p: Path, hid_p: Path, demo_key: str) -> _DemoRecord | None:
@@ -100,13 +102,16 @@ def _load_all(
             skipped += 1
             continue
         out.append(rec)
-    print(f"[wmpo-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True)
+    print(
+        f"[wmpo-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True
+    )
     return out
 
 
 # ---------------------------------------------------------------------------
 # Train: IterableDataset, infinite resampled stream
 # ---------------------------------------------------------------------------
+
 
 class WMPOAlignedLatentTrainDataset(IterableDataset):
     """Train-mode latent dataset. Each demo yields 1 end + 1 random earlier window.
@@ -154,15 +159,17 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
             fail_pairs = _find_demo_pairs(failure_dir_raw, failure_dir_hidden)
 
         if verbose:
-            print(f"[wmpo-latent:train] success pairs={len(succ_pairs)} "
-                  f"failure pairs={len(fail_pairs)} "
-                  f"granularity={'chunk' if self.K > 1 else 'action'} "
-                  f"W={self.W} K={self.K} pool={self.chunk_pool}", flush=True)
+            print(
+                f"[wmpo-latent:train] success pairs={len(succ_pairs)} "
+                f"failure pairs={len(fail_pairs)} "
+                f"granularity={'chunk' if self.K > 1 else 'action'} "
+                f"W={self.W} K={self.K} pool={self.chunk_pool}",
+                flush=True,
+            )
 
-        self._demos: list[_DemoRecord] = (
-            _load_all(succ_pairs, min_T=self.window_env, label="train-succ")
-            + _load_all(fail_pairs, min_T=self.window_env, label="train-fail")
-        )
+        self._demos: list[_DemoRecord] = _load_all(
+            succ_pairs, min_T=self.window_env, label="train-succ"
+        ) + _load_all(fail_pairs, min_T=self.window_env, label="train-fail")
         if not self._demos:
             raise RuntimeError("WMPOAlignedLatentTrainDataset: no demos loaded")
 
@@ -177,7 +184,8 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
             print(
                 f"[wmpo-latent:train] per-epoch windows: "
                 f"pos={n_pos_windows}  neg={n_neg_windows}  "
-                f"ratio={n_pos_windows}:{n_neg_windows}", flush=True
+                f"ratio={n_pos_windows}:{n_neg_windows}",
+                flush=True,
             )
 
     # ---- WebDataset-style infinite stream with per-worker shard ---------
@@ -210,7 +218,12 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
                     ends_list = list(ends)
                     if ends_list:
                         end = int(rng.choice(ends_list))
-                        yield self._to_tensor(self._pool_window(obs[end - self.window_env : end])), 0
+                        yield (
+                            self._to_tensor(
+                                self._pool_window(obs[end - self.window_env : end])
+                            ),
+                            0,
+                        )
 
     def _to_tensor(self, win: np.ndarray) -> torch.Tensor:
         # fp16 → fp32 here so the model sees a consistent dtype.
@@ -231,8 +244,10 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
         return reshaped.mean(axis=1)
 
     @staticmethod
-    def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
-        xs = torch.stack([b[0] for b in batch])           # [B, W, L]
+    def collate_fn(
+        batch: list[tuple[torch.Tensor, int]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        xs = torch.stack([b[0] for b in batch])  # [B, W, L]
         ys = torch.tensor([b[1] for b in batch], dtype=torch.long)
         return xs, ys
 
@@ -241,11 +256,12 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
 # Val: Map-style Dataset, deterministic
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _ValSlot:
-    demo_idx: int      # index into self._demos
-    end_idx: int       # python end-exclusive window end (1-based)
-    label: int         # 0 / 1
+    demo_idx: int  # index into self._demos
+    end_idx: int  # python end-exclusive window end (1-based)
+    label: int  # 0 / 1
     is_end_window: bool
 
 
@@ -289,15 +305,17 @@ class WMPOAlignedLatentValDataset(Dataset):
         if failure_dir_raw is not None and failure_dir_hidden is not None:
             fail_pairs = _find_demo_pairs(failure_dir_raw, failure_dir_hidden)
         if verbose:
-            print(f"[wmpo-latent:val] success pairs={len(succ_pairs)} "
-                  f"failure pairs={len(fail_pairs)} "
-                  f"granularity={'chunk' if self.K > 1 else 'action'} "
-                  f"W={self.W} K={self.K} pool={self.chunk_pool}", flush=True)
+            print(
+                f"[wmpo-latent:val] success pairs={len(succ_pairs)} "
+                f"failure pairs={len(fail_pairs)} "
+                f"granularity={'chunk' if self.K > 1 else 'action'} "
+                f"W={self.W} K={self.K} pool={self.chunk_pool}",
+                flush=True,
+            )
 
-        self._demos: list[_DemoRecord] = (
-            _load_all(succ_pairs, min_T=self.window_env, label="val-succ")
-            + _load_all(fail_pairs, min_T=self.window_env, label="val-fail")
-        )
+        self._demos: list[_DemoRecord] = _load_all(
+            succ_pairs, min_T=self.window_env, label="val-succ"
+        ) + _load_all(fail_pairs, min_T=self.window_env, label="val-fail")
         if not self._demos:
             raise RuntimeError("WMPOAlignedLatentValDataset: no demos loaded")
 
@@ -317,7 +335,8 @@ class WMPOAlignedLatentValDataset(Dataset):
             n_neg = len(slots) - n_pos
             print(
                 f"[wmpo-latent:val] total windows={len(slots)}  "
-                f"pos={n_pos}  neg={n_neg}", flush=True
+                f"pos={n_pos}  neg={n_neg}",
+                flush=True,
             )
 
     def __len__(self) -> int:
@@ -357,13 +376,18 @@ class WMPOAlignedLatentValDataset(Dataset):
         slide stride-1 windows without re-casting.
         """
         for rec in self._demos:
-            yield rec.obs.astype(np.float32, copy=False), rec.complete, rec.finish_step, rec.eid
+            yield (
+                rec.obs.astype(np.float32, copy=False),
+                rec.complete,
+                rec.finish_step,
+                rec.eid,
+            )
 
     @staticmethod
     def collate_fn(
-        batch: list[tuple[torch.Tensor, int, dict[str, Any]]]
+        batch: list[tuple[torch.Tensor, int, dict[str, Any]]],
     ) -> tuple[torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
-        xs = torch.stack([b[0] for b in batch])           # [B, W, L]
+        xs = torch.stack([b[0] for b in batch])  # [B, W, L]
         ys = torch.tensor([b[1] for b in batch], dtype=torch.long)
         metas = [b[2] for b in batch]
         return xs, ys, metas

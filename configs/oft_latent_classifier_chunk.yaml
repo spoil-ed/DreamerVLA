@@ -1,0 +1,55 @@
+# @package _global_
+defaults:
+  - _self_
+  - /task: libero_goal
+
+_target_: src.workspace.LatentClassifierWorkspace
+
+classifier:
+  _target_: ${task.openvla_oft.classifier_target}
+  latent_dim: ${task.openvla_oft.wm_obs_dim}
+  window: 8
+  head_type: transformer
+  hidden_dim: 256
+  num_layers: 4
+  num_heads: 4
+  mlp_ratio: 2.0
+  dropout: 0.5
+  granularity: chunk
+  chunk_size: ${task.openvla_oft.chunk_size}
+  chunk_pool: last
+
+data:
+  success_dir_raw: ${task.openvla_oft.hdf5_dir}
+  success_dir_hidden: ${task.openvla_oft.action_hidden_dir}
+  failure_dir_raw: ${task.openvla_oft.failure_hdf5_dir}
+  failure_dir_hidden: ${task.openvla_oft.failure_action_hidden_dir}
+  window: 8
+  stride_train: 64
+  stride_val: 8
+  chunk_subsample: ${task.openvla_oft.chunk_size}
+  chunk_pool: last
+
+training:
+  out_dir: ${oc.env:OUT_DIR,data/outputs/dreamervla/outcome_classifier/oft/${task.name}/chunk}
+  device: cuda
+  seed: 0
+  resume: false
+  max_steps: 8000
+  batch_size: 8
+  val_batch_size: 64
+  num_workers: 2
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  label_smoothing: 0.1
+  class_balanced: false
+  eval_every: 200
+  ckpt_every: 500
+  log_every: 50
+  thresh_min: 0.3
+  thresh_max: 1.0
+  thresh_steps: 20
+  episode_eval_enabled: true
+  episode_eval_min_steps: 4  # CHUNK units (was 32 env-step / K=8). Native unit, no conversion.
+  episode_eval_stride: 1
+  episode_eval_batch: 64

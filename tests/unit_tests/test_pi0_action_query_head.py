@@ -74,7 +74,9 @@ def test_pi0_style_action_query_head_accepts_bool_attention_mask() -> None:
     assert actions.shape == (3, 7)
 
 
-def test_pi0_style_action_query_head_exposes_observation_conditioned_action_hidden() -> None:
+def test_pi0_style_action_query_head_exposes_observation_conditioned_action_hidden() -> (
+    None
+):
     head = Pi0StyleActionQueryHead(
         action_dim=4,
         time_horizon=3,

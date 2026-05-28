@@ -11,4 +11,23 @@ dataset:
   action_horizon: ${task.action_horizon}
   trajectories_per_task: 1
   trajectory_offset: 0
+  selection_scope: global
+  strict: true
+
+dataset_val_ind:
+  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  config_path: ${task.pretokenize_val_ind_config_path}
+  action_horizon: ${task.action_horizon}
+  trajectories_per_task: 1
+  trajectory_offset: 0
+  selection_scope: global
+  strict: true
+
+dataset_val_ood:
+  _target_: src.dataloader.one_trajectory_pretokenize_dataset.OneTrajectoryPretokenizeActionChunkDataset
+  config_path: ${task.pretokenize_val_ood_config_path}
+  action_horizon: ${task.action_horizon}
+  trajectories_per_task: 1
+  trajectory_offset: 0
+  selection_scope: global
   strict: true

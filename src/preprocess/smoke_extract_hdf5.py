@@ -14,6 +14,7 @@ Usage:
         --max_demos 2 \
         --resolution 256
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,8 +45,13 @@ def extract_demo(
 ) -> None:
     """Extract a single demo into the expected directory structure."""
     actions = demo_data["actions"][()]
-    rewards = demo_data["rewards"][()] if "rewards" in demo_data else np.zeros(
-        actions.shape[0], dtype=np.float32,
+    rewards = (
+        demo_data["rewards"][()]
+        if "rewards" in demo_data
+        else np.zeros(
+            actions.shape[0],
+            dtype=np.float32,
+        )
     )
     ee_states = demo_data["obs"]["ee_states"][()]
     gripper_states = demo_data["obs"]["gripper_states"][()]
@@ -71,24 +77,54 @@ def extract_demo(
     num_steps = actions.shape[0]
     for step in range(num_steps):
         np.save(subdirs["action"] / f"action_{step}.npy", actions[step])
-        np.save(subdirs["reward"] / f"reward_{step}.npy", np.asarray(rewards[step], dtype=np.float32))
+        np.save(
+            subdirs["reward"] / f"reward_{step}.npy",
+            np.asarray(rewards[step], dtype=np.float32),
+        )
         np.save(subdirs["ee_state"] / f"ee_state_{step}.npy", ee_states[step])
-        np.save(subdirs["gripper_state"] / f"gripper_state_{step}.npy", gripper_states[step])
+        np.save(
+            subdirs["gripper_state"] / f"gripper_state_{step}.npy", gripper_states[step]
+        )
         np.save(
             subdirs["eef_gripper_state"] / f"eef_gripper_state_{step}.npy",
             np.concatenate([ee_states[step], gripper_states[step]]),
         )
         np.save(subdirs["robot_state"] / f"robot_state_{step}.npy", robot_states[step])
-        save_png(rgb_third[step], subdirs["imgs_third_view"] / f"image_{step}.png", resolution)
-        save_png(rgb_wrist[step], subdirs["imgs_wrist"] / f"image_{step}.png", resolution)
+        save_png(
+            rgb_third[step],
+            subdirs["imgs_third_view"] / f"image_{step}.png",
+            resolution,
+        )
+        save_png(
+            rgb_wrist[step], subdirs["imgs_wrist"] / f"image_{step}.png", resolution
+        )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--hdf5", type=Path, required=True, help="Path to a single *_demo.hdf5 file")
-    parser.add_argument("--save_dir", type=Path, required=True, help="Output base directory (task subdir created automatically)")
-    parser.add_argument("--max_demos", type=int, default=2, help="Max number of demos to extract (default: 2)")
-    parser.add_argument("--resolution", type=int, default=256, help="Target image resolution (default: 256)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--hdf5", type=Path, required=True, help="Path to a single *_demo.hdf5 file"
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=Path,
+        required=True,
+        help="Output base directory (task subdir created automatically)",
+    )
+    parser.add_argument(
+        "--max_demos",
+        type=int,
+        default=2,
+        help="Max number of demos to extract (default: 2)",
+    )
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=256,
+        help="Target image resolution (default: 256)",
+    )
     args = parser.parse_args()
 
     hdf5_path: Path = args.hdf5

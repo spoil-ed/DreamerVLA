@@ -4,7 +4,9 @@ from .chameleon_latent_action import (
     ChameleonLatentActionWorldModel,
     ChameleonLatentFlowWorldModel,
 )
-from .dreamer_v3_pixel_rynn_backbone_world_model import DreamerV3PixelRynnBackboneWorldModel
+from .dreamer_v3_pixel_rynn_backbone_world_model import (
+    DreamerV3PixelRynnBackboneWorldModel,
+)
 from .dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
 from .dreamer_v3_token_from_pixel_world_model import DreamerV3TokenFromPixelWorldModel
 from .dreamer_v3_token_world_model import DreamerV3TokenWorldModel

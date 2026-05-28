@@ -39,3 +39,43 @@ legacy_action_hidden:
   token_count: 35
   token_dim: 1024
   chunk_size: 5
+
+openvla_oft:
+  ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_object
+  component_ckpt_dir: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_object
+  resume_step: 150000
+  dataset_statistics_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_object/dataset_statistics.json
+  dataset_statistics_key: libero_object_no_noops
+  action_head_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_object/action_head--150000_checkpoint.pt
+  proprio_projector_ckpt: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_object/proprio_projector--150000_checkpoint.pt
+  action_horizon: 8
+  time_horizon: 8
+  image_resolution: 224
+  use_wrist_image: true
+  use_proprio: true
+  hdf5_dir: ${task.hdf5_dir}
+  hdf5_reward_dir: ${task.hdf5_reward_dir}
+  action_hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_object_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
+  failure_hdf5_dir: null
+  failure_action_hidden_dir: null
+  expected_action_head_type: oft_l1_regression
+  expected_obs_hidden_source: action_query
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  wm_obs_dim: 229376
+  token_count: 56
+  token_dim: 4096
+  chunk_size: 8
+  latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
+  sft_policy_target: src.models.encoder.OpenVLAOFTPolicy
+  sft_dataset_target: src.dataloader.OpenVLAOFTHDF5DatasetFactory
+  wm_target: src.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  classifier_target: src.models.reward.LatentSuccessClassifier
+  actor_target: src.models.actor.Pi0ActionHiddenActor
+  actor_head_type: legacy
+  actor_adapter_type: residual_mlp
+  actor_adapter_hidden_dim: 1024
+  actor_freeze_output_projection: false
+  critic_target: src.models.critic.twohot_critic.TwohotCritic

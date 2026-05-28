@@ -37,27 +37,36 @@ Cfg usage (Hydra ``_target_``):
       layers: 4
       units: 16384
 """
+
 # norms & activation
 from src.models.world_model.dreamerv3_torch import (
     RMSNorm,
     ChannelRMSNorm,
     _act as act,
 )
+
 # MLP family
 from src.models.world_model.dreamerv3_torch import (
     MLPHead,
     _ResBlock as ResBlock,
     ResMLPHead,
 )
+
 # block-diagonal linear
 from src.models.world_model.block_linear import BlockLinear
+
 # tiny utils
 from src.models.world_model.dreamerv3_torch import _module_dtype, _module_device
 
 
 __all__ = [
-    "RMSNorm", "ChannelRMSNorm", "act",
-    "MLPHead", "ResBlock", "ResMLPHead",
+    "RMSNorm",
+    "ChannelRMSNorm",
+    "act",
+    "MLPHead",
+    "ResBlock",
+    "ResMLPHead",
     "BlockLinear",
-    "_module_dtype", "_module_device",
+    "_module_dtype",
+    "_module_device",
 ]

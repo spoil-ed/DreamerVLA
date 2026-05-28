@@ -49,12 +49,16 @@ def write_json(path: str | Path, payload: Any) -> Path:
     out = project_path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:
-        json.dump(_clean_json(payload), handle, indent=2, sort_keys=True, allow_nan=False)
+        json.dump(
+            _clean_json(payload), handle, indent=2, sort_keys=True, allow_nan=False
+        )
         handle.write("\n")
     return out
 
 
-def nested_get(data: Mapping[str, Any], keys: Sequence[str], default: Any = None) -> Any:
+def nested_get(
+    data: Mapping[str, Any], keys: Sequence[str], default: Any = None
+) -> Any:
     cur: Any = data
     for key in keys:
         if not isinstance(cur, Mapping) or key not in cur:
@@ -81,7 +85,13 @@ def mean(values: Iterable[Any]) -> float | None:
 
 
 def success_rate_from_json(data: Mapping[str, Any]) -> float | None:
-    for key in ("eval_success_rate", "success_rate", "real_success", "long_success", "success"):
+    for key in (
+        "eval_success_rate",
+        "success_rate",
+        "real_success",
+        "long_success",
+        "success",
+    ):
         value = as_float(data.get(key))
         if value is not None:
             return value
@@ -92,7 +102,9 @@ def success_rate_from_json(data: Mapping[str, Any]) -> float | None:
     return None
 
 
-def collect_record_values(records: Sequence[Mapping[str, Any]], mode: str, key: str) -> float | None:
+def collect_record_values(
+    records: Sequence[Mapping[str, Any]], mode: str, key: str
+) -> float | None:
     vals = []
     for record in records:
         mode_payload = record.get(mode)
@@ -162,11 +174,16 @@ def write_latex_table(
 def command_to_str(command: Sequence[str], env: Mapping[str, str] | None = None) -> str:
     env_prefix = ""
     if env:
-        env_prefix = " ".join(f"{key}={shlex.quote(str(value))}" for key, value in env.items()) + " "
+        env_prefix = (
+            " ".join(f"{key}={shlex.quote(str(value))}" for key, value in env.items())
+            + " "
+        )
     return env_prefix + " ".join(shlex.quote(str(part)) for part in command)
 
 
-def run_or_print(command: Sequence[str], *, env: Mapping[str, str] | None, execute: bool) -> int:
+def run_or_print(
+    command: Sequence[str], *, env: Mapping[str, str] | None, execute: bool
+) -> int:
     rendered = command_to_str(command, env)
     print(rendered, flush=True)
     if not execute:
@@ -174,7 +191,9 @@ def run_or_print(command: Sequence[str], *, env: Mapping[str, str] | None, execu
     merged_env = os.environ.copy()
     if env:
         merged_env.update({key: str(value) for key, value in env.items()})
-    return subprocess.call([str(part) for part in command], cwd=str(PROJECT_ROOT), env=merged_env)
+    return subprocess.call(
+        [str(part) for part in command], cwd=str(PROJECT_ROOT), env=merged_env
+    )
 
 
 class KeyValueAction(argparse.Action):
@@ -190,15 +209,18 @@ class KeyValueAction(argparse.Action):
         setattr(namespace, self.dest, items)
 
 
-def add_common_collect_args(parser: argparse.ArgumentParser, default_json: Path, default_tex: Path) -> None:
+def add_common_collect_args(
+    parser: argparse.ArgumentParser, default_json: Path, default_tex: Path
+) -> None:
     parser.add_argument("--out-json", default=str(default_json))
     parser.add_argument("--out-tex", default=str(default_tex))
 
 
-def parse_metric_triples(items: Sequence[Sequence[str]] | None) -> list[tuple[str, str, Path]]:
+def parse_metric_triples(
+    items: Sequence[Sequence[str]] | None,
+) -> list[tuple[str, str, Path]]:
     triples: list[tuple[str, str, Path]] = []
     for item in items or []:
         name, key, path = item
         triples.append((name, key, project_path(path)))
     return triples
-

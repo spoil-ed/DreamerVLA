@@ -10,6 +10,7 @@ The env does not run the VLA encoder itself.  Instead, each observation carries
 the PIL history and a ready-to-tokenize VLA record so online trainers can build
 the same action-hidden input as the offline sidecar.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -43,7 +44,9 @@ def normalize_libero_action(action: np.ndarray | Sequence[float]) -> np.ndarray:
     """Map raw LIBERO env-scale actions to the policy range [-1, 1]."""
     action_arr = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
     denom = np.maximum(ACTION_HIGH - ACTION_LOW, 1e-8)
-    return (2.0 * (action_arr - ACTION_LOW) / denom - 1.0).astype(np.float32, copy=False)
+    return (2.0 * (action_arr - ACTION_LOW) / denom - 1.0).astype(
+        np.float32, copy=False
+    )
 
 
 def unnormalize_libero_action(action: np.ndarray | Sequence[float]) -> np.ndarray:
@@ -124,11 +127,15 @@ class DreamerVLAOnlineTrainEnv:
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         if self.cfg.task_suite_name not in benchmark_dict:
             valid = ", ".join(sorted(benchmark_dict))
-            raise ValueError(f"Unknown LIBERO task suite {self.cfg.task_suite_name!r}; valid: {valid}")
+            raise ValueError(
+                f"Unknown LIBERO task suite {self.cfg.task_suite_name!r}; valid: {valid}"
+            )
         self.task_suite = benchmark_dict[self.cfg.task_suite_name]()
         self.num_tasks = int(getattr(self.task_suite, "n_tasks", 0))
         if self.num_tasks <= 0:
-            raise RuntimeError(f"LIBERO suite {self.cfg.task_suite_name} reports no tasks")
+            raise RuntimeError(
+                f"LIBERO suite {self.cfg.task_suite_name} reports no tasks"
+            )
 
         self.rng = np.random.default_rng(self.cfg.seed)
         self._task_cycle_idx = 0
@@ -203,15 +210,21 @@ class DreamerVLAOnlineTrainEnv:
         )
         return obs, info
 
-    def step(self, action: np.ndarray | Sequence[float]) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: np.ndarray | Sequence[float]
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         if self.env is None:
-            raise RuntimeError("DreamerVLAOnlineTrainEnv is closed or was not initialised")
+            raise RuntimeError(
+                "DreamerVLAOnlineTrainEnv is closed or was not initialised"
+            )
         policy_action = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
         env_action = self.policy_action_to_env_action(policy_action)
         raw_obs, raw_reward, raw_done, raw_info = self.env.step(env_action.tolist())
         self._elapsed_steps += 1
 
-        success = self._is_success(raw_done=bool(raw_done), reward=float(raw_reward), info=raw_info)
+        success = self._is_success(
+            raw_done=bool(raw_done), reward=float(raw_reward), info=raw_info
+        )
         episode_end = resolve_episode_end(
             success=success,
             elapsed_steps=self._elapsed_steps,
@@ -223,7 +236,9 @@ class DreamerVLAOnlineTrainEnv:
 
         self._raw_obs = raw_obs
         is_last = episode_end.done
-        obs = self._format_obs(raw_obs, is_first=False, is_last=is_last, is_terminal=terminated)
+        obs = self._format_obs(
+            raw_obs, is_first=False, is_last=is_last, is_terminal=terminated
+        )
         info = self._make_info(
             raw_info=raw_info,
             reward=reward,
@@ -244,16 +259,22 @@ class DreamerVLAOnlineTrainEnv:
         self.env = None
         self._closed = True
 
-    def render_frame(self, view: Literal["third", "wrist"] = "third", *, vla_aligned: bool = True) -> np.ndarray:
+    def render_frame(
+        self, view: Literal["third", "wrist"] = "third", *, vla_aligned: bool = True
+    ) -> np.ndarray:
         if self._raw_obs is None:
             raise RuntimeError("render_frame called before reset")
         key = "agentview_image" if view == "third" else "robot0_eye_in_hand_image"
         if view not in {"third", "wrist"}:
             raise ValueError("view must be one of {'third', 'wrist'}")
-        rotate_180 = self.cfg.vla_rotate_180 if vla_aligned else self.cfg.pixel_rotate_180
+        rotate_180 = (
+            self.cfg.vla_rotate_180 if vla_aligned else self.cfg.pixel_rotate_180
+        )
         return self._camera_image(self._raw_obs, key, rotate_180=rotate_180)
 
-    def policy_action_to_env_action(self, action: np.ndarray | Sequence[float]) -> np.ndarray:
+    def policy_action_to_env_action(
+        self, action: np.ndarray | Sequence[float]
+    ) -> np.ndarray:
         if self.cfg.action_input == "normalized":
             action_arr = unnormalize_libero_action(action)
         elif self.cfg.action_input == "raw":
@@ -261,7 +282,9 @@ class DreamerVLAOnlineTrainEnv:
         else:
             raise ValueError("action_input must be one of {'raw', 'normalized'}")
         if action_arr.shape[0] != 7:
-            raise ValueError(f"LIBERO action must have 7 values, got shape {tuple(action_arr.shape)}")
+            raise ValueError(
+                f"LIBERO action must have 7 values, got shape {tuple(action_arr.shape)}"
+            )
         if self.cfg.clip_actions:
             action_arr = np.clip(action_arr, ACTION_LOW, ACTION_HIGH)
         return action_arr.astype(np.float32, copy=False)
@@ -317,7 +340,9 @@ class DreamerVLAOnlineTrainEnv:
         images: list[Image.Image] = []
         for third_pil, wrist_pil in frame_history:
             images.extend([third_pil, wrist_pil])
-        human_value = cls.build_vla_prompt(task_description=task_description, num_images=len(images))
+        human_value = cls.build_vla_prompt(
+            task_description=task_description, num_images=len(images)
+        )
         return {
             "conversations": [{"from": "human", "value": human_value}],
             "image": images,
@@ -327,12 +352,18 @@ class DreamerVLAOnlineTrainEnv:
 
     @staticmethod
     def build_vla_prompt(*, task_description: str, num_images: int) -> str:
-        return f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * int(num_images)
+        return (
+            f"Finish the task: {task_description}."
+            + "<|state|>"
+            + "<|image|>" * int(num_images)
+        )
 
     def set_task(self, task_id: int) -> None:
         task_id = int(task_id)
         if task_id < 0 or task_id >= self.num_tasks:
-            raise ValueError(f"task_id={task_id} out of range for {self.cfg.task_suite_name} ({self.num_tasks} tasks)")
+            raise ValueError(
+                f"task_id={task_id} out of range for {self.cfg.task_suite_name} ({self.num_tasks} tasks)"
+            )
         if self.env is not None and task_id == self.task_id:
             return
         self.close()
@@ -341,8 +372,12 @@ class DreamerVLAOnlineTrainEnv:
         self.task = self.task_suite.get_task(self.task_id)
         self.initial_states = self.task_suite.get_task_init_states(self.task_id)
         if len(self.initial_states) <= 0:
-            raise RuntimeError(f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states")
-        self.env, self.task_description = get_libero_env(self.task, resolution=self.cfg.resolution)
+            raise RuntimeError(
+                f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states"
+            )
+        self.env, self.task_description = get_libero_env(
+            self.task, resolution=self.cfg.resolution
+        )
         self.env.seed(self.cfg.seed + self.task_id)
         self.max_steps = int(
             self.cfg.max_steps
@@ -355,28 +390,42 @@ class DreamerVLAOnlineTrainEnv:
         if int(self.cfg.history_length) != 2:
             errors.append(f"history_length={self.cfg.history_length}, expected 2")
         if str(self.cfg.prompt_style) != "vla_policy":
-            errors.append(f"prompt_style={self.cfg.prompt_style!r}, expected 'vla_policy'")
+            errors.append(
+                f"prompt_style={self.cfg.prompt_style!r}, expected 'vla_policy'"
+            )
         if not bool(self.cfg.include_state):
             errors.append("include_state=False, expected True")
         if not bool(self.cfg.vla_rotate_180):
             errors.append("vla_rotate_180=False, expected True")
         if str(self.cfg.obs_hidden_source) != "action_query":
-            errors.append(f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected 'action_query'")
+            errors.append(
+                f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected 'action_query'"
+            )
         if str(self.cfg.action_head_type) not in {"pi0_query", "legacy"}:
-            errors.append(f"action_head_type={self.cfg.action_head_type!r}, expected 'pi0_query' or 'legacy'")
+            errors.append(
+                f"action_head_type={self.cfg.action_head_type!r}, expected 'pi0_query' or 'legacy'"
+            )
         if self.cfg.action_input not in {"raw", "normalized"}:
-            errors.append(f"action_input={self.cfg.action_input!r}, expected raw or normalized")
+            errors.append(
+                f"action_input={self.cfg.action_input!r}, expected raw or normalized"
+            )
         if self.cfg.reward_mode not in {"sparse_success", "raw"}:
-            errors.append(f"reward_mode={self.cfg.reward_mode!r}, expected sparse_success or raw")
+            errors.append(
+                f"reward_mode={self.cfg.reward_mode!r}, expected sparse_success or raw"
+            )
         if self.cfg.task_sampling not in {"sequential", "random"}:
-            errors.append(f"task_sampling={self.cfg.task_sampling!r}, expected sequential or random")
+            errors.append(
+                f"task_sampling={self.cfg.task_sampling!r}, expected sequential or random"
+            )
         if self.cfg.init_state_sampling not in {"sequential", "random"}:
             errors.append(
                 f"init_state_sampling={self.cfg.init_state_sampling!r}, expected sequential or random"
             )
         if errors:
             joined = "\n  - ".join(errors)
-            raise ValueError(f"Non-canonical DreamerVLA online env config:\n  - {joined}")
+            raise ValueError(
+                f"Non-canonical DreamerVLA online env config:\n  - {joined}"
+            )
 
     def _select_task_id(self) -> int:
         task_ids = self.cfg.task_ids
@@ -403,7 +452,9 @@ class DreamerVLAOnlineTrainEnv:
         return float(1.0 if success else 0.0)
 
     @staticmethod
-    def _camera_image(raw_obs: dict[str, Any], key: str, rotate_180: bool) -> np.ndarray:
+    def _camera_image(
+        raw_obs: dict[str, Any], key: str, rotate_180: bool
+    ) -> np.ndarray:
         if key not in raw_obs:
             raise KeyError(f"LIBERO observation missing camera key {key!r}")
         image = np.asarray(raw_obs[key], dtype=np.uint8)
@@ -419,7 +470,10 @@ class DreamerVLAOnlineTrainEnv:
             resample = Image.Resampling.BILINEAR
         except AttributeError:
             resample = Image.BILINEAR
-        return np.asarray(Image.fromarray(image).resize((size, size), resample=resample), dtype=np.uint8)
+        return np.asarray(
+            Image.fromarray(image).resize((size, size), resample=resample),
+            dtype=np.uint8,
+        )
 
     def _format_obs(
         self,
@@ -429,29 +483,44 @@ class DreamerVLAOnlineTrainEnv:
         is_last: bool,
         is_terminal: bool,
     ) -> dict[str, Any]:
-        pixel_third = self._camera_image(raw_obs, "agentview_image", rotate_180=self.cfg.pixel_rotate_180)
-        pixel_wrist = self._camera_image(raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.pixel_rotate_180)
+        pixel_third = self._camera_image(
+            raw_obs, "agentview_image", rotate_180=self.cfg.pixel_rotate_180
+        )
+        pixel_wrist = self._camera_image(
+            raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.pixel_rotate_180
+        )
         pixel_third_small = self._resize_hwc_uint8(pixel_third, self.cfg.image_size)
         pixel_wrist_small = self._resize_hwc_uint8(pixel_wrist, self.cfg.image_size)
         dreamer_image = np.concatenate(
-            [pixel_third_small.transpose(2, 0, 1), pixel_wrist_small.transpose(2, 0, 1)],
+            [
+                pixel_third_small.transpose(2, 0, 1),
+                pixel_wrist_small.transpose(2, 0, 1),
+            ],
             axis=0,
         ).astype(np.uint8, copy=False)
 
-        vla_third = self._camera_image(raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180)
-        vla_wrist = self._camera_image(raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.vla_rotate_180)
+        vla_third = self._camera_image(
+            raw_obs, "agentview_image", rotate_180=self.cfg.vla_rotate_180
+        )
+        vla_wrist = self._camera_image(
+            raw_obs, "robot0_eye_in_hand_image", rotate_180=self.cfg.vla_rotate_180
+        )
         third_pil = Image.fromarray(vla_third)
         wrist_pil = Image.fromarray(vla_wrist)
         self._frame_history.append((third_pil, wrist_pil))
         if len(self._frame_history) > self.cfg.history_length:
-            self._frame_history = self._frame_history[-self.cfg.history_length:]
+            self._frame_history = self._frame_history[-self.cfg.history_length :]
         history_pad = self.cfg.history_length - len(self._frame_history)
-        frame_history = [self._frame_history[0]] * history_pad + list(self._frame_history)
+        frame_history = [self._frame_history[0]] * history_pad + list(
+            self._frame_history
+        )
 
         state = np.concatenate(
             [
                 np.asarray(raw_obs["robot0_eef_pos"], dtype=np.float32),
-                quat2axisangle(np.asarray(raw_obs["robot0_eef_quat"], dtype=np.float32)).astype(np.float32),
+                quat2axisangle(
+                    np.asarray(raw_obs["robot0_eef_quat"], dtype=np.float32)
+                ).astype(np.float32),
                 np.asarray(raw_obs["robot0_gripper_qpos"], dtype=np.float32),
             ],
             axis=0,

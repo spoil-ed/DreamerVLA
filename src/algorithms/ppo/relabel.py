@@ -2,6 +2,7 @@
 tuples from real env interactions through the current policy so the actor sees
 gradient signal from real trajectories alongside imagined ones.
 """
+
 from __future__ import annotations
 
 from typing import Mapping
@@ -33,16 +34,21 @@ def _real_relabel_ppo_loss(
     old_log_prob = real_relabel_batch.get("old_log_prob")
     advantage = real_relabel_batch.get("advantage")
     weight = real_relabel_batch.get("weight")
-    if not all(isinstance(x, torch.Tensor) for x in (hidden, action, old_log_prob, advantage, weight)):
+    if not all(
+        isinstance(x, torch.Tensor)
+        for x in (hidden, action, old_log_prob, advantage, weight)
+    ):
         return None, dict(_ZERO_METRICS)
     if hidden.numel() == 0:
         return None, dict(_ZERO_METRICS)
 
-    log_prob, _entropy, _extra = policy({
-        "mode": "evaluate",
-        "hidden": hidden.float(),
-        "action": action.float(),
-    })
+    log_prob, _entropy, _extra = policy(
+        {
+            "mode": "evaluate",
+            "hidden": hidden.float(),
+            "action": action.float(),
+        }
+    )
     advantage = advantage.to(device=log_prob.device, dtype=log_prob.dtype)
     old_log_prob = old_log_prob.to(device=log_prob.device, dtype=log_prob.dtype)
     weight = weight.to(device=log_prob.device, dtype=log_prob.dtype).clamp_min(0.0)
@@ -51,7 +57,11 @@ def _real_relabel_ppo_loss(
     per_item = torch.maximum(-advantage * ratio, -advantage * ratio_clipped)
     denom = weight.sum().clamp_min(1.0)
     loss = (per_item * weight).sum() / denom
-    clipfrac = ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high)).float().mean()
+    clipfrac = (
+        ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high))
+        .float()
+        .mean()
+    )
     metrics = {
         "real_relabel_applied": 1.0,
         "real_relabel_loss": float(loss.detach().cpu()),

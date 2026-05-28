@@ -34,11 +34,20 @@ from src.models.world_model.dreamerv3_torch import DreamerV3LatentState
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", required=True)
-    p.add_argument("--hidden-hdf5", required=True, help="sidecar HDF5 with obs_embedding")
-    p.add_argument("--reward-hdf5", required=True, help="env HDF5 with actions/sparse_rewards")
+    p.add_argument(
+        "--hidden-hdf5", required=True, help="sidecar HDF5 with obs_embedding"
+    )
+    p.add_argument(
+        "--reward-hdf5", required=True, help="env HDF5 with actions/sparse_rewards"
+    )
     p.add_argument("--demo-key", default="demo_0")
-    p.add_argument("--probe-steps", type=int, nargs="*", default=None,
-                   help="Mid-episode steps to probe for SFT-direction reward (default = 5 evenly spaced)")
+    p.add_argument(
+        "--probe-steps",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Mid-episode steps to probe for SFT-direction reward (default = 5 evenly spaced)",
+    )
     p.add_argument("--num-perturb", type=int, default=8)
     p.add_argument("--perturb-scales", type=float, nargs="*", default=[0.1, 0.5, 1.0])
     p.add_argument("--device", default="cuda:0")
@@ -69,8 +78,12 @@ def main() -> None:
     cfg = OmegaConf.create(ckpt["cfg"])
 
     # 2. Instantiate WM + load trained state
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
-    missing, unexpected = world_model.load_state_dict(ckpt["state_dicts"]["world_model"], strict=False)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
+    missing, unexpected = world_model.load_state_dict(
+        ckpt["state_dicts"]["world_model"], strict=False
+    )
     if missing or unexpected:
         print(f"[wm] missing={len(missing)} unexpected={len(unexpected)}")
     world_model.eval()
@@ -81,33 +94,47 @@ def main() -> None:
     sft_policy = hydra.utils.instantiate(cfg.policy).to(device)
     trained_policy = hydra.utils.instantiate(cfg.policy).to(device)
     trained_policy.load_state_dict(ckpt["state_dicts"]["policy"], strict=True)
-    sft_policy.eval(); trained_policy.eval()
-    for p in sft_policy.parameters(): p.requires_grad = False
-    for p in trained_policy.parameters(): p.requires_grad = False
+    sft_policy.eval()
+    trained_policy.eval()
+    for p in sft_policy.parameters():
+        p.requires_grad = False
+    for p in trained_policy.parameters():
+        p.requires_grad = False
 
     # 4. Load one full demo
     with h5py.File(args.hidden_hdf5, "r") as fh, h5py.File(args.reward_hdf5, "r") as fr:
-        obs_embedding = fh["data"][args.demo_key]["obs_embedding"][:]      # (T, 5120)
-        actions = fr["data"][args.demo_key]["actions"][:]                  # (T, 7)
-        sparse_rewards = fr["data"][args.demo_key]["sparse_rewards"][:]    # (T,)
-        dense_rewards = fr["data"][args.demo_key]["rewards"][:]            # (T,) progress in [0,1]
+        obs_embedding = fh["data"][args.demo_key]["obs_embedding"][:]  # (T, 5120)
+        actions = fr["data"][args.demo_key]["actions"][:]  # (T, 7)
+        sparse_rewards = fr["data"][args.demo_key]["sparse_rewards"][:]  # (T,)
+        dense_rewards = fr["data"][args.demo_key]["rewards"][
+            :
+        ]  # (T,) progress in [0,1]
     T = int(obs_embedding.shape[0])
     print(f"[demo] {args.demo_key} T={T} success={bool(sparse_rewards[-1])}")
 
-    obs_emb_t = torch.from_numpy(obs_embedding).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
-    actions_t = torch.from_numpy(actions).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
-    is_first = torch.zeros(1, T, dtype=torch.bool, device=device); is_first[0, 0] = True
+    obs_emb_t = (
+        torch.from_numpy(obs_embedding)
+        .unsqueeze(0)
+        .to(device=device, dtype=torch.bfloat16)
+    )
+    actions_t = (
+        torch.from_numpy(actions).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
+    )
+    is_first = torch.zeros(1, T, dtype=torch.bool, device=device)
+    is_first[0, 0] = True
 
     # 5. Run posterior over full episode
     with torch.no_grad():
-        observed = world_model({
-            "mode": "observe_sequence",
-            "obs_embedding": obs_emb_t,
-            "actions": actions_t,
-            "is_first": is_first,
-        })
-    latent_seq = observed["latent"]                                          # batch=1, time=T
-    feat_seq = latent_seq.feature()                                          # [1, T, D]
+        observed = world_model(
+            {
+                "mode": "observe_sequence",
+                "obs_embedding": obs_emb_t,
+                "actions": actions_t,
+                "is_first": is_first,
+            }
+        )
+    latent_seq = observed["latent"]  # batch=1, time=T
+    feat_seq = latent_seq.feature()  # [1, T, D]
 
     # ── A. Reward curve over the whole episode ──────────────────────────────
     with torch.no_grad():
@@ -117,60 +144,83 @@ def main() -> None:
             reward_curve = world_model.reward_head.pred(logits).float().cpu().numpy()
         else:
             from src.models.world_model.dreamerv3_torch import _reward_pred
+
             pred = world_model.reward_head(flat_feat)
-            reward_curve = _reward_pred(world_model.reward_head, pred).squeeze(-1).float().cpu().numpy()
+            reward_curve = (
+                _reward_pred(world_model.reward_head, pred)
+                .squeeze(-1)
+                .float()
+                .cpu()
+                .numpy()
+            )
 
     print(f"\n========== A. Reward curve along demo (T={T}) ==========")
     print(f"  reward_head_type: {type(world_model.reward_head).__name__}")
     print(f"  reward[t=0]      = {reward_curve[0]:.4f}")
-    print(f"  reward[T/4]      = {reward_curve[T//4]:.4f}")
-    print(f"  reward[T/2]      = {reward_curve[T//2]:.4f}")
-    print(f"  reward[3T/4]     = {reward_curve[3*T//4]:.4f}")
-    print(f"  reward[T-8]      = {reward_curve[T-8]:.4f}")
-    print(f"  reward[T-4]      = {reward_curve[T-4]:.4f}")
-    print(f"  reward[T-2]      = {reward_curve[T-2]:.4f}")
-    print(f"  reward[T-1]      = {reward_curve[T-1]:.4f}")
+    print(f"  reward[T/4]      = {reward_curve[T // 4]:.4f}")
+    print(f"  reward[T/2]      = {reward_curve[T // 2]:.4f}")
+    print(f"  reward[3T/4]     = {reward_curve[3 * T // 4]:.4f}")
+    print(f"  reward[T-8]      = {reward_curve[T - 8]:.4f}")
+    print(f"  reward[T-4]      = {reward_curve[T - 4]:.4f}")
+    print(f"  reward[T-2]      = {reward_curve[T - 2]:.4f}")
+    print(f"  reward[T-1]      = {reward_curve[T - 1]:.4f}")
     # ASCII sparkline at 40 columns
     cols = 60
-    idxs = np.linspace(0, T-1, cols).astype(int)
+    idxs = np.linspace(0, T - 1, cols).astype(int)
     sample = reward_curve[idxs]
     norm = (sample - sample.min()) / (sample.max() - sample.min() + 1e-9)
     bars = " ▁▂▃▄▅▆▇█"
-    line = "".join(bars[int(v * (len(bars)-1))] for v in norm)
+    line = "".join(bars[int(v * (len(bars) - 1))] for v in norm)
     print(f"  curve: |{line}|  (min={sample.min():.3f} max={sample.max():.3f})")
 
     # ── B + C. Pick probe steps and compare actions ─────────────────────────
-    probe_steps = args.probe_steps or list(np.linspace(8, T-2, 5).astype(int))
-    print(f"\n========== B+C. Probe SFT vs Trained action at steps {list(probe_steps)} ==========")
+    probe_steps = args.probe_steps or list(np.linspace(8, T - 2, 5).astype(int))
+    print(
+        f"\n========== B+C. Probe SFT vs Trained action at steps {list(probe_steps)} =========="
+    )
     bc_records = []
     for t in probe_steps:
-        feat_t = feat_seq[:, t].float()                                      # [1, feat_dim]
+        feat_t = feat_seq[:, t].float()  # [1, feat_dim]
         latent_t = slice_latent(latent_seq, t)
         # Policy expects hidden_decoder output ([1, 5120]), not raw feature
         with torch.no_grad():
-            actor_hidden = world_model.actor_input(latent_t).float()         # [1, 5120]
+            actor_hidden = world_model.actor_input(latent_t).float()  # [1, 5120]
         feat_t = actor_hidden
         # SFT and trained action chunks (deterministic for clean comparison)
         with torch.no_grad():
-            _, _, sft_extra = sft_policy({"mode": "sample", "hidden": feat_t, "deterministic": True})
-            _, _, tr_extra  = trained_policy({"mode": "sample", "hidden": feat_t, "deterministic": True})
-        sft_chunk = sft_extra["action_chunk"].float()                        # [1, time_horizon, 7]
-        tr_chunk  = tr_extra["action_chunk"].float()
+            _, _, sft_extra = sft_policy(
+                {"mode": "sample", "hidden": feat_t, "deterministic": True}
+            )
+            _, _, tr_extra = trained_policy(
+                {"mode": "sample", "hidden": feat_t, "deterministic": True}
+            )
+        sft_chunk = sft_extra["action_chunk"].float()  # [1, time_horizon, 7]
+        tr_chunk = tr_extra["action_chunk"].float()
         drift_mse = (sft_chunk - tr_chunk).square().mean().item()
         drift_mae = (sft_chunk - tr_chunk).abs().mean().item()
         drift_max = (sft_chunk - tr_chunk).abs().max().item()
 
         # Use first action in chunk for predict_next
         sft_a0 = sft_chunk[:, 0, :]
-        tr_a0  = tr_chunk[:, 0, :]
+        tr_a0 = tr_chunk[:, 0, :]
         # B. Reward of next-latent for SFT vs trained vs perturbations
         with torch.no_grad():
-            ln_sft = world_model({"mode": "predict_next", "latent": latent_t,
-                                  "actions": sft_a0.to(dtype=torch.bfloat16)})
-            ln_tr  = world_model({"mode": "predict_next", "latent": latent_t,
-                                  "actions": tr_a0.to(dtype=torch.bfloat16)})
-            r_sft  = world_model.state_reward(ln_sft).float().cpu().item()
-            r_tr   = world_model.state_reward(ln_tr).float().cpu().item()
+            ln_sft = world_model(
+                {
+                    "mode": "predict_next",
+                    "latent": latent_t,
+                    "actions": sft_a0.to(dtype=torch.bfloat16),
+                }
+            )
+            ln_tr = world_model(
+                {
+                    "mode": "predict_next",
+                    "latent": latent_t,
+                    "actions": tr_a0.to(dtype=torch.bfloat16),
+                }
+            )
+            r_sft = world_model.state_reward(ln_sft).float().cpu().item()
+            r_tr = world_model.state_reward(ln_tr).float().cpu().item()
 
             # Perturbations around SFT
             K = args.num_perturb
@@ -184,7 +234,9 @@ def main() -> None:
                     stoch=latent_t.stoch.expand(K, -1, -1).contiguous(),
                     logits=latent_t.logits.expand(K, -1, -1).contiguous(),
                 )
-                ln_k = world_model({"mode": "predict_next", "latent": latent_k, "actions": noisy_a})
+                ln_k = world_model(
+                    {"mode": "predict_next", "latent": latent_k, "actions": noisy_a}
+                )
                 r_k = world_model.state_reward(ln_k).float().cpu().numpy()
                 perturb_rewards[scale] = {
                     "min": float(r_k.min()),
@@ -207,12 +259,20 @@ def main() -> None:
         bc_records.append(rec)
         # Print compact summary
         print(f"\n  t={t} (demo reward here = {reward_curve[t]:.3f})")
-        print(f"    drift  MSE={drift_mse:.5g}  MAE={drift_mae:.5g}  max|Δ|={drift_max:.5g}")
+        print(
+            f"    drift  MSE={drift_mse:.5g}  MAE={drift_mae:.5g}  max|Δ|={drift_max:.5g}"
+        )
         print(f"    reward(next | SFT  action) = {r_sft:.4f}")
-        print(f"    reward(next | TRND action) = {r_tr:.4f}   Δ={r_tr-r_sft:+.4f}")
+        print(f"    reward(next | TRND action) = {r_tr:.4f}   Δ={r_tr - r_sft:+.4f}")
         for scale, stats in perturb_rewards.items():
-            verdict = "✓ SFT wins" if stats["sft_rank"] == 0 else f"✗ SFT rank {stats['sft_rank']}/{args.num_perturb}"
-            print(f"    perturb σ={scale}: min={stats['min']:.4f} p50={stats['p50']:.4f} max={stats['max']:.4f}  {verdict}")
+            verdict = (
+                "✓ SFT wins"
+                if stats["sft_rank"] == 0
+                else f"✗ SFT rank {stats['sft_rank']}/{args.num_perturb}"
+            )
+            print(
+                f"    perturb σ={scale}: min={stats['min']:.4f} p50={stats['p50']:.4f} max={stats['max']:.4f}  {verdict}"
+            )
 
     # ── Save JSON ──────────────────────────────────────────────────────────
     out = {
@@ -226,7 +286,11 @@ def main() -> None:
         "demo_sparse_rewards": sparse_rewards.tolist(),
         "probes": bc_records,
     }
-    out_json = Path(args.out_json) if args.out_json else ckpt_path.parent / "measure_reward_and_drift.json"
+    out_json = (
+        Path(args.out_json)
+        if args.out_json
+        else ckpt_path.parent / "measure_reward_and_drift.json"
+    )
     out_json.write_text(json.dumps(out, indent=2))
     print(f"\n[save] {out_json}")
 

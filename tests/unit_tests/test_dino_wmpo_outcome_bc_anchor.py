@@ -58,7 +58,9 @@ class _TinyPolicy(torch.nn.Module):
         if batch["mode"] == "evaluate":
             action = batch["action"]
             target = action_chunk if action.ndim == 3 else mean
-            log_prob = -((action - target) ** 2).reshape(action.shape[0], -1).sum(dim=-1)
+            log_prob = (
+                -((action - target) ** 2).reshape(action.shape[0], -1).sum(dim=-1)
+            )
             entropy = torch.zeros_like(log_prob)
             return log_prob, entropy, {"action_chunk": action_chunk}
         raise ValueError(batch["mode"])
@@ -97,22 +99,26 @@ def test_outcome_step_applies_bc_anchor_to_reference_policy():
     for param in ref_policy.parameters():
         param.requires_grad = False
 
-    cfg = OmegaConf.create({
-        "wmpo": {
-            "chunk_size": 2,
-            "episode_max_steps": 2,
-            "classifier_min_steps": 1,
-            "filter_zero_variance_groups": True,
-        },
-        "ppo_rollouts_per_start": 1,
-        "ppo_update_epochs": 1,
-        "kl_coef": 0.0,
-        "actor_bc_to_ref_scale": 1.0,
-        "clip_ratio_low": 0.2,
-        "clip_ratio_high": 0.28,
-        "advantage_eps": 1.0e-6,
-    })
-    optim_cfg = OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True})
+    cfg = OmegaConf.create(
+        {
+            "wmpo": {
+                "chunk_size": 2,
+                "episode_max_steps": 2,
+                "classifier_min_steps": 1,
+                "filter_zero_variance_groups": True,
+            },
+            "ppo_rollouts_per_start": 1,
+            "ppo_update_epochs": 1,
+            "kl_coef": 0.0,
+            "actor_bc_to_ref_scale": 1.0,
+            "clip_ratio_low": 0.2,
+            "clip_ratio_high": 0.28,
+            "advantage_eps": 1.0e-6,
+        }
+    )
+    optim_cfg = OmegaConf.create(
+        {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+    )
     optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
 
     before = float(policy.action_value.detach())
@@ -137,22 +143,26 @@ def test_outcome_step_applies_bc_anchor_to_reference_policy():
 
 def test_outcome_step_optimizes_full_action_chunks_not_only_first_action():
     policy = _TinyChunkPolicy()
-    cfg = OmegaConf.create({
-        "wmpo": {
-            "chunk_size": 2,
-            "episode_max_steps": 2,
-            "classifier_min_steps": 1,
-            "filter_zero_variance_groups": False,
-        },
-        "ppo_rollouts_per_start": 1,
-        "ppo_update_epochs": 1,
-        "kl_coef": 0.0,
-        "actor_bc_to_ref_scale": 0.0,
-        "clip_ratio_low": 0.2,
-        "clip_ratio_high": 0.28,
-        "advantage_eps": 1.0e-6,
-    })
-    optim_cfg = OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True})
+    cfg = OmegaConf.create(
+        {
+            "wmpo": {
+                "chunk_size": 2,
+                "episode_max_steps": 2,
+                "classifier_min_steps": 1,
+                "filter_zero_variance_groups": False,
+            },
+            "ppo_rollouts_per_start": 1,
+            "ppo_update_epochs": 1,
+            "kl_coef": 0.0,
+            "actor_bc_to_ref_scale": 0.0,
+            "clip_ratio_low": 0.2,
+            "clip_ratio_high": 0.28,
+            "advantage_eps": 1.0e-6,
+        }
+    )
+    optim_cfg = OmegaConf.create(
+        {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+    )
 
     dino_wmpo_outcome_step(
         policy=policy,

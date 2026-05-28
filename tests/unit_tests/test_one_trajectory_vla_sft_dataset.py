@@ -14,7 +14,9 @@ if "h5py" not in sys.modules:
     sys.modules["h5py"] = h5py_stub
 
 
-def _write_payload(root: Path, task: str, trj: int, frame: int, item_id: int) -> dict[str, object]:
+def _write_payload(
+    root: Path, task: str, trj: int, frame: int, item_id: int
+) -> dict[str, object]:
     path = root / f"{task}_trj{trj}_frame{frame}.pkl"
     image_base = f"/dataset/{task}/trj_{trj}"
     payload = {
@@ -46,7 +48,9 @@ def _write_payload(root: Path, task: str, trj: int, frame: int, item_id: int) ->
     }
 
 
-def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(tmp_path: Path) -> None:
+def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(
+    tmp_path: Path,
+) -> None:
     from src.dataloader.one_trajectory_pretokenize_dataset import (
         OneTrajectoryPretokenizeActionChunkDataset,
     )
@@ -63,7 +67,12 @@ def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(tmp_path: P
     manifest_path.write_text(json.dumps(records), encoding="utf-8")
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        json.dumps({"META": [{"path": str(manifest_path)}], "prompt_text": "Finish the task: {task_text}."}),
+        json.dumps(
+            {
+                "META": [{"path": str(manifest_path)}],
+                "prompt_text": "Finish the task: {task_text}.",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -103,7 +112,9 @@ def test_one_trajectory_action_chunk_dataset_can_select_offset(tmp_path: Path) -
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(records), encoding="utf-8")
     config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"META": [{"path": str(manifest_path)}]}), encoding="utf-8")
+    config_path.write_text(
+        json.dumps({"META": [{"path": str(manifest_path)}]}), encoding="utf-8"
+    )
 
     dataset = OneTrajectoryPretokenizeActionChunkDataset(
         config_path=config_path,
@@ -113,4 +124,6 @@ def test_one_trajectory_action_chunk_dataset_can_select_offset(tmp_path: Path) -
     )
 
     assert dataset.selected_trajectory_keys == ("task_a/trj_1",)
-    assert {dataset[idx]["meta"]["trajectory_key"] for idx in range(len(dataset))} == {"task_a/trj_1"}
+    assert {dataset[idx]["meta"]["trajectory_key"] for idx in range(len(dataset))} == {
+        "task_a/trj_1"
+    }

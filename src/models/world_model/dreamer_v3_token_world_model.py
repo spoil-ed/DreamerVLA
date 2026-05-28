@@ -3,7 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from src.models.world_model.base_world_model import DreamerV3ActorAdapterMixin, DreamerV3Loss
+from src.models.world_model.base_world_model import (
+    DreamerV3ActorAdapterMixin,
+    DreamerV3Loss,
+)
 from src.models.world_model.dreamerv3_torch import (
     DreamerV3RSSM,
     DreamerV3TokenDecoder,
@@ -149,7 +152,9 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin):
         cont_target = 1.0 - dones.to(device=cont_logits.device, dtype=cont_logits.dtype)
         if self.contdisc:
             cont_target = cont_target * (1.0 - 1.0 / float(self.horizon))
-        cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_target, reduction="none").mean()
+        cont_loss = F.binary_cross_entropy_with_logits(
+            cont_logits, cont_target, reduction="none"
+        ).mean()
 
         loss = (
             self.rec_scale * rec_loss
@@ -168,7 +173,9 @@ class DreamerV3TokenWorldModel(DreamerV3ActorAdapterMixin):
             probs = log_probs.exp()
             pred_entropy = -(probs * log_probs).sum(dim=-1).mean()
             flat_pred = pred.reshape(pred.shape[0] * pred.shape[1], -1)
-            flat_gt = tokens.to(device=pred.device).reshape(tokens.shape[0] * tokens.shape[1], -1)
+            flat_gt = tokens.to(device=pred.device).reshape(
+                tokens.shape[0] * tokens.shape[1], -1
+            )
             pred_unique = torch.tensor(
                 [int(torch.unique(row).numel()) for row in flat_pred],
                 dtype=logits.dtype,

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Smoke-test the online LIBERO env wrapper.
 
 Example:
   MUJOCO_GL=osmesa python scripts/smoke_libero_online_env.py --task-id 0 --steps 3
 """
+
 from __future__ import annotations
 
 import argparse

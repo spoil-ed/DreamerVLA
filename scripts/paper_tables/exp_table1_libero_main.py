@@ -31,7 +31,12 @@ SUITES = {
     "goal": "libero_goal",
     "long": "libero_10",
 }
-DEFAULT_METHODS = ["RynnVLA SFT", "RynnVLA + BC finetuning", "RynnVLA + real-env PPO", "DreamerVLA"]
+DEFAULT_METHODS = [
+    "RynnVLA SFT",
+    "RynnVLA + BC finetuning",
+    "RynnVLA + real-env PPO",
+    "DreamerVLA",
+]
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -42,10 +47,21 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 "TASK_SUITE": suite_name,
                 "CKPT_PATH": ckpt,
                 "NUM_EPISODES": str(args.num_episodes),
-                "ACTION_STEPS": str(args.action_steps or (5 if suite_name in {"libero_goal", "libero_object"} else 10)),
-                "OUT_DIR": str(Path(args.out_dir) / method.replace(" ", "_").replace("+", "plus") / suite_name),
+                "ACTION_STEPS": str(
+                    args.action_steps
+                    or (5 if suite_name in {"libero_goal", "libero_object"} else 10)
+                ),
+                "OUT_DIR": str(
+                    Path(args.out_dir)
+                    / method.replace(" ", "_").replace("+", "plus")
+                    / suite_name
+                ),
             }
-            code = run_or_print(["bash", "scripts/evals_libero/_eval_runner.sh"], env=env, execute=args.execute)
+            code = run_or_print(
+                ["bash", "scripts/evals_libero/_eval_runner.sh"],
+                env=env,
+                execute=args.execute,
+            )
             if code:
                 return code
     return 0
@@ -56,7 +72,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
     table: dict[str, dict[str, float | None]] = {}
     for method, suite, path in triples:
         if suite not in SUITES:
-            raise SystemExit(f"Unknown suite key {suite!r}; expected one of {sorted(SUITES)}")
+            raise SystemExit(
+                f"Unknown suite key {suite!r}; expected one of {sorted(SUITES)}"
+            )
         payload = read_json(path)
         table.setdefault(method, {})[suite] = success_rate_from_json(payload)
 
@@ -73,14 +91,16 @@ def cmd_collect(args: argparse.Namespace) -> int:
     rows = []
     for method in method_order:
         row = table.get(method, {})
-        rows.append([
-            method,
-            format_metric(row.get("spatial"), pct=True),
-            format_metric(row.get("object"), pct=True),
-            format_metric(row.get("goal"), pct=True),
-            format_metric(row.get("long"), pct=True),
-            format_metric(row.get("avg"), pct=True),
-        ])
+        rows.append(
+            [
+                method,
+                format_metric(row.get("spatial"), pct=True),
+                format_metric(row.get("object"), pct=True),
+                format_metric(row.get("goal"), pct=True),
+                format_metric(row.get("long"), pct=True),
+                format_metric(row.get("avg"), pct=True),
+            ]
+        )
     out_tex = write_latex_table(
         args.out_tex,
         caption="Main LIBERO success rates.",
@@ -97,8 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    plan = sub.add_parser("plan", help="print or execute standardized LIBERO rollout commands")
-    plan.add_argument("--method", nargs="+", action="append", default=[], metavar="NAME=CKPT")
+    plan = sub.add_parser(
+        "plan", help="print or execute standardized LIBERO rollout commands"
+    )
+    plan.add_argument(
+        "--method", nargs="+", action="append", default=[], metavar="NAME=CKPT"
+    )
     plan.add_argument("--num-episodes", type=int, default=10)
     plan.add_argument("--action-steps", type=int, default=None)
     plan.add_argument("--out-dir", default="data/outputs/eval/table1_libero_main")
@@ -106,10 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
     plan.set_defaults(func=cmd_plan)
 
     collect = sub.add_parser("collect", help="aggregate eval JSONs and export Table 1")
-    collect.add_argument("--result", nargs=3, action="append", metavar=("METHOD", "SUITE", "JSON"))
+    collect.add_argument(
+        "--result", nargs=3, action="append", metavar=("METHOD", "SUITE", "JSON")
+    )
     collect.add_argument("--method-order", nargs="*")
-    collect.add_argument("--out-json", default=str(DEFAULT_OUTPUTS_DIR / "libero_main_results.json"))
-    collect.add_argument("--out-tex", default=str(DEFAULT_TABLES_DIR / "libero_main.tex"))
+    collect.add_argument(
+        "--out-json", default=str(DEFAULT_OUTPUTS_DIR / "libero_main_results.json")
+    )
+    collect.add_argument(
+        "--out-tex", default=str(DEFAULT_TABLES_DIR / "libero_main.tex")
+    )
     collect.set_defaults(func=cmd_collect)
     return parser
 
@@ -131,4 +161,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

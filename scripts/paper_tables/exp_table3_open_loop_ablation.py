@@ -43,7 +43,10 @@ VARIANTS = {
     },
     "success_to_go": {
         "label": "+ success-to-go",
-        "extra_overrides": ["world_model.success_return_head_type=binary", "world_model.success_return_loss_scale=1.0"],
+        "extra_overrides": [
+            "world_model.success_return_head_type=binary",
+            "world_model.success_return_loss_scale=1.0",
+        ],
     },
 }
 
@@ -59,16 +62,28 @@ def _open_loop_metrics(payload: Mapping[str, Any]) -> dict[str, float | None]:
         }
     starts = payload.get("starts")
     if isinstance(starts, list):
-        return {"one_step_mse": None, "rollout_mse": mean(mean(item.get("feat_mse", [])) for item in starts if isinstance(item, Mapping))}
+        return {
+            "one_step_mse": None,
+            "rollout_mse": mean(
+                mean(item.get("feat_mse", []))
+                for item in starts
+                if isinstance(item, Mapping)
+            ),
+        }
     return {
-        "one_step_mse": as_float(payload.get("one_step_mse", payload.get("next_latent_mse"))),
+        "one_step_mse": as_float(
+            payload.get("one_step_mse", payload.get("next_latent_mse"))
+        ),
         "rollout_mse": as_float(payload.get("rollout_mse")),
     }
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
     for key, spec in VARIANTS.items():
-        env = {"WM_KIND": "rynn_dino", "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal"}
+        env = {
+            "WM_KIND": "rynn_dino",
+            "CONFIG_NAME": "rynn_dino_wm_action_hidden_libero_goal",
+        }
         env.update(spec.get("env", {}))
         env["OUT_DIR"] = str(Path(args.out_dir) / key)
         command = ["bash", "scripts/train_wm.sh", *spec.get("extra_overrides", [])]
@@ -92,17 +107,23 @@ def cmd_collect(args: argparse.Namespace) -> int:
         else:
             raise SystemExit("Table 3 --result KIND must be 'wm' or 'real'")
 
-    out_json = write_json(args.out_json, {labels.get(k, k): v for k, v in table.items()})
-    order = [key for key in VARIANTS if key in table] + [key for key in table if key not in VARIANTS]
+    out_json = write_json(
+        args.out_json, {labels.get(k, k): v for k, v in table.items()}
+    )
+    order = [key for key in VARIANTS if key in table] + [
+        key for key in table if key not in VARIANTS
+    ]
     rows = []
     for key in order:
         row = table[key]
-        rows.append([
-            labels.get(key, key),
-            format_metric(row.get("one_step_mse"), precision=4),
-            format_metric(row.get("rollout_mse"), precision=4),
-            format_metric(row.get("real_success"), pct=True),
-        ])
+        rows.append(
+            [
+                labels.get(key, key),
+                format_metric(row.get("one_step_mse"), precision=4),
+                format_metric(row.get("rollout_mse"), precision=4),
+                format_metric(row.get("real_success"), pct=True),
+            ]
+        )
     out_tex = write_latex_table(
         args.out_tex,
         caption="Open-loop world-model ablation.",
@@ -119,13 +140,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     plan = sub.add_parser("plan")
-    plan.add_argument("--out-dir", default="data/outputs/worldmodel/table3_open_loop_ablation")
+    plan.add_argument(
+        "--out-dir", default="data/outputs/worldmodel/table3_open_loop_ablation"
+    )
     plan.add_argument("--execute", action="store_true")
     plan.set_defaults(func=cmd_plan)
     collect = sub.add_parser("collect")
-    collect.add_argument("--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON"))
-    collect.add_argument("--out-json", default=str(DEFAULT_OUTPUTS_DIR / "open_loop_ablation.json"))
-    collect.add_argument("--out-tex", default=str(DEFAULT_TABLES_DIR / "open_loop_ablation.tex"))
+    collect.add_argument(
+        "--result", nargs=3, action="append", metavar=("VARIANT", "KIND", "JSON")
+    )
+    collect.add_argument(
+        "--out-json", default=str(DEFAULT_OUTPUTS_DIR / "open_loop_ablation.json")
+    )
+    collect.add_argument(
+        "--out-tex", default=str(DEFAULT_TABLES_DIR / "open_loop_ablation.tex")
+    )
     collect.set_defaults(func=cmd_collect)
     return parser
 
@@ -137,4 +166,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

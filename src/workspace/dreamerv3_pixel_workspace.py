@@ -53,7 +53,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             torch.cuda.set_device(self.local_rank)
             self.device = torch.device(f"cuda:{self.local_rank}")
         else:
-            self.device = torch.device(OmegaConf.select(config, "training.device", default="cuda:0"))
+            self.device = torch.device(
+                OmegaConf.select(config, "training.device", default="cuda:0")
+            )
         self.out_dir = Path(self.output_dir)
         self.log_path = self.out_dir / "dreamerv3_pixel_logs.json.txt"
         self.ckpt_dir = self.out_dir / "ckpt"
@@ -76,7 +78,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         *,
         shuffle: bool,
     ) -> tuple[DataLoader, DistributedSampler | None]:
-        drop_last = bool(OmegaConf.select(self.cfg, "dataloader.drop_last", default=True))
+        drop_last = bool(
+            OmegaConf.select(self.cfg, "dataloader.drop_last", default=True)
+        )
         sampler = None
         if self.use_ddp:
             sampler = DistributedSampler(
@@ -86,21 +90,31 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                 shuffle=shuffle,
                 drop_last=drop_last,
             )
-        num_workers = int(OmegaConf.select(self.cfg, "dataloader.num_workers", default=4))
+        num_workers = int(
+            OmegaConf.select(self.cfg, "dataloader.num_workers", default=4)
+        )
         loader_kwargs: dict[str, Any] = {
             "dataset": dataset,
-            "batch_size": int(OmegaConf.select(self.cfg, "dataloader.batch_size", default=8)),
+            "batch_size": int(
+                OmegaConf.select(self.cfg, "dataloader.batch_size", default=8)
+            ),
             "shuffle": shuffle if sampler is None else False,
             "sampler": sampler,
             "num_workers": num_workers,
-            "pin_memory": bool(OmegaConf.select(self.cfg, "dataloader.pin_memory", default=True)),
+            "pin_memory": bool(
+                OmegaConf.select(self.cfg, "dataloader.pin_memory", default=True)
+            ),
             "drop_last": drop_last,
         }
         if num_workers > 0:
             loader_kwargs["persistent_workers"] = bool(
-                OmegaConf.select(self.cfg, "dataloader.persistent_workers", default=True)
+                OmegaConf.select(
+                    self.cfg, "dataloader.persistent_workers", default=True
+                )
             )
-            prefetch_factor = OmegaConf.select(self.cfg, "dataloader.prefetch_factor", default=None)
+            prefetch_factor = OmegaConf.select(
+                self.cfg, "dataloader.prefetch_factor", default=None
+            )
             if prefetch_factor is not None:
                 loader_kwargs["prefetch_factor"] = int(prefetch_factor)
             multiprocessing_context = OmegaConf.select(
@@ -139,7 +153,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             "epoch": self.epoch,
             "rng": {
                 "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+                "cuda": torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else [],
             },
             "cfg": OmegaConf.to_container(self.cfg, resolve=True),
         }
@@ -170,24 +186,36 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             return False
         path = self._resolve_resume_path()
         if not path.is_file():
-            raise FileNotFoundError(f"training.resume=true but checkpoint not found: {path}")
+            raise FileNotFoundError(
+                f"training.resume=true but checkpoint not found: {path}"
+            )
         self._print(f"[dreamerv3-pixel] resuming from {path}")
         payload = torch.load(path, map_location="cpu", weights_only=False)
         model_sd = payload.get("model")
         if model_sd is None and "state_dicts" in payload:
-            model_sd = payload["state_dicts"].get("model") or payload["state_dicts"].get("model_core")
+            model_sd = payload["state_dicts"].get("model") or payload[
+                "state_dicts"
+            ].get("model_core")
         if model_sd is None:
             raise KeyError(f"Checkpoint {path} does not contain a model state_dict")
-        strict = bool(OmegaConf.select(self.cfg, "training.resume_strict", default=True))
+        strict = bool(
+            OmegaConf.select(self.cfg, "training.resume_strict", default=True)
+        )
         missing, unexpected = model_core.load_state_dict(model_sd, strict=strict)
         if missing or unexpected:
-            self._print(f"[dreamerv3-pixel] resume model missing={len(missing)} unexpected={len(unexpected)}")
+            self._print(
+                f"[dreamerv3-pixel] resume model missing={len(missing)} unexpected={len(unexpected)}"
+            )
 
-        skip_optimizer = bool(OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False))
+        skip_optimizer = bool(
+            OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False)
+        )
         if not skip_optimizer and "optimizer" in payload:
             optimizer.load_state_dict(payload["optimizer"])
         elif skip_optimizer:
-            self._print("[dreamerv3-pixel] skipping optimizer state (training.resume_skip_optimizer=true)")
+            self._print(
+                "[dreamerv3-pixel] skipping optimizer state (training.resume_skip_optimizer=true)"
+            )
 
         # ``resume_reset_step`` = warm-start a NEW training run from the ckpt's
         # model weights only.  global_step / epoch / RNG stay at their
@@ -195,7 +223,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         # and max_steps budget all behave as a fresh run.  Use this when the
         # training objective or model topology has changed (e.g. switching
         # per-step teacher forcing -> chunk_loss with a new mask_obs_token).
-        reset_step = bool(OmegaConf.select(self.cfg, "training.resume_reset_step", default=False))
+        reset_step = bool(
+            OmegaConf.select(self.cfg, "training.resume_reset_step", default=False)
+        )
         if reset_step:
             self._print(
                 "[dreamerv3-pixel] resume_reset_step=true: keeping fresh "
@@ -210,12 +240,20 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                 if isinstance(torch_state, torch.Tensor):
                     torch.set_rng_state(torch_state)
                 cuda_state = rng.get("cuda")
-                if torch.cuda.is_available() and isinstance(cuda_state, list) and cuda_state:
+                if (
+                    torch.cuda.is_available()
+                    and isinstance(cuda_state, list)
+                    and cuda_state
+                ):
                     try:
                         torch.cuda.set_rng_state_all(cuda_state)
                     except Exception as exc:
-                        self._print(f"[dreamerv3-pixel] warning: could not restore CUDA RNG: {exc}")
-        self._print(f"[dreamerv3-pixel] resumed at global_step={self.global_step} epoch={self.epoch}")
+                        self._print(
+                            f"[dreamerv3-pixel] warning: could not restore CUDA RNG: {exc}"
+                        )
+        self._print(
+            f"[dreamerv3-pixel] resumed at global_step={self.global_step} epoch={self.epoch}"
+        )
         return True
 
     @staticmethod
@@ -236,29 +274,43 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         return Image.fromarray(arr, mode="RGB")
 
     @staticmethod
-    def _save_viz_strip(path: Path, panels: list[tuple[str, Any]], cell_size: int) -> None:
+    def _save_viz_strip(
+        path: Path, panels: list[tuple[str, Any]], cell_size: int
+    ) -> None:
         from PIL import Image, ImageDraw
 
         header = 22
-        canvas = Image.new("RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32))
+        canvas = Image.new(
+            "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
+        )
         draw = ImageDraw.Draw(canvas)
         for idx, (label, image) in enumerate(panels):
             x0 = idx * cell_size
             if image is not None:
-                canvas.paste(image.convert("RGB").resize((cell_size, cell_size)), (x0, header))
+                canvas.paste(
+                    image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
+                )
             else:
-                draw.rectangle([x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20))
-                draw.text((x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230))
+                draw.rectangle(
+                    [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
+                )
+                draw.text(
+                    (x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
+                )
             draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
         path.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(path)
 
     @torch.no_grad()
-    def _maybe_save_viz(self, model_core: torch.nn.Module, batch: dict[str, Any]) -> None:
+    def _maybe_save_viz(
+        self, model_core: torch.nn.Module, batch: dict[str, Any]
+    ) -> None:
         if not self.is_main_process:
             return
         viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
-        if viz_cfg is None or not bool(OmegaConf.select(viz_cfg, "enabled", default=False)):
+        if viz_cfg is None or not bool(
+            OmegaConf.select(viz_cfg, "enabled", default=False)
+        ):
             return
         every = int(OmegaConf.select(viz_cfg, "every_n_steps", default=100))
         if every <= 0 or self.global_step % every != 0:
@@ -267,7 +319,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         images = batch.get("images")
         actions = batch.get("actions")
         is_first = batch.get("is_first")
-        if not isinstance(images, torch.Tensor) or not isinstance(actions, torch.Tensor):
+        if not isinstance(images, torch.Tensor) or not isinstance(
+            actions, torch.Tensor
+        ):
             return
         if not isinstance(is_first, torch.Tensor):
             return
@@ -287,14 +341,22 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             prior_deter1 = model_core.rssm._core(deter0, stoch0, action1)
             prior_logits1 = model_core.rssm._prior(prior_deter1)
             prior_idx1 = prior_logits1.argmax(dim=-1)
-            prior_stoch1 = torch.nn.functional.one_hot(prior_idx1, model_core.rssm.classes).to(dtype=prior_logits1.dtype)
-            prior_recon = model_core.decoder(prior_deter1[:, None], prior_stoch1[:, None])[:, 0]
+            prior_stoch1 = torch.nn.functional.one_hot(
+                prior_idx1, model_core.rssm.classes
+            ).to(dtype=prior_logits1.dtype)
+            prior_recon = model_core.decoder(
+                prior_deter1[:, None], prior_stoch1[:, None]
+            )[:, 0]
         finally:
             if was_training:
                 model_core.train()
 
-        view_labels = list(OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"]))
-        channels_per_view = int(OmegaConf.select(viz_cfg, "channels_per_view", default=3))
+        view_labels = list(
+            OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"])
+        )
+        channels_per_view = int(
+            OmegaConf.select(viz_cfg, "channels_per_view", default=3)
+        )
         total_channels = int(images.shape[2])
         num_views = len(view_labels)
         if num_views <= 0 or total_channels != num_views * channels_per_view:
@@ -307,7 +369,10 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             num_views = total_channels // channels_per_view
             view_labels = [f"view{idx}" for idx in range(num_views)]
 
-        num_samples = min(int(OmegaConf.select(viz_cfg, "num_samples", default=4)), int(images.shape[0]))
+        num_samples = min(
+            int(OmegaConf.select(viz_cfg, "num_samples", default=4)),
+            int(images.shape[0]),
+        )
         cell_size = int(OmegaConf.select(viz_cfg, "cell_size", default=192))
         out_dir = self.out_dir / "viz"
         saved = 0
@@ -316,17 +381,33 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
             for view_idx, label in enumerate(view_labels):
                 c0 = view_idx * channels_per_view
                 c1 = c0 + channels_per_view
-                panels.extend([
-                    (f"{label} cur", self._tensor_to_pil(images[sample_idx, 0, c0:c1])),
-                    (f"{label} recon", self._tensor_to_pil(recon[sample_idx, 0, c0:c1])),
-                    (f"{label} next", self._tensor_to_pil(images[sample_idx, 1, c0:c1])),
-                    (f"{label} prior", self._tensor_to_pil(prior_recon[sample_idx, c0:c1])),
-                ])
+                panels.extend(
+                    [
+                        (
+                            f"{label} cur",
+                            self._tensor_to_pil(images[sample_idx, 0, c0:c1]),
+                        ),
+                        (
+                            f"{label} recon",
+                            self._tensor_to_pil(recon[sample_idx, 0, c0:c1]),
+                        ),
+                        (
+                            f"{label} next",
+                            self._tensor_to_pil(images[sample_idx, 1, c0:c1]),
+                        ),
+                        (
+                            f"{label} prior",
+                            self._tensor_to_pil(prior_recon[sample_idx, c0:c1]),
+                        ),
+                    ]
+                )
             path = out_dir / f"step_{self.global_step:07d}_sample{sample_idx:02d}.png"
             self._save_viz_strip(path, panels, cell_size=cell_size)
             saved += 1
         if saved:
-            print(f"[dreamerv3-pixel][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}")
+            print(
+                f"[dreamerv3-pixel][viz] step {self.global_step}: wrote {saved} panel(s) under {out_dir}"
+            )
 
     def _reduce_metrics(self, metrics: dict[str, float]) -> dict[str, float]:
         if not self.use_ddp:
@@ -334,10 +415,17 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         keys = list(metrics.keys())
         if not keys:
             return metrics
-        values = torch.tensor([float(metrics[key]) for key in keys], device=self.device, dtype=torch.float32)
+        values = torch.tensor(
+            [float(metrics[key]) for key in keys],
+            device=self.device,
+            dtype=torch.float32,
+        )
         dist.all_reduce(values, op=dist.ReduceOp.SUM)
         values /= float(self.world_size)
-        return {key: float(value) for key, value in zip(keys, values.detach().cpu().tolist())}
+        return {
+            key: float(value)
+            for key, value in zip(keys, values.detach().cpu().tolist())
+        }
 
     def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:
         return {
@@ -381,13 +469,17 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                 find_unused_parameters=False,
                 gradient_as_bucket_view=True,
             )
-            self._print(f"[dreamerv3-pixel]   distributed data parallel = {self.world_size} ranks")
+            self._print(
+                f"[dreamerv3-pixel]   distributed data parallel = {self.world_size} ranks"
+            )
         elif bool(OmegaConf.select(self.cfg, "training.data_parallel", default=False)):
             if self.device.type != "cuda":
                 raise ValueError("training.data_parallel=true requires CUDA")
             if torch.cuda.device_count() > 1:
                 model = torch.nn.DataParallel(model_core)
-                self._print(f"[dreamerv3-pixel]   data parallel = {torch.cuda.device_count()} visible CUDA devices")
+                self._print(
+                    f"[dreamerv3-pixel]   data parallel = {torch.cuda.device_count()} visible CUDA devices"
+                )
         n_params = sum(p.numel() for p in model_core.parameters() if p.requires_grad)
         self._print(f"[dreamerv3-pixel]   trainable params = {n_params:,}")
 
@@ -399,7 +491,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                 float(OmegaConf.select(self.cfg, "optim.beta2", default=0.999)),
             ),
             eps=float(OmegaConf.select(self.cfg, "optim.eps", default=1e-20)),
-            weight_decay=float(OmegaConf.select(self.cfg, "optim.weight_decay", default=0.0)),
+            weight_decay=float(
+                OmegaConf.select(self.cfg, "optim.weight_decay", default=0.0)
+            ),
         )
 
         resumed = self._maybe_resume(model_core, optimizer)
@@ -413,8 +507,12 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
         else:
             max_steps = int(max_steps_cfg)
         log_every = int(OmegaConf.select(self.cfg, "training.log_every", default=20))
-        save_every = int(OmegaConf.select(self.cfg, "training.save_every", default=1000))
-        tqdm_interval_sec = float(OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0))
+        save_every = int(
+            OmegaConf.select(self.cfg, "training.save_every", default=1000)
+        )
+        tqdm_interval_sec = float(
+            OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0)
+        )
         warmup = int(OmegaConf.select(self.cfg, "optim.warmup", default=1000))
         base_lr = float(OmegaConf.select(self.cfg, "optim.lr", default=4e-5))
         grad_clip = float(OmegaConf.select(self.cfg, "optim.grad_clip", default=100.0))
@@ -442,7 +540,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                         if self.global_step >= max_steps:
                             break
                         if warmup > 0:
-                            lr_scale = min(1.0, float(self.global_step + 1) / float(warmup))
+                            lr_scale = min(
+                                1.0, float(self.global_step + 1) / float(warmup)
+                            )
                             for group in optimizer.param_groups:
                                 group["lr"] = base_lr * lr_scale
 
@@ -460,7 +560,9 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                         loss = out["_loss"].mean()
                         optimizer.zero_grad(set_to_none=True)
                         loss.backward()
-                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), grad_clip
+                        )
                         optimizer.step()
 
                         row = {
@@ -468,13 +570,17 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
                             "epoch": self.epoch,
                             "lr": float(optimizer.param_groups[0]["lr"]),
                             "grad_norm": float(grad_norm),
-                            **self._reduce_metrics({
-                                k: float(v.detach().float().mean().cpu())
-                                for k, v in out.items()
-                                if k != "_loss"
-                            }),
+                            **self._reduce_metrics(
+                                {
+                                    k: float(v.detach().float().mean().cpu())
+                                    for k, v in out.items()
+                                    if k != "_loss"
+                                }
+                            ),
                         }
-                        tepoch.set_postfix(self._progress_postfix(row, max_steps), refresh=False)
+                        tepoch.set_postfix(
+                            self._progress_postfix(row, max_steps), refresh=False
+                        )
                         if (
                             self.is_main_process
                             and log_handle is not None
@@ -486,8 +592,14 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
 
                         self._maybe_save_viz(model_core, batch)
 
-                        if save_every > 0 and self.global_step > 0 and self.global_step % save_every == 0:
-                            self._save_ckpt(model_core, optimizer, self.ckpt_dir / "latest.ckpt")
+                        if (
+                            save_every > 0
+                            and self.global_step > 0
+                            and self.global_step % save_every == 0
+                        ):
+                            self._save_ckpt(
+                                model_core, optimizer, self.ckpt_dir / "latest.ckpt"
+                            )
                         self.global_step += 1
                         if self.global_step >= max_steps:
                             break
@@ -497,7 +609,11 @@ class DreamerV3PixelWorkspace(BaseWorkspace):
 
         if bool(OmegaConf.select(self.cfg, "training.save_final", default=True)):
             self._save_ckpt(model_core, optimizer, self.ckpt_dir / "latest.ckpt")
-            self._save_ckpt(model_core, optimizer, self.ckpt_dir / f"step_{self.global_step:08d}.ckpt")
+            self._save_ckpt(
+                model_core,
+                optimizer,
+                self.ckpt_dir / f"step_{self.global_step:08d}.ckpt",
+            )
         self._barrier()
         self._print("[dreamerv3-pixel] done")
         self._print(f"  log  = {self.log_path}")

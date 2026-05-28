@@ -4,8 +4,14 @@ import sys
 
 import torch
 
-from scripts.preprocess_rynn_pixel_hidden import _prepare_actor_sequence_arrays, _select_obs_hidden, parse_args
-from src.dataloader.libero_pixel_rynn_hidden_sequence_dataset import LIBEROPixelRynnHiddenSequenceDataset
+from scripts.preprocess_rynn_pixel_hidden import (
+    _prepare_actor_sequence_arrays,
+    _select_obs_hidden,
+    parse_args,
+)
+from src.dataloader.libero_pixel_rynn_hidden_sequence_dataset import (
+    LIBEROPixelRynnHiddenSequenceDataset,
+)
 from src.models.world_model.dreamerv3_torch import (
     CompactTokenSequenceAutoencoder,
     DreamerV3LatentState,
@@ -41,7 +47,13 @@ def test_prepare_actor_sequence_arrays_appends_action_trigger_and_pads() -> None
     assert arrays["actor_input_ids"][0].tolist() == [11, 12, 13, 10004, 0]
     assert arrays["actor_input_ids"][1].tolist() == [21, 22, 10004, 0, 0]
     assert arrays["actor_attention_mask"][0].tolist() == [True, True, True, True, False]
-    assert arrays["actor_attention_mask"][1].tolist() == [True, True, True, False, False]
+    assert arrays["actor_attention_mask"][1].tolist() == [
+        True,
+        True,
+        True,
+        False,
+        False,
+    ]
 
 
 def test_select_obs_hidden_can_flatten_action_query_hidden_for_wm() -> None:
@@ -79,8 +91,12 @@ def test_preprocess_cli_defaults_to_pi0_action_query_sidecar(monkeypatch) -> Non
 def test_pad_or_truncate_actor_sequence_arrays() -> None:
     array = torch.arange(2 * 3).numpy().reshape(2, 3)
 
-    padded = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 5, axis=1)
-    truncated = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 2, axis=1)
+    padded = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(
+        array, 5, axis=1
+    )
+    truncated = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(
+        array, 2, axis=1
+    )
 
     assert padded.shape == (2, 5)
     assert padded[:, :3].tolist() == array.tolist()

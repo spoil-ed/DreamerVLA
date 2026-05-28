@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 import os
 import re
 import sys
@@ -29,7 +30,6 @@ class ItemProcessor(FlexARItemProcessor_Action_State):
         print(self.crop_size_list)
 
     def process_item(self, raw_item, training_mode=False, out_flatten=True):
-
         # Add custom codes here to convert raw_item to the standard format
         # The standard format contains the "conversations" and "image" keys
 
@@ -39,7 +39,10 @@ class ItemProcessor(FlexARItemProcessor_Action_State):
 
         conversations = copy.deepcopy(raw_item["conversations"])
         if not conversations:
-            conversations = [{"from": "human", "value": ""}, {"from": "gpt", "value": ""}]
+            conversations = [
+                {"from": "human", "value": ""},
+                {"from": "gpt", "value": ""},
+            ]
 
         task_name = str(raw_item.get("task_name", "")).strip()
         next_obs = raw_item.get("next_obs", {})
@@ -58,7 +61,9 @@ class ItemProcessor(FlexARItemProcessor_Action_State):
             extra_prefix += "<|state|>" * len(next_obs_states)
 
         if extra_prefix:
-            conversations[0]["value"] = extra_prefix + str(conversations[0].get("value", ""))
+            conversations[0]["value"] = extra_prefix + str(
+                conversations[0].get("value", "")
+            )
 
         item = {
             "conversations": conversations,
@@ -86,7 +91,9 @@ class ItemProcessor(FlexARItemProcessor_Action_State):
 
 
 _IMG_INDEX_RE = re.compile(r"(?P<stem>.*/image_)(?P<idx>\d+)(?P<ext>\.\w+)$")
-_STATE_INDEX_RE = re.compile(r"(?P<stem>.*/eef_gripper_state_)(?P<idx>\d+)(?P<ext>\.\w+)$")
+_STATE_INDEX_RE = re.compile(
+    r"(?P<stem>.*/eef_gripper_state_)(?P<idx>\d+)(?P<ext>\.\w+)$"
+)
 
 
 def _bump_indexed_path(path: str, offset: int, regex: re.Pattern) -> str | None:
@@ -156,7 +163,9 @@ def derive_next_obs_from_paths(
 
         next_state_paths: list[str] = []
         if current_state_path is not None:
-            bumped_state = _bump_indexed_path(current_state_path, horizon, _STATE_INDEX_RE)
+            bumped_state = _bump_indexed_path(
+                current_state_path, horizon, _STATE_INDEX_RE
+            )
             if bumped_state is not None:
                 next_state_paths.append(bumped_state)
 
@@ -189,7 +198,9 @@ def ensure_next_obs(raw_item: dict, image_views_per_frame: int | None = None) ->
             merged.setdefault("effective_horizon", len(actions))
             merged.setdefault("full_horizon", len(actions))
             return merged
-    return derive_next_obs_from_paths(raw_item, image_views_per_frame=image_views_per_frame)
+    return derive_next_obs_from_paths(
+        raw_item, image_views_per_frame=image_views_per_frame
+    )
 
 
 def build_wm_action_mask(effective_horizon: int, full_horizon: int) -> list[bool]:
@@ -200,7 +211,9 @@ def build_wm_action_mask(effective_horizon: int, full_horizon: int) -> list[bool
     return [True] * effective_horizon + [False] * (full_horizon - effective_horizon)
 
 
-def _build_wm_token_sequences(raw_item: dict, item_processor: ItemProcessor) -> tuple[list[int], list[int]]:
+def _build_wm_token_sequences(
+    raw_item: dict, item_processor: ItemProcessor
+) -> tuple[list[int], list[int]]:
     task_name = str(raw_item.get("task_name", "")).strip()
     task_prefix = f"Task name: {task_name}. " if task_name else ""
     obs_images = list(raw_item.get("image", []) or [])
@@ -211,8 +224,14 @@ def _build_wm_token_sequences(raw_item: dict, item_processor: ItemProcessor) -> 
     next_images = list(next_obs.get("image", []) or [])
     next_states = list(next_obs.get("state", []) or [])
 
-    obs_human = task_prefix + ("<|state|>" * len(obs_states)) + ("<|image|>" * len(obs_images))
-    next_human = task_prefix + ("<|state|>" * len(next_states)) + ("<|image|>" * len(next_images))
+    obs_human = (
+        task_prefix + ("<|state|>" * len(obs_states)) + ("<|image|>" * len(obs_images))
+    )
+    next_human = (
+        task_prefix
+        + ("<|state|>" * len(next_states))
+        + ("<|image|>" * len(next_images))
+    )
     obs_item = {
         "conversations": [
             {"from": "human", "value": obs_human},
@@ -237,7 +256,6 @@ def _build_wm_token_sequences(raw_item: dict, item_processor: ItemProcessor) -> 
 
 
 if __name__ == "__main__":
-
     parser = ArgumentParser()
     parser.add_argument(
         "--splits",
@@ -281,7 +299,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    item_processor = ItemProcessor(target_size=args.target_size, tokenizer=args.tokenizer)
+    item_processor = ItemProcessor(
+        target_size=args.target_size, tokenizer=args.tokenizer
+    )
 
     with open(args.in_filename) as f:
         ori_contents = json.load(f)
@@ -305,7 +325,9 @@ if __name__ == "__main__":
         if progress == "finished":
             print(f"rank {rank}: progress is finished; scan existing pkl only")
         else:
-            print(f"rank {rank}: previous progress={progress}; scan existing pkl for holes")
+            print(
+                f"rank {rank}: previous progress={progress}; scan existing pkl for holes"
+            )
     except Exception:
         print(f"rank {rank}: no progress file; scan existing pkl from {rank_start_idx}")
 
@@ -332,18 +354,27 @@ if __name__ == "__main__":
                 raw_item,
                 image_views_per_frame=args.image_views_per_frame,
             )
-            if (not isinstance(original_next_obs, dict)
-                or not (list((original_next_obs or {}).get("image", []) or [])
-                        or list((original_next_obs or {}).get("state", []) or []))):
+            if not isinstance(original_next_obs, dict) or not (
+                list((original_next_obs or {}).get("image", []) or [])
+                or list((original_next_obs or {}).get("state", []) or [])
+            ):
                 if patched_next_obs.get("image") or patched_next_obs.get("state"):
                     derived_count += 1
             raw_item["next_obs"] = patched_next_obs
 
-            full_horizon = int(patched_next_obs.get("full_horizon", len(raw_item.get("action", []) or [])))
-            effective_horizon = int(patched_next_obs.get("effective_horizon", full_horizon))
+            full_horizon = int(
+                patched_next_obs.get(
+                    "full_horizon", len(raw_item.get("action", []) or [])
+                )
+            )
+            effective_horizon = int(
+                patched_next_obs.get("effective_horizon", full_horizon)
+            )
             if effective_horizon <= 0:
                 # truly end-of-trajectory; no future frame reachable -> skip.
-                with open(os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "w") as f:
+                with open(
+                    os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "w"
+                ) as f:
                     if i == end_idx - 1:
                         f.write("finished")
                     else:
@@ -352,7 +383,9 @@ if __name__ == "__main__":
             wm_action_mask = build_wm_action_mask(effective_horizon, full_horizon)
 
             tokens, labels = item_processor.process_item(raw_item, training_mode=True)
-            wm_obs_input_ids, wm_next_obs_input_ids = _build_wm_token_sequences(raw_item, item_processor)
+            wm_obs_input_ids, wm_next_obs_input_ids = _build_wm_token_sequences(
+                raw_item, item_processor
+            )
             meta = {
                 "task_name": raw_item.get("task_name"),
                 "task_text": raw_item.get("task_text"),
@@ -405,11 +438,15 @@ if __name__ == "__main__":
             print(format_exc())
 
         if record is not None:
-            with open(os.path.join(output_dir, f"{rank}-of-{splits}-record.jsonl"), "a") as f:
+            with open(
+                os.path.join(output_dir, f"{rank}-of-{splits}-record.jsonl"), "a"
+            ) as f:
                 record_str = json.dumps(record) + "\n"
                 f.write(record_str)
 
-        with open(os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "w") as f:
+        with open(
+            os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt"), "w"
+        ) as f:
             if i == end_idx - 1:
                 f.write("finished")
             else:
@@ -421,7 +458,11 @@ if __name__ == "__main__":
         if not os.path.exists(os.path.join(save_dir, f"{i}.pkl"))
     ]
     with open(progress_path, "w") as f:
-        f.write("finished" if not missing_after else str(max(rank_start_idx - 1, missing_after[0] - 1)))
+        f.write(
+            "finished"
+            if not missing_after
+            else str(max(rank_start_idx - 1, missing_after[0] - 1))
+        )
 
     print(
         f"rank {rank}: done. skipped existing {skipped_existing}; "

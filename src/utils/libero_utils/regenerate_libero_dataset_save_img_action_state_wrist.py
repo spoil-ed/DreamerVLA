@@ -9,13 +9,27 @@ from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RAW_DATA_DIR = PROJECT_ROOT / "data" / "preprocess" / "processed_data" / "libero_goal_no_noops_t_256"
-DEFAULT_SAVE_DIR = PROJECT_ROOT / "data" / "preprocess" / "processed_data" / "libero_goal_image_state_action_t_256"
+DEFAULT_RAW_DATA_DIR = (
+    PROJECT_ROOT
+    / "data"
+    / "preprocess"
+    / "processed_data"
+    / "libero_goal_no_noops_t_256"
+)
+DEFAULT_SAVE_DIR = (
+    PROJECT_ROOT
+    / "data"
+    / "preprocess"
+    / "processed_data"
+    / "libero_goal_image_state_action_t_256"
+)
 
 
 def recreate_directory(path: Path) -> None:
     if path.exists():
-        print(f"Warning: Directory '{path}' already exists. Deleting and recreating it.")
+        print(
+            f"Warning: Directory '{path}' already exists. Deleting and recreating it."
+        )
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
     print(f"Directory '{path}' created successfully.")
@@ -35,7 +49,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--libero_task_suite",
         type=str,
-        choices=["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"],
+        choices=[
+            "libero_spatial",
+            "libero_object",
+            "libero_goal",
+            "libero_10",
+            "libero_90",
+        ],
         required=True,
         help="LIBERO task suite. Example: libero_goal",
     )
@@ -98,9 +118,13 @@ def main(args: argparse.Namespace) -> None:
                 demo_data = orig_data[demo_name]
                 trj_idx = int(demo_name.split("_")[1])
                 orig_actions = demo_data["actions"][()]
-                orig_rewards = demo_data["rewards"][()] if "rewards" in demo_data else np.zeros(
-                    orig_actions.shape[0],
-                    dtype=np.float32,
+                orig_rewards = (
+                    demo_data["rewards"][()]
+                    if "rewards" in demo_data
+                    else np.zeros(
+                        orig_actions.shape[0],
+                        dtype=np.float32,
+                    )
                 )
                 orig_ee_states = demo_data["obs"]["ee_states"][()]
                 orig_gripper_states = demo_data["obs"]["gripper_states"][()]
@@ -137,13 +161,26 @@ def main(args: argparse.Namespace) -> None:
 
                     np.save(action_dir / f"action_{step_idx}.npy", action)
                     np.save(ee_state_dir / f"ee_state_{step_idx}.npy", ee_state)
-                    np.save(gripper_state_dir / f"gripper_state_{step_idx}.npy", gripper_state)
-                    np.save(eef_gripper_state_dir / f"eef_gripper_state_{step_idx}.npy", combined_state)
-                    np.save(robot_state_dir / f"robot_state_{step_idx}.npy", robot_state)
+                    np.save(
+                        gripper_state_dir / f"gripper_state_{step_idx}.npy",
+                        gripper_state,
+                    )
+                    np.save(
+                        eef_gripper_state_dir / f"eef_gripper_state_{step_idx}.npy",
+                        combined_state,
+                    )
+                    np.save(
+                        robot_state_dir / f"robot_state_{step_idx}.npy", robot_state
+                    )
                     np.save(reward_dir / f"reward_{step_idx}.npy", reward)
 
-                    save_png(orig_rgb[step_idx], img_dir_third_view / f"image_{step_idx}.png")
-                    save_png(orig_rgb_wrist[step_idx], img_dir_wrist / f"image_{step_idx}.png")
+                    save_png(
+                        orig_rgb[step_idx], img_dir_third_view / f"image_{step_idx}.png"
+                    )
+                    save_png(
+                        orig_rgb_wrist[step_idx],
+                        img_dir_wrist / f"image_{step_idx}.png",
+                    )
 
 
 if __name__ == "__main__":

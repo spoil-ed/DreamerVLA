@@ -30,20 +30,31 @@ def _abs(path: str | None) -> str | None:
 def _strip_prefix(key: str) -> str:
     for prefix in ("_fsdp_wrapped_module.", "module."):
         if key.startswith(prefix):
-            return key[len(prefix):]
+            return key[len(prefix) :]
     return key
 
 
-def _load_state(module: torch.nn.Module, state_dict: dict[str, Any], *, dtype: torch.dtype | None = None) -> None:
+def _load_state(
+    module: torch.nn.Module,
+    state_dict: dict[str, Any],
+    *,
+    dtype: torch.dtype | None = None,
+) -> None:
     converted = {}
     target = module.state_dict()
     for key, value in state_dict.items():
         key = _strip_prefix(key)
-        if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
+        if key.startswith("reward_head.net.") and not key.startswith(
+            "reward_head.net.net."
+        ):
             candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
             if candidate in target:
                 key = candidate
-        if isinstance(value, torch.Tensor) and torch.is_floating_point(value) and dtype is not None:
+        if (
+            isinstance(value, torch.Tensor)
+            and torch.is_floating_point(value)
+            and dtype is not None
+        ):
             value = value.to(dtype=dtype)
         converted[key] = value
     missing, unexpected = module.load_state_dict(converted, strict=False)
@@ -73,9 +84,15 @@ def _action_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict[str, float
         "rel_rmse": float((diff.square().mean().sqrt() / denom).detach().cpu()),
         "xyz_mae": float(diff[..., :3].abs().mean().detach().cpu()),
         "rot_mae": float(diff[..., 3:6].abs().mean().detach().cpu()),
-        "gripper_mae": float((gripper_pred - gripper_target).abs().mean().detach().cpu()),
-        "gripper_sign_acc": float(((gripper_pred >= 0) == (gripper_target >= 0)).float().mean().detach().cpu()),
-        "cosine_loss": float((1.0 - F.cosine_similarity(pred, target, dim=-1).mean()).detach().cpu()),
+        "gripper_mae": float(
+            (gripper_pred - gripper_target).abs().mean().detach().cpu()
+        ),
+        "gripper_sign_acc": float(
+            ((gripper_pred >= 0) == (gripper_target >= 0)).float().mean().detach().cpu()
+        ),
+        "cosine_loss": float(
+            (1.0 - F.cosine_similarity(pred, target, dim=-1).mean()).detach().cpu()
+        ),
     }
 
 
@@ -87,10 +104,16 @@ def _hidden_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict[str, float
         "mse": float(diff.square().mean().detach().cpu()),
         "rmse": float(diff.square().mean().sqrt().detach().cpu()),
         "mae": float(diff.abs().mean().detach().cpu()),
-        "cosine_loss": float((1.0 - F.cosine_similarity(pred, target, dim=-1).mean()).detach().cpu()),
+        "cosine_loss": float(
+            (1.0 - F.cosine_similarity(pred, target, dim=-1).mean()).detach().cpu()
+        ),
         "pred_norm": float(pred.norm(dim=-1).mean().detach().cpu()),
         "target_norm": float(target.norm(dim=-1).mean().detach().cpu()),
-        "norm_ratio": float((pred.norm(dim=-1).mean() / target.norm(dim=-1).mean().clamp_min(1e-8)).detach().cpu()),
+        "norm_ratio": float(
+            (pred.norm(dim=-1).mean() / target.norm(dim=-1).mean().clamp_min(1e-8))
+            .detach()
+            .cpu()
+        ),
     }
 
 
@@ -105,8 +128,14 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     args = parser.parse_args()
 
-    device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
-    dtype = torch.bfloat16 if args.dtype == "bf16" and device.type == "cuda" else torch.float32
+    device = torch.device(
+        args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu"
+    )
+    dtype = (
+        torch.bfloat16
+        if args.dtype == "bf16" and device.type == "cuda"
+        else torch.float32
+    )
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False, mmap=True)
     cfg = ckpt["cfg"]
     if isinstance(cfg, dict):
@@ -133,8 +162,12 @@ def main() -> None:
     policy_cfg = OmegaConf.create(OmegaConf.to_container(cfg.policy, resolve=True))
     with open_dict(policy_cfg):
         policy_cfg.init_action_head_ckpt = _abs(str(policy_cfg.init_action_head_ckpt))
-    policy_init = hydra.utils.instantiate(policy_cfg).to(device=device, dtype=dtype).eval()
-    policy_ckpt = hydra.utils.instantiate(policy_cfg).to(device=device, dtype=dtype).eval()
+    policy_init = (
+        hydra.utils.instantiate(policy_cfg).to(device=device, dtype=dtype).eval()
+    )
+    policy_ckpt = (
+        hydra.utils.instantiate(policy_cfg).to(device=device, dtype=dtype).eval()
+    )
     _load_state(policy_ckpt, ckpt["state_dicts"]["policy"], dtype=dtype)
 
     rows = []
@@ -143,36 +176,80 @@ def main() -> None:
             if bidx >= args.num_batches:
                 break
             model_batch = {}
-            for key in ("images", "obs_embedding", "actions", "rewards", "dones", "is_first"):
+            for key in (
+                "images",
+                "obs_embedding",
+                "actions",
+                "rewards",
+                "dones",
+                "is_first",
+            ):
                 value = batch[key]
                 if isinstance(value, torch.Tensor):
                     value = value.to(device=device)
                     if key not in {"is_first"} and torch.is_floating_point(value):
-                        value = value.to(dtype=dtype if key != "images" else torch.float32)
+                        value = value.to(
+                            dtype=dtype if key != "images" else torch.float32
+                        )
                 model_batch[key] = value
 
             observed = world_model.observe_sequence(model_batch)
             pred_hidden = world_model.actor_input(observed["latent"])
-            real_hidden = model_batch["obs_embedding"].to(device=device, dtype=pred_hidden.dtype)
+            real_hidden = model_batch["obs_embedding"].to(
+                device=device, dtype=pred_hidden.dtype
+            )
 
             # Dataset actions use previous-action convention: actions[t+1] is raw action at t.
             steps = min(int(policy_cfg.time_horizon), real_hidden.shape[1] - 1)
             real_flat = _flatten_time(real_hidden, keep=steps)
             pred_flat = _flatten_time(pred_hidden, keep=steps)
-            gt_first = _flatten_time(model_batch["actions"][:, 1 : steps + 1].to(dtype=torch.float32))
+            gt_first = _flatten_time(
+                model_batch["actions"][:, 1 : steps + 1].to(dtype=torch.float32)
+            )
 
-            real_chunk_init = policy_init({"mode": "sample", "hidden": real_flat, "deterministic": True, "return_chunk": True})[2]["action_chunk"].float()
-            pred_chunk_init = policy_init({"mode": "sample", "hidden": pred_flat, "deterministic": True, "return_chunk": True})[2]["action_chunk"].float()
-            real_chunk_ckpt = policy_ckpt({"mode": "sample", "hidden": real_flat, "deterministic": True, "return_chunk": True})[2]["action_chunk"].float()
+            real_chunk_init = policy_init(
+                {
+                    "mode": "sample",
+                    "hidden": real_flat,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )[2]["action_chunk"].float()
+            pred_chunk_init = policy_init(
+                {
+                    "mode": "sample",
+                    "hidden": pred_flat,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )[2]["action_chunk"].float()
+            real_chunk_ckpt = policy_ckpt(
+                {
+                    "mode": "sample",
+                    "hidden": real_flat,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )[2]["action_chunk"].float()
 
             rows.append(
                 {
                     "hidden_pred_vs_real": _hidden_metrics(pred_flat, real_flat),
-                    "init_action_pred_hidden_vs_real_hidden_first": _action_metrics(pred_chunk_init[:, 0], real_chunk_init[:, 0]),
-                    "init_action_real_hidden_vs_dataset_first": _action_metrics(real_chunk_init[:, 0], gt_first),
-                    "init_action_pred_hidden_vs_dataset_first": _action_metrics(pred_chunk_init[:, 0], gt_first),
-                    "ckpt_action_real_hidden_vs_dataset_first": _action_metrics(real_chunk_ckpt[:, 0], gt_first),
-                    "ckpt_action_vs_init_action_on_real_hidden_first": _action_metrics(real_chunk_ckpt[:, 0], real_chunk_init[:, 0]),
+                    "init_action_pred_hidden_vs_real_hidden_first": _action_metrics(
+                        pred_chunk_init[:, 0], real_chunk_init[:, 0]
+                    ),
+                    "init_action_real_hidden_vs_dataset_first": _action_metrics(
+                        real_chunk_init[:, 0], gt_first
+                    ),
+                    "init_action_pred_hidden_vs_dataset_first": _action_metrics(
+                        pred_chunk_init[:, 0], gt_first
+                    ),
+                    "ckpt_action_real_hidden_vs_dataset_first": _action_metrics(
+                        real_chunk_ckpt[:, 0], gt_first
+                    ),
+                    "ckpt_action_vs_init_action_on_real_hidden_first": _action_metrics(
+                        real_chunk_ckpt[:, 0], real_chunk_init[:, 0]
+                    ),
                 }
             )
 

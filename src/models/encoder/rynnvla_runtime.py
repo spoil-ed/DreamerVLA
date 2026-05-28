@@ -4,7 +4,6 @@ import copy
 import json
 import logging
 import random
-from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -13,7 +12,10 @@ from PIL import Image
 from transformers import AutoTokenizer
 
 from src.models.chameleon_model.chameleon_vae_ori.image_tokenizer import ImageTokenizer
-from src.models.chameleon_model.chameleon_vae_ori.vocab import VocabInfo, VocabTranslation
+from src.models.chameleon_model.chameleon_vae_ori.vocab import (
+    VocabInfo,
+    VocabTranslation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,9 @@ class RynnVLATokenizer:
             cat_tokens = self.encode(prefix + s, bos=False, eos=False)
             if cat_tokens[: len(prefix_tokens)] == prefix_tokens:
                 return cat_tokens[len(prefix_tokens) :]
-        raise NotImplementedError(f"Unable to tokenize segment without prefix space: {s!r}")
+        raise NotImplementedError(
+            f"Unable to tokenize segment without prefix space: {s!r}"
+        )
 
     def _probe_tokenizer_style(self):
         sentence1 = self.encode("Hi my darling", bos=False, eos=False)
@@ -87,10 +91,16 @@ class RynnVLATokenizer:
 
 
 def center_crop(pil_image, crop_size):
-    while pil_image.size[0] >= 2 * crop_size[0] and pil_image.size[1] >= 2 * crop_size[1]:
-        pil_image = pil_image.resize(tuple(x // 2 for x in pil_image.size), resample=Image.BOX)
+    while (
+        pil_image.size[0] >= 2 * crop_size[0] and pil_image.size[1] >= 2 * crop_size[1]
+    ):
+        pil_image = pil_image.resize(
+            tuple(x // 2 for x in pil_image.size), resample=Image.BOX
+        )
     scale = max(crop_size[0] / pil_image.size[0], crop_size[1] / pil_image.size[1])
-    pil_image = pil_image.resize(tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC)
+    pil_image = pil_image.resize(
+        tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
+    )
     crop_left = random.randint(0, pil_image.size[0] - crop_size[0])
     crop_upper = random.randint(0, pil_image.size[1] - crop_size[1])
     crop_right = crop_left + crop_size[0]
@@ -100,8 +110,14 @@ def center_crop(pil_image, crop_size):
 
 def var_center_crop(pil_image, crop_size_list, random_top_k=1):
     w, h = pil_image.size
-    rem_percent = [min(cw / w, ch / h) / max(cw / w, ch / h) for cw, ch in crop_size_list]
-    crop_size = random.choice(sorted(((x, y) for x, y in zip(rem_percent, crop_size_list)), reverse=True)[:random_top_k])[1]
+    rem_percent = [
+        min(cw / w, ch / h) / max(cw / w, ch / h) for cw, ch in crop_size_list
+    ]
+    crop_size = random.choice(
+        sorted(((x, y) for x, y in zip(rem_percent, crop_size_list)), reverse=True)[
+            :random_top_k
+        ]
+    )[1]
     return center_crop(pil_image, crop_size)
 
 
@@ -158,9 +174,13 @@ class MMConvItemProcessor:
     def insert_implicit_media_symbol_in_q1(conv_list, d_media):
         conv_list = copy.deepcopy(conv_list)
         for media_symbol, l_media in d_media.items():
-            media_symbol_count = "".join([entry["value"] for entry in conv_list if entry["value"] is not None]).count(media_symbol)
+            media_symbol_count = "".join(
+                [entry["value"] for entry in conv_list if entry["value"] is not None]
+            ).count(media_symbol)
             if media_symbol_count == 0:
-                conv_list[0]["value"] = (media_symbol + " ") * len(l_media) + conv_list[0]["value"]
+                conv_list[0]["value"] = (media_symbol + " ") * len(l_media) + conv_list[
+                    0
+                ]["value"]
             else:
                 assert media_symbol_count == len(l_media)
         return conv_list
@@ -186,15 +206,23 @@ class MMConvItemProcessor:
 
     def process_item(self, data_item: dict, training_mode=False):
         d_media = self.collect_and_process_media(data_item)
-        source = self.insert_implicit_media_symbol_in_q1(data_item["conversations"], d_media)
+        source = self.insert_implicit_media_symbol_in_q1(
+            data_item["conversations"], d_media
+        )
         conversation, pieces = self.add_speaker_and_signal(source)
         tokens = self.tokenizer.encode(conversation, bos=True, eos=False)
         labels = [-100 for _ in tokens]
 
         check_pos = 0
         for i, piece in enumerate(pieces):
-            tokenized_value = self.tokenizer.encode(piece["data"], bos=(i == 0), eos=False) if i == 0 else self.tokenizer.encode_wo_prefix_space(piece["data"])
-            assert tokens[check_pos : check_pos + len(tokenized_value)] == tokenized_value
+            tokenized_value = (
+                self.tokenizer.encode(piece["data"], bos=(i == 0), eos=False)
+                if i == 0
+                else self.tokenizer.encode_wo_prefix_space(piece["data"])
+            )
+            assert (
+                tokens[check_pos : check_pos + len(tokenized_value)] == tokenized_value
+            )
             if piece["predict"]:
                 labels[check_pos : check_pos + len(tokenized_value)] = tokenized_value
             check_pos += len(tokenized_value)
@@ -245,10 +273,16 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
             conv_template=Conversation,
         )
         self.patch_size = 32
-        self.crop_size_list = generate_crop_size_list((target_size // self.patch_size) ** 2, self.patch_size)
+        self.crop_size_list = generate_crop_size_list(
+            (target_size // self.patch_size) ** 2, self.patch_size
+        )
         self.device = device
-        self.chameleon_ori_vocab = VocabInfo(json.load(open(text_tokenizer_path, encoding="utf8"))["model"]["vocab"])
-        self.chameleon_ori_translation = VocabTranslation(self.chameleon_ori_vocab, device=device)
+        self.chameleon_ori_vocab = VocabInfo(
+            json.load(open(text_tokenizer_path, encoding="utf8"))["model"]["vocab"]
+        )
+        self.chameleon_ori_translation = VocabTranslation(
+            self.chameleon_ori_vocab, device=device
+        )
         self.chameleon_ori_image_tokenizer = ImageTokenizer(
             cfg_path=vqgan_cfg_path,
             ckpt_path=vqgan_ckpt_path,
@@ -273,7 +307,10 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         else:
             raise TypeError(f"Unsupported image input: {type(image)!r}")
         image = var_center_crop(image, crop_size_list=self.crop_size_list)
-        w_grids, h_grids = image.size[0] // self.patch_size, image.size[1] // self.patch_size
+        w_grids, h_grids = (
+            image.size[0] // self.patch_size,
+            image.size[1] // self.patch_size,
+        )
         image_toks = self.chameleon_ori_translation.convert_img2bp2(
             self.chameleon_ori_image_tokenizer.img_tokens_from_pil(image)
         ).view(-1)
@@ -282,7 +319,13 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         full_image_toks = torch.cat(
             (
                 full_image_toks,
-                torch.ones(image.size[1] // 16, 1, device=full_image_toks.device, dtype=full_image_toks.dtype) * new_line_id,
+                torch.ones(
+                    image.size[1] // 16,
+                    1,
+                    device=full_image_toks.device,
+                    dtype=full_image_toks.dtype,
+                )
+                * new_line_id,
             ),
             dim=1,
         ).flatten()
@@ -299,29 +342,69 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
     def process_action(self, action) -> dict:
         action = np.asarray(action)
         norm_action = self.norm_action(action)
-        discretized_action = np.digitize(norm_action, self.bins) + self.token2id(self.action_start_token) + 1
-        result_toks = [self.token2id(self.action_start_token), *discretized_action.tolist(), self.token2id(self.action_end_token)]
+        discretized_action = (
+            np.digitize(norm_action, self.bins)
+            + self.token2id(self.action_start_token)
+            + 1
+        )
+        result_toks = [
+            self.token2id(self.action_start_token),
+            *discretized_action.tolist(),
+            self.token2id(self.action_end_token),
+        ]
         return {"input_ids": result_toks, "labels": result_toks}
 
     @torch.no_grad()
     def process_state(self, state) -> dict:
         state = np.asarray(state)
         norm_state = self.norm_state(state)
-        discretized_state = np.digitize(norm_state, self.bins) + self.token2id(self.state_start_token) + 1
-        result_toks = [self.token2id(self.state_start_token), *discretized_state.tolist(), self.token2id(self.state_end_token)]
+        discretized_state = (
+            np.digitize(norm_state, self.bins)
+            + self.token2id(self.state_start_token)
+            + 1
+        )
+        result_toks = [
+            self.token2id(self.state_start_token),
+            *discretized_state.tolist(),
+            self.token2id(self.state_end_token),
+        ]
         return {"input_ids": result_toks, "labels": result_toks}
 
     @staticmethod
     def norm_action(action):
-        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
+        min_values = np.array(
+            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
+        )
         max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
         norm_action = 2 * (action - min_values) / (max_values - min_values + 1e-8) - 1
         return np.clip(norm_action, a_min=-1, a_max=1)
 
     @staticmethod
     def norm_state(state):
-        min_values = np.array([-0.4827807, -0.3309336, 0.00812818, 1.00279467, -3.63125079, -1.84273835, -0.00545302, -0.04201502])
-        max_values = np.array([2.10313803e-01, 3.90426440e-01, 1.47277813e00, 3.72486417e00, 3.56188956e00, 1.38632160e00, 4.23214189e-02, 1.31260958e-03])
+        min_values = np.array(
+            [
+                -0.4827807,
+                -0.3309336,
+                0.00812818,
+                1.00279467,
+                -3.63125079,
+                -1.84273835,
+                -0.00545302,
+                -0.04201502,
+            ]
+        )
+        max_values = np.array(
+            [
+                2.10313803e-01,
+                3.90426440e-01,
+                1.47277813e00,
+                3.72486417e00,
+                3.56188956e00,
+                1.38632160e00,
+                4.23214189e-02,
+                1.31260958e-03,
+            ]
+        )
         norm_state = 2 * (state - min_values) / (max_values - min_values + 1e-8) - 1
         return np.clip(norm_state, a_min=-1, a_max=1)
 

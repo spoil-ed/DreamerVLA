@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 import warnings
 
-import numpy as np
 import torch
 from transformers.utils import logging as hf_logging
 
@@ -60,10 +59,18 @@ class RynnVLAEncoder(BaseEncoder):
     def __init__(
         self,
         model_path: str = _default_ckpt_path("VLA_model_256", "libero_10"),
-        tokenizer_path: str = _default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"),
-        text_tokenizer_path: str = _default_ckpt_path("chameleon", "tokenizer", "text_tokenizer.json"),
-        chameleon_vqgan_config: str = _default_ckpt_path("chameleon", "tokenizer", "vqgan.yaml"),
-        chameleon_vqgan_ckpt: str = _default_ckpt_path("chameleon", "tokenizer", "vqgan.ckpt"),
+        tokenizer_path: str = _default_ckpt_path(
+            "models--Alpha-VLLM--Lumina-mGPT-7B-768"
+        ),
+        text_tokenizer_path: str = _default_ckpt_path(
+            "chameleon", "tokenizer", "text_tokenizer.json"
+        ),
+        chameleon_vqgan_config: str = _default_ckpt_path(
+            "chameleon", "tokenizer", "vqgan.yaml"
+        ),
+        chameleon_vqgan_ckpt: str = _default_ckpt_path(
+            "chameleon", "tokenizer", "vqgan.ckpt"
+        ),
         resolution: int = 256,
         action_dim: int = 7,
         time_horizon: int = 5,
@@ -101,15 +108,17 @@ class RynnVLAEncoder(BaseEncoder):
         try:
             hf_logging.set_verbosity_error()
             hf_logging.disable_progress_bar()
-            self.backbone = ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
-                self.model_path,
-                action_dim=self.action_dim,
-                time_horizon=self.time_horizon,
-                action_head_type=self.action_head_type,
-                attn_implementation="sdpa",
-                torch_dtype=torch.bfloat16,
-                ignore_mismatched_sizes=self.action_head_type != "legacy",
-                low_cpu_mem_usage=False,
+            self.backbone = (
+                ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
+                    self.model_path,
+                    action_dim=self.action_dim,
+                    time_horizon=self.time_horizon,
+                    action_head_type=self.action_head_type,
+                    attn_implementation="sdpa",
+                    torch_dtype=torch.bfloat16,
+                    ignore_mismatched_sizes=self.action_head_type != "legacy",
+                    low_cpu_mem_usage=False,
+                )
             )
         finally:
             hf_logging.set_verbosity(hf_verbosity)
@@ -239,7 +248,9 @@ class RynnVLAEncoder(BaseEncoder):
         action_loss_coef: float = 1.0,
     ) -> dict[str, torch.Tensor]:
         if not records:
-            raise ValueError("compute_action_sft_loss requires at least one action record.")
+            raise ValueError(
+                "compute_action_sft_loss requires at least one action record."
+            )
 
         device = self.device
         processor = self._build_processor(device)
@@ -293,7 +304,9 @@ class RynnVLAEncoder(BaseEncoder):
         action_loss_coef: float = 1.0,
     ) -> dict[str, torch.Tensor]:
         if not input_ids_list or not labels_list:
-            raise ValueError("compute_action_sft_loss_from_tokenized requires non-empty tokenized samples.")
+            raise ValueError(
+                "compute_action_sft_loss_from_tokenized requires non-empty tokenized samples."
+            )
 
         (
             token_loss,
@@ -361,15 +374,22 @@ class RynnVLAEncoder(BaseEncoder):
                 att_mask=False,
             )
 
-        attention_mask = torch.zeros(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+        attention_mask = torch.zeros(
+            hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device
+        )
         for idx, length in enumerate(lengths):
             attention_mask[idx, :length] = True
 
         if self.pool == "last":
-            pooled = torch.stack([hidden_states[idx, length - 1] for idx, length in enumerate(lengths)], dim=0)
+            pooled = torch.stack(
+                [hidden_states[idx, length - 1] for idx, length in enumerate(lengths)],
+                dim=0,
+            )
         else:
             weights = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
-            pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+            pooled = (hidden_states * weights).sum(dim=1) / weights.sum(
+                dim=1
+            ).clamp_min(1.0)
 
         return RynnVLAEncoderOutput(
             hidden=pooled.float(),

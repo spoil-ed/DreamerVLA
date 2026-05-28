@@ -51,7 +51,9 @@ def build_encoder_input_batch(
             state_mask=encoded.get("state_mask"),
             action=encoded.get("action", action),
             action_mask=encoded.get("action_mask", action_mask),
-            task_type=list(encoded.get("task_type", [])) if encoded.get("task_type") is not None else None,
+            task_type=list(encoded.get("task_type", []))
+            if encoded.get("task_type") is not None
+            else None,
             task_id=encoded.get("task_id"),
             meta=encoded.get("meta", meta),
         )
@@ -65,7 +67,12 @@ def build_encoder_input_batch(
     conversations = obs.get("conversations")
     if conversations is None:
         conversations_batch: list[list[dict[str, str]]] = [[] for _ in prompt_batch]
-    elif conversations and isinstance(conversations, list) and conversations[0] and isinstance(conversations[0], dict):
+    elif (
+        conversations
+        and isinstance(conversations, list)
+        and conversations[0]
+        and isinstance(conversations[0], dict)
+    ):
         conversations_batch = [list(conversations)]
     else:
         conversations_batch = list(conversations)

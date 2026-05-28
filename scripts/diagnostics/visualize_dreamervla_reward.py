@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -28,14 +29,18 @@ def _strip_prefix(key: str) -> str:
     return key
 
 
-def _load_world_model(ckpt_path: Path, device: torch.device) -> tuple[Any, dict[str, Any]]:
+def _load_world_model(
+    ckpt_path: Path, device: torch.device
+) -> tuple[Any, dict[str, Any]]:
     payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = payload["cfg"]
     wm_cfg = OmegaConf.select(cfg, "world_model")
     if wm_cfg is None:
         raise RuntimeError(f"{ckpt_path} has no world_model config")
     world_model = instantiate(wm_cfg).to(device)
-    fsdp_precision = str(OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16"))
+    fsdp_precision = str(
+        OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16")
+    )
     dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
     world_model = world_model.to(dtype=dtype_map.get(fsdp_precision, torch.bfloat16))
     state = payload.get("state_dicts", {}).get("world_model")
@@ -45,7 +50,9 @@ def _load_world_model(ckpt_path: Path, device: torch.device) -> tuple[Any, dict[
     remapped = {}
     for key, value in state.items():
         key = _strip_prefix(key)
-        if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
+        if key.startswith("reward_head.net.") and not key.startswith(
+            "reward_head.net.net."
+        ):
             candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
             if candidate in target_sd:
                 key = candidate
@@ -68,7 +75,9 @@ def _iter_demo_keys(hdf5_dir: Path) -> list[tuple[Path, str]]:
     return out
 
 
-def _load_demo_arrays(h5_path: Path, hidden_dir: Path, demo_key: str, hidden_key: str) -> dict[str, np.ndarray]:
+def _load_demo_arrays(
+    h5_path: Path, hidden_dir: Path, demo_key: str, hidden_key: str
+) -> dict[str, np.ndarray]:
     hidden_path = hidden_dir / h5_path.name
     with h5py.File(h5_path, "r") as src, h5py.File(hidden_path, "r") as hid:
         demo = src["data"][demo_key]
@@ -89,7 +98,9 @@ def _load_demo_arrays(h5_path: Path, hidden_dir: Path, demo_key: str, hidden_key
 
 
 @torch.no_grad()
-def _predict_reward(world_model: Any, arrays: dict[str, np.ndarray], device: torch.device) -> np.ndarray:
+def _predict_reward(
+    world_model: Any, arrays: dict[str, np.ndarray], device: torch.device
+) -> np.ndarray:
     obs = torch.from_numpy(arrays["hidden"]).unsqueeze(0).to(device)
     actions = torch.from_numpy(arrays["actions"]).unsqueeze(0).to(device)
     is_first = torch.zeros((1, obs.shape[1]), dtype=torch.bool, device=device)
@@ -101,7 +112,9 @@ def _predict_reward(world_model: Any, arrays: dict[str, np.ndarray], device: tor
     return pred.float().detach().cpu().numpy()
 
 
-def _plot_demo(out_png: Path, pred: np.ndarray, true_reward: np.ndarray, title: str) -> None:
+def _plot_demo(
+    out_png: Path, pred: np.ndarray, true_reward: np.ndarray, title: str
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -112,9 +125,23 @@ def _plot_demo(out_png: Path, pred: np.ndarray, true_reward: np.ndarray, title: 
     ax.plot(x, pred, label="WM predicted reward", color="#2563eb", linewidth=2.0)
     positive = np.where(true_reward > 0)[0]
     if len(positive):
-        ax.vlines(positive, ymin=0.0, ymax=max(float(pred.max()), float(true_reward.max()), 1e-3),
-                  colors="#111827", linestyles="--", linewidth=1.2, label="true reward > 0")
-    ax.plot(x, true_reward, label="true sparse reward", color="#dc2626", alpha=0.75, linewidth=1.0)
+        ax.vlines(
+            positive,
+            ymin=0.0,
+            ymax=max(float(pred.max()), float(true_reward.max()), 1e-3),
+            colors="#111827",
+            linestyles="--",
+            linewidth=1.2,
+            label="true reward > 0",
+        )
+    ax.plot(
+        x,
+        true_reward,
+        label="true sparse reward",
+        color="#dc2626",
+        alpha=0.75,
+        linewidth=1.0,
+    )
     ax.set_title(title)
     ax.set_xlabel("timestep")
     ax.set_ylabel("reward")
@@ -138,7 +165,11 @@ def main() -> None:
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    device = torch.device(args.device if torch.cuda.is_available() or not args.device.startswith("cuda") else "cpu")
+    device = torch.device(
+        args.device
+        if torch.cuda.is_available() or not args.device.startswith("cuda")
+        else "cpu"
+    )
     world_model, load_info = _load_world_model(args.ckpt, device)
 
     candidates = _iter_demo_keys(args.hdf5_dir)

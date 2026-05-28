@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -85,7 +86,12 @@ def _is_complete_hdf5(path: Path, *, require_actor_sequence: bool = False) -> bo
                 return False
             for demo_key in data_group.keys():
                 demo = data_group[demo_key]
-                for key in ("actor_hidden_states", "actor_input_ids", "actor_attention_mask", "actor_seq_lens"):
+                for key in (
+                    "actor_hidden_states",
+                    "actor_input_ids",
+                    "actor_attention_mask",
+                    "actor_seq_lens",
+                ):
                     if key not in demo:
                         return False
             return True
@@ -126,9 +132,13 @@ def _prepare_actor_sequence_arrays(
     trigger to the stored ids and mark it valid in the actor attention mask.
     """
     if hidden_states.ndim != 3:
-        raise ValueError(f"hidden_states must be [B,L,D], got {tuple(hidden_states.shape)}")
+        raise ValueError(
+            f"hidden_states must be [B,L,D], got {tuple(hidden_states.shape)}"
+        )
     if attention_mask.ndim != 2:
-        raise ValueError(f"attention_mask must be [B,L], got {tuple(attention_mask.shape)}")
+        raise ValueError(
+            f"attention_mask must be [B,L], got {tuple(attention_mask.shape)}"
+        )
     batch_size, seq_len, _hidden_dim = hidden_states.shape
     if attention_mask.shape != (batch_size, seq_len):
         raise ValueError(
@@ -136,7 +146,9 @@ def _prepare_actor_sequence_arrays(
             f"got {tuple(attention_mask.shape)}, expected {(batch_size, seq_len)}"
         )
     if len(input_ids) != batch_size:
-        raise ValueError(f"input_ids batch mismatch: got {len(input_ids)}, expected {batch_size}")
+        raise ValueError(
+            f"input_ids batch mismatch: got {len(input_ids)}, expected {batch_size}"
+        )
 
     input_rows = np.zeros((batch_size, seq_len + 1), dtype=np.int32)
     mask_rows = np.zeros((batch_size, seq_len + 1), dtype=np.bool_)
@@ -147,7 +159,9 @@ def _prepare_actor_sequence_arrays(
         if valid_len < 1:
             raise ValueError(f"sample {idx} has no valid hidden tokens")
         if valid_len > seq_len:
-            raise ValueError(f"sample {idx} valid_len={valid_len} exceeds seq_len={seq_len}")
+            raise ValueError(
+                f"sample {idx} valid_len={valid_len} exceeds seq_len={seq_len}"
+            )
         if len(input_ids[idx]) < valid_len:
             raise ValueError(
                 f"sample {idx} input_ids shorter than attention_mask: "
@@ -181,7 +195,9 @@ def _select_obs_hidden(
     if action_hidden is None:
         raise ValueError("obs_hidden_source='action_query' requires action_hidden")
     if action_hidden.ndim != 3:
-        raise ValueError(f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}")
+        raise ValueError(
+            f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}"
+        )
     return action_hidden.reshape(action_hidden.shape[0], -1)
 
 
@@ -213,7 +229,9 @@ def _state_from_obs_group(obs_group: h5py.Group, index: int) -> np.ndarray:
         [
             np.asarray(obs_group["ee_pos"][index], dtype=np.float32).reshape(-1),
             np.asarray(obs_group["ee_ori"][index], dtype=np.float32).reshape(-1),
-            np.asarray(obs_group["gripper_states"][index], dtype=np.float32).reshape(-1),
+            np.asarray(obs_group["gripper_states"][index], dtype=np.float32).reshape(
+                -1
+            ),
         ],
         axis=0,
     )
@@ -252,11 +270,17 @@ def _build_vla_policy_record(
     rotate_images_180: bool,
 ) -> dict[str, Any]:
     if len(image_keys) != 2:
-        raise ValueError("prompt_style='vla_policy' expects exactly two image keys: third-view and wrist-view")
+        raise ValueError(
+            "prompt_style='vla_policy' expects exactly two image keys: third-view and wrist-view"
+        )
     images: list[Image.Image] = []
     for hidx in _history_indices(index, history):
         for key in image_keys:
-            images.append(_image_from_hdf5(obs_group, key, hidx, rotate_images_180=rotate_images_180))
+            images.append(
+                _image_from_hdf5(
+                    obs_group, key, hidx, rotate_images_180=rotate_images_180
+                )
+            )
     human_val = f"Finish the task: {prompt}."
     if include_state:
         human_val += "<|state|>"
@@ -306,7 +330,9 @@ def _read_progress(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _read_rank_progress(progress_dir: Path, rank: int, run_id: str) -> dict[str, Any] | None:
+def _read_rank_progress(
+    progress_dir: Path, rank: int, run_id: str
+) -> dict[str, Any] | None:
     progress = _read_progress(progress_dir / f"rank{rank:03d}.json")
     if not progress or progress.get("run_id") != run_id:
         return None
@@ -388,7 +414,9 @@ def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEnco
         freeze_backbone=True,
     ).to(device)
     if args.encoder_state_ckpt:
-        payload = torch.load(args.encoder_state_ckpt, map_location="cpu", weights_only=False)
+        payload = torch.load(
+            args.encoder_state_ckpt, map_location="cpu", weights_only=False
+        )
         encoder_state = payload.get("state_dicts", {}).get("encoder")
         if encoder_state is None:
             raise RuntimeError(f"{args.encoder_state_ckpt} has no state_dicts.encoder")
@@ -426,7 +454,12 @@ def _encode_chunk(
     include_state: bool,
     rotate_images_180: bool,
 ) -> dict[str, np.ndarray]:
-    if str(prompt_style).lower() != "vla_policy" or not bool(include_state) or not bool(rotate_images_180) or int(history) != 2:
+    if (
+        str(prompt_style).lower() != "vla_policy"
+        or not bool(include_state)
+        or not bool(rotate_images_180)
+        or int(history) != 2
+    ):
         raise ValueError(
             "pi0 action-hidden preprocessing must match the existing sidecar: "
             "vla_policy + history=2 + state + rotate180"
@@ -460,7 +493,9 @@ def _encode_chunk(
             output_hidden_states=True,
             att_mask=False,
         )
-    attention_mask = torch.zeros(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+    attention_mask = torch.zeros(
+        hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device
+    )
     for idx, length in enumerate(lengths):
         attention_mask[idx, :length] = True
     weights = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
@@ -494,10 +529,16 @@ def _encode_chunk(
     action_hidden = None
     if bool(save_action_hidden) or str(obs_hidden_source).lower() == "action_query":
         if actor_arrays is None:
-            raise RuntimeError("internal error: action hidden requested without actor input arrays")
+            raise RuntimeError(
+                "internal error: action hidden requested without actor input arrays"
+            )
         device = encoded.hidden_states.device
-        input_ids = torch.as_tensor(actor_arrays["actor_input_ids"], device=device, dtype=torch.long)
-        attention_mask = torch.as_tensor(actor_arrays["actor_attention_mask"], device=device, dtype=torch.bool)
+        input_ids = torch.as_tensor(
+            actor_arrays["actor_input_ids"], device=device, dtype=torch.long
+        )
+        attention_mask = torch.as_tensor(
+            actor_arrays["actor_attention_mask"], device=device, dtype=torch.bool
+        )
         with torch.no_grad():
             action_hidden = encoder.extract_action_hidden(
                 hidden_states=encoded.hidden_states,
@@ -547,7 +588,10 @@ def _write_source_sidecar(
     action_hidden_seq_len: int | None = None
     action_hidden_dim: int | None = None
 
-    with h5py.File(source_path, "r", swmr=True, libver="latest") as source, h5py.File(tmp_path, "w", libver="latest") as out:
+    with (
+        h5py.File(source_path, "r", swmr=True, libver="latest") as source,
+        h5py.File(tmp_path, "w", libver="latest") as out,
+    ):
         data_group = source["data"]
         out_data = out.create_group("data")
         demo_keys = _list_demo_keys(data_group)
@@ -630,7 +674,10 @@ def _write_source_sidecar(
                             shape=(length, actor_seq_len + 1),
                             maxshape=(length, None),
                             dtype=np.int32,
-                            chunks=(min(max(1, int(args.chunk_size)), length), actor_seq_len + 1),
+                            chunks=(
+                                min(max(1, int(args.chunk_size)), length),
+                                actor_seq_len + 1,
+                            ),
                             compression=compression,
                         )
                         actor_attention_mask_dset = demo_out.create_dataset(
@@ -638,7 +685,10 @@ def _write_source_sidecar(
                             shape=(length, actor_seq_len + 1),
                             maxshape=(length, None),
                             dtype=np.bool_,
-                            chunks=(min(max(1, int(args.chunk_size)), length), actor_seq_len + 1),
+                            chunks=(
+                                min(max(1, int(args.chunk_size)), length),
+                                actor_seq_len + 1,
+                            ),
                             compression=compression,
                         )
                         actor_seq_lens_dset = demo_out.create_dataset(
@@ -651,10 +701,18 @@ def _write_source_sidecar(
                         actor_hidden_dset.attrs["hidden_dim"] = actor_hidden_dim
                         actor_hidden_dset.attrs["source_dtype"] = "float32"
                         actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
-                        actor_input_ids_dset.attrs["target_token_id"] = int(args.action_trigger_token_id)
+                        actor_input_ids_dset.attrs["target_token_id"] = int(
+                            args.action_trigger_token_id
+                        )
                     elif chunk_seq_len > int(actor_hidden_dset.shape[1]):
                         actor_seq_len = chunk_seq_len
-                        actor_hidden_dset.resize((length, actor_seq_len, int(actor_hidden_dim or actor_hidden.shape[-1])))
+                        actor_hidden_dset.resize(
+                            (
+                                length,
+                                actor_seq_len,
+                                int(actor_hidden_dim or actor_hidden.shape[-1]),
+                            )
+                        )
                         actor_input_ids_dset.resize((length, actor_seq_len + 1))
                         actor_attention_mask_dset.resize((length, actor_seq_len + 1))
                         actor_hidden_dset.attrs["sequence_dim"] = actor_seq_len
@@ -664,12 +722,22 @@ def _write_source_sidecar(
                         pad = target_seq_len - chunk_seq_len
                         actor_hidden = np.pad(actor_hidden, ((0, 0), (0, pad), (0, 0)))
                         actor_input_ids = np.pad(actor_input_ids, ((0, 0), (0, pad)))
-                        actor_attention_mask = np.pad(actor_attention_mask, ((0, 0), (0, pad)))
+                        actor_attention_mask = np.pad(
+                            actor_attention_mask, ((0, 0), (0, pad))
+                        )
 
-                    actor_hidden_dset[start:end] = actor_hidden.astype(hidden_dtype, copy=False)
-                    actor_input_ids_dset[start:end] = actor_input_ids.astype(np.int32, copy=False)
-                    actor_attention_mask_dset[start:end] = actor_attention_mask.astype(np.bool_, copy=False)
-                    actor_seq_lens_dset[start:end] = actor_seq_lens.astype(np.int32, copy=False)
+                    actor_hidden_dset[start:end] = actor_hidden.astype(
+                        hidden_dtype, copy=False
+                    )
+                    actor_input_ids_dset[start:end] = actor_input_ids.astype(
+                        np.int32, copy=False
+                    )
+                    actor_attention_mask_dset[start:end] = actor_attention_mask.astype(
+                        np.bool_, copy=False
+                    )
+                    actor_seq_lens_dset[start:end] = actor_seq_lens.astype(
+                        np.int32, copy=False
+                    )
                 if bool(args.save_action_hidden):
                     action_hidden = encoded["action_hidden_states"]
                     chunk_action_horizon = int(action_hidden.shape[1])
@@ -686,7 +754,9 @@ def _write_source_sidecar(
                         action_hidden_dset.attrs["hidden_dim"] = action_hidden_dim
                         action_hidden_dset.attrs["source_dtype"] = "float32"
                         action_hidden_dset.attrs["sequence_dim"] = action_hidden_seq_len
-                    action_hidden_dset[start:end] = action_hidden.astype(hidden_dtype, copy=False)
+                    action_hidden_dset[start:end] = action_hidden.astype(
+                        hidden_dtype, copy=False
+                    )
                 frames_written += end - start
             demos_written += 1
             _write_rank_progress(
@@ -751,7 +821,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--hdf5-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256"),
+        default=str(
+            PROJECT_ROOT / "data" / "processed_data" / "libero_goal_no_noops_t_256"
+        ),
     )
     parser.add_argument(
         "--out-dir",
@@ -762,7 +834,9 @@ def parse_args() -> argparse.Namespace:
             "'legacy' -> ..._pi0_legacy_action_hidden_vla_policy_h2/."
         ),
     )
-    parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
+    parser.add_argument(
+        "--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"]
+    )
     parser.add_argument(
         "--prompt-style",
         default="vla_policy",
@@ -815,15 +889,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--action-trigger-token-id", type=int, default=10004)
     parser.add_argument("--chunk-size", type=int, default=16)
-    parser.add_argument("--output-dtype", default="float16", choices=["float16", "float32"])
-    parser.add_argument("--compression", default="none", choices=["none", "lzf", "gzip"])
+    parser.add_argument(
+        "--output-dtype", default="float16", choices=["float16", "float32"]
+    )
+    parser.add_argument(
+        "--compression", default="none", choices=["none", "lzf", "gzip"]
+    )
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-demos-per-file", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-global-progress", action="store_true")
-    parser.add_argument("--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal"))
+    parser.add_argument(
+        "--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal")
+    )
     parser.add_argument("--encoder-state-ckpt", default=None)
-    parser.add_argument("--tokenizer-path", default=_default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"))
+    parser.add_argument(
+        "--tokenizer-path",
+        default=_default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"),
+    )
     parser.add_argument(
         "--text-tokenizer-path",
         default=_default_ckpt_path("chameleon", "tokenizer", "text_tokenizer.json"),
@@ -839,7 +922,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--time-horizon", type=int, default=5)
-    parser.add_argument("--action-head-type", default="pi0_query", choices=["legacy", "pi0_query"])
+    parser.add_argument(
+        "--action-head-type", default="pi0_query", choices=["legacy", "pi0_query"]
+    )
     parser.add_argument("--pool", default="mean", choices=["mean", "last"])
     return parser.parse_args()
 
@@ -877,7 +962,9 @@ def main() -> None:
     if not files:
         raise RuntimeError(f"No HDF5 files found under {hdf5_dir}")
     assigned = files[rank::world_size]
-    assigned_stats = {stat["file"]: stat for stat in (_source_stats(path, args) for path in assigned)}
+    assigned_stats = {
+        stat["file"]: stat for stat in (_source_stats(path, args) for path in assigned)
+    }
     progress_dir = out_dir / ".progress"
     total_demos = 0
     total_frames = 0

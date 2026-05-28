@@ -242,7 +242,9 @@ class ChameleonConfig(PretrainedConfig):
 
         if vq_config is None:
             vq_config = {}
-            logger.info("vq_config is None. initializing the ChameleonVQConfig with default values.")
+            logger.info(
+                "vq_config is None. initializing the ChameleonVQConfig with default values."
+            )
 
         self.vq_config = ChameleonVQVAEConfig(**vq_config)
 
@@ -267,7 +269,10 @@ class ChameleonConfig(PretrainedConfig):
 
         # Newer transformers may auto-populate a default rope metadata dict like:
         # {"rope_type": "default", "rope_theta": 10000.0}. Treat that as no scaling.
-        if isinstance(self.rope_scaling, dict) and self.rope_scaling.get("rope_type") == "default":
+        if (
+            isinstance(self.rope_scaling, dict)
+            and self.rope_scaling.get("rope_type") == "default"
+        ):
             self.rope_scaling = None
             return
 
@@ -282,5 +287,11 @@ class ChameleonConfig(PretrainedConfig):
             raise ValueError(
                 f"`rope_scaling`'s type field must be one of ['linear', 'dynamic'], got {rope_scaling_type}"
             )
-        if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
-            raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+        if (
+            rope_scaling_factor is None
+            or not isinstance(rope_scaling_factor, float)
+            or rope_scaling_factor <= 1.0
+        ):
+            raise ValueError(
+                f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}"
+            )

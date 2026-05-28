@@ -27,25 +27,43 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
     include_keys = ("global_step", "epoch", "dataset_statistics")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/openvla_oft_goal"
+    default_output_dir = (
+        "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/openvla_oft_goal"
+    )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
-            output_dir = str(OmegaConf.select(config, "training.out_dir", default=self.default_output_dir))
+            output_dir = str(
+                OmegaConf.select(
+                    config, "training.out_dir", default=self.default_output_dir
+                )
+            )
         super().__init__(config, output_dir=output_dir)
         self.distributed = NopretokenizeSFTDistributedHelper.initialize(
-            strategy=str(OmegaConf.select(config, "training.distributed_strategy", default="ddp")),
-            fsdp_mixed_precision=str(OmegaConf.select(config, "training.fsdp_mixed_precision", default="bf16")),
+            strategy=str(
+                OmegaConf.select(config, "training.distributed_strategy", default="ddp")
+            ),
+            fsdp_mixed_precision=str(
+                OmegaConf.select(
+                    config, "training.fsdp_mixed_precision", default="bf16"
+                )
+            ),
             enable_activation_checkpointing=bool(
-                OmegaConf.select(config, "training.enable_activation_checkpointing", default=False)
+                OmegaConf.select(
+                    config, "training.enable_activation_checkpointing", default=False
+                )
             ),
         )
         if self.distributed.uses_fsdp:
-            raise ValueError("OpenVLA-OFT workspace supports single-process/DDP training; use distributed_strategy=ddp.")
+            raise ValueError(
+                "OpenVLA-OFT workspace supports single-process/DDP training; use distributed_strategy=ddp."
+            )
         self.rank = self.distributed.rank
         self.local_rank = self.distributed.local_rank
         self.world_size = self.distributed.world_size
-        self.device = self.distributed.resolve_device(str(OmegaConf.select(config, "trainer.device", default="auto")))
+        self.device = self.distributed.resolve_device(
+            str(OmegaConf.select(config, "trainer.device", default="auto"))
+        )
         set_seed(int(config.seed) + self.rank)
         self.policy = None
         self.optimizer = None
@@ -67,14 +85,22 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
         vla = self.distributed.unwrap_module(self.policy).vla
         if hasattr(vla, "save_pretrained"):
             vla.save_pretrained(adapter_dir)
-        processor = getattr(self.distributed.unwrap_module(self.policy), "processor", None)
+        processor = getattr(
+            self.distributed.unwrap_module(self.policy), "processor", None
+        )
         if processor is not None and hasattr(processor, "save_pretrained"):
             processor.save_pretrained(save_dir)
-        torch.save(
-            self.distributed.unwrap_module(self.policy).action_head.state_dict(),
-            os.path.join(save_dir, f"action_head--{int(step)}_checkpoint.pt"),
+        action_head = getattr(
+            self.distributed.unwrap_module(self.policy), "action_head", None
         )
-        proprio_projector = getattr(self.distributed.unwrap_module(self.policy), "proprio_projector", None)
+        if action_head is not None:
+            torch.save(
+                action_head.state_dict(),
+                os.path.join(save_dir, f"action_head--{int(step)}_checkpoint.pt"),
+            )
+        proprio_projector = getattr(
+            self.distributed.unwrap_module(self.policy), "proprio_projector", None
+        )
         if proprio_projector is not None:
             torch.save(
                 proprio_projector.state_dict(),
@@ -97,17 +123,27 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
 
         dataset_factory = hydra.utils.instantiate(cfg.dataset)
         if not hasattr(dataset_factory, "build"):
-            raise TypeError("OpenVLA-OFT dataset config must instantiate a factory with build(policy, train=...).")
-        bundle = dataset_factory.build(self.distributed.unwrap_module(self.policy), train=True)
+            raise TypeError(
+                "OpenVLA-OFT dataset config must instantiate a factory with build(policy, train=...)."
+            )
+        bundle = dataset_factory.build(
+            self.distributed.unwrap_module(self.policy), train=True
+        )
         dataloader = bundle.dataloader
         self.dataset_statistics = bundle.dataset_statistics
 
-        max_train_steps = int(OmegaConf.select(cfg, "training.max_train_steps", default=1000))
-        grad_accumulation = int(OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1))
+        max_train_steps = int(
+            OmegaConf.select(cfg, "training.max_train_steps", default=1000)
+        )
+        grad_accumulation = int(
+            OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1)
+        )
         lr_scheduler = get_scheduler(
             str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant")),
             optimizer=self.optimizer,
-            num_warmup_steps=int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)),
+            num_warmup_steps=int(
+                OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
+            ),
             num_training_steps=max_train_steps,
             last_epoch=self.global_step - 1,
         )
@@ -117,18 +153,28 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
             **cfg.checkpoint.topk,
         )
         log_path = os.path.join(self.output_dir, "openvla_oft_logs.json.txt")
-        checkpoint_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=500))
-        save_components_every = int(OmegaConf.select(cfg, "training.save_components_every", default=0))
+        checkpoint_every = int(
+            OmegaConf.select(cfg, "training.checkpoint_every", default=500)
+        )
+        save_components_every = int(
+            OmegaConf.select(cfg, "training.save_components_every", default=0)
+        )
 
         self.policy.train()
-        self.optimizer.zero_grad(set_to_none=bool(OmegaConf.select(cfg, "optim.zero_grad_set_to_none", default=True)))
+        self.optimizer.zero_grad(
+            set_to_none=bool(
+                OmegaConf.select(cfg, "optim.zero_grad_set_to_none", default=True)
+            )
+        )
         with JsonLogger(log_path) as logger:
             progress = tqdm.tqdm(
                 total=max_train_steps,
                 initial=self.global_step,
                 disable=not self.distributed.is_main_process,
                 desc="OpenVLA-OFT train",
-                mininterval=float(OmegaConf.select(cfg, "training.tqdm_interval_sec", default=1.0)),
+                mininterval=float(
+                    OmegaConf.select(cfg, "training.tqdm_interval_sec", default=1.0)
+                ),
             )
             while self.global_step < max_train_steps:
                 sampler = getattr(dataloader, "sampler", None)
@@ -140,13 +186,21 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
                     (loss / grad_accumulation).backward()
                     if (batch_idx + 1) % grad_accumulation != 0:
                         continue
-                    grad_clip_norm = OmegaConf.select(cfg, "optim.grad_clip_norm", default=None)
+                    grad_clip_norm = OmegaConf.select(
+                        cfg, "optim.grad_clip_norm", default=None
+                    )
                     if grad_clip_norm is not None:
-                        self.distributed.clip_grad_norm(self.policy, float(grad_clip_norm))
+                        self.distributed.clip_grad_norm(
+                            self.policy, float(grad_clip_norm)
+                        )
                     self.optimizer.step()
                     lr_scheduler.step()
                     self.optimizer.zero_grad(
-                        set_to_none=bool(OmegaConf.select(cfg, "optim.zero_grad_set_to_none", default=True))
+                        set_to_none=bool(
+                            OmegaConf.select(
+                                cfg, "optim.zero_grad_set_to_none", default=True
+                            )
+                        )
                     )
 
                     reduced = self.distributed.reduce_mean_dict(metrics)
@@ -158,17 +212,33 @@ class OpenVLAOFTTrainingWorkspace(BaseWorkspace):
                     }
                     logger.log(step_log)
                     history.append(step_log)
-                    progress.set_postfix(refresh=False, loss=float(step_log["train_loss_value"]))
+                    progress.set_postfix(
+                        refresh=False, loss=float(step_log["train_loss_value"])
+                    )
                     progress.update(1)
 
-                    if self.global_step > 0 and self.global_step % checkpoint_every == 0:
+                    if (
+                        self.global_step > 0
+                        and self.global_step % checkpoint_every == 0
+                    ):
                         self.save_checkpoint()
-                        metric_dict = {key.replace("/", "_"): value for key, value in step_log.items()}
-                        topk_path = topk_manager.get_ckpt_path(metric_dict) if self.distributed.is_main_process else None
+                        metric_dict = {
+                            key.replace("/", "_"): value
+                            for key, value in step_log.items()
+                        }
+                        topk_path = (
+                            topk_manager.get_ckpt_path(metric_dict)
+                            if self.distributed.is_main_process
+                            else None
+                        )
                         topk_path = self.distributed.broadcast_object(topk_path)
                         if topk_path is not None:
                             self.save_checkpoint(path=topk_path)
-                    if save_components_every > 0 and self.global_step > 0 and self.global_step % save_components_every == 0:
+                    if (
+                        save_components_every > 0
+                        and self.global_step > 0
+                        and self.global_step % save_components_every == 0
+                    ):
                         self._save_oft_components(self.global_step)
 
                     self.global_step += 1

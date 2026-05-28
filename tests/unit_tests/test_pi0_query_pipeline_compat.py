@@ -28,7 +28,9 @@ def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
+        LIBEROPixelRynnHiddenSequenceDataset
+    )
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -52,7 +54,9 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
+        LIBEROPixelRynnHiddenSequenceDataset
+    )
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -87,9 +91,9 @@ def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
         action_head_type="pi0_query",
     )
 
-    chunk = actor({"mode": "sample", "hidden": torch.randn(2, 16), "deterministic": True})[2][
-        "action_chunk"
-    ]
+    chunk = actor(
+        {"mode": "sample", "hidden": torch.randn(2, 16), "deterministic": True}
+    )[2]["action_chunk"]
 
     assert actor.action_token_embeddings.weight.shape == (1, 4 * 16)
     assert chunk.shape == (2, 4, 3)
@@ -97,7 +101,9 @@ def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
 
 def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> None:
     path = tmp_path / "vla_without_action_head.ckpt"
-    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
+    torch.save(
+        {"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path
+    )
 
     with pytest.raises(RuntimeError, match="action_head"):
         VLAActionHeadActor(
@@ -150,12 +156,14 @@ def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
 
 
 def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
-    cfg = EvalLiberoVLAWorkspace._checkpoint_cfg_from_payload({
-        "cfg": {
-            "training": {"out_dir": "/tmp/eval"},
-            "eval": {"task_suite_name": "libero_goal"},
+    cfg = EvalLiberoVLAWorkspace._checkpoint_cfg_from_payload(
+        {
+            "cfg": {
+                "training": {"out_dir": "/tmp/eval"},
+                "eval": {"task_suite_name": "libero_goal"},
+            }
         }
-    })
+    )
 
     assert OmegaConf.select(cfg, "training.out_dir") == "/tmp/eval"
     assert OmegaConf.select(cfg, "eval.task_suite_name") == "libero_goal"
@@ -170,11 +178,13 @@ def test_pi0_action_hidden_actor_decodes_flattened_action_hidden() -> None:
         adapter_type="identity",
     )
 
-    action, log_prob, extra = actor({
-        "mode": "sample",
-        "hidden": torch.randn(2, 20),
-        "deterministic": True,
-    })
+    action, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": torch.randn(2, 20),
+            "deterministic": True,
+        }
+    )
 
     assert action.shape == (2, 3)
     assert log_prob.shape == (2,)
@@ -213,9 +223,13 @@ def test_pi0_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
         assert torch.equal(actor.output_projection.state_dict()[key], value)
 
 
-def test_pi0_action_hidden_actor_rejects_ckpt_without_output_projection(tmp_path) -> None:
+def test_pi0_action_hidden_actor_rejects_ckpt_without_output_projection(
+    tmp_path,
+) -> None:
     path = tmp_path / "vla_without_projection.ckpt"
-    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
+    torch.save(
+        {"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path
+    )
 
     with pytest.raises(RuntimeError, match="output_projection"):
         Pi0ActionHiddenActor(

@@ -41,10 +41,14 @@ class FixedStepVideoRecorder:
         elif "agentview_rgb" in obs:
             frame = obs["agentview_rgb"]
         else:
-            raise KeyError(f"observation has no video frame key {self.frame_key!r} or 'agentview_rgb'")
+            raise KeyError(
+                f"observation has no video frame key {self.frame_key!r} or 'agentview_rgb'"
+            )
         frame_arr = np.asarray(frame, dtype=np.uint8)
         if frame_arr.ndim != 3 or frame_arr.shape[-1] != 3:
-            raise ValueError(f"video frame must be HWC uint8 RGB, got shape {tuple(frame_arr.shape)}")
+            raise ValueError(
+                f"video frame must be HWC uint8 RGB, got shape {tuple(frame_arr.shape)}"
+            )
         self._frames.append(np.ascontiguousarray(frame_arr))
         if self.max_frames > 0 and len(self._frames) > self.max_frames:
             del self._frames[: len(self._frames) - self.max_frames]

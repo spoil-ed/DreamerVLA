@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Diagnose whether DINO-WM imagined PPO routes match real LIBERO rollout.
 
 This is intentionally a diagnostic script, not a training/eval path.  For a
@@ -13,18 +14,16 @@ fixed LIBERO task/init state it:
 6. Logs action deltas between closed-loop Dreamer actions and the original SFT
    VLA actions at the same real states.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
-import hydra
 import numpy as np
 import torch
 from hydra import compose, initialize_config_dir
@@ -36,11 +35,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.env import TASK_MAX_STEPS, get_libero_dummy_action, get_libero_env, get_libero_image
+from src.env import get_libero_dummy_action, get_libero_env, get_libero_image
 from src.workspace.eval_libero_vla_workspace import EvalLiberoVLAWorkspace
 from src.algorithms.dreamer_vla import (
     _actor_action_for_world_model,
-    _actor_action_to_env_scale,
     _detach_latent,
     _world_model_actor_input,
     _world_model_state_reward,
@@ -52,7 +50,11 @@ from robosuite.utils.transform_utils import quat2axisangle
 def _array_stats(prefix: str, left: np.ndarray, right: np.ndarray) -> dict[str, float]:
     diff = np.asarray(left, dtype=np.float32) - np.asarray(right, dtype=np.float32)
     denom = float(np.linalg.norm(left.reshape(-1)) * np.linalg.norm(right.reshape(-1)))
-    cos = float(np.dot(left.reshape(-1), right.reshape(-1)) / denom) if denom > 1.0e-12 else math.nan
+    cos = (
+        float(np.dot(left.reshape(-1), right.reshape(-1)) / denom)
+        if denom > 1.0e-12
+        else math.nan
+    )
     return {
         f"{prefix}_mse": float(np.mean(np.square(diff))),
         f"{prefix}_mae": float(np.mean(np.abs(diff))),
@@ -61,7 +63,9 @@ def _array_stats(prefix: str, left: np.ndarray, right: np.ndarray) -> dict[str, 
     }
 
 
-def _merge_dreamer_eval_cfg(eval_cfg_root: DictConfig, payload: dict[str, Any]) -> DictConfig:
+def _merge_dreamer_eval_cfg(
+    eval_cfg_root: DictConfig, payload: dict[str, Any]
+) -> DictConfig:
     cfg = payload.get("cfg")
     if cfg is None:
         raise RuntimeError("Dreamer checkpoint has no cfg")
@@ -70,12 +74,16 @@ def _merge_dreamer_eval_cfg(eval_cfg_root: DictConfig, payload: dict[str, Any]) 
         train_cfg.eval = eval_cfg_root.eval
         if OmegaConf.select(train_cfg, "encoder", default=None) is None:
             train_cfg.encoder = eval_cfg_root.encoder
-        eval_vla_path = OmegaConf.select(eval_cfg_root, "init.vla_ckpt_path", default=None)
+        eval_vla_path = OmegaConf.select(
+            eval_cfg_root, "init.vla_ckpt_path", default=None
+        )
         if eval_vla_path is not None:
             train_cfg.init.vla_ckpt_path = eval_vla_path
             if OmegaConf.select(train_cfg, "encoder", default=None) is not None:
                 train_cfg.encoder.model_path = eval_vla_path
-        eval_encoder_ckpt = OmegaConf.select(eval_cfg_root, "init.encoder_state_ckpt", default=None)
+        eval_encoder_ckpt = OmegaConf.select(
+            eval_cfg_root, "init.encoder_state_ckpt", default=None
+        )
         train_cfg.init.encoder_state_ckpt = eval_encoder_ckpt
         train_cfg.training.out_dir = eval_cfg_root.training.out_dir
         train_cfg.training.distributed_strategy = "ddp"
@@ -105,7 +113,9 @@ def _build_workspace(args: argparse.Namespace) -> EvalLiberoVLAWorkspace:
         "eval.dreamer_deterministic=true",
         "trainer.device=cuda:0",
     ]
-    with initialize_config_dir(config_dir=str(PROJECT_ROOT / "configs"), version_base=None):
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs"), version_base=None
+    ):
         eval_cfg = compose(config_name="eval_libero_vla", overrides=overrides)
     bootstrap = EvalLiberoVLAWorkspace(eval_cfg)
     payload = bootstrap._load_checkpoint_payload(str(args.ckpt))
@@ -133,11 +143,17 @@ def _build_workspace(args: argparse.Namespace) -> EvalLiberoVLAWorkspace:
 
 def _state_from_obs(obs: dict[str, Any]) -> np.ndarray:
     return np.concatenate(
-        (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+        (
+            obs["robot0_eef_pos"],
+            quat2axisangle(obs["robot0_eef_quat"]),
+            obs["robot0_gripper_qpos"],
+        )
     ).astype(np.float32)
 
 
-def _padded_history(frame_history: list[tuple[Image.Image, Image.Image]], history_length: int) -> list[tuple[Image.Image, Image.Image]]:
+def _padded_history(
+    frame_history: list[tuple[Image.Image, Image.Image]], history_length: int
+) -> list[tuple[Image.Image, Image.Image]]:
     return [frame_history[0]] * (history_length - len(frame_history)) + frame_history
 
 
@@ -158,14 +174,19 @@ def _observe(
     state = _state_from_obs(obs)
     ws._libero_current_raw_obs = obs
     obs_embedding, input_ids = ws._dreamer_obs_embedding_from_eval_inputs(
-        item_processor, _padded_history(frame_history, history_length), state, task_description
+        item_processor,
+        _padded_history(frame_history, history_length),
+        state,
+        task_description,
     )
     if input_ids is None:
         raise RuntimeError("This diagnostic expects token/VLA observation inputs")
     return obs_embedding, input_ids, state, frame_history
 
 
-def _sft_action(ws: EvalLiberoVLAWorkspace, input_ids: list[int]) -> tuple[np.ndarray, np.ndarray]:
+def _sft_action(
+    ws: EvalLiberoVLAWorkspace, input_ids: list[int]
+) -> tuple[np.ndarray, np.ndarray]:
     backbone = ws.encoder.backbone
     generation_config = GenerationConfig(
         max_new_tokens=1,
@@ -175,9 +196,17 @@ def _sft_action(ws: EvalLiberoVLAWorkspace, input_ids: list[int]) -> tuple[np.nd
         do_sample=False,
         eos_token_id=[8710],
     )
-    input_tensor = torch.tensor(input_ids, dtype=torch.long, device=ws.device).unsqueeze(0)
+    input_tensor = torch.tensor(
+        input_ids, dtype=torch.long, device=ws.device
+    ).unsqueeze(0)
     with torch.no_grad():
-        raw = backbone.generate_action_head(input_tensor, generation_config).detach().cpu().float().numpy()
+        raw = (
+            backbone.generate_action_head(input_tensor, generation_config)
+            .detach()
+            .cpu()
+            .float()
+            .numpy()
+        )
     raw = raw.reshape(-1, raw.shape[-1])
     env = np.asarray(ws._unnorm_actions(raw)[0], dtype=np.float32)
     return raw[0, :7].astype(np.float32), env[:7].astype(np.float32)
@@ -190,7 +219,14 @@ def _dreamer_action_from_latent(
 ) -> tuple[torch.Tensor, np.ndarray, np.ndarray, torch.Tensor]:
     feat = _world_model_actor_input(ws.world_model, latent).detach().float()
     with torch.no_grad():
-        action, _, extra = ws.policy({"mode": "sample", "hidden": feat, "deterministic": deterministic, "return_chunk": False})
+        action, _, extra = ws.policy(
+            {
+                "mode": "sample",
+                "hidden": feat,
+                "deterministic": deterministic,
+                "return_chunk": False,
+            }
+        )
     raw = action.detach().reshape(-1, 7)[0].cpu().float().numpy().astype(np.float32)
     env = ws._dreamer_policy_raw_to_env_action(raw).astype(np.float32)
     wm_action = _actor_action_for_world_model(action.detach(), ws.cfg.algorithm)
@@ -212,14 +248,20 @@ def _imagine_candidates(
         first_action_tensor = None
         first_wm_action = None
         for step in range(horizon):
-            action_tensor, raw, env, wm_action = _dreamer_action_from_latent(ws, cur, deterministic=False)
+            action_tensor, raw, env, wm_action = _dreamer_action_from_latent(
+                ws, cur, deterministic=False
+            )
             if step == 0:
                 first_action_tensor = action_tensor
                 first_wm_action = wm_action
             raw_actions.append(raw.tolist())
             env_actions.append(env.tolist())
             with torch.no_grad():
-                cur = _detach_latent(ws.world_model({"mode": "predict_next", "latent": cur, "actions": wm_action}))
+                cur = _detach_latent(
+                    ws.world_model(
+                        {"mode": "predict_next", "latent": cur, "actions": wm_action}
+                    )
+                )
                 reward = _world_model_state_reward(ws.world_model, cur).detach().float()
             rewards.append(float(reward.reshape(-1)[0].cpu()))
         rows.append(
@@ -265,19 +307,29 @@ def _rollout_with_forced_first_action(
     forced_used = False
     for step_idx in range(max_steps):
         obs_embedding, input_ids, state, frame_history = _observe(
-            ws, item_processor, obs, frame_history, task_description, resolution, history_length
+            ws,
+            item_processor,
+            obs,
+            frame_history,
+            task_description,
+            resolution,
+            history_length,
         )
         with torch.no_grad():
             if args.rollout_mode == "online_rssm":
                 latent = ws._dreamer_online_update_latent(obs_embedding)
             else:
-                latent = ws.world_model({"mode": "encode_latent", "hidden": obs_embedding})
+                latent = ws.world_model(
+                    {"mode": "encode_latent", "hidden": obs_embedding}
+                )
         if not forced_used:
             dreamer_env = forced_env_action.astype(np.float32)
             wm_action = forced_wm_action.reshape(1, -1).to(ws.device)
             forced_used = True
         else:
-            _action_tensor, _raw, dreamer_env, wm_action = _dreamer_action_from_latent(ws, latent, deterministic=True)
+            _action_tensor, _raw, dreamer_env, wm_action = _dreamer_action_from_latent(
+                ws, latent, deterministic=True
+            )
         row = {
             "step": step_idx,
             "dreamer_env_action": dreamer_env.tolist(),
@@ -294,10 +346,22 @@ def _rollout_with_forced_first_action(
         if done:
             break
     means = {}
-    for key in ("dreamer_vs_sft_env_action_mse", "dreamer_vs_sft_env_action_mae", "dreamer_vs_sft_env_action_max_abs", "dreamer_vs_sft_env_action_cos"):
-        vals = [float(row[key]) for row in comparisons if not math.isnan(float(row[key]))]
+    for key in (
+        "dreamer_vs_sft_env_action_mse",
+        "dreamer_vs_sft_env_action_mae",
+        "dreamer_vs_sft_env_action_max_abs",
+        "dreamer_vs_sft_env_action_cos",
+    ):
+        vals = [
+            float(row[key]) for row in comparisons if not math.isnan(float(row[key]))
+        ]
         means[f"mean_{key}"] = float(np.mean(vals)) if vals else math.nan
-    return {"success": bool(done), "steps": int(steps), "action_compare": means, "action_compare_rows": comparisons[: args.trace_steps]}
+    return {
+        "success": bool(done),
+        "steps": int(steps),
+        "action_compare": means,
+        "action_compare_rows": comparisons[: args.trace_steps],
+    }
 
 
 def main() -> None:
@@ -312,7 +376,9 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--action-steps", type=int, default=5)
     parser.add_argument("--history-length", type=int, default=2)
-    parser.add_argument("--rollout-mode", choices=["stateless", "online_rssm"], default="stateless")
+    parser.add_argument(
+        "--rollout-mode", choices=["stateless", "online_rssm"], default="stateless"
+    )
     parser.add_argument("--trace-steps", type=int, default=20)
     parser.add_argument("--sft-compare-steps", type=int, default=80)
     parser.add_argument("--seed", type=int, default=7)
@@ -329,7 +395,10 @@ def main() -> None:
     task = task_suite.get_task(int(args.task_id))
     initial_states = task_suite.get_task_init_states(int(args.task_id))
     initial_state = initial_states[int(args.episode_idx)]
-    env, task_description = get_libero_env(task, resolution=int(OmegaConf.select(ws.cfg, "encoder.resolution", default=256)))
+    env, task_description = get_libero_env(
+        task,
+        resolution=int(OmegaConf.select(ws.cfg, "encoder.resolution", default=256)),
+    )
 
     # Build the shared real initial observation for imagined candidates.
     env.reset()
@@ -352,7 +421,9 @@ def main() -> None:
     with torch.no_grad():
         latent = ws.world_model({"mode": "encode_latent", "hidden": obs_embedding})
     sft_raw, sft_env = _sft_action(ws, input_ids)
-    candidates = _imagine_candidates(ws, latent, int(args.num_candidates), int(args.imagination_horizon))
+    candidates = _imagine_candidates(
+        ws, latent, int(args.num_candidates), int(args.imagination_horizon)
+    )
 
     real_rows = []
     partial_json = args.out_dir / "imagine_vs_real_routes.partial.json"
@@ -367,7 +438,9 @@ def main() -> None:
             initial_state=initial_state,
             task_description=task_description,
             item_processor=item_processor,
-            forced_env_action=np.asarray(candidate["first_env_action"], dtype=np.float32),
+            forced_env_action=np.asarray(
+                candidate["first_env_action"], dtype=np.float32
+            ),
             forced_wm_action=candidate["_first_wm_action"],
             args=args,
         )

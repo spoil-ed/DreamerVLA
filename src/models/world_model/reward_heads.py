@@ -89,10 +89,14 @@ class SymexpTwoHotHead(nn.Module):
 
     def _bins(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         if self.bins_count % 2 == 1:
-            half = torch.linspace(-20.0, 0.0, (self.bins_count - 1) // 2 + 1, device=device, dtype=dtype)
+            half = torch.linspace(
+                -20.0, 0.0, (self.bins_count - 1) // 2 + 1, device=device, dtype=dtype
+            )
             half = symexp(half)
             return torch.cat([half, -half[:-1].flip(0)], dim=0)
-        half = torch.linspace(-20.0, 0.0, self.bins_count // 2, device=device, dtype=dtype)
+        half = torch.linspace(
+            -20.0, 0.0, self.bins_count // 2, device=device, dtype=dtype
+        )
         half = symexp(half)
         return torch.cat([half, -half.flip(0)], dim=0)
 
@@ -102,7 +106,9 @@ class SymexpTwoHotHead(nn.Module):
     def loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         target = target.to(device=logits.device, dtype=logits.dtype).detach()
         bins = self._bins(logits.device, logits.dtype)
-        below = (bins.view(*((1,) * target.ndim), -1) <= target.unsqueeze(-1)).sum(dim=-1) - 1
+        below = (bins.view(*((1,) * target.ndim), -1) <= target.unsqueeze(-1)).sum(
+            dim=-1
+        ) - 1
         above = self.bins_count - (
             bins.view(*((1,) * target.ndim), -1) > target.unsqueeze(-1)
         ).sum(dim=-1)
@@ -111,15 +117,20 @@ class SymexpTwoHotHead(nn.Module):
         equal = below == above
         below_bins = bins[below]
         above_bins = bins[above]
-        dist_to_below = torch.where(equal, torch.ones_like(target), (below_bins - target).abs())
-        dist_to_above = torch.where(equal, torch.ones_like(target), (above_bins - target).abs())
+        dist_to_below = torch.where(
+            equal, torch.ones_like(target), (below_bins - target).abs()
+        )
+        dist_to_above = torch.where(
+            equal, torch.ones_like(target), (above_bins - target).abs()
+        )
         total = dist_to_below + dist_to_above
         weight_below = dist_to_above / total.clamp_min(1e-8)
         weight_above = dist_to_below / total.clamp_min(1e-8)
-        target_dist = (
-            F.one_hot(below, self.bins_count).to(dtype=logits.dtype) * weight_below.unsqueeze(-1)
-            + F.one_hot(above, self.bins_count).to(dtype=logits.dtype) * weight_above.unsqueeze(-1)
-        )
+        target_dist = F.one_hot(below, self.bins_count).to(
+            dtype=logits.dtype
+        ) * weight_below.unsqueeze(-1) + F.one_hot(above, self.bins_count).to(
+            dtype=logits.dtype
+        ) * weight_above.unsqueeze(-1)
         return -(target_dist * F.log_softmax(logits, dim=-1)).sum(dim=-1)
 
     def pred(self, logits: torch.Tensor) -> torch.Tensor:
@@ -166,11 +177,19 @@ class BinaryRewardHead(nn.Module):
 
     def loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         logits = logits.squeeze(-1).float()
-        target = target.to(device=logits.device, dtype=torch.float32).detach().clamp(0.0, 1.0)
+        target = (
+            target.to(device=logits.device, dtype=torch.float32)
+            .detach()
+            .clamp(0.0, 1.0)
+        )
         pos_weight = None
         if self.pos_weight is not None:
-            pos_weight = torch.tensor(self.pos_weight, device=logits.device, dtype=logits.dtype)
-        return F.binary_cross_entropy_with_logits(logits, target, reduction="none", pos_weight=pos_weight)
+            pos_weight = torch.tensor(
+                self.pos_weight, device=logits.device, dtype=logits.dtype
+            )
+        return F.binary_cross_entropy_with_logits(
+            logits, target, reduction="none", pos_weight=pos_weight
+        )
 
     def pred(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(logits.squeeze(-1).float()).to(dtype=logits.dtype)
@@ -202,7 +221,9 @@ def _make_reward_head(
     return SymexpTwoHotHead(feat_dim, bins=reward_bins, layers=1, units=hidden, act=act)
 
 
-def _reward_loss(head: nn.Module, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def _reward_loss(
+    head: nn.Module, pred: torch.Tensor, target: torch.Tensor
+) -> torch.Tensor:
     target = target.to(device=pred.device, dtype=pred.dtype)
     if hasattr(head, "loss"):
         return head.loss(pred, target).mean()

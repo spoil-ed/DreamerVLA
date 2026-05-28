@@ -9,10 +9,18 @@
 #    dreamervla_pi0_action_hidden_head_actor   (default)   RSSM + pi0 head actor
 #    dreamervla_rynn_dino_wm_actor_critic                  DINO-WM + DreamerV3 AC
 #    dreamervla_rynn_dino_wm_wmpo_outcome                  DINO-WM + WMPO outcome PPO
+#    dreamervla_oft_dino_wm_wmpo_outcome                   OpenVLA-OFT DINO-WM + WMPO outcome PPO
+#
+#  The OFT variant requires a pre-trained classifier checkpoint:
+#    1. CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh   → produces .ckpt
+#    2. CONFIG=dreamervla_oft_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh \
+#         init.classifier_state_ckpt=<path-from-step-1>
 #
 #  Examples:
 #    bash scripts/train_dreamervla.sh
 #    CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh
+#    CONFIG=dreamervla_oft_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh \
+#        task=libero_goal init.classifier_state_ckpt=path/to/classifier.ckpt
 #    NGPU=4 CONFIG=dreamervla_rynn_dino_wm_actor_critic \
 #        bash scripts/train_dreamervla.sh task=libero_object
 # ============================================================================

@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# ruff: noqa: E402
 """Fine-tune ONLY the WM reward head as a terminal-success classifier.
 
 WMPO-style recipe:
@@ -13,6 +14,7 @@ WMPO-style recipe:
 Outputs a new WM checkpoint with the fine-tuned reward head; the actor/critic
 training script can then resume from it via --world-model-ckpt.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,7 +34,9 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import load_world_model_state
+from scripts.training.train_online_pi0_action_hidden_dreamervla import (
+    load_world_model_state,
+)
 from src.dataloader.libero_balanced_terminal_dataset import (
     BalancedTerminalSampler,
     LIBEROBalancedTerminalDataset,
@@ -43,7 +47,12 @@ from src.utils.seed import set_seed
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--config", default=str(PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"))
+    p.add_argument(
+        "--config",
+        default=str(
+            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+        ),
+    )
     p.add_argument("--world-model-ckpt", required=True)
     p.add_argument("--out-dir", required=True)
     p.add_argument("--max-steps", type=int, default=2000)
@@ -56,11 +65,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--grad-clip", type=float, default=1.0)
-    p.add_argument("--swap-binary-head", action="store_true",
-                   help="Replace the existing SymexpTwoHot reward head with a fresh BinaryRewardHead")
+    p.add_argument(
+        "--swap-binary-head",
+        action="store_true",
+        help="Replace the existing SymexpTwoHot reward head with a fresh BinaryRewardHead",
+    )
     p.add_argument("--binary-init-logit", type=float, default=-5.0)
-    p.add_argument("--binary-pos-weight", type=float, default=10.0,
-                   help="positive class weight for BCE (compensates within-window 1:31 imbalance)")
+    p.add_argument(
+        "--binary-pos-weight",
+        type=float,
+        default=10.0,
+        help="positive class weight for BCE (compensates within-window 1:31 imbalance)",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--positive-ratio", type=float, default=0.5)
@@ -82,7 +98,9 @@ def reward_head_param_names(world_model: torch.nn.Module) -> list[str]:
     return [n for n, _ in world_model.named_parameters() if "reward_head" in n]
 
 
-def maybe_swap_binary_head(world_model: torch.nn.Module, init_logit: float, pos_weight: float) -> None:
+def maybe_swap_binary_head(
+    world_model: torch.nn.Module, init_logit: float, pos_weight: float
+) -> None:
     """Replace world_model.reward_head with a fresh BinaryRewardHead.
 
     Inherits feat_dim / hidden / act from the existing head's MLP if accessible;
@@ -98,7 +116,9 @@ def maybe_swap_binary_head(world_model: torch.nn.Module, init_logit: float, pos_
             if isinstance(layer, torch.nn.Linear):
                 if feat_dim is None:
                     feat_dim = layer.in_features
-                units = layer.out_features  # last linear out_features will be bins / 1; we use mid-layer width
+                units = (
+                    layer.out_features
+                )  # last linear out_features will be bins / 1; we use mid-layer width
         # Take MLP hidden width = the FIRST Linear's out_features
         for layer in mlp_net:
             if isinstance(layer, torch.nn.Linear):
@@ -117,8 +137,11 @@ def maybe_swap_binary_head(world_model: torch.nn.Module, init_logit: float, pos_
     device = next(head.parameters()).device
     dtype = next(head.parameters()).dtype
     world_model.reward_head = new_head.to(device=device, dtype=dtype)
-    print(f"[swap-head] replaced reward_head with BinaryRewardHead(feat_dim={feat_dim}, units={units}, "
-          f"init_logit={init_logit}, pos_weight={pos_weight})", flush=True)
+    print(
+        f"[swap-head] replaced reward_head with BinaryRewardHead(feat_dim={feat_dim}, units={units}, "
+        f"init_logit={init_logit}, pos_weight={pos_weight})",
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -132,7 +155,9 @@ def main() -> None:
     cfg = OmegaConf.load(args.config)
     cfg.init.world_model_state_ckpt = args.world_model_ckpt
     # Force dataset → balanced-terminal variant; reuse existing dataset target's args.
-    cfg.dataset._target_ = "src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+    cfg.dataset._target_ = (
+        "src.dataloader.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+    )
     cfg.dataset.sequence_length = int(args.sequence_length)
 
     print(f"[finetune] out_dir={out_dir}", flush=True)
@@ -142,8 +167,10 @@ def main() -> None:
     # Build dataset
     dataset: LIBEROBalancedTerminalDataset = hydra.utils.instantiate(cfg.dataset)
     sampler = BalancedTerminalSampler(
-        dataset, num_samples=int(args.max_steps) * int(args.batch_size),
-        positive_ratio=float(args.positive_ratio), seed=int(args.seed),
+        dataset,
+        num_samples=int(args.max_steps) * int(args.batch_size),
+        positive_ratio=float(args.positive_ratio),
+        seed=int(args.seed),
     )
     loader = DataLoader(
         dataset,
@@ -155,11 +182,15 @@ def main() -> None:
     )
 
     # Build WM
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
     load_world_model_state(world_model, args.world_model_ckpt, reset_reward_head=False)
 
     if args.swap_binary_head:
-        maybe_swap_binary_head(world_model, args.binary_init_logit, args.binary_pos_weight)
+        maybe_swap_binary_head(
+            world_model, args.binary_init_logit, args.binary_pos_weight
+        )
 
     # Freeze all except reward_head
     n_train, n_total = 0, 0
@@ -170,15 +201,21 @@ def main() -> None:
             n_train += p.numel()
         else:
             p.requires_grad = False
-    print(f"[finetune] trainable params = {n_train:,} / total = {n_total:,}", flush=True)
+    print(
+        f"[finetune] trainable params = {n_train:,} / total = {n_total:,}", flush=True
+    )
 
     trainable = [p for p in world_model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=float(args.lr), weight_decay=float(args.weight_decay))
+    optimizer = torch.optim.AdamW(
+        trainable, lr=float(args.lr), weight_decay=float(args.weight_decay)
+    )
 
     world_model.train()
     # Force frozen modules to eval to disable BN/dropout drift if present.
     for name, m in world_model.named_modules():
-        if "reward_head" not in name and not any("reward_head" in n for n, _ in m.named_parameters(recurse=False)):
+        if "reward_head" not in name and not any(
+            "reward_head" in n for n, _ in m.named_parameters(recurse=False)
+        ):
             m.eval()
 
     loss_mode = str(args.loss_mode)
@@ -187,18 +224,24 @@ def main() -> None:
 
     if loss_mode == "per_window":
         from src.models.world_model.dreamerv3_torch import BinaryRewardHead as _BRH
+
         if not isinstance(world_model.reward_head, _BRH):
-            raise RuntimeError("loss_mode=per_window requires --swap-binary-head (BinaryRewardHead)")
+            raise RuntimeError(
+                "loss_mode=per_window requires --swap-binary-head (BinaryRewardHead)"
+            )
     if loss_mode == "reward_diffusion":
         gamma = float(args.diffusion_gamma)
         # decay[t] = gamma^(W-1-t)  → decay[W-1]=1, decay[0]=gamma^(W-1)
         decay_template = torch.tensor(
             [gamma ** (seq_len - 1 - t) for t in range(seq_len)],
-            dtype=torch.float32, device=device,
+            dtype=torch.float32,
+            device=device,
         )  # [W]
-        print(f"[finetune] reward_diffusion gamma={gamma}  "
-              f"decay=[{float(decay_template[0]):.3f} … {float(decay_template[-1]):.3f}]",
-              flush=True)
+        print(
+            f"[finetune] reward_diffusion gamma={gamma}  "
+            f"decay=[{float(decay_template[0]):.3f} … {float(decay_template[-1]):.3f}]",
+            flush=True,
+        )
 
     step = 0
     t0 = time.time()
@@ -227,8 +270,8 @@ def main() -> None:
             with torch.no_grad():
                 enc = world_model.encoder(obs_emb)
                 seq = world_model.rssm.observe(enc, actions, is_first)
-                feat_full = world_model.feature(seq)        # [B, T, D]
-            last_feat = feat_full[:, -1, :].detach()        # [B, D]
+                feat_full = world_model.feature(seq)  # [B, T, D]
+            last_feat = feat_full[:, -1, :].detach()  # [B, D]
             reward_logits = world_model.reward_head(last_feat)  # [B, 1]
             loss = world_model.reward_head.loss(reward_logits, is_pos).mean()
             reward_loss = float(loss.detach().cpu())
@@ -246,7 +289,9 @@ def main() -> None:
             if not isinstance(loss, torch.Tensor):
                 raise RuntimeError("world_model did not return loss tensor")
             reward_loss = float(out.get("reward_loss", torch.zeros(())).detach().cpu())
-            reward_pred = float(out.get("reward_pred_mean", torch.zeros(())).detach().cpu())
+            reward_pred = float(
+                out.get("reward_pred_mean", torch.zeros(())).detach().cpu()
+            )
             pred_pos = -1.0
         else:  # per_step_sparse: original behavior
             out = world_model(flat)
@@ -254,18 +299,24 @@ def main() -> None:
             if not isinstance(loss, torch.Tensor):
                 raise RuntimeError("world_model did not return loss tensor")
             reward_loss = float(out.get("reward_loss", torch.zeros(())).detach().cpu())
-            reward_pred = float(out.get("reward_pred_mean", torch.zeros(())).detach().cpu())
+            reward_pred = float(
+                out.get("reward_pred_mean", torch.zeros(())).detach().cpu()
+            )
             pred_pos = -1.0
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        gnorm = torch.nn.utils.clip_grad_norm_(trainable, max_norm=float(args.grad_clip))
+        gnorm = torch.nn.utils.clip_grad_norm_(
+            trainable, max_norm=float(args.grad_clip)
+        )
         optimizer.step()
 
         # Diagnostics
         with torch.no_grad():
             pos_count = int(is_pos.sum()) if is_pos is not None else -1
-            label_sum = float(flat["rewards"].sum().cpu()) if "rewards" in flat else -1.0
+            label_sum = (
+                float(flat["rewards"].sum().cpu()) if "rewards" in flat else -1.0
+            )
         if step % int(args.log_every) == 0:
             elapsed = max(time.time() - t0, 1e-6)
             print(
@@ -273,26 +324,31 @@ def main() -> None:
                 f"reward_loss={reward_loss:.4f}  reward_pred_mean={reward_pred:.4f}  "
                 f"pred_pos_frac={pred_pos:.3f}  "
                 f"pos_in_batch={pos_count}/{int(args.batch_size)}  label_sum={label_sum:.2f}  "
-                f"gnorm={float(torch.as_tensor(gnorm).detach().cpu()):.3f}  fps={step/elapsed:.2f}",
+                f"gnorm={float(torch.as_tensor(gnorm).detach().cpu()):.3f}  fps={step / elapsed:.2f}",
                 flush=True,
             )
-        metrics_log.append({
-            "step": step,
-            "loss": float(loss.detach().cpu()),
-            "reward_loss": reward_loss,
-            "reward_pred_mean": reward_pred,
-            "pred_pos_frac": pred_pos,
-            "pos_in_batch": pos_count,
-            "label_sum": label_sum,
-        })
+        metrics_log.append(
+            {
+                "step": step,
+                "loss": float(loss.detach().cpu()),
+                "reward_loss": reward_loss,
+                "reward_pred_mean": reward_pred,
+                "pred_pos_frac": pred_pos,
+                "pos_in_batch": pos_count,
+                "label_sum": label_sum,
+            }
+        )
 
         if step > 0 and step % int(args.save_every) == 0:
             ckpt_path = out_dir / f"reward_head_step{step:06d}.ckpt"
-            torch.save({
-                "world_model": world_model.state_dict(),
-                "step": step,
-                "args": vars(args),
-            }, ckpt_path)
+            torch.save(
+                {
+                    "world_model": world_model.state_dict(),
+                    "step": step,
+                    "args": vars(args),
+                },
+                ckpt_path,
+            )
             print(f"[finetune] ckpt → {ckpt_path}", flush=True)
 
         step += 1
@@ -300,7 +356,10 @@ def main() -> None:
             break
 
     final_ckpt = out_dir / "reward_head_final.ckpt"
-    torch.save({"world_model": world_model.state_dict(), "step": step, "args": vars(args)}, final_ckpt)
+    torch.save(
+        {"world_model": world_model.state_dict(), "step": step, "args": vars(args)},
+        final_ckpt,
+    )
     print(f"\n[finetune] FINAL ckpt → {final_ckpt}", flush=True)
 
     (out_dir / "finetune_metrics.json").write_text(json.dumps(metrics_log, indent=2))

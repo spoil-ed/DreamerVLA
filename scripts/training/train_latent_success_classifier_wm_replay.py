@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Train LatentSuccessClassifier on WM-replayed pos/neg trajectories.
 
 Phase 3 v2 of the WMPO reproduction. Replaces demo-only shards with on-the-fly
@@ -15,11 +16,11 @@ Single-GPU. Usage:
         scripts/train_latent_success_classifier_wm_replay.py \
         --config configs/wmpo_classifier_libero_goal_wm_replay.yaml
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -65,7 +66,9 @@ def _evaluate(model, loader, device, cfg, max_batches: int | None = None):
         return {"metrics": {}, "best": {"f1": 0.0, "thresh": 0.5}, "n_val": 0}
     metrics = {}
     best = {"f1": -1.0, "thresh": 0.5}
-    thresholds = np.linspace(cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps))
+    thresholds = np.linspace(
+        cfg.train.thresh_min, cfg.train.thresh_max, int(cfg.train.thresh_steps)
+    )
     for th in thresholds:
         preds = (probs >= th).astype(int)
         f1 = float(f1_score(ys, preds, zero_division=0))
@@ -90,7 +93,10 @@ def main() -> None:
 
     print(f"[1/4] loading chunk WM from {cfg.wm_replay.chunk_wm_ckpt}")
     chunk_wm = ChunkAwareRynnDinoWMWorldModel.from_rynn_dino_wm_ckpt(
-        cfg.wm_replay.chunk_wm_ckpt, chunk_size=int(cfg.wm_replay.K), device=device, strict=True
+        cfg.wm_replay.chunk_wm_ckpt,
+        chunk_size=int(cfg.wm_replay.K),
+        device=device,
+        strict=True,
     ).eval()
 
     print("[2/4] building WMReplayClassifierDataset (train + val split)")
@@ -111,7 +117,9 @@ def main() -> None:
             W=int(cfg.classifier.window),
             num_hist=int(cfg.wm_replay.num_hist),
             mode=mode,
-            stride=int(cfg.train.stride_train if mode == "train" else cfg.train.stride_val),
+            stride=int(
+                cfg.train.stride_train if mode == "train" else cfg.train.stride_val
+            ),
             neg_method=str(cfg.wm_replay.neg_method),
             noise_std=float(cfg.wm_replay.noise_std),
             swap_min_frac=float(cfg.wm_replay.swap_min_frac),
@@ -132,15 +140,23 @@ def main() -> None:
     va_ds.imagine_all(verbose=True)
 
     tr_ld = DataLoader(
-        tr_ds, batch_size=int(cfg.train.batch_size), num_workers=0,
-        collate_fn=_collate, pin_memory=True,
+        tr_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=0,
+        collate_fn=_collate,
+        pin_memory=True,
     )
     va_ld = DataLoader(
-        va_ds, batch_size=int(cfg.train.batch_size), num_workers=0,
-        collate_fn=_collate, pin_memory=True,
+        va_ds,
+        batch_size=int(cfg.train.batch_size),
+        num_workers=0,
+        collate_fn=_collate,
+        pin_memory=True,
     )
 
-    classifier_cfg = LatentSuccessClassifierConfig(**OmegaConf.to_container(cfg.classifier))
+    classifier_cfg = LatentSuccessClassifierConfig(
+        **OmegaConf.to_container(cfg.classifier)
+    )
     model = LatentSuccessClassifier(classifier_cfg).to(device)
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(
@@ -197,7 +213,9 @@ def main() -> None:
                     },
                     ckpt_dir / "best.ckpt",
                 )
-                print(f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir/'best.ckpt'}")
+                print(
+                    f"[best] step={step} f1={best_f1:.4f} thresh={out['best']['thresh']:.2f} → {ckpt_dir / 'best.ckpt'}"
+                )
     print(f"done. best_f1={best_f1:.4f}")
 
 

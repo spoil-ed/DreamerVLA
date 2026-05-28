@@ -21,7 +21,12 @@ from typing import List, Optional, Union
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessorMixin
-from transformers.tokenization_utils_base import PaddingStrategy, PreTokenizedInput, TextInput, TruncationStrategy
+from transformers.tokenization_utils_base import (
+    PaddingStrategy,
+    PreTokenizedInput,
+    TextInput,
+    TruncationStrategy,
+)
 from transformers.utils import TensorType
 
 
@@ -48,16 +53,26 @@ class ChameleonProcessor(ProcessorMixin):
     tokenizer_class = ("LlamaTokenizer", "LlamaTokenizerFast")
     image_processor_class = "ChameleonImageProcessor"
 
-    def __init__(self, image_processor, tokenizer, image_seq_length: int = 1024, image_token: str = "<image>"):
+    def __init__(
+        self,
+        image_processor,
+        tokenizer,
+        image_seq_length: int = 1024,
+        image_token: str = "<image>",
+    ):
         self.image_seq_length = image_seq_length
         self.image_token = image_token
-        self.image_start_token = "<racm3:break>"  # fixed tokens for start and end, so can hardcode
+        self.image_start_token = (
+            "<racm3:break>"  # fixed tokens for start and end, so can hardcode
+        )
         self.image_end_token = "<eoss>"
         super().__init__(image_processor, tokenizer)
 
     def __call__(
         self,
-        text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
+        text: Union[
+            TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]
+        ] = None,
         images: ImageInput = None,
         padding: Union[bool, str, PaddingStrategy] = False,
         truncation: Union[bool, str, TruncationStrategy] = None,
@@ -113,15 +128,23 @@ class ChameleonProcessor(ProcessorMixin):
         if isinstance(text, str):
             text = [text]
         elif not isinstance(text, list) and not isinstance(text[0], str):
-            raise TypeError("Invalid input text. Please provide a string, or a list of strings")
+            raise TypeError(
+                "Invalid input text. Please provide a string, or a list of strings"
+            )
 
         # Replace the image token with the expanded image token sequence
         prompt_strings = []
-        one_img_tokens = self.image_start_token + (self.image_token * self.image_seq_length) + self.image_end_token
+        one_img_tokens = (
+            self.image_start_token
+            + (self.image_token * self.image_seq_length)
+            + self.image_end_token
+        )
         for sample in text:
             sample = sample.replace(self.image_token, one_img_tokens)
             if not return_for_text_completion:
-                sample += self.tokenizer.sep_token  # special Chameleon treatment to add sep for chat mode
+                sample += (
+                    self.tokenizer.sep_token
+                )  # special Chameleon treatment to add sep for chat mode
             prompt_strings.append(sample)
 
         data = self.tokenizer(
@@ -133,7 +156,9 @@ class ChameleonProcessor(ProcessorMixin):
         )
 
         if images is not None:
-            pixel_values = self.image_processor(images, return_tensors=return_tensors)["pixel_values"]
+            pixel_values = self.image_processor(images, return_tensors=return_tensors)[
+                "pixel_values"
+            ]
             data["pixel_values"] = pixel_values
 
         return BatchFeature(data=data, tensor_type=return_tensors)

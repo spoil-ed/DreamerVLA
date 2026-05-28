@@ -43,20 +43,37 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Frozen-WM DreamerVLA actor/critic training with online or offline replay starts."
     )
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"))
+    parser.add_argument(
+        "--config",
+        default=str(
+            PROJECT_ROOT / "configs/dreamervla_pi0_action_hidden_head_actor.yaml"
+        ),
+    )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--world-model-ckpt", required=True)
     parser.add_argument("--resume-ckpt", default=None)
-    parser.add_argument("--vla-ckpt-path", default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"))
-    parser.add_argument("--encoder-state-ckpt", default="",
-                        help="Optional separate encoder state ckpt (legacy uses HF model_path only, leave empty).")
-    parser.add_argument("--action-head-type", default="legacy", choices=["legacy", "pi0_query"],
-                        help="Selects extract_action_hidden mode: legacy=35840-dim (v2 WM), pi0_query=5120-dim.")
+    parser.add_argument(
+        "--vla-ckpt-path",
+        default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"),
+    )
+    parser.add_argument(
+        "--encoder-state-ckpt",
+        default="",
+        help="Optional separate encoder state ckpt (legacy uses HF model_path only, leave empty).",
+    )
+    parser.add_argument(
+        "--action-head-type",
+        default="legacy",
+        choices=["legacy", "pi0_query"],
+        help="Selects extract_action_hidden mode: legacy=35840-dim (v2 WM), pi0_query=5120-dim.",
+    )
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument("--task-ids", default="0")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--start-source", choices=["online", "offline", "mixed"], default="online")
+    parser.add_argument(
+        "--start-source", choices=["online", "offline", "mixed"], default="online"
+    )
     parser.add_argument(
         "--offline-ratio",
         type=float,
@@ -82,7 +99,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Head-level BC anchor against frozen ref_policy (MSE on action_chunk). "
-             "Overrides cfg.algorithm.actor_bc_to_ref_scale. Leave unset to use config default.",
+        "Overrides cfg.algorithm.actor_bc_to_ref_scale. Leave unset to use config default.",
     )
     parser.add_argument(
         "--kl-coef",
@@ -95,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="WMPO-style KL(π_now ‖ π_prev) penalty coef (reward shaping). "
-             "π_prev is an EMA-tracked snapshot of the policy. Overrides cfg.algorithm.prev_kl_coef.",
+        "π_prev is an EMA-tracked snapshot of the policy. Overrides cfg.algorithm.prev_kl_coef.",
     )
     parser.add_argument(
         "--prev-policy-tau",
@@ -123,20 +140,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video-frame-key", default="third_image")
     parser.add_argument("--video-dir", default=None)
     parser.add_argument("--deterministic-collect", action="store_true")
-    parser.add_argument("--freeze-world-model", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--freeze-world-model", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument(
         "--joint-train-wm",
         action="store_true",
         help="Enable joint world-model training: run world_model_pretrain_step at every "
-             "update_step using the same batch as imagine_actor_critic_step. Overrides "
-             "--freeze-world-model when set.",
+        "update_step using the same batch as imagine_actor_critic_step. Overrides "
+        "--freeze-world-model when set.",
     )
     parser.add_argument(
         "--freeze-log-std",
         action="store_true",
         help="Override config: lock the Gaussian policy std at exp(initial_log_std). "
-             "When set, log_std is registered with requires_grad=False and excluded from "
-             "the actor optimizer state.",
+        "When set, log_std is registered with requires_grad=False and excluded from "
+        "the actor optimizer state.",
     )
     parser.add_argument(
         "--resume-policy-non-strict",
@@ -152,30 +171,49 @@ def parse_args() -> argparse.Namespace:
         "--allow-tiny-trainable",
         action="store_true",
         help="Bypass the silent-freeze guard. By default the script aborts if the policy has "
-             "<=1k trainable params (almost certainly the identity+freeze_output_projection bug).",
+        "<=1k trainable params (almost certainly the identity+freeze_output_projection bug).",
     )
     # ── WMPO-style reward labelling for the WM reward head ─────────────────
     parser.add_argument(
         "--reward-target-mode",
         choices=("raw", "per_window", "diffusion"),
         default="raw",
-        help=("raw: use rewards as-is from the batch (legacy). "
-              "per_window: WMPO-style binary label, BCE on the LAST latent only. "
-              "diffusion: rewrite rewards to gamma^(W-1-t) on positive windows, 0 elsewhere."),
+        help=(
+            "raw: use rewards as-is from the batch (legacy). "
+            "per_window: WMPO-style binary label, BCE on the LAST latent only. "
+            "diffusion: rewrite rewards to gamma^(W-1-t) on positive windows, 0 elsewhere."
+        ),
     )
     parser.add_argument("--diffusion-gamma", type=float, default=0.95)
-    parser.add_argument("--swap-binary-head", action="store_true",
-                        help="Swap WM reward_head with a fresh BinaryRewardHead (random init).")
+    parser.add_argument(
+        "--swap-binary-head",
+        action="store_true",
+        help="Swap WM reward_head with a fresh BinaryRewardHead (random init).",
+    )
     parser.add_argument("--binary-init-logit", type=float, default=0.0)
     parser.add_argument("--binary-pos-weight", type=float, default=1.0)
-    parser.add_argument("--use-balanced-sampler", action="store_true",
-                        help="Use LIBEROBalancedTerminalDataset + BalancedTerminalSampler for offline (50/50 pos/neg).")
-    parser.add_argument("--freeze-non-reward-head", action="store_true",
-                        help="When --joint-train-wm is on, only update reward_head (freeze encoder/RSSM/decoder/continue_head).")
-    parser.add_argument("--wm-lr", type=float, default=None,
-                        help="Override cfg.optim.world_model.lr (WMPO uses 1e-4 for reward model).")
-    parser.add_argument("--wm-weight-decay", type=float, default=None,
-                        help="Override cfg.optim.world_model.weight_decay.")
+    parser.add_argument(
+        "--use-balanced-sampler",
+        action="store_true",
+        help="Use LIBEROBalancedTerminalDataset + BalancedTerminalSampler for offline (50/50 pos/neg).",
+    )
+    parser.add_argument(
+        "--freeze-non-reward-head",
+        action="store_true",
+        help="When --joint-train-wm is on, only update reward_head (freeze encoder/RSSM/decoder/continue_head).",
+    )
+    parser.add_argument(
+        "--wm-lr",
+        type=float,
+        default=None,
+        help="Override cfg.optim.world_model.lr (WMPO uses 1e-4 for reward model).",
+    )
+    parser.add_argument(
+        "--wm-weight-decay",
+        type=float,
+        default=None,
+        help="Override cfg.optim.world_model.weight_decay.",
+    )
     return parser.parse_args()
 
 
@@ -185,7 +223,9 @@ def infinite_batches(loader: DataLoader) -> Iterator[dict[str, Any]]:
             yield batch
 
 
-def build_offline_loader(cfg: Any, args: argparse.Namespace) -> tuple[DataLoader, Iterator[dict[str, Any]]]:
+def build_offline_loader(
+    cfg: Any, args: argparse.Namespace
+) -> tuple[DataLoader, Iterator[dict[str, Any]]]:
     cfg.dataset.sequence_length = int(args.sequence_length)
     cfg.dataloader.batch_size = int(args.batch_size)
     cfg.dataloader.num_workers = int(args.num_workers)
@@ -200,9 +240,15 @@ def build_offline_loader(cfg: Any, args: argparse.Namespace) -> tuple[DataLoader
     dataset = hydra.utils.instantiate(cfg.dataset)
     use_balanced = bool(getattr(args, "use_balanced_sampler", False))
     if use_balanced:
-        from src.dataloader.libero_balanced_terminal_dataset import BalancedTerminalSampler
+        from src.dataloader.libero_balanced_terminal_dataset import (
+            BalancedTerminalSampler,
+        )
+
         sampler = BalancedTerminalSampler(
-            dataset, num_samples=10**8, positive_ratio=0.5, seed=int(getattr(args, "seed", 0)),
+            dataset,
+            num_samples=10**8,
+            positive_ratio=0.5,
+            seed=int(getattr(args, "seed", 0)),
         )
         loader = DataLoader(
             dataset,
@@ -264,12 +310,20 @@ def choose_batch(
     online_replay: OnlineReplay | None,
     offline_iter: Iterator[dict[str, Any]] | None,
 ) -> tuple[str, dict[str, Any] | None]:
-    can_online = online_replay is not None and online_replay.num_transitions >= int(args.min_replay) and bool(online_replay.episodes)
+    can_online = (
+        online_replay is not None
+        and online_replay.num_transitions >= int(args.min_replay)
+        and bool(online_replay.episodes)
+    )
     can_offline = offline_iter is not None
     if args.start_source == "offline":
         return ("offline", next(offline_iter)) if can_offline else ("none", None)
     if args.start_source == "online":
-        return ("online", online_replay.sample(args.batch_size)) if can_online and online_replay is not None else ("none", None)
+        return (
+            ("online", online_replay.sample(args.batch_size))
+            if can_online and online_replay is not None
+            else ("none", None)
+        )
     if can_offline and (not can_online or random.random() < float(args.offline_ratio)):
         return "offline", next(offline_iter)
     if can_online and online_replay is not None:
@@ -301,7 +355,9 @@ def main() -> None:
 
     cfg = OmegaConf.load(args.config)
     cfg.init.vla_ckpt_path = args.vla_ckpt_path
-    cfg.init.encoder_state_ckpt = args.encoder_state_ckpt if args.encoder_state_ckpt else None
+    cfg.init.encoder_state_ckpt = (
+        args.encoder_state_ckpt if args.encoder_state_ckpt else None
+    )
     cfg.init.world_model_state_ckpt = args.world_model_ckpt
     cfg.training.out_dir = str(out_dir)
     cfg.training.distributed_strategy = "single"
@@ -366,7 +422,9 @@ def main() -> None:
     print(f"[frozen-wm] wm_ckpt={args.world_model_ckpt}", flush=True)
     print("[frozen-wm] world_model_phase=disabled repval_loss=disabled", flush=True)
 
-    world_model = hydra.utils.instantiate(cfg.world_model).to(device=device, dtype=torch.bfloat16)
+    world_model = hydra.utils.instantiate(cfg.world_model).to(
+        device=device, dtype=torch.bfloat16
+    )
     # If we swapped the head architecture, load WM weights but SKIP loading the old
     # reward_head (binary head has different shape than original twohot head).
     load_world_model_state(
@@ -374,7 +432,11 @@ def main() -> None:
         args.world_model_ckpt,
         reset_reward_head=(
             bool(args.swap_binary_head)
-            or bool(OmegaConf.select(cfg, "init.reset_world_model_reward_head", default=False))
+            or bool(
+                OmegaConf.select(
+                    cfg, "init.reset_world_model_reward_head", default=False
+                )
+            )
         ),
     )
     # WMPO-style: only update reward_head, freeze everything else of the WM.
@@ -386,8 +448,10 @@ def main() -> None:
                 n_train += p.numel()
             else:
                 p.requires_grad = False
-        print(f"[frozen-wm] freeze_non_reward_head=ON  WM trainable (reward_head only) = {n_train:,}",
-              flush=True)
+        print(
+            f"[frozen-wm] freeze_non_reward_head=ON  WM trainable (reward_head only) = {n_train:,}",
+            flush=True,
+        )
 
     wm_optimizer = build_optimizer(world_model, cfg.optim.world_model)
     # `--joint-train-wm` overrides `--freeze-world-model`: WM stays trainable and
@@ -400,7 +464,9 @@ def main() -> None:
         # to disable any potential dropout/BN drift.
         if bool(args.freeze_non_reward_head):
             for name, m in world_model.named_modules():
-                if "reward_head" not in name and not any("reward_head" in n for n, _ in m.named_parameters(recurse=False)):
+                if "reward_head" not in name and not any(
+                    "reward_head" in n for n, _ in m.named_parameters(recurse=False)
+                ):
                     m.eval()
         print(
             f"[frozen-wm] joint_train_wm=ON  WM lr={cfg.optim.world_model.lr} "
@@ -411,7 +477,10 @@ def main() -> None:
         if bool(args.freeze_world_model):
             freeze_module(world_model)
         world_model.eval()
-    print(f"[frozen-wm] reward_target_mode={args.reward_target_mode}  swap_binary_head={bool(args.swap_binary_head)}  use_balanced_sampler={bool(args.use_balanced_sampler)}", flush=True)
+    print(
+        f"[frozen-wm] reward_target_mode={args.reward_target_mode}  swap_binary_head={bool(args.swap_binary_head)}  use_balanced_sampler={bool(args.use_balanced_sampler)}",
+        flush=True,
+    )
 
     policy = hydra.utils.instantiate(cfg.policy).to(device)
 
@@ -419,6 +488,7 @@ def main() -> None:
     # so the ref always reflects the SFT init (init_action_head_ckpt), not a
     # resumed RL state. Only kept in memory; not saved with the checkpoint.
     import copy as _copy
+
     ref_policy = _copy.deepcopy(policy)
     for _p in ref_policy.parameters():
         _p.requires_grad = False
@@ -449,7 +519,9 @@ def main() -> None:
     )
     if n_policy_trainable <= 1000 and not bool(args.allow_tiny_trainable):
         adapter_type = OmegaConf.select(cfg, "policy.adapter_type", default=None)
-        frozen_op = OmegaConf.select(cfg, "policy.freeze_output_projection", default=None)
+        frozen_op = OmegaConf.select(
+            cfg, "policy.freeze_output_projection", default=None
+        )
         raise RuntimeError(
             f"Refusing to start: policy has only {n_policy_trainable} trainable parameters "
             f"({trainable_names}). This is almost certainly the silent-freeze trap: "
@@ -466,9 +538,13 @@ def main() -> None:
     policy_optimizer = build_optimizer(policy, cfg.optim.policy)
     critic_optimizer = build_optimizer(critic, cfg.optim.critic)
     return_tracker = ReturnPercentileTracker(
-        decay=float(OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)),
+        decay=float(
+            OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)
+        ),
         low=float(OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)),
-        high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
+        high=float(
+            OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)
+        ),
     )
 
     resume_env_step = 0
@@ -509,7 +585,9 @@ def main() -> None:
     episode_len = 0
     latent = None
     prev_wm_action: torch.Tensor | None = None
-    task_ids = tuple(int(item) for item in str(args.task_ids).split(",") if item.strip())
+    task_ids = tuple(
+        int(item) for item in str(args.task_ids).split(",") if item.strip()
+    )
     if collect_online:
         encoder = build_encoder(args, device)
         processor = encoder._build_processor(device)
@@ -528,11 +606,15 @@ def main() -> None:
             obs_hidden_source="action_query",
             action_head_type=str(args.action_head_type),
         )
-        replay = OnlineReplay(capacity=args.replay_size, sequence_length=args.sequence_length)
+        replay = OnlineReplay(
+            capacity=args.replay_size, sequence_length=args.sequence_length
+        )
         obs, _info = env.reset(seed=args.seed)
         video_recorder = FixedStepVideoRecorder(
             every_steps=int(args.video_every_env_steps),
-            output_dir=Path(args.video_dir).expanduser().resolve() if args.video_dir else out_dir / "videos",
+            output_dir=Path(args.video_dir).expanduser().resolve()
+            if args.video_dir
+            else out_dir / "videos",
             fps=int(args.video_fps),
             max_frames=int(args.video_max_frames),
             frame_key=str(args.video_frame_key),
@@ -540,7 +622,11 @@ def main() -> None:
 
     update_step = int(resume_update_step)
     final_env_step = int(resume_env_step)
-    last_saved_update = int(resume_update_step) if int(resume_update_step) % int(args.save_every) == 0 else -1
+    last_saved_update = (
+        int(resume_update_step)
+        if int(resume_update_step) % int(args.save_every) == 0
+        else -1
+    )
     train_accum = 0.0
     batch_steps = max(int(args.batch_size) * int(args.sequence_length), 1)
     log_path = out_dir / "frozen_wm_logs.json.txt"
@@ -551,9 +637,13 @@ def main() -> None:
         nonlocal update_step, last_saved_update
         last_metrics: dict[str, float] = {}
         for _ in range(int(num_updates)):
-            if args.max_train_updates is not None and update_step >= int(args.max_train_updates):
+            if args.max_train_updates is not None and update_step >= int(
+                args.max_train_updates
+            ):
                 break
-            source, batch = choose_batch(args=args, online_replay=replay, offline_iter=offline_iter)
+            source, batch = choose_batch(
+                args=args, online_replay=replay, offline_iter=offline_iter
+            )
             if batch is None:
                 break
             source_counts[source] = source_counts.get(source, 0) + 1
@@ -573,7 +663,8 @@ def main() -> None:
                 gamma_t = float(args.diffusion_gamma)
                 decay = torch.tensor(
                     [gamma_t ** (W - 1 - t) for t in range(W)],
-                    dtype=torch.float32, device=is_positive_window.device,
+                    dtype=torch.float32,
+                    device=is_positive_window.device,
                 )
                 # rewards[b, t] = decay[t]  if positive window else 0
                 new_rewards = decay.unsqueeze(0) * is_positive_window.unsqueeze(-1)
@@ -586,7 +677,8 @@ def main() -> None:
                 W = int(args.sequence_length)
                 new_rewards = torch.zeros(
                     (is_positive_window.shape[0], W),
-                    dtype=torch.float32, device=is_positive_window.device,
+                    dtype=torch.float32,
+                    device=is_positive_window.device,
                 )
                 new_rewards[:, -1] = is_positive_window
                 batch["rewards"] = new_rewards
@@ -640,7 +732,9 @@ def main() -> None:
                 "actor": float(ac_metrics["actor_loss"]),
                 "critic": float(ac_metrics["critic_loss"]),
                 "G": float(ac_metrics["returns_mean"]),
-                "raw_G": float(ac_metrics.get("raw_returns_mean", ac_metrics["returns_mean"])),
+                "raw_G": float(
+                    ac_metrics.get("raw_returns_mean", ac_metrics["returns_mean"])
+                ),
                 "adv": float(ac_metrics.get("advantage_mean", 0.0)),
                 "adv_mag": float(ac_metrics.get("advantage_mag", 0.0)),
                 "kl": float(ac_metrics.get("ref_kl_mean", 0.0)),
@@ -659,19 +753,27 @@ def main() -> None:
                 "g_pg": float(ac_metrics.get("actor_grad_norm_pg", 0.0)),
                 "g_bcref": float(ac_metrics.get("actor_grad_norm_bc_ref", 0.0)),
                 "g_ent": float(ac_metrics.get("actor_grad_norm_entropy", 0.0)),
-                "g_out": float(ac_metrics.get("actor_grad_norm_output_projection", 0.0)),
+                "g_out": float(
+                    ac_metrics.get("actor_grad_norm_output_projection", 0.0)
+                ),
                 "cos_pg_bc": float(ac_metrics.get("actor_grad_cos_pg_bcref", 0.0)),
                 "logp_mean": float(ac_metrics.get("log_prob_mean", 0.0)),
                 "adv_pos": float(ac_metrics.get("advantage_pos_frac", 0.0)),
                 "drift_raw": float(ac_metrics.get("actor_vla_drift_raw_mse", 0.0)),
                 "drift_env": float(ac_metrics.get("actor_vla_drift_env_mse", 0.0)),
-                "drift_env_clip": float(ac_metrics.get("actor_vla_drift_env_mse_clipped", 0.0)),
+                "drift_env_clip": float(
+                    ac_metrics.get("actor_vla_drift_env_mse_clipped", 0.0)
+                ),
                 "drift_env_mae": float(ac_metrics.get("actor_vla_drift_env_mae", 0.0)),
                 "repval": float(ac_metrics.get("repval_loss", 0.0)),
                 "src_online": float(source_counts.get("online", 0)),
                 "src_offline": float(source_counts.get("offline", 0)),
             }
-            if update_step > 0 and update_step % int(args.save_every) == 0 and update_step != last_saved_update:
+            if (
+                update_step > 0
+                and update_step % int(args.save_every) == 0
+                and update_step != last_saved_update
+            ):
                 save_checkpoint(
                     out_dir,
                     world_model=world_model,
@@ -691,11 +793,15 @@ def main() -> None:
 
     try:
         if not collect_online:
-            while args.max_train_updates is None or update_step < int(args.max_train_updates):
+            while args.max_train_updates is None or update_step < int(
+                args.max_train_updates
+            ):
                 before = update_step
                 metrics = train_updates(1, final_env_step)
                 if update_step == before:
-                    raise RuntimeError("offline frozen-WM training could not draw a batch")
+                    raise RuntimeError(
+                        "offline frozen-WM training could not draw a batch"
+                    )
                 if update_step % int(args.log_every) == 0:
                     elapsed = max(time.time() - start_time, 1e-6)
                     row = {
@@ -707,31 +813,51 @@ def main() -> None:
                     log_row(log_path, "frozen-wm", row)
             return
 
-        assert env is not None and replay is not None and encoder is not None and processor is not None and obs is not None
+        assert (
+            env is not None
+            and replay is not None
+            and encoder is not None
+            and processor is not None
+            and obs is not None
+        )
         for env_step in range(int(resume_env_step) + 1, int(args.total_env_steps) + 1):
             final_env_step = int(env_step)
             with torch.no_grad():
-                obs_embedding = obs_to_action_hidden(encoder, processor, obs, device, args.target_token_id)
+                obs_embedding = obs_to_action_hidden(
+                    encoder, processor, obs, device, args.target_token_id
+                )
                 is_first = bool(obs.get("is_first", False)) or latent is None
                 if is_first:
-                    latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
+                    latent = world_model(
+                        {"mode": "encode_latent", "hidden": obs_embedding}
+                    )
                 else:
                     assert prev_wm_action is not None
-                    latent = world_model({
-                        "mode": "observe_next",
-                        "latent": latent,
-                        "hidden": obs_embedding,
-                        "actions": prev_wm_action,
-                        "is_first": False,
-                    })
+                    latent = world_model(
+                        {
+                            "mode": "observe_next",
+                            "latent": latent,
+                            "hidden": obs_embedding,
+                            "actions": prev_wm_action,
+                            "is_first": False,
+                        }
+                    )
                 feat = world_model({"mode": "actor_input", "latent": latent}).float()
-                action_chunk, _log_prob, _extra = policy({
-                    "mode": "sample",
-                    "hidden": feat,
-                    "deterministic": bool(args.deterministic_collect),
-                    "return_chunk": True,
-                })
-                policy_action = action_chunk.reshape(-1, action_chunk.shape[-1])[0, :7].detach().cpu().float().numpy()
+                action_chunk, _log_prob, _extra = policy(
+                    {
+                        "mode": "sample",
+                        "hidden": feat,
+                        "deterministic": bool(args.deterministic_collect),
+                        "return_chunk": True,
+                    }
+                )
+                policy_action = (
+                    action_chunk.reshape(-1, action_chunk.shape[-1])[0, :7]
+                    .detach()
+                    .cpu()
+                    .float()
+                    .numpy()
+                )
 
             next_obs, reward, terminated, truncated, info = env.step(policy_action)
             done = bool(terminated or truncated)
@@ -749,18 +875,30 @@ def main() -> None:
                 if saved_video:
                     print(f"[video] saved {saved_video}", flush=True)
 
-            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[:7]
-            episode.append({
-                "image": np.asarray(obs["image"], dtype=np.uint8),
-                "obs_embedding": obs_embedding.squeeze(0).detach().cpu().numpy().astype(np.float32),
-                "policy_action": policy_action.astype(np.float32),
-                "wm_action": wm_action_np.astype(np.float32),
-                "reward": np.float32(reward),
-                "done": np.float32(done),
-                "is_terminal": np.float32(terminated),
-                "is_last": np.float32(done),
-            })
-            prev_wm_action = torch.from_numpy(wm_action_np).to(device=device, dtype=obs_embedding.dtype).unsqueeze(0)
+            wm_action_np = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[
+                :7
+            ]
+            episode.append(
+                {
+                    "image": np.asarray(obs["image"], dtype=np.uint8),
+                    "obs_embedding": obs_embedding.squeeze(0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32),
+                    "policy_action": policy_action.astype(np.float32),
+                    "wm_action": wm_action_np.astype(np.float32),
+                    "reward": np.float32(reward),
+                    "done": np.float32(done),
+                    "is_terminal": np.float32(terminated),
+                    "is_last": np.float32(done),
+                }
+            )
+            prev_wm_action = (
+                torch.from_numpy(wm_action_np)
+                .to(device=device, dtype=obs_embedding.dtype)
+                .unsqueeze(0)
+            )
             obs = next_obs
 
             train_accum += float(args.train_ratio) / float(batch_steps)
@@ -796,7 +934,9 @@ def main() -> None:
                 latent = None
                 prev_wm_action = None
 
-            if args.max_train_updates is not None and update_step >= int(args.max_train_updates):
+            if args.max_train_updates is not None and update_step >= int(
+                args.max_train_updates
+            ):
                 break
     finally:
         save_checkpoint(

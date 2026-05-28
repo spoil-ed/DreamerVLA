@@ -46,7 +46,9 @@ class VLAActionHeadActor(BaseActor):
         if self.action_head_type not in {"legacy", "pi0_query"}:
             raise ValueError("action_head_type must be one of {'legacy', 'pi0_query'}")
         self.action_token_count = (
-            self.time_horizon if self.action_head_type == "pi0_query" else self.time_horizon * self.action_dim
+            self.time_horizon
+            if self.action_head_type == "pi0_query"
+            else self.time_horizon * self.action_dim
         )
 
         if self.adapter_type == "identity":
@@ -98,7 +100,9 @@ class VLAActionHeadActor(BaseActor):
                 self.action_dim,
             )
 
-        self.log_std = nn.Parameter(torch.full((self.action_dim,), float(initial_log_std)))
+        self.log_std = nn.Parameter(
+            torch.full((self.action_dim,), float(initial_log_std))
+        )
 
         if init_action_head_ckpt:
             self._load_action_head_from_vla_ckpt(str(init_action_head_ckpt))
@@ -107,12 +111,12 @@ class VLAActionHeadActor(BaseActor):
         payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         encoder_sd = payload.get("state_dicts", {}).get("encoder")
         if encoder_sd is None:
-            raise RuntimeError(f"VLA action head checkpoint has no state_dicts.encoder: {ckpt_path}")
+            raise RuntimeError(
+                f"VLA action head checkpoint has no state_dicts.encoder: {ckpt_path}"
+            )
         prefix = "backbone.action_head."
         action_head_sd = {
-            k[len(prefix):]: v
-            for k, v in encoder_sd.items()
-            if k.startswith(prefix)
+            k[len(prefix) :]: v for k, v in encoder_sd.items() if k.startswith(prefix)
         }
         if not action_head_sd:
             raise RuntimeError(
@@ -135,13 +139,17 @@ class VLAActionHeadActor(BaseActor):
                     f"(implied time_horizon={ckpt_horizon})."
                 )
         missing, unexpected = self.load_state_dict(action_head_sd, strict=False)
-        non_adapter_missing = [k for k in missing if not k.startswith("adapter.") and k != "log_std"]
+        non_adapter_missing = [
+            k for k in missing if not k.startswith("adapter.") and k != "log_std"
+        ]
         print(
             f"[VLAActor] loaded {len(action_head_sd)} action_head tensors from VLA ckpt; "
             f"unexpected={len(unexpected)}, missing-action-head-only={len(non_adapter_missing)}"
         )
         if non_adapter_missing:
-            print(f"[VLAActor] WARN missing action_head tensors (first 5): {non_adapter_missing[:5]}")
+            print(
+                f"[VLAActor] WARN missing action_head tensors (first 5): {non_adapter_missing[:5]}"
+            )
         if unexpected:
             print(f"[VLAActor] WARN unexpected (first 5): {unexpected[:5]}")
         del payload
@@ -186,16 +194,22 @@ class VLAActionHeadActor(BaseActor):
             attention_mask = attention_mask.to(device=hidden_states.device)
 
         batch_size = hidden_states.shape[0]
-        action_tokens = self.action_token_embeddings.weight.view(
-            1,
-            self.action_token_count,
-            self.hidden_size,
-        ).expand(batch_size, -1, -1).to(dtype=param_dtype)
+        action_tokens = (
+            self.action_token_embeddings.weight.view(
+                1,
+                self.action_token_count,
+                self.hidden_size,
+            )
+            .expand(batch_size, -1, -1)
+            .to(dtype=param_dtype)
+        )
 
         extracted_hidden_states: list[torch.Tensor] = []
         extracted_attention_masks: list[torch.Tensor] = []
         for idx in range(batch_size):
-            target_positions = (input_ids[idx] == int(target_token_id)).nonzero(as_tuple=True)[0]
+            target_positions = (input_ids[idx] == int(target_token_id)).nonzero(
+                as_tuple=True
+            )[0]
             if len(target_positions) == 0:
                 end_pos = int(hidden_states.shape[1])
             else:
@@ -234,7 +248,12 @@ class VLAActionHeadActor(BaseActor):
                 combined = torch.cat(
                     [
                         combined,
-                        torch.zeros(pad, self.hidden_size, device=hidden_states.device, dtype=param_dtype),
+                        torch.zeros(
+                            pad,
+                            self.hidden_size,
+                            device=hidden_states.device,
+                            dtype=param_dtype,
+                        ),
                     ],
                     dim=0,
                 )
@@ -245,7 +264,11 @@ class VLAActionHeadActor(BaseActor):
                     mask = torch.cat(
                         [
                             mask,
-                            torch.zeros(pad, device=hidden_states.device, dtype=attention_mask.dtype),
+                            torch.zeros(
+                                pad,
+                                device=hidden_states.device,
+                                dtype=attention_mask.dtype,
+                            ),
                         ],
                         dim=0,
                     )
@@ -263,7 +286,9 @@ class VLAActionHeadActor(BaseActor):
             processed_mask = torch.stack(padded_masks, dim=0).bool()
 
         projected = self.hidden_projection(processed_hidden)
-        out = self.transformer_encoder(projected, src_key_padding_mask=(~processed_mask))
+        out = self.transformer_encoder(
+            projected, src_key_padding_mask=(~processed_mask)
+        )
 
         action_outputs: list[torch.Tensor] = []
         for idx, context in enumerate(extracted_hidden_states):
@@ -281,7 +306,9 @@ class VLAActionHeadActor(BaseActor):
         input_ids = batch.get("input_ids")
         if hidden_states is not None:
             if input_ids is None:
-                raise ValueError("VLAActionHeadActor sequence mode requires `input_ids`.")
+                raise ValueError(
+                    "VLAActionHeadActor sequence mode requires `input_ids`."
+                )
             return self._action_chunk_from_sequence(
                 hidden_states=hidden_states,
                 input_ids=input_ids,
@@ -297,31 +324,59 @@ class VLAActionHeadActor(BaseActor):
         mode = batch.get("mode")
         action_chunk = self._action_chunk(batch)
         dist, mean, std = self._normal_from_action_chunk(action_chunk)
-        chunk_dist, mean_chunk, std_chunk = self._normal_from_full_action_chunk(action_chunk)
+        chunk_dist, mean_chunk, std_chunk = self._normal_from_full_action_chunk(
+            action_chunk
+        )
         if mode == "sample":
             deterministic = bool(batch.get("deterministic", False))
             if bool(batch.get("return_chunk", False)):
                 action = mean_chunk if deterministic else chunk_dist.rsample()
                 log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
-                return action, log_prob, {
-                    "mean": mean,
-                    "std": std,
-                    "mean_chunk": mean_chunk,
-                    "std_chunk": std_chunk,
-                    "action_chunk": mean_chunk,
-                }
+                return (
+                    action,
+                    log_prob,
+                    {
+                        "mean": mean,
+                        "std": std,
+                        "mean_chunk": mean_chunk,
+                        "std_chunk": std_chunk,
+                        "action_chunk": mean_chunk,
+                    },
+                )
             action = mean if deterministic else dist.rsample()
             log_prob = dist.log_prob(action).sum(dim=-1)
-            return action, log_prob, {"mean": mean, "std": std, "action_chunk": mean_chunk}
+            return (
+                action,
+                log_prob,
+                {"mean": mean, "std": std, "action_chunk": mean_chunk},
+            )
         if mode == "evaluate":
             action = batch["action"]
             if action.ndim == 3:
                 log_prob = chunk_dist.log_prob(action).sum(dim=(-1, -2))
                 entropy = chunk_dist.entropy().sum(dim=(-1, -2))
-                return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
+                return (
+                    log_prob,
+                    entropy,
+                    {
+                        "mean": mean,
+                        "std": std,
+                        "mean_chunk": mean_chunk,
+                        "std_chunk": std_chunk,
+                    },
+                )
             log_prob = dist.log_prob(action).sum(dim=-1)
             entropy = dist.entropy().sum(dim=-1)
-            return log_prob, entropy, {"mean": mean, "std": std, "mean_chunk": mean_chunk, "std_chunk": std_chunk}
+            return (
+                log_prob,
+                entropy,
+                {
+                    "mean": mean,
+                    "std": std,
+                    "mean_chunk": mean_chunk,
+                    "std_chunk": std_chunk,
+                },
+            )
         raise ValueError(f"Unknown VLAActionHeadActor forward mode: {mode!r}")
 
 

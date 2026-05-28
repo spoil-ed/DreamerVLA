@@ -10,6 +10,7 @@ This gives a more parameter-efficient linear (params = in*out/groups instead
 of in*out) with a structured inductive bias: each group specialises on a
 disjoint slice of the input feature space.
 """
+
 from __future__ import annotations
 
 import math

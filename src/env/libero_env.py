@@ -2,6 +2,7 @@
 
 Adapted from RynnVLA-002/rynnvla-002/libero_util/libero_utils.py
 """
+
 from __future__ import annotations
 
 import math
@@ -30,7 +31,9 @@ TASK_MAX_STEPS: dict[str, int] = {
 def get_libero_env(task, resolution: int = 256):
     """Create an off-screen LIBERO environment for *task*."""
     task_description = task.language
-    task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
+    task_bddl_file = os.path.join(
+        get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
+    )
     env_args = {
         "bddl_file_name": task_bddl_file,
         "camera_heights": resolution,
@@ -65,11 +68,25 @@ def quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
-def save_rollout_video(rollout_dir: str, rollout_images: list, idx: int, success: bool, task_description: str) -> str:
+def save_rollout_video(
+    rollout_dir: str,
+    rollout_images: list,
+    idx: int,
+    success: bool,
+    task_description: str,
+) -> str:
     """Save an MP4 replay of a single episode."""
     os.makedirs(rollout_dir, exist_ok=True)
-    sanitised = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
-    mp4_path = os.path.join(rollout_dir, f"{DATE_TIME}--episode={idx}--success={success}--task={sanitised}.mp4")
+    sanitised = (
+        task_description.lower()
+        .replace(" ", "_")
+        .replace("\n", "_")
+        .replace(".", "_")[:50]
+    )
+    mp4_path = os.path.join(
+        rollout_dir,
+        f"{DATE_TIME}--episode={idx}--success={success}--task={sanitised}.mp4",
+    )
     writer = imageio.get_writer(mp4_path, fps=30)
     for img in rollout_images:
         writer.append_data(img)
@@ -109,8 +126,12 @@ class LIBERODreamerEnv:
         self.task = self.task_suite.get_task(self.task_id)
         self.initial_states = self.task_suite.get_task_init_states(self.task_id)
         if not len(self.initial_states):
-            raise RuntimeError(f"LIBERO task {self.task_suite_name}/{self.task_id} has no initial states")
-        self.env, self.task_description = get_libero_env(self.task, resolution=self.resolution)
+            raise RuntimeError(
+                f"LIBERO task {self.task_suite_name}/{self.task_id} has no initial states"
+            )
+        self.env, self.task_description = get_libero_env(
+            self.task, resolution=self.resolution
+        )
         self.env.seed(self.seed)
         self.max_steps = TASK_MAX_STEPS.get(self.task_suite_name, 300)
         self.frame_history: list[tuple[Image.Image, Image.Image]] = []
@@ -156,14 +177,20 @@ class LIBERODreamerEnv:
         third = get_libero_image(obs, self.resolution)
         wrist = get_libero_image(obs, self.resolution, "robot0_eye_in_hand_image")
         state = np.concatenate(
-            (obs["robot0_eef_pos"], quat2axisangle(obs["robot0_eef_quat"]), obs["robot0_gripper_qpos"])
+            (
+                obs["robot0_eef_pos"],
+                quat2axisangle(obs["robot0_eef_quat"]),
+                obs["robot0_gripper_qpos"],
+            )
         ).astype(np.float32)
         third_pil = Image.fromarray(third)
         wrist_pil = Image.fromarray(wrist)
         self.frame_history.append((third_pil, wrist_pil))
         if len(self.frame_history) > self.history_length:
-            self.frame_history = self.frame_history[-self.history_length:]
-        padded_history = [self.frame_history[0]] * (self.history_length - len(self.frame_history)) + self.frame_history
+            self.frame_history = self.frame_history[-self.history_length :]
+        padded_history = [self.frame_history[0]] * (
+            self.history_length - len(self.frame_history)
+        ) + self.frame_history
         return {
             "third_image": third,
             "wrist_image": wrist,

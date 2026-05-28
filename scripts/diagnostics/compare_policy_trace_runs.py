@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Compare LIBERO policy traces from pure VLA and DreamerVLA rollouts."""
+
 from __future__ import annotations
 
 import argparse
@@ -92,7 +93,10 @@ def _mean(rows: list[dict[str, Any]], key: str) -> float | None:
 def _equal_ids(left: np.ndarray | None, right: np.ndarray | None) -> bool | None:
     if left is None or right is None:
         return None
-    return bool(left.shape == right.shape and np.array_equal(left.astype(np.int64), right.astype(np.int64)))
+    return bool(
+        left.shape == right.shape
+        and np.array_equal(left.astype(np.int64), right.astype(np.int64))
+    )
 
 
 def main() -> None:
@@ -114,7 +118,9 @@ def main() -> None:
         vla = traces["vla"][idx]
         orig = traces["original"][idx]
         trained = traces["trained"][idx]
-        vla_hidden = _array(vla, "wm_style_action_hidden", "action_hidden", "obs_embedding")
+        vla_hidden = _array(
+            vla, "wm_style_action_hidden", "action_hidden", "obs_embedding"
+        )
         orig_live = _array(orig, "live_action_hidden", "obs_embedding")
         orig_recon = _array(orig, "recon_action_hidden", "actor_input")
         trained_live = _array(trained, "live_action_hidden", "obs_embedding")
@@ -125,9 +131,15 @@ def main() -> None:
             "original_env_step": orig.get("context", {}).get("env_step"),
             "trained_env_step": trained.get("context", {}).get("env_step"),
             "state_mse_vla_original": _mse(_array(vla, "state"), _array(orig, "state")),
-            "state_mse_vla_trained": _mse(_array(vla, "state"), _array(trained, "state")),
-            "input_ids_equal_vla_original": _equal_ids(_array(vla, "input_ids"), _array(orig, "input_ids")),
-            "input_ids_equal_vla_trained": _equal_ids(_array(vla, "input_ids"), _array(trained, "input_ids")),
+            "state_mse_vla_trained": _mse(
+                _array(vla, "state"), _array(trained, "state")
+            ),
+            "input_ids_equal_vla_original": _equal_ids(
+                _array(vla, "input_ids"), _array(orig, "input_ids")
+            ),
+            "input_ids_equal_vla_trained": _equal_ids(
+                _array(vla, "input_ids"), _array(trained, "input_ids")
+            ),
             "hidden_mse_vla_original_live": _mse(vla_hidden, orig_live),
             "hidden_cos_vla_original_live": _cos(vla_hidden, orig_live),
             "hidden_mse_vla_trained_live": _mse(vla_hidden, trained_live),
@@ -139,25 +151,53 @@ def main() -> None:
             "recon_mse_trained_live": _mse(trained_live, trained_recon),
             "recon_cos_trained_live": _cos(trained_live, trained_recon),
             "recon_mse_original_trained": _mse(orig_recon, trained_recon),
-            "rssm_deter_mse_original_trained": _mse(_array(orig, "rssm_deter"), _array(trained, "rssm_deter")),
-            "rssm_stoch_mse_original_trained": _mse(_array(orig, "rssm_stoch"), _array(trained, "rssm_stoch")),
+            "rssm_deter_mse_original_trained": _mse(
+                _array(orig, "rssm_deter"), _array(trained, "rssm_deter")
+            ),
+            "rssm_stoch_mse_original_trained": _mse(
+                _array(orig, "rssm_stoch"), _array(trained, "rssm_stoch")
+            ),
             "action_mse_vla_original_env": _mse(_first_env(vla), _first_env(orig)),
             "action_mse_vla_trained_env": _mse(_first_env(vla), _first_env(trained)),
-            "action_mse_original_trained_env": _mse(_first_env(orig), _first_env(trained)),
-            "action_mae_original_trained_env": _mae(_first_env(orig), _first_env(trained)),
-            "vla_first_action_env": _first_env(vla).tolist() if _first_env(vla) is not None else None,
-            "original_first_action_env": _first_env(orig).tolist() if _first_env(orig) is not None else None,
-            "trained_first_action_env": _first_env(trained).tolist() if _first_env(trained) is not None else None,
+            "action_mse_original_trained_env": _mse(
+                _first_env(orig), _first_env(trained)
+            ),
+            "action_mae_original_trained_env": _mae(
+                _first_env(orig), _first_env(trained)
+            ),
+            "vla_first_action_env": _first_env(vla).tolist()
+            if _first_env(vla) is not None
+            else None,
+            "original_first_action_env": _first_env(orig).tolist()
+            if _first_env(orig) is not None
+            else None,
+            "trained_first_action_env": _first_env(trained).tolist()
+            if _first_env(trained) is not None
+            else None,
         }
         rows.append(row)
 
     summary = {
         "num_compared_trace_points": n,
-        "runs": {name: str(path) for name, path in {"vla": args.vla, "original": args.original, "trained": args.trained}.items()},
+        "runs": {
+            name: str(path)
+            for name, path in {
+                "vla": args.vla,
+                "original": args.original,
+                "trained": args.trained,
+            }.items()
+        },
         "means": {
             key: _mean(rows, key)
             for key in rows[0].keys()
-            if rows and key not in {"index", "vla_first_action_env", "original_first_action_env", "trained_first_action_env"}
+            if rows
+            and key
+            not in {
+                "index",
+                "vla_first_action_env",
+                "original_first_action_env",
+                "trained_first_action_env",
+            }
         },
         "first_step": rows[0] if rows else {},
         "rows": rows,

@@ -41,6 +41,7 @@ Usage
         --out data/outputs/dreamervla/outcome_classifier/libero_goal/ceiling_real_hidden \\
         --feature-source real_hidden
 """
+
 from __future__ import annotations
 
 import argparse
@@ -69,6 +70,7 @@ from src.dataloader.wm_replay_classifier_dataset import _find_demo_pairs  # noqa
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def _load_demo(raw_p: Path, hid_p: Path, demo_key: str):
     """Return (obs[T, L] float32, finish_step, complete, episode_id)."""
@@ -126,7 +128,9 @@ def build_windows(
             pos.append((end - 1) / max(fs, 1))
             eids.append(eid_i)
         if (i + 1) % 100 == 0:
-            print(f"  [{label}] {i+1}/{len(pairs)} demos, windows={len(X)}", flush=True)
+            print(
+                f"  [{label}] {i + 1}/{len(pairs)} demos, windows={len(X)}", flush=True
+            )
     if not X:
         raise RuntimeError(f"no windows produced for {label}")
     X = np.stack(X).astype(np.float32)
@@ -140,6 +144,7 @@ def build_windows(
 # Small MLP — Option B in the design doc (per-frame shared proj + small head)
 # ---------------------------------------------------------------------------
 
+
 class SmallLatentMLP(nn.Module):
     """Per-frame shared Linear(L → d) → flatten → 2-layer MLP head.
 
@@ -147,8 +152,15 @@ class SmallLatentMLP(nn.Module):
     PAC-Bayes-friendly for n≈800.
     """
 
-    def __init__(self, latent_dim: int, window: int, frame_dim: int = 32,
-                 hidden: int = 64, dropout: float = 0.5, pos_dim: int = 0):
+    def __init__(
+        self,
+        latent_dim: int,
+        window: int,
+        frame_dim: int = 32,
+        hidden: int = 64,
+        dropout: float = 0.5,
+        pos_dim: int = 0,
+    ):
         super().__init__()
         self.W = window
         self.L = latent_dim
@@ -162,7 +174,9 @@ class SmallLatentMLP(nn.Module):
             nn.Linear(hidden, 2),
         )
 
-    def forward(self, flat: torch.Tensor, pos: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, flat: torch.Tensor, pos: torch.Tensor | None = None
+    ) -> torch.Tensor:
         # flat: [B, W*L]
         B = flat.shape[0]
         x = flat.view(B, self.W, self.L)
@@ -174,11 +188,20 @@ class SmallLatentMLP(nn.Module):
 
 
 def train_mlp(
-    X_tr: np.ndarray, y_tr: np.ndarray, p_tr: np.ndarray,
-    X_va: np.ndarray, y_va: np.ndarray, p_va: np.ndarray,
-    latent_dim: int, window: int,
-    use_pos: bool, device: str = "cuda",
-    epochs: int = 60, batch_size: int = 32, lr: float = 1e-3, wd: float = 1e-2,
+    X_tr: np.ndarray,
+    y_tr: np.ndarray,
+    p_tr: np.ndarray,
+    X_va: np.ndarray,
+    y_va: np.ndarray,
+    p_va: np.ndarray,
+    latent_dim: int,
+    window: int,
+    use_pos: bool,
+    device: str = "cuda",
+    epochs: int = 60,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+    wd: float = 1e-2,
     seed: int = 0,
 ):
     torch.manual_seed(seed)
@@ -194,9 +217,13 @@ def train_mlp(
 
     Xtr_t = torch.from_numpy(X_tr).to(device)
     ytr_t = torch.from_numpy(y_tr).to(device)
-    ptr_t = torch.from_numpy(np.stack([p_tr, np.ones_like(p_tr) - p_tr], axis=-1)).to(device)
+    ptr_t = torch.from_numpy(np.stack([p_tr, np.ones_like(p_tr) - p_tr], axis=-1)).to(
+        device
+    )
     Xva_t = torch.from_numpy(X_va).to(device)
-    pva_t = torch.from_numpy(np.stack([p_va, np.ones_like(p_va) - p_va], axis=-1)).to(device)
+    pva_t = torch.from_numpy(np.stack([p_va, np.ones_like(p_va) - p_va], axis=-1)).to(
+        device
+    )
 
     best_val_f1 = -1.0
     best_thresh = 0.5
@@ -236,6 +263,7 @@ def train_mlp(
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 def sweep_f1(probs: np.ndarray, y: np.ndarray, steps: int = 30) -> tuple[float, float]:
     best_f1, best_th = -1.0, 0.5
     for th in np.linspace(0.1, 0.95, steps):
@@ -264,18 +292,28 @@ def full_metrics(probs: np.ndarray, y: np.ndarray, thresh: float) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--feature-source", choices=["real_hidden"], default="real_hidden",
-                        help="Currently only real_hidden — imagined needs WM rollout; can extend later.")
+    parser.add_argument(
+        "--feature-source",
+        choices=["real_hidden"],
+        default="real_hidden",
+        help="Currently only real_hidden — imagined needs WM rollout; can extend later.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--val-frac", type=float, default=0.2)
-    parser.add_argument("--cache", type=str, default=None,
-                        help="Optional /dev/shm cache for the X,y arrays")
-    parser.add_argument("--skip-knn", action="store_true",
-                        help="Skip kNN (slowest step on CPU)")
+    parser.add_argument(
+        "--cache",
+        type=str,
+        default=None,
+        help="Optional /dev/shm cache for the X,y arrays",
+    )
+    parser.add_argument(
+        "--skip-knn", action="store_true", help="Skip kNN (slowest step on CPU)"
+    )
     parser.add_argument("--skip-mlp", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -293,8 +331,15 @@ def main() -> None:
         log_f.write(json.dumps(d) + "\n")
         log_f.flush()
 
-    log({"event": "config", "W": W, "feature_source": args.feature_source,
-         "seed": args.seed, "val_frac": args.val_frac})
+    log(
+        {
+            "event": "config",
+            "W": W,
+            "feature_source": args.feature_source,
+            "seed": args.seed,
+            "val_frac": args.val_frac,
+        }
+    )
 
     cache_p = Path(args.cache) if args.cache else None
     if cache_p and cache_p.exists():
@@ -305,7 +350,9 @@ def main() -> None:
         rng = np.random.default_rng(args.seed)
         log({"event": "discover_pairs"})
         succ = _find_demo_pairs(cfg.wm_replay.raw_dir, cfg.wm_replay.hidden_dir)
-        fail = _find_demo_pairs(cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir)
+        fail = _find_demo_pairs(
+            cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir
+        )
         log({"event": "pair_counts", "succ": len(succ), "fail": len(fail)})
         log({"event": "build_windows_start"})
         X_s, y_s, p_s, e_s = build_windows(succ, W, rng, "succ")
@@ -321,8 +368,15 @@ def main() -> None:
             np.savez(str(cache_p), X=X, y=y, pos=pos, eids=eids)
             log({"event": "cache_saved", "path": str(cache_p)})
 
-    log({"event": "data_summary", "n": int(X.shape[0]), "d": int(X.shape[1]),
-         "pos": int((y == 1).sum()), "neg": int((y == 0).sum())})
+    log(
+        {
+            "event": "data_summary",
+            "n": int(X.shape[0]),
+            "d": int(X.shape[1]),
+            "pos": int((y == 1).sum()),
+            "neg": int((y == 0).sum()),
+        }
+    )
 
     # ------------ stratified split ----------------------------------------
     idx_tr, idx_va = train_test_split(
@@ -331,18 +385,26 @@ def main() -> None:
     X_tr, X_va = X[idx_tr], X[idx_va]
     y_tr, y_va = y[idx_tr], y[idx_va]
     p_tr, p_va = pos[idx_tr], pos[idx_va]
-    log({"event": "split",
-         "n_tr": len(y_tr), "n_va": len(y_va),
-         "pos_tr": int((y_tr == 1).sum()), "neg_tr": int((y_tr == 0).sum()),
-         "pos_va": int((y_va == 1).sum()), "neg_va": int((y_va == 0).sum())})
+    log(
+        {
+            "event": "split",
+            "n_tr": len(y_tr),
+            "n_va": len(y_va),
+            "pos_tr": int((y_tr == 1).sum()),
+            "neg_tr": int((y_tr == 0).sum()),
+            "pos_va": int((y_va == 1).sum()),
+            "neg_va": int((y_va == 0).sum()),
+        }
+    )
 
     results: dict[str, dict] = {}
 
     # ------------ 1. sklearn LR baseline ----------------------------------
     log({"event": "fit_lr"})
     t0 = time.time()
-    lr = LogisticRegression(C=0.01, class_weight="balanced", max_iter=200,
-                            solver="lbfgs", n_jobs=-1)
+    lr = LogisticRegression(
+        C=0.01, class_weight="balanced", max_iter=200, solver="lbfgs", n_jobs=-1
+    )
     lr.fit(X_tr, y_tr)
     probs_va = lr.predict_proba(X_va)[:, 1]
     f1, th = sweep_f1(probs_va, y_va)
@@ -358,8 +420,9 @@ def main() -> None:
     pos_feat_va = np.stack([p_va, 1.0 - p_va], axis=-1).astype(np.float32)
     Xp_tr = np.concatenate([X_tr, pos_feat_tr], axis=-1)
     Xp_va = np.concatenate([X_va, pos_feat_va], axis=-1)
-    lr_pos = LogisticRegression(C=0.01, class_weight="balanced", max_iter=200,
-                                solver="lbfgs", n_jobs=-1)
+    lr_pos = LogisticRegression(
+        C=0.01, class_weight="balanced", max_iter=200, solver="lbfgs", n_jobs=-1
+    )
     lr_pos.fit(Xp_tr, y_tr)
     probs_va = lr_pos.predict_proba(Xp_va)[:, 1]
     f1, th = sweep_f1(probs_va, y_va)
@@ -378,8 +441,9 @@ def main() -> None:
                 continue
             log({"event": "fit_knn", "k": k})
             t0 = time.time()
-            knn = KNeighborsClassifier(n_neighbors=k, algorithm="brute",
-                                       metric="cosine", n_jobs=-1)
+            knn = KNeighborsClassifier(
+                n_neighbors=k, algorithm="brute", metric="cosine", n_jobs=-1
+            )
             knn.fit(Xn_tr, y_tr)
             probs_va = knn.predict_proba(Xn_va)[:, 1]
             f1, th = sweep_f1(probs_va, y_va)
@@ -395,9 +459,19 @@ def main() -> None:
             tag = "MLP+pos" if use_pos else "MLP"
             log({"event": "train_mlp", "use_pos": use_pos})
             t0 = time.time()
-            r = train_mlp(X_tr, y_tr, p_tr, X_va, y_va, p_va,
-                          latent_dim=latent_dim, window=W, use_pos=use_pos,
-                          device=args.device, seed=args.seed)
+            r = train_mlp(
+                X_tr,
+                y_tr,
+                p_tr,
+                X_va,
+                y_va,
+                p_va,
+                latent_dim=latent_dim,
+                window=W,
+                use_pos=use_pos,
+                device=args.device,
+                seed=args.seed,
+            )
             r["wall_s"] = time.time() - t0
             results[tag] = r
             log({"event": "result", "method": tag, **r})
@@ -406,9 +480,16 @@ def main() -> None:
     summary = sorted(results.items(), key=lambda kv: -kv[1].get("f1", -1))
     log({"event": "summary"})
     for name, m in summary:
-        log({"event": "rank", "method": name, "f1": m.get("f1"),
-             "thresh": m.get("thresh"), "n_params": m.get("n_params"),
-             "wall_s": m.get("wall_s")})
+        log(
+            {
+                "event": "rank",
+                "method": name,
+                "f1": m.get("f1"),
+                "thresh": m.get("thresh"),
+                "n_params": m.get("n_params"),
+                "wall_s": m.get("wall_s"),
+            }
+        )
 
     with open(out_dir / "summary.json", "w") as fh:
         json.dump({"results": results, "ranked": [s[0] for s in summary]}, fh, indent=2)

@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Episode-level evaluation harness for LatentSuccessClassifier ckpts.
 
 Runs WMPO-protocol ``predict_success`` on real (or imagined) hidden trajectories
@@ -34,6 +35,7 @@ Usage:
         --threshold-sweep 0.5,0.7,0.9,0.93,0.95,0.99 --stride 1 --min-steps 64 \\
         --out data/outputs/dreamervla/outcome_classifier/_compare_v0/sweep.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -103,8 +105,10 @@ def _load_classifier(ckpt_path: Path, override_cfg: dict | None, device: torch.d
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing or unexpected:
         # Only flag truly suspicious mismatches; transformer vs linear keys differ.
-        print(f"  [load:{ckpt_path.name}] missing={len(missing)} unexpected={len(unexpected)}",
-              flush=True)
+        print(
+            f"  [load:{ckpt_path.name}] missing={len(missing)} unexpected={len(unexpected)}",
+            flush=True,
+        )
     return model, classifier_cfg, payload
 
 
@@ -142,7 +146,9 @@ def _collect_real_demos(
     """
     out: list[tuple[str, str, np.ndarray, int, bool]] = []
     succ_pairs = _find_demo_pairs(cfg.wm_replay.raw_dir, cfg.wm_replay.hidden_dir)
-    fail_pairs = _find_demo_pairs(cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir)
+    fail_pairs = _find_demo_pairs(
+        cfg.wm_replay.failure_raw_dir, cfg.wm_replay.failure_hidden_dir
+    )
     if val_only:
         v_succ = int(cfg.wm_replay.val_demos_tail)
         v_fail = int(cfg.wm_replay.val_failure_tail)
@@ -176,9 +182,15 @@ def _pool_chunks(hidden: np.ndarray, K: int, chunk_pool: str) -> np.ndarray:
 
 @torch.no_grad()
 def _predict_episode(
-    model, hidden: np.ndarray, W: int, stride: int, min_steps: int,
-    batch_size: int, device: torch.device,
-    K: int = 1, chunk_pool: str = "last",
+    model,
+    hidden: np.ndarray,
+    W: int,
+    stride: int,
+    min_steps: int,
+    batch_size: int,
+    device: torch.device,
+    K: int = 1,
+    chunk_pool: str = "last",
 ) -> np.ndarray:
     """Return the per-window p(success) array, length = number of windows scanned.
 
@@ -202,14 +214,19 @@ def _predict_episode(
     arr = np.stack(windows).astype(np.float32)  # [N, W, L]
     probs: list[np.ndarray] = []
     for i in range(0, arr.shape[0], batch_size):
-        chunk = torch.from_numpy(arr[i:i + batch_size]).to(device)
+        chunk = torch.from_numpy(arr[i : i + batch_size]).to(device)
         logits = model(chunk)
         probs.append(torch.softmax(logits, dim=-1)[:, 1].detach().cpu().numpy())
     return np.concatenate(probs)
 
 
 def _episode_decision(
-    probs: np.ndarray, threshold: float, W: int, stride: int, min_steps: int, T: int,
+    probs: np.ndarray,
+    threshold: float,
+    W: int,
+    stride: int,
+    min_steps: int,
+    T: int,
     K: int = 1,
 ) -> tuple[bool, int]:
     """Earliest window-end index where probs >= threshold; else T-1.
@@ -254,7 +271,9 @@ def _aggregate(
         fs_mae = float("nan")
         fs_med = float("nan")
     return {
-        "f1": f1, "prec": prec, "rec": rec,
+        "f1": f1,
+        "prec": prec,
+        "rec": rec,
         "n_tp": int(((y_true == 1) & (y_pred == 1)).sum()),
         "n_fp": int(((y_true == 0) & (y_pred == 1)).sum()),
         "n_fn": int(((y_true == 1) & (y_pred == 0)).sum()),
@@ -267,27 +286,52 @@ def _aggregate(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", action="append", required=True,
-                        help="Either path or tag=path. Repeatable.")
-    parser.add_argument("--config", required=True,
-                        help="A wmpo_classifier_libero_goal_*.yaml — used for data paths "
-                             "and val_demos_tail / val_failure_tail.")
-    parser.add_argument("--hidden-mode", default="real", choices=["real"],
-                        help="Currently only 'real'. Imagined-mode eval intentionally "
-                             "omitted to enforce the WMPO-parity protocol.")
-    parser.add_argument("--threshold", type=float, default=0.93,
-                        help="WMPO default 0.93 (matches best_videomae_f10.1989_th0.93.pth).")
-    parser.add_argument("--threshold-sweep", default=None,
-                        help="Comma-separated list of thresholds. If set, overrides --threshold "
-                             "and reports a sweep table.")
+    parser.add_argument(
+        "--ckpt",
+        action="append",
+        required=True,
+        help="Either path or tag=path. Repeatable.",
+    )
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="A wmpo_classifier_libero_goal_*.yaml — used for data paths "
+        "and val_demos_tail / val_failure_tail.",
+    )
+    parser.add_argument(
+        "--hidden-mode",
+        default="real",
+        choices=["real"],
+        help="Currently only 'real'. Imagined-mode eval intentionally "
+        "omitted to enforce the WMPO-parity protocol.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.93,
+        help="WMPO default 0.93 (matches best_videomae_f10.1989_th0.93.pth).",
+    )
+    parser.add_argument(
+        "--threshold-sweep",
+        default=None,
+        help="Comma-separated list of thresholds. If set, overrides --threshold "
+        "and reports a sweep table.",
+    )
     parser.add_argument("--stride", type=int, default=1, help="WMPO default 1.")
-    parser.add_argument("--min-steps", type=int, default=64,
-                        help="WMPO predict_success min_steps; window-end must be >= W + min_steps.")
+    parser.add_argument(
+        "--min-steps",
+        type=int,
+        default=64,
+        help="WMPO predict_success min_steps; window-end must be >= W + min_steps.",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--use-train-split", action="store_true",
-                        help="If set, evaluate on ALL demos (training + val), not just the "
-                             "held-out tail. Default: held-out val only.")
+    parser.add_argument(
+        "--use-train-split",
+        action="store_true",
+        help="If set, evaluate on ALL demos (training + val), not just the "
+        "held-out tail. Default: held-out val only.",
+    )
     parser.add_argument("--out", required=True, help="JSON output path.")
     args = parser.parse_args()
 
@@ -327,36 +371,58 @@ def main() -> None:
         model, classifier_cfg, payload = _load_classifier(
             path, override_cfg=override_cfg_classifier, device=device
         )
-        K = int(getattr(classifier_cfg, "chunk_size", 1)) if str(getattr(classifier_cfg, "granularity", "action")) == "chunk" else 1
+        K = (
+            int(getattr(classifier_cfg, "chunk_size", 1))
+            if str(getattr(classifier_cfg, "granularity", "action")) == "chunk"
+            else 1
+        )
         chunk_pool = str(getattr(classifier_cfg, "chunk_pool", "last"))
-        print(f"  head_type={classifier_cfg.head_type} latent_dim={classifier_cfg.latent_dim} "
-              f"window={classifier_cfg.window} granularity={getattr(classifier_cfg, 'granularity', 'action')} "
-              f"K={K} chunk_pool={chunk_pool}", flush=True)
+        print(
+            f"  head_type={classifier_cfg.head_type} latent_dim={classifier_cfg.latent_dim} "
+            f"window={classifier_cfg.window} granularity={getattr(classifier_cfg, 'granularity', 'action')} "
+            f"K={K} chunk_pool={chunk_pool}",
+            flush=True,
+        )
 
         # Cache per-episode probs once; sweep thresholds in Python.
         per_demo: list[np.ndarray] = []
         for i, (split, demo_id, hidden, _, _) in enumerate(demos):
             probs = _predict_episode(
-                model, hidden, W=W, stride=int(args.stride),
-                min_steps=int(args.min_steps), batch_size=int(args.batch_size), device=device,
-                K=K, chunk_pool=chunk_pool,
+                model,
+                hidden,
+                W=W,
+                stride=int(args.stride),
+                min_steps=int(args.min_steps),
+                batch_size=int(args.batch_size),
+                device=device,
+                K=K,
+                chunk_pool=chunk_pool,
             )
             per_demo.append(probs)
             if (i + 1) % 10 == 0:
-                print(f"  [{tag}] scored {i+1}/{len(demos)} demos", flush=True)
+                print(f"  [{tag}] scored {i + 1}/{len(demos)} demos", flush=True)
 
         per_threshold: dict[str, dict] = {}
         for th in thresholds:
             decisions = []
             for (split, demo_id, hidden, _, _), probs in zip(demos, per_demo):
                 T = int(hidden.shape[0])
-                decisions.append(_episode_decision(
-                    probs, threshold=float(th), W=W,
-                    stride=int(args.stride), min_steps=int(args.min_steps), T=T, K=K,
-                ))
+                decisions.append(
+                    _episode_decision(
+                        probs,
+                        threshold=float(th),
+                        W=W,
+                        stride=int(args.stride),
+                        min_steps=int(args.min_steps),
+                        T=T,
+                        K=K,
+                    )
+                )
             per_threshold[f"th_{th:.3f}"] = _aggregate(decisions, truths)
-            print(f"  [{tag}] th={th:.3f} → F1={per_threshold[f'th_{th:.3f}']['f1']:.4f}",
-                  flush=True)
+            print(
+                f"  [{tag}] th={th:.3f} → F1={per_threshold[f'th_{th:.3f}']['f1']:.4f}",
+                flush=True,
+            )
 
         # Per-demo dump (only emitted for the FIRST threshold, to keep file size sane)
         first_th = thresholds[0]
@@ -364,16 +430,27 @@ def main() -> None:
         for (split, demo_id, hidden, fs_true, c_true), probs in zip(demos, per_demo):
             T = int(hidden.shape[0])
             pred_complete, pred_fs = _episode_decision(
-                probs, threshold=float(first_th), W=W,
-                stride=int(args.stride), min_steps=int(args.min_steps), T=T, K=K,
+                probs,
+                threshold=float(first_th),
+                W=W,
+                stride=int(args.stride),
+                min_steps=int(args.min_steps),
+                T=T,
+                K=K,
             )
-            per_demo_dump.append({
-                "split": split, "demo": demo_id,
-                "T": T, "fs_true": int(fs_true), "complete_true": bool(c_true),
-                "fs_pred@th0": int(pred_fs), "complete_pred@th0": bool(pred_complete),
-                "max_prob": float(probs.max()) if probs.size else 0.0,
-                "mean_prob": float(probs.mean()) if probs.size else 0.0,
-            })
+            per_demo_dump.append(
+                {
+                    "split": split,
+                    "demo": demo_id,
+                    "T": T,
+                    "fs_true": int(fs_true),
+                    "complete_true": bool(c_true),
+                    "fs_pred@th0": int(pred_fs),
+                    "complete_pred@th0": bool(pred_complete),
+                    "max_prob": float(probs.max()) if probs.size else 0.0,
+                    "mean_prob": float(probs.mean()) if probs.size else 0.0,
+                }
+            )
 
         out_payload["ckpts"][tag] = {
             "path": str(path),
@@ -391,11 +468,15 @@ def main() -> None:
 
     # ----- compact stdout summary table ----------------------------------
     print("\n=== episode-level summary ===")
-    print(f"{'ckpt':<32s} {'head':>12s} " + " ".join(f"{f'F1@{th:.2f}':>9s}" for th in thresholds))
+    print(
+        f"{'ckpt':<32s} {'head':>12s} "
+        + " ".join(f"{f'F1@{th:.2f}':>9s}" for th in thresholds)
+    )
     for tag, payload in out_payload["ckpts"].items():
         row = f"{tag:<32s} {payload['head_type']:>12s} "
         row += " ".join(
-            f"{payload['per_threshold'][f'th_{th:.3f}']['f1']:>9.4f}" for th in thresholds
+            f"{payload['per_threshold'][f'th_{th:.3f}']['f1']:>9.4f}"
+            for th in thresholds
         )
         print(row)
 
