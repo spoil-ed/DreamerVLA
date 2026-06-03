@@ -211,6 +211,7 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
                         "epoch": int(self.epoch),
                     }
                     logger.log(step_log)
+                    self.log_metrics(step_log, step=self.global_step)
                     history.append(step_log)
                     progress.set_postfix(
                         refresh=False, loss=float(step_log["train_loss_value"])

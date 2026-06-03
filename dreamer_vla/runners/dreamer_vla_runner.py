@@ -1974,6 +1974,7 @@ class DreamerVLARunner(BaseRunner):
                             is_last_batch = batch_idx == len(train_dataloader) - 1
                             if not is_last_batch:
                                 train_json_logger.log(step_log)
+                                self.log_metrics(step_log, step=self.global_step)
                                 self.global_step += 1
 
                             if (
@@ -2027,6 +2028,7 @@ class DreamerVLARunner(BaseRunner):
                             step_log.update(self.evaluate_val_loss(val_dl, split_name))
 
                     train_json_logger.log(step_log)
+                    self.log_metrics(step_log, step=self.global_step)
                     history.append(dict(step_log))
 
                     if (self.epoch % cfg.training.checkpoint_every) == 0:

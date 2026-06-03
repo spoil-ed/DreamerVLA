@@ -33,6 +33,7 @@ ray[default]
 scipy 
 scikit-learn 
 tensorflow==2.19.0 
+tensorboard
 tensorflow_datasets 
 tensordict 
 timm==0.9.10 

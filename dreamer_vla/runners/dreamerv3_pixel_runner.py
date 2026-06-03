@@ -589,6 +589,7 @@ class DreamerV3PixelRunner(BaseRunner):
                         ):
                             log_handle.write(json.dumps(row) + "\n")
                             log_handle.flush()
+                            self.log_metrics(row, step=self.global_step)
 
                         self._maybe_save_viz(model_core, batch)
 

@@ -513,6 +513,12 @@ class LatentClassifierRunner(BaseRunner):
 
     def _log(self, payload: dict) -> None:
         payload = {"ts": time.strftime("%H:%M:%S"), **payload}
+        event = str(payload.get("event", ""))
+        metric_prefix = "eval" if event.startswith("val_") else None
+        if event == "train_step":
+            metric_prefix = "train"
+        step_value = payload.get("step", payload.get("global_step", self.global_step))
+        self.log_metrics(payload, step=int(step_value), prefix=metric_prefix)
         print(json.dumps(payload), flush=True)
         if self._log_path is not None:
             with open(self._log_path, "a") as fh:

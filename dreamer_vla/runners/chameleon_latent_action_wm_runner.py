@@ -542,6 +542,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                                 and (self.global_step % log_every) == 0
                             ):
                                 logger.log(step_log)
+                                self.log_metrics(step_log, step=self.global_step)
                             postfix: dict[str, float] = {}
                             for name, keys in (
                                 ("loss", ("train_loss",)),
@@ -585,6 +586,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                         for split_name, val_dl in val_dataloaders.items():
                             epoch_log.update(self.evaluate_val_loss(val_dl, split_name))
                     logger.log(epoch_log)
+                    self.log_metrics(epoch_log, step=self.global_step)
 
                     if (self.epoch % int(cfg.training.checkpoint_every)) == 0:
                         if bool(

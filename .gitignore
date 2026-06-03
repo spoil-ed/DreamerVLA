@@ -23,6 +23,7 @@ data/
 train.log
 *.log
 wandb/
+.env.wandb
 
 # other
 CLAUDE.local.md

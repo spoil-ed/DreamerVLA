@@ -763,6 +763,7 @@ class PretokenizeVLARunner(BaseRunner):
                             is_last_batch = batch_idx == (len(train_dataloader) - 1)
                             if not is_last_batch:
                                 train_json_logger.log(step_log)
+                                self.log_metrics(step_log, step=self.global_step)
                                 self.global_step += 1
 
                             if (
@@ -802,6 +803,7 @@ class PretokenizeVLARunner(BaseRunner):
                             step_log.update(val_metrics)
 
                     train_json_logger.log(step_log)
+                    self.log_metrics(step_log, step=self.global_step)
 
                     if (self.epoch % cfg.training.checkpoint_every) == 0:
                         if cfg.checkpoint.save_last_ckpt:

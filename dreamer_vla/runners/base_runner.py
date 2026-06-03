@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import copy
+import math
+import numbers
 import pathlib
 import pickle
 from pprint import pprint
@@ -13,6 +15,8 @@ from hydra.core.hydra_config import HydraConfig
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
+
+from dreamer_vla.utils.metric_logger import MetricLogger, NullMetricLogger
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -38,6 +42,7 @@ class BaseRunner(ABC):
         # Loop state
         self.global_step = 0
         self.epoch = 0
+        self._metric_logger: Any | None = None
 
     @property
     def output_dir(self) -> str:
@@ -395,6 +400,124 @@ class BaseRunner(ABC):
                 f"{stage}_step={step} global_step={global_step} epoch={epoch} {metrics}"
             )
 
+    def _ensure_metric_logger(self) -> Any:
+        if self._metric_logger is not None:
+            return self._metric_logger
+        if not self.is_main_process:
+            self._metric_logger = NullMetricLogger()
+            return self._metric_logger
+
+        output_name = pathlib.Path(self.output_dir).name or str(self.runner_name)
+        self._metric_logger = MetricLogger(
+            self.cfg,
+            default_log_path=str(self.get_log_dir()),
+            default_project_name="dreamer_vla",
+            default_experiment_name=output_name,
+        )
+        return self._metric_logger
+
+    def log_metrics(
+        self,
+        metrics: Mapping[str, Any],
+        *,
+        step: int | None = None,
+        prefix: str | None = None,
+        backend: str | list[str] | tuple[str, ...] | None = None,
+        worker_group_name: str | None = None,
+        rank: int | None = None,
+    ) -> None:
+        """Send scalar metrics to the configured external metric backends."""
+        prepared = self._prepare_metric_payload(metrics, prefix=prefix)
+        if not prepared:
+            return
+        metric_step = self._resolve_metric_step(metrics, explicit_step=step)
+        self._ensure_metric_logger().log(
+            prepared,
+            step=metric_step,
+            backend=backend,
+            worker_group_name=worker_group_name,
+            rank=rank,
+        )
+
+    def finish_metric_logger(self) -> None:
+        if self._metric_logger is None:
+            return
+        finish = getattr(self._metric_logger, "finish", None)
+        if callable(finish):
+            finish()
+
+    def _prepare_metric_payload(
+        self,
+        metrics: Mapping[str, Any],
+        *,
+        prefix: str | None = None,
+    ) -> dict[str, float]:
+        payload: dict[str, float] = {}
+        for key, value in metrics.items():
+            key_str = str(key)
+            if key_str in {"global_step", "step", "epoch", "ts"}:
+                continue
+            scalar = self._coerce_metric_scalar(value)
+            if scalar is None:
+                continue
+            metric_name = self._normalize_metric_name(key_str, prefix=prefix)
+            if metric_name:
+                payload[metric_name] = scalar
+        return payload
+
+    def _resolve_metric_step(
+        self,
+        metrics: Mapping[str, Any],
+        *,
+        explicit_step: int | None,
+    ) -> int:
+        if explicit_step is not None:
+            return int(explicit_step)
+        for key in ("global_step", "step", "epoch"):
+            value = metrics.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, numbers.Number):
+                return int(value)
+        return int(self.global_step)
+
+    @staticmethod
+    def _coerce_metric_scalar(value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, numbers.Number):
+            scalar = float(value)
+        elif hasattr(value, "detach") and hasattr(value, "numel"):
+            try:
+                if int(value.numel()) != 1:
+                    return None
+                scalar = float(value.detach().item())
+            except Exception:
+                return None
+        else:
+            return None
+        if not math.isfinite(scalar):
+            return None
+        return scalar
+
+    @staticmethod
+    def _normalize_metric_name(key: str, *, prefix: str | None = None) -> str:
+        if "/" in key:
+            return key
+        if key.startswith("train_"):
+            return f"train/{key[len('train_'):]}"
+        if key.startswith("val_"):
+            return f"eval/{key[len('val_'):]}"
+        if key.startswith("eval_"):
+            return f"eval/{key[len('eval_'):]}"
+        if key.startswith("time_"):
+            return f"time/{key[len('time_'):]}"
+        if key.startswith("wall_"):
+            return f"time/{key}"
+        if prefix:
+            return f"{prefix.strip('/')}/{key}"
+        return f"train/{key}"
+
     def save_checkpoint(
         self,
         path: str | pathlib.Path | None = None,
@@ -533,7 +656,7 @@ class BaseRunner(ABC):
 
     def teardown(self) -> None:
         """Optional lifecycle hook after execution."""
-        return None
+        self.finish_metric_logger()
 
     @abstractmethod
     def run(self) -> object:
