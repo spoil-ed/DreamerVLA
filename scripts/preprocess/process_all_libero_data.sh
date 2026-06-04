@@ -18,12 +18,16 @@
 #   FORCE=1   re-run even if outputs look complete
 set -uo pipefail
 
-PROJECT_ROOT="/mnt/data/spoil/workspace/DreamerVLA"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
 cd "${PROJECT_ROOT}"
 
-source /home/user01/miniconda3/etc/profile.d/conda.sh
-conda activate dreamervla
-PYTHON="/home/user01/miniconda3/envs/dreamervla/bin/python"
+if [[ -n "${CONDA_SH:-}" ]]; then
+  # Optional: CONDA_SH=/path/to/conda.sh CONDA_ENV=dreamervla bash ...
+  source "${CONDA_SH}"
+  conda activate "${CONDA_ENV:-dreamervla}"
+fi
+PYTHON="${PYTHON:-python}"
 
 LOG_DIR="${PROJECT_ROOT}/data/logs/libero_data_prep"
 mkdir -p "${LOG_DIR}"

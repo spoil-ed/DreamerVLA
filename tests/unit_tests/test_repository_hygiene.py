@@ -160,6 +160,25 @@ def test_active_targets_use_canonical_module_paths() -> None:
         assert "dreamer_vla.models.vla_policy" not in text, path.relative_to(project_root)
 
 
+def test_active_configs_do_not_pin_machine_local_roots() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    config_dir = project_root / "configs"
+    active_configs = sorted(
+        path
+        for path in config_dir.rglob("*.yaml")
+        if "archive" not in path.relative_to(config_dir).parts
+    )
+
+    forbidden_roots = [
+        "/mnt/data/spoil/workspace/DreamerVLA",
+        "/home/user01",
+    ]
+    for path in active_configs:
+        text = path.read_text(encoding="utf-8")
+        stale = [root for root in forbidden_roots if root in text]
+        assert stale == [], f"{path.relative_to(project_root)}: {stale}"
+
+
 def test_active_docs_do_not_describe_removed_source_roots() -> None:
     project_root = Path(__file__).resolve().parents[2]
     active_docs = [

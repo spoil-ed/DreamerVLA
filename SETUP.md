@@ -1,18 +1,24 @@
 # DreamerVLA Setup
 
-本文给出从空环境到 LIBERO 评估的最短复现路径。所有命令默认在单机多 GPU Linux 上运行，并默认项目路径为：
+本文给出从空环境到 LIBERO 评估的最短复现路径。所有命令默认在单机多 GPU Linux 上运行。先进入你的 DreamerVLA checkout，并把仓库根目录导出为统一根目录：
 
 ```bash
-export DVLA_ROOT=/mnt/data/spoil/workspace/DreamerVLA
+cd /path/to/DreamerVLA
+export DVLA_ROOT="$(pwd -P)"
 cd "$DVLA_ROOT"
 ```
 
-如果仓库不在这个路径，先把 `configs/` 和稳定脚本中的旧绝对路径替换成你的路径：
+活动 Hydra 配置使用 `${oc.env:DVLA_ROOT,.}` 作为路径根。也就是说：
+
+- 已导出 `DVLA_ROOT` 时，配置解析到该绝对根目录。
+- 未导出 `DVLA_ROOT` 时，配置默认从当前工作目录 `.` 解析；因此仍建议先 `cd "$DVLA_ROOT"`。
+- `configs/archive/**` 是历史实验配置，可能保留旧机器绝对路径；活动配置不需要再做批量 `sed` 替换。
+
+建议同时把 LIBERO 的全局配置也收敛到仓库内，避免不同项目共享 `~/.libero/config.yaml`：
 
 ```bash
-OLD=/mnt/data/spoil/workspace/DreamerVLA
-NEW=/abs/path/to/DreamerVLA
-rg -l "$OLD" configs scripts | xargs sed -i "s#${OLD}#${NEW}#g"
+export LIBERO_CONFIG_PATH="$DVLA_ROOT/.libero"
+mkdir -p "$LIBERO_CONFIG_PATH"
 ```
 
 ## 1. 环境
@@ -54,12 +60,19 @@ sudo apt install -y libgl1 libopengl0 libgl1-mesa-dri libgl1-mesa-glx \
   libosmesa6-dev libosmesa6 ffmpeg
 ```
 
-安装本地第三方包：
+### 1.1 安装 third_party 本地包
+
+主线 LIBERO 环境至少需要 robosuite 栈、LIBERO 本体和渲染探针。按下面顺序安装，所有路径都从 `DVLA_ROOT` 派生：
 
 ```bash
-# LIBERO
-cd "$DVLA_ROOT/third_party/LIBERO"
-python -m pip install --no-build-isolation -e .
+# robosuite stack used by LIBERO env replay/eval
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robosuite"
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robosuite-task-zoo"
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robomimic"
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/mimicgen"
+
+# LIBERO editable install. Install the checkout root, not third_party/LIBERO/libero.
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/LIBERO"
 
 # egl_probe，若 CMake 版本报错，先放宽 cmake_minimum_required
 cd "$DVLA_ROOT/third_party/egl_probe"
@@ -70,6 +83,41 @@ python -m pip install --no-build-isolation .
 # 可选：部分历史/WMPO 路线会用到
 pip install -e "$DVLA_ROOT/third_party/TensorNVMe" || true
 pip install -v --no-build-isolation "$DVLA_ROOT/third_party/apex" || true
+```
+
+`third_party/LIBERO` 保留了两个本地兼容修改：
+
+- `pyproject.toml` + thin `setup.py`：修复新版 `pip` / `setuptools` 下 `pip install -e .` 后仍 `ModuleNotFoundError: libero` 的问题。
+- `libero/libero/__init__.py`：首次 import 且缺少 config 时，只在交互式 TTY 中询问路径，避免 CI/子进程/eval runner 卡在 `input()`。
+
+如果替换或重置了 `third_party/LIBERO`，先确认这两个修改仍在，再重新执行 editable install。
+
+建议显式写入 repo-local LIBERO config，避免读取用户目录下旧的 `~/.libero/config.yaml`：
+
+```bash
+export LIBERO_CONFIG_PATH="$DVLA_ROOT/.libero"
+mkdir -p "$LIBERO_CONFIG_PATH"
+cat > "$LIBERO_CONFIG_PATH/config.yaml" <<EOF
+benchmark_root: $DVLA_ROOT/third_party/LIBERO/libero/libero
+bddl_files: $DVLA_ROOT/third_party/LIBERO/libero/libero/bddl_files
+init_states: $DVLA_ROOT/third_party/LIBERO/libero/libero/init_files
+datasets: $DVLA_ROOT/third_party/LIBERO/libero/datasets
+assets: $DVLA_ROOT/third_party/LIBERO/libero/libero/assets
+EOF
+```
+
+验证 LIBERO 必须离开源码目录后仍能 import：
+
+```bash
+cd /tmp
+python -c "import libero; print(libero.__path__)"
+cd "$DVLA_ROOT"
+```
+
+OpenVLA-OFT 有两套 vendored 代码：`third_party/openvla-oft-lightweight` 由 DreamerVLA helper 动态加入 `sys.path`，默认不用安装；官方 eval launcher 使用 `third_party/openvla-oft`，只在跑官方 OpenVLA-OFT eval 时按需安装：
+
+```bash
+python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/openvla-oft" || true
 ```
 
 `flash-attn` 可选。若需要，用和 `torch==2.5.1/cu12/cp311` 匹配的 wheel，例如：
@@ -137,10 +185,10 @@ python third_party/LIBERO/benchmark_scripts/download_libero_datasets.py \
   --datasets libero_goal --use-huggingface
 ```
 
-确认 `~/.libero/config.yaml` 的 `datasets:` 指向实际 LIBERO 数据目录，例如：
+确认 LIBERO config 的 `datasets:` 指向实际 LIBERO 数据目录：
 
 ```bash
-grep '^datasets:' ~/.libero/config.yaml
+grep '^datasets:' "$LIBERO_CONFIG_PATH/config.yaml"
 ```
 
 ## 4. 数据处理
@@ -182,7 +230,13 @@ SUITES="$SUITE" GPUS=0,1 PRETOKENIZE_PROCS=8 FORCE=0 \
   bash scripts/preprocess/process_all_libero_data.sh
 ```
 
-如果你的 conda 不在 `/home/user01/miniconda3`，先修改 `scripts/preprocess/process_all_libero_data.sh` 顶部的 `source .../conda.sh` 和 `PYTHON=...` 两行。
+脚本默认使用当前 shell 里的 `python`，并从自身位置推断 `DVLA_ROOT`。如果需要脚本内部激活 conda，可以显式传入：
+
+```bash
+CONDA_SH=/path/to/miniconda3/etc/profile.d/conda.sh CONDA_ENV=dreamervla \
+SUITES="$SUITE" GPUS=0,1 PRETOKENIZE_PROCS=8 FORCE=0 \
+  bash scripts/preprocess/process_all_libero_data.sh
+```
 
 产物：
 
@@ -261,19 +315,34 @@ PY
 
 期望 `obs_embedding` 最后一维为 `35840`，`action_hidden_states` 为 `[T, 35, 1024]`。
 
-### 4.5 更新 task config
+### 4.5 task config 路径规则
 
-确认 `configs/task/${SUITE}.yaml` 中这些字段指向刚生成的目录：
+活动 task config 已经从机器绝对路径迁移为 `DVLA_ROOT` 根目录，例如：
 
 ```yaml
-vla_ckpt_path: /mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal
-pretokenize_config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: /mnt/data/spoil/workspace/DreamerVLA/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
-hdf5_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256
-hdf5_reward_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-pi0_legacy_action_hidden_dir: /mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
+pretokenize_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+hdf5_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
+pi0_legacy_action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
 ```
+
+正常使用时只需要保持：
+
+```bash
+export DVLA_ROOT="$(pwd -P)"
+```
+
+如果某个 ckpt 或 sidecar 放在仓库外，优先用 Hydra CLI override，而不是改回机器硬编码路径：
+
+```bash
+bash scripts/train_wm.sh task=libero_goal \
+  task.pi0_legacy_action_hidden_dir=/abs/path/to/hidden_sidecar
+```
+
+注意：action-hidden sidecar 的 `preprocess_config.json` 会记录预处理时传入的 `model_path`。如果复用旧 sidecar 且其 attr 仍是旧绝对路径，训练时需要覆盖对应 route 的 `dataset.expected_model_path=/old/model/path`，或重新运行 4.4 生成 sidecar。
 
 ## 5. 训练
 
@@ -420,11 +489,11 @@ data/outputs/eval/eval_libero_vla/
 | 现象 | 处理 |
 | --- | --- |
 | `ModuleNotFoundError: libero` | 重新执行 `python -m pip install --no-build-isolation -e third_party/LIBERO`，并在 `/tmp` 下验证 import |
-| LIBERO 找不到数据 | 检查 `~/.libero/config.yaml` 的 `datasets:` |
+| LIBERO 找不到数据 | 检查 `$LIBERO_CONFIG_PATH/config.yaml` 的 `datasets:` |
 | CUDA 不可用 | 检查驱动、`nvidia-smi`、PyTorch wheel 是否为 cu124 |
 | `xformers` 冲突 | 确认 `torch==2.5.1`，再安装 `requirements.txt` |
 | `flash-attn` 编译失败 | 使用预编译 wheel，或暂时跳过 |
-| 训练报路径不存在 | 检查 `configs/task/*.yaml` 和 `init.*_ckpt` 是否仍是旧机器绝对路径 |
+| 训练报路径不存在 | 检查 `DVLA_ROOT` 是否指向仓库根目录，并用 Hydra CLI override 外部 ckpt/sidecar |
 | WM 读取 sidecar 报 schema mismatch | 确认 hidden sidecar 使用 `--action-head-type legacy --history 2 --include-state --rotate-images-180` |
 | DDP 卡住 | 先用 `NGPU=1` 和 `training.max_steps=1` smoke；再检查 rank0 日志和 batch/NaN |
 

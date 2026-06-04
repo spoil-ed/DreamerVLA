@@ -31,7 +31,7 @@ data:
   chunk_pool: last
 
 training:
-  out_dir: ${oc.env:OUT_DIR,data/outputs/dreamervla/outcome_classifier/oft/${task.name}/chunk}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_ROOT,.}/data/outputs/dreamervla/outcome_classifier/oft/${task.name}/chunk}
   device: cuda
   seed: 0
   resume: false
