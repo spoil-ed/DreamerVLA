@@ -26,7 +26,7 @@ Brief for AI coding agents working on Dreamer-VLA. For full contribution flow, c
 
 - **`configs/`** – Hydra configs, one top-level YAML per training route (VLA, WM, DreamerVLA, OFT, classifier, eval); tasks under `task/libero_*.yaml`.
 
-- **`scripts/`** – Shell launchers and Python tools for training, evaluation, preprocessing, diagnostics, smoke tests.
+- **`scripts/`** – Shell launchers and Python tools for training, evaluation, preprocessing, diagnostics, setup tools, smoke tests.
 
 - **`tests/`** – `unit_tests/`, `e2e_tests/` (VLA, WM, DreamerVLA, OFT, classifier); e2e configs under `e2e_tests/<route>/*.yaml`.
 
