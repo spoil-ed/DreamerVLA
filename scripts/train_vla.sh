@@ -24,18 +24,16 @@
 #        bash scripts/train_vla.sh task=libero_object
 # ============================================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/common_env.sh"
+cd "${DVLA_ROOT}"
 
 # ---- defaults --------------------------------------------------------------
 CONFIG="${CONFIG:-vla_pi0_query}"
 NGPU="${NGPU:-1}"
-PYTHON="${PYTHON:-python}"
 MASTER_PORT="${MASTER_PORT:-29501}"
 
 # ---- env -------------------------------------------------------------------
-export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 
 # ---- launch ----------------------------------------------------------------
 echo "[train_vla] config=${CONFIG}  ngpu=${NGPU}  gpus=${CUDA_VISIBLE_DEVICES:-<all>}"

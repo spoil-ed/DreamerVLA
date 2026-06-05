@@ -4,7 +4,7 @@ DreamerVLA 是一个面向 LIBERO 机器人操控任务的 VLA + Dreamer-style w
 
 ```text
 LIBERO HDF5
-  -> no-op 过滤和 reward 处理
+  -> no-op 标记 / 可选筛选和 reward 处理
   -> RynnVLA / pi0 action-hidden sidecar
   -> DINO-style chunk world model
   -> DreamerVLA actor-critic / WMPO outcome
@@ -15,9 +15,9 @@ LIBERO HDF5
 
 ## 主线复现路线
 
-1. 环境：Python 3.11，PyTorch 2.5.1/cu124，`requirements.txt`，本地安装 `third_party/LIBERO`。
-2. 权重：下载 Chameleon tokenizer、Lumina tokenizer、RynnVLA-002 `VLA_model_256/<suite>`。
-3. 数据：下载 LIBERO，生成 `${suite}_no_noops_t_256`，再生成 reward HDF5 和 pi0 legacy action-hidden sidecar。
+1. 环境：`bash scripts/install_env.sh`。
+2. 权重和数据：`bash scripts/download_assets.sh`。
+3. 数据处理：`TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh`。
 4. 训练 VLA：`CONFIG=vla_pi0_query bash scripts/train_vla.sh task=libero_goal`。
 5. 训练 WM：`CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal`。
 6. 训练 DreamerVLA：`CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh ...`。
@@ -40,6 +40,9 @@ DreamerVLA/
 
 | 阶段 | 命令 |
 | --- | --- |
+| Install | `bash scripts/install_env.sh` |
+| Download | `bash scripts/download_assets.sh` |
+| LIBERO data | `TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh` |
 | VLA SFT | `CONFIG=vla_pi0_query bash scripts/train_vla.sh task=libero_goal` |
 | one-trajectory VLA | `CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal` |
 | World Model | `CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal` |
@@ -47,7 +50,7 @@ DreamerVLA/
 | DreamerVLA | `CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh` |
 | Eval | `bash scripts/eval_libero_vla.sh eval.ckpt_path=data/outputs/.../ckpt/latest.ckpt eval.ckpt_kind=vla` |
 
-常用 override：
+正式 shell 入口会自动 source `scripts/common_env.sh`。常用 override：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -64,7 +67,7 @@ Hydra 入口在 `configs/*.yaml`，任务路径在 `configs/task/*.yaml`。
 
 - `task.vla_ckpt_path`：RynnVLA base 或 SFT 权重目录。
 - `task.pretokenize_config_path`：VLA SFT manifest 配置。
-- `task.hdf5_dir`：no-op 过滤后的 LIBERO HDF5。
+- `task.hdf5_dir`：默认从 no-op 标记数据筛出的 LIBERO HDF5。
 - `task.hdf5_reward_dir`：remaining-steps reward HDF5。
 - `task.pi0_legacy_action_hidden_dir`：WM/DreamerVLA 使用的 action-hidden sidecar。
 - `init.world_model_state_ckpt`：DreamerVLA 初始化 WM 的 ckpt。

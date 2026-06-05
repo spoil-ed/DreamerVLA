@@ -20,6 +20,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+if [[ -f "${SCRIPT_DIR}/../common_env.sh" ]]; then
+  source "${SCRIPT_DIR}/../common_env.sh"
+  PROJECT_ROOT="${DVLA_ROOT}"
+fi
 cd "${PROJECT_ROOT}"
 
 if [[ -n "${CONDA_SH:-}" ]]; then

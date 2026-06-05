@@ -13,18 +13,19 @@
 #   tmux attach -t ppo_alltasks_trace_wmclf_g67
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/common_env.sh"
+cd "${DVLA_ROOT}"
 
-PYTHON="${PYTHON:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
 SESSION="${SESSION:-ppo_alltasks_trace_wmclf_g67}"
 MASTER_PORT="${MASTER_PORT:-29519}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-6,7}"
 NGPU="${NGPU:-2}"
 
-CONFIG="${CONFIG:-/mnt/data/spoil/workspace/DreamerVLA/configs/online_wmpo_outcome_libero_goal.yaml}"
-WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/step_00015000.ckpt}"
-CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf_chunk_minsteps32/ckpt/best_episode_f10.9705_th0.67.ckpt}"
-VLA_CKPT_PATH="${VLA_CKPT_PATH:-/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model}"
+CONFIG="${CONFIG:-${DVLA_ROOT}/configs/online_wmpo_outcome_libero_goal.yaml}"
+WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-${DVLA_ROOT}/data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/step_00015000.ckpt}"
+CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-${DVLA_ROOT}/data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf_chunk_minsteps32/ckpt/best_episode_f10.9705_th0.67.ckpt}"
+VLA_CKPT_PATH="${VLA_CKPT_PATH:-${DVLA_ROOT}/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model}"
 
 TASK_SUITE="${TASK_SUITE:-libero_goal}"
 TASK_IDS="${TASK_IDS:-0,1,2,3,4,5,6,7,8,9}"
@@ -43,8 +44,8 @@ BC_TO_REF="${BC_TO_REF:-0.1}"
 COLLECT_CHUNK_STEPS="${COLLECT_CHUNK_STEPS:-5}"
 
 TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR="${OUT_DIR:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla/online_wmpo_outcome/alltasks_frozenlegacy_ppo_g67_trace_wmclf_online_replay3k_freezeenc_globalcov_wmrefresh75_long300_chunk5/${TS}}"
-LOG_FILE="${LOG_FILE:-/mnt/data/spoil/workspace/DreamerVLA/data/outputs/logs/ppo_alltasks_trace_wmclf_replay3k_freezeenc_globalcov_chunk5_g67_${TS}.log}"
+OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/dreamervla/online_wmpo_outcome/alltasks_frozenlegacy_ppo_g67_trace_wmclf_online_replay3k_freezeenc_globalcov_wmrefresh75_long300_chunk5/${TS}}"
+LOG_FILE="${LOG_FILE:-${DVLA_ROOT}/data/outputs/logs/ppo_alltasks_trace_wmclf_replay3k_freezeenc_globalcov_chunk5_g67_${TS}.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -60,8 +61,8 @@ echo "[run_online_wmpo_alltasks] out_dir=$OUT_DIR"
 echo "[run_online_wmpo_alltasks] log_file=$LOG_FILE"
 echo "[run_online_wmpo_alltasks] task_ids=$TASK_IDS total_env_steps=$TOTAL_ENV_STEPS max_train_updates=$MAX_TRAIN_UPDATES collect_chunk_steps=$COLLECT_CHUNK_STEPS"
 
-tmux new-session -d -s "$SESSION" -c "$PWD" \
-  "PYTHONPATH=$PWD CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES MUJOCO_GL=osmesa $PYTHON -m torch.distributed.run \
+tmux new-session -d -s "$SESSION" -c "${DVLA_ROOT}" \
+  "PYTHONPATH=$DVLA_ROOT CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES MUJOCO_GL=$MUJOCO_GL $PYTHON -m torch.distributed.run \
   --standalone --nproc_per_node=$NGPU --master_port=$MASTER_PORT \
   scripts/training/train_online_pi0_action_hidden_dreamervla.py \
   --config $CONFIG \

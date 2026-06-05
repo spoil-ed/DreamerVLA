@@ -11,6 +11,7 @@ dist/
 .venv/
 venv/
 .DS_Store
+.libero/
 
 # Third-party local checkouts/wheels (installed in editable mode)
 third_party/

@@ -9,8 +9,11 @@ set -euo pipefail
 # lifecycle used by RLinf/SimpleVLA-RL and avoids robosuite render context
 # crashes when switching tasks in-process.
 
-ROOT="${ROOT:-/mnt/data/spoil/workspace/DreamerVLA}"
-PYTHON_BIN="${PYTHON_BIN:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/../common_env.sh"
+
+ROOT="${ROOT:-${DVLA_ROOT}}"
+PYTHON_BIN="${PYTHON_BIN:-${PYTHON}}"
 OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${ROOT}/third_party/openvla-oft}"
 
 SUITE="${SUITE:-libero_goal}"

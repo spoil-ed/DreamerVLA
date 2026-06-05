@@ -23,18 +23,16 @@
 #        training.max_steps=1 dataloader.num_workers=0
 # ============================================================================
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/common_env.sh"
+cd "${DVLA_ROOT}"
 
 # ---- defaults --------------------------------------------------------------
 CONFIG="${CONFIG:-world_model_dinowm_chunk}"
 NGPU="${NGPU:-1}"
-PYTHON="${PYTHON:-python}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 
 # ---- env -------------------------------------------------------------------
-export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 
 # ---- launch ----------------------------------------------------------------
 echo "[train_wm] config=${CONFIG}  ngpu=${NGPU}  gpus=${CUDA_VISIBLE_DEVICES:-<all>}"

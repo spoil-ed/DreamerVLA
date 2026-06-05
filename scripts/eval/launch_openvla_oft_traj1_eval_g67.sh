@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/mnt/data/spoil/workspace/DreamerVLA}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/../common_env.sh"
+
+ROOT="${ROOT:-${DVLA_ROOT}}"
 CKPT_ROOT="${CKPT_ROOT:-${ROOT}/data/ckpts/Openvla-oft-SFT-traj1}"
 OUT_ROOT="${OUT_ROOT:-${ROOT}/data/outputs/eval/openvla_oft_traj1_g67}"
-PYTHON_BIN="${PYTHON_BIN:-/home/user01/miniconda3/envs/dreamervla/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-${PYTHON}}"
 OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${ROOT}/third_party/openvla-oft}"
 SUITE="${SUITE:-libero_spatial}"
 NUM_TRIALS="${NUM_TRIALS:-10}"

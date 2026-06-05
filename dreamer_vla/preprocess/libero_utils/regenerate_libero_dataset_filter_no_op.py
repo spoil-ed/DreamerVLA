@@ -34,6 +34,8 @@ from libero_utils import (
     get_libero_env,
 )
 
+NOOP_MARKING_SCHEME = "libero_noop_marking_v1"
+
 
 def is_noop(action, prev_action=None, threshold=1e-4):
     """
@@ -65,6 +67,11 @@ def is_noop(action, prev_action=None, threshold=1e-4):
 
 def main(args):
     print(f"Regenerating {args.libero_task_suite} dataset!")
+    keep_noops = bool(getattr(args, "keep_noops", False))
+    if keep_noops:
+        print("No-op actions will be kept and marked with data/demo_*/noop_mask.")
+    else:
+        print("No-op actions will be filtered after marking.")
 
     # Create target directory
     if os.path.isdir(args.libero_target_dir):
@@ -113,6 +120,8 @@ def main(args):
         # Create new HDF5 file for regenerated demos
         new_data_path = os.path.join(args.libero_target_dir, f"{task.name}_demo.hdf5")
         new_data_file = h5py.File(new_data_path, "w")
+        new_data_file.attrs["noop_marking_scheme"] = NOOP_MARKING_SCHEME
+        new_data_file.attrs["noop_keep_noops"] = bool(keep_noops)
         grp = new_data_file.create_group("data")
 
         for i in range(len(orig_data.keys())):
@@ -136,15 +145,26 @@ def main(args):
             robot_states = []
             agentview_images = []
             eye_in_hand_images = []
+            noop_mask = []
+            source_indices = []
+            prev_kept_action = None
 
             # Replay original demo actions in environment and record observations
-            for _, action in enumerate(orig_actions):
-                # Skip transitions with no-op actions
-                prev_action = actions[-1] if len(actions) > 0 else None
-                if is_noop(action, prev_action):
-                    print(f"\tSkipping no-op action: {action}")
+            for action_idx, action in enumerate(orig_actions):
+                action_is_noop = is_noop(action, prev_kept_action)
+                if action_is_noop:
                     num_noops += 1
-                    continue
+                    if not keep_noops:
+                        print(f"\tSkipping no-op action: {action}")
+                        continue
+                else:
+                    prev_kept_action = action
+
+                noop_mask.append(bool(action_is_noop))
+                source_indices.append(int(action_idx))
+
+                if action_is_noop and keep_noops:
+                    print(f"\tMarking no-op action: {action}")
 
                 if states == []:
                     # In the first timestep, since we're using the original initial state to initialize the environment,
@@ -186,7 +206,7 @@ def main(args):
                 obs, reward, done, info = env.step(action.tolist())
 
             # At end of episode, save replayed trajectories to new HDF5 files (only keep successes)
-            if done:
+            if done and len(actions) > 0:
                 dones = np.zeros(len(actions)).astype(np.uint8)
                 dones[-1] = 1
                 rewards = np.zeros(len(actions)).astype(np.uint8)
@@ -221,6 +241,18 @@ def main(args):
                 )
                 ep_data_grp.create_dataset("rewards", data=rewards)
                 ep_data_grp.create_dataset("dones", data=dones)
+                ep_data_grp.create_dataset(
+                    "noop_mask", data=np.asarray(noop_mask, dtype=np.bool_)
+                )
+                ep_data_grp.create_dataset(
+                    "source_indices", data=np.asarray(source_indices, dtype=np.int64)
+                )
+                ep_data_grp.attrs["noop_marking_scheme"] = NOOP_MARKING_SCHEME
+                ep_data_grp.attrs["noop_filtered"] = not bool(keep_noops)
+                ep_data_grp.attrs["source_episode_length"] = int(len(orig_actions))
+                ep_data_grp.attrs["source_noop_frames"] = int(
+                    np.asarray(noop_mask, dtype=np.bool_).sum()
+                )
 
                 num_success += 1
 
@@ -297,6 +329,15 @@ if __name__ == "__main__":
         type=int,
         help="image resolution, 256 or 512",
         required=True,
+    )
+    parser.add_argument(
+        "--keep-noops",
+        action="store_true",
+        help=(
+            "Keep no-op transitions in the regenerated HDF5 and mark them with "
+            "data/demo_*/noop_mask. Without this flag, no-ops are marked then "
+            "filtered to preserve the historical *_no_noops_t_* output."
+        ),
     )
     args = parser.parse_args()
 

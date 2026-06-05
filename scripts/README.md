@@ -6,9 +6,22 @@ recipes.
 
 ## Data Preparation
 
+Formal setup and data entry points:
+
+| Script | Purpose |
+| --- | --- |
+| `install_env.sh` | Install apt tools, conda env, uv, torch, requirements, flash-attn, third_party packages, LIBERO, and egl_probe |
+| `download_assets.sh` | Download Hugging Face weights plus LIBERO / optional CALVIN datasets |
+| `preprocess/prepare_libero_data.sh` | One-command LIBERO pipeline: mark no-ops, optionally filter, reward HDF5, VLA pretokenize configs, and action-hidden sidecar |
+| `preprocess/process_all_libero_data.sh` | Lower-level VLA pretokenize stage used by `prepare_libero_data.sh` |
+
+`prepare_libero_data.sh` defaults to `TASK=libero_goal`, `HIS=1`,
+`ACTION_HORIZON=1`, and `FILTER_NOOPS=1`. The VLA SFT data name is therefore
+`his_1_third_view_wrist_w_state_1_256_pretokenize`. The action-hidden sidecar is
+separate and keeps `history=2` to match the current WM/DreamerVLA configs.
+
 Historical data-preparation shell recipes are archived under
-`scripts/archive/uncertain_shells/`. Current training launchers take task
-metadata from `configs/task/*.yaml`.
+`scripts/archive/uncertain_shells/`.
 
 ## Training
 
@@ -21,15 +34,13 @@ metadata from `configs/task/*.yaml`.
 
 Configs point directly at the route-specific runner class.
 
-Most wrappers accept standard environment variables:
+Formal wrappers source `scripts/common_env.sh` and accept standard environment variables:
 
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7
-NUM_GPUS=4
-BATCH_SIZE=96
-NUM_WORKERS=2
+CUDA_VISIBLE_DEVICES=0,1,2,3
+NGPU=4
+OUT_DIR=data/outputs/<stage>/<run_name>
 RUN_TAG=my_run
-OUT_DIR_BASE=/path/to/output/root
 ```
 
 `DETACH=1` backgrounds training and writes a `train.pid`; omit `DETACH` to keep

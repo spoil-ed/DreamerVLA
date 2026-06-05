@@ -1,511 +1,197 @@
 # DreamerVLA Setup
 
-本文给出从空环境到 LIBERO 评估的最短复现路径。所有命令默认在单机多 GPU Linux 上运行。先进入你的 DreamerVLA checkout，并把仓库根目录导出为统一根目录：
+本文只保留从新机器到 LIBERO 训练/评估的正式路径。安装、下载、环境变量和 LIBERO config 都由脚本处理，不需要每次手动 export 临时全局变量。
+
+所有命令默认在仓库根目录执行：
 
 ```bash
 cd /path/to/DreamerVLA
-export DVLA_ROOT="$(pwd -P)"
-cd "$DVLA_ROOT"
-```
-
-活动 Hydra 配置使用 `${oc.env:DVLA_ROOT,.}` 作为路径根。也就是说：
-
-- 已导出 `DVLA_ROOT` 时，配置解析到该绝对根目录。
-- 未导出 `DVLA_ROOT` 时，配置默认从当前工作目录 `.` 解析；因此仍建议先 `cd "$DVLA_ROOT"`。
-- `configs/archive/**` 是历史实验配置，可能保留旧机器绝对路径；活动配置不需要再做批量 `sed` 替换。
-
-建议同时把 LIBERO 的全局配置也收敛到仓库内，避免不同项目共享 `~/.libero/config.yaml`：
-
-```bash
-export LIBERO_CONFIG_PATH="$DVLA_ROOT/.libero"
-mkdir -p "$LIBERO_CONFIG_PATH"
 ```
 
 ## 1. 环境
 
-推荐版本：
-
-- Ubuntu 20.04+，NVIDIA GPU，CUDA 12.x
-- Python 3.11
-- PyTorch 2.5.1 + CUDA 12.4
-- `numpy==1.26.4`
-- `transformers==4.40.1`
+正式安装入口：
 
 ```bash
-conda create -n dreamervla python=3.11 -y
-conda activate dreamervla
-
-pip install --upgrade pip setuptools wheel
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-  --index-url https://download.pytorch.org/whl/cu124
-
-pip install -e "$DVLA_ROOT"
-pip install -r "$DVLA_ROOT/requirements.txt"
-pip install transformers==4.40.1
+bash scripts/install_env.sh
 ```
 
-仿真和训练常用环境变量：
-
-```bash
-export MUJOCO_GL=egl
-export TOKENIZERS_PARALLELISM=false
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-```
-
-系统 OpenGL 依赖：
-
-```bash
-sudo apt update
-sudo apt install -y libgl1 libopengl0 libgl1-mesa-dri libgl1-mesa-glx \
-  libosmesa6-dev libosmesa6 ffmpeg
-```
-
-### 1.1 安装 third_party 本地包
-
-主线 LIBERO 环境至少需要 robosuite 栈、LIBERO 本体和渲染探针。按下面顺序安装，所有路径都从 `DVLA_ROOT` 派生：
-
-```bash
-# robosuite stack used by LIBERO env replay/eval
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robosuite"
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robosuite-task-zoo"
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/robomimic"
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/mimicgen"
-
-# LIBERO editable install. Install the checkout root, not third_party/LIBERO/libero.
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/LIBERO"
-
-# egl_probe，若 CMake 版本报错，先放宽 cmake_minimum_required
-cd "$DVLA_ROOT/third_party/egl_probe"
-sed -i 's/cmake_minimum_required(VERSION 2.8.12)/cmake_minimum_required(VERSION 3.5)/' \
-  egl_probe/CMakeLists.txt || true
-python -m pip install --no-build-isolation .
-
-# 可选：部分历史/WMPO 路线会用到
-pip install -e "$DVLA_ROOT/third_party/TensorNVMe" || true
-pip install -v --no-build-isolation "$DVLA_ROOT/third_party/apex" || true
-```
-
-`third_party/LIBERO` 保留了两个本地兼容修改：
-
-- `pyproject.toml` + thin `setup.py`：修复新版 `pip` / `setuptools` 下 `pip install -e .` 后仍 `ModuleNotFoundError: libero` 的问题。
-- `libero/libero/__init__.py`：首次 import 且缺少 config 时，只在交互式 TTY 中询问路径，避免 CI/子进程/eval runner 卡在 `input()`。
-
-如果替换或重置了 `third_party/LIBERO`，先确认这两个修改仍在，再重新执行 editable install。
-
-建议显式写入 repo-local LIBERO config，避免读取用户目录下旧的 `~/.libero/config.yaml`：
-
-```bash
-export LIBERO_CONFIG_PATH="$DVLA_ROOT/.libero"
-mkdir -p "$LIBERO_CONFIG_PATH"
-cat > "$LIBERO_CONFIG_PATH/config.yaml" <<EOF
-benchmark_root: $DVLA_ROOT/third_party/LIBERO/libero/libero
-bddl_files: $DVLA_ROOT/third_party/LIBERO/libero/libero/bddl_files
-init_states: $DVLA_ROOT/third_party/LIBERO/libero/libero/init_files
-datasets: $DVLA_ROOT/third_party/LIBERO/libero/datasets
-assets: $DVLA_ROOT/third_party/LIBERO/libero/libero/assets
-EOF
-```
-
-验证 LIBERO 必须离开源码目录后仍能 import：
-
-```bash
-cd /tmp
-python -c "import libero; print(libero.__path__)"
-cd "$DVLA_ROOT"
-```
-
-OpenVLA-OFT 有两套 vendored 代码：`third_party/openvla-oft-lightweight` 由 DreamerVLA helper 动态加入 `sys.path`，默认不用安装；官方 eval launcher 使用 `third_party/openvla-oft`，只在跑官方 OpenVLA-OFT eval 时按需安装：
-
-```bash
-python -m pip install --no-build-isolation -e "$DVLA_ROOT/third_party/openvla-oft" || true
-```
-
-`flash-attn` 可选。若需要，用和 `torch==2.5.1/cu12/cp311` 匹配的 wheel，例如：
-
-```bash
-python -c "import torch; print(torch.__version__, torch.compiled_with_cxx11_abi())"
-wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post1/flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
-pip install flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
-```
-
-环境验证：
-
-```bash
-cd "$DVLA_ROOT"
-python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
-python -c "import h5py, hydra, omegaconf, transformers; print('deps ok')"
-python -c "import libero; print('libero ok')"
-python -c "from dreamer_vla.models.encoder.rynnvla_encoder import RynnVLAEncoder; print('encoder ok')"
-```
-
-## 2. 权重
-
-先登录 Hugging Face：
-
-```bash
-hf auth login
-```
-
-把权重下载到 `data/ckpts` 根目录，最终路径要匹配 `configs/task/*.yaml`：
-
-```bash
-mkdir -p "$DVLA_ROOT/data/ckpts"
-
-# Chameleon tokenizer / base model
-hf download Alibaba-DAMO-Academy/WorldVLA --repo-type model \
-  --local-dir "$DVLA_ROOT/data/ckpts" \
-  --include "chameleon/tokenizer/*" "chameleon/base_model/*" "base_model/*"
-
-# Lumina tokenizer
-hf download Alpha-VLLM/Lumina-mGPT-7B-768 --repo-type model \
-  --local-dir "$DVLA_ROOT/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768"
-
-# RynnVLA-002 VLA ckpt；按需把 libero_goal 换成 libero_object/libero_spatial/libero_10
-hf download Alibaba-DAMO-Academy/RynnVLA-002 --repo-type model \
-  --local-dir "$DVLA_ROOT/data/ckpts" \
-  --include "VLA_model_256/libero_goal/*" "Action_World_model_512/libero_goal/*"
-```
-
-检查关键文件：
-
-```bash
-test -f "$DVLA_ROOT/data/ckpts/chameleon/tokenizer/text_tokenizer.json"
-test -f "$DVLA_ROOT/data/ckpts/chameleon/tokenizer/vqgan.yaml"
-test -d "$DVLA_ROOT/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768"
-test -d "$DVLA_ROOT/data/ckpts/VLA_model_256/libero_goal"
-```
-
-## 3. LIBERO 数据
-
-下载原始 LIBERO HDF5：
-
-```bash
-cd "$DVLA_ROOT"
-python third_party/LIBERO/benchmark_scripts/download_libero_datasets.py \
-  --datasets libero_goal --use-huggingface
-```
-
-确认 LIBERO config 的 `datasets:` 指向实际 LIBERO 数据目录：
-
-```bash
-grep '^datasets:' "$LIBERO_CONFIG_PATH/config.yaml"
-```
-
-## 4. 数据处理
-
-下面以 `libero_goal` 为例。其他 suite 把 `SUITE` 改成 `libero_object`、`libero_spatial` 或 `libero_10`。
-
-```bash
-export SUITE=libero_goal
-export RAW_LIBERO="$DVLA_ROOT/third_party/LIBERO/libero/datasets/$SUITE"
-export HDF5_DIR="$DVLA_ROOT/data/processed_data/${SUITE}_no_noops_t_256"
-export REWARD_DIR="$DVLA_ROOT/data/processed_data/${SUITE}_no_noops_t_256_pi06_remaining_reward"
-export HIDDEN_DIR="$DVLA_ROOT/data/processed_data/${SUITE}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
-export META_JSON="$DVLA_ROOT/data/processed_data/${SUITE}_metainfo.json"
-```
-
-### 4.1 生成 no-op 过滤后的 HDF5
-
-这一步会 replay LIBERO demos，过滤 no-op 和失败 demo，并写出 256 分辨率 HDF5：
-
-```bash
-cd "$DVLA_ROOT/dreamer_vla/preprocess/libero_utils"
-python regenerate_libero_dataset_filter_no_op.py \
-  --libero_task_suite "$SUITE" \
-  --libero_raw_data_dir "$RAW_LIBERO" \
-  --libero_target_dir "$HDF5_DIR" \
-  --image_resolution 256
-
-mkdir -p "$DVLA_ROOT/data/processed_data"
-mv "${SUITE}_metainfo.json" "$META_JSON"
-```
-
-### 4.2 生成 VLA SFT 所需 pretokenize 数据
-
-该脚本会生成 image/state/action 目录、conversation JSON、token pkl、manifest 和 `data/configs/<suite>/*.yaml`。
-
-```bash
-cd "$DVLA_ROOT"
-SUITES="$SUITE" GPUS=0,1 PRETOKENIZE_PROCS=8 FORCE=0 \
-  bash scripts/preprocess/process_all_libero_data.sh
-```
-
-脚本默认使用当前 shell 里的 `python`，并从自身位置推断 `DVLA_ROOT`。如果需要脚本内部激活 conda，可以显式传入：
-
-```bash
-CONDA_SH=/path/to/miniconda3/etc/profile.d/conda.sh CONDA_ENV=dreamervla \
-SUITES="$SUITE" GPUS=0,1 PRETOKENIZE_PROCS=8 FORCE=0 \
-  bash scripts/preprocess/process_all_libero_data.sh
-```
-
-产物：
+脚本按固定顺序执行：
 
 ```text
-data/processed_data/convs/
-data/processed_data/tokens/
-data/processed_data/concate_tokens/
-data/configs/<suite>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
+apt 系统工具
+  -> conda dreamervla / Python 3.11
+  -> uv
+  -> PyTorch 2.5.1 cu124 + requirements.txt
+  -> flash-attn wheel
+  -> third_party clone + editable install
+  -> LIBERO editable install + repo-local config
+  -> egl_probe
+  -> import / CUDA 验证
 ```
 
-校验：
+`scripts/common_env.sh` 会被正式 shell 入口自动 source，统一设置：
+
+```text
+DVLA_ROOT, PROJECT_ROOT, PYTHON, PYTHONPATH,
+LIBERO_CONFIG_PATH, MUJOCO_GL, PYOPENGL_PLATFORM,
+TOKENIZERS_PARALLELISM, PYTORCH_CUDA_ALLOC_CONF
+```
+
+默认 Python 指向 `dreamervla` conda 环境。若环境在非默认位置，可覆盖：
 
 ```bash
-python -m dreamer_vla.preprocess.validate_pretokenized \
-  --tokens-dir "$DVLA_ROOT/data/processed_data/tokens" \
-  --sample-every 200
+CONDA_ENV_BIN=/abs/path/to/env/bin bash scripts/train_wm.sh
 ```
 
-### 4.3 生成 remaining-steps reward HDF5
+## 2. 权重和数据下载
 
-WM 和 DreamerVLA 训练读取 `task.hdf5_reward_dir`：
+下载 Hugging Face 权重与 LIBERO 数据：
 
 ```bash
-cd "$DVLA_ROOT"
-python scripts/preprocess/preprocess_remaining_steps_reward.py \
-  --input-dir "$HDF5_DIR" \
-  --output-dir "$REWARD_DIR" \
-  --metainfo-json "$META_JSON" \
-  --overwrite
+bash scripts/download_assets.sh
 ```
 
-### 4.4 生成 pi0 legacy action-hidden sidecar
-
-WM 和 DreamerVLA 训练读取 `task.pi0_legacy_action_hidden_dir`。为避免脚本默认路径和机器路径不一致，显式传入所有路径：
+常用覆盖：
 
 ```bash
-cd "$DVLA_ROOT"
-CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
-  --standalone --nnodes=1 --nproc-per-node=2 \
-  scripts/preprocess/preprocess_rynn_pixel_hidden.py \
-  --hdf5-dir "$HDF5_DIR" \
-  --out-dir "$HIDDEN_DIR" \
-  --model-path "$DVLA_ROOT/data/ckpts/VLA_model_256/$SUITE" \
-  --tokenizer-path "$DVLA_ROOT/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768" \
-  --text-tokenizer-path "$DVLA_ROOT/data/ckpts/chameleon/tokenizer/text_tokenizer.json" \
-  --chameleon-vqgan-config "$DVLA_ROOT/data/ckpts/chameleon/tokenizer/vqgan.yaml" \
-  --chameleon-vqgan-ckpt "$DVLA_ROOT/data/ckpts/chameleon/tokenizer/vqgan.ckpt" \
-  --action-head-type legacy \
-  --obs-hidden-source action_query \
-  --history 2 \
-  --include-state \
-  --rotate-images-180 \
-  --save-action-hidden \
-  --action-dim 7 \
-  --time-horizon 5 \
-  --overwrite
+LIBERO_SUITES="libero_goal libero_object" bash scripts/download_assets.sh
+DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1 LIBERO_SUITES=libero_spatial bash scripts/download_assets.sh
 ```
 
-校验 sidecar：
+CALVIN 默认不下载；需要时显式开启：
 
 ```bash
-python - <<'PY'
-import os
-from pathlib import Path
-import h5py
-root = Path(os.environ["HIDDEN_DIR"])
-path = next(root.glob("*.hdf5"))
-with h5py.File(path, "r") as f:
-    demo = next(iter(f["data"].values()))
-    print(path.name)
-    print("complete:", bool(f.attrs.get("complete", False)))
-    print("obs_embedding:", demo["obs_embedding"].shape)
-    print("action_hidden_states:", demo["action_hidden_states"].shape)
-PY
+DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=0 DOWNLOAD_CALVIN=1 \
+CALVIN_TASKS=task_ABCD_D \
+bash scripts/download_assets.sh
 ```
 
-期望 `obs_embedding` 最后一维为 `35840`，`action_hidden_states` 为 `[T, 35, 1024]`。
+## 3. LIBERO 数据处理
 
-### 4.5 task config 路径规则
-
-活动 task config 已经从机器绝对路径迁移为 `DVLA_ROOT` 根目录，例如：
-
-```yaml
-vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
-pretokenize_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
-hdf5_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256
-hdf5_reward_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-pi0_legacy_action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-```
-
-正常使用时只需要保持：
+正式一键入口：
 
 ```bash
-export DVLA_ROOT="$(pwd -P)"
+TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
 ```
 
-如果某个 ckpt 或 sidecar 放在仓库外，优先用 Hydra CLI override，而不是改回机器硬编码路径：
+默认生成当前训练配置需要的格式：
 
-```bash
-bash scripts/train_wm.sh task=libero_goal \
-  task.pi0_legacy_action_hidden_dir=/abs/path/to/hidden_sidecar
+```text
+data/processed_data/${TASK}_marked_t_256
+data/processed_data/${TASK}_no_noops_t_256
+data/processed_data/${TASK}_no_noops_t_256_pi06_remaining_reward
+data/processed_data/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+data/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
-注意：action-hidden sidecar 的 `preprocess_config.json` 会记录预处理时传入的 `model_path`。如果复用旧 sidecar 且其 attr 仍是旧绝对路径，训练时需要覆盖对应 route 的 `dataset.expected_model_path=/old/model/path`，或重新运行 4.4 生成 sidecar。
+说明：
 
-## 5. 训练
+- no-op 第一步先标记到 `noop_mask`，默认 `FILTER_NOOPS=1` 再筛成现有 `*_no_noops_t_256` 路径。
+- VLA SFT pretokenize 默认是 `his=1`、`len_action=1`、third view + wrist + state、256 分辨率。
+- action-hidden sidecar 是另一条数据，默认 `history=2`、state、rotate180、legacy action-query hidden；`libero_goal/object` 的 `time_horizon=5`，`libero_spatial/libero_10` 的 `time_horizon=10`。
 
-所有训练都走 Hydra config。常用环境变量：
+常用覆盖：
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export NGPU=4
+TASK=libero_10 ACTION_HIDDEN_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
+bash scripts/preprocess/prepare_libero_data.sh
+
+TASK=libero_goal RUN_ACTION_HIDDEN=0 bash scripts/preprocess/prepare_libero_data.sh
 ```
 
-### 5.1 VLA SFT
+## 4. 训练
+
+训练只选择一个正式 Hydra route config，然后用 `task=...` 或 trailing override 改少量运行参数。
+
+### VLA SFT
 
 ```bash
-cd "$DVLA_ROOT"
-OUT_DIR="$DVLA_ROOT/data/outputs/vla/pi0_query/libero_goal_run1" \
-CONFIG=vla_pi0_query \
+CONFIG=vla_pi0_query NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash scripts/train_vla.sh task=libero_goal
 ```
 
-快速 smoke：
+切任务：
 
 ```bash
-OUT_DIR=/tmp/dvla_vla_smoke CONFIG=vla_pi0_query \
-bash scripts/train_vla.sh task=libero_goal training.max_train_steps=1 dataloader.num_workers=0
+bash scripts/train_vla.sh task=libero_object
 ```
 
-### 5.2 World Model
+### World Model
 
 ```bash
-OUT_DIR="$DVLA_ROOT/data/outputs/worldmodel/dinowm_chunk/libero_goal_run1" \
-CONFIG=world_model_dinowm_chunk \
-bash scripts/train_wm.sh task=libero_goal training.max_steps=20000
+CONFIG=world_model_dinowm_chunk NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
+bash scripts/train_wm.sh task=libero_goal
 ```
 
-最终常用 ckpt：
-
-```text
-data/outputs/worldmodel/dinowm_chunk/<run>/ckpt/latest.ckpt
-data/outputs/worldmodel/dinowm_chunk/<run>/ckpt/step_00020000.ckpt
-```
-
-快速 smoke：
+### Classifier
 
 ```bash
-OUT_DIR=/tmp/dvla_wm_smoke CONFIG=world_model_dinowm_chunk \
-bash scripts/train_wm.sh task=libero_goal training.max_steps=1 dataloader.num_workers=0
-```
-
-### 5.3 LatentSuccessClassifier
-
-`dreamervla_rynn_dino_wm_wmpo_outcome` 需要 `init.classifier_state_ckpt`。先训练 classifier：
-
-```bash
-OUT_DIR="$DVLA_ROOT/data/outputs/dreamervla/outcome_classifier/libero_goal/run1" \
 CONFIG=latent_classifier_libero_goal_chunk \
 bash scripts/train_wm.sh
 ```
 
-如果还没有 failure demo 目录，可以先让配置只使用成功 demo：
+### DreamerVLA
 
 ```bash
-OUT_DIR="$DVLA_ROOT/data/outputs/dreamervla/outcome_classifier/libero_goal/run1" \
-CONFIG=latent_classifier_libero_goal_chunk \
-bash scripts/train_wm.sh \
-  data.failure_dir_raw=null \
-  data.failure_dir_hidden=null
-```
-
-产物在：
-
-```text
-data/outputs/dreamervla/outcome_classifier/libero_goal/<run>/ckpt/best_*.ckpt
-data/outputs/dreamervla/outcome_classifier/libero_goal/<run>/ckpt/latest.ckpt
-```
-
-### 5.4 DreamerVLA
-
-使用上一步的 WM ckpt 和 classifier ckpt：
-
-```bash
-export WM_CKPT="$DVLA_ROOT/data/outputs/worldmodel/dinowm_chunk/libero_goal_run1/ckpt/latest.ckpt"
-export CLS_CKPT="$DVLA_ROOT/data/outputs/dreamervla/outcome_classifier/libero_goal/run1/ckpt/latest.ckpt"
-
-OUT_DIR="$DVLA_ROOT/data/outputs/dreamervla/wmpo_outcome/libero_goal_run1" \
-CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome \
+CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash scripts/train_dreamervla.sh \
   task=libero_goal \
-  init.world_model_state_ckpt="$WM_CKPT" \
-  init.classifier_state_ckpt="$CLS_CKPT"
+  init.world_model_state_ckpt=/abs/path/to/wm.ckpt \
+  init.classifier_state_ckpt=/abs/path/to/classifier.ckpt
 ```
 
-若只想避开 outcome classifier 依赖，可先跑 actor-critic route：
+Hydra config 用法只需要记住两点：
+
+- `CONFIG=<route>` 选择训练路线，例如 `vla_pi0_query`、`world_model_dinowm_chunk`、`dreamervla_rynn_dino_wm_wmpo_outcome`。
+- trailing args 是 Hydra override，例如 `task=libero_object`、`training.max_steps=1`、`task.hdf5_dir=/abs/path`。
+
+## 5. 评估
+
+VLA checkpoint：
 
 ```bash
-OUT_DIR="$DVLA_ROOT/data/outputs/dreamervla/actor_critic/libero_goal_run1" \
-CONFIG=dreamervla_rynn_dino_wm_actor_critic \
-bash scripts/train_dreamervla.sh \
-  task=libero_goal \
-  init.world_model_state_ckpt="$WM_CKPT"
-```
-
-## 6. 评估
-
-### 6.1 VLA checkpoint
-
-```bash
-export VLA_CKPT="$DVLA_ROOT/data/outputs/vla/pi0_query/libero_goal_run1/ckpt/latest.ckpt"
-
 CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
-  init.vla_ckpt_path="$DVLA_ROOT/data/ckpts/VLA_model_256/libero_goal" \
-  eval.ckpt_path="$VLA_CKPT" \
   eval.ckpt_kind=vla \
+  eval.ckpt_path=/abs/path/to/vla.ckpt \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=10 \
-  eval.action_steps=5 \
   training.device=cuda:0
 ```
 
-### 6.2 Dreamer checkpoint
+Dreamer checkpoint：
 
 ```bash
-export DREAMER_CKPT="$DVLA_ROOT/data/outputs/dreamervla/wmpo_outcome/libero_goal_run1/ckpt/latest.ckpt"
-
 CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
-  init.vla_ckpt_path="$DVLA_ROOT/data/ckpts/VLA_model_256/libero_goal" \
-  eval.ckpt_path="$DREAMER_CKPT" \
   eval.ckpt_kind=dreamer \
+  eval.ckpt_path=/abs/path/to/dreamer.ckpt \
   eval.dreamer_policy_source=ckpt \
   eval.dreamer_actor_input_source=rssm \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=10 \
-  eval.action_steps=5 \
   training.device=cuda:0
 ```
 
-输出默认在：
+## 6. 验证
 
-```text
-data/outputs/eval/eval_libero_vla/
-```
-
-## 7. 常见问题
-
-| 现象 | 处理 |
-| --- | --- |
-| `ModuleNotFoundError: libero` | 重新执行 `python -m pip install --no-build-isolation -e third_party/LIBERO`，并在 `/tmp` 下验证 import |
-| LIBERO 找不到数据 | 检查 `$LIBERO_CONFIG_PATH/config.yaml` 的 `datasets:` |
-| CUDA 不可用 | 检查驱动、`nvidia-smi`、PyTorch wheel 是否为 cu124 |
-| `xformers` 冲突 | 确认 `torch==2.5.1`，再安装 `requirements.txt` |
-| `flash-attn` 编译失败 | 使用预编译 wheel，或暂时跳过 |
-| 训练报路径不存在 | 检查 `DVLA_ROOT` 是否指向仓库根目录，并用 Hydra CLI override 外部 ckpt/sidecar |
-| WM 读取 sidecar 报 schema mismatch | 确认 hidden sidecar 使用 `--action-head-type legacy --history 2 --include-state --rotate-images-180` |
-| DDP 卡住 | 先用 `NGPU=1` 和 `training.max_steps=1` smoke；再检查 rank0 日志和 batch/NaN |
-
-## 8. 最小成功标准
-
-复现到可评估状态至少应满足：
+轻量验证：
 
 ```bash
-pytest tests/unit_tests -q
+/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests -q
+```
+
+数据路径验证：
+
+```bash
 test -d data/ckpts/VLA_model_256/libero_goal
 test -d data/processed_data/libero_goal_no_noops_t_256
 test -d data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
 test -d data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+```
+
+训练 smoke：
+
+```bash
+OUT_DIR=/tmp/dvla_wm_smoke CONFIG=world_model_dinowm_chunk \
 bash scripts/train_wm.sh task=libero_goal training.max_steps=1 dataloader.num_workers=0
 ```

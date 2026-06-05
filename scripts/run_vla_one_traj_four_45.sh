@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Sequential one-trajectory VLA SFT on GPUs 4,5 for all LIBERO suites.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/common_env.sh"
+cd "${DVLA_ROOT}"
 
 TASKS=(${TASKS:-libero_goal libero_10 libero_object libero_spatial})
 TRAJ_OFFSET="${TRAJ_OFFSET:-0}"
@@ -11,7 +13,7 @@ mkdir -p data/logs/vla_one_traj_45
 
 for TASK in "${TASKS[@]}"; do
   RUN_TAG="${TASK}_one_traj_o${TRAJ_OFFSET}_gpu45_$(date +%Y%m%d_%H%M%S)"
-  OUT_DIR="$(pwd)/data/outputs/vla/pi0_query_one_trajectory/${RUN_TAG}"
+  OUT_DIR="${DVLA_ROOT}/data/outputs/vla/pi0_query_one_trajectory/${RUN_TAG}"
   LOG="data/logs/vla_one_traj_45/${RUN_TAG}.log"
   echo "[one_traj_four] start ${TASK} run=${RUN_TAG}"
   TAG="${TASK}" RUN_TAG="${RUN_TAG}" OUT_DIR="${OUT_DIR}" \
