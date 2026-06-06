@@ -60,14 +60,14 @@ def main():
         p.requires_grad = False
 
     with h5py.File(args.hidden_hdf5, "r") as fh, h5py.File(args.reward_hdf5, "r") as fr:
-        obs_emb = fh["data"][args.demo_key]["obs_embedding"][:]  # (T, 5120)
+        obs_emb = fh["data"][args.demo_key]["obs_embedding"][:]  # (T, D)
         actions = fr["data"][args.demo_key]["actions"][:]  # (T, 7)
     T = int(obs_emb.shape[0])
     print(f"[demo] T={T}")
 
     obs_t = (
         torch.from_numpy(obs_emb).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
-    )  # [1,T,5120]
+    )  # [1,T,D]
     act_t = (
         torch.from_numpy(actions).unsqueeze(0).to(device=device, dtype=torch.bfloat16)
     )
@@ -92,8 +92,8 @@ def main():
     with torch.no_grad():
         recon = world_model.hidden_decoder(
             post_feat.reshape(T, -1).to(dtype=torch.bfloat16)
-        )  # [T, 5120]
-    real = obs_t[0].float()  # [T, 5120]
+        )  # [T, D]
+    real = obs_t[0].float()  # [T, D]
     recon = recon.float()
     diff = recon - real
     per_step_mse = diff.square().mean(-1).cpu().numpy()  # [T]

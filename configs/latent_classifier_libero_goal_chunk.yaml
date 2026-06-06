@@ -24,7 +24,10 @@
 _target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
-  latent_dim: 35840
+  latent_dim: null
+  action_dim: 7
+  time_horizon: 5
+  token_dim: 1024
   window: 8
   head_type: transformer
   hidden_dim: 256

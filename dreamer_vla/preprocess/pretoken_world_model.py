@@ -94,8 +94,8 @@ if __name__ == "__main__":
 
     data_type = ["val_ind", "val_ood", "train"]
 
-    # in_filename_dir = '/mnt/PLNAS/cenjun/libero/processed_data/convs'
-    # out_root = '/mnt/PLNAS/cenjun/libero/processed_data/tokens'
+    # in_filename_dir = 'data/processed_data/convs'
+    # out_root = 'data/processed_data/tokens'
     in_filename_dir = Path(args.in_filename_dir)
     out_root = Path(args.out_root)
 

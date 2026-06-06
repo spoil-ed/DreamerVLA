@@ -17,7 +17,7 @@ then improve the policy through imagined rollouts?
 The project moved through several interfaces before settling on the current
 direction. Early notes compared Dreamer/TransDreamer dynamics, action-aware
 world models, inverse dynamics, and shuffled-action diagnostics. The first
-implementation line used RynnVLA/pi0 action hidden as the observation target for
+implementation line used RynnVLA legacy action hidden as the observation target for
 a DreamerV3-style RSSM. Diagnostics then showed that the hidden target is not a
 generic full transformer state: it is mostly a 5-step action-time structure with
 redundant joint copies and a very low effective rank. That pushed the work away
@@ -98,15 +98,15 @@ scripts/*.sh
 This made it easier to compare routes without mixing old workspaces, configs,
 and scripts.
 
-### 4. First mainline: pi0 action-hidden DreamerV3
+### 4. First mainline: RynnVLA action-hidden DreamerV3
 
-The first concrete mainline used pi0 action-query hidden states as the
+The first concrete mainline used RynnVLA legacy action-query hidden states as the
 observation for a DreamerV3-style RSSM:
 
 ```text
 LIBERO obs + language + state
 -> frozen RynnVLA/Chameleon backbone
--> pi0 action-query block
+-> legacy action-query block
 -> action_hidden [H, 1024]
 -> flattened action-hidden sidecar
 -> DreamerV3 RSSM posterior / transition
@@ -118,7 +118,7 @@ The intended actor route was:
 ```text
 DreamerV3 RSSM feature
 -> hidden decoder reconstructs action hidden
--> Pi0ActionHiddenActor
+-> RynnVLAActionHiddenActor
 -> VLA output projection
 -> action
 ```
@@ -151,15 +151,15 @@ criterion. The reconstructed hidden must remain usable by the VLA action head.
 
 ### 6. Hidden target diagnosis and the v4-F lesson
 
-The hidden-structure diagnostic on pi0 action hidden found that the nominal
+The hidden-structure diagnostic on legacy RynnVLA action hidden found that the nominal
 `[5, 7, 1024]` target is highly redundant:
 
 - the 35 tokens are statistically near-identical at the marginal level
 - same-time tokens across the 7 joints are almost duplicate residual signals
-- the flattened 35840-dimensional target has a very low effective rank
+- the flattened `time_horizon * action_dim * token_dim` target has a very low effective rank
 - the structure is closer to a 5-step time sequence than a 5-by-7 joint grid
 
-This led to the v4-F `pi0_time_broadcast` decoder idea:
+This led to the v4-F time-broadcast decoder idea:
 
 ```text
 RSSM feature
@@ -199,7 +199,7 @@ action hidden:
 
 ```text
 u_t in R^{5 x 7 x 1024}
-e_t = flatten(u_t) in R^{35840}
+e_t = flatten(u_t) in R^{time_horizon * action_dim * token_dim}
 ```
 
 The data path is:
@@ -282,9 +282,9 @@ The important contracts are:
 - include robot state: `true`
 - rotate images 180 degrees: `true`
 - action horizon / action steps: `5`
-- hidden dimension: `35840`
+- hidden dimension: derived from `time_horizon * action_dim * token_dim`
 
-Do not mix legacy full action hidden with pi0-query `[5, 1024]` hidden, and do
+Do not mix legacy full action hidden with compact action-query `[H, D]` hidden, and do
 not evaluate with an online input contract that differs from sidecar generation.
 
 ## Open Questions
@@ -306,7 +306,7 @@ Original notes moved under `docs/archive/history_sources/`:
 - `architecture.md`: first VLA-head / WM-head sketch.
 - `1.md`: Dreamer, TransDreamer, action-aware WM, and shuffled-action notes.
 - `repository_structure.md`: repo layout, workspace API, config/data policy.
-- `wm_training_routes.md`: pi0 action-hidden DreamerV3 route and retained
+- `wm_training_routes.md`: legacy action-hidden DreamerV3 route and retained
   baselines.
 - `rynnvla_encode_dreamervla_scheme.md`: RynnVLA hidden interface design and
   reconstruction-target analysis.

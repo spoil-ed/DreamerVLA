@@ -8,7 +8,7 @@ checkpoint paths, output tags, and smoke-test limits.
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
-| VLA training | `scripts/train_vla.sh` | `vla_pi0_query` |
+| VLA training | `scripts/train_vla.sh` | `vla_rynnvla_action_head` |
 | VLA one-trajectory SFT | `CONFIG=vla_sft_one_trajectory scripts/train_vla.sh` | `vla_sft_one_trajectory` |
 | OpenVLA-OFT one-trajectory SFT | `CONFIG=openvla_oft_hdf5_one_trajectory scripts/train_vla.sh` | `openvla_oft_hdf5_one_trajectory` |
 | WM training | `scripts/train_wm.sh` | `world_model_dinowm_chunk` |
@@ -19,7 +19,7 @@ checkpoint paths, output tags, and smoke-test limits.
 
 | Route | Config |
 | --- | --- |
-| VLA | `vla_pi0_query` |
+| VLA | `vla_rynnvla_action_head` |
 | VLA one-trajectory SFT | `vla_sft_one_trajectory` |
 | OpenVLA-OFT HDF5 SFT | `openvla_oft_hdf5` |
 | OpenVLA-OFT LM-head one-trajectory SFT | `openvla_oft_hdf5_one_trajectory` |

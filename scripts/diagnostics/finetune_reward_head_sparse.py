@@ -34,7 +34,7 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (
     load_world_model_state,
 )
 from dreamer_vla.dataset.libero_balanced_terminal_dataset import (
@@ -99,7 +99,10 @@ def reward_head_param_names(world_model: torch.nn.Module) -> list[str]:
 
 
 def maybe_swap_binary_head(
-    world_model: torch.nn.Module, init_logit: float, pos_weight: float
+    world_model: torch.nn.Module,
+    cfg: Any,
+    init_logit: float,
+    pos_weight: float,
 ) -> None:
     """Replace world_model.reward_head with a fresh BinaryRewardHead.
 
@@ -125,9 +128,13 @@ def maybe_swap_binary_head(
                 units = layer.out_features
                 break
     except AttributeError:
-        feat_dim = 5120  # safe fallback for our config; will be checked at runtime
+        feat_dim = getattr(world_model, "obs_dim", None)
+        if feat_dim is None:
+            feat_dim = OmegaConf.select(cfg, "world_model.obs_dim", default=None)
+    if feat_dim is None:
+        raise ValueError("Could not infer reward head feature dimension from model or config")
     new_head = BinaryRewardHead(
-        feat_dim or 5120,
+        int(feat_dim),
         layers=1,
         units=int(units),
         act="silu",
@@ -189,7 +196,7 @@ def main() -> None:
 
     if args.swap_binary_head:
         maybe_swap_binary_head(
-            world_model, args.binary_init_logit, args.binary_pos_weight
+            world_model, cfg, args.binary_init_logit, args.binary_pos_weight
         )
 
     # Freeze all except reward_head

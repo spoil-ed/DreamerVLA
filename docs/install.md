@@ -38,7 +38,7 @@ This repository uses the same fix direction as upstream `PR #84`:
 ### Install / Reinstall
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO
+cd "$DVLA_ROOT/third_party/LIBERO"
 python -m pip install --no-build-isolation -e .
 ```
 
@@ -56,7 +56,7 @@ python -c "import libero; print(libero.__path__)"
 Then verify the dataset integrity script can run directly:
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO
+cd "$DVLA_ROOT/third_party/LIBERO"
 python scripts/check_dataset_integrity.py
 ```
 
@@ -67,13 +67,13 @@ If this command runs without `ModuleNotFoundError`, the packaging issue is fixed
 `LIBERO` does not always read datasets from the current repo. It uses the global config file:
 
 ```bash
-/home/user01/.libero/config.yaml
+$HOME/.libero/config.yaml
 ```
 
 Check the active dataset path with:
 
 ```bash
-grep '^datasets:' /home/user01/.libero/config.yaml
+grep '^datasets:' "$HOME/.libero/config.yaml"
 ```
 
 The built-in checks mean:
@@ -81,8 +81,8 @@ The built-in checks mean:
 - `check_libero_dataset(...)`: verifies expected `.hdf5` file counts
 - `scripts/check_dataset_integrity.py`: verifies each `.hdf5` contains 50 demo trajectories and checks `tag == "libero-v1"`
 
-For the current machine, the validated dataset path is:
+For the default in-repo setup, the dataset path is:
 
 ```bash
-/mnt/data/spoil/workspace/DreamerVLA/third_party/LIBERO/libero/datasets
+$DVLA_ROOT/third_party/LIBERO/libero/datasets
 ```

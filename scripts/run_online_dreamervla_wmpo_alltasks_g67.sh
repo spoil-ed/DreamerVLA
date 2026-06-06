@@ -25,7 +25,7 @@ NGPU="${NGPU:-2}"
 CONFIG="${CONFIG:-${DVLA_ROOT}/configs/online_wmpo_outcome_libero_goal.yaml}"
 WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-${DVLA_ROOT}/data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/step_00015000.ckpt}"
 CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-${DVLA_ROOT}/data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf_chunk_minsteps32/ckpt/best_episode_f10.9705_th0.67.ckpt}"
-VLA_CKPT_PATH="${VLA_CKPT_PATH:-${DVLA_ROOT}/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model}"
+VLA_CKPT_PATH="${VLA_CKPT_PATH:-${DVLA_ROOT}/data/ckpts/VLA_model_256/libero_goal}"
 
 TASK_SUITE="${TASK_SUITE:-libero_goal}"
 TASK_IDS="${TASK_IDS:-0,1,2,3,4,5,6,7,8,9}"
@@ -64,7 +64,7 @@ echo "[run_online_wmpo_alltasks] task_ids=$TASK_IDS total_env_steps=$TOTAL_ENV_S
 tmux new-session -d -s "$SESSION" -c "${DVLA_ROOT}" \
   "PYTHONPATH=$DVLA_ROOT CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES MUJOCO_GL=$MUJOCO_GL $PYTHON -m torch.distributed.run \
   --standalone --nproc_per_node=$NGPU --master_port=$MASTER_PORT \
-  scripts/training/train_online_pi0_action_hidden_dreamervla.py \
+  scripts/training/train_online_rynnvla_action_hidden_dreamervla.py \
   --config $CONFIG \
   --out-dir $OUT_DIR \
   --world-model-ckpt $WORLD_MODEL_CKPT \

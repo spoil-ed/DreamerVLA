@@ -82,7 +82,7 @@ def _json_safe(value: Any) -> Any:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Online DreamerVLA training with pi0 action-query hidden inputs."
+        description="Online DreamerVLA training with RynnVLA action-hidden inputs."
     )
     parser.add_argument(
         "--config",
@@ -95,15 +95,15 @@ def parse_args() -> argparse.Namespace:
         "--vla-ckpt-path",
         default=str(
             PROJECT_ROOT
-            / "data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model"
+            / "data/ckpts/VLA_model_256/libero_goal"
         ),
     )
     parser.add_argument("--encoder-state-ckpt", default="")
     parser.add_argument(
         "--action-head-type",
         default="legacy",
-        choices=["legacy", "pi0_query"],
-        help="Action-hidden head used by the online encoder. legacy is 35x1024; pi0_query is 5x1024.",
+        choices=["legacy"],
+        help="Action-hidden head used by the online encoder.",
     )
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument("--task-ids", default="0")
@@ -479,7 +479,28 @@ def obs_to_action_hidden(
         target_token_id=int(target_token_id),
         eval=True,
     )
-    return action_hidden.reshape(action_hidden.shape[0], -1).float()
+    return action_hidden.float()
+
+
+@torch.no_grad()
+def obs_batch_to_action_hidden(
+    encoder: RynnVLAEncoder,
+    processor: Any,
+    obs_batch: list[dict[str, Any]],
+    device: torch.device,
+    target_token_id: int,
+) -> torch.Tensor:
+    embeddings = [
+        obs_to_action_hidden(
+            encoder=encoder,
+            processor=processor,
+            obs=obs,
+            device=device,
+            target_token_id=target_token_id,
+        )
+        for obs in obs_batch
+    ]
+    return torch.cat(embeddings, dim=0)
 
 
 class OnlineReplay:
@@ -851,7 +872,8 @@ class OnlineReplay:
                 axis=0,
             ).astype(np.float32, copy=False)
             if chunk_size > 1:
-                reshaped = env_window.reshape(window, chunk_size, env_window.shape[-1])
+                trailing_shape = env_window.shape[1:]
+                reshaped = env_window.reshape(window, chunk_size, *trailing_shape)
                 if chunk_pool == "last":
                     pooled = reshaped[:, -1]
                 elif chunk_pool == "first":
@@ -1229,13 +1251,16 @@ def main() -> None:
     )
 
     cfg = OmegaConf.load(args.config)
-    expected_obs_dim = 35840 if args.action_head_type == "legacy" else 5120
-    cfg_obs_dim = int(OmegaConf.select(cfg, "world_model.obs_dim"))
-    if cfg_obs_dim != expected_obs_dim:
+    expected_obs_dim = (
+        int(OmegaConf.select(cfg, "policy.time_horizon"))
+        * int(OmegaConf.select(cfg, "policy.action_dim"))
+        * int(OmegaConf.select(cfg, "policy.action_hidden_dim"))
+    )
+    cfg_obs_dim = OmegaConf.select(cfg, "world_model.obs_dim")
+    if cfg_obs_dim is not None and int(cfg_obs_dim) != expected_obs_dim:
         raise ValueError(
             f"--action-head-type={args.action_head_type} produces obs dim {expected_obs_dim}, "
-            f"but config world_model.obs_dim={cfg_obs_dim}. Use legacy for 35x1024 hidden, "
-            "or pi0_query for 5x1024 hidden."
+            f"but config world_model.obs_dim={cfg_obs_dim}."
         )
     cfg.init.vla_ckpt_path = args.vla_ckpt_path
     cfg.init.encoder_state_ckpt = args.encoder_state_ckpt
@@ -1252,12 +1277,12 @@ def main() -> None:
 
     if is_rank0:
         print(
-            f"[online-pi0] DDP world_size={world_size} rank={rank} local_rank={local_rank} "
+            f"[online-rynnvla] DDP world_size={world_size} rank={rank} local_rank={local_rank} "
             f"out_dir={out_dir}",
             flush=True,
         )
         print(
-            "[online-pi0] algo_params "
+            "[online-rynnvla] algo_params "
             f"policy_lr={OmegaConf.select(cfg, 'optim.policy.lr', default='?')} "
             f"wm_lr={OmegaConf.select(cfg, 'optim.world_model.lr', default='?')} "
             f"grad_clip_norm={OmegaConf.select(cfg, 'optim.grad_clip_norm', default='?')} "
@@ -1272,12 +1297,12 @@ def main() -> None:
             flush=True,
         )
         print(
-            f"[online-pi0] device={device} task_suite={args.task_suite} task_ids={args.task_ids}",
+            f"[online-rynnvla] device={device} task_suite={args.task_suite} task_ids={args.task_ids}",
             flush=True,
         )
-        print(f"[online-pi0] wm_ckpt={args.world_model_ckpt}", flush=True)
+        print(f"[online-rynnvla] wm_ckpt={args.world_model_ckpt}", flush=True)
         print(
-            f"[online-pi0] episode_horizon={args.episode_horizon} "
+            f"[online-rynnvla] episode_horizon={args.episode_horizon} "
             f"total_env_steps={args.total_env_steps} "
             f"max_train_updates={args.max_train_updates} "
             f"train_ratio={args.train_ratio} "
@@ -1285,12 +1310,12 @@ def main() -> None:
             flush=True,
         )
         print(
-            "[online-pi0] input=vla_policy history=2 state rotate180 action_query",
+            "[online-rynnvla] input=vla_policy history=2 state rotate180 action_query",
             flush=True,
         )
         if int(args.video_every_env_steps) > 0:
             print(
-                f"[online-pi0] video_every_env_steps={args.video_every_env_steps} "
+                f"[online-rynnvla] video_every_env_steps={args.video_every_env_steps} "
                 f"video_fps={args.video_fps} video_frame_key={args.video_frame_key}",
                 flush=True,
             )
@@ -2254,7 +2279,7 @@ def main() -> None:
                     **last_metrics,
                 }
                 print(
-                    "[online-pi0] "
+                    "[online-rynnvla] "
                     + " ".join(
                         f"{key}={value:.4g}"
                         if isinstance(value, float)
@@ -2379,7 +2404,7 @@ def main() -> None:
 
             if stop_training:
                 print(
-                    f"[online-pi0] reached max_train_updates={args.max_train_updates} "
+                    f"[online-rynnvla] reached max_train_updates={args.max_train_updates} "
                     f"at env_step={env_step}",
                     flush=True,
                 )

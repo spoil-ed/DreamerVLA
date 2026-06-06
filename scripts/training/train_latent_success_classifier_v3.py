@@ -16,7 +16,7 @@ Per-episode windowing matches WMPO/reward_model/videomae.py exactly:
 
 Single-GPU. Usage:
     CUDA_VISIBLE_DEVICES=7 PYTHONUNBUFFERED=1 \
-        /home/user01/miniconda3/envs/dreamervla/bin/python -u \
+        python -u \
         scripts/train_latent_success_classifier_v3.py \
         --config configs/wmpo_classifier_libero_goal_v3_with_failures.yaml
 """
@@ -28,7 +28,7 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -241,7 +241,7 @@ def _replace_with_real_hidden(ds, tag: str = "ds") -> None:
         out_trajs, out_meta = [], []
         for pair in pairs:
             obs, _act, finish_step, complete = ds._load_pair_at(pair)
-            # obs may be [T, 35, 1024] or [T, 35840]; flatten last dims
+            # obs may be [T, N, D] or [T, N*D]; flatten last dims
             arr = np.asarray(obs, dtype=np.float32).reshape(obs.shape[0], -1)
             out_trajs.append(arr)
             out_meta.append((bool(complete), int(finish_step)))

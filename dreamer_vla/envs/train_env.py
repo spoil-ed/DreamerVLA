@@ -1,6 +1,6 @@
 """Aligned online training environment for DreamerVLA on LIBERO.
 
-This module is the canonical online env path for the pi0 action-hidden route.
+This module is the canonical online env path for the RynnVLA action-hidden route.
 It keeps the environment API Dreamer-style while making the VLA/WM observation
 contract explicit:
 
@@ -79,7 +79,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     prompt_style: Literal["vla_policy"] = "vla_policy"
     include_state: bool = True
     obs_hidden_source: Literal["action_query"] = "action_query"
-    action_head_type: Literal["pi0_query", "legacy"] = "legacy"
+    action_head_type: Literal["legacy"] = "legacy"
     target_token_id: int = 10004
 
 
@@ -98,7 +98,7 @@ class DreamerVLAOnlineTrainEnv:
     ``reset()`` returns ``(obs, info)``. ``step(action)`` returns
     ``(obs, reward, terminated, truncated, info)``.
 
-    ``action_input='normalized'`` means the caller passes pi0/VLA policy-scale
+    ``action_input='normalized'`` means the caller passes RynnVLA/VLA policy-scale
     actions in [-1, 1].  The env executes raw LIBERO actions and records those
     raw actions as ``info['wm_action']`` because the RSSM is trained on HDF5
     executed-action scale.
@@ -401,9 +401,9 @@ class DreamerVLAOnlineTrainEnv:
             errors.append(
                 f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected 'action_query'"
             )
-        if str(self.cfg.action_head_type) not in {"pi0_query", "legacy"}:
+        if str(self.cfg.action_head_type) != "legacy":
             errors.append(
-                f"action_head_type={self.cfg.action_head_type!r}, expected 'pi0_query' or 'legacy'"
+                f"action_head_type={self.cfg.action_head_type!r}, expected 'legacy'"
             )
         if self.cfg.action_input not in {"raw", "normalized"}:
             errors.append(

@@ -21,12 +21,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ----- paths -----
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(
-    "/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/"
-    "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+    PROJECT_ROOT
+    / "data"
+    / "processed_data"
+    / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
 )
-OUT_DIR = Path(
-    "/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure"
+OUT_DIR = (
+    PROJECT_ROOT / "data" / "diagnostics" / "hidden_token_structure"
 )
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +39,7 @@ J = 7
 D = 1024
 DTYPE = np.float64  # accumulators in fp64 to keep numerics clean
 
-SUBSAMPLE_FOR_PCA = 12000  # 12k * 35840 * 4B = 1.7 GB fp32, fits.
+SUBSAMPLE_FOR_PCA = 12000
 RNG = np.random.default_rng(0)
 
 
@@ -265,7 +268,7 @@ def main():
     X = subsample_frames(files, SUBSAMPLE_FOR_PCA)  # [n, 35, 1024] fp32
     print(f"  subsample done in {time.time() - t0:.1f}s, shape={X.shape}")
 
-    # Flat PCA on [n, 35840]
+    # Flat PCA on [n, D]
     print("[phase] flat PCA via gram matrix...")
     t0 = time.time()
     Xflat = X.reshape(X.shape[0], N_TOKENS * D)

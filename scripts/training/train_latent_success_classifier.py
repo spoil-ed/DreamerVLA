@@ -6,7 +6,7 @@ episodes total). Multi-GPU DDP support deferred.
 
 Usage:
     MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES=4 \
-        /home/user01/miniconda3/envs/dreamervla/bin/python \
+        python \
         scripts/train_latent_success_classifier.py \
         --config configs/wmpo_classifier_libero_goal.yaml
 """
@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Collect online LIBERO rollouts and dump them as classifier-dataset shards.
 
-Reuses the pi0-action-hidden online training pipeline (encoder + processor + WM
+Reuses the RynnVLA action-hidden online training pipeline (encoder + processor + WM
 + actor) — but instead of running PPO updates, it only rolls out episodes and
 writes them to disk in the schema expected by ``WMReplayClassifierDataset``:
 
@@ -19,12 +19,11 @@ semantics.
 Single GPU. Usage example::
 
     CUDA_VISIBLE_DEVICES=7 \\
-        /home/user01/miniconda3/envs/dreamervla/bin/python -u \\
+        python -u \\
         scripts/collect_online_rollouts_for_classifier.py \\
             --config configs/online_wmpo_outcome_libero_goal.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
             --vla-ckpt-path data/ckpts/VLA_model_256/libero_goal \\
-            --encoder-state-ckpt data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
             --num-episodes 200 --episodes-per-shard 25 \\
             --out-raw-dir data/processed_data/libero_goal_online_rollouts_pi0_sft \\
@@ -45,11 +44,11 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa: E402
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (  # noqa: E402
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,
@@ -67,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         default=str(PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"),
-        help="Defaults to the legacy 35840-dim action-hidden config that matches the m1024 chunk WM "
+        help="Defaults to the legacy RynnVLA action-hidden config that matches the m1024 chunk WM "
         "and the *_pi0_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
         "WMReplayClassifierDataset.",
     )
@@ -79,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--encoder-state-ckpt",
         default="",
-        help="Optional separate encoder state ckpt. Legacy 35840-dim extraction does NOT need this; "
+        help="Optional separate encoder state ckpt. Legacy RynnVLA extraction does NOT need this; "
         "leave empty to use the base SFT VLA backbone directly.",
     )
     parser.add_argument(
@@ -91,10 +90,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--action-head-type",
         default="legacy",
-        choices=["legacy", "pi0_query"],
-        help="Encoder action-head variant. ``legacy`` produces 35840-dim hidden matching the "
+        choices=["legacy"],
+        help="Encoder action-head variant. ``legacy`` produces RynnVLA hidden matching the "
         "m1024 chunk WM and the *_pi0_legacy_action_hidden_vla_policy_h2 sidecars used by "
-        "WMReplayClassifierDataset. ``pi0_query`` is the 5120-dim head (needs a smaller WM).",
+        "WMReplayClassifierDataset.",
     )
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument(

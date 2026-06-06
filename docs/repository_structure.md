@@ -35,7 +35,7 @@ dreamer_vla/
 ├── dataset/              # Offline datasets and online rollout dumpers
 ├── envs/                 # LIBERO sim and online env wrappers
 ├── models/               # Encoders, actors, critics, rewards, world models
-│   ├── actor/            # BaseActor, VLAPolicy, Pi0ActionHiddenActor, VLAActionHeadActor
+│   ├── actor/            # BaseActor, VLAPolicy, RynnVLAActionHiddenActor, VLAActionHeadActor
 │   ├── critic/           # Critic modules
 │   ├── encoder/          # BaseEncoder plus encoder input protocol helpers
 │   ├── reward/           # Latent success classifier
@@ -65,7 +65,7 @@ configs should target those public names rather than implementation classes.
 
 ```text
 VLA SFT:
-  vla_pi0_query
+  vla_rynnvla_action_head
   vla_sft_one_trajectory
   openvla_oft_hdf5
   openvla_oft_hdf5_one_trajectory

@@ -31,9 +31,11 @@ class TSSMRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
 
     def __init__(
         self,
-        obs_dim: int = 35840,
+        obs_dim: int | None = None,
         latent_dim: int | None = None,
         action_dim: int = 7,
+        action_hidden_dim: int = 1024,
+        time_horizon: int = 5,
         image_channels: int = 6,
         image_size: int = 64,
         # encoder (shared)
@@ -94,8 +96,12 @@ class TSSMRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         reward_pos_weight: float = 1.0,
     ) -> None:
         super().__init__()
-        if latent_dim is not None:
-            obs_dim = int(obs_dim if obs_dim is not None else latent_dim)
+        if obs_dim is None:
+            obs_dim = (
+                int(latent_dim)
+                if latent_dim is not None
+                else int(time_horizon) * int(action_dim) * int(action_hidden_dim)
+            )
         self.obs_dim = int(obs_dim)
         self.image_channels = int(image_channels)
         self.image_size = int(image_size)

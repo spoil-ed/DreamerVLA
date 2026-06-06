@@ -27,7 +27,7 @@ from dreamer_vla.envs import (
     get_libero_image,
     quat2axisangle,
 )
-from dreamer_vla.models.actor import Pi0ActionHiddenActor
+from dreamer_vla.models.actor import RynnVLAActionHiddenActor
 from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
 
 
@@ -213,10 +213,12 @@ def _add_latent_stats(
         collector.add(f"{prefix}/post_max_prob_per_stoch", probs.max(dim=-1).values)
 
 
-def _make_original_pi0_actor(ws: EvalLiberoVLARunner) -> Pi0ActionHiddenActor:
+def _make_original_rynnvla_actor(
+    ws: EvalLiberoVLARunner,
+) -> RynnVLAActionHiddenActor:
     cfg = ws.cfg
-    actor = Pi0ActionHiddenActor(
-        hidden_dim=int(OmegaConf.select(cfg, "policy.hidden_dim", default=5120)),
+    actor = RynnVLAActionHiddenActor(
+        hidden_dim=OmegaConf.select(cfg, "policy.hidden_dim", default=None),
         action_hidden_dim=int(
             OmegaConf.select(cfg, "policy.action_hidden_dim", default=1024)
         ),
@@ -293,7 +295,7 @@ def collect_offline(
         _add_latent_stats(
             "offline/posterior", collector, ws.world_model, observed["latent"]
         )
-    original_actor = _make_original_pi0_actor(ws)
+    original_actor = _make_original_rynnvla_actor(ws)
     pair = PairCollector()
     for idx, batch in enumerate(loader):
         if idx >= batches:
@@ -360,7 +362,7 @@ def collect_online(
     collector = Collector()
     action_collector = Collector()
     pair_collector = PairCollector()
-    original_actor = _make_original_pi0_actor(ws)
+    original_actor = _make_original_rynnvla_actor(ws)
 
     for task_id in task_ids:
         task = task_suite.get_task(int(task_id))
@@ -675,7 +677,7 @@ def main() -> None:
         f"eval.ckpt_path={_hydra_quote(args.ckpt)}",
         "eval.ckpt_kind=dreamer",
         f"init.encoder_state_ckpt={_hydra_quote(args.encoder_ckpt)}",
-        "+encoder.action_head_type=pi0_query",
+        "+encoder.action_head_type=legacy",
         "eval.dreamer_rollout_mode=online_rssm",
         "eval.dreamer_actor_input_source=rssm",
         "eval.dreamer_unnorm_actions=auto",

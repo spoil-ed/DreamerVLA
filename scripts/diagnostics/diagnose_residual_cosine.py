@@ -18,12 +18,15 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(
-    "/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/"
-    "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+    PROJECT_ROOT
+    / "data"
+    / "processed_data"
+    / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
 )
-OUT_DIR = Path(
-    "/mnt/data/spoil/workspace/DreamerVLA/data/diagnostics/hidden_token_structure"
+OUT_DIR = (
+    PROJECT_ROOT / "data" / "diagnostics" / "hidden_token_structure"
 )
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 

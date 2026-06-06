@@ -15,6 +15,9 @@ from torch.utils.data import DataLoader
 from dreamer_vla.runners.base_runner import BaseRunner
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _to_device(value: Any, device: torch.device) -> Any:
     if isinstance(value, torch.Tensor):
         return value.to(device, non_blocking=True)
@@ -174,12 +177,26 @@ class DreamerV3TokenRunner(BaseRunner):
         cfg_path = OmegaConf.select(
             viz_cfg,
             "vqgan_config_path",
-            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
+            default=str(
+                PROJECT_ROOT
+                / "data"
+                / "ckpts"
+                / "chameleon"
+                / "tokenizer"
+                / "vqgan.yaml"
+            ),
         )
         ckpt_path = OmegaConf.select(
             viz_cfg,
             "vqgan_ckpt_path",
-            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+            default=str(
+                PROJECT_ROOT
+                / "data"
+                / "ckpts"
+                / "chameleon"
+                / "tokenizer"
+                / "vqgan.ckpt"
+            ),
         )
         try:
             from dreamer_vla.utils.vq_image_decoder import load_vq_model

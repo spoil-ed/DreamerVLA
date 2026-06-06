@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,
@@ -67,10 +67,7 @@ def parse_args():
     )
     p.add_argument(
         "--encoder-state-ckpt",
-        default=str(
-            PROJECT_ROOT
-            / "data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt"
-        ),
+        default="",
     )
     p.add_argument("--task-suite", default="libero_goal")
     p.add_argument("--task-id", type=int, default=0)
@@ -147,7 +144,7 @@ def main():
         include_state=True,
         vla_rotate_180=True,
         obs_hidden_source="action_query",
-        action_head_type="pi0_query",
+        action_head_type="legacy",
     )
 
     obs, _ = env.reset(
@@ -260,8 +257,8 @@ def main():
             )
 
     # ── Comparison ──────────────────────────────────────────────────────────
-    real_obs_embs_t = torch.stack(real_obs_embs, dim=0).squeeze(1)  # [T, 5120]
-    recon_obs_embs_t = torch.stack(recon_obs_embs, dim=0)  # [T, 5120]
+    real_obs_embs_t = torch.stack(real_obs_embs, dim=0).squeeze(1)  # [T, D]
+    recon_obs_embs_t = torch.stack(recon_obs_embs, dim=0)  # [T, D]
     real_actions_t = torch.tensor(real_actions, dtype=torch.float32)
     imag_actions_t = torch.tensor(imag_actions, dtype=torch.float32)
     cos_emb = F.cosine_similarity(recon_obs_embs_t, real_obs_embs_t, dim=-1).numpy()

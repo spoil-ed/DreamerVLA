@@ -16,7 +16,10 @@ import torch.nn as nn
 
 @dataclass
 class LatentSuccessClassifierConfig:
-    latent_dim: int = 35840
+    latent_dim: int | None = None
+    action_dim: int = 7
+    time_horizon: int = 5
+    token_dim: int = 1024
     window: int = 8
     hidden_dim: int = 1024
     num_layers: int = 8
@@ -44,7 +47,9 @@ class LatentSuccessClassifierConfig:
 class LatentSuccessClassifier(nn.Module):
     """Binary success classifier over a window of latent frames.
 
-    Input shape contract: ``[B, W, latent_dim]`` where W == cfg.window.
+    Input shape contract: ``[B, W, latent_dim]`` where W == cfg.window. Tokenized
+    windows such as ``[B, W, N, token_dim]`` are accepted and flattened at this
+    boundary.
     Output: ``[B, 2]`` logits.
 
     ``cfg.head_type`` selects the architecture:
@@ -59,6 +64,10 @@ class LatentSuccessClassifier(nn.Module):
         super().__init__()
         if cfg is None:
             cfg = LatentSuccessClassifierConfig(**kwargs)
+        if cfg.latent_dim is None:
+            cfg.latent_dim = int(cfg.time_horizon) * int(cfg.action_dim) * int(
+                cfg.token_dim
+            )
         self.cfg = cfg
         gran = str(getattr(cfg, "granularity", "action"))
         if gran not in ("action", "chunk"):
@@ -105,10 +114,14 @@ class LatentSuccessClassifier(nn.Module):
             raise ValueError(f"unknown head_type: {ht!r} (transformer|linear|mlp2)")
 
     def forward(self, latent_window: torch.Tensor) -> torch.Tensor:
-        """latent_window: [B, W, latent_dim] -> logits [B, 2]."""
+        """latent_window: [B, W, latent_dim] or [B, W, ...] -> logits [B, 2]."""
         if latent_window.shape[1] != self.cfg.window:
             raise ValueError(
                 f"expected window={self.cfg.window}, got {latent_window.shape[1]}"
+            )
+        if latent_window.ndim > 3:
+            latent_window = latent_window.reshape(
+                latent_window.shape[0], latent_window.shape[1], -1
             )
         ht = str(getattr(self.cfg, "head_type", "transformer"))
         if ht == "transformer":
@@ -125,10 +138,11 @@ class LatentSuccessClassifier(nn.Module):
     def _chunk_aggregate(self, latent_video: torch.Tensor) -> torch.Tensor:
         """Subsample / pool an env-step granular video to chunk granularity.
 
-        Returns ``[B, T_chunk, latent_dim]`` where ``T_chunk = T // K``.
+        Returns ``[B, T_chunk, ...]`` where ``T_chunk = T // K``.
         Pooling is controlled by ``self.cfg.chunk_pool`` (last|first|mean).
         """
-        B, T, D = latent_video.shape
+        B, T = latent_video.shape[:2]
+        trailing_shape = latent_video.shape[2:]
         K = int(self.cfg.chunk_size)
         T_chunk = T // K
         if T_chunk < 1:
@@ -137,7 +151,7 @@ class LatentSuccessClassifier(nn.Module):
             )
         pool = str(self.cfg.chunk_pool)
         usable = T_chunk * K
-        reshaped = latent_video[:, :usable].reshape(B, T_chunk, K, D)
+        reshaped = latent_video[:, :usable].reshape(B, T_chunk, K, *trailing_shape)
         if pool == "last":
             return reshaped[:, :, -1]
         if pool == "first":
@@ -166,7 +180,8 @@ class LatentSuccessClassifier(nn.Module):
         (``finish_chunk * chunk_size + (chunk_size - 1)`` for ``chunk_pool=last``).
 
         Args:
-            latent_video: ``[B, T, latent_dim]``, ENV-STEP granular.
+            latent_video: ``[B, T, latent_dim]`` or ``[B, T, ...]``,
+                ENV-STEP granular.
             threshold:    p(success) threshold for the positive class.
             stride:       window stride, NATIVE unit.
             min_steps:    earliest window-end position, NATIVE unit.

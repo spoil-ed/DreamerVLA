@@ -4,7 +4,9 @@ from .libero_env import (
     get_libero_dummy_action,
     get_libero_image,
     quat2axisangle,
+    resolve_libero_eval_protocol,
     save_rollout_video,
+    select_libero_action_chunk,
 )
 from .libero_env import TASK_MAX_STEPS
 from .libero_online_env import (
@@ -47,7 +49,9 @@ __all__ = [
     "build_libero_online_envs",
     "normalize_libero_action",
     "quat2axisangle",
+    "resolve_libero_eval_protocol",
     "save_rollout_video",
+    "select_libero_action_chunk",
     "TASK_MAX_STEPS",
     "unnormalize_libero_action",
 ]

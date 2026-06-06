@@ -11,7 +11,7 @@
 5. `CLAUDE.md` / `AGENTS.md` / `README.md` / `docs/**` 没有提到
 
 **保护的主线（即使 grep 失误也不动）：**
-- 训练路由 YAML：`vla_pi0_query`、`vla_sft_one_trajectory`、`openvla_oft_hdf5`、`openvla_oft_hdf5_one_trajectory`、`world_model_dinowm_step`、`world_model_dinowm_chunk`、`dreamervla_rynn_dino_wm_actor_critic`、`dreamervla_rynn_dino_wm_wmpo_outcome`、`eval_libero_vla`
+- 训练路由 YAML：`vla_rynnvla_action_head`、`vla_sft_one_trajectory`、`openvla_oft_hdf5`、`openvla_oft_hdf5_one_trajectory`、`world_model_dinowm_step`、`world_model_dinowm_chunk`、`dreamervla_rynn_dino_wm_actor_critic`、`dreamervla_rynn_dino_wm_wmpo_outcome`、`eval_libero_vla`
 - `task/libero_{goal,object,spatial,10}.yaml`
 - `scripts/README.md` 形式入口：`train_vla.sh`、`train_vla_nongoal_45.sh`、`train_wm.sh`、`train_dreamervla.sh`，以及 Diagnostics 表里的 4 个脚本
 

@@ -1,6 +1,6 @@
 # @package _global_
 # DINO-WM-style predictor over full legacy RynnVLA action hidden.
-# Target hidden shape per timestep: 5 * 7 * 1024 = 35840.
+# Target hidden shape is derived from time_horizon * action_dim * token_dim.
 # Primary objective: minimize next-frame latent prediction loss
 #   obs_embedding[:, t] -> obs_embedding[:, t + 1].
 defaults:
@@ -38,7 +38,7 @@ dataset:
   # (per_window_dense puts +1 on every step of a terminal-ending window).
   _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
-  hidden_dir: ${task.pi0_legacy_action_hidden_dir}
+  hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
   expected_encoder_state_ckpt: null
   expected_time_horizon: ${task.time_horizon}
@@ -78,6 +78,7 @@ world_model:
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
   token_dim: ${task.legacy_action_hidden.token_dim}
+  time_horizon: ${task.time_horizon}
   # Matches the existing m384 ckpt used by the actor stage.  Raise to 1024 via
   # `MODEL_DIM=1024 bash scripts/train_wm.sh` for capacity-ablation experiments.
   model_dim: 384

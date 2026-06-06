@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa: E402
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (  # noqa: E402
     OnlineReplay,
     build_encoder,
     load_training_checkpoint,
@@ -64,8 +64,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--action-head-type",
         default="legacy",
-        choices=["legacy", "pi0_query"],
-        help="Selects extract_action_hidden mode: legacy=35840-dim (v2 WM), pi0_query=5120-dim.",
+        choices=["legacy"],
+        help="Selects the RynnVLA legacy action-hidden extraction mode.",
     )
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument("--task-ids", default="0")

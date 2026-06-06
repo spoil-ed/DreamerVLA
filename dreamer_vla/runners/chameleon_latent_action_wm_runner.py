@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -30,6 +31,9 @@ from dreamer_vla.utils.seed import set_seed
 from dreamer_vla.runners.base_runner import BaseRunner
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 class ChameleonLatentActionWMRunner(BaseRunner):
     runner_name = "chameleon_latent_wm_compat"
     runner_status = "compatibility"
@@ -37,10 +41,17 @@ class ChameleonLatentActionWMRunner(BaseRunner):
     include_keys = ("global_step", "epoch")
     exclude_keys = ("encoder",)
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = (
-        "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_vla_init_dir = str(
+        PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_goal"
     )
-    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/chameleon_latent_action_wm/debug"
+    default_output_dir = str(
+        PROJECT_ROOT
+        / "data"
+        / "outputs"
+        / "worldmodel"
+        / "chameleon_latent_action_wm"
+        / "debug"
+    )
 
     @staticmethod
     def _first_finite_metric(metrics: dict[str, Any], *keys: str) -> float | None:

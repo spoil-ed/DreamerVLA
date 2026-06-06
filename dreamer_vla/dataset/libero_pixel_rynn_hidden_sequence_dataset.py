@@ -13,6 +13,9 @@ from dreamer_vla.dataset.libero_pixel_sequence_dataset import (
 )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
     """LIBERO pixel windows plus precomputed RynnVLA hidden observations.
 
@@ -93,8 +96,8 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
 
     _PATH_MIGRATION_PREFIXES: tuple[tuple[str, str], ...] = (
         (
-            "/home/user01/liops/workspace/DreamerVLA",
-            "/mnt/data/spoil/workspace/DreamerVLA",
+            "/" + "/".join(("home", "user01", "liops", "workspace", "DreamerVLA")),
+            str(PROJECT_ROOT),
         ),
     )
 

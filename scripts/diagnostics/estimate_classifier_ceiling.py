@@ -35,7 +35,7 @@ Data protocol (matches the "1000-sample, 1:1.3 ratio" baseline in
 
 Usage
 -----
-    /home/user01/miniconda3/envs/dreamervla/bin/python -u \\
+    python -u \\
         scripts/estimate_classifier_ceiling.py \\
         --config configs/wmpo_classifier_libero_goal_v4_real_hidden.yaml \\
         --out data/outputs/dreamervla/outcome_classifier/libero_goal/ceiling_real_hidden \\
@@ -50,7 +50,7 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -148,7 +148,7 @@ def build_windows(
 class SmallLatentMLP(nn.Module):
     """Per-frame shared Linear(L → d) → flatten → 2-layer MLP head.
 
-    Total params ≈ L*d + (W*d)*h + h*2  ≈ 35840*32 + 256*64 + 64*2 ≈ 1.16 M
+    Total params ≈ L*d + (W*d)*h + h*2.
     PAC-Bayes-friendly for n≈800.
     """
 

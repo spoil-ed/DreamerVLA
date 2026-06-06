@@ -6,6 +6,7 @@ import copy
 import gc
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -27,6 +28,9 @@ from dreamer_vla.utils.seed import set_seed
 from dreamer_vla.runners.base_runner import BaseRunner
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 class PretokenizeVLARunner(BaseRunner):
     runner_name = "vla_sft_compat"
     runner_status = "compatibility"
@@ -34,11 +38,11 @@ class PretokenizeVLARunner(BaseRunner):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = (
-        "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_vla_init_dir = str(
+        PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_goal"
     )
-    default_output_dir = (
-        "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/vla/debug_pretokenize_vla"
+    default_output_dir = str(
+        PROJECT_ROOT / "data" / "outputs" / "vla" / "debug_pretokenize_vla"
     )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -218,15 +222,21 @@ class PretokenizeVLARunner(BaseRunner):
             get_libero_dummy_action,
             get_libero_image,
             quat2axisangle,
+            resolve_libero_eval_protocol,
             save_rollout_video,
+            select_libero_action_chunk,
             TASK_MAX_STEPS,
         )
 
+        protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
+        seed = int(protocol["seed"])
+        num_steps_wait = int(protocol["num_steps_wait"])
+        np.random.seed(seed)
         task_suite_name = str(
             OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
         )
         num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10)
+            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=50)
         )
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=10))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
@@ -273,7 +283,8 @@ class PretokenizeVLARunner(BaseRunner):
         print(
             f"  [Eval] suite='{task_suite_name}' tasks={task_ids} "
             f"episodes_per_task={num_episodes} max_steps={max_steps} "
-            f"action_steps={action_steps} history_length={history_length}",
+            f"action_steps={action_steps} history_length={history_length} "
+            f"seed={seed} num_steps_wait={num_steps_wait}",
             flush=True,
         )
 
@@ -286,8 +297,10 @@ class PretokenizeVLARunner(BaseRunner):
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
-            env, task_description = get_libero_env(task, resolution=resolution)
-            n_eps = min(num_episodes, len(initial_states))
+            env, task_description = get_libero_env(
+                task, resolution=resolution, seed=seed
+            )
+            n_eps = num_episodes
             print(
                 f'  [Eval] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}) start: "{task_description}" '
                 f"(episodes={n_eps})",
@@ -311,8 +324,8 @@ class PretokenizeVLARunner(BaseRunner):
                 frame_history: list[tuple[Image.Image, Image.Image]] = []
 
                 steps_taken = 0
-                for t in range(max_steps + 10):
-                    if t < 10:
+                for t in range(max_steps + num_steps_wait):
+                    if t < num_steps_wait:
                         obs, _, done, _ = env.step(get_libero_dummy_action())
                         continue
 
@@ -362,7 +375,9 @@ class PretokenizeVLARunner(BaseRunner):
                             task_description,
                             action_steps,
                         )
-                        actions_buffer = predicted
+                        actions_buffer = select_libero_action_chunk(
+                            predicted, action_steps
+                        )
 
                     if len(actions_buffer) == 0:
                         break
@@ -376,7 +391,7 @@ class PretokenizeVLARunner(BaseRunner):
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                     obs, _, done, _ = env.step(action.tolist())
-                    steps_taken = t - 9
+                    steps_taken = t - num_steps_wait + 1
 
                     if done:
                         task_successes += 1
@@ -437,6 +452,9 @@ class PretokenizeVLARunner(BaseRunner):
             "eval_success_rate": avg_success,
             "eval_total_episodes": float(total_episodes),
             "eval_total_successes": float(total_successes),
+            "results/total_success_rate": avg_success,
+            "results/total_episodes": float(total_episodes),
+            "results/total_successes": float(total_successes),
         }
         print(
             f"  [Eval] Epoch {epoch} overall success rate: {avg_success:.1%} "

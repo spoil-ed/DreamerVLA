@@ -735,7 +735,7 @@ class ResMLPHead(nn.Module):
 class Pi0StyleHiddenDecoder(nn.Module):
     """Pi0-action-head-style hidden decoder.
 
-    Replicates the original Pi0StyleActionQueryHead pattern: a TransformerEncoder
+    Replicates the original RynnVLA action-head pattern: a TransformerEncoder
     over [memory_tokens, learned_query_tokens]. Memory comes from feat (deter +
     stoch*classes) split into ``mem_tokens`` tokens of width ``d_model``. We have
     ``num_queries = out_dim // d_model`` learned query embeddings; their output
@@ -937,7 +937,7 @@ class PerTokenMLPHead(nn.Module):
         query_emb 35×128 = 4.5 K
         Linear(10368 → 2048) = 21.2 M
         Linear(2048 → 1024)  =  2.1 M
-        ≈ 23 M total — matches the OLD pi0_query-head decoder's per-token capacity.
+        ≈ 23 M total — matches the legacy RynnVLA action-head decoder's per-token capacity.
     """
 
     def __init__(

@@ -43,7 +43,7 @@ WMPO 自己的 VideoMAE 在 RGB 视频上 window F1 也只有 0.20。WMPO 通过
 
 ### R3. 130 M Transformer 容量过剩(高置信度推测)
 
-LR (~36k 参数)上 F1 0.87,意味着 35840-d 隐空间在 W=8 窗口上几乎线性可分。8 层 16 头 Transformer 的归纳偏置不需要;在 small dataset(401 正 / 39142 负 in v1, ~400+67 per epoch in v3)上反而过拟合 — v3b 训练 loss 在 20k 步降到 0.005,验证 F1 仍 ~0.1。
+LR (~36k 参数)上 F1 0.87,意味着 `time_horizon * action_dim * token_dim` 隐空间在 W=8 窗口上几乎线性可分。8 层 16 头 Transformer 的归纳偏置不需要;在 small dataset(401 正 / 39142 负 in v1, ~400+67 per epoch in v3)上反而过拟合 — v3b 训练 loss 在 20k 步降到 0.005,验证 F1 仍 ~0.1。
 
 → 减容量 / 强正则 / 走 LR-style head。
 

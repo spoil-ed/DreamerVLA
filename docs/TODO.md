@@ -4,7 +4,6 @@
 
 - LIBERO VLA 主 ckpt 已有，移出待办：
   - `data/ckpts/VLA_model_256/libero_goal`
-  - `data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt`
   - `data/ckpts/frozen_backbones/openvla_oft_libero_goal_hdf5_latest_6650`
 - LIBERO WM 主训练已有可用 ckpt，移出“从零训练 WM”待办：
   - `data/ckpts/Action_World_model_512/libero_goal`

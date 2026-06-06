@@ -12,19 +12,19 @@ from dreamer_vla.models.world_model.base_world_model import BaseWorldModel
 class RynnDinoWMWorldModel(BaseWorldModel):
     """DINO-WM-style predictor over full RynnVLA action-token hidden states.
 
-    The expected observation is the flattened legacy RynnVLA action hidden:
-    ``[time_horizon=5, action_dim=7, hidden=1024]`` flattened to 35840 dims.
-    Internally the model restores this as 35 tokens of size 1024, appends one
-    action token per environment timestep, and uses a causal transformer to
-    predict future observation tokens.
+    The model accepts either legacy flattened sidecars or tokenized RynnVLA
+    action hidden states. Internally it keeps the ``time_horizon * action_dim``
+    token structure, appends one action token per environment timestep, and uses
+    a causal transformer to predict future observation tokens.
     """
 
     def __init__(
         self,
-        obs_dim: int = 5 * 7 * 1024,
+        obs_dim: int | None = None,
         action_dim: int = 7,
-        token_count: int = 35,
+        token_count: int | None = None,
         token_dim: int = 1024,
+        time_horizon: int | None = 5,
         model_dim: int = 512,
         depth: int = 6,
         heads: int = 8,
@@ -54,10 +54,19 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         latent_source: str = "RynnVLA legacy [5,7,1024] action hidden",
     ) -> None:
         super().__init__()
-        self.obs_dim = int(obs_dim)
         self.action_dim = int(action_dim)
-        self.token_count = int(token_count)
         self.token_dim = int(token_dim)
+        self.time_horizon = int(time_horizon) if time_horizon is not None else 5
+        self.token_count = (
+            int(token_count)
+            if token_count is not None
+            else self.time_horizon * self.action_dim
+        )
+        self.obs_dim = (
+            int(obs_dim)
+            if obs_dim is not None
+            else self.token_count * self.token_dim
+        )
         self.model_dim = int(model_dim)
         self.num_hist = int(num_hist)
         self.num_pred = int(num_pred)
@@ -286,25 +295,8 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         return self.obs_proj.weight.device
 
     def _validate_obs_embedding(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        if obs_embedding.ndim == 2:
-            obs_embedding = obs_embedding[:, None]
-        if obs_embedding.ndim != 3:
-            raise ValueError(
-                f"obs_embedding must be [B,T,{self.obs_dim}] or [B,{self.obs_dim}], "
-                f"got {tuple(obs_embedding.shape)}"
-            )
-        if obs_embedding.shape[-1] != self.obs_dim:
-            raise ValueError(
-                f"obs dim mismatch: got {obs_embedding.shape[-1]}, expected {self.obs_dim}. "
-                f"This route predicts {self.latent_source}."
-            )
-        if obs_embedding.shape[1] > self.max_seq_len:
-            raise ValueError(
-                f"sequence length {obs_embedding.shape[1]} exceeds max_seq_len={self.max_seq_len}"
-            )
-        return obs_embedding.to(
-            device=self._module_device(), dtype=self._module_dtype()
-        )
+        """Return the legacy flat ``[B,T,obs_dim]`` view for compatibility."""
+        return self.tokens_to_flat(self.obs_to_tokens(obs_embedding))
 
     def _validate_actions(self, actions: torch.Tensor, steps: int) -> torch.Tensor:
         if actions.ndim == 2:
@@ -326,12 +318,69 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         )
 
     def obs_to_tokens(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        obs_embedding = self._validate_obs_embedding(obs_embedding)
-        return obs_embedding.reshape(
-            obs_embedding.shape[0],
-            obs_embedding.shape[1],
-            self.token_count,
-            self.token_dim,
+        """Normalize flat or tokenized action-hidden inputs to ``[B,T,N,D]``."""
+        if obs_embedding.ndim == 2:
+            if obs_embedding.shape[-1] != self.obs_dim:
+                raise ValueError(
+                    f"obs dim mismatch: got {obs_embedding.shape[-1]}, expected {self.obs_dim}. "
+                    f"This route predicts {self.latent_source}."
+                )
+            tokens = obs_embedding.reshape(
+                obs_embedding.shape[0], 1, self.token_count, self.token_dim
+            )
+        elif obs_embedding.ndim == 3:
+            if obs_embedding.shape[1:] == (self.token_count, self.token_dim):
+                tokens = obs_embedding[:, None]
+            elif obs_embedding.shape[-1] == self.obs_dim:
+                tokens = obs_embedding.reshape(
+                    obs_embedding.shape[0],
+                    obs_embedding.shape[1],
+                    self.token_count,
+                    self.token_dim,
+                )
+            else:
+                raise ValueError(
+                    "obs_embedding must be flat [B,T,obs_dim] / [B,obs_dim] "
+                    "or tokenized [B,N,token_dim] / [B,T,N,token_dim]; "
+                    f"got {tuple(obs_embedding.shape)}"
+                )
+        elif obs_embedding.ndim == 4:
+            if obs_embedding.shape[-2:] != (self.token_count, self.token_dim):
+                raise ValueError(
+                    f"tokenized obs shape mismatch: got {tuple(obs_embedding.shape)}, "
+                    f"expected trailing dims ({self.token_count}, {self.token_dim})"
+                )
+            tokens = obs_embedding
+        else:
+            raise ValueError(
+                "obs_embedding must be flat [B,T,obs_dim] / [B,obs_dim] "
+                "or tokenized [B,N,token_dim] / [B,T,N,token_dim]; "
+                f"got {tuple(obs_embedding.shape)}"
+            )
+        if tokens.shape[1] > self.max_seq_len:
+            raise ValueError(
+                f"sequence length {tokens.shape[1]} exceeds max_seq_len={self.max_seq_len}"
+            )
+        return tokens.to(device=self._module_device(), dtype=self._module_dtype())
+
+    def tokens_to_flat(self, obs_tokens: torch.Tensor) -> torch.Tensor:
+        """Flatten tokenized action hidden for legacy call sites and sidecars."""
+        if obs_tokens.ndim == 3:
+            if obs_tokens.shape[-2:] != (self.token_count, self.token_dim):
+                raise ValueError(
+                    f"tokenized obs shape mismatch: got {tuple(obs_tokens.shape)}, "
+                    f"expected trailing dims ({self.token_count}, {self.token_dim})"
+                )
+            return obs_tokens.reshape(obs_tokens.shape[0], self.obs_dim)
+        if obs_tokens.ndim == 4:
+            if obs_tokens.shape[-2:] != (self.token_count, self.token_dim):
+                raise ValueError(
+                    f"tokenized obs shape mismatch: got {tuple(obs_tokens.shape)}, "
+                    f"expected trailing dims ({self.token_count}, {self.token_dim})"
+                )
+            return obs_tokens.reshape(obs_tokens.shape[0], obs_tokens.shape[1], self.obs_dim)
+        raise ValueError(
+            f"obs_tokens must be [B,N,D] or [B,T,N,D], got {tuple(obs_tokens.shape)}"
         )
 
     def _obs_embedding_from_obs(
@@ -342,15 +391,9 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         if "obs_embedding" in obs:
             return obs["obs_embedding"]
         if "visual" in obs:
-            visual = obs["visual"]
-            if visual.ndim == 4:
-                visual = visual[:, None]
-            if visual.ndim == 5 and visual.shape[-1] == self.obs_dim:
-                return visual.reshape(visual.shape[0], visual.shape[1], self.obs_dim)
-            if visual.ndim == 3 and visual.shape[-1] == self.obs_dim:
-                return visual
+            return obs["visual"]
         raise KeyError(
-            "RynnDinoWMWorldModel expects obs to contain `obs_embedding` or flattened hidden `visual`."
+            "RynnDinoWMWorldModel expects obs to contain `obs_embedding` or action-hidden `visual`."
         )
 
     def _block_causal_mask(
@@ -386,8 +429,7 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     def encode(
         self, obs: dict[str, torch.Tensor] | torch.Tensor, act: torch.Tensor
     ) -> torch.Tensor:
-        obs_embedding = self._validate_obs_embedding(self._obs_embedding_from_obs(obs))
-        obs_tokens = self.obs_to_tokens(obs_embedding)
+        obs_tokens = self.obs_to_tokens(self._obs_embedding_from_obs(obs))
         steps = obs_tokens.shape[1]
         act_emb = self.encode_act(act)
         obs_emb = self.obs_proj(self.obs_norm(obs_tokens))
@@ -461,10 +503,8 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     def observe_sequence(
         self, batch: dict[str, torch.Tensor]
     ) -> dict[str, dict[str, torch.Tensor]]:
-        obs_embedding = self._validate_obs_embedding(
-            self._obs_embedding_from_obs(batch)
-        )
-        bsz, steps = obs_embedding.shape[:2]
+        obs_tokens = self.obs_to_tokens(self._obs_embedding_from_obs(batch))
+        bsz, steps = obs_tokens.shape[:2]
         actions = self._actions_or_zeros(batch.get("actions"), bsz, steps)
 
         histories: list[torch.Tensor] = []
@@ -473,28 +513,28 @@ class RynnDinoWMWorldModel(BaseWorldModel):
             indices = torch.arange(
                 step - self.num_hist + 1,
                 step + 1,
-                device=obs_embedding.device,
+                device=obs_tokens.device,
             ).clamp_min(0)
-            histories.append(obs_embedding.index_select(1, indices))
+            histories.append(obs_tokens.index_select(1, indices))
             action_histories.append(actions.index_select(1, indices))
 
         latent = {
-            "hidden": obs_embedding,
+            "hidden": obs_tokens,
             "history": torch.stack(histories, dim=1),
             "actions": torch.stack(action_histories, dim=1),
         }
         return {"latent": latent}
 
     def encode_latent(self, hidden: torch.Tensor) -> dict[str, torch.Tensor]:
-        obs_embedding = self._validate_obs_embedding(hidden)
-        bsz = int(obs_embedding.shape[0])
-        if obs_embedding.shape[1] >= self.num_hist:
-            history = obs_embedding[:, -self.num_hist :]
+        obs_tokens = self.obs_to_tokens(hidden)
+        bsz = int(obs_tokens.shape[0])
+        if obs_tokens.shape[1] >= self.num_hist:
+            history = obs_tokens[:, -self.num_hist :]
         else:
-            pad = obs_embedding[:, :1].expand(
-                -1, self.num_hist - obs_embedding.shape[1], -1
+            pad = obs_tokens[:, :1].expand(
+                -1, self.num_hist - obs_tokens.shape[1], -1, -1
             )
-            history = torch.cat([pad, obs_embedding], dim=1)
+            history = torch.cat([pad, obs_tokens], dim=1)
         actions = torch.zeros(
             bsz,
             self.num_hist,
@@ -524,7 +564,7 @@ class RynnDinoWMWorldModel(BaseWorldModel):
 
         history = self._latent_history(latent)
         bsz = int(history.shape[0])
-        next_hidden = self._validate_obs_embedding(hidden)[:, -1]
+        next_hidden = self.obs_to_tokens(hidden)[:, -1]
         action_history = self._latent_actions(latent, bsz).clone()
         action = actions
         if action.ndim == 3:
@@ -559,7 +599,14 @@ class RynnDinoWMWorldModel(BaseWorldModel):
             return hidden
         history = latent.get("history")
         if isinstance(history, torch.Tensor):
-            return history[..., -1, :]
+            if history.ndim == 3:
+                return history[:, -1]
+            if history.ndim == 4:
+                if history.shape[-1] == self.obs_dim:
+                    return history[:, :, -1]
+                return history[:, -1]
+            if history.ndim == 5:
+                return history[:, :, -1]
         raise KeyError("Rynn-DINO latent must contain `hidden` or `history`.")
 
     def _latent_history(
@@ -567,32 +614,30 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     ) -> torch.Tensor:
         if isinstance(latent, dict) and isinstance(latent.get("history"), torch.Tensor):
             history = latent["history"]
-            if history.ndim != 3:
+            if history.ndim == 4 and history.shape[-1] == self.obs_dim:
+                history = history[:, -1]
+            elif history.ndim == 5:
+                history = history[:, -1]
+            if history.ndim not in {3, 4}:
                 raise ValueError(
-                    f"flat latent history must be [B,H,D], got {tuple(history.shape)}"
+                    "latent history must be [B,H,obs_dim], [B,H,N,token_dim], "
+                    f"[B,T,H,obs_dim], or [B,T,H,N,token_dim]; got {tuple(history.shape)}"
                 )
-            return history.to(device=self._module_device(), dtype=self._module_dtype())
+            return self.obs_to_tokens(history)
         hidden = self._latent_hidden(latent)
-        if hidden.ndim == 2:
-            hidden = hidden[:, None]
-        if hidden.ndim != 3:
-            raise ValueError(
-                f"latent hidden must be [B,D] or [B,H,D], got {tuple(hidden.shape)}"
-            )
-        if hidden.shape[1] >= self.num_hist:
-            return hidden[:, -self.num_hist :].to(
-                device=self._module_device(), dtype=self._module_dtype()
-            )
-        pad = hidden[:, :1].expand(-1, self.num_hist - hidden.shape[1], -1)
-        return torch.cat([pad, hidden], dim=1).to(
-            device=self._module_device(), dtype=self._module_dtype()
-        )
+        tokens = self.obs_to_tokens(hidden)
+        if tokens.shape[1] >= self.num_hist:
+            return tokens[:, -self.num_hist :]
+        pad = tokens[:, :1].expand(-1, self.num_hist - tokens.shape[1], -1, -1)
+        return torch.cat([pad, tokens], dim=1)
 
     def _latent_actions(
         self, latent: dict[str, torch.Tensor] | torch.Tensor, batch: int
     ) -> torch.Tensor:
         if isinstance(latent, dict) and isinstance(latent.get("actions"), torch.Tensor):
             actions = latent["actions"]
+            if actions.ndim == 4:
+                actions = actions[:, -1]
             if actions.ndim != 3:
                 raise ValueError(
                     f"flat latent action history must be [B,H,A], got {tuple(actions.shape)}"
@@ -635,7 +680,7 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         z = self.encode(history, action_history)
         pred_z = self.predict(z)
         pred_obs, _ = self.separate_emb(pred_z[:, -1:])
-        next_hidden = pred_obs["visual"].reshape(bsz, self.obs_dim)
+        next_hidden = pred_obs["visual"][:, -1]
 
         if self.num_hist > 1:
             next_history = torch.cat([history[:, 1:], next_hidden[:, None]], dim=1)
@@ -664,25 +709,22 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         self, latent: dict[str, torch.Tensor] | torch.Tensor
     ) -> torch.Tensor:
         hidden = self._latent_hidden(latent)
-        if hidden.ndim == 2:
-            tokens = hidden.reshape(hidden.shape[0], self.token_count, self.token_dim)
-            return tokens.mean(dim=1)
-        if hidden.ndim == 3:
-            tokens = hidden.reshape(
-                hidden.shape[0], hidden.shape[1], self.token_count, self.token_dim
-            )
-            return tokens.mean(dim=2)
-        raise ValueError(
-            f"critic_input expected [B,D] or [B,T,D], got {tuple(hidden.shape)}"
-        )
+        tokens = self.obs_to_tokens(hidden)
+        pooled = tokens.mean(dim=2)
+        if hidden.ndim == 2 or (
+            hidden.ndim == 3
+            and hidden.shape[1:] == (self.token_count, self.token_dim)
+        ):
+            return pooled[:, 0]
+        return pooled
 
     def reward_from_latent(
         self, latent: dict[str, torch.Tensor] | torch.Tensor
     ) -> torch.Tensor:
         hidden = self._latent_hidden(latent)
         reward = self.predict_reward(hidden)
-        if hidden.ndim == 2:
-            return reward.squeeze(-1)
+        if self.obs_to_tokens(hidden).shape[1] == 1:
+            return reward[:, 0]
         return reward
 
     def success_return_from_latent(
@@ -690,8 +732,8 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     ) -> torch.Tensor:
         hidden = self._latent_hidden(latent)
         success_return = self.predict_success_return(hidden)
-        if hidden.ndim == 2:
-            return success_return.squeeze(-1)
+        if self.obs_to_tokens(hidden).shape[1] == 1:
+            return success_return[:, 0]
         return success_return
 
     def continue_from_latent(
@@ -857,10 +899,11 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     def _open_loop_rollout_loss(
         self, obs_embedding: torch.Tensor, actions: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        steps = int(obs_embedding.shape[1])
+        obs_tokens = self.obs_to_tokens(obs_embedding)
+        steps = int(obs_tokens.shape[1])
         context_len = min(self.rollout_context, steps - 1)
         horizon = min(self.rollout_horizon, steps - context_len)
-        zero = obs_embedding.new_zeros(())
+        zero = obs_tokens.new_zeros(())
         if horizon < 1:
             return {
                 "rollout_loss": zero,
@@ -869,11 +912,11 @@ class RynnDinoWMWorldModel(BaseWorldModel):
                 "rollout_horizon": zero,
             }
 
-        seed = obs_embedding[:, :context_len]
+        seed = obs_tokens[:, :context_len]
         rollout_actions = actions[:, : context_len + horizon]
         rollout, _ = self._rollout_hidden(seed, rollout_actions)
         hidden_pred = rollout[:, context_len : context_len + horizon]
-        hidden_target = obs_embedding[:, context_len : context_len + horizon].detach()
+        hidden_target = obs_tokens[:, context_len : context_len + horizon].detach()
         rollout_loss, rollout_mse, rollout_cosine = self._hidden_loss_terms(
             hidden_pred, hidden_target
         )
@@ -909,12 +952,8 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         pred_tokens_all = self.predict_next_tokens(obs_embedding, transition_actions)
         pred_tokens = pred_tokens_all[:, : -self.num_pred]
         target_tokens = obs_tokens[:, self.num_pred :].detach()
-        hidden_pred = pred_tokens.reshape(
-            pred_tokens.shape[0], pred_tokens.shape[1], self.obs_dim
-        )
-        hidden_target = target_tokens.reshape(
-            target_tokens.shape[0], target_tokens.shape[1], self.obs_dim
-        )
+        hidden_pred = pred_tokens
+        hidden_target = target_tokens
 
         loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
             hidden_pred, hidden_target
@@ -1040,13 +1079,13 @@ class RynnDinoWMWorldModel(BaseWorldModel):
     def _rollout_hidden(
         self, obs_embedding: torch.Tensor, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        obs_embedding = self._validate_obs_embedding(obs_embedding)
+        obs_tokens = self.obs_to_tokens(obs_embedding)
         actions = self._validate_actions(actions, int(actions.shape[1]))
-        if obs_embedding.shape[0] != actions.shape[0]:
+        if obs_tokens.shape[0] != actions.shape[0]:
             raise ValueError(
-                f"batch mismatch: obs_embedding batch={obs_embedding.shape[0]}, actions batch={actions.shape[0]}"
+                f"batch mismatch: obs_embedding batch={obs_tokens.shape[0]}, actions batch={actions.shape[0]}"
             )
-        rollout = obs_embedding
+        rollout = obs_tokens
         z_rollout = self.encode(rollout, actions[:, : rollout.shape[1]])
         while rollout.shape[1] < actions.shape[1]:
             context_len = min(self.num_hist, int(rollout.shape[1]))
@@ -1057,7 +1096,7 @@ class RynnDinoWMWorldModel(BaseWorldModel):
             )
             pred_z = self.predict(cur_z)
             pred_obs, _ = self.separate_emb(pred_z[:, -1:])
-            next_hidden = pred_obs["visual"].reshape(rollout.shape[0], 1, self.obs_dim)
+            next_hidden = pred_obs["visual"]
             rollout = torch.cat([rollout, next_hidden], dim=1)
             z_new = self.encode(
                 rollout[:, -1:], actions[:, rollout.shape[1] - 1 : rollout.shape[1]]
@@ -1087,10 +1126,8 @@ class RynnDinoWMWorldModel(BaseWorldModel):
             )
         rollout, _ = self._rollout_hidden(obs_embedding, actions)
         out = {
-            "obs_embedding": rollout,
-            "obs_tokens": rollout.reshape(
-                rollout.shape[0], rollout.shape[1], self.token_count, self.token_dim
-            ),
+            "obs_embedding": self.tokens_to_flat(rollout),
+            "obs_tokens": rollout,
         }
         if self.reward_enabled:
             out["reward_pred"] = self.predict_reward(rollout)
@@ -1174,7 +1211,7 @@ class OFTDinoWMWorldModel(RynnDinoWMWorldModel):
 
     def __init__(
         self,
-        obs_dim: int = 8 * 4096,
+        obs_dim: int | None = None,
         action_dim: int = 7,
         token_count: int = 8,
         token_dim: int = 4096,

@@ -134,7 +134,7 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
-        "vla_pi0_query": "dreamer_vla.runners.VLASFTRunner",
+        "vla_rynnvla_action_head": "dreamer_vla.runners.VLASFTRunner",
         "vla_sft_one_trajectory": "dreamer_vla.runners.VLASFTRunner",
         "world_model_dinowm_chunk": "dreamer_vla.runners.RynnDinoWMRunner",
         "world_model_dinowm_step": "dreamer_vla.runners.RynnDinoWMRunner",

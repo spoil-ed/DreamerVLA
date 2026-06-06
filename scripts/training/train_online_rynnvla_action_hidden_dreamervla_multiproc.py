@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla_multienv import (
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (
     OnlineReplay,
     _init_distributed,
     build_encoder,
@@ -87,10 +87,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--world-model-ckpt", required=True)
     parser.add_argument(
         "--vla-ckpt-path",
-        default=str(PROJECT_ROOT / "data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model"),
+        default=str(PROJECT_ROOT / "data/ckpts/VLA_model_256/libero_goal"),
     )
     parser.add_argument("--encoder-state-ckpt", default="")
-    parser.add_argument("--action-head-type", default="legacy", choices=["legacy", "pi0_query"])
+    parser.add_argument("--action-head-type", default="legacy", choices=["legacy"])
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument("--task-ids", default="0,1,2,3")
     parser.add_argument("--seed", type=int, default=7)
@@ -252,9 +252,13 @@ def main() -> None:
     online_log_f = (logs_dir / f"online_rank{rank}.jsonl").open("a", encoding="utf-8")
 
     cfg = OmegaConf.load(args.config)
-    expected_obs_dim = 35840 if args.action_head_type == "legacy" else 5120
-    cfg_obs_dim = int(OmegaConf.select(cfg, "world_model.obs_dim"))
-    if cfg_obs_dim != expected_obs_dim:
+    expected_obs_dim = (
+        int(OmegaConf.select(cfg, "policy.time_horizon"))
+        * int(OmegaConf.select(cfg, "policy.action_dim"))
+        * int(OmegaConf.select(cfg, "policy.action_hidden_dim"))
+    )
+    cfg_obs_dim = OmegaConf.select(cfg, "world_model.obs_dim")
+    if cfg_obs_dim is not None and int(cfg_obs_dim) != expected_obs_dim:
         raise ValueError(
             f"--action-head-type={args.action_head_type} produces obs dim {expected_obs_dim}, "
             f"but config world_model.obs_dim={cfg_obs_dim}."

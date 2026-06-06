@@ -107,7 +107,7 @@ TASK=libero_goal RUN_ACTION_HIDDEN=0 bash scripts/preprocess/prepare_libero_data
 ### VLA SFT
 
 ```bash
-CONFIG=vla_pi0_query NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
+CONFIG=vla_rynnvla_action_head NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash scripts/train_vla.sh task=libero_goal
 ```
 
@@ -143,7 +143,7 @@ bash scripts/train_dreamervla.sh \
 
 Hydra config 用法只需要记住两点：
 
-- `CONFIG=<route>` 选择训练路线，例如 `vla_pi0_query`、`world_model_dinowm_chunk`、`dreamervla_rynn_dino_wm_wmpo_outcome`。
+- `CONFIG=<route>` 选择训练路线，例如 `vla_rynnvla_action_head`、`world_model_dinowm_chunk`、`dreamervla_rynn_dino_wm_wmpo_outcome`。
 - trailing args 是 Hydra override，例如 `task=libero_object`、`training.max_steps=1`、`task.hdf5_dir=/abs/path`。
 
 ## 5. 评估
@@ -177,7 +177,7 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
 轻量验证：
 
 ```bash
-/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests -q
+python -m pytest tests/unit_tests -q
 ```
 
 数据路径验证：

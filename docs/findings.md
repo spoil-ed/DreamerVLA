@@ -15,10 +15,10 @@
 
 ## DINO-WM Action-Chunk Route
 
-- `/mnt/data/spoil/workspace/DreamerVLA` contains the source-complete DINO-WM implementation; this checkout has `dreamer_vla/models/world_model/rynn_dino_wm.py`, `dreamer_vla/models/world_model/rynn_dino_wm_chunk.py`, and `dreamer_vla/runners/rynn_dino_wm_runner.py`.
+- This checkout contains the source-complete DINO-WM implementation: `dreamer_vla/models/world_model/rynn_dino_wm.py`, `dreamer_vla/models/world_model/rynn_dino_wm_chunk.py`, and `dreamer_vla/runners/rynn_dino_wm_runner.py`.
 - `ChunkAwareRynnDinoWMWorldModel` adds `predict_next_chunk()` over a fixed `chunk_size` and does not add trainable parameters relative to `RynnDinoWMWorldModel`, so existing m1024/d6 checkpoints load directly.
 - Reused the completed 10k m1024/d6 checkpoint:
-  `/mnt/data/spoil/workspace/DreamerVLA/data/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/latest.ckpt`.
+  `data/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/latest.ckpt`.
 - The first foreground debug run verified dataset construction, 4-rank DDP, strict resume at `global_step=10000`, and `ChunkAwareRynnDinoWMWorldModel(chunk_size=5)`.
 
 ## 2026-05-27 GPU45 One-Trajectory Pipeline

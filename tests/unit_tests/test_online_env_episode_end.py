@@ -39,7 +39,7 @@ def test_online_training_script_separates_episode_horizon_from_training_budget()
 ):
     repo = Path(__file__).resolve().parents[2]
     script = (
-        repo / "scripts/training/train_online_pi0_action_hidden_dreamervla.py"
+        repo / "scripts/training/train_online_rynnvla_action_hidden_dreamervla.py"
     ).read_text(encoding="utf-8")
 
     assert "--episode-horizon" in script

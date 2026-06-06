@@ -2,7 +2,7 @@
 LIBERO demo action-hiddens.
 
 Schema per sample (matches WMPO's reward_model/videomae.py expectations):
-    <key>.latent.npy  shape [T, latent_dim=35840] (float16)
+    <key>.latent.npy  shape [T, latent_dim] (float16)
     <key>.meta.json   {"finish_step": T-1, "complete": true, "task_id": int, "demo_id": int}
 
 All demo episodes are successful, so this is a v1 dataset of positives.

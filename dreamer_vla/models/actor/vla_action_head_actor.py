@@ -8,7 +8,6 @@ import torch.nn as nn
 from dreamer_vla.models.actor.base_actor import BaseActor
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
-    PerTokenRegressionActionHead,
 )
 
 
@@ -40,16 +39,12 @@ class VLAActionHeadActor(BaseActor):
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
         self.adapter_type = str(adapter_type).lower()
-        self.action_head_type = str(action_head_type)
+        self.action_head_type = str(action_head_type).lower()
         if self.adapter_type not in {"mlp", "identity"}:
             raise ValueError("adapter_type must be one of {'mlp', 'identity'}")
-        if self.action_head_type not in {"legacy", "pi0_query"}:
-            raise ValueError("action_head_type must be one of {'legacy', 'pi0_query'}")
-        self.action_token_count = (
-            self.time_horizon
-            if self.action_head_type == "pi0_query"
-            else self.time_horizon * self.action_dim
-        )
+        if self.action_head_type != "legacy":
+            raise ValueError("VLAActionHeadActor action_head_type must be 'legacy'")
+        self.action_token_count = self.time_horizon * self.action_dim
 
         if self.adapter_type == "identity":
             if int(hidden_dim) != self.hidden_size:
@@ -86,19 +81,12 @@ class VLAActionHeadActor(BaseActor):
             num_layers=int(num_encoder_layers),
             norm=nn.LayerNorm(self.reduced_hidden_size),
         )
-        if self.action_head_type == "pi0_query":
-            self.output_projection = PerTokenRegressionActionHead(
-                self.reduced_hidden_size,
-                self.reduced_hidden_size,
-                self.action_dim,
-            )
-        else:
-            self.output_projection = L1RegressionActionHead(
-                self.reduced_hidden_size,
-                self.reduced_hidden_size,
-                self.time_horizon,
-                self.action_dim,
-            )
+        self.output_projection = L1RegressionActionHead(
+            self.reduced_hidden_size,
+            self.reduced_hidden_size,
+            self.time_horizon,
+            self.action_dim,
+        )
 
         self.log_std = nn.Parameter(
             torch.full((self.action_dim,), float(initial_log_std))
@@ -127,10 +115,7 @@ class VLAActionHeadActor(BaseActor):
             expected = self.action_token_count * self.hidden_size
             got = int(emb.shape[-1])
             if got != expected:
-                if self.action_head_type == "pi0_query":
-                    ckpt_horizon = got // max(self.hidden_size, 1)
-                else:
-                    ckpt_horizon = got // max(self.action_dim * self.hidden_size, 1)
+                ckpt_horizon = got // max(self.action_dim * self.hidden_size, 1)
                 raise ValueError(
                     "VLA action head checkpoint is not compatible with this actor: "
                     f"configured action_head_type={self.action_head_type}, "
@@ -175,8 +160,6 @@ class VLAActionHeadActor(BaseActor):
 
         action_part = out[:, 1:, :]
         actions = self.output_projection(action_part)
-        if self.action_head_type == "pi0_query":
-            return actions.reshape(bs, self.time_horizon, self.action_dim)
         return actions
 
     def _action_chunk_from_sequence(
@@ -297,8 +280,6 @@ class VLAActionHeadActor(BaseActor):
             action_outputs.append(out[idx, start:end, :])
         action_part = torch.stack(action_outputs, dim=0)
         actions = self.output_projection(action_part)
-        if self.action_head_type == "pi0_query":
-            return actions.reshape(batch_size, self.time_horizon, self.action_dim)
         return actions
 
     def _action_chunk(self, batch: dict[str, Any]) -> torch.Tensor:

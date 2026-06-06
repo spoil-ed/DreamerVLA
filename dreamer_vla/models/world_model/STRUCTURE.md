@@ -46,7 +46,7 @@ All are instantiable via Hydra `_target_`, e.g.:
 hidden_decoder:
   _target_: dreamer_vla.models.world_model.common.ResMLPHead
   in_dim: 10240
-  out_dim: 35840
+  out_dim: null  # derived from token_count * token_dim
   layers: 4
   units: 16384
 ```
@@ -57,7 +57,7 @@ Everything that's part of the DreamerV3 lineage stays together:
 
 * **Dynamics** — `DreamerV3RSSM` (GRU + block-diagonal)
 * **Pixel I/O** — `DreamerV3PixelEncoder/Decoder`, `DreamerV3TokenEncoder/Decoder`
-* **Hidden decoders** (pi0 35×1024 action_hidden) — `Pi0StyleHiddenDecoder`, `PerTokenMLPHead`, `FullHiddenSequenceDecoder`
+* **Hidden decoders** (legacy RynnVLA action-hidden tokens) — legacy transformer decoder, `PerTokenMLPHead`, `FullHiddenSequenceDecoder`
 * **Obs encoder** — `_RynnBackboneObsEncoder` (frozen RynnVLA backbone → embed)
 * **Heads** — `BinaryRewardHead`, `SymexpTwoHotHead`, `_make_reward_head`, `_reward_loss`/`_pred`
 * **Legacy exports** — concrete WMs are lazily re-exported so old Hydra targets under `dreamerv3_torch` still work
@@ -93,7 +93,7 @@ Concrete TSSM WMs now live in:
 ```yaml
 world_model:
   _target_: dreamer_vla.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
-  obs_dim: 35840
+  obs_dim: null
   hidden_decoder_kind: per_token_mlp     # mlp | resnet | pi0_transformer | per_token_mlp
   hidden_decoder_layers: 2
   hidden_decoder_units: 2048
@@ -107,7 +107,7 @@ world_model:
 ```yaml
 world_model:
   _target_: dreamer_vla.models.world_model.dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
-  obs_dim: 35840
+  obs_dim: null
   ...
   hidden_decoder:
     _target_: dreamer_vla.models.world_model.dreamerv3_torch.PerTokenMLPHead

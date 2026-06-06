@@ -420,7 +420,10 @@ class LatentClassifierRunner(BaseRunner):
                     obs_pooled = None
                     T = 0
                 else:
-                    reshaped = obs[: T_chunk * K].reshape(T_chunk, K, -1)
+                    trailing_shape = obs.shape[1:]
+                    reshaped = obs[: T_chunk * K].reshape(
+                        T_chunk, K, *trailing_shape
+                    )
                     if chunk_pool == "last":
                         obs_pooled = reshaped[:, -1]
                     elif chunk_pool == "first":
@@ -469,7 +472,7 @@ class LatentClassifierRunner(BaseRunner):
     # --------------------------- io helpers ----------------------------
 
     def _save_named(self, name: str, *, extra: dict | None = None) -> None:
-        """Save in the format consumed by scripts/train_online_pi0_action_hidden_dreamervla.py.
+        """Save in the format consumed by scripts/train_online_rynnvla_action_hidden_dreamervla.py.
 
         Schema (matches the old v2/v3 trainer + WMPO predict_success consumer):
             model      : nn.Module.state_dict()

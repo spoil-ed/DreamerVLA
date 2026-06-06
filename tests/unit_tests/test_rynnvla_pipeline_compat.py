@@ -10,7 +10,9 @@ from omegaconf import OmegaConf
 from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from dreamer_vla.models.vla_actor import Pi0ActionHiddenActor, VLAActionHeadActor
+from dreamer_vla.models.vla_actor import RynnVLAActionHiddenActor, VLAActionHeadActor
+from dreamer_vla.models.reward import LatentSuccessClassifier
+from dreamer_vla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
 from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner
 from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
 
@@ -39,7 +41,7 @@ def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
             expected_model_path=None,
             expected_encoder_state_ckpt=None,
             expected_time_horizon=5,
-            expected_action_head_type="pi0_query",
+            expected_action_head_type="old_head",
             require_preprocess_config=True,
         )
 
@@ -49,7 +51,7 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
         json.dumps(
             {
                 "time_horizon": 5,
-                "action_head_type": "pi0_query",
+                "action_head_type": "legacy",
             }
         ),
         encoding="utf-8",
@@ -65,7 +67,7 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
             expected_model_path="/tmp/model",
             expected_encoder_state_ckpt=None,
             expected_time_horizon=5,
-            expected_action_head_type="pi0_query",
+            expected_action_head_type="legacy",
             require_preprocess_config=True,
         )
 
@@ -74,12 +76,12 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
             expected_model_path=None,
             expected_encoder_state_ckpt="/tmp/encoder.ckpt",
             expected_time_horizon=5,
-            expected_action_head_type="pi0_query",
+            expected_action_head_type="legacy",
             require_preprocess_config=True,
         )
 
 
-def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
+def test_vla_action_head_actor_uses_rynnvla_action_tokens() -> None:
     actor = VLAActionHeadActor(
         hidden_dim=16,
         action_dim=3,
@@ -88,14 +90,14 @@ def test_pi0_query_vla_actor_uses_one_query_per_action_step() -> None:
         hidden_size_factor=0.25,
         num_encoder_layers=1,
         adapter_type="identity",
-        action_head_type="pi0_query",
+        action_head_type="legacy",
     )
 
     chunk = actor(
         {"mode": "sample", "hidden": torch.randn(2, 16), "deterministic": True}
     )[2]["action_chunk"]
 
-    assert actor.action_token_embeddings.weight.shape == (1, 4 * 16)
+    assert actor.action_token_embeddings.weight.shape == (1, 4 * 3 * 16)
     assert chunk.shape == (2, 4, 3)
 
 
@@ -114,17 +116,17 @@ def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> Non
             hidden_size_factor=0.25,
             num_encoder_layers=1,
             adapter_type="identity",
-            action_head_type="pi0_query",
+            action_head_type="legacy",
             init_action_head_ckpt=str(path),
         )
 
 
-def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
+def test_dreamer_eval_keeps_rynnvla_action_hidden_tokens_for_wm() -> None:
     workspace = EvalLiberoVLARunner.__new__(EvalLiberoVLARunner)
     workspace.cfg = OmegaConf.create(
         {
             "eval": {"obs_hidden_source": "action_query", "target_token_id": 10004},
-            "encoder": {"action_head_type": "pi0_query"},
+            "encoder": {"action_head_type": "legacy"},
         }
     )
 
@@ -151,8 +153,8 @@ def test_dreamer_eval_flattens_pi0_action_query_hidden_for_wm() -> None:
 
     obs_embedding = workspace._obs_embedding_for_wm([[11, 12, 13]])
 
-    assert obs_embedding.shape == (1, 20)
-    assert obs_embedding.tolist() == action_hidden.reshape(1, -1).tolist()
+    assert obs_embedding.shape == (1, 5, 4)
+    assert obs_embedding.tolist() == action_hidden.tolist()
 
 
 def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
@@ -169,19 +171,19 @@ def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
     assert OmegaConf.select(cfg, "eval.task_suite_name") == "libero_goal"
 
 
-def test_pi0_action_hidden_actor_decodes_flattened_action_hidden() -> None:
-    actor = Pi0ActionHiddenActor(
-        hidden_dim=20,
+def test_rynnvla_action_hidden_actor_decodes_flattened_action_hidden() -> None:
+    actor = RynnVLAActionHiddenActor(
         action_hidden_dim=4,
         action_dim=3,
         time_horizon=5,
         adapter_type="identity",
     )
+    assert actor.hidden_dim == 5 * 3 * 4
 
     action, log_prob, extra = actor(
         {
             "mode": "sample",
-            "hidden": torch.randn(2, 20),
+            "hidden": torch.randn(2, actor.hidden_dim),
             "deterministic": True,
         }
     )
@@ -191,9 +193,105 @@ def test_pi0_action_hidden_actor_decodes_flattened_action_hidden() -> None:
     assert extra["action_chunk"].shape == (2, 5, 3)
 
 
-def test_pi0_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
-    source = Pi0ActionHiddenActor(
-        hidden_dim=20,
+def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
+    model = RynnDinoWMWorldModel(
+        obs_dim=None,
+        action_dim=3,
+        token_count=None,
+        token_dim=4,
+        time_horizon=5,
+        model_dim=16,
+        depth=1,
+        heads=4,
+        mlp_dim=32,
+        max_seq_len=8,
+    )
+
+    assert model.token_count == 5 * 3
+    assert model.obs_dim == 5 * 3 * 4
+
+
+def test_rynn_dino_wm_accepts_tokenized_action_hidden_without_flattening() -> None:
+    model = RynnDinoWMWorldModel(
+        obs_dim=None,
+        action_dim=3,
+        token_count=None,
+        token_dim=4,
+        time_horizon=5,
+        model_dim=16,
+        depth=1,
+        heads=4,
+        mlp_dim=32,
+        max_seq_len=8,
+    )
+    tokens = torch.randn(2, 15, 4)
+    flat = tokens.reshape(2, -1)
+
+    assert model.obs_to_tokens(tokens).shape == (2, 1, 15, 4)
+    assert torch.allclose(model.obs_to_tokens(tokens)[:, 0], tokens)
+    assert torch.allclose(model.obs_to_tokens(flat)[:, 0], tokens)
+
+
+def test_rynn_dino_wm_encode_latent_preserves_action_hidden_tokens() -> None:
+    model = RynnDinoWMWorldModel(
+        obs_dim=None,
+        action_dim=3,
+        token_count=None,
+        token_dim=4,
+        time_horizon=5,
+        model_dim=16,
+        depth=1,
+        heads=4,
+        mlp_dim=32,
+        max_seq_len=8,
+        num_hist=2,
+    )
+    tokens = torch.randn(2, 15, 4)
+
+    latent = model.encode_latent(tokens)
+
+    assert latent["hidden"].shape == (2, 15, 4)
+    assert latent["history"].shape == (2, 2, 15, 4)
+    assert model.actor_input(latent).shape == (2, 15, 4)
+    assert model.critic_input(latent).shape == (2, 4)
+
+
+def test_latent_success_classifier_derives_latent_dim() -> None:
+    classifier = LatentSuccessClassifier(
+        latent_dim=None,
+        action_dim=3,
+        time_horizon=5,
+        token_dim=4,
+        window=2,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        head_type="transformer",
+    )
+
+    assert classifier.cfg.latent_dim == 5 * 3 * 4
+
+
+def test_latent_success_classifier_accepts_tokenized_windows() -> None:
+    classifier = LatentSuccessClassifier(
+        latent_dim=None,
+        action_dim=3,
+        time_horizon=5,
+        token_dim=4,
+        window=2,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        head_type="linear",
+    )
+
+    logits = classifier(torch.randn(3, 2, 15, 4))
+
+    assert logits.shape == (3, 2)
+
+
+def test_rynnvla_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
+    source = RynnVLAActionHiddenActor(
         action_hidden_dim=4,
         action_dim=3,
         time_horizon=5,
@@ -210,8 +308,7 @@ def test_pi0_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
     path = tmp_path / "vla.ckpt"
     torch.save(ckpt, path)
 
-    actor = Pi0ActionHiddenActor(
-        hidden_dim=20,
+    actor = RynnVLAActionHiddenActor(
         action_hidden_dim=4,
         action_dim=3,
         time_horizon=5,
@@ -223,7 +320,7 @@ def test_pi0_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
         assert torch.equal(actor.output_projection.state_dict()[key], value)
 
 
-def test_pi0_action_hidden_actor_rejects_ckpt_without_output_projection(
+def test_rynnvla_action_hidden_actor_rejects_ckpt_without_output_projection(
     tmp_path,
 ) -> None:
     path = tmp_path / "vla_without_projection.ckpt"
@@ -232,8 +329,7 @@ def test_pi0_action_hidden_actor_rejects_ckpt_without_output_projection(
     )
 
     with pytest.raises(RuntimeError, match="output_projection"):
-        Pi0ActionHiddenActor(
-            hidden_dim=20,
+        RynnVLAActionHiddenActor(
             action_hidden_dim=4,
             action_dim=3,
             time_horizon=5,

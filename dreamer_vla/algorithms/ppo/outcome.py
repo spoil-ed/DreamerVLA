@@ -10,7 +10,7 @@ signal per successful rollout, none otherwise.
 This is the DreamerVLA-side reproduction of the WMPO/verl PPO loop. The
 rollout drives the WM in chunk mode (``ChunkAwareRynnDinoWMWorldModel.
 predict_next_chunk``) so one WM call advances ``action_chunks_len`` env
-steps in lockstep with the pi0 actor's K-step action chunk.
+steps in lockstep with the RynnVLA actor's K-step action chunk.
 
 Contrast with ``dino_wmpo_dense_step`` (``ppo/dense.py``), which decodes a
 dense per-step state-reward from the WM hidden at every imagined env-step.
@@ -19,7 +19,7 @@ dense per-step state-reward from the WM hidden at every imagined env-step.
         → encode to WM latent
         → repeat for GRPO group
         → loop episode_max_steps // K chunks:
-              pi0 actor (chunk-output)  → action_chunk[B, K, 7]
+              RynnVLA actor (chunk-output)  → action_chunk[B, K, 7]
               chunk WM (chunk-input)     → next K latent frames
               accumulate K latents to a video buffer
         → LatentSuccessClassifier.predict_success on the video
@@ -71,7 +71,7 @@ def build_valid_chunk_count(
     Args:
         finish_step: [B] env-step index of the success frame, or T_max-1 for
             failed episodes.
-        chunk_size: K, env-steps per actor decision (e.g., 5 for pi0).
+        chunk_size: K, env-steps per actor decision (e.g., 5 for RynnVLA).
         num_chunks: total chunks in the episode (=T_max // K).
 
     Returns:
@@ -146,7 +146,7 @@ def dino_wmpo_outcome_step(
     """One WMPO PPO step.
 
     Shape conventions:
-        K       = algorithm_cfg.wmpo.chunk_size (pi0 actor time_horizon, default 5)
+        K       = algorithm_cfg.wmpo.chunk_size (RynnVLA actor time_horizon, default 5)
         T_max   = algorithm_cfg.wmpo.episode_max_steps (libero_goal: 300)
         num_chunks = T_max // K
         group_size = algorithm_cfg.ppo_rollouts_per_start
@@ -218,7 +218,7 @@ def dino_wmpo_outcome_step(
             )
             with torch.no_grad():
                 # Stochastic full action chunk. This is the PPO action unit for
-                # pi0/WMPO: one policy decision emits K env actions.
+                # RynnVLA/WMPO: one policy decision emits K env actions.
                 action_chunk, old_lp, _sample_extra = policy(
                     {
                         "mode": "sample",

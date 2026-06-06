@@ -1,6 +1,6 @@
 # @package _global_
-# Chunk-aware DINO-WM predictor (true Plan B) over pi0 legacy action hidden.
-# Target hidden shape per env-step: 5 * 7 * 1024 = 35840.
+# Chunk-aware DINO-WM predictor (true Plan B) over RynnVLA legacy action hidden.
+# Target hidden shape is derived from time_horizon * action_dim * token_dim.
 #
 # Objective: K-step chunk-as-one-input prediction.
 #   Given h_history (H frames) + chunk actions [a_0..a_{K-1}], predict
@@ -55,7 +55,7 @@ dataset:
   # we keep 32 for parity with the per-step ckpt training run.
   _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
-  hidden_dir: ${task.pi0_legacy_action_hidden_dir}
+  hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
   expected_encoder_state_ckpt: null
   expected_time_horizon: ${task.time_horizon}
@@ -100,6 +100,7 @@ world_model:
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
   token_dim: ${task.legacy_action_hidden.token_dim}
+  time_horizon: ${task.time_horizon}
   # Matches the existing chunkaware_pinned ckpt (model_dim=1024) so warm-start
   # from that ckpt is shape-compatible (only mask_obs_token is missing → fresh).
   model_dim: 1024

@@ -23,7 +23,7 @@ CKPT="${CKPT:-${DVLA_ROOT}/data/ckpts/VLA_model_256/${TASK}}"
 TRAJ_OFFSET="${TRAJ_OFFSET:-0}"
 TRAJ_PER_TASK="${TRAJ_PER_TASK:-1}"
 RUN_TAG="${RUN_TAG:-${TASK}_one_traj_o${TRAJ_OFFSET}_gpu45_$(date +%Y%m%d_%H%M%S)}"
-export OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/vla/pi0_query_one_trajectory/${RUN_TAG}}"
+export OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/vla/rynnvla_action_head_one_trajectory/${RUN_TAG}}"
 
 [[ -f "${CKPT}/config.json" ]] || { echo "ERROR: missing pretrained checkpoint: ${CKPT}/config.json" >&2; exit 3; }
 HORIZON="$("${PYTHON}" -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c.get("time_horizon") or c.get("action_horizon") or "")' "${CKPT}/config.json")"

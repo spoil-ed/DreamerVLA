@@ -159,12 +159,12 @@ class StochasticBottleneck(nn.Module):
     def __init__(self, input_dim=4096, latent_dim=32):
         self.fc_mu = nn.Linear(input_dim, latent_dim)
         self.fc_logvar = nn.Linear(input_dim, latent_dim)
-    
+
     def forward(self, z_sem):
         mu = self.fc_mu(z_sem)
         logvar = self.fc_logvar(z_sem)
         z_phys = mu + torch.randn_like(mu) * (0.5 * logvar).exp()
-        
+
         # KL regularization
         kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(-1)
         return z_phys, kl
@@ -182,18 +182,18 @@ class StochasticBottleneck(nn.Module):
 class RSSM(nn.Module):
     def __init__(self, latent_dim=32, hidden_dim=256, action_dim=7):
         self.gru = nn.GRUCell(latent_dim + action_dim, hidden_dim)
-        self.prior = nn.Sequential(nn.Linear(hidden_dim, 64), nn.ELU(), 
+        self.prior = nn.Sequential(nn.Linear(hidden_dim, 64), nn.ELU(),
                                    nn.Linear(64, 2 * latent_dim))
         self.posterior = nn.Sequential(nn.Linear(hidden_dim + latent_dim, 64), nn.ELU(),
                                        nn.Linear(64, 2 * latent_dim))
-    
+
     def forward(self, h_prev, z_prev, a_prev, z_sem=None):
         # Deterministic
         h = self.gru(torch.cat([z_prev, a_prev], -1), h_prev)
-        
+
         # Prior (for imagination)
         prior_mu, prior_logvar = self.prior(h).chunk(2, -1)
-        
+
         # Posterior (for training, needs z_sem)
         if z_sem is not None:
             post_mu, post_logvar = self.posterior(torch.cat([h, z_sem], -1)).chunk(2, -1)
@@ -202,7 +202,7 @@ class RSSM(nn.Module):
         else:
             z = prior_mu + torch.randn_like(prior_mu) * (0.5 * prior_logvar).exp()
             kl = 0
-        
+
         return h, z, kl
 ```
 
@@ -217,7 +217,7 @@ class SimpleDynamics(nn.Module):
             nn.LayerNorm(hidden_dim), nn.ELU(),
             nn.Linear(hidden_dim, latent_dim)
         )
-    
+
     def forward(self, z, a):
         return z + self.net(torch.cat([z, a], -1))  # 残差
 ```
@@ -231,7 +231,7 @@ class RewardHead(nn.Module):
             nn.Linear(input_dim, hidden_dim), nn.ELU(),
             nn.Linear(hidden_dim, 1)
         )
-    
+
     def forward(self, state):
         # state = h_t (RSSM) 或 z_t (简化版)
         return self.net(state)
@@ -248,17 +248,17 @@ for batch in replay_buffer:
     # 1. VLA 编码 (frozen)
     with torch.no_grad():
         z_sem = vla_encoder(obs)
-    
+
     # 2. Bottleneck
     z_phys, kl_bn = bottleneck(z_sem)
-    
+
     # 3. World model forward
     # 方案 A: h, z, kl_dyn = rssm(h_prev, z_prev, a_prev, z_phys)
     # 方案 B: z_next = dynamics(z_phys, action)
-    
+
     # 4. Prediction
     r_pred = reward_head(state)
-    
+
     # 5. Loss
     loss = F.mse_loss(r_pred, reward) + β * kl_dyn + γ * kl_bn
 ```
@@ -273,14 +273,14 @@ imagined_states, rewards, values = [], [], []
 
 for t in range(horizon):
     action = actor(state)
-    
+
     # Imagine next state
     # 方案 A: h, z, _ = rssm.imagine(h, z, action)
     # 方案 B: z = dynamics(z, action)
-    
+
     r = reward_head(state)
     v = value_head(state)
-    
+
     imagined_states.append(state)
     rewards.append(r)
     values.append(v)

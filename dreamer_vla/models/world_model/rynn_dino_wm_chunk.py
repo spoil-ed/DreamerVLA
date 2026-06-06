@@ -22,7 +22,7 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
     control horizons and VLA chunk action generation; it is NOT K stacked
     autoregressive ``predict_next`` calls (the previous loop-based variant).
 
-    The K dimension is locked to the host pi0 actor's ``time_horizon`` and is
+    The K dimension is locked to the host RynnVLA actor's ``time_horizon`` and is
     validated at construction and at every call.
     """
 
@@ -119,15 +119,16 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         """Advance the WM by ``chunk_size`` env-steps in ONE transformer call.
 
         Args:
-            latent: dict with ``history`` [B,H,obs_dim], ``actions`` [B,H,A],
-                ``hidden`` [B,obs_dim]; or a raw hidden tensor.
+            latent: dict with ``history`` [B,H,N,token_dim], ``actions`` [B,H,A],
+                ``hidden`` [B,N,token_dim]; flat legacy hidden tensors are also
+                accepted and normalized at the boundary.
             action_chunk: [B, K, A] where K == ``self.chunk_size``.
 
         Returns dict with:
-            ``hidden``     [B, obs_dim]    — last predicted frame h_K.
-            ``hidden_seq`` [B, K, obs_dim] — all K predicted frames h_1..h_K.
-            ``history``    [B, H, obs_dim] — rolled history after K steps.
-            ``actions``    [B, H, A]       — rolled action history, last slot zero.
+            ``hidden``     [B, N, token_dim]    — last predicted frame h_K.
+            ``hidden_seq`` [B, K, N, token_dim] — all K predicted frames h_1..h_K.
+            ``history``    [B, H, N, token_dim] — rolled history after K steps.
+            ``actions``    [B, H, A]            — rolled action history, last slot zero.
         """
         if action_chunk.ndim != 3 or action_chunk.shape[-1] != self.action_dim:
             raise ValueError(
@@ -157,7 +158,7 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         pred_z = self._chunk_forward_z(history, action_history, future_chunk_actions)
         target_z = pred_z[:, H - 1 : H - 1 + K]
         pred_obs, _ = self.separate_emb(target_z)
-        hidden_seq = pred_obs["visual"].reshape(bsz, K, self.obs_dim)
+        hidden_seq = pred_obs["visual"]
         next_hidden = hidden_seq[:, -1]
 
         all_hidden = torch.cat([history, hidden_seq], dim=1)
@@ -201,11 +202,8 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         actions = batch["actions"]
         H = self.num_hist
         K = self.chunk_size
-        if obs.ndim != 3:
-            raise ValueError(
-                f"obs_embedding must be [B,T,obs_dim], got {tuple(obs.shape)}"
-            )
-        T = int(obs.shape[1])
+        obs_tokens = self.obs_to_tokens(obs)
+        T = int(obs_tokens.shape[1])
         if T < H + K:
             raise ValueError(f"chunk_loss requires T >= H+K = {H + K}, got T={T}")
         if actions.shape[1] < H - 1 + K:
@@ -213,13 +211,12 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
                 f"actions length {actions.shape[1]} too short for chunk loss (need >= {H - 1 + K})"
             )
 
-        obs = self._validate_obs_embedding(obs)
         actions = self._validate_actions(actions, int(actions.shape[1]))
-        bsz = int(obs.shape[0])
+        bsz = int(obs_tokens.shape[0])
 
-        history = obs[:, :H]
+        history = obs_tokens[:, :H]
         chunk_actions = actions[:, H - 1 : H - 1 + K]
-        hidden_target = obs[:, H : H + K].detach()
+        hidden_target = obs_tokens[:, H : H + K].detach()
 
         action_history = torch.zeros(
             bsz,
@@ -271,8 +268,8 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
                     "history": out_c["history"],
                     "actions": out_c["actions"],
                 }
-            rollout_pred = torch.cat(rollout_preds, dim=1)  # [B, (N-1)*K, obs_dim]
-            rollout_target = obs[:, H + K : H + N * K].detach()  # [B, (N-1)*K, obs_dim]
+            rollout_pred = torch.cat(rollout_preds, dim=1)
+            rollout_target = obs_tokens[:, H + K : H + N * K].detach()
             rollout_loss_total, rollout_mse, rollout_cosine = self._hidden_loss_terms(
                 rollout_pred, rollout_target
             )

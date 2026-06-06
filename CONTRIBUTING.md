@@ -42,7 +42,7 @@ If you have done that, push your changes to your forked repository:
 git push origin feature/your-feature-name
 ```
 
-Then, open a [Pull Request](https://github.com/spoil-ed/DreamerVLA/compare) against the `main` branch of the original repository. 
+Then, open a [Pull Request](https://github.com/spoil-ed/DreamerVLA/compare) against the `main` branch of the original repository.
 We will review your changes and run CI tests before merging them.
 
 ## Pull Request Guidelines

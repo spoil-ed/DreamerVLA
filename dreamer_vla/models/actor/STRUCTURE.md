@@ -8,15 +8,14 @@ compatibility import paths for existing code.
 | --- | --- |
 | `base_actor.py` | `BaseActor` and shared Gaussian action distribution helper. |
 | `vla_action_head_actor.py` | `VLAActionHeadActor`, the full VLA ActionHead reuse path. |
-| `pi0_action_hidden_actor.py` | `Pi0ActionHiddenActor`, the action-hidden DreamerVLA actor path. |
+| `rynnvla_action_hidden_actor.py` | `RynnVLAActionHiddenActor`, the action-hidden DreamerVLA actor path. |
 | `vla_policy.py` | `SharedObservationEmbedding` and `VLAPolicy`. |
 | `__init__.py` | Public actor exports. |
 
 Preferred new imports:
 
 ```python
-from dreamer_vla.models.actor import Pi0ActionHiddenActor, VLAActionHeadActor, VLAPolicy
+from dreamer_vla.models.actor import RynnVLAActionHiddenActor, VLAActionHeadActor, VLAPolicy
 ```
 
-Existing Hydra targets such as `dreamer_vla.models.vla_actor.Pi0ActionHiddenActor` are
-kept valid by the compatibility module.
+Compatibility exports remain available through `dreamer_vla.models.vla_actor`.

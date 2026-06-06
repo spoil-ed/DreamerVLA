@@ -8,9 +8,11 @@ from __future__ import annotations
 import math
 import os
 import time
+from typing import Any
 
 import imageio
 import numpy as np
+from omegaconf import OmegaConf
 from PIL import Image
 
 from libero.libero import get_libero_path
@@ -28,7 +30,27 @@ TASK_MAX_STEPS: dict[str, int] = {
 }
 
 
-def get_libero_env(task, resolution: int = 256):
+def resolve_libero_eval_protocol(root_cfg: Any, eval_cfg: Any) -> dict[str, int]:
+    """Resolve RLinf-compatible LIBERO rollout protocol options."""
+    root_seed = OmegaConf.select(root_cfg, "seed", default=0)
+    seed = int(OmegaConf.select(eval_cfg, "seed", default=root_seed))
+    num_steps_wait = int(OmegaConf.select(eval_cfg, "num_steps_wait", default=10))
+    if num_steps_wait < 0:
+        raise ValueError("eval.num_steps_wait must be non-negative")
+    return {"seed": seed, "num_steps_wait": num_steps_wait}
+
+
+def select_libero_action_chunk(action_chunk: Any, action_steps: int) -> list[Any]:
+    """Return the next RLinf-style action chunk and assert it is long enough."""
+    action_steps = int(action_steps)
+    assert len(action_chunk) >= action_steps, (
+        f"We want to replan every {action_steps} steps, but policy only predicts "
+        f"{len(action_chunk)} steps."
+    )
+    return list(action_chunk[:action_steps])
+
+
+def get_libero_env(task, resolution: int = 256, seed: int = 0):
     """Create an off-screen LIBERO environment for *task*."""
     task_description = task.language
     task_bddl_file = os.path.join(
@@ -40,7 +62,7 @@ def get_libero_env(task, resolution: int = 256):
         "camera_widths": resolution,
     }
     env = OffScreenRenderEnv(**env_args)
-    env.seed(0)
+    env.seed(int(seed))
     return env, task_description
 
 
@@ -52,8 +74,9 @@ def get_libero_dummy_action():
 def get_libero_image(obs, resize_size, image_view: str = "agentview_image"):
     """Extract an image from the observation dict and rotate 180 degrees."""
     img = obs[image_view]
-    img = img[::-1, ::-1]  # rotate 180° to match training preprocessing
-    return img
+    return np.ascontiguousarray(
+        img[::-1, ::-1]
+    )  # rotate 180° to match training preprocessing
 
 
 def quat2axisangle(quat):

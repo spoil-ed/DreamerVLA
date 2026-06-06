@@ -1,9 +1,9 @@
-"""Compare action chunks: trained policy vs frozen pi0-SFT baseline.
+"""Compare action chunks: trained policy vs frozen RynnVLA-SFT baseline.
 
 Both policies are VLAActionHeadActor instances built from the same config
 (``configs/dreamervla_rynn_dino_wm_actor_critic.yaml``):
 
-  - baseline: only the pi0 SFT warm-start via init_action_head_ckpt
+  - baseline: only the RynnVLA SFT warm-start via init_action_head_ckpt
               (adapter random-init, never updated)
   - trained:  loads the live run's saved checkpoint, so adapter +
               transformer + output_projection reflect actual SGD updates
@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf
 import hydra
 
-sys.path.insert(0, "/mnt/data/spoil/workspace/DreamerVLA")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def load_policy_state_from_training_ckpt(ckpt_path: str) -> dict[str, torch.Tensor]:
@@ -62,8 +65,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--encoder-ckpt",
-        default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt",
-        help="pi0 SFT ckpt used to warm-start both actors.",
+        default=str(PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_goal"),
+        help="RynnVLA checkpoint used to warm-start both actors.",
     )
     parser.add_argument(
         "--trained-ckpt",
@@ -73,7 +76,7 @@ def main() -> None:
     parser.add_argument(
         "--baseline-ckpt",
         default=None,
-        help="Optional second ckpt for the baseline. Default: just pi0 SFT warm-start (no training).",
+        help="Optional second ckpt for the baseline. Default: just RynnVLA SFT warm-start (no training).",
     )
     parser.add_argument("--n-inputs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=7)
@@ -83,9 +86,9 @@ def main() -> None:
     cfg = OmegaConf.load(args.config)
     cfg.init.encoder_state_ckpt = args.encoder_ckpt
 
-    # ── build baseline (pi0 SFT only) and trained policies ────────────────
+    # ── build baseline (RynnVLA SFT only) and trained policies ────────────────
     # Use the SAME torch seed before each build so adapter random init matches.
-    print("[compare] building baseline (pi0 SFT warm-start, no training) ...")
+    print("[compare] building baseline (RynnVLA SFT warm-start, no training) ...")
     torch.manual_seed(args.seed)
     baseline = build_actor(cfg, args.device)
     if args.baseline_ckpt:
@@ -107,7 +110,14 @@ def main() -> None:
 
     # ── fixed-seed deterministic WM-like inputs (random gaussian here) ────
     torch.manual_seed(args.seed)
-    hidden_dim = int(OmegaConf.select(cfg, "policy.hidden_dim", default=5120))
+    hidden_dim_cfg = OmegaConf.select(cfg, "policy.hidden_dim", default=None)
+    hidden_dim = (
+        int(hidden_dim_cfg)
+        if hidden_dim_cfg is not None
+        else int(OmegaConf.select(cfg, "policy.time_horizon"))
+        * int(OmegaConf.select(cfg, "policy.action_dim"))
+        * int(OmegaConf.select(cfg, "policy.action_hidden_dim"))
+    )
     hidden = torch.randn(args.n_inputs, hidden_dim, device=args.device)
 
     bc = get_chunk(baseline, hidden)

@@ -7,14 +7,14 @@ actor decision produces a K-step action chunk that the WM consumes in one
 call.
 
 Semantics:
-    K       = wmpo.chunk_size (pi0 actor time_horizon, default 5)
+    K       = wmpo.chunk_size (RynnVLA actor time_horizon, default 5)
     horizon = imagination_horizon, redefined as **number of chunk decisions**
               (one actor call per chunk). Total imagined env-steps = horizon * K.
     group_size = ppo_rollouts_per_start
     B_eff   = B * group_size
 
 Per chunk c we record:
-    actor_feat[c]                   — pi0 hidden, frozen actor input
+    actor_feat[c]                   — RynnVLA hidden, frozen actor input
     action_chunk[c], old_lp[c]      — sampled K-step action chunk + chunk-level log_prob
     rewards[c, :, k]                — dense state-reward at imagined frame k
 
@@ -222,7 +222,7 @@ def dino_wmpo_dense_chunk_step(
                         "actions": wm_action_chunk,
                     }
                 )
-                hidden_seq = next_seq["hidden_seq"]  # [B_eff, K, D]
+                hidden_seq = next_seq["hidden_seq"]  # [B_eff, K, ...]
                 current = _detach_latent(
                     {
                         "history": next_seq["history"],

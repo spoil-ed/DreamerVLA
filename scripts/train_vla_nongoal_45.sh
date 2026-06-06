@@ -18,10 +18,10 @@ export NGPU="${NGPU:-2}"
 export NUM_GPUS="${NUM_GPUS:-${NGPU}}"
 export MASTER_PORT="${MASTER_PORT:-29545}"
 
-CONFIG="${CONFIG:-vla_pi0_query}"
+CONFIG="${CONFIG:-vla_rynnvla_action_head}"
 CKPT="${CKPT:-${DVLA_ROOT}/data/ckpts/VLA_model_256/${TASK}}"
 RUN_TAG="${RUN_TAG:-${TASK}_$(date +%Y%m%d_%H%M%S)}"
-export OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/vla/pi0_query/${RUN_TAG}}"
+export OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/vla/rynnvla_action_head/${RUN_TAG}}"
 
 [[ -f "${CKPT}/config.json" ]] || { echo "ERROR: missing pretrained checkpoint: ${CKPT}/config.json" >&2; exit 3; }
 HORIZON="$("${PYTHON}" -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c.get("time_horizon") or c.get("action_horizon") or "")' "${CKPT}/config.json")"

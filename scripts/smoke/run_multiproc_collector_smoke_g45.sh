@@ -12,7 +12,7 @@ TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
 
 CONFIG="${CONFIG:-${DVLA_ROOT}/configs/online_wmpo_outcome_libero_goal.yaml}"
 WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-${DVLA_ROOT}/data/outputs/worldmodel/dinowm_chunk/20260525_221114/ckpt/step_00015000.ckpt}"
-VLA_CKPT_PATH="${VLA_CKPT_PATH:-${DVLA_ROOT}/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model}"
+VLA_CKPT_PATH="${VLA_CKPT_PATH:-${DVLA_ROOT}/data/ckpts/VLA_model_256/libero_goal}"
 
 OUT_DIR="${OUT_DIR:-${DVLA_ROOT}/data/outputs/dreamervla/smoke_multiproc_collector_g45/${TS}}"
 LOG_FILE="${LOG_FILE:-${DVLA_ROOT}/data/outputs/logs/smoke_multiproc_collector_g45_${TS}.log}"
@@ -25,7 +25,7 @@ echo "[multiproc-smoke] log_file=$LOG_FILE"
 PYTHONPATH="${DVLA_ROOT}" CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" MUJOCO_GL="${MUJOCO_GL}" \
   "$PYTHON" -m torch.distributed.run \
   --standalone --nproc_per_node="$NGPU" --master_port="$MASTER_PORT" \
-  scripts/training/train_online_pi0_action_hidden_dreamervla_multiproc.py \
+  scripts/training/train_online_rynnvla_action_hidden_dreamervla_multiproc.py \
   --config "$CONFIG" \
   --out-dir "$OUT_DIR" \
   --world-model-ckpt "$WORLD_MODEL_CKPT" \

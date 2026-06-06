@@ -103,7 +103,7 @@ def main() -> None:
 
     # 4. Load one full demo
     with h5py.File(args.hidden_hdf5, "r") as fh, h5py.File(args.reward_hdf5, "r") as fr:
-        obs_embedding = fh["data"][args.demo_key]["obs_embedding"][:]  # (T, 5120)
+        obs_embedding = fh["data"][args.demo_key]["obs_embedding"][:]  # (T, D)
         actions = fr["data"][args.demo_key]["actions"][:]  # (T, 7)
         sparse_rewards = fr["data"][args.demo_key]["sparse_rewards"][:]  # (T,)
         dense_rewards = fr["data"][args.demo_key]["rewards"][
@@ -182,9 +182,9 @@ def main() -> None:
     for t in probe_steps:
         feat_t = feat_seq[:, t].float()  # [1, feat_dim]
         latent_t = slice_latent(latent_seq, t)
-        # Policy expects hidden_decoder output ([1, 5120]), not raw feature
+        # Policy expects hidden_decoder output ([1, D]), not raw feature
         with torch.no_grad():
-            actor_hidden = world_model.actor_input(latent_t).float()  # [1, 5120]
+            actor_hidden = world_model.actor_input(latent_t).float()  # [1, D]
         feat_t = actor_hidden
         # SFT and trained action chunks (deterministic for clean comparison)
         with torch.no_grad():

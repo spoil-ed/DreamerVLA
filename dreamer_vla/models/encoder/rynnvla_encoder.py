@@ -413,8 +413,7 @@ class RynnVLAEncoder(BaseEncoder):
         if action_head is None or not hasattr(action_head, "extract_action_hidden"):
             raise ValueError(
                 "RynnVLAEncoder.extract_action_hidden requires an action head "
-                "that exposes extract_action_hidden; use action_head_type='pi0_query' "
-                "or 'legacy' (both expose it)."
+                "that exposes extract_action_hidden; use action_head_type='legacy'."
             )
         try:
             param = next(action_head.parameters())
@@ -432,7 +431,7 @@ class RynnVLAEncoder(BaseEncoder):
             eval=bool(eval),
         )
         if not ok:
-            raise ValueError("pi0 action head did not find a usable action context")
+            raise ValueError("RynnVLA action head did not find a usable action context")
         return action_hidden.float()
 
     def encode(self, obs: dict[str, Any]) -> torch.Tensor:

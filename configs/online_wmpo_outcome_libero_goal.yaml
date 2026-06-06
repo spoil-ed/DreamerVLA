@@ -1,7 +1,7 @@
 # DreamerVLA — ONLINE WMPO outcome training (Path B).
 #
 # Driven by:
-#   scripts/train_online_pi0_action_hidden_dreamervla.py
+#   scripts/train_online_rynnvla_action_hidden_dreamervla.py
 #     --actor-update-kind outcome
 #     --classifier-ckpt <path>
 #     --world-model-ckpt <path>
@@ -14,7 +14,7 @@
 #   * runs its own train loop (NOT this config's _target_ runner)
 #
 # Differences vs configs/dreamer_vla_libero_goal_rynn_dino_wm_wmpo_outcome.yaml:
-#   * all paths migrated /mnt/data/spoil/... → /mnt/data/spoil/...
+#   * all paths are repo-root relative via ${oc.env:DVLA_ROOT,.}
 #   * world_model_state_ckpt → pinned ChunkAware step 17000 (today's training)
 #   * classifier_state_ckpt → the wmpo_aligned_small_tf episode-F1 0.951 winner
 #     (this field is read by JointDreamerVLARunner; online script ignores it
@@ -54,7 +54,7 @@ training:
   run_actor_critic_phase: true
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model
+  vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   # ChunkAware m1024_d6 trained today, pinned snapshot at step 17000.
@@ -116,10 +116,11 @@ dataloader:
 world_model:
   _target_: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
   chunk_size: 5
-  obs_dim: 35840
+  obs_dim: null
   action_dim: 7
-  token_count: 35
+  token_count: null
   token_dim: 1024
+  time_horizon: 5
   model_dim: 1024
   depth: 6
   heads: 8
@@ -143,8 +144,8 @@ world_model:
   freeze_backbone: true
 
 policy:
-  _target_: dreamer_vla.models.actor.Pi0ActionHiddenActor
-  hidden_dim: 35840
+  _target_: dreamer_vla.models.actor.RynnVLAActionHiddenActor
+  hidden_dim: null
   action_hidden_dim: 1024
   action_dim: 7
   time_horizon: 5

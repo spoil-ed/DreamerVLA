@@ -36,6 +36,9 @@ from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 from dreamer_vla.models.world_model.rynn_dino_wm_chunk import ChunkAwareRynnDinoWMWorldModel
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def load_chunk_wm(
     ckpt_path: str, device: torch.device
 ) -> ChunkAwareRynnDinoWMWorldModel:
@@ -82,7 +85,7 @@ def load_chunk_wm(
 def load_demo(
     raw_p: Path, hid_p: Path, demo_key: str
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Returns (obs[T, obs_dim], actions[T, action_dim]) for one demo, or None."""
+    """Returns (obs[T,...], actions[T, action_dim]) for one demo, or None."""
     with h5py.File(str(hid_p), "r") as hh:
         if f"{demo_key}/obs_embedding" not in hh:
             return None
@@ -99,12 +102,12 @@ def load_demo(
 @torch.no_grad()
 def rollout(
     wm: ChunkAwareRynnDinoWMWorldModel,
-    obs: torch.Tensor,  # [T, obs_dim]
+    obs: torch.Tensor,  # [T, obs_dim] or [T,N,token_dim]
     actions: torch.Tensor,  # [T, action_dim]
     num_chunks: int,
     mode: str,  # "open" or "close"
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Returns (pred_seq[N*K, obs_dim], target_seq[N*K, obs_dim])."""
+    """Returns (pred_seq[N*K,...], target_seq[N*K,...])."""
     H = wm.num_hist
     K = wm.chunk_size
     T = int(obs.shape[0])
@@ -112,7 +115,8 @@ def rollout(
     if N < 1:
         raise ValueError(f"demo too short: T={T} needs >= H+K = {H + K}")
 
-    history = obs[:H].unsqueeze(0)  # [1, H, obs_dim]
+    obs_tokens = wm.obs_to_tokens(obs.unsqueeze(0))[0]
+    history = obs_tokens[:H].unsqueeze(0)
     action_history = torch.zeros(
         1, H, wm.action_dim, device=obs.device, dtype=obs.dtype
     )
@@ -132,8 +136,8 @@ def rollout(
             0
         )  # [1, K, A]
         out = wm.predict_next_chunk(cur_latent, chunk_actions)
-        pred = out["hidden_seq"][0]  # [K, obs_dim]
-        target = obs[H + c * K : H + (c + 1) * K]  # [K, obs_dim]
+        pred = out["hidden_seq"][0]
+        target = obs_tokens[H + c * K : H + (c + 1) * K]
         preds.append(pred)
         targets.append(target)
 
@@ -148,7 +152,7 @@ def rollout(
             #                          overwrites with next chunk's a_0)
             start = (c + 1) * K
             end = start + H  # exclusive
-            new_history = obs[start:end].unsqueeze(0)
+            new_history = obs_tokens[start:end].unsqueeze(0)
             new_action_history = torch.zeros(
                 1, H, wm.action_dim, device=obs.device, dtype=obs.dtype
             )
@@ -168,11 +172,13 @@ def rollout(
                 "hidden": out["hidden"],
             }
 
-    return torch.cat(preds, dim=0), torch.cat(targets, dim=0)  # both [N*K, obs_dim]
+    return torch.cat(preds, dim=0), torch.cat(targets, dim=0)
 
 
 def per_step_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict:
     """Per-env-step cos sim + per-dim MSE; returns numpy arrays [T_pred]."""
+    pred = pred.reshape(pred.shape[0], -1)
+    target = target.reshape(target.shape[0], -1)
     cos = F.cosine_similarity(pred.float(), target.float(), dim=-1)  # [T]
     mse = ((pred.float() - target.float()) ** 2).mean(dim=-1)  # [T]
     rel_l2 = (pred.float() - target.float()).norm(dim=-1) / target.float().norm(
@@ -190,11 +196,21 @@ def main() -> None:
     parser.add_argument("--ckpt", required=True)
     parser.add_argument(
         "--success-dir-raw",
-        default="/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward",
+        default=str(
+            PROJECT_ROOT
+            / "data"
+            / "processed_data"
+            / "libero_goal_no_noops_t_256_pi06_remaining_reward"
+        ),
     )
     parser.add_argument(
         "--success-dir-hidden",
-        default="/mnt/data/spoil/workspace/DreamerVLA/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2",
+        default=str(
+            PROJECT_ROOT
+            / "data"
+            / "processed_data"
+            / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+        ),
     )
     parser.add_argument("--num-demos", type=int, default=16)
     parser.add_argument("--num-chunks", type=int, default=20)

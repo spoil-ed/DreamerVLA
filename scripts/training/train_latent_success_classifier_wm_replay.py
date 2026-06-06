@@ -12,7 +12,7 @@ Pipeline:
 
 Single-GPU. Usage:
     CUDA_VISIBLE_DEVICES=6 \
-        /home/user01/miniconda3/envs/dreamervla/bin/python \
+        python \
         scripts/train_latent_success_classifier_wm_replay.py \
         --config configs/wmpo_classifier_libero_goal_wm_replay.yaml
 """
@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

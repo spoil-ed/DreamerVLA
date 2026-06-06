@@ -1,7 +1,7 @@
 """WMPO-aligned latent W-frame classifier dataset.
 
 Mirrors ``WMPO/reward_model/videomae.py::SuccessWindowDataset`` exactly,
-but operates on **precomputed real pi0 action-hidden sidecar HDF5** instead
+but operates on **precomputed real RynnVLA action-hidden sidecar HDF5** instead
 of raw video frames. The positive/negative protocol is intentionally
 identical so that downstream eval thresholds (``WMPO/reward_model/find_thre.py``,
 ``WMPO/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
@@ -56,7 +56,7 @@ from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 class _DemoRecord:
     """One episode's frozen latent + label metadata."""
 
-    obs: np.ndarray  # [T, L] float16, the real pi0 obs_embedding
+    obs: np.ndarray  # [T, L] float16, the real RynnVLA obs_embedding
     finish_step: int  # 1-based step where dones first fires (clamped to T)
     complete: bool  # rewards.sum() > 0
     eid: str  # stable episode id like "<file>/<demo_key>"

@@ -28,7 +28,7 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/frozen_backbones/rynnvla_libero_goal_pi0_query/base_model
+  vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
   encoder_state_ckpt: null
 
 encoder:
@@ -47,8 +47,10 @@ encoder:
 eval:
   ckpt_path: null
   ckpt_kind: vla
+  seed: ${seed}
   task_suite_name: libero_goal
-  num_episodes_per_task: 10
+  num_episodes_per_task: 50
+  num_steps_wait: 10
   task_start: 0
   task_ids: null
   max_tasks: null

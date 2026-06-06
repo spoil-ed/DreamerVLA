@@ -45,8 +45,12 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
     runner_name = "libero_eval_compat"
     runner_status = "compatibility"
     runner_family = "eval"
-    default_output_dir = (
-        "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/eval/eval_libero_vla"
+    default_output_dir = str(
+        pathlib.Path(__file__).resolve().parents[2]
+        / "data"
+        / "outputs"
+        / "eval"
+        / "eval_libero_vla"
     )
 
     def run(self) -> list[dict[str, Any]]:
@@ -128,7 +132,17 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                     OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
                 ),
                 "num_episodes_per_task": int(
-                    OmegaConf.select(cfg, "eval.num_episodes_per_task", default=10)
+                    OmegaConf.select(cfg, "eval.num_episodes_per_task", default=50)
+                ),
+                "seed": int(
+                    OmegaConf.select(
+                        cfg,
+                        "eval.seed",
+                        default=OmegaConf.select(cfg, "seed", default=0),
+                    )
+                ),
+                "num_steps_wait": int(
+                    OmegaConf.select(cfg, "eval.num_steps_wait", default=10)
                 ),
                 "action_steps": int(
                     OmegaConf.select(cfg, "eval.action_steps", default=10)
@@ -384,8 +398,18 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                 ),
                 "num_episodes_per_task": int(
                     OmegaConf.select(
-                        train_cfg, "eval.num_episodes_per_task", default=10
+                        train_cfg, "eval.num_episodes_per_task", default=50
                     )
+                ),
+                "seed": int(
+                    OmegaConf.select(
+                        train_cfg,
+                        "eval.seed",
+                        default=OmegaConf.select(train_cfg, "seed", default=0),
+                    )
+                ),
+                "num_steps_wait": int(
+                    OmegaConf.select(train_cfg, "eval.num_steps_wait", default=10)
                 ),
                 "action_steps": int(
                     OmegaConf.select(train_cfg, "eval.action_steps", default=10)
@@ -765,10 +789,10 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                     OmegaConf.select(self.cfg, "policy._target_", default="")
                 )
                 return (
-                    "Pi0ActionHiddenActor" in policy_name
+                    "RynnVLAActionHiddenActor" in policy_name
                     or "VLAActionHeadActor" in policy_name
                     or (
-                        "Pi0ActionHiddenActor" in policy_target
+                        "RynnVLAActionHiddenActor" in policy_target
                         or "VLAActionHeadActor" in policy_target
                     )
                 )
@@ -979,6 +1003,28 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                     f"exec_vs_live_env={record.get('executed_vs_live_env_action_mse', float('nan')):.6g}",
                     flush=True,
                 )
+
+    def _action_hidden_tokens_for_trace(
+        self, hidden: torch.Tensor | None
+    ) -> torch.Tensor | None:
+        if hidden is None:
+            return None
+        if hidden.ndim == 3:
+            return hidden
+        if hidden.ndim != 2:
+            return None
+        token_dim = int(
+            OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024)
+        )
+        time_horizon = int(
+            OmegaConf.select(self.cfg, "policy.time_horizon", default=5)
+        )
+        action_dim = int(OmegaConf.select(self.cfg, "policy.action_dim", default=7))
+        token_count = time_horizon * action_dim
+        expected = token_count * token_dim
+        if int(hidden.shape[-1]) != expected:
+            return None
+        return hidden.reshape(hidden.shape[0], token_count, token_dim)
 
     def _hidden_action_compare_summary(self) -> dict[str, float | str | int | bool]:
         count = int(getattr(self, "_hidden_action_compare_count", 0))
@@ -1362,7 +1408,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                 ),
                 eval=True,
             )
-            return action_hidden.reshape(action_hidden.shape[0], -1).float().detach()
+            return action_hidden.float().detach()
         return self._encode_hidden_from_tokenized(input_ids_list)
 
     def _use_action_query_obs_hidden(self) -> bool:
@@ -1377,12 +1423,9 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             return True
         if source == "pooled":
             return False
-        return (
-            str(
-                OmegaConf.select(self.cfg, "encoder.action_head_type", default="legacy")
-            ).lower()
-            == "pi0_query"
-        )
+        return str(
+            OmegaConf.select(self.cfg, "encoder.action_head_type", default="legacy")
+        ).lower() == "legacy"
 
     def _dreamer_wm_observation_input_ids(
         self,
@@ -1694,27 +1737,10 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             context=getattr(self, "_libero_current_eval_context", None),
             source="online_rssm",
         )
-        live_trace_hidden = None
-        recon_trace_hidden = None
-        if (
-            live_hidden is not None
-            and "feat" in locals()
-            and live_hidden.ndim == 2
-            and feat.ndim == 2
-        ):
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024)
-            )
-            horizon = int(OmegaConf.select(self.cfg, "policy.time_horizon", default=5))
-            expected = hidden_dim * horizon
-            if (
-                int(live_hidden.shape[-1]) == expected
-                and int(feat.shape[-1]) == expected
-            ):
-                live_trace_hidden = live_hidden.reshape(
-                    live_hidden.shape[0], horizon, hidden_dim
-                )
-                recon_trace_hidden = feat.reshape(feat.shape[0], horizon, hidden_dim)
+        live_trace_hidden = self._action_hidden_tokens_for_trace(live_hidden)
+        recon_trace_hidden = self._action_hidden_tokens_for_trace(
+            feat if "feat" in locals() else None
+        )
         self._write_policy_trace(
             source="dreamer",
             state=np.asarray(
@@ -1797,15 +1823,20 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             get_libero_env,
             get_libero_image,
             quat2axisangle,
+            resolve_libero_eval_protocol,
             save_rollout_video,
         )
 
         eval_cfg = OmegaConf.select(self.cfg, "eval", default=None)
+        protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
+        seed = int(protocol["seed"])
+        num_steps_wait = int(protocol["num_steps_wait"])
+        np.random.seed(seed)
         task_suite_name = str(
             OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
         )
         num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=10)
+            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=50)
         )
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=5))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
@@ -1844,7 +1875,8 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         )
         print(
             f"  [Eval][online_rssm] suite='{task_suite_name}' tasks={task_ids} "
-            f"episodes_per_task={num_episodes} max_steps={max_steps} history_length={history_length}",
+            f"episodes_per_task={num_episodes} max_steps={max_steps} history_length={history_length} "
+            f"seed={seed} num_steps_wait={num_steps_wait}",
             flush=True,
         )
 
@@ -1854,8 +1886,10 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
-            env, task_description = get_libero_env(task, resolution=resolution)
-            n_eps = min(num_episodes, len(initial_states))
+            env, task_description = get_libero_env(
+                task, resolution=resolution, seed=seed
+            )
+            n_eps = num_episodes
             print(
                 f"  [Eval][online_rssm] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}): "
                 f'"{task_description}" episodes={n_eps}',
@@ -1868,10 +1902,8 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                 env.reset()
                 obs = env.set_init_state(initial_states[episode_idx])
                 done = False
-                for _ in range(10):
+                for _ in range(num_steps_wait):
                     obs, _, done, _ = env.step(get_libero_dummy_action())
-                    if done:
-                        break
                 ep_t0 = time.time()
                 frame_history: list[tuple[Image.Image, Image.Image]] = []
                 env_actions_buffer: list[np.ndarray] = []
@@ -2108,6 +2140,9 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             "eval_success_rate": avg_success,
             "eval_total_episodes": float(total_episodes),
             "eval_total_successes": float(total_successes),
+            "results/total_success_rate": avg_success,
+            "results/total_episodes": float(total_episodes),
+            "results/total_successes": float(total_successes),
             "eval_dreamer_rollout_mode_online_rssm": 1.0,
         }
 
@@ -2196,15 +2231,10 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                         state=state,
                         task_description=task_description,
                     )
-                    wm_flat = self._obs_embedding_for_wm([wm_tokens])
-                    horizon = int(
-                        OmegaConf.select(self.cfg, "encoder.time_horizon", default=5)
+                    wm_hidden = self._obs_embedding_for_wm([wm_tokens])
+                    wm_style_action_hidden = self._action_hidden_tokens_for_trace(
+                        wm_hidden
                     )
-                    hidden_dim = int(wm_flat.shape[-1]) // max(horizon, 1)
-                    if hidden_dim * horizon == int(wm_flat.shape[-1]):
-                        wm_style_action_hidden = wm_flat.reshape(
-                            wm_flat.shape[0], horizon, hidden_dim
-                        )
                 except Exception as exc:
                     if bool(
                         OmegaConf.select(
@@ -2404,20 +2434,9 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             return []
         live_hidden = None
         recon_hidden = None
-        if actor_input_source == "rssm" and obs_embedding.ndim == 2 and feat.ndim == 2:
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024)
-            )
-            horizon = int(OmegaConf.select(self.cfg, "policy.time_horizon", default=5))
-            expected = hidden_dim * horizon
-            if (
-                int(obs_embedding.shape[-1]) == expected
-                and int(feat.shape[-1]) == expected
-            ):
-                live_hidden = obs_embedding.reshape(
-                    obs_embedding.shape[0], horizon, hidden_dim
-                )
-                recon_hidden = feat.reshape(feat.shape[0], horizon, hidden_dim)
+        if actor_input_source == "rssm":
+            live_hidden = self._action_hidden_tokens_for_trace(obs_embedding)
+            recon_hidden = self._action_hidden_tokens_for_trace(feat)
         self._write_policy_trace(
             source="dreamer",
             state=state,

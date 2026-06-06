@@ -66,7 +66,7 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
             print(
                 "Usage: python -m dreamer_vla.cli.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m dreamer_vla.cli.train --config-name vla_pi0_query training.num_epochs=5\n"
+                "  python -m dreamer_vla.cli.train --config-name vla_rynnvla_action_head training.num_epochs=5\n"
                 "  python -m dreamer_vla.cli.train --config-name world_model_dinowm_chunk training.max_steps=10\n"
                 "  python -m dreamer_vla.cli.train --config-name dreamervla_rynn_dino_wm_actor_critic task=libero_object"
             )

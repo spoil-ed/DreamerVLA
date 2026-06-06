@@ -3,12 +3,12 @@ from __future__ import annotations
 import torch
 
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
-    Pi0StyleActionQueryHead,
+    RynnVLAActionHead,
 )
 
 
-def test_pi0_style_action_query_head_uses_one_query_per_action_step() -> None:
-    head = Pi0StyleActionQueryHead(
+def test_rynnvla_action_head_uses_one_token_per_action_dimension() -> None:
+    head = RynnVLAActionHead(
         action_dim=7,
         time_horizon=5,
         hidden_size_factor=0.25,
@@ -26,12 +26,12 @@ def test_pi0_style_action_query_head_uses_one_query_per_action_step() -> None:
     actions, ok = head(hidden_states=hidden_states, input_ids=input_ids, eval=True)
 
     assert ok is True
-    assert head.action_token_embeddings.weight.shape == (1, 5 * 4096)
+    assert head.action_token_embeddings.weight.shape == (1, 5 * 7 * 4096)
     assert actions.shape == (2 * 5, 7)
 
 
-def test_pi0_style_action_query_head_supports_attention_mask() -> None:
-    head = Pi0StyleActionQueryHead(
+def test_rynnvla_action_head_supports_attention_mask() -> None:
+    head = RynnVLAActionHead(
         action_dim=7,
         time_horizon=3,
         hidden_size_factor=0.25,
@@ -52,8 +52,8 @@ def test_pi0_style_action_query_head_supports_attention_mask() -> None:
     assert actions.shape == (3, 7)
 
 
-def test_pi0_style_action_query_head_accepts_bool_attention_mask() -> None:
-    head = Pi0StyleActionQueryHead(
+def test_rynnvla_action_head_accepts_bool_attention_mask() -> None:
+    head = RynnVLAActionHead(
         action_dim=7,
         time_horizon=3,
         hidden_size_factor=0.25,
@@ -74,10 +74,10 @@ def test_pi0_style_action_query_head_accepts_bool_attention_mask() -> None:
     assert actions.shape == (3, 7)
 
 
-def test_pi0_style_action_query_head_exposes_observation_conditioned_action_hidden() -> (
+def test_rynnvla_action_head_exposes_observation_conditioned_action_hidden() -> (
     None
 ):
-    head = Pi0StyleActionQueryHead(
+    head = RynnVLAActionHead(
         action_dim=4,
         time_horizon=3,
         hidden_size_factor=0.25,
@@ -99,7 +99,7 @@ def test_pi0_style_action_query_head_exposes_observation_conditioned_action_hidd
     )
 
     assert ok is True
-    assert action_hidden.shape == (2, 3, head.reduced_hidden_size)
+    assert action_hidden.shape == (2, 3 * 4, head.reduced_hidden_size)
     shifted_hidden = hidden_states.clone()
     shifted_hidden[:, 0, :] += 1.0
     shifted_action_hidden, _ = head.extract_action_hidden(

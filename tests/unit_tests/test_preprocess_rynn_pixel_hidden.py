@@ -75,13 +75,13 @@ def test_select_obs_hidden_can_flatten_action_query_hidden_for_wm() -> None:
     ).shape == (2, 8)
 
 
-def test_preprocess_cli_defaults_to_pi0_action_query_sidecar(monkeypatch) -> None:
+def test_preprocess_cli_defaults_to_rynnvla_action_hidden_sidecar(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["preprocess_rynn_pixel_hidden.py"])
 
     args = parse_args()
 
     assert args.obs_hidden_source == "action_query"
-    assert args.action_head_type == "pi0_query"
+    assert args.action_head_type == "legacy"
     assert args.prompt_style == "vla_policy"
     assert args.history == 2
     assert args.include_state is True

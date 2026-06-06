@@ -2,22 +2,20 @@ from __future__ import annotations
 
 import torch
 
-from dreamer_vla.models.actor.pi0_action_hidden_actor import Pi0ActionHiddenActor
+from dreamer_vla.models.actor.rynnvla_action_hidden_actor import RynnVLAActionHiddenActor
 
 
-def test_pi0_actor_samples_and_evaluates_full_action_chunks() -> None:
+def test_rynnvla_actor_samples_and_evaluates_full_action_chunks() -> None:
     torch.manual_seed(0)
-    actor = Pi0ActionHiddenActor(
-        hidden_dim=12,
+    actor = RynnVLAActionHiddenActor(
         action_hidden_dim=4,
         action_dim=2,
         time_horizon=3,
         adapter_type="identity",
         freeze_output_projection=False,
         initial_log_std=-0.2,
-        head_type="pi0_query",
     )
-    hidden = torch.randn(5, 12)
+    hidden = torch.randn(5, actor.hidden_dim)
 
     action_chunk, log_prob, extra = actor(
         {

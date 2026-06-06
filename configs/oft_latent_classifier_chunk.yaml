@@ -7,7 +7,10 @@ _target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   _target_: ${task.openvla_oft.classifier_target}
-  latent_dim: ${task.openvla_oft.wm_obs_dim}
+  latent_dim: null
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.openvla_oft.time_horizon}
+  token_dim: ${task.openvla_oft.token_dim}
   window: 8
   head_type: transformer
   hidden_dim: 256

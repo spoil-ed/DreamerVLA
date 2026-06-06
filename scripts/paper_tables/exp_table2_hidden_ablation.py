@@ -30,8 +30,8 @@ VARIANTS = {
             "CONFIG": "world_model_dinowm_step",
         },
     },
-    "pi0_query": {
-        "label": "pi0 query hidden",
+    "rynnvla_legacy": {
+        "label": "RynnVLA action hidden",
         "env": {
             "CONFIG": "oft_world_model_dinowm_chunk",
         },

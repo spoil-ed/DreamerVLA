@@ -1,7 +1,7 @@
 # ruff: noqa: E402
 """Sklearn LogisticRegression baseline — the "LR ceiling" for LatentSuccessClassifier.
 
-CLAUDE.md records that a sklearn LogisticRegression(C=0.01) on real pi0 hidden
+CLAUDE.md records that a sklearn LogisticRegression(C=0.01) on real RynnVLA hidden
 W=8 windows reaches F1 ≈ 0.87 — far above the 130 M Transformer's F1 0.13–0.33.
 This script re-establishes that ceiling under the current data layout and packs
 the result as a LatentSuccessClassifier(head_type="linear") ckpt so the same
@@ -23,7 +23,7 @@ Pipeline:
        train_log.jsonl matching the v3 schema so downstream tools work unchanged.
 
 Usage:
-    PYTHONUNBUFFERED=1 /home/user01/miniconda3/envs/dreamervla/bin/python -u \\
+    PYTHONUNBUFFERED=1 python -u \\
         scripts/train_logreg_classifier.py \\
         --config configs/wmpo_classifier_libero_goal_v4_real_hidden.yaml \\
         --out data/outputs/dreamervla/outcome_classifier/libero_goal/lr_ceiling \\
@@ -37,7 +37,7 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -184,7 +184,14 @@ def main() -> None:
 
     cfg = OmegaConf.load(args.config)
     W = int(cfg.classifier.window)
-    L = int(cfg.classifier.latent_dim)
+    latent_dim_cfg = OmegaConf.select(cfg, "classifier.latent_dim", default=None)
+    L = (
+        int(latent_dim_cfg)
+        if latent_dim_cfg is not None
+        else int(cfg.classifier.time_horizon)
+        * int(cfg.classifier.action_dim)
+        * int(cfg.classifier.token_dim)
+    )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 

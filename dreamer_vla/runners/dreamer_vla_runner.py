@@ -62,10 +62,16 @@ class DreamerVLARunner(BaseRunner):
     # encoder is frozen — no need to checkpoint it.
     exclude_keys = ("encoder", "_unwrapped_world_model")
 
-    default_vla_init_dir = (
-        "/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal"
+    default_vla_init_dir = str(
+        pathlib.Path(__file__).resolve().parents[2]
+        / "data"
+        / "ckpts"
+        / "VLA_model_256"
+        / "libero_goal"
     )
-    default_output_dir = "/mnt/data/spoil/workspace/DreamerVLA/data/outputs/dreamervla"
+    default_output_dir = str(
+        pathlib.Path(__file__).resolve().parents[2] / "data" / "outputs" / "dreamervla"
+    )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -633,12 +639,26 @@ class DreamerVLARunner(BaseRunner):
         cfg_path = OmegaConf.select(
             viz_cfg,
             "vqgan_config_path",
-            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.yaml",
+            default=str(
+                pathlib.Path(__file__).resolve().parents[2]
+                / "data"
+                / "ckpts"
+                / "chameleon"
+                / "tokenizer"
+                / "vqgan.yaml"
+            ),
         )
         ckpt_path = OmegaConf.select(
             viz_cfg,
             "vqgan_ckpt_path",
-            default="/mnt/data/spoil/workspace/DreamerVLA/data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+            default=str(
+                pathlib.Path(__file__).resolve().parents[2]
+                / "data"
+                / "ckpts"
+                / "chameleon"
+                / "tokenizer"
+                / "vqgan.ckpt"
+            ),
         )
         try:
             from dreamer_vla.utils.vq_image_decoder import load_vq_model

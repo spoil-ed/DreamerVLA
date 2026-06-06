@@ -1,6 +1,6 @@
 # @package _global_
 # Dreamer actor-critic on the DINO-WM-style full RynnVLA action-hidden world model.
-# WM target/action hidden shape per step: 5 * 7 * 1024 = 35840.
+# WM target/action hidden shape is derived from time_horizon * action_dim * token_dim.
 defaults:
   - _self_
   - /task: libero_goal
@@ -56,7 +56,7 @@ encoder: null
 dataset:
   _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
-  hidden_dir: ${task.pi0_legacy_action_hidden_dir}
+  hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
   expected_encoder_state_ckpt: null
   expected_time_horizon: ${task.time_horizon}
@@ -95,6 +95,7 @@ world_model:
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
   token_dim: ${task.legacy_action_hidden.token_dim}
+  time_horizon: ${task.time_horizon}
   model_dim: 1024
   depth: 6
   heads: 8
@@ -117,9 +118,9 @@ world_model:
   freeze_backbone: true
 
 policy:
-  _target_: dreamer_vla.models.actor.Pi0ActionHiddenActor
-  hidden_dim: ${task.legacy_action_hidden.wm_obs_dim}
-  action_hidden_dim: 1024
+  _target_: dreamer_vla.models.actor.RynnVLAActionHiddenActor
+  hidden_dim: null
+  action_hidden_dim: ${task.legacy_action_hidden.token_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.time_horizon}
   head_type: legacy

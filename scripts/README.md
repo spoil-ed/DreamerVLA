@@ -27,8 +27,8 @@ Historical data-preparation shell recipes are archived under
 
 | Script | Main Config | Public Runner | Purpose |
 | --- | --- | --- | --- |
-| `train_vla.sh` | `vla_pi0_query`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `dreamer_vla.runners.*` target from config | VLA SFT, including one trajectory per task |
-| `train_vla_nongoal_45.sh` | `vla_pi0_query` | `VLASFTRunner` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
+| `train_vla.sh` | `vla_rynnvla_action_head`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `dreamer_vla.runners.*` target from config | VLA SFT, including one trajectory per task |
+| `train_vla_nongoal_45.sh` | `vla_rynnvla_action_head` | `VLASFTRunner` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
 | `train_wm.sh` | `world_model_dinowm_chunk`, `world_model_dinowm_step`, `oft_world_model_dinowm_chunk` | route-specific `dreamer_vla.runners.*` target from config | WM training |
 | `train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_oft_dino_wm_wmpo_outcome` | `JointDreamerVLARunner` | DreamerVLA training |
 
@@ -120,7 +120,7 @@ Policy comparison:
 
 | Script | Purpose |
 | --- | --- |
-| `compare_action_chunks.py` | Trained policy vs frozen pi0-SFT baseline action_chunks on shared WM features |
+| `compare_action_chunks.py` | Trained policy vs frozen RynnVLA-SFT baseline action_chunks on shared WM features |
 | `compare_policy_trace_runs.py` | Compare `policy_trace.jsonl` from VLA and DreamerVLA rollouts |
 | `diagnose_dreamervla_latent_distribution.py` | DreamerVLA latent distribution diagnostics |
 
@@ -154,7 +154,7 @@ constant and only the actor / critic are trained.
 | `scripts/preprocess/preprocess_remaining_steps_reward.py` | Precompute `remaining_steps`-style dense reward labels |
 | `scripts/preprocess/preprocess_rynn_pixel_hidden.py` | Build rynn pixel / hidden sidecar |
 | `scripts/preprocess/build_classifier_shards_from_demos.py` | Pack demo action-hiddens into WebDataset shards for the LatentSuccessClassifier (positives only; failure-class negatives must be appended separately) |
-| `scripts/preprocess/collect_online_rollouts_for_classifier.py` | Roll out pi0 SFT in LIBERO sim to collect failure-class negatives for the classifier |
+| `scripts/preprocess/collect_online_rollouts_for_classifier.py` | Roll out RynnVLA SFT in LIBERO sim to collect failure-class negatives for the classifier |
 
 ## Script Hygiene
 

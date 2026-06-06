@@ -304,7 +304,11 @@ class WMReplayClassifierDataset(IterableDataset):
 
     @torch.no_grad()
     def _imagine_one(self, obs: np.ndarray, actions: np.ndarray) -> np.ndarray:
-        """Return imagined latent sequence [T_out, obs_dim] as float32 numpy."""
+        """Return imagined latent sequence as float32 numpy.
+
+        Rynn-DINO chunk WMs emit tokenized hidden ``[T_out,N,token_dim]``;
+        older flat WMs continue to emit ``[T_out,obs_dim]``.
+        """
         T = int(obs.shape[0])
         K = self.K
         H = self.num_hist
@@ -329,12 +333,16 @@ class WMReplayClassifierDataset(IterableDataset):
         )
         latent_seq = out["latent"] if isinstance(out, dict) and "latent" in out else out
         latent = {
-            "hidden": latent_seq["hidden"][:, -1],  # [B, obs_dim]
-            "history": latent_seq["history"][:, -1],  # [B, num_hist, obs_dim]
+            "hidden": latent_seq["hidden"][:, -1],
+            "history": latent_seq["history"][:, -1],
             "actions": latent_seq["actions"][:, -1],  # [B, num_hist, A]
         }
 
-        imagined: list[torch.Tensor] = [obs_t[H - 1 : H]]  # last real history frame
+        if hasattr(self.chunk_wm, "obs_to_tokens"):
+            real_seed = self.chunk_wm.obs_to_tokens(obs_init)[:, -1].squeeze(0)
+            imagined: list[torch.Tensor] = [real_seed.unsqueeze(0)]
+        else:
+            imagined = [obs_t[H - 1 : H]]  # last real history frame
         T_apply = T - H
         num_chunks = T_apply // K
         for c in range(num_chunks):
@@ -346,7 +354,7 @@ class WMReplayClassifierDataset(IterableDataset):
                     "actions": chunk_actions,
                 }
             )
-            imagined.append(out["hidden_seq"].squeeze(0))  # [K, obs_dim]
+            imagined.append(out["hidden_seq"].squeeze(0))
             latent = {
                 "history": out["history"],
                 "actions": out["actions"],

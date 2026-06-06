@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.training.train_online_pi0_action_hidden_dreamervla import (  # noqa: E402
+from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (  # noqa: E402
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,
@@ -99,13 +99,10 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--encoder-state-ckpt",
-        default=str(
-            PROJECT_ROOT
-            / "data/ckpts/pi0_query_vla_libero_goal/epoch003_train_vla_loss1.255_success8of10.ckpt"
-        ),
+        default="",
     )
     p.add_argument(
-        "--action-head-type", default="legacy", choices=["legacy", "pi0_query"]
+        "--action-head-type", default="legacy", choices=["legacy"]
     )
     p.add_argument("--task-suite", default="libero_goal")
     p.add_argument("--task-ids", default="0,1,2,3,4,5,6,7,8,9")

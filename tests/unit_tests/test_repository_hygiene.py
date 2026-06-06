@@ -45,7 +45,7 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         project_root / "dreamer_vla" / "cli" / "train.py",
         project_root / "scripts" / "train_wm.sh",
         project_root / "scripts" / "train_dreamervla.sh",
-        project_root / "scripts" / "training" / "train_online_pi0_action_hidden_dreamervla.py",
+        project_root / "scripts" / "training" / "train_online_rynnvla_action_hidden_dreamervla.py",
         project_root / "scripts" / "training" / "train_frozen_wm_actor_critic.py",
         project_root / "scripts" / "eval" / "eval_frozen_wm_actor.py",
         project_root / "scripts" / "diagnostics" / "compare_action_chunks.py",
@@ -69,11 +69,43 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
             "world_model_rssm_step",
             "dreamervla_pi0_action_hidden_head_actor",
             "pretokenize_vla_libero_goal",
-            "pretokenize_vla_libero_goal_pi0_query",
+            "pretokenize_vla_libero_goal_" + "pi0" + "_query",
             "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed",
         }
         stale = sorted(name for name in removed_route_names if name in text)
         assert stale == [], f"{text_file.relative_to(project_root)}: {stale}"
+
+
+def test_active_sources_do_not_reference_removed_action_head_variant() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    removed_variant = "pi0" + "_query"
+    active_roots = [
+        project_root / "AGENTS.md",
+        project_root / "README.md",
+        project_root / "configs",
+        project_root / "docs",
+        project_root / "dreamer_vla",
+        project_root / "scripts",
+        project_root / "tests",
+    ]
+    skip_parts = {"archive", "__pycache__"}
+    checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
+
+    offenders: list[str] = []
+    for root in active_roots:
+        paths = [root] if root.is_file() else root.rglob("*")
+        for path in paths:
+            if not path.is_file():
+                continue
+            if any(part in skip_parts for part in path.parts):
+                continue
+            if path.suffix not in checked_suffixes:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if removed_variant in text or removed_variant in path.name:
+                offenders.append(str(path.relative_to(project_root)))
+
+    assert offenders == []
 
 
 def test_repository_structure_doc_and_editable_package_metadata_exist() -> None:
@@ -170,13 +202,53 @@ def test_active_configs_do_not_pin_machine_local_roots() -> None:
     )
 
     forbidden_roots = [
-        "/mnt/data/spoil/workspace/DreamerVLA",
-        "/home/user01",
+        "/" + "/".join(("mnt", "data", "spoil", "workspace", "DreamerVLA")),
+        "/" + "/".join(("home", "user01")),
     ]
     for path in active_configs:
         text = path.read_text(encoding="utf-8")
         stale = [root for root in forbidden_roots if root in text]
         assert stale == [], f"{path.relative_to(project_root)}: {stale}"
+
+
+def test_active_files_do_not_pin_machine_local_roots() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    active_roots = [
+        project_root / "AGENTS.md",
+        project_root / "CLAUDE.md",
+        project_root / "CONTRIBUTING.md",
+        project_root / "README.md",
+        project_root / "README.zh-CN.md",
+        project_root / "SETUP.md",
+        project_root / "configs",
+        project_root / "docs",
+        project_root / "dreamer_vla",
+        project_root / "scripts",
+        project_root / "tests",
+    ]
+    skip_parts = {"archive", "__pycache__"}
+    checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
+    forbidden_roots = [
+        "/" + "mnt" + "/",
+        "/" + "home" + "/",
+    ]
+
+    offenders: dict[str, list[str]] = {}
+    for root in active_roots:
+        paths = [root] if root.is_file() else root.rglob("*")
+        for path in paths:
+            if not path.is_file():
+                continue
+            if any(part in skip_parts for part in path.relative_to(project_root).parts):
+                continue
+            if path.suffix not in checked_suffixes:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            stale = [root for root in forbidden_roots if root in text]
+            if stale:
+                offenders[str(path.relative_to(project_root))] = stale
+
+    assert offenders == {}
 
 
 def test_active_docs_do_not_describe_removed_source_roots() -> None:

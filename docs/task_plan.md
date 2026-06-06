@@ -25,7 +25,7 @@ Run the LIBERO-goal single-trajectory VLA-SFT pipeline on GPUs 4 and 5, with the
 - User clarified this is the DINO-WM-based action-chunk route, not the Chameleon WM route.
 - Current request: "单轨迹VLA-SFT在libero goal上面的任务，需要先训练WM和classifier" on "45卡".
 - Interpret "45卡" as `CUDA_VISIBLE_DEVICES=4,5`; GPUs 4 and 5 were free at session start.
-- Run from `/mnt/data/spoil/workspace/DreamerVLA`, the source-complete checkout with current DINO-WM and classifier code.
+- Run from `$DVLA_ROOT`, the source-complete checkout with current DINO-WM and classifier code.
 - Resume-based pipeline session: `goal_one_traj_gpu45_20260527_031359`.
 - Pipeline manifest: `data/outputs/logs/pipeline_goal_one_traj_gpu45_20260527_031359/manifest.txt`.
 - WM stage reached 20000 steps.
@@ -38,7 +38,7 @@ Run the LIBERO-goal single-trajectory VLA-SFT pipeline on GPUs 4 and 5, with the
 - Fresh no-resume pipeline session: `goal_one_traj_fresh_gpu45_20260527_050937`.
 - Fresh WM log confirms `training.resume=false`, `training.resume_path=null`, and progress from `step=0/20000`.
 - Completed VLA checkpoint under eval:
-  `data/outputs/vla/pi0_query_one_trajectory/libero_goal_one_traj_o0_gpu45_after_wmclf_20260527_031359/ckpt/latest.ckpt`.
+  `data/outputs/vla/rynnvla_action_head_one_trajectory/libero_goal_one_traj_o0_gpu45_after_wmclf_20260527_031359/ckpt/latest.ckpt`.
 - Eval base directory:
   `data/outputs/eval/eval_libero_vla/completed_vla_goal_8proc_20260527_052728`.
 - Retry queue session:
@@ -47,9 +47,9 @@ Run the LIBERO-goal single-trajectory VLA-SFT pipeline on GPUs 4 and 5, with the
 - Fresh classifier completed with best episode F1 `0.9704545454545455`.
 - Fresh VLA verification: completed 20 epochs, final logged `global_step=79`, `train_vla_loss=3.2240`, `val_val_ind_loss=1.2874`, `val_val_ood_loss=1.4889`; tmux session `goal_one_traj_fresh_gpu45_20260527_050937` exited and GPUs 4/5 were released.
 - Fresh VLA artifacts:
-  `data/outputs/vla/pi0_query_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/ckpt/latest.ckpt`,
-  `data/outputs/vla/pi0_query_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/checkpoints/epoch=019-train_vla_loss=3.224.ckpt`,
-  `data/outputs/vla/pi0_query_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/vla_logs.json.txt`.
+  `data/outputs/vla/rynnvla_action_head_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/ckpt/latest.ckpt`,
+  `data/outputs/vla/rynnvla_action_head_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/checkpoints/epoch=019-train_vla_loss=3.224.ckpt`,
+  `data/outputs/vla/rynnvla_action_head_one_trajectory/libero_goal_one_traj_o0_gpu45_fresh_after_wmclf_20260527_050937/vla_logs.json.txt`.
 - Fresh VLA eval base directory:
   `data/outputs/eval/eval_libero_vla/fresh_vla_goal_8proc_20260527_071628`.
 - Fresh VLA eval aggregate: `0/100` successes (`0.0%`) over all 10 LIBERO-goal tasks.

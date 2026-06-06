@@ -257,7 +257,7 @@ Collector 进程不参与 DDP barrier。
 
 新增实验文件，不动当前正式脚本：
 
-- `scripts/training/train_online_pi0_action_hidden_dreamervla_multiproc.py`
+- `scripts/training/train_online_rynnvla_action_hidden_dreamervla_multiproc.py`
 - `scripts/smoke/run_multiproc_collector_smoke_g45.sh`
 
 只验证：

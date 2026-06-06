@@ -63,8 +63,8 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
 def test_active_shell_scripts_do_not_pin_machine_local_environment() -> None:
     root = _project_root()
     forbidden = (
-        "/mnt/data/spoil/workspace/DreamerVLA",
-        "/home/user01/miniconda3/envs/dreamervla",
+        "/" + "/".join(("mnt", "data", "spoil", "workspace", "DreamerVLA")),
+        "/" + "/".join(("home", "user01", "miniconda3", "envs", "dreamervla")),
     )
     active_scripts = sorted(
         path

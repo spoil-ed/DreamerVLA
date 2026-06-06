@@ -25,8 +25,7 @@ pretokenize_val_ood_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_spati
 
 hdf5_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256
 hdf5_reward_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_pi06_remaining_reward
-pi0_action_hidden_dir: null
-pi0_legacy_action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+rynnvla_action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
 
 legacy_action_hidden:
   expected_action_head_type: legacy
@@ -35,8 +34,8 @@ legacy_action_hidden:
   expected_history: 2
   expected_include_state: true
   expected_rotate_images_180: true
-  wm_obs_dim: 71680
-  token_count: 70
+  wm_obs_dim: null
+  token_count: null
   token_dim: 1024
   chunk_size: 10
 
@@ -64,8 +63,8 @@ openvla_oft:
   expected_history: 2
   expected_include_state: true
   expected_rotate_images_180: true
-  wm_obs_dim: 229376
-  token_count: 56
+  wm_obs_dim: null
+  token_count: null
   token_dim: 4096
   chunk_size: 8
   latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
@@ -73,7 +72,7 @@ openvla_oft:
   sft_dataset_target: dreamer_vla.dataset.OpenVLAOFTHDF5DatasetFactory
   wm_target: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
   classifier_target: dreamer_vla.models.reward.LatentSuccessClassifier
-  actor_target: dreamer_vla.models.actor.Pi0ActionHiddenActor
+  actor_target: dreamer_vla.models.actor.RynnVLAActionHiddenActor
   actor_head_type: legacy
   actor_adapter_type: residual_mlp
   actor_adapter_hidden_dim: 1024

@@ -32,7 +32,7 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
     """Token-based TSSM WM: action_hidden kept as N=35 tokens of dim D_tok=1024.
 
     Key differences from the flat ``TSSMRynnBackboneWorldModel``:
-        - No ``_RynnBackboneObsEncoder`` compressing 35840→embed_dim. Instead the 35840
+        - No ``_RynnBackboneObsEncoder`` compressing flattened hidden→embed_dim. Instead the flattened hidden
           is reshaped to [B, T, 35, 1024] and each token is passed individually through
           a small per-token Linear (or Identity if d_model==1024).
         - The Transformer sees (T * 35) tokens with spatio-temporal causal mask
@@ -46,13 +46,14 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
 
     def __init__(
         self,
-        obs_dim: int = 35840,
+        obs_dim: int | None = None,
         latent_dim: int | None = None,
         action_dim: int = 7,
         image_channels: int = 6,
         image_size: int = 64,
-        n_tokens: int = 35,
+        n_tokens: int | None = None,
         token_dim: int = 1024,
+        time_horizon: int = 5,
         # TSSM
         hidden: int = 1024,
         stoch: int = 32,
@@ -110,14 +111,22 @@ class TSSMTokenRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         reward_pos_weight: float = 1.0,
     ) -> None:
         super().__init__()
-        if latent_dim is not None:
-            obs_dim = int(obs_dim if obs_dim is not None else latent_dim)
-        self.obs_dim = int(obs_dim)
         self.image_channels = int(image_channels)
         self.image_size = int(image_size)
         self.actor_input_kind = str(actor_input_kind).lower()
-        self.n_tokens = int(n_tokens)
+        self.n_tokens = (
+            int(n_tokens)
+            if n_tokens is not None
+            else int(time_horizon) * int(action_dim)
+        )
         self.token_dim = int(token_dim)
+        if obs_dim is None:
+            obs_dim = (
+                int(latent_dim)
+                if latent_dim is not None
+                else self.n_tokens * self.token_dim
+            )
+        self.obs_dim = int(obs_dim)
         if self.n_tokens * self.token_dim != self.obs_dim:
             raise ValueError(
                 f"obs_dim={self.obs_dim} must equal n_tokens * token_dim "

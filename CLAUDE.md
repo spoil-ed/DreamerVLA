@@ -8,7 +8,7 @@ For full contribution flow, code style, and PR process, see [CONTRIBUTING.md](CO
 
 Keeping the detailed guidance in `AGENTS.md` avoids duplication and prevents the two files from drifting out of sync.
 
-**Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon + pi0 action-query head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Runner** pattern as the training unit. Distributed runs use **torchrun** (DDP) or **FSDP**; there is no Ray, no multi-node cluster. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
+**Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon action head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Runner** pattern as the training unit. Distributed runs use **torchrun** (DDP) or **FSDP**; there is no Ray, no multi-node cluster. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
 
 ---
 
@@ -50,7 +50,7 @@ Keeping the detailed guidance in `AGENTS.md` avoids duplication and prevents the
 
 ## How Dreamer-VLA runs
 
-You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `LiberoOnlineEnv` (or the multi-proc variant in `scripts/training/train_online_pi0_action_hidden_dreamervla_multiproc.py`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
+You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `LiberoOnlineEnv` (or the multi-proc variant in `scripts/training/train_online_rynnvla_action_hidden_dreamervla_multiproc.py`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ---
 

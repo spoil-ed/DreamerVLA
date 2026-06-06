@@ -33,7 +33,7 @@ Cfg usage (Hydra ``_target_``):
     hidden_decoder:
       _target_: dreamer_vla.models.world_model.common.ResMLPHead
       in_dim: 10240
-      out_dim: 35840
+      out_dim: null
       layers: 4
       units: 16384
 """

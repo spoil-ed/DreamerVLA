@@ -1,8 +1,8 @@
 """TSSM (Transformer State Space Model) port for DreamerVLA.
 
 Faithful port of TransDreamer's TransformerDynamic:
-    /mnt/data/spoil/workspace/worldmodel/TransDreamer/model/modules_transformer.py
-    /mnt/data/spoil/workspace/worldmodel/TransDreamer/model/transformer.py
+    TransDreamer/model/modules_transformer.py
+    TransDreamer/model/transformer.py
 
 The Transformer cell, MultiheadAttention, PositionwiseFF, GRUGating, and sinusoidal
 positional embedding are inlined here (TransDreamer's transformer.py classes) with

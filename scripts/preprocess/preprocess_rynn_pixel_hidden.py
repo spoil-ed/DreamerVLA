@@ -198,7 +198,14 @@ def _select_obs_hidden(
         raise ValueError(
             f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}"
         )
-    return action_hidden.reshape(action_hidden.shape[0], -1)
+    return _legacy_flat_obs_embedding_from_action_hidden(action_hidden)
+
+
+def _legacy_flat_obs_embedding_from_action_hidden(
+    action_hidden: torch.Tensor,
+) -> torch.Tensor:
+    """Flatten action-hidden tokens only at the legacy HDF5 sidecar boundary."""
+    return action_hidden.flatten(start_dim=1)
 
 
 def _source_stats(source_path: Path, args: argparse.Namespace) -> dict[str, Any]:
@@ -461,7 +468,7 @@ def _encode_chunk(
         or int(history) != 2
     ):
         raise ValueError(
-            "pi0 action-hidden preprocessing must match the existing sidecar: "
+            "RynnVLA action-hidden preprocessing must match the existing sidecar: "
             "vla_policy + history=2 + state + rotate180"
         )
 
@@ -830,8 +837,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Sidecar output directory. If omitted, the default is derived from "
-            "--action-head-type: 'pi0_query' -> ..._pi0_action_hidden_vla_policy_h2/, "
-            "'legacy' -> ..._pi0_legacy_action_hidden_vla_policy_h2/."
+            "the legacy RynnVLA action-hidden sidecar layout."
         ),
     )
     parser.add_argument(
@@ -841,7 +847,7 @@ def parse_args() -> argparse.Namespace:
         "--prompt-style",
         default="vla_policy",
         choices=["vla_policy"],
-        help="Construct inputs exactly like the existing pi0 VLA action-hidden sidecar.",
+        help="Construct inputs exactly like the existing RynnVLA action-hidden sidecar.",
     )
     parser.add_argument(
         "--history",
@@ -868,7 +874,7 @@ def parse_args() -> argparse.Namespace:
         choices=["pooled", "action_query"],
         help=(
             "Which VLA representation is written to --hidden-key. "
-            "'action_query' writes the flattened pi0 action-query hidden "
+            "'action_query' writes the flattened RynnVLA action hidden "
             "after the action-head transformer; 'pooled' keeps the old "
             "4096-d pooled backbone hidden for explicit ablations."
         ),
@@ -885,7 +891,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-action-hidden",
         action="store_true",
-        help="Also store unflattened pi0 action-query hidden states as action_hidden_states.",
+        help="Also store unflattened RynnVLA action hidden states as action_hidden_states.",
     )
     parser.add_argument("--action-trigger-token-id", type=int, default=10004)
     parser.add_argument("--chunk-size", type=int, default=16)
@@ -922,9 +928,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--time-horizon", type=int, default=5)
-    parser.add_argument(
-        "--action-head-type", default="pi0_query", choices=["legacy", "pi0_query"]
-    )
+    parser.add_argument("--action-head-type", default="legacy", choices=["legacy"])
     parser.add_argument("--pool", default="mean", choices=["mean", "last"])
     return parser.parse_args()
 
@@ -933,20 +937,12 @@ def main() -> None:
     args = parse_args()
     hdf5_dir = _project_path(args.hdf5_dir)
     if args.out_dir is None:
-        if str(args.action_head_type) == "legacy":
-            args.out_dir = str(
-                PROJECT_ROOT
-                / "data"
-                / "processed_data"
-                / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
-            )
-        else:
-            args.out_dir = str(
-                PROJECT_ROOT
-                / "data"
-                / "processed_data"
-                / "libero_goal_no_noops_t_256_pi0_action_hidden_vla_policy_h2"
-            )
+        args.out_dir = str(
+            PROJECT_ROOT
+            / "data"
+            / "processed_data"
+            / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+        )
     out_dir = _project_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rank, world_size, _local_rank, device = _init_distributed()
