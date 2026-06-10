@@ -117,6 +117,55 @@ bash scripts/train_vla.sh task=libero_goal
 bash scripts/train_vla.sh task=libero_object
 ```
 
+### One-trajectory VLA（两种方案）
+
+单轨迹 VLA 不需要额外数据下载，复用第 2/3 节的产物。
+
+**方案 A：自己训练**
+
+RynnVLA 路线（产物可接主链 action-hidden → WM → DreamerVLA）：
+
+```bash
+CONFIG=vla_sft_one_trajectory NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
+bash scripts/train_vla.sh task=libero_goal
+
+# 换轨迹：选全局第 k 条 demo
+CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
+```
+
+OpenVLA-OFT 路线（action-token SFT，`policy.use_l1_regression=false`）：
+
+```bash
+CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
+
+# 换 demo：dataset.demo_selection_seed=...
+```
+
+**方案 B：下载现成 OpenVLA-OFT one-traj 权重（Haozhan72）**
+
+```bash
+# 国内加速可选：export HF_ENDPOINT=https://hf-mirror.com
+for name in libero-spatial libero-object libero-goal libero10; do
+  hf download "Haozhan72/Openvla-oft-SFT-${name}-traj1" \
+    --local-dir "data/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-${name}-traj1"
+done
+```
+
+也可以 `git lfs install` 后 `git clone https://huggingface.co/Haozhan72/Openvla-oft-SFT-<suite>-traj1`，放进同一目录。
+
+目录约定 `data/ckpts/Openvla-oft-SFT-traj1/<repo 名>`，与 `scripts/eval/launch_openvla_oft_traj1_eval_g67.sh` 的默认 `CKPT_ROOT` 一致。评估：
+
+```bash
+SUITE=libero_goal bash scripts/eval/launch_openvla_oft_traj1_eval_g67.sh
+
+# 或单卡直接跑
+python scripts/eval/eval_openvla_oft_libero.py \
+  --ckpt data/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
+  --suite libero_goal --policy-mode auto
+```
+
+注意：方案 B 是 token 离散头的合并权重，用于直接评估或作 RL 起点。OFT action-hidden 抽取（`scripts/preprocess/preprocess_oft_action_hidden.py`）目前固定按 L1 头组件式 ckpt 加载（`use_l1_regression=True`），方案 B 权重不能直接接 OFT WM 链路。
+
 ### World Model
 
 ```bash
