@@ -18,34 +18,36 @@
 #   FORCE=1   re-run even if outputs look complete
 set -uo pipefail
 
+# ---- environment (self-contained; no common_env.sh) -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PROJECT_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-if [[ -f "${SCRIPT_DIR}/../common_env.sh" ]]; then
-  source "${SCRIPT_DIR}/../common_env.sh"
-  PROJECT_ROOT="${DVLA_ROOT}"
-fi
-cd "${PROJECT_ROOT}"
-
-if [[ -n "${CONDA_SH:-}" ]]; then
-  # Optional: CONDA_SH=/path/to/conda.sh CONDA_ENV=dreamervla bash ...
-  source "${CONDA_SH}"
-  conda activate "${CONDA_ENV:-dreamervla}"
-fi
+export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+PROJECT_ROOT="${DVLA_ROOT}"
+case ":${PYTHONPATH:-}:" in
+  *":${DVLA_ROOT}:"*) ;;
+  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
 PYTHON="${PYTHON:-python}"
 
-LOG_DIR="${PROJECT_ROOT}/data/logs/libero_data_prep"
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+cd "${PROJECT_ROOT}"
+
+LOG_DIR="${DVLA_DATA_ROOT}/logs/libero_data_prep"
 mkdir -p "${LOG_DIR}"
 
 SUITES="${SUITES:-libero_10 libero_object libero_spatial}"
-GPUS="${GPUS:-4,5}"
+GPUS="${GPUS:-0}"
 PRETOKENIZE_PROCS="${PRETOKENIZE_PROCS:-16}"
 IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-256}"
 ACTION_HORIZON="${ACTION_HORIZON:-1}"           # atomic pretokenize
 HIS="${HIS:-1}"
 FORCE="${FORCE:-0}"
 
-TOKENIZER_PATH="${PROJECT_ROOT}/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768"
-PROCESSED_DATA_ROOT="${PROJECT_ROOT}/data/processed_data"
+TOKENIZER_PATH="${DVLA_DATA_ROOT}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
 
 CONVS_DIR="${PROCESSED_DATA_ROOT}/convs"
 TOKENS_DIR="${PROCESSED_DATA_ROOT}/tokens"
@@ -72,7 +74,7 @@ process_one_suite() {
   TASK_NAME="$(suite_task_name "${SUITE}")"
   local RAW_DIR="${PROCESSED_DATA_ROOT}/${SUITE}_no_noops_t_${IMAGE_RESOLUTION}"
   local IMG_STATE_DIR="${PROCESSED_DATA_ROOT}/${SUITE}_image_state_action_t_${IMAGE_RESOLUTION}"
-  local CONFIG_DIR="${PROJECT_ROOT}/data/configs/${SUITE}"
+  local CONFIG_DIR="${DVLA_DATA_ROOT}/configs/${SUITE}"
   local SUFFIX="his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}"
   local MANIFEST="${CONCATE_DIR}/${SUITE}_${SUFFIX}.json"
   local VAL_IND_REC="${TOKENS_DIR}/${SUITE}_his_${HIS}_val_ind_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}/record.json"

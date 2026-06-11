@@ -2,8 +2,35 @@
 # One-command LIBERO preprocessing for the formal DreamerVLA data layout.
 set -euo pipefail
 
+# ---- environment (self-contained; no common_env.sh) -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/../common_env.sh"
+export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+case ":${PYTHONPATH:-}:" in
+  *":${DVLA_ROOT}:"*) ;;
+  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+PYTHON="${PYTHON:-python}"
+
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+
+# ---- LIBERO paths (datasets live under the data root) -----------------------
+export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
+mkdir -p "${LIBERO_CONFIG_PATH}"
+if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
+  cat > "${LIBERO_CONFIG_PATH}/config.yaml" <<EOF
+benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
+bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
+init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
+datasets: ${DVLA_DATA_ROOT}/dataset/libero
+assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
+EOF
+fi
+
 cd "${DVLA_ROOT}"
 
 TASK="${TASK:-libero_goal}"
@@ -24,8 +51,8 @@ case "${TASK}" in
 esac
 TIME_HORIZON="${TIME_HORIZON:-${DEFAULT_TIME_HORIZON}}"
 
-PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-${DVLA_ROOT}/data/processed_data}"
-RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_ROOT}/third_party/LIBERO/libero/datasets/${TASK}}"
+PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-${DVLA_DATA_ROOT}/processed_data}"
+RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_DATA_ROOT}/dataset/libero/${TASK}}"
 MARKED_DIR="${MARKED_DIR:-${PROCESSED_DATA_ROOT}/${TASK}_marked_t_${IMAGE_RESOLUTION}}"
 if [[ "${FILTER_NOOPS}" == "1" ]]; then
   HDF5_DIR="${HDF5_DIR:-${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_${IMAGE_RESOLUTION}}"
@@ -35,14 +62,14 @@ fi
 REWARD_DIR="${REWARD_DIR:-${HDF5_DIR}_pi06_remaining_reward}"
 HIDDEN_DIR="${HIDDEN_DIR:-${HDF5_DIR}_pi0_legacy_action_hidden_vla_policy_h2}"
 META_JSON="${META_JSON:-${PROCESSED_DATA_ROOT}/${TASK}_metainfo.json}"
-VLA_CKPT="${VLA_CKPT:-${DVLA_ROOT}/data/ckpts/VLA_model_256/${TASK}}"
-TOKENIZER_PATH="${TOKENIZER_PATH:-${DVLA_ROOT}/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768}"
-TEXT_TOKENIZER_PATH="${TEXT_TOKENIZER_PATH:-${DVLA_ROOT}/data/ckpts/chameleon/tokenizer/text_tokenizer.json}"
-CHAMELEON_VQGAN_CONFIG="${CHAMELEON_VQGAN_CONFIG:-${DVLA_ROOT}/data/ckpts/chameleon/tokenizer/vqgan.yaml}"
-CHAMELEON_VQGAN_CKPT="${CHAMELEON_VQGAN_CKPT:-${DVLA_ROOT}/data/ckpts/chameleon/tokenizer/vqgan.ckpt}"
+VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/ckpts/VLA_model_256/${TASK}}"
+TOKENIZER_PATH="${TOKENIZER_PATH:-${DVLA_DATA_ROOT}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768}"
+TEXT_TOKENIZER_PATH="${TEXT_TOKENIZER_PATH:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/text_tokenizer.json}"
+CHAMELEON_VQGAN_CONFIG="${CHAMELEON_VQGAN_CONFIG:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/vqgan.yaml}"
+CHAMELEON_VQGAN_CKPT="${CHAMELEON_VQGAN_CKPT:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/vqgan.ckpt}"
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-1}}"
 
-mkdir -p "${PROCESSED_DATA_ROOT}" "${DVLA_ROOT}/data/logs/libero_data_prep"
+mkdir -p "${PROCESSED_DATA_ROOT}" "${DVLA_DATA_ROOT}/logs/libero_data_prep"
 
 echo "[prepare_libero_data] task=${TASK} his=${HIS} len_action=${ACTION_HORIZON} resolution=${IMAGE_RESOLUTION}"
 echo "[prepare_libero_data] raw=${RAW_LIBERO_DIR}"
