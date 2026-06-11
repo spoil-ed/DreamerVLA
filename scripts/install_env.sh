@@ -3,7 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/common_env.sh"
+export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 cd "${DVLA_ROOT}"
 
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-dreamervla}"
@@ -42,8 +43,8 @@ uv pip install --python "${PYTHON}" transformers==4.40.1
 
 if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then
   echo "[install_env] flash-attn wheel"
-  mkdir -p "${DVLA_ROOT}/data/wheels"
-  FLASH_ATTN_WHEEL="${DVLA_ROOT}/data/wheels/$(basename "${FLASH_ATTN_WHEEL_URL}")"
+  mkdir -p "${DVLA_DATA_ROOT}/wheels"
+  FLASH_ATTN_WHEEL="${DVLA_DATA_ROOT}/wheels/$(basename "${FLASH_ATTN_WHEEL_URL}")"
   if [[ ! -f "${FLASH_ATTN_WHEEL}" ]]; then
     curl -L "${FLASH_ATTN_WHEEL_URL}" -o "${FLASH_ATTN_WHEEL}"
   fi
