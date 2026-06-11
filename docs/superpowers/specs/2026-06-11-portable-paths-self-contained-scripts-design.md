@@ -159,6 +159,26 @@ Note: the current machine's live layout deviates from the canonical one
 `data/processed_data`). Implementation reconciles via symlinks and the
 manifest documents only the canonical layout.
 
+## No machine-specific code (hard requirement)
+
+Nothing in mainline code may be specific to the machine it was developed on.
+Machine-bound values (absolute `/mnt/...` or `/home/...` paths, GPU id lists,
+hostnames, conda install locations) are allowed only in the explicitly legacy
+scripts (`*_45.sh`, `*_g67.sh`, `scripts/archive/`, `scripts/smoke/`,
+`scripts/wm_variants_v4_v4E/`). Formal scripts must derive everything from
+script location + environment variables with portable defaults.
+
+## Final deliverable: first-person migration walkthrough
+
+After all implementation tasks, simulate "I just cloned this repo on a new
+machine with an empty data disk" from the user's first-person perspective:
+walk the SETUP.md quickstart step by step, note every point of friction
+("I run X → I hit Y"), and run a machine-specificity sweep (absolute paths,
+hardcoded GPU ids, configs defaulting to this machine's past run artifacts).
+Fix in-scope findings (the 9 formal scripts); report out-of-scope ones
+(legacy scripts, `init.*_ckpt` experiment pins, `third_party/`) in a findings
+table: file:line, why it breaks on a new machine, fixed / reported.
+
 ## Migration note (existing machines)
 
 On machines with LIBERO raw data already under

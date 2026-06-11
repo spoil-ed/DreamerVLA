@@ -12,6 +12,48 @@
 
 ---
 
+## Execution status (2026-06-11, handed off mid-run)
+
+| Task | Status | Commit |
+|---|---|---|
+| 1 — config sweep | ✅ done, both-mode resolution verified | `5b49843` |
+| 2 — core launchers ×4 | ✅ done | `b4f89d8` |
+| 3 — download_assets.sh | ✅ done | `faefbc9` |
+| 4 — install_env.sh | ✅ done | `5777ec2` |
+| 5 — preprocess launchers | ✅ done (deviation: `GPUS` default changed `4,5` → `0`, machine-specificity fix) | `66d8e4f` |
+| 6–11 | ⬜ remaining | — |
+
+**Corrections discovered during execution — read before continuing:**
+
+1. `dreamer_vla/cli/train.py` parses args manually and calls `compose()`;
+   it does NOT support Hydra's `--cfg job` flag (raises
+   `OverrideParseException`). Wherever this plan says `--cfg job`, verify
+   resolution with this snippet instead (run from the repo root):
+
+   ```bash
+   python - <<'PY'
+   import os
+   from hydra import compose, initialize_config_dir
+   from omegaconf import OmegaConf
+   with initialize_config_dir(config_dir=os.getcwd() + "/configs", version_base=None):
+       cfg = compose(config_name="vla_rynnvla_action_head")
+   text = OmegaConf.to_yaml(cfg, resolve=True)
+   print("\n".join(l.strip() for l in text.splitlines() if "ckpts" in l)[:400])
+   PY
+   ```
+
+   Run once with `DVLA_DATA_ROOT` unset (expect `data/ckpts/...`) and once
+   with `DVLA_DATA_ROOT=/tmp/dvla_data_test` (expect
+   `/tmp/dvla_data_test/ckpts/...`).
+2. A bare `python` on this machine is base conda without hydra — use the
+   project env: `~/miniconda3/envs/dreamervla/bin/python` (or
+   `conda activate dreamervla` first).
+3. `grep -l common_env <script>` now matches the *comment*
+   `# ---- environment (self-contained; no common_env.sh)` in rewritten
+   scripts; grep for `source.*common_env` instead.
+
+---
+
 ## Reference: the standard env block
 
 Every rewritten script starts with this block (shown here once for the reader's
@@ -65,7 +107,7 @@ Notes:
 **Files:**
 - Modify: `configs/*.yaml`, `configs/task/*.yaml` (18 files, ~70 references)
 
-- [ ] **Step 1: Confirm every config reference matches the replace pattern**
+- [x] **Step 1: Confirm every config reference matches the replace pattern**
 
 Run:
 ```bash
@@ -77,14 +119,14 @@ Expected: `ALL-MATCH` and `NO-PROJECT-ROOT` (no references outside the
 pattern). If any line appears, handle it case-by-case with the same semantics
 (data paths → `DVLA_DATA_ROOT`, code paths stay `DVLA_ROOT`) before the sed.
 
-- [ ] **Step 2: Apply the text replacement**
+- [x] **Step 2: Apply the text replacement**
 
 ```bash
 sed -i 's|${oc.env:DVLA_ROOT,.}/data/|${oc.env:DVLA_DATA_ROOT,data}/|g' \
   configs/*.yaml configs/task/*.yaml
 ```
 
-- [ ] **Step 3: Verify zero residue and resolution in both modes**
+- [x] **Step 3: Verify zero residue and resolution in both modes**
 
 ```bash
 grep -rn 'oc.env:DVLA_ROOT' configs/ && echo "FAIL: residue" || echo "OK: no residue"
@@ -101,7 +143,7 @@ shows `/tmp/dvla_data_test/ckpts/...` paths. Repeat the two `--cfg job` checks
 for `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome`,
 `eval_libero_vla` (grep `ckpts` or `processed_data`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add configs/
@@ -121,7 +163,7 @@ verbatim; only the `source common_env.sh` line is replaced by the standard env
 block. The four scripts differ only in header comment, default `CONFIG`,
 default `MASTER_PORT`, and echo tag.
 
-- [ ] **Step 1: Rewrite `scripts/train_vla.sh`**
+- [x] **Step 1: Rewrite `scripts/train_vla.sh`**
 
 Keep lines 1–25 (shebang + header comment block) unchanged. Replace everything
 from `set -euo pipefail` to the end with:
@@ -181,21 +223,21 @@ else
 fi
 ```
 
-- [ ] **Step 2: Rewrite `scripts/train_wm.sh`**
+- [x] **Step 2: Rewrite `scripts/train_wm.sh`**
 
 Same as Step 1 with these substitutions: keep its own header comment
 (lines 1–24); `CONFIG="${CONFIG:-world_model_dinowm_chunk}"`;
 `MASTER_PORT="${MASTER_PORT:-29500}"`; echo tag `[train_wm]`; out_dir echo
 says `outputs/worldmodel/...`.
 
-- [ ] **Step 3: Rewrite `scripts/train_dreamervla.sh`**
+- [x] **Step 3: Rewrite `scripts/train_dreamervla.sh`**
 
 Same with: keep its header comment (lines 1–25);
 `CONFIG="${CONFIG:-dreamervla_rynn_dino_wm_wmpo_outcome}"`;
 `MASTER_PORT="${MASTER_PORT:-29502}"`; echo tag `[train_dreamervla]`; out_dir
 echo says `outputs/dreamervla/...`.
 
-- [ ] **Step 4: Rewrite `scripts/eval_libero_vla.sh`**
+- [x] **Step 4: Rewrite `scripts/eval_libero_vla.sh`**
 
 Same env block, then (no NGPU/torchrun in this script):
 
@@ -212,7 +254,7 @@ echo "[eval_libero_vla] extra hydra args: $*"
 exec "${PYTHON}" -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
 ```
 
-- [ ] **Step 5: Syntax-check and verify no common_env reference**
+- [x] **Step 5: Syntax-check and verify no common_env reference**
 
 ```bash
 bash -n scripts/train_vla.sh scripts/train_wm.sh scripts/train_dreamervla.sh scripts/eval_libero_vla.sh
@@ -220,7 +262,7 @@ grep -l common_env scripts/train_vla.sh scripts/train_wm.sh scripts/train_dreame
 ```
 Expected: no output from `bash -n`; `OK`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/train_vla.sh scripts/train_wm.sh scripts/train_dreamervla.sh scripts/eval_libero_vla.sh
@@ -234,7 +276,7 @@ git commit -s -m "refactor: make core launchers self-contained with DVLA_DATA_RO
 **Files:**
 - Modify: `scripts/download_assets.sh` (full rewrite)
 
-- [ ] **Step 1: Rewrite the script**
+- [x] **Step 1: Rewrite the script**
 
 ```bash
 #!/usr/bin/env bash
@@ -335,14 +377,14 @@ explicit `--download-dir` (the LIBERO downloader places suites in
 had a bare `python`). No LIBERO config block needed — the downloader takes the
 explicit dir.
 
-- [ ] **Step 2: Syntax-check**
+- [x] **Step 2: Syntax-check**
 
 ```bash
 bash -n scripts/download_assets.sh
 ```
 Expected: no output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/download_assets.sh
@@ -356,7 +398,7 @@ git commit -s -m "refactor: download assets into DVLA_DATA_ROOT"
 **Files:**
 - Modify: `scripts/install_env.sh:1-7,45-46`
 
-- [ ] **Step 1: Replace the sourcing header**
+- [x] **Step 1: Replace the sourcing header**
 
 Replace lines 1–7:
 
@@ -386,7 +428,7 @@ cd "${DVLA_ROOT}"
 (The installer creates and activates its own conda env below, so no `PYTHON`
 default or LIBERO block is needed here.)
 
-- [ ] **Step 2: Point the wheel cache at the data root**
+- [x] **Step 2: Point the wheel cache at the data root**
 
 Replace:
 ```bash
@@ -399,7 +441,7 @@ with:
   FLASH_ATTN_WHEEL="${DVLA_DATA_ROOT}/wheels/$(basename "${FLASH_ATTN_WHEEL_URL}")"
 ```
 
-- [ ] **Step 3: Syntax-check and commit**
+- [x] **Step 3: Syntax-check and commit**
 
 ```bash
 bash -n scripts/install_env.sh
@@ -415,7 +457,7 @@ git commit -s -m "refactor: self-contained install_env without common_env.sh"
 - Modify: `scripts/preprocess/prepare_libero_data.sh:1-44`
 - Modify: `scripts/preprocess/process_all_libero_data.sh:19-53,73-75`
 
-- [ ] **Step 1: Replace `prepare_libero_data.sh` header and path defaults**
+- [x] **Step 1: Replace `prepare_libero_data.sh` header and path defaults**
 
 Replace lines 1–44 (through the `ACTION_HIDDEN_GPUS` line) with:
 
@@ -501,7 +543,7 @@ file stays unchanged (the raw-dir change is in defaults above:
 `RAW_LIBERO_DIR` now points at `${DVLA_DATA_ROOT}/dataset/libero/${TASK}`
 instead of `third_party/LIBERO/libero/datasets/${TASK}`).
 
-- [ ] **Step 2: Replace `process_all_libero_data.sh` env header**
+- [x] **Step 2: Replace `process_all_libero_data.sh` env header**
 
 Replace lines 19–53 (from `set -uo pipefail` through the `mkdir -p
 "${CONVS_DIR}" ...` line) with:
@@ -550,13 +592,13 @@ mkdir -p "${CONVS_DIR}" "${TOKENS_DIR}" "${CONCATE_DIR}"
 user's job now. `PROJECT_ROOT` is kept as an alias so the rest of the script
 is untouched.)
 
-- [ ] **Step 3: Point the generated yaml-config dir at the data root**
+- [x] **Step 3: Point the generated yaml-config dir at the data root**
 
 In `process_one_suite()`, replace
 `local CONFIG_DIR="${PROJECT_ROOT}/data/configs/${SUITE}"` with
 `local CONFIG_DIR="${DVLA_DATA_ROOT}/configs/${SUITE}"`.
 
-- [ ] **Step 4: Verify no other `data/` literals remain in either script**
+- [x] **Step 4: Verify no other `data/` literals remain in either script**
 
 ```bash
 bash -n scripts/preprocess/prepare_libero_data.sh scripts/preprocess/process_all_libero_data.sh
@@ -565,7 +607,7 @@ grep -n 'DVLA_ROOT}/data\|PROJECT_ROOT}/data\|common_env' \
 ```
 Expected: `bash -n` silent; `OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/preprocess/prepare_libero_data.sh scripts/preprocess/process_all_libero_data.sh
@@ -963,10 +1005,9 @@ grep -l common_env scripts/*.sh scripts/preprocess/*.sh scripts/eval/launch_open
   | grep -v -E '_(45|g67)|common_env.sh' || echo OK
 # 3. config residue
 grep -rn 'oc.env:DVLA_ROOT' configs/ || echo OK
-# 4. resolution, both modes (paths must exist locally for the unset case)
-python -m dreamer_vla.cli.train --config-name vla_rynnvla_action_head --cfg job | grep -m3 ckpts
-DVLA_DATA_ROOT=/tmp/dvla_data_test python -m dreamer_vla.cli.train \
-  --config-name vla_rynnvla_action_head --cfg job | grep -m3 /tmp/dvla_data_test
+# 4. resolution, both modes — use the compose snippet from "Corrections
+#    discovered during execution" note 1 (the CLI does not support --cfg job),
+#    once with DVLA_DATA_ROOT unset and once with DVLA_DATA_ROOT=/tmp/dvla_data_test
 # 5. data presence with reconciled symlinks
 test -d data/ckpts/VLA_model_256/libero_goal && echo ckpts-ok
 test -d data/processed_data/libero_goal_no_noops_t_256 && echo processed-ok
@@ -1003,8 +1044,8 @@ git clone --no-hardlinks . "${TMP}/DreamerVLA" && cd "${TMP}/DreamerVLA"
 # Walk the SETUP.md quickstart on paper: which commands would fail, in what
 # order, with what message? Run the cheap ones for real:
 bash -n scripts/*.sh scripts/preprocess/*.sh
-DVLA_DATA_ROOT="${TMP}/data" python -m dreamer_vla.cli.train \
-  --config-name vla_rynnvla_action_head --cfg job | grep -m3 "${TMP}/data" || echo "RESOLUTION-FAIL"
+# resolution check: compose snippet from "Corrections" note 1, run inside the
+# clone with DVLA_DATA_ROOT="${TMP}/data" — expect ${TMP}/data/ckpts/... paths
 cd - && rm -rf "${TMP}"
 ```
 
