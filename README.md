@@ -32,7 +32,7 @@ DreamerVLA/
 ├── scripts/            # 训练、评估、预处理、诊断入口
 ├── tests/              # 单测和轻量兼容性测试
 ├── third_party/        # LIBERO、OpenVLA-OFT、robosuite、apex 等本地依赖
-├── data/               # 权重、数据、训练输出；不应提交到 git
+├── data/               # 默认 DVLA_DATA_ROOT；权重、数据、训练输出；不应提交到 git
 └── docs/               # 架构说明、实验记录、历史计划
 ```
 
@@ -50,12 +50,15 @@ DreamerVLA/
 | DreamerVLA | `CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh` |
 | Eval | `bash scripts/eval_libero_vla.sh eval.ckpt_path=data/outputs/.../ckpt/latest.ckpt eval.ckpt_kind=vla` |
 
-正式 shell 入口会自动 source `scripts/common_env.sh`。常用 override：
+正式 shell 入口是自包含脚本，不再 source legacy-only `scripts/common_env.sh`。
+路径由 `DVLA_DATA_ROOT` 控制（默认 `repo/data`）；完整布局见
+[docs/data_layout.md](docs/data_layout.md)。常用 override：
 
 ```bash
+DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data
 CUDA_VISIBLE_DEVICES=0,1,2,3
 NGPU=4
-OUT_DIR=data/outputs/<stage>/<run_name>
+OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run_name>"
 RUN_TAG=my_run
 ```
 
@@ -82,8 +85,8 @@ OUT_DIR=/tmp/dvla_wm_smoke CONFIG=world_model_dinowm_chunk \
 bash scripts/train_wm.sh task=libero_goal training.max_steps=1 dataloader.num_workers=0
 
 CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
-  init.vla_ckpt_path=data/ckpts/VLA_model_256/libero_goal \
-  eval.ckpt_path=data/outputs/vla/rynnvla_action_head/<run>/ckpt/latest.ckpt \
+  init.vla_ckpt_path="${DVLA_DATA_ROOT:-data}/ckpts/VLA_model_256/libero_goal" \
+  eval.ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/rynnvla_action_head/<run>/ckpt/latest.ckpt" \
   eval.ckpt_kind=vla \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=1 \

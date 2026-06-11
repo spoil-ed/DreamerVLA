@@ -2,6 +2,21 @@
 
 本文只保留从新机器到 LIBERO 训练/评估的正式路径。安装、下载、环境变量和 LIBERO config 都由脚本处理，不需要每次手动 export 临时全局变量。
 
+## 新机器 5 步快速开始
+
+```bash
+git clone <repo> && cd DreamerVLA
+bash scripts/install_env.sh                       # conda env + 依赖 + third_party
+conda activate dreamervla
+export DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data      # 可选；不设则用 repo/data
+bash scripts/download_assets.sh                   # 权重 + 数据集 -> 数据根
+bash scripts/preprocess/prepare_libero_data.sh    # 预处理产物 -> 数据根
+bash scripts/train_vla.sh                         # 开始训练
+```
+
+代码与数据由唯一变量 `DVLA_DATA_ROOT` 连接（默认 `${DVLA_ROOT}/data`）。
+完整数据布局与迁移清单见 [docs/data_layout.md](docs/data_layout.md)。
+
 所有命令默认在仓库根目录执行：
 
 ```bash
@@ -30,19 +45,13 @@ apt 系统工具
   -> import / CUDA 验证
 ```
 
-`scripts/common_env.sh` 会被正式 shell 入口自动 source，统一设置：
-
-```text
-DVLA_ROOT, PROJECT_ROOT, PYTHON, PYTHONPATH,
-LIBERO_CONFIG_PATH, MUJOCO_GL, PYOPENGL_PLATFORM,
-TOKENIZERS_PARALLELISM, PYTORCH_CUDA_ALLOC_CONF
-```
-
-默认 Python 指向 `dreamervla` conda 环境。若环境在非默认位置，可覆盖：
-
-```bash
-CONDA_ENV_BIN=/abs/path/to/env/bin bash scripts/train_wm.sh
-```
+正式 shell 入口均为自包含脚本（不再 source legacy-only
+`scripts/common_env.sh`）：脚本顶部自行推导 `DVLA_ROOT`，默认
+`DVLA_DATA_ROOT=${DVLA_ROOT}/data`，设置 `PYTHONPATH` / `MUJOCO_GL`，并生成
+LIBERO 路径配置（`${DVLA_DATA_ROOT}/.libero/config.yaml`，`datasets:` 指向
+`${DVLA_DATA_ROOT}/dataset/libero`）。运行前先 `conda activate dreamervla`；
+脚本使用当前 `PATH` 上的 `python`，也可用 `PYTHON=/abs/path/to/python`
+覆盖。
 
 ## 2. 权重和数据下载
 
@@ -78,11 +87,11 @@ TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
 默认生成当前训练配置需要的格式：
 
 ```text
-data/processed_data/${TASK}_marked_t_256
-data/processed_data/${TASK}_no_noops_t_256
-data/processed_data/${TASK}_no_noops_t_256_pi06_remaining_reward
-data/processed_data/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-data/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_marked_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256_pi06_remaining_reward
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
 说明：
@@ -147,20 +156,20 @@ CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
 # 国内加速可选：export HF_ENDPOINT=https://hf-mirror.com
 for name in libero-spatial libero-object libero-goal libero10; do
   hf download "Haozhan72/Openvla-oft-SFT-${name}-traj1" \
-    --local-dir "data/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-${name}-traj1"
+    --local-dir "${DVLA_DATA_ROOT:-data}/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-${name}-traj1"
 done
 ```
 
 也可以 `git lfs install` 后 `git clone https://huggingface.co/Haozhan72/Openvla-oft-SFT-<suite>-traj1`，放进同一目录。
 
-目录约定 `data/ckpts/Openvla-oft-SFT-traj1/<repo 名>`，与 `scripts/eval/launch_openvla_oft_traj1_eval_g67.sh` 的默认 `CKPT_ROOT` 一致。评估：
+目录约定 `${DVLA_DATA_ROOT:-data}/ckpts/Openvla-oft-SFT-traj1/<repo 名>`。评估：
 
 ```bash
 SUITE=libero_goal bash scripts/eval/launch_openvla_oft_traj1_eval_g67.sh
 
 # 或单卡直接跑
 python scripts/eval/eval_openvla_oft_libero.py \
-  --ckpt data/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
+  --ckpt "${DVLA_DATA_ROOT:-data}/ckpts/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
   --suite libero_goal --policy-mode auto
 ```
 
@@ -232,10 +241,10 @@ python -m pytest tests/unit_tests -q
 数据路径验证：
 
 ```bash
-test -d data/ckpts/VLA_model_256/libero_goal
-test -d data/processed_data/libero_goal_no_noops_t_256
-test -d data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-test -d data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+test -d "${DVLA_DATA_ROOT:-data}/ckpts/VLA_model_256/libero_goal"
+test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256"
+test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward"
+test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
 ```
 
 训练 smoke：

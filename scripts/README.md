@@ -34,12 +34,16 @@ Historical data-preparation shell recipes are archived under
 
 Configs point directly at the route-specific runner class.
 
-Formal wrappers source `scripts/common_env.sh` and accept standard environment variables:
+Formal wrappers are self-contained; they no longer source legacy-only
+`scripts/common_env.sh`. Paths are controlled by `DVLA_DATA_ROOT` (default:
+`repo/data`); see [docs/data_layout.md](../docs/data_layout.md). Standard
+environment overrides:
 
 ```bash
+DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data
 CUDA_VISIBLE_DEVICES=0,1,2,3
 NGPU=4
-OUT_DIR=data/outputs/<stage>/<run_name>
+OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run_name>"
 RUN_TAG=my_run
 ```
 

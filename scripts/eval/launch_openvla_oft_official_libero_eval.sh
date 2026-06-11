@@ -10,19 +10,37 @@ set -euo pipefail
 # crashes when switching tasks in-process.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/../common_env.sh"
+export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+case ":${PYTHONPATH:-}:" in
+  *":${DVLA_ROOT}:"*) ;;
+  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+
+# ---- LIBERO paths (datasets live under the data root) -----------------------
+export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
+mkdir -p "${LIBERO_CONFIG_PATH}"
+if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
+  cat > "${LIBERO_CONFIG_PATH}/config.yaml" <<EOF
+benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
+bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
+init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
+datasets: ${DVLA_DATA_ROOT}/dataset/libero
+assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
+EOF
+fi
 
 ROOT="${ROOT:-${DVLA_ROOT}}"
-PYTHON_BIN="${PYTHON_BIN:-${PYTHON}}"
+PYTHON_BIN="${PYTHON_BIN:-${PYTHON:-python}}"
 OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${ROOT}/third_party/openvla-oft}"
 
 SUITE="${SUITE:-libero_goal}"
 case "${SUITE}" in
   libero10|libero_long) SUITE="libero_10" ;;
 esac
-CKPT_ROOT="${CKPT_ROOT:-${ROOT}/data/ckpts/Openvla-oft-SFT-traj1}"
-OUT_ROOT="${OUT_ROOT:-${ROOT}/data/outputs/eval/openvla_oft_official_libero}"
-STAGED_CKPT_ROOT="${STAGED_CKPT_ROOT:-${ROOT}/data/tmp_ckpts/openvla_oft_official_eval}"
+CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/ckpts/Openvla-oft-SFT-traj1}"
+OUT_ROOT="${OUT_ROOT:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"
+STAGED_CKPT_ROOT="${STAGED_CKPT_ROOT:-${DVLA_DATA_ROOT}/tmp_ckpts/openvla_oft_official_eval}"
 USE_STAGED_CKPT="${USE_STAGED_CKPT:-1}"
 
 NUM_TRIALS="${NUM_TRIALS:-10}"
@@ -72,8 +90,8 @@ SCRIPT_PATH="$(readlink -f "$0")"
 
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}"
-export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
-export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-osmesa}"
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 export OPENVLA_OFT_ROOT
 
 stage_checkpoint() {
@@ -187,7 +205,7 @@ launch_worker_session() {
   fi
 
   tmux new-session -d -s "${session_name}" \
-    "cd '${ROOT}' && env DREAMERVLA_OFFICIAL_LIBERO_WORKER=1 ROOT='${ROOT}' PYTHON_BIN='${PYTHON_BIN}' OPENVLA_OFT_ROOT='${OPENVLA_OFT_ROOT}' SUITE='${SUITE}' CKPT='${CKPT}' MODEL_FOR_RUN='${MODEL_FOR_RUN}' RUN_DIR='${RUN_DIR}' RUN_ID='${RUN_ID}' NUM_TRIALS='${NUM_TRIALS}' POLICY_MODE='${POLICY_MODE}' CAMERA_INPUTS='${CAMERA_INPUTS}' NUM_IMAGES='${NUM_IMAGES}' USE_PROPRIO='${USE_PROPRIO}' NUM_OPEN_LOOP_STEPS='${NUM_OPEN_LOOP_STEPS}' ENV_IMG_RES='${ENV_IMG_RES}' SEED='${SEED}' SAVE_VIDEOS='${SAVE_VIDEOS}' MUJOCO_GL='${MUJOCO_GL}' PYOPENGL_PLATFORM='${PYOPENGL_PLATFORM}' TF_FORCE_GPU_ALLOW_GROWTH='${TF_FORCE_GPU_ALLOW_GROWTH}' TOKENIZERS_PARALLELISM='${TOKENIZERS_PARALLELISM}' SLEEP_BETWEEN_TASKS='${SLEEP_BETWEEN_TASKS}' '${SCRIPT_PATH}' '${gpu}' '${task_list}' '${session_name}'"
+    "cd '${ROOT}' && env DREAMERVLA_OFFICIAL_LIBERO_WORKER=1 DVLA_ROOT='${DVLA_ROOT}' DVLA_DATA_ROOT='${DVLA_DATA_ROOT}' ROOT='${ROOT}' PYTHON_BIN='${PYTHON_BIN}' OPENVLA_OFT_ROOT='${OPENVLA_OFT_ROOT}' SUITE='${SUITE}' CKPT='${CKPT}' MODEL_FOR_RUN='${MODEL_FOR_RUN}' RUN_DIR='${RUN_DIR}' RUN_ID='${RUN_ID}' NUM_TRIALS='${NUM_TRIALS}' POLICY_MODE='${POLICY_MODE}' CAMERA_INPUTS='${CAMERA_INPUTS}' NUM_IMAGES='${NUM_IMAGES}' USE_PROPRIO='${USE_PROPRIO}' NUM_OPEN_LOOP_STEPS='${NUM_OPEN_LOOP_STEPS}' ENV_IMG_RES='${ENV_IMG_RES}' SEED='${SEED}' SAVE_VIDEOS='${SAVE_VIDEOS}' MUJOCO_GL='${MUJOCO_GL}' PYOPENGL_PLATFORM='${PYOPENGL_PLATFORM}' TF_FORCE_GPU_ALLOW_GROWTH='${TF_FORCE_GPU_ALLOW_GROWTH}' TOKENIZERS_PARALLELISM='${TOKENIZERS_PARALLELISM}' SLEEP_BETWEEN_TASKS='${SLEEP_BETWEEN_TASKS}' '${SCRIPT_PATH}' '${gpu}' '${task_list}' '${session_name}'"
   echo "${session_name}" | tee -a "${RUN_DIR}/tmux_sessions.txt"
 }
 

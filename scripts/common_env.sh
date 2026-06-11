@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Shared environment defaults for formal DreamerVLA shell entrypoints.
+# DEPRECATED for formal entrypoints -- they are now self-contained and read
+# DVLA_DATA_ROOT (see docs/data_layout.md). Kept only for the legacy
+# machine-specific scripts (*_45.sh, *_g67.sh, smoke/, archive/) that still
+# source it.
 
 _DREAMERVLA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${_DREAMERVLA_SCRIPT_DIR}/.." && pwd -P)}"
