@@ -23,20 +23,48 @@
 #        training.max_steps=1 dataloader.num_workers=0
 # ============================================================================
 set -euo pipefail
+
+# ---- environment (self-contained; no common_env.sh) -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/common_env.sh"
+export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+case ":${PYTHONPATH:-}:" in
+  *":${DVLA_ROOT}:"*) ;;
+  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+PYTHON="${PYTHON:-python}"
+
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+
+# ---- LIBERO paths (datasets live under the data root) -----------------------
+export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
+mkdir -p "${LIBERO_CONFIG_PATH}"
+if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
+  cat > "${LIBERO_CONFIG_PATH}/config.yaml" <<EOF
+benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
+bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
+init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
+datasets: ${DVLA_DATA_ROOT}/dataset/libero
+assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
+EOF
+fi
+
 cd "${DVLA_ROOT}"
 
-# ---- defaults --------------------------------------------------------------
+# ---- knobs -------------------------------------------------------------------
 CONFIG="${CONFIG:-world_model_dinowm_chunk}"
 NGPU="${NGPU:-1}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 
-# ---- env -------------------------------------------------------------------
-
-# ---- launch ----------------------------------------------------------------
+# ---- launch ------------------------------------------------------------------
+echo "[train_wm] python=$(command -v "${PYTHON}")"
+echo "[train_wm] root=${DVLA_ROOT}  data_root=${DVLA_DATA_ROOT}"
 echo "[train_wm] config=${CONFIG}  ngpu=${NGPU}  gpus=${CUDA_VISIBLE_DEVICES:-<all>}"
-echo "[train_wm] out_dir=${OUT_DIR:-<config default: data/outputs/worldmodel/.../<timestamp>>}"
+echo "[train_wm] out_dir=${OUT_DIR:-<config default: \${DVLA_DATA_ROOT}/outputs/worldmodel/.../<timestamp>>}"
 echo "[train_wm] extra hydra args: $*"
 
 if [ "${NGPU}" -gt 1 ]; then
