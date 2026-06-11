@@ -15,6 +15,7 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         "scripts/train_wm.sh",
         "scripts/train_dreamervla.sh",
         "scripts/eval_libero_vla.sh",
+        "scripts/preprocess_libero.sh",
         "scripts/preprocess/prepare_libero_data.sh",
     )
     release_entrypoints = (
@@ -103,6 +104,20 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert "${TASK}_no_noops_t_${IMAGE_RESOLUTION}" in prepare_text
 
 
+def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> None:
+    root = _project_root()
+    wrapper = root / "scripts" / "preprocess_libero.sh"
+
+    assert wrapper.is_file()
+    text = wrapper.read_text(encoding="utf-8")
+
+    assert 'export DVLA_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"' in text
+    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
+    assert 'DEFAULT_SUITES=(libero_goal libero_object libero_spatial libero_10)' in text
+    assert 'bash "${DVLA_ROOT}/scripts/preprocess/prepare_libero_data.sh"' in text
+    assert 'TASK="${suite}"' in text
+
+
 def test_release_scripts_do_not_ship_common_env() -> None:
     root = _project_root()
 
@@ -121,6 +136,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "download_assets.sh",
         "eval_libero_vla.sh",
         "install_env.sh",
+        "preprocess_libero.sh",
         "train_dreamervla.sh",
         "train_vla.sh",
         "train_wm.sh",

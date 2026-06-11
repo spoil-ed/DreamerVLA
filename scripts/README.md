@@ -9,6 +9,7 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | --- | --- |
 | `install_env.sh` | Run resumable install steps under `scripts/install/` |
 | `download_assets.sh` | Download checkpoints and LIBERO / CALVIN data |
+| `preprocess_libero.sh` | Compatibility wrapper that preprocesses the standard LIBERO suites |
 | `preprocess/prepare_libero_data.sh` | Build LIBERO HDF5 views, reward labels, manifests, and action-hidden sidecars |
 | `train_vla.sh` | VLA SFT via Hydra route configs |
 | `train_wm.sh` | World-model and classifier training via Hydra route configs |
@@ -30,6 +31,7 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 
 | Script | Purpose |
 | --- | --- |
+| `preprocess_libero.sh` | Top-level wrapper around `preprocess/prepare_libero_data.sh` for one or more LIBERO suites |
 | `preprocess/prepare_libero_data.sh` | End-to-end resumable LIBERO preprocessing path |
 | `preprocess/process_all_libero_data.sh` | Lower-level LIBERO image, conversation, token, and config generation |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
