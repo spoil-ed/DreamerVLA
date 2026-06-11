@@ -18,7 +18,7 @@ trainer:
   debug: false
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_ROOT,.}/data/outputs/dreamervla/wmpo_outcome/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/wmpo_outcome/${now:%Y%m%d_%H%M%S}}
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -43,10 +43,10 @@ init:
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   # Use the better-trained m1024 step_10000 ckpt (continued training to convergence).
-  world_model_state_ckpt: ${oc.env:DVLA_ROOT,.}/data/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/step_00010000.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/step_00010000.ckpt
   # LatentSuccessClassifier (frozen) for the WMPO outcome reward. Required when
   # algorithm.update_type=wmpo_outcome.
-  classifier_state_ckpt: ${oc.env:DVLA_ROOT,.}/data/outputs/dreamervla/outcome_classifier/libero_goal/v2_wm_replay/best.ckpt
+  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/libero_goal/v2_wm_replay/best.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
   load_dreamervla_critic: false

@@ -12,20 +12,20 @@ action_horizon: 10
 time_horizon: 10
 
 vla_init_tag: libero_spatial
-vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_spatial
+vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/VLA_model_256/libero_spatial
 
-tokenizer_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-text_tokenizer_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/chameleon/tokenizer/text_tokenizer.json
-chameleon_vqgan_config: ${oc.env:DVLA_ROOT,.}/data/ckpts/chameleon/tokenizer/vqgan.yaml
-chameleon_vqgan_ckpt: ${oc.env:DVLA_ROOT,.}/data/ckpts/chameleon/tokenizer/vqgan.ckpt
+tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
+text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/text_tokenizer.json
+chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/vqgan.yaml
+chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/vqgan.ckpt
 
-pretokenize_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: ${oc.env:DVLA_ROOT,.}/data/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_spatial/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
 
-hdf5_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256
-hdf5_reward_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_pi06_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_spatial_no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_spatial_no_noops_t_256_pi06_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_spatial_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
 
 legacy_action_hidden:
   expected_action_head_type: legacy
@@ -40,13 +40,13 @@ legacy_action_hidden:
   chunk_size: 10
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/OpenVLA-OFT/libero_spatial
-  component_ckpt_dir: ${oc.env:DVLA_ROOT,.}/data/ckpts/OpenVLA-OFT/libero_spatial
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_spatial
+  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_spatial
   resume_step: 150000
-  dataset_statistics_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/OpenVLA-OFT/libero_spatial/dataset_statistics.json
+  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_spatial/dataset_statistics.json
   dataset_statistics_key: libero_spatial_no_noops
-  action_head_ckpt: ${oc.env:DVLA_ROOT,.}/data/ckpts/OpenVLA-OFT/libero_spatial/action_head--150000_checkpoint.pt
-  proprio_projector_ckpt: ${oc.env:DVLA_ROOT,.}/data/ckpts/OpenVLA-OFT/libero_spatial/proprio_projector--150000_checkpoint.pt
+  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_spatial/action_head--150000_checkpoint.pt
+  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_spatial/proprio_projector--150000_checkpoint.pt
   action_horizon: 8
   time_horizon: 8
   image_resolution: 224
@@ -54,7 +54,7 @@ openvla_oft:
   use_proprio: true
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_spatial_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
+  action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_spatial_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
   failure_hdf5_dir: null
   failure_action_hidden_dir: null
   expected_action_head_type: oft_l1_regression

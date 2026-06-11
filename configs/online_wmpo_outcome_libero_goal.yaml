@@ -14,7 +14,7 @@
 #   * runs its own train loop (NOT this config's _target_ runner)
 #
 # Differences vs configs/dreamer_vla_libero_goal_rynn_dino_wm_wmpo_outcome.yaml:
-#   * all paths are repo-root relative via ${oc.env:DVLA_ROOT,.}
+#   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,data}
 #   * world_model_state_ckpt → pinned ChunkAware step 17000 (today's training)
 #   * classifier_state_ckpt → the wmpo_aligned_small_tf episode-F1 0.951 winner
 #     (this field is read by JointDreamerVLARunner; online script ignores it
@@ -36,7 +36,7 @@ trainer:
   debug: false
 
 training:
-  out_dir: ${oc.env:DVLA_ROOT,.}/data/outputs/dreamervla/online_wmpo_outcome/default/run
+  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/online_wmpo_outcome/default/run
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -54,15 +54,15 @@ training:
   run_actor_critic_phase: true
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
+  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/VLA_model_256/libero_goal
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   # ChunkAware m1024_d6 trained today, pinned snapshot at step 17000.
-  world_model_state_ckpt: ${oc.env:DVLA_ROOT,.}/data/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
   # WMPO-aligned small Transformer classifier — episode F1 = 0.9514 (2026-05-25).
   # Online script reads from --classifier-ckpt instead; this entry is kept in
   # sync for offline-runner compatibility.
-  classifier_state_ckpt: ${oc.env:DVLA_ROOT,.}/data/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
+  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
   load_dreamervla_critic: false
@@ -76,12 +76,12 @@ encoder: null
 
 dataset:
   _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
-  hdf5_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-  hidden_dir: ${oc.env:DVLA_ROOT,.}/data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
   # Sidecar metadata stores the model_path used during preprocessing. Keep this
   # aligned with the path used to generate hidden_dir; override on the CLI if
   # reusing old sidecars whose stored model_path differs.
-  expected_model_path: ${oc.env:DVLA_ROOT,.}/data/ckpts/VLA_model_256/libero_goal
+  expected_model_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/VLA_model_256/libero_goal
   expected_encoder_state_ckpt: null
   expected_time_horizon: 5
   expected_action_head_type: legacy
