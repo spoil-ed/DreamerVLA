@@ -133,6 +133,32 @@ noting formal entries no longer use it. The machine-suffixed one-off scripts
 document `DVLA_DATA_ROOT`), `scripts/README.md`, and `README.md` references
 to `common_env.sh` / data layout.
 
+**New: `docs/data_layout.md` — portable dataset manifest.** A single
+self-contained document that fully specifies the data root, so a new machine
+can be provisioned (or an old one audited) from this file alone. For every
+asset class it records:
+
+- **Content**: what it is and which training route needs it
+  (required / optional per route).
+- **Canonical path** under `${DVLA_DATA_ROOT}` (the single source of truth;
+  configs and scripts must agree with this file).
+- **Format**: HDF5 / safetensors / pt / json / yaml, plus key internal
+  structure where it matters (e.g. HDF5 demo keys, sidecar tensor shapes).
+- **Provenance**: the exact command that downloads it
+  (`download_assets.sh` flags) or the script that generates it
+  (`prepare_libero_data.sh` stage), with upstream repo names.
+
+Covered asset classes: pretrained ckpts (RynnVLA `VLA_model_256`,
+`Action_World_model_512`, WorldVLA chameleon tokenizer, Lumina-mGPT,
+OpenVLA-OFT), raw LIBERO HDF5 per suite, optional CALVIN, preprocessed
+products (marked / no_noops / reward / action-hidden sidecars / pretokenize
+configs), task metainfo JSONs, and training outputs. Linked from `SETUP.md`.
+
+Note: the current machine's live layout deviates from the canonical one
+(e.g. `processed_data` sits under `data/dataset/` while configs expect
+`data/processed_data`). Implementation reconciles via symlinks and the
+manifest documents only the canonical layout.
+
 ## Migration note (existing machines)
 
 On machines with LIBERO raw data already under
