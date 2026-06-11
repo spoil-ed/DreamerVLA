@@ -111,7 +111,7 @@ Notes:
 
 Run:
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA
+cd /path/to/DreamerVLA
 grep -rn 'oc.env:DVLA_ROOT' configs/ | grep -v 'oc.env:DVLA_ROOT,.}/data/' || echo "ALL-MATCH"
 grep -rn 'oc.env:PROJECT_ROOT' configs/ || echo "NO-PROJECT-ROOT"
 ```
@@ -894,7 +894,7 @@ At the top of SETUP.md (after the title/intro), insert:
 git clone <repo> && cd DreamerVLA
 bash scripts/install_env.sh                       # conda env + 依赖 + third_party
 conda activate dreamervla
-export DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data      # 可选；不设则用 repo/data
+export DVLA_DATA_ROOT=/path/to/dvla_data          # 可选；不设则用 repo/data
 bash scripts/download_assets.sh                   # 权重 + 数据集 → 数据根
 bash scripts/preprocess/prepare_libero_data.sh    # 预处理产物 → 数据根
 bash scripts/train_vla.sh                         # 开始训练
@@ -1053,7 +1053,7 @@ cd - && rm -rf "${TMP}"
 
 ```bash
 # absolute paths bound to this machine
-grep -rn '/mnt/data\|/home/user01\|/data/spoil' --include='*.sh' --include='*.yaml' --include='*.py' \
+grep -rn "$(printf '/%s/data\\|/%s/user01\\|/data/spoil' mnt home)" --include='*.sh' --include='*.yaml' --include='*.py' \
   scripts/ configs/ dreamer_vla/ | grep -v -E '_(45|g67)|archive/|smoke/|wm_variants'
 # hardcoded GPU ids / device lists in formal scripts
 grep -n 'GPUS=\|GPU_A=\|GPU_B=\|CUDA_VISIBLE_DEVICES=' scripts/*.sh scripts/preprocess/*.sh \

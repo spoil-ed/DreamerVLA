@@ -8,7 +8,7 @@
 git clone <repo> && cd DreamerVLA
 bash scripts/install_env.sh                       # conda env + 依赖 + third_party
 conda activate dreamervla
-export DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data      # 可选；不设则用 repo/data
+export DVLA_DATA_ROOT=/path/to/dvla_data          # 可选；不设则用 repo/data
 bash scripts/download_assets.sh                   # 权重 + 数据集 -> 数据根
 bash scripts/preprocess/prepare_libero_data.sh    # 预处理产物 -> 数据根
 bash scripts/train_vla.sh                         # 开始训练

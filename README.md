@@ -55,7 +55,7 @@ DreamerVLA/
 [docs/data_layout.md](docs/data_layout.md)。常用 override：
 
 ```bash
-DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data
+DVLA_DATA_ROOT=/path/to/dvla_data
 CUDA_VISIBLE_DEVICES=0,1,2,3
 NGPU=4
 OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run_name>"

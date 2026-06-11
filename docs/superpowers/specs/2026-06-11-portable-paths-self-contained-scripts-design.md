@@ -162,7 +162,7 @@ manifest documents only the canonical layout.
 ## No machine-specific code (hard requirement)
 
 Nothing in mainline code may be specific to the machine it was developed on.
-Machine-bound values (absolute `/mnt/...` or `/home/...` paths, GPU id lists,
+Machine-bound values (absolute mount/home paths, GPU id lists,
 hostnames, conda install locations) are allowed only in the explicitly legacy
 scripts (`*_45.sh`, `*_g67.sh`, `scripts/archive/`, `scripts/smoke/`,
 `scripts/wm_variants_v4_v4E/`). Formal scripts must derive everything from
@@ -197,7 +197,7 @@ Documented in SETUP.md.
 ```bash
 git clone <repo> && cd DreamerVLA
 bash scripts/install_env.sh
-export DVLA_DATA_ROOT=/mnt/bigdisk/dvla_data   # optional
+export DVLA_DATA_ROOT=/path/to/dvla_data       # optional
 bash scripts/download_assets.sh
 bash scripts/preprocess/prepare_libero_data.sh
 bash scripts/train_vla.sh
