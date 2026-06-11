@@ -13,7 +13,7 @@
 #
 # Env overrides:
 #   SUITES="libero_10 libero_object libero_spatial"  (default)
-#   GPUS=4,5
+#   GPUS=0
 #   PRETOKENIZE_PROCS=16
 #   FORCE=1   re-run even if outputs look complete
 set -uo pipefail

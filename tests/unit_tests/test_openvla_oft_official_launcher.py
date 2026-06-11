@@ -17,6 +17,8 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     assert 'CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/ckpts/Openvla-oft-SFT-traj1}"' in text
     assert 'OUT_ROOT="${OUT_ROOT:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"' in text
     assert 'STAGED_CKPT_ROOT="${STAGED_CKPT_ROOT:-${DVLA_DATA_ROOT}/tmp_ckpts/openvla_oft_official_eval}"' in text
+    assert 'GPU_A="${GPU_A:-0}"' in text
+    assert 'GPU_B="${GPU_B:-1}"' in text
     assert 'MUJOCO_GL="${MUJOCO_GL:-egl}"' in text
     assert 'PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"' in text
     assert 'CAMERA_INPUTS="${CAMERA_INPUTS:-primary}"' in text

@@ -71,6 +71,7 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
 
     assert 'HIS="${HIS:-1}"' in process_text
     assert 'ACTION_HORIZON="${ACTION_HORIZON:-1}"' in process_text
+    assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in prepare_text
     assert 'FILTER_NOOPS="${FILTER_NOOPS:-1}"' in prepare_text
     assert 'RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_DATA_ROOT}/dataset/libero/${TASK}}"' in prepare_text
