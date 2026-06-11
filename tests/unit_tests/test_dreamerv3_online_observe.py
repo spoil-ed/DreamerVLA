@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import torch
 
+from dreamer_vla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
+    DreamerV3PixelRynnBackboneWorldModel,
+)
 from dreamer_vla.models.world_model.dreamerv3_torch import (
     DreamerV3LatentState,
-    DreamerV3PixelRynnBackboneWorldModel,
     DreamerV3RSSM,
 )
 

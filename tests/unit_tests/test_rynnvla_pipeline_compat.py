@@ -4,13 +4,13 @@ import json
 
 import pytest
 import torch
-from torch import nn
 from omegaconf import OmegaConf
+from torch import nn
 
 from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from dreamer_vla.models.vla_actor import RynnVLAActionHiddenActor, VLAActionHeadActor
+from dreamer_vla.models.actor import RynnVLAActionHiddenActor, VLAActionHeadActor
 from dreamer_vla.models.reward import LatentSuccessClassifier
 from dreamer_vla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
 from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner

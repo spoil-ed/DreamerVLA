@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import sys
 import os
+import sys
 from pathlib import Path
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDORED_OPENVLA_OFT_ROOT = PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"

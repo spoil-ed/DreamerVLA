@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import torch
 
 from dreamer_vla.dataset.base_dataset import BaseDataset
 from dreamer_vla.dataset.pretokenize_dataset import PretokenizeDataset
 from dreamer_vla.utils.wm_image_viz import extract_image_blocks
-
 
 _IMG_TOKEN_NAME_RE = re.compile(r"^IMGIMG(.+)$")
 

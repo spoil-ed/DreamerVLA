@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-import re
 from typing import Any
 
 import h5py
 import numpy as np
 import torch
 from PIL import Image
-
 from torch.utils.data import Dataset
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

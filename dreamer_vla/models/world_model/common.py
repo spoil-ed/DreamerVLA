@@ -1,72 +1,159 @@
-"""Truly model-agnostic primitives shared across DreamerVLA's world models.
+"""Model-agnostic primitives shared across DreamerVLA world models."""
 
-This is the equivalent of ``diffusion_policy/model/common/`` — only stuff that
-is **not tied to any specific WM architecture** lives here. Things that are
-inherently part of a model family (RSSM/DreamerV3 details, TSSM details,
-pi0-action-hidden-specific decoders) stay grouped in their family files
-(``dreamerv3_torch.py`` and ``tssm_torch.py``).
+from __future__ import annotations
 
-What's here:
+import torch
+import torch.nn as nn
 
-    norms / activation
-        ``RMSNorm``, ``ChannelRMSNorm``, ``act`` (activation factory).
-    MLP family
-        ``MLPHead``, ``ResBlock``, ``ResMLPHead`` — plain and residual MLPs
-        used by hidden decoders, reward heads, continue heads, etc.
-    Block-diagonal Linear
-        ``BlockLinear`` — used inside RSSM's GRU, also reusable elsewhere.
-    Tiny utilities
-        ``_module_dtype``, ``_module_device``.
-
-What's intentionally NOT here (lives with its family):
-
-    * ``DreamerV3RSSM``, ``DreamerV3PixelEncoder/Decoder``, pi0 hidden
-      decoders and RynnBackboneObsEncoder — grouped with their model family;
-      reward heads live in ``reward_heads.py``.
-    * Causal transformer + multihead attention (ported from TransDreamer,
-      tightly coupled with TSSM dynamics) — in ``tssm_torch.py``.
-
-Cfg usage (Hydra ``_target_``):
-
-.. code-block:: yaml
-
-    hidden_decoder:
-      _target_: dreamer_vla.models.world_model.common.ResMLPHead
-      in_dim: 10240
-      out_dim: null
-      layers: 4
-      units: 16384
-"""
-
-# norms & activation
-from dreamer_vla.models.world_model.dreamerv3_torch import (
-    RMSNorm,
-    ChannelRMSNorm,
-    _act as act,
-)
-
-# MLP family
-from dreamer_vla.models.world_model.dreamerv3_torch import (
-    MLPHead,
-    _ResBlock as ResBlock,
-    ResMLPHead,
-)
-
-# block-diagonal linear
 from dreamer_vla.models.world_model.block_linear import BlockLinear
 
-# tiny utils
-from dreamer_vla.models.world_model.dreamerv3_torch import _module_dtype, _module_device
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = float(eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dtype = x.dtype
+        x32 = x.float()
+        rms = x32.square().mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return (x32 * rms).to(dtype) * self.weight.to(dtype=dtype)
+
+
+class ChannelRMSNorm(nn.Module):
+    def __init__(self, channels: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(channels))
+        self.eps = float(eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dtype = x.dtype
+        x32 = x.float()
+        rms = x32.square().mean(dim=1, keepdim=True).add(self.eps).rsqrt()
+        weight = self.weight.to(dtype=dtype).view(1, -1, 1, 1)
+        return (x32 * rms).to(dtype) * weight
+
+
+def act(name: str) -> nn.Module:
+    name = str(name).lower()
+    if name in {"silu", "swish"}:
+        return nn.SiLU()
+    if name == "gelu":
+        return nn.GELU()
+    if name == "relu":
+        return nn.ReLU()
+    if name == "elu":
+        return nn.ELU()
+    raise ValueError(f"Unsupported activation: {name}")
+
+
+def _module_ref_tensor(module: nn.Module) -> torch.Tensor | None:
+    for tensor in module.parameters(recurse=True):
+        return tensor
+    for tensor in module.buffers(recurse=True):
+        return tensor
+    for child in module.modules():
+        for attr in ("weight", "bias"):
+            tensor = getattr(child, attr, None)
+            if isinstance(tensor, torch.Tensor):
+                return tensor
+    return None
+
+
+def _module_dtype(module: nn.Module, fallback: torch.dtype) -> torch.dtype:
+    tensor = _module_ref_tensor(module)
+    return tensor.dtype if tensor is not None else fallback
+
+
+def _module_device(module: nn.Module, fallback: torch.device) -> torch.device:
+    tensor = _module_ref_tensor(module)
+    return tensor.device if tensor is not None else fallback
+
+
+class MLPHead(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        layers: int = 1,
+        units: int = 1024,
+        act: str = "silu",
+        outscale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        mods: list[nn.Module] = []
+        cur = int(in_dim)
+        for _ in range(int(layers)):
+            activation = globals()["act"](act)
+            mods.extend([nn.Linear(cur, int(units)), RMSNorm(int(units)), activation])
+            cur = int(units)
+        final = nn.Linear(cur, int(out_dim))
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                final.weight.mul_(float(outscale))
+                if final.bias is not None:
+                    final.bias.mul_(float(outscale))
+        mods.append(final)
+        self.net = nn.Sequential(*mods)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class ResBlock(nn.Module):
+    def __init__(self, dim: int, act: str) -> None:
+        super().__init__()
+        self.norm = RMSNorm(dim)
+        self.fc1 = nn.Linear(dim, dim)
+        self.act = globals()["act"](act)
+        self.fc2 = nn.Linear(dim, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        h = self.act(self.fc1(h))
+        return x + self.fc2(h)
+
+
+class ResMLPHead(nn.Module):
+    """ResNet-style MLP head: input projection, residual blocks, output projection."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        layers: int = 2,
+        units: int = 8192,
+        act: str = "silu",
+        outscale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.input_proj = nn.Linear(int(in_dim), int(units))
+        self.blocks = nn.ModuleList([ResBlock(int(units), act) for _ in range(int(layers))])
+        self.norm_out = RMSNorm(int(units))
+        final = nn.Linear(int(units), int(out_dim))
+        if float(outscale) != 1.0:
+            with torch.no_grad():
+                final.weight.mul_(float(outscale))
+                if final.bias is not None:
+                    final.bias.mul_(float(outscale))
+        self.output_proj = final
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.input_proj(x)
+        for block in self.blocks:
+            h = block(h)
+        return self.output_proj(self.norm_out(h))
 
 
 __all__ = [
-    "RMSNorm",
+    "BlockLinear",
     "ChannelRMSNorm",
-    "act",
     "MLPHead",
+    "RMSNorm",
     "ResBlock",
     "ResMLPHead",
-    "BlockLinear",
-    "_module_dtype",
     "_module_device",
+    "_module_dtype",
+    "act",
 ]

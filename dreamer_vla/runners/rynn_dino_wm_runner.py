@@ -11,8 +11,8 @@ from dreamer_vla.runners.dreamerv3_pixel_runner import DreamerV3PixelRunner
 class RynnDinoWMTrainingRunner(DreamerV3PixelRunner):
     """DINO-WM-style trainer for full RynnVLA action-token hidden sidecars."""
 
-    runner_name = "rynn_dino_wm_compat"
-    runner_status = "compatibility"
+    runner_name = "rynn_dino_wm"
+    runner_status = "secondary"
     runner_family = "world_model"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:

@@ -1,7 +1,7 @@
 # LatentSuccessClassifier — CHUNK-LEVEL variant aligned 1:1 with the
 # action-level small_tf baseline, with ONLY the time unit reinterpreted:
 #
-#   action-level (small_tf, archived):           chunk-level (this config):
+#   action-level (small_tf):                     chunk-level (this config):
 #     window=8 env-steps consecutive               window=8 chunks (= 40 env-steps)
 #     stride_train=8 env-steps (non-overlap)       stride_train=8 chunks = 40 env-steps
 #     stride_val=1 env-step (dense sweep)          stride_val=1 chunk  = 5 env-steps
@@ -9,7 +9,7 @@
 #
 # Every other knob (arch, optimizer, regularization, max_steps, batch_size,
 # label_smoothing, weight_decay, episode_eval cadence) is byte-identical to
-# the archived small_tf config — only the data-time unit and the chunk-pool
+# the earlier small_tf config — only the data-time unit and the chunk-pool
 # fields change.
 #
 # chunk_pool="last" matches the user spec "实实在在做完 chunk 的那一帧": each

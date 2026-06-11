@@ -5,11 +5,10 @@ gradient signal from real trajectories alongside imagined ones.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import torch
 from torch import nn
-
 
 _ZERO_METRICS = {
     "real_relabel_applied": 0.0,

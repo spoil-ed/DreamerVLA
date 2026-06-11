@@ -24,33 +24,26 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamer_vla.dataset import BaseDataset
+from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.optim import build_optimizer
+from dreamer_vla.utils.paths import checkpoints_path, data_path
 from dreamer_vla.utils.seed import set_seed
-from dreamer_vla.runners.base_runner import BaseRunner
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ChameleonLatentActionWMRunner(BaseRunner):
-    runner_name = "chameleon_latent_wm_compat"
-    runner_status = "compatibility"
+    runner_name = "chameleon_latent_wm"
+    runner_status = "secondary"
     runner_family = "world_model"
     include_keys = ("global_step", "epoch")
     exclude_keys = ("encoder",)
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = str(
-        PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_goal"
-    )
+    default_vla_init_dir = str(checkpoints_path("VLA_model_256", "libero_goal"))
     default_output_dir = str(
-        PROJECT_ROOT
-        / "data"
-        / "outputs"
-        / "worldmodel"
-        / "chameleon_latent_action_wm"
-        / "debug"
+        data_path("outputs", "worldmodel", "chameleon_latent_action_wm", "debug")
     )
 
     @staticmethod

@@ -17,24 +17,24 @@ import gc
 import json
 import os
 
-from PIL import Image
-from accelerate import init_empty_weights
-from configuration_chameleon import ChameleonConfig
-from image_processing_chameleon import ChameleonImageProcessor
-from modeling_chameleon import ChameleonForConditionalGeneration
-from processing_chameleon import ChameleonProcessor
 import requests
 import torch
 import transformers
 import yaml
+from accelerate import init_empty_weights
+from configuration_chameleon import ChameleonConfig
+from image_processing_chameleon import ChameleonImageProcessor
+from modeling_chameleon import ChameleonForConditionalGeneration
+from PIL import Image
+from processing_chameleon import ChameleonProcessor
 
 try:
     from transformers import LlamaTokenizerFast
-except ImportError:
+except ImportError as err:
     raise ValueError(
         "Chameleon conversion supports only FastTokenizer and LlamaTokenizerFast can't be imported! "
         "Update your `tokenizers` library and re-run the tokenizer conversion."
-    )
+    ) from err
 
 """
 Sample usage:
@@ -72,7 +72,7 @@ def compute_intermediate_size(n, ffn_dim_multiplier=1, multiple_of=256):
 
 
 def read_json(path):
-    with open(path, "r") as f:
+    with open(path) as f:
         return json.load(f)
 
 

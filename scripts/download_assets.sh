@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Download model weights and benchmark datasets used by formal DreamerVLA flows.
+# Download model weights and benchmark datasets used by DreamerVLA.
 # All assets land under ${DVLA_DATA_ROOT} (default: <repo>/data).
 set -euo pipefail
 
-# ---- environment (self-contained; no common_env.sh) -------------------------
+# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
@@ -23,9 +23,9 @@ DOWNLOAD_LIBERO="${DOWNLOAD_LIBERO:-1}"
 DOWNLOAD_CALVIN="${DOWNLOAD_CALVIN:-0}"
 DOWNLOAD_ACTION_WM="${DOWNLOAD_ACTION_WM:-1}"
 
-CKPT_DIR="${DVLA_DATA_ROOT}/ckpts"
-LIBERO_DATASET_DIR="${LIBERO_DATASET_DIR:-${DVLA_DATA_ROOT}/dataset/libero}"
-mkdir -p "${CKPT_DIR}" "${LIBERO_DATASET_DIR}"
+CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"
+LIBERO_DATASET_DIR="${LIBERO_DATASET_DIR:-${DVLA_DATA_ROOT}/datasets/libero}"
+mkdir -p "${CHECKPOINT_DIR}" "${LIBERO_DATASET_DIR}"
 
 echo "[download_assets] data_root=${DVLA_DATA_ROOT}"
 
@@ -34,22 +34,22 @@ normalize_list() {
 }
 
 if [[ "${DOWNLOAD_WEIGHTS}" == "1" ]]; then
-  echo "[download_assets] Hugging Face weights -> ${CKPT_DIR}"
+  echo "[download_assets] Hugging Face weights -> ${CHECKPOINT_DIR}"
   hf download "${WORLDVLA_REPO}" --repo-type model \
-    --local-dir "${CKPT_DIR}" \
+    --local-dir "${CHECKPOINT_DIR}" \
     --include "chameleon/tokenizer/*" "chameleon/base_model/*" "base_model/*" "chameleon/starting_point/*"
 
   hf download "${LUMINA_REPO}" --repo-type model \
-    --local-dir "${CKPT_DIR}/models--Alpha-VLLM--Lumina-mGPT-7B-768"
+    --local-dir "${CHECKPOINT_DIR}/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 
   for suite in $(normalize_list "${LIBERO_SUITES}"); do
     [[ -n "${suite}" ]] || continue
     hf download "${RYNNVLA_REPO}" --repo-type model \
-      --local-dir "${CKPT_DIR}" \
+      --local-dir "${CHECKPOINT_DIR}" \
       --include "VLA_model_256/${suite}/*"
     if [[ "${DOWNLOAD_ACTION_WM}" == "1" ]]; then
       hf download "${RYNNVLA_REPO}" --repo-type model \
-        --local-dir "${CKPT_DIR}" \
+        --local-dir "${CHECKPOINT_DIR}" \
         --include "Action_World_model_512/${suite}/*"
     fi
   done
@@ -73,16 +73,16 @@ if [[ "${DOWNLOAD_CALVIN}" == "1" ]]; then
   echo "[download_assets] CALVIN datasets"
   CALVIN_BASE_URL="${CALVIN_BASE_URL:-http://calvin.cs.uni-freiburg.de/dataset}"
   CALVIN_TASKS="${CALVIN_TASKS:-task_ABCD_D}"
-  CALVIN_DIR="${CALVIN_DIR:-${DVLA_DATA_ROOT}/dataset/calvin}"
+  CALVIN_DIR="${CALVIN_DIR:-${DVLA_DATA_ROOT}/datasets/calvin}"
   mkdir -p "${CALVIN_DIR}"
   for task in $(normalize_list "${CALVIN_TASKS}"); do
     [[ -n "${task}" ]] || continue
-    archive="${CALVIN_DIR}/${task}.zip"
-    if [[ ! -f "${archive}" ]]; then
-      curl -L -C - "${CALVIN_BASE_URL}/${task}.zip" -o "${archive}"
+    zip_path="${CALVIN_DIR}/${task}.zip"
+    if [[ ! -f "${zip_path}" ]]; then
+      curl -L -C - "${CALVIN_BASE_URL}/${task}.zip" -o "${zip_path}"
     fi
     if [[ "${EXTRACT_CALVIN:-0}" == "1" ]]; then
-      "${PYTHON}" -m zipfile -e "${archive}" "${CALVIN_DIR}/${task}"
+      "${PYTHON}" -m zipfile -e "${zip_path}" "${CALVIN_DIR}/${task}"
     fi
   done
 fi

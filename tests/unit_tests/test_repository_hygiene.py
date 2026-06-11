@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
@@ -45,10 +45,13 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         project_root / "dreamer_vla" / "cli" / "train.py",
         project_root / "scripts" / "train_wm.sh",
         project_root / "scripts" / "train_dreamervla.sh",
-        project_root / "scripts" / "training" / "train_online_rynnvla_action_hidden_dreamervla.py",
-        project_root / "scripts" / "training" / "train_frozen_wm_actor_critic.py",
-        project_root / "scripts" / "eval" / "eval_frozen_wm_actor.py",
-        project_root / "scripts" / "diagnostics" / "compare_action_chunks.py",
+        project_root
+        / "dreamer_vla"
+        / "training"
+        / "train_online_rynnvla_action_hidden_dreamervla.py",
+        project_root / "dreamer_vla" / "training" / "train_frozen_wm_actor_critic.py",
+        project_root / "dreamer_vla" / "evaluation" / "eval_frozen_wm_actor.py",
+        project_root / "dreamer_vla" / "diagnostics" / "compare_action_chunks.py",
     ]
 
     for text_file in active_text_files:
@@ -88,7 +91,7 @@ def test_active_sources_do_not_reference_removed_action_head_variant() -> None:
         project_root / "scripts",
         project_root / "tests",
     ]
-    skip_parts = {"archive", "__pycache__"}
+    skip_parts = {"archive", "__pycache__", "superpowers"}
     checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
 
     offenders: list[str] = []
@@ -125,12 +128,10 @@ def test_files_live_under_their_architecture_domains() -> None:
 
     expected_top_level_dirs = {
         "configs",
-        "data",
         "docs",
         "dreamer_vla",
         "scripts",
         "tests",
-        "third_party",
     }
     for dirname in expected_top_level_dirs:
         assert (project_root / dirname).is_dir(), dirname
@@ -147,8 +148,11 @@ def test_files_live_under_their_architecture_domains() -> None:
     for dirname in forbidden_top_level_dirs:
         assert not (project_root / dirname).exists(), dirname
 
-    assert (project_root / "docs" / "archive" / "graveyard").is_dir()
-    assert (project_root / "data" / "outputs" / "logs" / "root_legacy_logs").is_dir()
+    assert not (project_root / ".claude").exists()
+    assert not (project_root / ".cursor").exists()
+    assert not (project_root / "configs" / "archive").exists()
+    assert not (project_root / "docs" / "archive").exists()
+    assert not (project_root / "data" / "libero_goal_metainfo.json").exists()
 
     cli_files = {
         path.name for path in (project_root / "dreamer_vla" / "cli").glob("*.py")
@@ -163,6 +167,10 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert (preprocess_dir / "conversation.py").is_file()
     assert (preprocess_dir / "concat_record.py").is_file()
     assert (preprocess_dir / "concat_action_world_model_data_libero.py").is_file()
+    assert not (preprocess_dir / "collect_online_rollouts_for_classifier.py").exists()
+    assert (
+        project_root / "dreamer_vla" / "training" / "collect_online_rollouts_for_classifier.py"
+    ).is_file()
     assert (preprocess_dir / "xllmx").is_dir()
 
     assert not (project_root / "dreamer_vla" / "utils" / "libero_utils").exists()
@@ -171,25 +179,178 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert (preprocess_dir / "libero_utils").is_dir()
     assert (project_root / "third_party" / "openvla-oft-lightweight").is_dir()
 
+    assert not (project_root / "scripts" / "archive").exists()
+    assert not (project_root / "scripts" / "paper_tables").exists()
+    assert not (project_root / "scripts" / "wm_variants_v4_v4E").exists()
     assert not (project_root / "scripts" / "process_all_libero_data.sh").exists()
     assert not (project_root / "scripts" / "eval_chunkwm_closeloop.py").exists()
+    assert not (project_root / "scripts" / "eval" / "eval_libero_legacy.py").exists()
     assert (project_root / "scripts" / "preprocess" / "process_all_libero_data.sh").is_file()
-    assert (project_root / "scripts" / "diagnostics" / "eval_chunkwm_closeloop.py").is_file()
+    assert not (project_root / "scripts" / "diagnostics").exists()
+    assert (
+        project_root / "dreamer_vla" / "diagnostics" / "eval_chunkwm_closeloop.py"
+    ).is_file()
 
-    assert (project_root / "scripts" / "eval" / "eval_libero_legacy.py").is_file()
+    gitignore = (project_root / ".gitignore").read_text(encoding="utf-8")
+    for ignored in (
+        ".local/",
+        ".claude/",
+        ".cursor/",
+        "data/",
+        "third_party/",
+        "docs/superpowers/",
+        "docs/TODO.md",
+        "docs/task_plan.md",
+        "docs/*_plan.md",
+    ):
+        assert ignored in gitignore
 
 
 def test_active_targets_use_canonical_module_paths() -> None:
     project_root = Path(__file__).resolve().parents[2]
     active_files = [
         *sorted((project_root / "configs").glob("*.yaml")),
-        project_root / "scripts" / "diagnostics" / "diagnose_dreamervla_latent_distribution.py",
+        project_root
+        / "dreamer_vla"
+        / "diagnostics"
+        / "diagnose_dreamervla_latent_distribution.py",
     ]
 
     for path in active_files:
         text = path.read_text(encoding="utf-8")
         assert "dreamer_vla.models.vla_actor" not in text, path.relative_to(project_root)
         assert "dreamer_vla.models.vla_policy" not in text, path.relative_to(project_root)
+
+
+def test_preprocess_libero_utils_reexports_canonical_env_helpers() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    compat_path = project_root / "dreamer_vla" / "preprocess" / "libero_utils" / "libero_utils.py"
+    text = compat_path.read_text(encoding="utf-8")
+
+    assert "from dreamer_vla.envs.libero_env import" in text
+    assert "OffScreenRenderEnv" not in text
+    assert "def get_libero_env" not in text
+    assert "def get_libero_image" not in text
+    assert "def quat2axisangle" not in text
+
+
+def test_rynnvla_processor_shared_helpers_have_single_home() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    runtime_path = project_root / "dreamer_vla" / "models" / "encoder" / "rynnvla_runtime.py"
+    preprocess_path = project_root / "dreamer_vla" / "preprocess" / "item_processor.py"
+    conversation_path = project_root / "dreamer_vla" / "preprocess" / "conversation.py"
+
+    runtime_text = runtime_path.read_text(encoding="utf-8")
+    preprocess_text = preprocess_path.read_text(encoding="utf-8")
+    conversation_text = conversation_path.read_text(encoding="utf-8")
+
+    assert "from dreamer_vla.utils.conversation import Conversation" in runtime_text
+    assert "from dreamer_vla.utils.conversation import Conversation" in conversation_text
+    for text, path in (
+        (runtime_text, runtime_path),
+        (preprocess_text, preprocess_path),
+    ):
+        assert "from dreamer_vla.models.encoder.rynnvla_image_ops import" in text, (
+            path.relative_to(project_root)
+        )
+        assert "def center_crop" not in text, path.relative_to(project_root)
+        assert "def var_center_crop" not in text, path.relative_to(project_root)
+        assert "def generate_crop_size_list" not in text, path.relative_to(project_root)
+
+
+def test_online_replay_is_library_module_not_cli_local_class() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    cli_path = (
+        project_root
+        / "dreamer_vla"
+        / "training"
+        / "train_online_rynnvla_action_hidden_dreamervla.py"
+    )
+    cli_text = cli_path.read_text(encoding="utf-8")
+
+    assert (project_root / "dreamer_vla" / "training" / "online_replay.py").is_file()
+    assert "from dreamer_vla.training.online_replay import" in cli_text
+    assert "class OnlineReplay" not in cli_text
+    assert "def pack_replay_task_stats_for_ddp" not in cli_text
+    assert "def unpack_replay_task_stats_from_ddp" not in cli_text
+
+
+def test_chameleon_lazy_exports_only_existing_modeling_symbols() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    init_path = (
+        project_root
+        / "dreamer_vla"
+        / "models"
+        / "chameleon_model"
+        / "chameleon"
+        / "__init__.py"
+    )
+    text = init_path.read_text(encoding="utf-8")
+
+    assert "ChameleonForConditionalGeneration_ContinuousHead" not in text
+
+
+def test_models_package_does_not_hide_import_failures() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    text = (project_root / "dreamer_vla" / "models" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "except Exception" not in text
+    assert "= None" not in text
+
+
+def test_package_modules_do_not_insert_project_root_into_sys_path() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for path in (project_root / "dreamer_vla").rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "sys.path.insert(0, str(PROJECT_ROOT))" in text:
+            offenders.append(str(path.relative_to(project_root)))
+
+    assert offenders == []
+
+
+def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    for relpath in (
+        "dreamer_vla/models/world_model/dreamerv3_torch.py",
+        "dreamer_vla/models/world_model/tssm_torch.py",
+    ):
+        text = (project_root / relpath).read_text(encoding="utf-8")
+        assert "_WORLD_MODEL_EXPORTS" not in text, relpath
+        assert "def __getattr__" not in text, relpath
+
+    config_text = "\n".join(path.read_text(encoding="utf-8") for path in (project_root / "configs").rglob("*.yaml"))
+    assert "dreamer_vla.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel" not in config_text
+
+
+def test_active_configs_do_not_describe_ignored_targets() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    offenders: dict[str, list[str]] = {}
+    banned = ("online script ignores", "NOT this config's _target_", "not part of the main Runner launch path")
+    for path in (project_root / "configs").rglob("*.yaml"):
+        text = path.read_text(encoding="utf-8")
+        matches = [item for item in banned if item in text]
+        if matches:
+            offenders[str(path.relative_to(project_root))] = matches
+
+    assert offenders == {}
+
+
+def test_residual_cosine_diagnostic_has_no_import_time_io() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    path = project_root / "dreamer_vla" / "diagnostics" / "diagnose_residual_cosine.py"
+    text = path.read_text(encoding="utf-8")
+
+    assert "def main(" in text
+    assert 'if __name__ == "__main__":' in text
+    before_main = text.split("def main(", 1)[0]
+    assert "np.load(" not in before_main
+    assert ".mkdir(" not in before_main
+    assert "h5py.File(" not in before_main
 
 
 def test_active_configs_do_not_pin_machine_local_roots() -> None:
@@ -226,7 +387,7 @@ def test_active_files_do_not_pin_machine_local_roots() -> None:
         project_root / "scripts",
         project_root / "tests",
     ]
-    skip_parts = {"archive", "__pycache__"}
+    skip_parts = {"archive", "__pycache__", "superpowers"}
     checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
     forbidden_roots = [
         "/" + "mnt" + "/",

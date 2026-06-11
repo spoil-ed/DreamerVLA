@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RAW_DATA_DIR = (
     PROJECT_ROOT

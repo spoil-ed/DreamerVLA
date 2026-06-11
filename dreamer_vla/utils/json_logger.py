@@ -1,12 +1,13 @@
-from typing import Optional, Callable, Any
-import os
 import json
 import numbers
+import os
+from collections.abc import Callable
+from typing import Any
 
 
 class JsonLogger:
     def __init__(
-        self, path: str, filter_fn: Optional[Callable[[str, Any], bool]] = None
+        self, path: str, filter_fn: Callable[[str, Any], bool] | None = None
     ):
         if filter_fn is None:
 

@@ -22,8 +22,8 @@ class RynnBackboneDreamerV3WMRunner(DreamerV3PixelRunner):
     observations before the normal DreamerV3 world-model forward pass.
     """
 
-    runner_name = "rynn_backbone_wm_compat"
-    runner_status = "compatibility"
+    runner_name = "rynn_backbone_wm"
+    runner_status = "secondary"
     runner_family = "world_model"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:

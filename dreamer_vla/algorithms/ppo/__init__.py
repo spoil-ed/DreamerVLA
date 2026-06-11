@@ -27,31 +27,14 @@ differ in the **reward form** seen by the actor:
 
 Submodules (``grpo``, ``relabel``, ``tdmpc_critic``, ``dense``,
 ``dense_chunk``, ``outcome``) are implementation detail.
-
-Legacy aliases — kept for back-compat with workspace / tests / scripts:
-  ``dino_wmpo_ppo_step``   → ``dino_wmpo_dense_step``
-  ``dino_wmpo_chunk_step`` → ``dino_wmpo_outcome_step``
-  ``dino_wmpo_frame_step`` → ``dino_wmpo_dense_step``
-  ``dino_wmpo_window_step``→ ``dino_wmpo_outcome_step``
 """
 
 from dreamer_vla.algorithms.ppo.dense import dino_wmpo_dense_step
 from dreamer_vla.algorithms.ppo.dense_chunk import dino_wmpo_dense_chunk_step
 from dreamer_vla.algorithms.ppo.outcome import dino_wmpo_outcome_step
 
-# Legacy aliases — DO NOT USE in new code.
-dino_wmpo_frame_step = dino_wmpo_dense_step
-dino_wmpo_window_step = dino_wmpo_outcome_step
-dino_wmpo_ppo_step = dino_wmpo_dense_step
-dino_wmpo_chunk_step = dino_wmpo_outcome_step
-
 __all__ = [
     "dino_wmpo_dense_step",
     "dino_wmpo_dense_chunk_step",
     "dino_wmpo_outcome_step",
-    # Legacy aliases.
-    "dino_wmpo_frame_step",
-    "dino_wmpo_window_step",
-    "dino_wmpo_ppo_step",
-    "dino_wmpo_chunk_step",
 ]

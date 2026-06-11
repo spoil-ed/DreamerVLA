@@ -4,11 +4,15 @@ import torch
 from torch import nn
 
 from dreamer_vla.models.world_model.dreamerv3_torch import _act
+from dreamer_vla.models.world_model.tssm_rynn_backbone_world_model import (
+    TSSMRynnBackboneWorldModel,
+)
+from dreamer_vla.models.world_model.tssm_token_rynn_backbone_world_model import (
+    TSSMTokenRynnBackboneWorldModel,
+)
 from dreamer_vla.models.world_model.tssm_torch import (
     TSSMDynamic,
-    TSSMRynnBackboneWorldModel,
     TSSMTokenDynamic,
-    TSSMTokenRynnBackboneWorldModel,
 )
 
 

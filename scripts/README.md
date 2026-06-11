@@ -1,168 +1,116 @@
-# Script Entry Points
+# Script Registry
 
-Scripts are thin wrappers around `python -m dreamer_vla.cli.train` or small diagnostic
-tools. Keep durable logic in `dreamer_vla/`; keep scripts as reproducible launch
-recipes.
+`scripts/` contains resumable shell launchers only. Python implementation code
+lives under the `dreamer_vla` package and is launched with `python -m`.
 
-## Data Preparation
-
-Formal setup and data entry points:
+## Main Path
 
 | Script | Purpose |
 | --- | --- |
-| `install_env.sh` | Install apt tools, conda env, uv, torch, requirements, flash-attn, third_party packages, LIBERO, and egl_probe |
-| `download_assets.sh` | Download Hugging Face weights plus LIBERO / optional CALVIN datasets |
-| `preprocess/prepare_libero_data.sh` | One-command LIBERO pipeline: mark no-ops, optionally filter, reward HDF5, VLA pretokenize configs, and action-hidden sidecar |
-| `preprocess/process_all_libero_data.sh` | Lower-level VLA pretokenize stage used by `prepare_libero_data.sh` |
+| `install_env.sh` | Run resumable install steps under `scripts/install/` |
+| `download_assets.sh` | Download checkpoints and LIBERO / CALVIN data |
+| `preprocess/prepare_libero_data.sh` | Build LIBERO HDF5 views, reward labels, manifests, and action-hidden sidecars |
+| `train_vla.sh` | VLA SFT via Hydra route configs |
+| `train_wm.sh` | World-model and classifier training via Hydra route configs |
+| `train_dreamervla.sh` | DreamerVLA training via Hydra route configs |
+| `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
 
-`prepare_libero_data.sh` defaults to `TASK=libero_goal`, `HIS=1`,
-`ACTION_HORIZON=1`, and `FILTER_NOOPS=1`. The VLA SFT data name is therefore
-`his_1_third_view_wrist_w_state_1_256_pretokenize`. The action-hidden sidecar is
-separate and keeps `history=2` to match the current WM/DreamerVLA configs.
+## Install Steps
 
-Historical data-preparation shell recipes are archived under
-`scripts/archive/uncertain_shells/`.
+| Script | Purpose |
+| --- | --- |
+| `install/00_apt_tools.sh` | System packages |
+| `install/10_conda_env.sh` | Conda environment |
+| `install/20_python_deps.sh` | PyTorch, repo package, Python deps, flash-attn |
+| `install/30_third_party.sh` | LIBERO / robosuite stack |
+| `install/40_verify.sh` | Import and CUDA visibility check |
+| `install/_env.sh` | Shared install-step environment |
 
-## Training
+## Preprocessing
 
-| Script | Main Config | Public Runner | Purpose |
-| --- | --- | --- | --- |
-| `train_vla.sh` | `vla_rynnvla_action_head`, `vla_sft_one_trajectory`, `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory` | route-specific `dreamer_vla.runners.*` target from config | VLA SFT, including one trajectory per task |
-| `train_vla_nongoal_45.sh` | `vla_rynnvla_action_head` | `VLASFTRunner` | LIBERO non-goal VLA SFT on GPUs 4,5; switch task with `TAG=<tag>` |
-| `train_wm.sh` | `world_model_dinowm_chunk`, `world_model_dinowm_step`, `oft_world_model_dinowm_chunk` | route-specific `dreamer_vla.runners.*` target from config | WM training |
-| `train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome`, `dreamervla_rynn_dino_wm_actor_critic`, `dreamervla_oft_dino_wm_wmpo_outcome` | `JointDreamerVLARunner` | DreamerVLA training |
+| Script | Purpose |
+| --- | --- |
+| `preprocess/prepare_libero_data.sh` | End-to-end resumable LIBERO preprocessing path |
+| `preprocess/process_all_libero_data.sh` | Lower-level LIBERO image, conversation, token, and config generation |
+| `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
 
-Configs point directly at the route-specific runner class.
+Python modules:
 
-Formal wrappers are self-contained; they no longer source legacy-only
-`scripts/common_env.sh`. Paths are controlled by `DVLA_DATA_ROOT` (default:
-`repo/data`); see [docs/data_layout.md](../docs/data_layout.md). Standard
-environment overrides:
-
-```bash
-DVLA_DATA_ROOT=/path/to/dvla_data
-CUDA_VISIBLE_DEVICES=0,1,2,3
-NGPU=4
-OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run_name>"
-RUN_TAG=my_run
-```
-
-`DETACH=1` backgrounds training and writes a `train.pid`; omit `DETACH` to keep
-logs in the terminal.
-
-Non-goal LIBERO VLA SFT uses suite-specific pretrained weights under
-`data/ckpts/VLA_model_256/<suite>`:
-
-```bash
-bash scripts/train_vla_nongoal_45.sh libero_10
-TAG=libero_object bash scripts/train_vla_nongoal_45.sh
-TAG=libero_spatial bash scripts/train_vla_nongoal_45.sh
-```
-
-One-trajectory SFT keeps one demonstration trajectory per LIBERO task:
-
-```bash
-CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
-CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
-CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
-```
-
-`openvla_oft_hdf5_one_trajectory` uses the OpenVLA-OFT LLaMA LM head for action-token SFT (`policy.use_l1_regression=false`) and samples one demo per task file with `dataset.demo_selection_seed`.
+| Module | Purpose |
+| --- | --- |
+| `dreamer_vla.preprocess.filter_marked_libero_hdf5` | Filter no-op marked HDF5 files |
+| `dreamer_vla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
+| `dreamer_vla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
+| `dreamer_vla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
 
 ## Evaluation
 
 | Script | Purpose |
 | --- | --- |
-| `eval_libero_vla.sh` | Single-process LIBERO rollout eval for VLA or Dreamer checkpoints |
+| `eval/launch_openvla_oft_official_libero_eval.sh` | OpenVLA-OFT eval launcher |
 
-For Dreamer checkpoints, `eval_libero_vla.sh` supports:
+Python modules:
 
-```text
-eval.ckpt_kind=dreamer
-eval.dreamer_policy_source=ckpt|init
-eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence
-```
-
-These switches are useful for actor and hidden ablations.
-
-## Diagnostics
-
-Core diagnostics (`scripts/diagnostics/`):
-
-| Script | Purpose |
+| Module | Purpose |
 | --- | --- |
-| `analyze_rynn_hidden_action_metrics.py` | Offline hidden/action mismatch metrics |
-| `monitor_dreamer_vla_metrics.py` | Summarize training log trends |
-| `visualize_dreamervla_reward.py` | Reward-model visualization helper |
-| `smoke_libero_online_env.py` | Smoke test for online LIBERO env wiring (lives in `scripts/smoke/`) |
+| `dreamer_vla.evaluation.eval_openvla_oft_libero` | OpenVLA-OFT eval implementation |
+| `dreamer_vla.evaluation.openvla_oft_obs_action_policy` | OpenVLA-OFT policy adapter |
+| `dreamer_vla.evaluation.eval_frozen_wm_actor` | Frozen-WM actor evaluation |
 
-Hidden-token structure (paper §5.1 analysis):
+## Advanced Training
 
-| Script | Purpose |
+Python modules:
+
+| Module | Purpose |
 | --- | --- |
-| `diagnose_hidden_token_structure.py` | Phase 1 statistics on 35×1024 action_hidden over time / joint axes |
-| `diagnose_residual_cosine.py` | Cross-token residual cosine; tests per-sample redundancy vs LayerNorm bias |
-| `analyze_compact_token_z_reconstruction.py` | Reconstruction quality of `CompactTokenSequenceAutoencoder` |
+| `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla` | Online WMPO experiment loop |
+| `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla_multiproc` | Multi-process online collector variant |
+| `dreamer_vla.training.train_frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
+| `dreamer_vla.training.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
 
-Classifier ceiling estimation:
+## Diagnostics And Smoke Tests
 
-| Script | Purpose |
+Python modules:
+
+| Module | Purpose |
 | --- | --- |
-| `estimate_classifier_ceiling.py` | LR / kNN / small-MLP triangulation of LatentSuccessClassifier Bayes ceiling |
-| `finetune_reward_head_sparse.py` | Fine-tune only WM reward head as terminal-success classifier (WMPO recipe) |
+| `dreamer_vla.diagnostics.monitor_dreamer_vla_metrics` | Summarize training logs |
+| `dreamer_vla.diagnostics.analyze_rynn_hidden_action_metrics` | Hidden/action mismatch analysis |
+| `dreamer_vla.diagnostics.analyze_compact_token_z_reconstruction` | Compact-token reconstruction analysis |
+| `dreamer_vla.diagnostics.compare_action_chunks` | Policy action comparison |
+| `dreamer_vla.diagnostics.compare_policy_trace_runs` | Compare policy trace runs |
+| `dreamer_vla.diagnostics.diagnose_dreamervla_latent_distribution` | DreamerVLA latent distribution diagnostics |
+| `dreamer_vla.diagnostics.diagnose_hidden_token_structure` | Hidden token structure diagnostics |
+| `dreamer_vla.diagnostics.diagnose_ppo_imagine_vs_real` | PPO imagined-vs-real diagnostics |
+| `dreamer_vla.diagnostics.diagnose_residual_cosine` | Residual cosine diagnostics |
+| `dreamer_vla.diagnostics.eval_chunkwm_closeloop` | Chunk-WM closed-loop eval |
+| `dreamer_vla.diagnostics.finetune_reward_head_sparse` | Sparse reward-head finetuning |
+| `dreamer_vla.diagnostics.measure_real_vs_imagine` | Real-vs-imagined rollout comparison |
+| `dreamer_vla.diagnostics.measure_recon_and_action_delta` | Reconstruction and action-delta metrics |
+| `dreamer_vla.diagnostics.measure_reward_and_drift` | Reward and action drift analysis |
+| `dreamer_vla.diagnostics.measure_wm_closed_loop` | WM closed-loop fidelity |
+| `dreamer_vla.diagnostics.measure_wm_imagine_actor` | WM imagined actor diagnostics |
+| `dreamer_vla.diagnostics.measure_wm_imagine_fidelity` | WM imagined-vs-demo fidelity |
+| `dreamer_vla.diagnostics.reward_landscape_sweep` | Reward landscape sweep |
+| `dreamer_vla.diagnostics.validate_oft_rynn_style_sidecar` | Sidecar schema validation |
+| `dreamer_vla.diagnostics.validate_real_rollout_relabel` | Real-rollout relabel validation |
+| `dreamer_vla.diagnostics.visualize_dreamervla_reward` | Reward visualization |
+| `dreamer_vla.smoke.smoke_libero_online_env` | LIBERO online env smoke test |
 
-WM imagine fidelity:
+## Legacy Utilities
 
-| Script | Purpose |
+These modules are kept for reproducibility of older classifier-shard
+experiments and are not part of the main release pipeline.
+
+| Module | Purpose |
 | --- | --- |
-| `measure_wm_imagine_fidelity.py` | Faithfulness of WM-imagined trajectory under demo actions (feature / reward) |
-| `measure_wm_imagine_actor.py` | Same, but under trained / SFT-init / demo actions (OOD test) |
-| `measure_recon_and_action_delta.py` | hidden_decoder reconstruction quality + SFT actor sensitivity to recon |
-| `measure_reward_and_drift.py` | Reward curve on success demo + SFT-direction reward peak + action drift |
+| `dreamer_vla.legacy.build_classifier_shards_from_demos` | Build old WebDataset classifier shards from demo sidecars |
+| `dreamer_vla.legacy.libero_sim_rollout_shards` | Read old WebDataset classifier shards |
 
-Policy comparison:
+## Conventions
 
-| Script | Purpose |
-| --- | --- |
-| `compare_action_chunks.py` | Trained policy vs frozen RynnVLA-SFT baseline action_chunks on shared WM features |
-| `compare_policy_trace_runs.py` | Compare `policy_trace.jsonl` from VLA and DreamerVLA rollouts |
-| `diagnose_dreamervla_latent_distribution.py` | DreamerVLA latent distribution diagnostics |
-
-Data validation:
-
-| Script | Purpose |
-| --- | --- |
-| `validate_oft_rynn_style_sidecar.py` | Validate OFT / rynn-style sidecar HDF5 schema |
-
-Diagnostic outputs should go under:
-
-```text
-data/outputs/eval/
-```
-
-## Frozen-WM actor / critic route
-
-Frozen-WM is a non-mainline ablation route where the world model is held
-constant and only the actor / critic are trained.
-
-| Script | Purpose |
-| --- | --- |
-| `scripts/training/train_frozen_wm_actor_critic.py` | Train actor / critic with the WM frozen (reuses `OnlineReplay` from the live training script) |
-| `scripts/eval/eval_frozen_wm_actor.py` | Deterministic LIBERO rollout eval for checkpoints saved by the above; emits MP4s + JSON summary |
-
-## Preprocess
-
-| Script | Purpose |
-| --- | --- |
-| `scripts/preprocess/preprocess_oft_action_hidden.py` | Build OFT action-hidden sidecar from raw demos |
-| `scripts/preprocess/preprocess_remaining_steps_reward.py` | Precompute `remaining_steps`-style dense reward labels |
-| `scripts/preprocess/preprocess_rynn_pixel_hidden.py` | Build rynn pixel / hidden sidecar |
-| `scripts/preprocess/build_classifier_shards_from_demos.py` | Pack demo action-hiddens into WebDataset shards for the LatentSuccessClassifier (positives only; failure-class negatives must be appended separately) |
-| `scripts/preprocess/collect_online_rollouts_for_classifier.py` | Roll out RynnVLA SFT in LIBERO sim to collect failure-class negatives for the classifier |
-
-## Script Hygiene
-
-- Do not hard-code a new experiment path if an env var or Hydra override is enough.
-- Put long-lived launch defaults in the wrapper; put experiment identity in `RUN_TAG`.
-- Keep logs under `data/outputs/...`; do not write logs into the repo root.
-- If a script becomes a stable entry point, list it here.
+- Use `DVLA_DATA_ROOT` for data location.
+- Use `CONFIG=<route>` for route selection.
+- Pass Hydra overrides after launcher arguments.
+- Keep runtime outputs under `${DVLA_DATA_ROOT:-data}/outputs/`.
+- See `docs/data_layout.md` for the full runtime data layout.

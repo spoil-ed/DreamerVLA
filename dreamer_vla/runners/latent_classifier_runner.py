@@ -1,11 +1,11 @@
 """LatentSuccessClassifier training runner (WMPO-aligned).
 
-Three-layer architecture per CLAUDE.md:
-    scripts/train_latent_classifier.sh           # env-var wrapper
-        → python -m dreamer_vla.cli.train --config-name latent_classifier_libero_goal
+Launch path:
+    CONFIG=latent_classifier_libero_goal_chunk bash scripts/train_wm.sh
+        → python -m dreamer_vla.cli.train --config-name latent_classifier_libero_goal_chunk
             → dreamer_vla.runners.LatentClassifierRunner.run()
-                → dreamer_vla.dataset.wmpo_aligned_latent_dataset (1 pos + 1 neg per demo)
-                → dreamer_vla.models.reward.LatentSuccessClassifier (linear | mlp2 | transformer)
+                → dreamer_vla.dataset.wmpo_aligned_latent_dataset
+                → dreamer_vla.models.reward.LatentSuccessClassifier
 
 Why a dedicated runner, not another standalone script:
   * The existing v3 / wm_replay classifier scripts are 500+ lines each and bypass
@@ -26,10 +26,8 @@ Window-level F1 uses sigmoid + threshold sweep to mirror WMPO's
 via cfg). Episode-level F1 mirrors ``predict_success`` (stride-1 sliding window +
 ``any-positive`` aggregation).
 
-Reproduction sanity peg (verified 2026-05-25 via
-``scripts/estimate_classifier_ceiling.py``): sklearn LR on real pi0 hidden W=8
-with the per-demo (1 end + 1 random earlier) protocol hits **F1 ≈ 0.91**. That
-is the working ceiling — see [[dreamervla-classifier-ceiling]] memory.
+The runner owns resume, checkpointing, logging, and Hydra override behavior so
+classifier training follows the same contract as WM and DreamerVLA routes.
 """
 
 from __future__ import annotations
@@ -53,7 +51,6 @@ from dreamer_vla.dataset.wmpo_aligned_latent_dataset import (
 )
 from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamer_vla.runners.base_runner import BaseRunner
-
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -472,7 +469,7 @@ class LatentClassifierRunner(BaseRunner):
     # --------------------------- io helpers ----------------------------
 
     def _save_named(self, name: str, *, extra: dict | None = None) -> None:
-        """Save in the format consumed by scripts/train_online_rynnvla_action_hidden_dreamervla.py.
+        """Save in the format consumed by the online WMPO training script.
 
         Schema (matches the old v2/v3 trainer + WMPO predict_success consumer):
             model      : nn.Module.state_dict()

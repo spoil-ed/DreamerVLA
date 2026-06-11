@@ -1,6 +1,7 @@
 # AGENTS.md
 
-Brief for AI coding agents working on Dreamer-VLA. For full contribution flow, code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md); for behavioral guardrails see [CLAUDE.local.md](CLAUDE.local.md).
+Brief for AI coding agents working on Dreamer-VLA. For full contribution flow,
+code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon action head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Runner** pattern as the training unit. Distributed runs use **torchrun** (DDP) or **FSDP**; there is no Ray, no multi-node cluster. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
 
@@ -8,35 +9,35 @@ Brief for AI coding agents working on Dreamer-VLA. For full contribution flow, c
 
 ## Code structure
 
-- **`.cursor/`** – Rules and skills: `rules/agents-md.mdc`, `skills/add-install-docker-ci-e2e`, `skills/add-example-doc-model-env`, `skills/review-pr`.
-- **`.agents/`**
-- **`.claude/`**
-- **`.codex/`**
-
 - **`dreamer_vla/`** – Main package (installed as `dreamer_vla`):
   - `algorithms/` – PPO, GRPO, DINO-WMPO, TD-MPC; actor, critic, reward.
   - `cli/` – Hydra entrypoints for training and evaluation.
   - `dataset/` – Offline datasets (LIBERO, OpenVLA-OFT) and online rollout dumpers.
+  - `diagnostics/` – Importable diagnostic CLI modules and analysis helpers.
   - `envs/` – LIBERO sim and online env wrappers.
+  - `evaluation/` – Evaluation CLIs and policy adapters that are not Hydra runners.
+  - `legacy/` – Isolated non-mainline utilities for old artifacts; do not import from active configs or runners.
   - `models/` – Encoder, world model, VLA backbones.
-  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval.
-  - `trainer/` – Shared DDP / FSDP helper.
-  - `utils/` – Checkpoint, logger, optim, EMA, visualization, distributed helpers.
   - `preprocess/` – Dataset preprocessing and hidden extraction pipelines.
+  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval.
+  - `smoke/` – Lightweight smoke-test entrypoints.
+  - `trainer/` – Shared DDP / FSDP helper.
+  - `training/` – Standalone online/frozen training CLIs plus shared online helpers.
+  - `utils/` – Checkpoint, logger, optim, EMA, visualization, distributed helpers.
 
 - **`configs/`** – Hydra configs, one top-level YAML per training route (VLA, WM, DreamerVLA, OFT, classifier, eval); tasks under `task/libero_*.yaml`.
 
-- **`scripts/`** – Shell launchers and Python tools for training, evaluation, preprocessing, diagnostics, setup tools, smoke tests.
+- **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamer_vla/` and is launched with `python -m`.
 
 - **`tests/`** – `unit_tests/`, `e2e_tests/` (VLA, WM, DreamerVLA, OFT, classifier); e2e configs under `e2e_tests/<route>/*.yaml`.
 
 - **`third_party/`** – Vendored upstream libraries (LIBERO, OpenVLA-OFT, robosuite, opensora, apex, etc.).
 
 - **`data/`** – Runtime inputs, outputs, and intermediate artifacts:
-  - `dataset/` – LIBERO, CALVIN, preprocessed data, task metainfo.
-  - `ckpts/` – Pretrained weights.
+  - `datasets/` – LIBERO, CALVIN, and raw benchmark assets.
+  - `checkpoints/` – Pretrained weights and downloaded model assets.
 
-- **`docs/`** – Repository structure, install notes, history, plans, findings, write-ups, paper draft.
+- **`docs/`** – Repository structure, install notes, data layout, write-ups, paper draft.
 
 - **`requirements.txt`** – Python deps; PyTorch, flash-attn, ColossalAI installed separately.
 
@@ -44,7 +45,7 @@ Brief for AI coding agents working on Dreamer-VLA. For full contribution flow, c
 
 ## How Dreamer-VLA runs
 
-You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `LiberoOnlineEnv` (or the multi-proc variant in `scripts/training/train_online_rynnvla_action_hidden_dreamervla_multiproc.py`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
+You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the multi-proc variant in `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla_multiproc`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ---
 
@@ -62,13 +63,19 @@ You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name
 
 - **Metrics:** runners use `dreamer_vla/utils/json_logger.py` plus optional wandb / tensorboard. Online RL emits chunk-credit, KL (k1 estimator), advantage, value, action-clipping; see `dreamer_vla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
 - **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`.
-- **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `scripts/diagnostics/measure_wm_*.py` and `diagnose_ppo_imagine_vs_real.py`.
+- **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `python -m dreamer_vla.diagnostics.<module>`.
 
 ---
 
 ## When things go wrong
 
-Install (LIBERO editable install, flash-attn wheel, ColossalAI / TensorNVMe / APEX, egl_probe): see [docs/install.md](docs/install.md). Rendering: set `MUJOCO_GL=egl`; smoke-test via `scripts/smoke/smoke_libero_online_env.py`. NCCL / CUDA timeouts under DDP are usually one rank diverging (NaN, mismatched batch) — read the rank-0 log before assuming network; the DDP synchronization guards in `dreamer_vla/algorithms/ppo/outcome.py` exist for a reason, don't remove them. Stale RLinf-style references (`rlinf.*`, Ray, `cluster.num_nodes`, `RLINF_NODE_RANK`, `.cursor/skills/`) are leftovers — remove or replace.
+Install (LIBERO editable install, flash-attn wheel, ColossalAI / TensorNVMe /
+APEX, egl_probe): see [docs/install.md](docs/install.md). Rendering: set
+`MUJOCO_GL=egl`; smoke-test via `python -m dreamer_vla.smoke.smoke_libero_online_env`.
+NCCL / CUDA timeouts under DDP are usually one rank diverging (NaN, mismatched
+batch) — read the rank-0 log before assuming network; the DDP synchronization
+guards in `dreamer_vla/algorithms/ppo/outcome.py` exist for a reason, don't
+remove them.
 
 ---
 
@@ -114,13 +121,12 @@ Not a stable extension surface. The data path and reward labels assume LIBERO HD
 
 ## Style and contributing
 
-Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `dreamer_vla/utils/json_logger.py` or runner loggers. Config YAML: static only, no computed fields; derive in the runner. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `scripts/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
+Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `dreamer_vla/utils/json_logger.py` or runner loggers. Config YAML: static only, no computed fields; derive in the runner. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `dreamer_vla/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 ## Further reading
 
 - [Repository structure](docs/repository_structure.md) · [Install](docs/install.md) · [Script registry](scripts/README.md) · [Config registry](configs/README.md)
-- [Write-up](docs/dreamer_vla_writeup.md) · [Findings](docs/findings.md) · [History](docs/history.md) · [Task plan](docs/task_plan.md) · [TODO](docs/TODO.md)
-- [Classifier revision plan](docs/classifier_revision_plan.md) · [Multicollector batched encoder plan](docs/multicollector_batched_encoder_plan.md)
-- [README](README.md) · [中文 README](README.zh-CN.md) · [Git workflow tutorial](tutorial_of_git.md) · [Behavioral guidelines](CLAUDE.local.md)
+- [Write-up](docs/dreamer_vla_writeup.md) · [Data layout](docs/data_layout.md)
+- [README](README.md) · [中文 README](README.zh-CN.md)

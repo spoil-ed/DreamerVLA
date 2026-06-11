@@ -12,12 +12,12 @@ action_horizon: 5
 time_horizon: 5
 
 vla_init_tag: libero_goal
-vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/VLA_model_256/libero_goal
+vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
 
-tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768
-text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/text_tokenizer.json
-chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/vqgan.yaml
-chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/chameleon/tokenizer/vqgan.ckpt
+tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
+text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
+chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.yaml
+chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
 
 pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
 pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
@@ -40,13 +40,13 @@ legacy_action_hidden:
   chunk_size: 5
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_goal_hdf5_latest_6650
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
   resume_step: 6650
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_goal_hdf5_latest_6650/dataset_statistics.json
+  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/dataset_statistics.json
   dataset_statistics_key: libero_goal_no_noops
-  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_goal_hdf5_latest_6650/action_head--6650_checkpoint.pt
-  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/ckpts/OpenVLA-OFT/libero_goal_hdf5_latest_6650/proprio_projector--6650_checkpoint.pt
+  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/action_head--6650_checkpoint.pt
+  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/proprio_projector--6650_checkpoint.pt
   action_horizon: 8
   time_horizon: 8
   image_resolution: 224

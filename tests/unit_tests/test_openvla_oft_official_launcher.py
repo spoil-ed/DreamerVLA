@@ -13,8 +13,8 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     assert re.search(r"^\s*source\s+.*common_env\.sh", text, re.MULTILINE) is None
     assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
     assert 'LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"' in text
-    assert "datasets: ${DVLA_DATA_ROOT}/dataset/libero" in text
-    assert 'CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/ckpts/Openvla-oft-SFT-traj1}"' in text
+    assert "datasets: ${DVLA_DATA_ROOT}/datasets/libero" in text
+    assert 'CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1}"' in text
     assert 'OUT_ROOT="${OUT_ROOT:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"' in text
     assert 'STAGED_CKPT_ROOT="${STAGED_CKPT_ROOT:-${DVLA_DATA_ROOT}/tmp_ckpts/openvla_oft_official_eval}"' in text
     assert 'GPU_A="${GPU_A:-0}"' in text

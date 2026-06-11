@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from scripts.eval.openvla_oft_obs_action_policy import (
+from dreamer_vla.evaluation.openvla_oft_obs_action_policy import (
     OpenVLAOFTObsActionPolicy,
     resolve_unnorm_key,
     set_runtime_env,

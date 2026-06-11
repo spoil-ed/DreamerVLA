@@ -34,7 +34,6 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["modeling_chameleon"] = [
         "ChameleonForConditionalGeneration",
-        "ChameleonForConditionalGeneration_ContinuousHead",
         "ChameleonModel",
         "ChameleonPreTrainedModel",
         "ChameleonVQVAE",
@@ -52,6 +51,8 @@ else:
 if TYPE_CHECKING:
     from .configuration_chameleon import (
         ChameleonConfig as ChameleonConfig,
+    )
+    from .configuration_chameleon import (
         ChameleonVQVAEConfig as ChameleonVQVAEConfig,
     )
     from .processing_chameleon import ChameleonProcessor as ChameleonProcessor
@@ -64,9 +65,14 @@ if TYPE_CHECKING:
     else:
         from .modeling_chameleon import (
             ChameleonForConditionalGeneration as ChameleonForConditionalGeneration,
-            ChameleonForConditionalGeneration_ContinuousHead as ChameleonForConditionalGeneration_ContinuousHead,
+        )
+        from .modeling_chameleon import (
             ChameleonModel as ChameleonModel,
+        )
+        from .modeling_chameleon import (
             ChameleonPreTrainedModel as ChameleonPreTrainedModel,
+        )
+        from .modeling_chameleon import (
             ChameleonVQVAE as ChameleonVQVAE,
         )
 

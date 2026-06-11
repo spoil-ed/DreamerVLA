@@ -35,7 +35,6 @@ from PIL import Image
 
 from dreamer_vla.models.chameleon_model.chameleon_vae_ori.vqgan import VQModel
 
-
 # Default latent spatial size for 512×512 images with the Chameleon VQ config.
 # 512 / (2^4) = 32  (four 2× downsampling stages)
 _DEFAULT_LATENT_H = 32
@@ -51,8 +50,8 @@ def load_vq_model(
     Load the VQGAN model from a yaml config + checkpoint.
 
     Default paths for the DreamerVLA repo:
-        cfg_path  = data/ckpts/chameleon/tokenizer/vqgan.yaml
-        ckpt_path = data/ckpts/chameleon/tokenizer/vqgan.ckpt
+        cfg_path  = data/checkpoints/chameleon/tokenizer/vqgan.yaml
+        ckpt_path = data/checkpoints/chameleon/tokenizer/vqgan.ckpt
     """
     cfg_path = Path(cfg_path)
     ckpt_path = Path(ckpt_path)
@@ -212,8 +211,8 @@ class ChameleonImageReconstructor:
 
     Usage:
         rec = ChameleonImageReconstructor.from_paths(
-            vqgan_cfg  = "data/ckpts/chameleon/tokenizer/vqgan.yaml",
-            vqgan_ckpt = "data/ckpts/chameleon/tokenizer/vqgan.ckpt",
+            vqgan_cfg  = "data/checkpoints/chameleon/tokenizer/vqgan.yaml",
+            vqgan_ckpt = "data/checkpoints/chameleon/tokenizer/vqgan.ckpt",
             vocabulary_mapping = model.model.vocabulary_mapping,
         )
 
@@ -245,7 +244,7 @@ class ChameleonImageReconstructor:
         device: str | torch.device = "cpu",
         h_latent: int = _DEFAULT_LATENT_H,
         w_latent: int = _DEFAULT_LATENT_W,
-    ) -> "ChameleonImageReconstructor":
+    ) -> ChameleonImageReconstructor:
         vq_model = load_vq_model(vqgan_cfg, vqgan_ckpt, device=device)
         bpe2vq_table = (
             build_bpe2vq_tensor(vocabulary_mapping).to(device)

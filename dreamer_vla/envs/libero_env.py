@@ -12,12 +12,11 @@ from typing import Any
 
 import imageio
 import numpy as np
+from libero.libero import benchmark as libero_benchmark
+from libero.libero import get_libero_path
+from libero.libero.envs import OffScreenRenderEnv
 from omegaconf import OmegaConf
 from PIL import Image
-
-from libero.libero import get_libero_path
-from libero.libero import benchmark as libero_benchmark
-from libero.libero.envs import OffScreenRenderEnv
 
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
 

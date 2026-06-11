@@ -52,8 +52,8 @@ Three optional data sources can be combined freely:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator
 
 import h5py
 import numpy as np

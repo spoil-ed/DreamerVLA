@@ -18,7 +18,7 @@
 #   FORCE=1   re-run even if outputs look complete
 set -uo pipefail
 
-# ---- environment (self-contained; no common_env.sh) -------------------------
+# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
@@ -46,7 +46,7 @@ ACTION_HORIZON="${ACTION_HORIZON:-1}"           # atomic pretokenize
 HIS="${HIS:-1}"
 FORCE="${FORCE:-0}"
 
-TOKENIZER_PATH="${DVLA_DATA_ROOT}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768"
+TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
 
 CONVS_DIR="${PROCESSED_DATA_ROOT}/convs"
@@ -112,7 +112,7 @@ process_one_suite() {
   if [[ "${need_stage2}" == "1" ]]; then
     local log="${LOG_DIR}/${SUITE}_stage2_${STAMP}.log"
     echo "  [stage2] -> ${log}"
-    "${PYTHON}" "${PROJECT_ROOT}/dreamer_vla/preprocess/libero_utils/regenerate_libero_dataset_save_img_action_state_wrist.py" \
+    "${PYTHON}" -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
       --libero_task_suite "${SUITE}" \
       --image_resolution "${IMAGE_RESOLUTION}" \
       --raw_data_dir "${RAW_DIR}" \
@@ -136,8 +136,7 @@ process_one_suite() {
     local log="${LOG_DIR}/${SUITE}_stage3_${STAMP}.log"
     echo "  [stage3] -> ${log}"
     (
-      cd "${PROJECT_ROOT}/dreamer_vla/preprocess"
-      "${PYTHON}" action_state_model_conv_generation.py \
+      "${PYTHON}" -m dreamer_vla.preprocess.action_state_model_conv_generation \
         --base_dir "${IMG_STATE_DIR}" \
         --his "${HIS}" \
         --len_action "${ACTION_HORIZON}" \
@@ -188,11 +187,10 @@ process_one_suite() {
     local log="${LOG_DIR}/${SUITE}_stage4_${STAMP}.log"
     echo "  [stage4] -> ${log}  (GPUs=${GPUS})"
     (
-      cd "${PROJECT_ROOT}/dreamer_vla/preprocess"
       if [[ "${tokens_complete}" != "1" || "${FORCE}" == "1" ]]; then
         overwrite_arg=()
         [[ "${OVERWRITE_TOKENS:-0}" == "1" ]] && overwrite_arg=(--overwrite)
-        "${PYTHON}" pretoken_state_action_model.py \
+        "${PYTHON}" -m dreamer_vla.preprocess.pretoken_state_action_model \
           --task "${TASK_NAME}" \
           --resolution "${IMAGE_RESOLUTION}" \
           --with_state \
@@ -211,7 +209,7 @@ process_one_suite() {
 
       bash "${PROJECT_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
 
-      "${PYTHON}" concat_action_world_model_data_libero.py \
+      "${PYTHON}" -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
         --source_dir_patterns "${SUITE}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
         --all_patterns "${SUITE}_his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
         --processed_data_root "${PROCESSED_DATA_ROOT}"

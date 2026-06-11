@@ -28,11 +28,11 @@ def test_runner_public_api_exports_route_specific_names() -> None:
     for name in expected:
         cls = getattr(runners, name)
         assert cls.__name__ == name
-        assert isinstance(getattr(cls, "runner_name"), str)
-        assert callable(getattr(cls, "setup"))
-        assert callable(getattr(cls, "execute"))
-        assert callable(getattr(cls, "run"))
-        assert callable(getattr(cls, "teardown"))
+        assert isinstance(cls.runner_name, str)
+        assert callable(cls.setup)
+        assert callable(cls.execute)
+        assert callable(cls.run)
+        assert callable(cls.teardown)
 
 
 def test_runner_directory_contains_route_specific_runners() -> None:
@@ -88,6 +88,8 @@ def test_removed_route_files_are_absent() -> None:
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal.yaml",
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml",
         "configs/semantic_bottleneck_wm_libero_goal.yaml",
+        "dreamer_vla/algorithms/dino_wmpo.py",
+        "dreamer_vla/algorithms/dino_wmpo_chunk.py",
         "scripts/diagnose_wm.sh",
         "scripts/eval_wm.sh",
         "scripts/prepare_latent_data.sh",
@@ -116,6 +118,8 @@ def test_removed_route_files_are_absent() -> None:
         "dreamer_vla/models/world_model/transdreamer_transformer.py",
         "dreamer_vla/models/world_model/tssm.py",
         "dreamer_vla/models/world_model/tssm_discrete.py",
+        "dreamer_vla/models/vla_actor.py",
+        "dreamer_vla/models/vla_policy.py",
         "dreamer_vla/runners/pretokenize_sft_runner.py",
         "dreamer_vla/runners/pretokenize_wm_runner.py",
         "dreamer_vla/runners/semantic_bottleneck_wm_runner.py",
@@ -159,8 +163,10 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
             assert cls.__name__ == target.rsplit(".", 1)[-1]
 
 
-def test_root_configs_inherit_archive_defaults_at_global_package() -> None:
+def test_root_configs_resolve_public_route_defaults() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
+    assert not (config_dir / "archive").exists()
+
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="world_model_dinowm_chunk")
         assert cfg._target_ == "dreamer_vla.runners.RynnDinoWMRunner"
@@ -173,15 +179,6 @@ def test_root_configs_inherit_archive_defaults_at_global_package() -> None:
             == "dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel"
         )
         assert "dinowm_chunk" in cfg.training.out_dir
-
-        archive_cfg = compose(
-            config_name="archive/libero10_legacy/dreamerv3_pixel_libero_10"
-        )
-        assert archive_cfg._target_ == "dreamer_vla.runners.PixelWMRunner"
-        assert (
-            archive_cfg.dataset._target_
-            == "dreamer_vla.dataset.libero_pixel_sequence_dataset.LIBEROPixelSequenceDataset"
-        )
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
@@ -244,6 +241,14 @@ def test_world_model_package_exposes_only_retained_architectures() -> None:
         assert not hasattr(world_model, name)
         assert name not in models.__all__
         assert not hasattr(models, name)
+
+
+def test_models_package_exports_fail_fast_symbols() -> None:
+    import dreamer_vla.models as models
+
+    for name in ("Critic", "VLAPolicy", "OFTDinoWMWorldModel", "RynnDinoWMWorldModel"):
+        assert name in models.__all__
+        assert getattr(models, name) is not None
 
 
 def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None:

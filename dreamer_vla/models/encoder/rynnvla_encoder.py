@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
 import io
+import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import warnings
 
 import torch
 from transformers.utils import logging as hf_logging
@@ -13,11 +13,11 @@ from transformers.utils import logging as hf_logging
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     ChameleonXLLMXForConditionalGeneration_ck_action_head,
 )
+from dreamer_vla.utils.paths import checkpoints_path
 
 from .base_encoder import BaseEncoder
 from .protocol import EncoderInputBatch
 from .rynnvla_runtime import FlexARItemProcessorActionState
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -27,7 +27,7 @@ def _resolve_path(path: str | Path) -> Path:
 
 
 def _default_ckpt_path(*parts: str) -> str:
-    return str((PROJECT_ROOT / "data" / "ckpts" / Path(*parts)).resolve())
+    return str(checkpoints_path(*parts).resolve())
 
 
 def _resolve_pretrained_model_dir(path: str | Path) -> Path:
@@ -94,7 +94,7 @@ class RynnVLAEncoder(BaseEncoder):
             if not Path(required_path).exists():
                 raise FileNotFoundError(
                     f"Required encoder asset not found: {required_path}. "
-                    "Please check the local checkpoint layout under data/ckpts/."
+                    "Please check the local checkpoint layout under data/checkpoints/."
                 )
         self.resolution = int(resolution)
         self.action_dim = int(action_dim)

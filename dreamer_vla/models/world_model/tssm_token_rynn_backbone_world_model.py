@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from dreamer_vla.models.world_model.base_world_model import DreamerV3ActorAdapterMixin
 from dreamer_vla.models.world_model.dreamerv3_torch import (
@@ -21,10 +21,10 @@ from dreamer_vla.models.world_model.dreamerv3_torch import (
 from dreamer_vla.models.world_model.tssm_torch import (
     TSSMTokenDynamic,
     TSSMTokenLatentState,
-    _PerTokenMLPDecoder,
-    _Transformer,
     _build_hidden_decoder,
     _onehot_st_sample,
+    _PerTokenMLPDecoder,
+    _Transformer,
 )
 
 

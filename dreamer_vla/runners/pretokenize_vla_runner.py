@@ -20,30 +20,26 @@ from torch.utils.data import DataLoader
 from transformers import GenerationConfig
 
 from dreamer_vla.dataset import BaseDataset
+from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.ema import EMAHelper
 from dreamer_vla.utils.optim import build_optimizer
+from dreamer_vla.utils.paths import checkpoints_path, data_path
 from dreamer_vla.utils.seed import set_seed
-from dreamer_vla.runners.base_runner import BaseRunner
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class PretokenizeVLARunner(BaseRunner):
-    runner_name = "vla_sft_compat"
-    runner_status = "compatibility"
+    runner_name = "vla_sft"
+    runner_status = "current"
     runner_family = "vla"
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = str(
-        PROJECT_ROOT / "data" / "ckpts" / "VLA_model_256" / "libero_goal"
-    )
-    default_output_dir = str(
-        PROJECT_ROOT / "data" / "outputs" / "vla" / "debug_pretokenize_vla"
-    )
+    default_vla_init_dir = str(checkpoints_path("VLA_model_256", "libero_goal"))
+    default_output_dir = str(data_path("outputs", "vla", "debug_pretokenize_vla"))
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
@@ -217,15 +213,16 @@ class PretokenizeVLARunner(BaseRunner):
             return {}
 
         from libero.libero import benchmark as libero_benchmark
+
         from dreamer_vla.envs import (
-            get_libero_env,
+            TASK_MAX_STEPS,
             get_libero_dummy_action,
+            get_libero_env,
             get_libero_image,
             quat2axisangle,
             resolve_libero_eval_protocol,
             save_rollout_video,
             select_libero_action_chunk,
-            TASK_MAX_STEPS,
         )
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)

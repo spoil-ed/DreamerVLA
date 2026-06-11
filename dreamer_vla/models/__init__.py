@@ -1,17 +1,16 @@
-try:
-    from .critic.critic import Critic
-except Exception:
-    Critic = None
+"""Public model exports.
 
-try:
-    from .actor import VLAPolicy
-except Exception:
-    VLAPolicy = None
+Prefer canonical subpackage imports for new code, for example
+``dreamer_vla.models.actor`` or ``dreamer_vla.models.world_model``.
+"""
 
-try:
-    from .world_model import OFTDinoWMWorldModel, RynnDinoWMWorldModel
-except Exception:
-    OFTDinoWMWorldModel = None
-    RynnDinoWMWorldModel = None
+from dreamer_vla.models.actor import VLAPolicy
+from dreamer_vla.models.critic.critic import Critic
+from dreamer_vla.models.world_model import OFTDinoWMWorldModel, RynnDinoWMWorldModel
 
-__all__ = ["Critic", "VLAPolicy", "OFTDinoWMWorldModel", "RynnDinoWMWorldModel"]
+__all__ = [
+    "Critic",
+    "OFTDinoWMWorldModel",
+    "RynnDinoWMWorldModel",
+    "VLAPolicy",
+]

@@ -37,6 +37,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from dreamer_vla.utils.paths import processed_data_path
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 IMG_START = 8197
@@ -223,7 +225,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--tokens-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "tokens"),
+        default=str(processed_data_path("tokens")),
     )
     parser.add_argument(
         "--pattern",

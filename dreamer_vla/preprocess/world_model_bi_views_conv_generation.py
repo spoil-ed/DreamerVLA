@@ -1,8 +1,8 @@
-import json
-import os
-import math
-import copy
 import argparse
+import copy
+import json
+import math
+import os
 
 
 def main():

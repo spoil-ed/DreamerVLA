@@ -32,9 +32,9 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from dreamer_vla.utils.paths import processed_data_path
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from dreamer_vla.preprocess.pre_tokenize_action_state_local import (
     derive_next_obs_from_paths,
@@ -130,7 +130,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--convs-dir",
-        default=str(PROJECT_ROOT / "data" / "processed_data" / "convs"),
+        default=str(processed_data_path("convs")),
     )
     parser.add_argument(
         "--pattern",

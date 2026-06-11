@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2024 Meta Inc. and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +13,6 @@
 # limitations under the License.
 """chameleon model configuration"""
 
-from typing import List
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
@@ -71,9 +69,9 @@ class ChameleonVQVAEConfig(PretrainedConfig):
         resolution: int = 512,
         in_channels: int = 3,
         base_channels: int = 128,
-        channel_multiplier: List[int] = [1, 1, 2, 2, 4],
+        channel_multiplier: list[int] | None = None,
         num_res_blocks: int = 2,
-        attn_resolutions: List[int] = None,
+        attn_resolutions: list[int] | None = None,
         dropout: float = 0.0,
         attn_type: str = "vanilla",
         initializer_range=0.02,
@@ -87,7 +85,9 @@ class ChameleonVQVAEConfig(PretrainedConfig):
         self.resolution = resolution
         self.in_channels = in_channels
         self.base_channels = base_channels
-        self.channel_multiplier = channel_multiplier
+        self.channel_multiplier = (
+            [1, 1, 2, 2, 4] if channel_multiplier is None else channel_multiplier
+        )
         self.num_res_blocks = num_res_blocks
         self.attn_resolutions = attn_resolutions
         self.dropout = dropout

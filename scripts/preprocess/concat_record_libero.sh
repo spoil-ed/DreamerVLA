@@ -4,7 +4,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 base_dir="${1:-${PROJECT_ROOT}/data/processed_data/tokens}"
-CONCAT_RECORD="${PROJECT_ROOT}/dreamer_vla/preprocess/concat_record.py"
+PYTHON="${PYTHON:-python}"
+case ":${PYTHONPATH:-}:" in
+  *":${PROJECT_ROOT}:"*) ;;
+  *) export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
 
 # --------------------------------------------------------------------------
 # Dynamically find all directory names starting with "libero" under base_dir
@@ -46,10 +50,10 @@ do
     save_path="${base_dir}/${dir_name}/record.json"
 
     # Output the command to be executed (for debugging purposes)
-    echo "Executing: python -u ${CONCAT_RECORD} --sub_record_dir ${sub_record_dir} --save_path ${save_path}"
+    echo "Executing: ${PYTHON} -u -m dreamer_vla.preprocess.concat_record --sub_record_dir ${sub_record_dir} --save_path ${save_path}"
     
     # Directly execute the command, which is safer than using eval
-    python -u "${CONCAT_RECORD}" --sub_record_dir "${sub_record_dir}" --save_path "${save_path}"
+    "${PYTHON}" -u -m dreamer_vla.preprocess.concat_record --sub_record_dir "${sub_record_dir}" --save_path "${save_path}"
 
     echo "------------------------------------"
 done

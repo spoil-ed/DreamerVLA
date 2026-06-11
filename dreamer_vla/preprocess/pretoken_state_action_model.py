@@ -1,22 +1,16 @@
 # ruff: noqa: E402
-import os
-import shlex
 import argparse  # 导入 argparse 模块
+import os
+import subprocess
 import sys
 from multiprocessing import Process
 from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from dreamer_vla.preprocess.paths import (
     DEFAULT_CONVS_DIR,
     DEFAULT_TOKENIZER_PATH,
     DEFAULT_TOKENS_DIR,
 )
-
-SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def run_script(
@@ -39,24 +33,32 @@ def run_script(
         f"Starting running on rank={rank}, CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}."
     )
 
-    script_name = (
-        "pre_tokenize_action_state_local.py"
+    module_name = (
+        "dreamer_vla.preprocess.pre_tokenize_action_state_local"
         if with_state
-        else "pre_tokenize_action_local.py"
+        else "dreamer_vla.preprocess.pre_tokenize_action_local"
     )
-    script_path = SCRIPT_DIR / script_name
-    overwrite_arg = " --overwrite" if overwrite else ""
-    os.system(
-        f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script_path))} "
-        f"--splits={all_ranks} "
-        f"--rank={rank} "
-        f"--in_filename {shlex.quote(str(in_filename_path))} "
-        f"--out_dir {shlex.quote(str(out_dir))} "
-        f"--tokenizer {shlex.quote(str(tokenizer_path))} "
-        f"--target_size {resolution} "
-        f"--image_views_per_frame {int(image_views_per_frame)}"
-        f"{overwrite_arg}"
-    )
+    command = [
+        sys.executable,
+        "-u",
+        "-m",
+        module_name,
+        f"--splits={all_ranks}",
+        f"--rank={rank}",
+        "--in_filename",
+        str(in_filename_path),
+        "--out_dir",
+        str(out_dir),
+        "--tokenizer",
+        str(tokenizer_path),
+        "--target_size",
+        str(resolution),
+        "--image_views_per_frame",
+        str(int(image_views_per_frame)),
+    ]
+    if overwrite:
+        command.append("--overwrite")
+    subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
@@ -79,7 +81,7 @@ if __name__ == "__main__":
         "--tokenizer_path",
         type=str,
         default=str(DEFAULT_TOKENIZER_PATH),
-        help="tokenizer path inside DreamerVLA/data/ckpts",
+        help="tokenizer path inside DreamerVLA/data/checkpoints",
     )
     parser.add_argument(
         "--in_filename_dir",
@@ -194,3 +196,5 @@ if __name__ == "__main__":
 
         for p in processes:
             p.join()
+            if p.exitcode != 0:
+                raise SystemExit(f"worker process failed with exit code {p.exitcode}")

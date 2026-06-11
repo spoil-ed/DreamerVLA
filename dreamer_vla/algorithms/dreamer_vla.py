@@ -22,10 +22,11 @@ imagination rollout trains the actor and value head:
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import torch
 from omegaconf import DictConfig
@@ -45,7 +46,7 @@ def _temporarily_freeze(module: nn.Module):
             p.requires_grad_(False)
         yield
     finally:
-        for p, flag in zip(params, requires_grad):
+        for p, flag in zip(params, requires_grad, strict=True):
             p.requires_grad_(flag)
 
 
@@ -987,7 +988,7 @@ def imagine_actor_critic_step(
                 return None
             pieces = []
             has_any = False
-            for g, p in zip(grads, actor_params):
+            for g, p in zip(grads, actor_params, strict=True):
                 if g is None:
                     pieces.append(
                         torch.zeros(p.numel(), device=p.device, dtype=p.dtype)

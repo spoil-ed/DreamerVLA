@@ -6,7 +6,6 @@ from typing import Any
 import h5py
 import numpy as np
 
-
 SCHEME_NAME = "libero_noop_marking_v1"
 
 

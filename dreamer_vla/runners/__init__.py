@@ -16,7 +16,9 @@ from dreamer_vla.runners.dreamerv3_token_runner import (
 from dreamer_vla.runners.eval_libero_vla_runner import (
     EvalLiberoVLARunner as _EvalLiberoVLARunner,
 )
-from dreamer_vla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
+from dreamer_vla.runners.latent_classifier_runner import (
+    LatentClassifierRunner as _LatentClassifierRunner,
+)
 from dreamer_vla.runners.openvla_oft_runner import (
     OpenVLAOFTTrainingRunner as _OpenVLAOFTTrainingRunner,
 )
@@ -26,9 +28,7 @@ from dreamer_vla.runners.rynn_backbone_dreamerv3_wm_runner import (
 from dreamer_vla.runners.rynn_dino_wm_runner import (
     RynnDinoWMTrainingRunner as _RynnDinoWMTrainingRunner,
 )
-from dreamer_vla.runners.latent_classifier_runner import (
-    LatentClassifierRunner as _LatentClassifierRunner,
-)
+from dreamer_vla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
 
 
 class ActionHiddenWMRunner(_RynnBackboneDreamerV3WMRunner):

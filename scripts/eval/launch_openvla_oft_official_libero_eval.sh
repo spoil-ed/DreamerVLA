@@ -4,7 +4,7 @@ set -euo pipefail
 # Official-style OpenVLA-OFT LIBERO eval launcher for DreamerVLA.
 #
 # This uses the OpenVLA-OFT `experiments.robot.libero.run_libero_eval`
-# internals through scripts/eval/eval_openvla_oft_libero.py, but isolates each
+# internals through dreamer_vla.evaluation.eval_openvla_oft_libero, but isolates each
 # LIBERO task in its own Python process. That mirrors the safer subprocess
 # lifecycle used by RLinf/SimpleVLA-RL and avoids robosuite render context
 # crashes when switching tasks in-process.
@@ -25,7 +25,7 @@ if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
 benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
 bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
 init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
-datasets: ${DVLA_DATA_ROOT}/dataset/libero
+datasets: ${DVLA_DATA_ROOT}/datasets/libero
 assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
 EOF
 fi
@@ -38,7 +38,7 @@ SUITE="${SUITE:-libero_goal}"
 case "${SUITE}" in
   libero10|libero_long) SUITE="libero_10" ;;
 esac
-CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/ckpts/Openvla-oft-SFT-traj1}"
+CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1}"
 OUT_ROOT="${OUT_ROOT:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"
 STAGED_CKPT_ROOT="${STAGED_CKPT_ROOT:-${DVLA_DATA_ROOT}/tmp_ckpts/openvla_oft_official_eval}"
 USE_STAGED_CKPT="${USE_STAGED_CKPT:-1}"
@@ -145,7 +145,7 @@ run_worker() {
     mkdir -p "${task_dir}"
     echo "starting task=${tid}" | tee -a "${worker_log}"
     set +e
-    "${PYTHON_BIN}" -u scripts/eval/eval_openvla_oft_libero.py \
+    "${PYTHON_BIN}" -u -m dreamer_vla.evaluation.eval_openvla_oft_libero \
       --ckpt "${MODEL_FOR_RUN:-${CKPT}}" \
       --suite "${SUITE}" \
       --task-ids "${tid}" \

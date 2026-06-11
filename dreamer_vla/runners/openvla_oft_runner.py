@@ -11,13 +11,12 @@ import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf
 
+from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.json_logger import JsonLogger
 from dreamer_vla.utils.optim import build_optimizer
 from dreamer_vla.utils.seed import set_seed
-from dreamer_vla.runners.base_runner import BaseRunner
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

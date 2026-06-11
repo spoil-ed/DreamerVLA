@@ -29,9 +29,9 @@ def test_online_env_wrappers_use_shared_episode_end_logic() -> None:
     )
 
     assert "from dreamer_vla.utils.episode_end import resolve_episode_end" in train_env
-    assert "from dreamer_vla.utils.episode_end import resolve_episode_end" in libero_online_env
+    assert "DreamerVLAOnlineTrainEnv" in libero_online_env
     assert "episode_end = resolve_episode_end" in train_env
-    assert "episode_end = resolve_episode_end" in libero_online_env
+    assert "episode_end = resolve_episode_end" not in libero_online_env
 
 
 def test_online_training_script_separates_episode_horizon_from_training_budget() -> (
@@ -39,7 +39,7 @@ def test_online_training_script_separates_episode_horizon_from_training_budget()
 ):
     repo = Path(__file__).resolve().parents[2]
     script = (
-        repo / "scripts/training/train_online_rynnvla_action_hidden_dreamervla.py"
+        repo / "dreamer_vla/training/train_online_rynnvla_action_hidden_dreamervla.py"
     ).read_text(encoding="utf-8")
 
     assert "--episode-horizon" in script

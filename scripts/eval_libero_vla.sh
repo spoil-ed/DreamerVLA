@@ -4,7 +4,7 @@
 # ============================================================================
 set -euo pipefail
 
-# ---- environment (self-contained; no common_env.sh) -------------------------
+# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
@@ -28,7 +28,7 @@ if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
 benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
 bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
 init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
-datasets: ${DVLA_DATA_ROOT}/dataset/libero
+datasets: ${DVLA_DATA_ROOT}/datasets/libero
 assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
 EOF
 fi

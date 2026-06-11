@@ -1,4 +1,3 @@
-from typing import Optional, Dict
 import os
 
 
@@ -21,7 +20,7 @@ class TopKCheckpointManager:
         self.format_str = format_str
         self.path_value_map = dict()
 
-    def get_ckpt_path(self, data: Dict[str, float]) -> Optional[str]:
+    def get_ckpt_path(self, data: dict[str, float]) -> str | None:
         if self.k == 0:
             return None
 

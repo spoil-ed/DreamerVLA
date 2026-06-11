@@ -16,7 +16,6 @@ from typing import Any
 import torch
 from PIL import Image, ImageDraw
 
-
 IMG_START_TOK = 8197
 IMG_END_TOK = 8196
 IMG_HEADER_TOK = 8812
@@ -73,7 +72,7 @@ def _decode_bpe_block_to_pil(
     bpe2vq: torch.Tensor,
     vq_model: Any,
 ) -> Image.Image:
-    from dreamer_vla.utils.vq_image_decoder import vq_tokens_to_pixels, tensor_to_pil
+    from dreamer_vla.utils.vq_image_decoder import tensor_to_pil, vq_tokens_to_pixels
 
     clean_ids = strip_image_block_delimiters(bpe_ids)
     n = len(clean_ids)

@@ -1,18 +1,11 @@
 # ruff: noqa: E402
-import os
-import re
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from argparse import ArgumentParser
+import copy
 import json
 import math
+import os
 import pickle
-import copy
+import re
+from argparse import ArgumentParser
 
 from dreamer_vla.preprocess.conversation import Conversation
 from dreamer_vla.preprocess.item_processor import FlexARItemProcessorActionState
@@ -72,7 +65,7 @@ class ItemProcessor(FlexARItemProcessorActionState):
             "state": list(raw_item["state"]) + next_obs_states,
         }
 
-        return super(ItemProcessor, self).process_item(item, training_mode, out_flatten)
+        return super().process_item(item, training_mode, out_flatten)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -320,7 +313,7 @@ if __name__ == "__main__":
     end_idx = min(num_per_rank * (rank + 1), len(ori_contents))
     progress_path = os.path.join(output_dir, f"{rank}-of-{splits}-progress.txt")
     try:
-        with open(progress_path, "r") as f:
+        with open(progress_path) as f:
             progress = f.read().strip()
         if progress == "finished":
             print(f"rank {rank}: progress is finished; scan existing pkl only")

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-# ruff: noqa: F822
-# (names below are resolved lazily via module-level __getattr__)
-
 import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dreamer_vla.models.world_model.block_linear import BlockLinear
 from dreamer_vla.models.world_model.base_world_model import (
     DreamerV3ActorAdapterMixin,
     DreamerV3LatentState,
     DreamerV3Loss,
 )
+from dreamer_vla.models.world_model.block_linear import BlockLinear
 from dreamer_vla.models.world_model.reward_heads import (
     BinaryRewardHead,
     SymexpTwoHotHead,
@@ -1183,37 +1180,10 @@ class _RynnBackboneObsEncoder(nn.Module):
         return self.net(obs_embedding.to(dtype=dtype))
 
 
-_WORLD_MODEL_EXPORTS = {
-    "DreamerV3PixelWorldModel": "dreamer_vla.models.world_model.dreamer_v3_pixel_world_model",
-    "DreamerV3TokenWorldModel": "dreamer_vla.models.world_model.dreamer_v3_token_world_model",
-    "DreamerV3TokenFromPixelWorldModel": "dreamer_vla.models.world_model.dreamer_v3_token_from_pixel_world_model",
-    "DreamerV3PixelRynnBackboneWorldModel": "dreamer_vla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model",
-    "RynnDinoWMWorldModel": "dreamer_vla.models.world_model.rynn_dino_wm",
-    "OFTDinoWMWorldModel": "dreamer_vla.models.world_model.rynn_dino_wm",
-}
-
-
-def __getattr__(name: str):
-    if name in _WORLD_MODEL_EXPORTS:
-        from importlib import import_module
-
-        module = import_module(_WORLD_MODEL_EXPORTS[name])
-        value = getattr(module, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ = [
     "DreamerV3ActorAdapterMixin",
     "DreamerV3LatentState",
     "DreamerV3Loss",
-    "DreamerV3PixelWorldModel",
-    "DreamerV3TokenWorldModel",
-    "DreamerV3TokenFromPixelWorldModel",
-    "DreamerV3PixelRynnBackboneWorldModel",
-    "RynnDinoWMWorldModel",
-    "OFTDinoWMWorldModel",
     "DreamerV3PixelEncoder",
     "DreamerV3TokenEncoder",
     "DreamerV3RSSM",

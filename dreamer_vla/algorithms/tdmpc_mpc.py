@@ -7,12 +7,12 @@ loaded policy, world model, and optional target critic.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
-from typing import Any, Callable
+from typing import Any
 
 import torch
 from torch import nn
-
 
 ActionTransform = Callable[[torch.Tensor], torch.Tensor]
 

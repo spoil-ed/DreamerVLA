@@ -13,13 +13,13 @@ the same action-hidden input as the offline sidecar.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Literal
 
 import numpy as np
-from PIL import Image
-
 from libero.libero import benchmark as libero_benchmark
+from PIL import Image
 
 from dreamer_vla.envs.libero_env import (
     TASK_MAX_STEPS,
@@ -28,7 +28,6 @@ from dreamer_vla.envs.libero_env import (
     quat2axisangle,
 )
 from dreamer_vla.utils.episode_end import resolve_episode_end
-
 
 ACTION_LOW = np.array(
     [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0],
@@ -157,7 +156,7 @@ class DreamerVLAOnlineTrainEnv:
     def from_config(
         cls,
         config: DreamerVLAOnlineTrainEnvConfig | dict[str, Any],
-    ) -> "DreamerVLAOnlineTrainEnv":
+    ) -> DreamerVLAOnlineTrainEnv:
         return cls(config)
 
     @property
@@ -617,7 +616,7 @@ class DreamerVLAOnlineTrainEnv:
                 info["normalized_action"] = normalize_libero_action(env_action_arr)
         return info
 
-    def __enter__(self) -> "DreamerVLAOnlineTrainEnv":
+    def __enter__(self) -> DreamerVLAOnlineTrainEnv:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

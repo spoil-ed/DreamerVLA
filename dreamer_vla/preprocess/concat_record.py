@@ -1,8 +1,8 @@
-from argparse import ArgumentParser
 import json
 import os
 import re
 import warnings
+from argparse import ArgumentParser
 
 
 def find_sub_records(directory: str):
@@ -53,7 +53,7 @@ if __name__ == "__main__":
                             f"{sub_record} seems still writing, skip last incomplete record"
                         )
                     else:
-                        warnings.warn(f"read line failed: {line}")
+                        warnings.warn(f"read line failed: {line}", stacklevel=2)
 
     complete_record = complete_record_without_id + [
         complete_record_by_id[k] for k in sorted(complete_record_by_id)

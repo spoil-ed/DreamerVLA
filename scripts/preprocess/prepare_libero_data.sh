@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# One-command LIBERO preprocessing for the formal DreamerVLA data layout.
+# One-command LIBERO preprocessing for the DreamerVLA data layout.
 set -euo pipefail
 
-# ---- environment (self-contained; no common_env.sh) -------------------------
+# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
@@ -26,7 +26,7 @@ if [[ "${DREAMERVLA_WRITE_LIBERO_CONFIG:-1}" == "1" ]]; then
 benchmark_root: ${DVLA_ROOT}/third_party/LIBERO/libero/libero
 bddl_files: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/bddl_files
 init_states: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/init_files
-datasets: ${DVLA_DATA_ROOT}/dataset/libero
+datasets: ${DVLA_DATA_ROOT}/datasets/libero
 assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
 EOF
 fi
@@ -52,7 +52,7 @@ esac
 TIME_HORIZON="${TIME_HORIZON:-${DEFAULT_TIME_HORIZON}}"
 
 PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-${DVLA_DATA_ROOT}/processed_data}"
-RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_DATA_ROOT}/dataset/libero/${TASK}}"
+RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_DATA_ROOT}/datasets/libero/${TASK}}"
 MARKED_DIR="${MARKED_DIR:-${PROCESSED_DATA_ROOT}/${TASK}_marked_t_${IMAGE_RESOLUTION}}"
 if [[ "${FILTER_NOOPS}" == "1" ]]; then
   HDF5_DIR="${HDF5_DIR:-${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_${IMAGE_RESOLUTION}}"
@@ -62,11 +62,11 @@ fi
 REWARD_DIR="${REWARD_DIR:-${HDF5_DIR}_pi06_remaining_reward}"
 HIDDEN_DIR="${HIDDEN_DIR:-${HDF5_DIR}_pi0_legacy_action_hidden_vla_policy_h2}"
 META_JSON="${META_JSON:-${PROCESSED_DATA_ROOT}/${TASK}_metainfo.json}"
-VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/ckpts/VLA_model_256/${TASK}}"
-TOKENIZER_PATH="${TOKENIZER_PATH:-${DVLA_DATA_ROOT}/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768}"
-TEXT_TOKENIZER_PATH="${TEXT_TOKENIZER_PATH:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/text_tokenizer.json}"
-CHAMELEON_VQGAN_CONFIG="${CHAMELEON_VQGAN_CONFIG:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/vqgan.yaml}"
-CHAMELEON_VQGAN_CKPT="${CHAMELEON_VQGAN_CKPT:-${DVLA_DATA_ROOT}/ckpts/chameleon/tokenizer/vqgan.ckpt}"
+VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${TASK}}"
+TOKENIZER_PATH="${TOKENIZER_PATH:-${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768}"
+TEXT_TOKENIZER_PATH="${TEXT_TOKENIZER_PATH:-${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json}"
+CHAMELEON_VQGAN_CONFIG="${CHAMELEON_VQGAN_CONFIG:-${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.yaml}"
+CHAMELEON_VQGAN_CKPT="${CHAMELEON_VQGAN_CKPT:-${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.ckpt}"
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-1}}"
 
 mkdir -p "${PROCESSED_DATA_ROOT}" "${DVLA_DATA_ROOT}/logs/libero_data_prep"
@@ -88,7 +88,7 @@ if [[ "${RUN_MARKED}" == "1" ]]; then
   if [[ ! -d "${MARKED_DIR}" || "${OVERWRITE}" == "1" ]]; then
     echo "[prepare_libero_data] stage 1: replay and mark no-ops"
     [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
-    "${PYTHON}" "${DVLA_ROOT}/dreamer_vla/preprocess/libero_utils/regenerate_libero_dataset_filter_no_op.py" \
+    "${PYTHON}" -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
       --libero_task_suite "${TASK}" \
       --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
       --libero_target_dir "${MARKED_DIR}" \
@@ -106,7 +106,7 @@ if [[ "${RUN_MARKED}" == "1" ]]; then
     [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HDF5_DIR}"
     filter_arg=()
     [[ "${FILTER_NOOPS}" == "1" ]] && filter_arg=(--filter-noops)
-    "${PYTHON}" "${DVLA_ROOT}/scripts/preprocess/filter_marked_libero_hdf5.py" \
+    "${PYTHON}" -m dreamer_vla.preprocess.filter_marked_libero_hdf5 \
       --input-dir "${MARKED_DIR}" \
       --output-dir "${HDF5_DIR}" \
       --overwrite \
@@ -121,7 +121,7 @@ if [[ "${RUN_REWARD}" == "1" ]]; then
     echo "[prepare_libero_data] stage 3: remaining-steps reward"
     reward_args=(--input-dir "${HDF5_DIR}" --output-dir "${REWARD_DIR}" --overwrite)
     [[ -f "${META_JSON}" ]] && reward_args+=(--metainfo-json "${META_JSON}")
-    "${PYTHON}" "${DVLA_ROOT}/scripts/preprocess/preprocess_remaining_steps_reward.py" "${reward_args[@]}"
+    "${PYTHON}" -m dreamer_vla.preprocess.preprocess_remaining_steps_reward "${reward_args[@]}"
   else
     echo "[prepare_libero_data] stage 3 skipped: ${REWARD_DIR}"
   fi
@@ -152,7 +152,7 @@ if [[ "${RUN_ACTION_HIDDEN}" == "1" ]]; then
     [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
     "${PYTHON}" -m torch.distributed.run \
       --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
-      "${DVLA_ROOT}/scripts/preprocess/preprocess_rynn_pixel_hidden.py" \
+      --module dreamer_vla.preprocess.preprocess_rynn_pixel_hidden \
       --hdf5-dir "${REWARD_DIR}" \
       --out-dir "${HIDDEN_DIR}" \
       --model-path "${VLA_CKPT}" \

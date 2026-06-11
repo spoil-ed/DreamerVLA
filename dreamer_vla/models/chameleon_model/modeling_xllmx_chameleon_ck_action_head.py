@@ -1,7 +1,6 @@
 import functools
 import logging
 import math
-from typing import List
 
 import torch
 from torch import nn
@@ -633,7 +632,7 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(
             as_tuple=True
         )
         valid_sequences = []
-        for batch, start in zip(*start_indices):
+        for batch, start in zip(*start_indices, strict=True):
             if tensor_input[batch, start + self.action_dim + 1] == 15004:
                 valid_sequences.append((batch, start + 1))
         return valid_sequences
@@ -680,7 +679,13 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(
 
             # 存储图像块的起始和结束位置
             image_blocks.append(
-                list(zip(image_starts.cpu().numpy(), image_ends.cpu().numpy()))
+                list(
+                    zip(
+                        image_starts.cpu().numpy(),
+                        image_ends.cpu().numpy(),
+                        strict=True,
+                    )
+                )
             )
 
             # 找到当前batch的动作块起始和结束位置
@@ -708,7 +713,13 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(
 
             # 存储动作块的起始和结束位置
             action_blocks.append(
-                list(zip(action_starts.cpu().numpy(), action_ends.cpu().numpy()))
+                list(
+                    zip(
+                        action_starts.cpu().numpy(),
+                        action_ends.cpu().numpy(),
+                        strict=True,
+                    )
+                )
             )
 
         # 遍历每个batch并更新mask
@@ -851,7 +862,7 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(
         # print(f"Predicted actions: {predicted_actions}")
         return predicted_actions
 
-    def get_fsdp_wrap_module_list(self) -> List:
+    def get_fsdp_wrap_module_list(self) -> list:
         modules = [
             *list(self.model.layers),
             self.lm_head,
@@ -862,7 +873,7 @@ class ChameleonXLLMXForConditionalGeneration_ck_action_head(
             modules.append(self.model.vqmodel)
         return modules
 
-    def get_checkpointing_wrap_module_list(self) -> List:
+    def get_checkpointing_wrap_module_list(self) -> list:
         modules = [
             *list(self.model.layers),
         ]

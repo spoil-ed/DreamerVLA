@@ -35,9 +35,10 @@ the hidden path for ``obs_embedding``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 import h5py
 import numpy as np
@@ -45,7 +46,6 @@ import torch
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from dreamer_vla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
-
 
 # ---------------------------------------------------------------------------
 # Loading

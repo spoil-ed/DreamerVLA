@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2024 Meta Inc. and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +13,6 @@
 # limitations under the License.
 """Image processor class for Chameleon."""
 
-from typing import Dict, List, Optional, Union
 
 import numpy as np
 from transformers.image_processing_utils import (
@@ -47,7 +45,7 @@ if is_vision_available():
     import PIL
 
 
-def make_batched_images(images) -> List[List[ImageInput]]:
+def make_batched_images(images) -> list[list[ImageInput]]:
     """
     Accepts images in list or nested list format, and makes a list of images for preprocessing.
 
@@ -118,15 +116,15 @@ class ChameleonImageProcessor(BaseImageProcessor):
     def __init__(
         self,
         do_resize: bool = True,
-        size: Dict[str, int] = None,
+        size: dict[str, int] = None,
         resample: PILImageResampling = PIL.Image.LANCZOS,
         do_center_crop: bool = True,
-        crop_size: Dict[str, int] = None,
+        crop_size: dict[str, int] = None,
         do_rescale: bool = True,
-        rescale_factor: Union[int, float] = 0.0078,
+        rescale_factor: int | float = 0.0078,
         do_normalize: bool = True,
-        image_mean: Optional[Union[float, List[float]]] = None,
-        image_std: Optional[Union[float, List[float]]] = None,
+        image_mean: float | list[float] | None = None,
+        image_std: float | list[float] | None = None,
         do_convert_rgb: bool = True,
         **kwargs,
     ) -> None:
@@ -173,10 +171,10 @@ class ChameleonImageProcessor(BaseImageProcessor):
     def resize(
         self,
         image: np.ndarray,
-        size: Dict[str, int],
+        size: dict[str, int],
         resample: PILImageResampling = PILImageResampling.BICUBIC,
-        data_format: Optional[Union[str, ChannelDimension]] = None,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        data_format: str | ChannelDimension | None = None,
+        input_data_format: str | ChannelDimension | None = None,
         **kwargs,
     ) -> np.ndarray:
         """
@@ -225,19 +223,19 @@ class ChameleonImageProcessor(BaseImageProcessor):
         self,
         images: ImageInput,
         do_resize: bool = None,
-        size: Dict[str, int] = None,
+        size: dict[str, int] = None,
         resample: PILImageResampling = None,
         do_center_crop: bool = None,
         crop_size: int = None,
         do_rescale: bool = None,
         rescale_factor: float = None,
         do_normalize: bool = None,
-        image_mean: Optional[Union[float, List[float]]] = None,
-        image_std: Optional[Union[float, List[float]]] = None,
+        image_mean: float | list[float] | None = None,
+        image_std: float | list[float] | None = None,
         do_convert_rgb: bool = None,
-        return_tensors: Optional[Union[str, TensorType]] = None,
-        data_format: Optional[ChannelDimension] = ChannelDimension.FIRST,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        return_tensors: str | TensorType | None = None,
+        data_format: ChannelDimension | None = ChannelDimension.FIRST,
+        input_data_format: str | ChannelDimension | None = None,
         **kwargs,
     ) -> PIL.Image.Image:
         """

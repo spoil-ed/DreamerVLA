@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import random
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import h5py
 import numpy as np
@@ -15,7 +16,6 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
-
 
 _DEMO_RE = re.compile(r"^demo_(\d+)$")
 
@@ -339,6 +339,7 @@ class OpenVLAOFTHDF5DatasetFactory:
         ensure_openvla_oft_on_path()
         from prismatic.util.data_utils import PaddedCollatorForActionPrediction
         from prismatic.vla.action_tokenizer import ActionTokenizer
+
         from dreamer_vla.dataset.openvla_oft_rlds_dataset import OpenVLAOFTRLDSDatasetBundle
 
         stats = self._load_statistics(policy)

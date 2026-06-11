@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDORED_OPENVLA_OFT = PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"
 
@@ -33,7 +32,7 @@ def test_openvla_oft_path_prefers_vendored_lightweight_tree() -> None:
 
 
 def test_official_openvla_oft_default_root_lives_under_third_party() -> None:
-    from scripts.eval.openvla_oft_obs_action_policy import default_openvla_oft_root
+    from dreamer_vla.evaluation.openvla_oft_obs_action_policy import default_openvla_oft_root
 
     assert default_openvla_oft_root() == PROJECT_ROOT / "third_party" / "openvla-oft"
 

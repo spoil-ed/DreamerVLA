@@ -35,15 +35,15 @@ from PIL import Image
 from transformers import GenerationConfig
 
 from dreamer_vla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
-from dreamer_vla.utils.torch_utils import freeze_module
 from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+from dreamer_vla.utils.torch_utils import freeze_module
 
 
 class EvalLiberoVLARunner(PretokenizeVLARunner):
     """Load a VLA or Dreamer ckpt -> run LIBERO rollout -> dump JSON metrics."""
 
-    runner_name = "libero_eval_compat"
-    runner_status = "compatibility"
+    runner_name = "libero_eval"
+    runner_status = "current"
     runner_family = "eval"
     default_output_dir = str(
         pathlib.Path(__file__).resolve().parents[2]
@@ -877,7 +877,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             self._dreamer_rssm_action_from_raw_env(raw, env).astype(
                 np.float32, copy=False
             )
-            for raw, env in zip(raw_actions, env_actions)
+            for raw, env in zip(raw_actions, env_actions, strict=True)
         ]
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
@@ -1377,7 +1377,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         max_len = int(hidden_states.shape[1])
         input_rows = []
         mask_rows = []
-        for seq, length in zip(input_ids_list, lengths):
+        for seq, length in zip(input_ids_list, lengths, strict=True):
             # Append the action trigger as a marker.  The actor consumes all
             # hidden states before this marker, matching native ActionHead.
             row = [int(tok) for tok in seq[:max_len]] + [int(target_token_id)]
@@ -1693,7 +1693,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             self._dreamer_rssm_action_from_raw_env(raw, env).astype(
                 np.float32, copy=False
             )
-            for raw, env in zip(raw_actions, env_actions)
+            for raw, env in zip(raw_actions, env_actions, strict=True)
         ]
         if not env_actions:
             return [], []
@@ -1817,6 +1817,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
             return {}
 
         from libero.libero import benchmark as libero_benchmark
+
         from dreamer_vla.envs import (
             TASK_MAX_STEPS,
             get_libero_dummy_action,

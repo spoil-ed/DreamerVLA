@@ -4,7 +4,7 @@ import random
 
 import numpy as np
 
-from scripts.training.train_online_rynnvla_action_hidden_dreamervla import (
+from dreamer_vla.training.online_replay import (
     OnlineReplay,
     pack_replay_task_stats_for_ddp,
     unpack_replay_task_stats_from_ddp,

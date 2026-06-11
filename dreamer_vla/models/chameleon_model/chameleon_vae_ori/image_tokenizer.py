@@ -3,11 +3,11 @@
 # This source code is licensed under the Chameleon License found in the
 # LICENSE file in the root directory of this source tree.
 
-import PIL
-from PIL import Image
 import numpy as np
+import PIL
 import torch
 import yaml
+from PIL import Image
 
 from .vqgan import VQModel
 

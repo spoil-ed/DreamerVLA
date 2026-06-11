@@ -3,8 +3,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import random
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -16,31 +16,13 @@ from dreamer_vla.models.chameleon_model.chameleon_vae_ori.vocab import (
     VocabInfo,
     VocabTranslation,
 )
+from dreamer_vla.models.encoder.rynnvla_image_ops import (
+    generate_crop_size_list,
+    var_center_crop,
+)
+from dreamer_vla.utils.conversation import Conversation
 
 logger = logging.getLogger(__name__)
-
-
-class Conversation:
-    sep_token = "<reserved08706>"
-    roles = ["Human", "Assistant"]
-
-    def __init__(self, messages=None):
-        self.messages = messages or []
-
-    def process(self):
-        ret = ""
-        pieces = []
-        for i, (role, message) in enumerate(self.messages):
-            if message is not None:
-                turn = message + self.sep_token
-                ret += turn
-                pieces.append({"data": turn, "predict": role == self.roles[1]})
-            else:
-                assert i == len(self.messages) - 1 and role == self.roles[1]
-        return {"conv": ret, "pieces": pieces}
-
-    def append_message(self, role, message):
-        self.messages.append([role, message])
 
 
 class RynnVLATokenizer:
@@ -88,50 +70,6 @@ class RynnVLATokenizer:
             sentence3 = self.encode(" my darling", bos=False, eos=False)
             assert sentence1[-len(sentence3) :] == sentence3
             self.need_space_before_segment = True
-
-
-def center_crop(pil_image, crop_size):
-    while (
-        pil_image.size[0] >= 2 * crop_size[0] and pil_image.size[1] >= 2 * crop_size[1]
-    ):
-        pil_image = pil_image.resize(
-            tuple(x // 2 for x in pil_image.size), resample=Image.BOX
-        )
-    scale = max(crop_size[0] / pil_image.size[0], crop_size[1] / pil_image.size[1])
-    pil_image = pil_image.resize(
-        tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
-    )
-    crop_left = random.randint(0, pil_image.size[0] - crop_size[0])
-    crop_upper = random.randint(0, pil_image.size[1] - crop_size[1])
-    crop_right = crop_left + crop_size[0]
-    crop_lower = crop_upper + crop_size[1]
-    return pil_image.crop(box=(crop_left, crop_upper, crop_right, crop_lower))
-
-
-def var_center_crop(pil_image, crop_size_list, random_top_k=1):
-    w, h = pil_image.size
-    rem_percent = [
-        min(cw / w, ch / h) / max(cw / w, ch / h) for cw, ch in crop_size_list
-    ]
-    crop_size = random.choice(
-        sorted(((x, y) for x, y in zip(rem_percent, crop_size_list)), reverse=True)[
-            :random_top_k
-        ]
-    )[1]
-    return center_crop(pil_image, crop_size)
-
-
-def generate_crop_size_list(num_patches, patch_size, max_ratio=4.0):
-    crop_size_list = []
-    wp, hp = num_patches, 1
-    while wp > 0:
-        if max(wp, hp) / min(wp, hp) <= max_ratio:
-            crop_size_list.append((wp * patch_size, hp * patch_size))
-        if (hp + 1) * wp <= num_patches:
-            hp += 1
-        else:
-            wp -= 1
-    return crop_size_list
 
 
 class MMConvItemProcessor:
@@ -231,7 +169,7 @@ class MMConvItemProcessor:
 
         flattened_tokens = []
         flattened_labels = []
-        for token_or_media, ori_label in zip(tokens, labels):
+        for token_or_media, ori_label in zip(tokens, labels, strict=True):
             if isinstance(token_or_media, int):
                 flattened_tokens.append(token_or_media)
                 flattened_labels.append(ori_label)

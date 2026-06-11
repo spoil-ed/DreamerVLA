@@ -1,4 +1,4 @@
-"""DreamerVLA algorithms — mature end-to-end training routes.
+"""DreamerVLA algorithms.
 
 Routes (public interface):
 
@@ -12,9 +12,6 @@ Routes (public interface):
         ``dino_wmpo_outcome_step``  (sparse outcome reward from
                                      LatentSuccessClassifier, WMPO/verl)
         from ``dreamer_vla.algorithms.ppo``
-        (legacy aliases ``dino_wmpo_ppo_step`` / ``dino_wmpo_chunk_step`` /
-        ``dino_wmpo_frame_step`` / ``dino_wmpo_window_step`` are retained
-        for back-compat but discouraged in new code)
 
   • TD-MPC MPC planner (eval-time): ``dreamer_vla.algorithms.tdmpc_mpc``
 
@@ -30,12 +27,9 @@ from .dreamer_vla import (
     world_model_pretrain_step,
 )
 from .ppo import (
-    dino_wmpo_chunk_step,  # legacy alias
+    dino_wmpo_dense_chunk_step,
     dino_wmpo_dense_step,
-    dino_wmpo_frame_step,  # legacy alias
     dino_wmpo_outcome_step,
-    dino_wmpo_ppo_step,  # legacy alias
-    dino_wmpo_window_step,  # legacy alias
 )
 
 __all__ = [
@@ -46,10 +40,6 @@ __all__ = [
     "compute_replay_lambda_returns",
     # PPO routes (new names, distinguished by reward form).
     "dino_wmpo_dense_step",
+    "dino_wmpo_dense_chunk_step",
     "dino_wmpo_outcome_step",
-    # Legacy aliases — back-compat only.
-    "dino_wmpo_frame_step",
-    "dino_wmpo_window_step",
-    "dino_wmpo_ppo_step",
-    "dino_wmpo_chunk_step",
 ]

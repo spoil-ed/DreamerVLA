@@ -18,8 +18,8 @@ Both phases can be toggled independently via `training.run_wm_phase` and
 
 from __future__ import annotations
 
-import copy
 import contextlib
+import copy
 import json
 import math
 import os
@@ -39,24 +39,27 @@ from dreamer_vla.algorithms.dreamer_vla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
-from dreamer_vla.algorithms.dino_wmpo import dino_wmpo_ppo_step
-from dreamer_vla.algorithms.ppo import dino_wmpo_dense_chunk_step, dino_wmpo_outcome_step
+from dreamer_vla.algorithms.ppo import (
+    dino_wmpo_dense_chunk_step,
+    dino_wmpo_dense_step,
+    dino_wmpo_outcome_step,
+)
 from dreamer_vla.dataset import BaseDataset
 from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.ema import EMAHelper
 from dreamer_vla.utils.optim import build_optimizer
 from dreamer_vla.utils.seed import set_seed
 from dreamer_vla.utils.torch_utils import freeze_module
-from dreamer_vla.runners.base_runner import BaseRunner
 
 
 class DreamerVLARunner(BaseRunner):
     """Closed-loop DreamerVLA: WM pretraining + DreamerV3 actor-critic (twohot + target critic)."""
 
-    runner_name = "joint_dreamer_vla_compat"
-    runner_status = "compatibility"
+    runner_name = "joint_dreamer_vla"
+    runner_status = "current"
     runner_family = "actor"
     include_keys = ("global_step", "epoch")
     # encoder is frozen — no need to checkpoint it.
@@ -65,7 +68,7 @@ class DreamerVLARunner(BaseRunner):
     default_vla_init_dir = str(
         pathlib.Path(__file__).resolve().parents[2]
         / "data"
-        / "ckpts"
+        / "checkpoints"
         / "VLA_model_256"
         / "libero_goal"
     )
@@ -491,7 +494,7 @@ class DreamerVLARunner(BaseRunner):
         for path in paths:
             if not path.is_file():
                 raise FileNotFoundError(f"real rollout relabel jsonl not found: {path}")
-            with open(path, "r") as f:
+            with open(path) as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -642,7 +645,7 @@ class DreamerVLARunner(BaseRunner):
             default=str(
                 pathlib.Path(__file__).resolve().parents[2]
                 / "data"
-                / "ckpts"
+                / "checkpoints"
                 / "chameleon"
                 / "tokenizer"
                 / "vqgan.yaml"
@@ -654,7 +657,7 @@ class DreamerVLARunner(BaseRunner):
             default=str(
                 pathlib.Path(__file__).resolve().parents[2]
                 / "data"
-                / "ckpts"
+                / "checkpoints"
                 / "chameleon"
                 / "tokenizer"
                 / "vqgan.ckpt"
@@ -1760,7 +1763,7 @@ class DreamerVLARunner(BaseRunner):
                                         "ppo",
                                         "grpo",
                                     }:
-                                        ac_metrics = dino_wmpo_ppo_step(
+                                        ac_metrics = dino_wmpo_dense_step(
                                             policy=self.policy,
                                             world_model=self.world_model,
                                             actor_optimizer=self.policy_optimizer,

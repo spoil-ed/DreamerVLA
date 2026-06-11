@@ -9,9 +9,9 @@ move from `src/` to `dreamer_vla/`.
 DreamerVLA/
 ├── dreamer_vla/          # Python package imported as dreamer_vla
 ├── configs/              # Hydra route configs and LIBERO task configs
-├── scripts/              # Launchers, preprocessing, diagnostics, smoke tests
+├── scripts/              # Shell launchers for install, data prep, train, eval
 ├── tests/                # Unit and e2e tests
-├── docs/                 # Architecture notes, findings, plans, paper drafts
+├── docs/                 # Repository, install, data-layout, and paper notes
 ├── data/                 # Runtime datasets, checkpoints, outputs
 ├── third_party/          # Vendored/local upstream checkouts and wheels
 │   ├── LIBERO/           # Local LIBERO checkout
@@ -41,6 +41,7 @@ dreamer_vla/
 │   ├── reward/           # Latent success classifier
 │   └── world_model/      # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Dataset preprocessing, xllmx helpers, hidden extraction
+├── legacy/               # Isolated non-mainline utilities for old artifacts
 ├── trainer/              # Shared distributed training helpers
 ├── utils/                # Checkpoints, logging, optim, EMA, visualization
 └── runners/              # Public route runners and implementations
@@ -81,14 +82,13 @@ DreamerVLA:
   dreamervla_rynn_dino_wm_actor_critic
   dreamervla_rynn_dino_wm_wmpo_outcome
   dreamervla_oft_dino_wm_wmpo_outcome
-  online_wmpo_outcome_libero_goal
 
 Evaluation:
   eval_libero_vla
 ```
 
-Historical or uncertain routes live under `configs/archive/` and
-`scripts/archive/`. They are not launch defaults.
+Release launchers stay in `scripts/`; route experiments should graduate to a
+top-level config only when they have a runner, defaults, and tests.
 
 ## Interface Boundaries
 
@@ -107,6 +107,5 @@ Models stay behind focused public interfaces:
 - Datasets inherit `BaseDataset` and expose `data_spec` plus
   `get_normalizer()`.
 
-Compatibility shims such as `dreamer_vla.models.vla_actor` are allowed only
-when they keep existing Hydra targets importable while the canonical file lives
-in the right subpackage.
+Do not add package-level compatibility shims for moved modules. Update imports
+and Hydra targets to the canonical subpackage path.

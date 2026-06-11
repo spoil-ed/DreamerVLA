@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any
-import warnings
 
 import hydra
 import torch
@@ -29,8 +29,8 @@ def _to_device(value: Any, device: torch.device) -> Any:
 class DreamerV3PixelRunner(BaseRunner):
     """Standalone pixel-level DreamerV3 world-model trainer for LIBERO."""
 
-    runner_name = "pixel_wm_compat"
-    runner_status = "compatibility"
+    runner_name = "pixel_wm"
+    runner_status = "secondary"
     runner_family = "world_model"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -424,7 +424,7 @@ class DreamerV3PixelRunner(BaseRunner):
         values /= float(self.world_size)
         return {
             key: float(value)
-            for key, value in zip(keys, values.detach().cpu().tolist())
+            for key, value in zip(keys, values.detach().cpu().tolist(), strict=True)
         }
 
     def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:

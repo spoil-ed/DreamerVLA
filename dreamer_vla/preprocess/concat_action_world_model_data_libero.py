@@ -1,19 +1,16 @@
 # ruff: noqa: E402
+import argparse  # 导入 argparse 模块
 import json
 from pathlib import Path
-import argparse  # 导入 argparse 模块
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from dreamer_vla.preprocess.paths import DEFAULT_DATA_ROOT
 
 
 def read_json_file(file_path: Path):
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         print(f"Warning: File not found at {file_path}. Skipping.")

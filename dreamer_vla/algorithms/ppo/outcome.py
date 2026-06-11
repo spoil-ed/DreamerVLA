@@ -33,7 +33,8 @@ dense per-step state-reward from the WM hidden at every imagined env-step.
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import torch
 import torch.distributed as dist

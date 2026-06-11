@@ -107,7 +107,7 @@ class RynnVLAActionHiddenActor(BaseActor):
         index_path = _os.path.join(model_dir, "model.safetensors.index.json")
         files: list[str]
         if _os.path.isfile(index_path):
-            with open(index_path, "r") as fh:
+            with open(index_path) as fh:
                 index = _json.load(fh).get("weight_map", {})
             files = sorted(
                 {

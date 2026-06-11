@@ -1,75 +1,27 @@
 # ruff: noqa: E402
 import json
 import logging
-import random
-import sys
 from pathlib import Path
-from typing import Dict, List
-import numpy as np
 
-from PIL import Image
+import numpy as np
 import torch
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+
+from transformers import AutoProcessor
 
 from dreamer_vla.models.chameleon_model import chameleon_vae_ori
+from dreamer_vla.models.encoder.rynnvla_image_ops import (
+    generate_crop_size_list,
+    var_center_crop,
+)
 from dreamer_vla.preprocess.conversation import Conversation
 from dreamer_vla.preprocess.paths import DEFAULT_CHAMELEON_TOKENIZER_DIR, DEFAULT_TOKENIZER_PATH
 from dreamer_vla.preprocess.xllmx.data.data_reader import read_general
 from dreamer_vla.preprocess.xllmx.data.item_processor import MMConvItemProcessor
 
-from transformers import AutoProcessor
-
 logger = logging.getLogger(__name__)
-
-
-def center_crop(pil_image, crop_size):
-    while (
-        pil_image.size[0] >= 2 * crop_size[0] and pil_image.size[1] >= 2 * crop_size[1]
-    ):
-        pil_image = pil_image.resize(
-            tuple(x // 2 for x in pil_image.size), resample=Image.BOX
-        )
-
-    scale = max(crop_size[0] / pil_image.size[0], crop_size[1] / pil_image.size[1])
-    pil_image = pil_image.resize(
-        tuple(round(x * scale) for x in pil_image.size), resample=Image.BICUBIC
-    )
-
-    crop_left = random.randint(0, pil_image.size[0] - crop_size[0])
-    crop_upper = random.randint(0, pil_image.size[1] - crop_size[1])
-    crop_right = crop_left + crop_size[0]
-    crop_lower = crop_upper + crop_size[1]
-    return pil_image.crop(box=(crop_left, crop_upper, crop_right, crop_lower))
-
-
-def var_center_crop(pil_image, crop_size_list, random_top_k=1):
-    w, h = pil_image.size
-    rem_percent = [
-        min(cw / w, ch / h) / max(cw / w, ch / h) for cw, ch in crop_size_list
-    ]
-    crop_size = random.choice(
-        sorted(((x, y) for x, y in zip(rem_percent, crop_size_list)), reverse=True)[
-            :random_top_k
-        ]
-    )[1]
-    return center_crop(pil_image, crop_size)
-
-
-def generate_crop_size_list(num_patches, patch_size, max_ratio=4.0):
-    assert max_ratio >= 1.0
-    crop_size_list = []
-    wp, hp = num_patches, 1
-    while wp > 0:
-        if max(wp, hp) / min(wp, hp) <= max_ratio:
-            crop_size_list.append((wp * patch_size, hp * patch_size))
-        if (hp + 1) * wp <= num_patches:
-            hp += 1
-        else:
-            wp -= 1
-    return crop_size_list
 
 
 class FlexARItemProcessor(MMConvItemProcessor):
@@ -139,7 +91,7 @@ class FlexARItemProcessor(MMConvItemProcessor):
         return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
-    def process_image(self, image) -> Dict:
+    def process_image(self, image) -> dict:
         if isinstance(image, Image.Image):
             pass
         else:
@@ -191,7 +143,7 @@ class FlexARItemProcessor(MMConvItemProcessor):
             tokens, labels = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
             modified_labels_item = []
-            for i, (token_or_media, ori_label) in enumerate(zip(tokens, labels)):
+            for token_or_media, ori_label in zip(tokens, labels, strict=True):
                 if isinstance(token_or_media, int):
                     token = token_or_media
                     input_tokens_item.append(token)
@@ -208,7 +160,7 @@ class FlexARItemProcessor(MMConvItemProcessor):
         else:
             tokens = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
-            for i, token_or_media in enumerate(tokens):
+            for token_or_media in tokens:
                 if isinstance(token_or_media, int):
                     input_tokens_item.append(token_or_media)
                 else:
@@ -216,7 +168,7 @@ class FlexARItemProcessor(MMConvItemProcessor):
 
             return input_tokens_item
 
-    def decode_image(self, tokens: List[int]) -> Image.Image:
+    def decode_image(self, tokens: list[int]) -> Image.Image:
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
         if tokens[-1] == self.token2id(self.image_end_token):
@@ -238,30 +190,6 @@ class FlexARItemProcessor(MMConvItemProcessor):
         return self.chameleon_ori_image_tokenizer.pil_from_img_toks(
             tokens, h_latent_dim, w_latent_dim
         )
-
-
-__all__ = [
-    "FlexARItemProcessor",
-    "FlexARItemProcessorAction",
-    "FlexARItemProcessorActionState",
-    "FlexARItemProcessorActionFast",
-    "FlexARItemProcessor_Action",
-    "FlexARItemProcessor_Action_State",
-    "FlexARItemProcessor_Action_FAST",
-]
-
-
-_LEGACY_CLASS_NAMES = {
-    "FlexARItemProcessor_Action": "FlexARItemProcessorAction",
-    "FlexARItemProcessor_Action_State": "FlexARItemProcessorActionState",
-    "FlexARItemProcessor_Action_FAST": "FlexARItemProcessorActionFast",
-}
-
-
-def __getattr__(name: str):
-    if name in _LEGACY_CLASS_NAMES:
-        return globals()[_LEGACY_CLASS_NAMES[name]]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class FlexARItemProcessorAction(MMConvItemProcessor):
@@ -341,7 +269,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
         return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
-    def process_image(self, image) -> Dict:
+    def process_image(self, image) -> dict:
         if isinstance(image, Image.Image):
             pass
         elif isinstance(image, list):
@@ -392,7 +320,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
         return {"input_ids": result_toks, "labels": result_toks}
 
     @torch.no_grad()
-    def process_action(self, action) -> Dict:
+    def process_action(self, action) -> dict:
         if isinstance(action, str):
             action = np.load(action)
         action = np.array(action)
@@ -441,7 +369,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
             tokens, labels = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
             modified_labels_item = []
-            for i, (token_or_media, ori_label) in enumerate(zip(tokens, labels)):
+            for token_or_media, ori_label in zip(tokens, labels, strict=True):
                 if isinstance(token_or_media, int):
                     token = token_or_media
                     input_tokens_item.append(token)
@@ -459,7 +387,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
         else:
             tokens = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
-            for i, token_or_media in enumerate(tokens):
+            for token_or_media in tokens:
                 if isinstance(token_or_media, int):
                     input_tokens_item.append(token_or_media)
                 else:
@@ -467,7 +395,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
 
             return input_tokens_item
 
-    def decode_image(self, tokens: List[int]) -> Image.Image:
+    def decode_image(self, tokens: list[int]) -> Image.Image:
         # print('0', tokens, len(tokens))
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
@@ -576,7 +504,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
-    def process_image(self, image) -> Dict:
+    def process_image(self, image) -> dict:
         # print('1: ', image.shape, type(image))
         # print(np.array(image).astype(np.uint8))
         # image = Image.fromarray(np.array(image).astype(np.uint8))
@@ -636,7 +564,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         return {"input_ids": result_toks, "labels": result_toks}
 
     @torch.no_grad()
-    def process_action(self, action) -> Dict:
+    def process_action(self, action) -> dict:
         if isinstance(action, str):
             action = np.load(action)
         action = np.array(action)
@@ -657,7 +585,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         return {"input_ids": result_toks, "labels": result_toks}
 
     @torch.no_grad()
-    def process_state(self, state) -> Dict:
+    def process_state(self, state) -> dict:
         if isinstance(state, str):
             state = np.load(state)
         state = np.array(state)
@@ -728,7 +656,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
             tokens, labels = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
             modified_labels_item = []
-            for i, (token_or_media, ori_label) in enumerate(zip(tokens, labels)):
+            for token_or_media, ori_label in zip(tokens, labels, strict=True):
                 if isinstance(token_or_media, int):
                     token = token_or_media
                     input_tokens_item.append(token)
@@ -746,7 +674,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         else:
             tokens = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
-            for i, token_or_media in enumerate(tokens):
+            for token_or_media in tokens:
                 if isinstance(token_or_media, int):
                     input_tokens_item.append(token_or_media)
                 else:
@@ -754,7 +682,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
 
             return input_tokens_item
 
-    def decode_image(self, tokens: List[int]) -> Image.Image:
+    def decode_image(self, tokens: list[int]) -> Image.Image:
         print(tokens, len(tokens))
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
@@ -796,7 +724,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
 
     def __init__(
         self,
-        tokenizer="../ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/snapshots/9624463a82ea5ce814af9b561dcd08a31082c3af",
+        tokenizer="../checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768/snapshots/9624463a82ea5ce814af9b561dcd08a31082c3af",
         conv_template=Conversation,
         target_size=512,
     ):
@@ -828,15 +756,15 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         #  because the transformers implementation does not contain the vae decoder
         self.chameleon_ori_vocab = chameleon_vae_ori.VocabInfo(
             json.load(
-                open("./ckpts/chameleon/tokenizer/text_tokenizer.json", encoding="utf8")
+                open("./checkpoints/chameleon/tokenizer/text_tokenizer.json", encoding="utf8")
             )["model"]["vocab"]
         )
         self.chameleon_ori_translation = chameleon_vae_ori.VocabTranslation(
             self.chameleon_ori_vocab, device="cuda"
         )
         self.chameleon_ori_image_tokenizer = chameleon_vae_ori.ImageTokenizer(
-            cfg_path="./ckpts/chameleon/tokenizer/vqgan.yaml",
-            ckpt_path="./ckpts/chameleon/tokenizer/vqgan.ckpt",
+            cfg_path="./checkpoints/chameleon/tokenizer/vqgan.yaml",
+            ckpt_path="./checkpoints/chameleon/tokenizer/vqgan.ckpt",
             device="cuda",
         )
 
@@ -859,7 +787,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
-    def process_image(self, image) -> Dict:
+    def process_image(self, image) -> dict:
         if isinstance(image, Image.Image):
             pass
         else:
@@ -906,7 +834,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         return {"input_ids": result_toks, "labels": result_toks}
 
     @torch.no_grad()
-    def process_action(self, action) -> Dict:
+    def process_action(self, action) -> dict:
         # Tokenize & decode action chunks (we use dummy data here)
         # action_data = np.random.rand(1, 10, 7)    # one batch of action chunks
         discretized_action = self.action_tokenizer(
@@ -936,7 +864,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
             tokens, labels = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
             modified_labels_item = []
-            for i, (token_or_media, ori_label) in enumerate(zip(tokens, labels)):
+            for token_or_media, ori_label in zip(tokens, labels, strict=True):
                 if isinstance(token_or_media, int):
                     token = token_or_media
                     input_tokens_item.append(token)
@@ -954,7 +882,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         else:
             tokens = super().process_item(item, training_mode=training_mode)
             input_tokens_item = []
-            for i, token_or_media in enumerate(tokens):
+            for token_or_media in tokens:
                 if isinstance(token_or_media, int):
                     input_tokens_item.append(token_or_media)
                 else:
@@ -962,7 +890,7 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
 
             return input_tokens_item
 
-    def decode_image(self, tokens: List[int]) -> Image.Image:
+    def decode_image(self, tokens: list[int]) -> Image.Image:
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
         if tokens[-1] == self.token2id(self.image_end_token):
@@ -984,3 +912,19 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         return self.chameleon_ori_image_tokenizer.pil_from_img_toks(
             tokens, h_latent_dim, w_latent_dim
         )
+
+
+FlexARItemProcessor_Action = FlexARItemProcessorAction
+FlexARItemProcessor_Action_State = FlexARItemProcessorActionState
+FlexARItemProcessor_Action_FAST = FlexARItemProcessorActionFast
+
+
+__all__ = [
+    "FlexARItemProcessor",
+    "FlexARItemProcessorAction",
+    "FlexARItemProcessorActionState",
+    "FlexARItemProcessorActionFast",
+    "FlexARItemProcessor_Action",
+    "FlexARItemProcessor_Action_State",
+    "FlexARItemProcessor_Action_FAST",
+]

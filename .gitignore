@@ -6,6 +6,7 @@ build/
 dist/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
 # Virtual envs / OS
 .venv/
@@ -25,6 +26,20 @@ train.log
 *.log
 wandb/
 .env.wandb
+
+# Local agent/editor workspaces and planning drafts
+.local/
+.agents/
+.claude/
+.codex/
+.cursor/
+docs/superpowers/
+docs/TODO.md
+docs/task_plan.md
+docs/*_plan.md
+docs/findings.md
+docs/history.md
+docs/graveyard_candidates_*.md
 
 # other
 CLAUDE.local.md

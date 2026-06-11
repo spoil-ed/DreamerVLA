@@ -81,13 +81,6 @@ class OpenVLAOFTPolicy(nn.Module):
         ensure_openvla_oft_on_path()
 
         from peft import LoraConfig, get_peft_model
-        from transformers import (
-            AutoConfig,
-            AutoImageProcessor,
-            AutoModelForVision2Seq,
-            AutoProcessor,
-        )
-
         from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
         from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
         from prismatic.extern.hf.processing_prismatic import (
@@ -97,6 +90,12 @@ class OpenVLAOFTPolicy(nn.Module):
         from prismatic.models.projectors import ProprioProjector
         from prismatic.vla.action_tokenizer import ActionTokenizer
         from prismatic.vla.constants import ACTION_DIM, PROPRIO_DIM
+        from transformers import (
+            AutoConfig,
+            AutoImageProcessor,
+            AutoModelForVision2Seq,
+            AutoProcessor,
+        )
 
         AutoConfig.register("openvla", OpenVLAConfig, exist_ok=True)
         AutoImageProcessor.register(
@@ -192,7 +191,7 @@ class OpenVLAOFTPolicy(nn.Module):
         use_proprio: bool = False,
         use_film: bool = False,
         proprio_projector: nn.Module | None = None,
-    ) -> "OpenVLAOFTPolicy":
+    ) -> OpenVLAOFTPolicy:
         self = cls.__new__(cls)
         nn.Module.__init__(self)
         self.vla = vla

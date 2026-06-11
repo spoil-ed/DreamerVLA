@@ -13,5 +13,30 @@ dependencies = [
     "omegaconf",
 ]
 
+[project.scripts]
+dreamer-vla-train = "dreamer_vla.cli.train:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
 [tool.setuptools.packages.find]
 include = ["dreamer_vla*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit_tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -5,7 +5,6 @@ import sys
 import types
 from pathlib import Path
 
-
 if "h5py" not in sys.modules:
     try:
         import h5py  # noqa: F401

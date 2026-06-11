@@ -160,7 +160,7 @@ critic:
   bin_max: 20.0
 
 algorithm:
-  # Mainline: PPO/WMPO-style imagined-trajectory actor update (dreamer_vla/algorithms/dino_wmpo.py).
+  # Mainline: PPO/WMPO-style imagined-trajectory actor update (dreamer_vla/algorithms/ppo/).
   # The dreamer-style lambda-return AC path (dreamer_vla/algorithms/dreamer_vla.py:imagine_actor_critic_step)
   # is preserved as an optional fallback: set `update_type=dreamer` to use it.
   # Dispatch is in dreamer_vla/runners/dreamer_vla_runner.py:~1105.

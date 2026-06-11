@@ -39,26 +39,15 @@ import robosuite.utils.transform_utils as T
 import tqdm
 from libero.libero import benchmark
 
-from libero_utils import (
+from dreamer_vla.preprocess.libero_utils.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
 )
-
-
-def is_noop(action, prev_action=None, threshold=1e-4):
-    """Same definition as the original no-op filter — keeps action sequences identical."""
-    if prev_action is None:
-        return np.linalg.norm(action[:-1]) < threshold
-    gripper_action = action[-1]
-    prev_gripper_action = prev_action[-1]
-    return (
-        np.linalg.norm(action[:-1]) < threshold
-        and gripper_action == prev_gripper_action
-    )
+from dreamer_vla.preprocess.libero_utils.noop_marking import is_noop_action
 
 
 def _load_metainfo(path: str) -> dict:
-    with open(path, "r") as f:
+    with open(path) as f:
         return json.load(f)
 
 
@@ -186,7 +175,7 @@ def main(args):
 
             for _, action in enumerate(orig_actions):
                 prev_action = actions[-1] if len(actions) > 0 else None
-                if is_noop(action, prev_action):
+                if is_noop_action(action, prev_action):
                     num_noops += 1
                     continue
 

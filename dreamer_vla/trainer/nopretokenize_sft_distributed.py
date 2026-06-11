@@ -29,7 +29,7 @@ from dreamer_vla.utils.json_logger import JsonLogger
 
 
 class _NullJsonLogger:
-    def __enter__(self) -> "_NullJsonLogger":
+    def __enter__(self) -> _NullJsonLogger:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -54,7 +54,7 @@ class NopretokenizeSFTDistributedHelper:
         strategy: str = "ddp",
         fsdp_mixed_precision: str = "bf16",
         enable_activation_checkpointing: bool = True,
-    ) -> "NopretokenizeSFTDistributedHelper":
+    ) -> NopretokenizeSFTDistributedHelper:
         normalized_strategy = str(strategy).lower()
         if normalized_strategy not in {"ddp", "fsdp"}:
             raise ValueError(f"Unsupported distributed strategy: {strategy}")

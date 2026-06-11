@@ -8,7 +8,6 @@ earliest window with p(success) >= threshold defines finish_step.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -59,7 +58,7 @@ class LatentSuccessClassifier(nn.Module):
     """
 
     def __init__(
-        self, cfg: Optional[LatentSuccessClassifierConfig] = None, **kwargs
+        self, cfg: LatentSuccessClassifierConfig | None = None, **kwargs
     ) -> None:
         super().__init__()
         if cfg is None:

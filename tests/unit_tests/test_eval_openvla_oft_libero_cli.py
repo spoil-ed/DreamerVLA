@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.eval.eval_openvla_oft_libero import parse_suite_name, resolve_num_images_for_camera_inputs
+from dreamer_vla.evaluation.eval_openvla_oft_libero import (
+    parse_suite_name,
+    resolve_num_images_for_camera_inputs,
+)
 
 
 def test_parse_suite_name_accepts_libero_10_aliases() -> None:

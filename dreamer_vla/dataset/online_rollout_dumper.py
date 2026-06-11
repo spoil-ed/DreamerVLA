@@ -9,7 +9,7 @@ Writes one episode at a time into sharded HDF5 files that match the
 Designed to piggy-back on existing training loops: each completed episode is
 already a ``list[dict]`` with ``obs_embedding`` / ``wm_action`` / ``reward``
 / ``done`` / ``is_terminal`` keys (see
-``scripts.train_online_rynnvla_action_hidden_dreamervla``). Wire the dumper next
+``dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla``). Wire the dumper next
 to ``replay.add_episode(episode)`` and rollouts get persisted to disk for free
 — no extra GPU time, no separate collection pass.
 
@@ -24,8 +24,9 @@ actually solved the task.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import h5py
 import numpy as np
@@ -190,7 +191,7 @@ class RolloutDumper:
         partial = 1 if self._total_episodes % self.episodes_per_shard else 0
         return int(full + partial)
 
-    def __enter__(self) -> "RolloutDumper":
+    def __enter__(self) -> RolloutDumper:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

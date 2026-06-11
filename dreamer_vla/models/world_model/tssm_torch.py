@@ -10,29 +10,25 @@ image-spatial H/W dims removed (we only have a T-axis sequence). All other behav
 (deter_type=concat_o, layer-wise output stacking, manual straight-through sample,
 no unimix, no final LN) matches the original 1:1.
 
-Public class:
-    ``TSSMRynnBackboneWorldModel`` — drop-in replacement for
-    ``DreamerV3PixelRynnBackboneWorldModel``.
+This module contains the shared TSSM dynamics and helper layers. Concrete world
+model classes live in ``tssm_rynn_backbone_world_model.py`` and
+``tssm_token_rynn_backbone_world_model.py``.
 """
 
 from __future__ import annotations
-
-# ruff: noqa: F822
-# (names below are resolved lazily via module-level __getattr__)
 
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import OneHotCategorical, Independent
+from torch.distributions import Independent, OneHotCategorical
 
 from dreamer_vla.models.world_model.dreamerv3_torch import (
     MLPHead,
     Pi0StyleHiddenDecoder,
     ResMLPHead,
 )
-
 
 # ============================================================
 # Faithful TransDreamer Transformer port (1D sequence, no H/W)
@@ -932,28 +928,9 @@ class _PerTokenMLPDecoder(nn.Module):
         return out.reshape(*out.shape[:-2], self.n_tokens * self.out_dim_per_tok)
 
 
-_WORLD_MODEL_EXPORTS = {
-    "TSSMRynnBackboneWorldModel": "dreamer_vla.models.world_model.tssm_rynn_backbone_world_model",
-    "TSSMTokenRynnBackboneWorldModel": "dreamer_vla.models.world_model.tssm_token_rynn_backbone_world_model",
-}
-
-
-def __getattr__(name: str):
-    if name in _WORLD_MODEL_EXPORTS:
-        from importlib import import_module
-
-        module = import_module(_WORLD_MODEL_EXPORTS[name])
-        value = getattr(module, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ = [
-    "TSSMRynnBackboneWorldModel",
     "TSSMDynamic",
     "TSSMLatentState",
-    "TSSMTokenRynnBackboneWorldModel",
     "TSSMTokenDynamic",
     "TSSMTokenLatentState",
 ]

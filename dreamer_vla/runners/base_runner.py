@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import copy
 import math
 import numbers
 import pathlib
 import pickle
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from pprint import pprint
-from typing import Any, Mapping
+from typing import Any
 
 import hydra
 import torch
 from hydra.core.hydra_config import HydraConfig
-
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamer_vla.utils.metric_logger import MetricLogger, NullMetricLogger
-
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 

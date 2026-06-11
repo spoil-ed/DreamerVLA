@@ -409,7 +409,7 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         chunk_size: int = 5,
         device: str | torch.device = "cpu",
         strict: bool = False,
-    ) -> "ChunkAwareRynnDinoWMWorldModel":
+    ) -> ChunkAwareRynnDinoWMWorldModel:
         """Warm-start a chunk WM from a parent RynnDinoWM (or old chunk) ckpt.
 
         Old checkpoints lack the new ``mask_obs_token`` parameter and were

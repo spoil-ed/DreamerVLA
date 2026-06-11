@@ -12,7 +12,6 @@ import torch
 
 from dreamer_vla.dataset.base_dataset import BaseDataset
 
-
 _FRAME_RE = re.compile(r"image_(\d+)\.png$")
 
 

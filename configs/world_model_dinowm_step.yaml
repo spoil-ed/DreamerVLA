@@ -73,7 +73,7 @@ dataloader:
   multiprocessing_context: null
 
 world_model:
-  _target_: dreamer_vla.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel
+  _target_: dreamer_vla.models.world_model.rynn_dino_wm.RynnDinoWMWorldModel
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}

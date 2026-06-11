@@ -29,40 +29,16 @@ import robosuite.utils.transform_utils as T
 import tqdm
 from libero.libero import benchmark
 
-from libero_utils import (
+from dreamer_vla.preprocess.libero_utils.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
 )
+from dreamer_vla.preprocess.libero_utils.noop_marking import (
+    SCHEME_NAME,
+    is_noop_action,
+)
 
-NOOP_MARKING_SCHEME = "libero_noop_marking_v1"
-
-
-def is_noop(action, prev_action=None, threshold=1e-4):
-    """
-    Returns whether an action is a no-op action.
-
-    A no-op action satisfies two criteria:
-        (1) All action dimensions, except for the last one (gripper action), are near zero.
-        (2) The gripper action is equal to the previous timestep's gripper action.
-
-    Explanation of (2):
-        Naively filtering out actions with just criterion (1) is not good because you will
-        remove actions where the robot is staying still but opening/closing its gripper.
-        So you also need to consider the current state (by checking the previous timestep's
-        gripper action as a proxy) to determine whether the action really is a no-op.
-    """
-    # Special case: Previous action is None if this is the first action in the episode
-    # Then we only care about criterion (1)
-    if prev_action is None:
-        return np.linalg.norm(action[:-1]) < threshold
-
-    # Normal case: Check both criteria (1) and (2)
-    gripper_action = action[-1]
-    prev_gripper_action = prev_action[-1]
-    return (
-        np.linalg.norm(action[:-1]) < threshold
-        and gripper_action == prev_gripper_action
-    )
+NOOP_MARKING_SCHEME = SCHEME_NAME
 
 
 def main(args):
@@ -151,7 +127,7 @@ def main(args):
 
             # Replay original demo actions in environment and record observations
             for action_idx, action in enumerate(orig_actions):
-                action_is_noop = is_noop(action, prev_kept_action)
+                action_is_noop = is_noop_action(action, prev_kept_action)
                 if action_is_noop:
                     num_noops += 1
                     if not keep_noops:

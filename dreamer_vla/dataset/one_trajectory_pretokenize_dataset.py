@@ -8,7 +8,6 @@ from typing import Any
 
 from dreamer_vla.dataset.pretokenize_dataset import PretokenizeActionChunkDataset
 
-
 _TRAJECTORY_RE = re.compile(r"^trj_(\d+)$")
 
 

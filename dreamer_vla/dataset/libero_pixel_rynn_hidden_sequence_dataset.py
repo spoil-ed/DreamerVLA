@@ -1,19 +1,17 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import h5py
-import json
 import numpy as np
 import torch
 
 from dreamer_vla.dataset.libero_pixel_sequence_dataset import (
     LIBEROPixelSequenceDataset,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
@@ -94,21 +92,9 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             require_preprocess_config=bool(require_preprocess_config),
         )
 
-    _PATH_MIGRATION_PREFIXES: tuple[tuple[str, str], ...] = (
-        (
-            "/" + "/".join(("home", "user01", "liops", "workspace", "DreamerVLA")),
-            str(PROJECT_ROOT),
-        ),
-    )
-
-    @classmethod
-    def _canonical_path(cls, value: str) -> str:
-        resolved = str(Path(value).expanduser().resolve())
-        for old_prefix, new_prefix in cls._PATH_MIGRATION_PREFIXES:
-            if resolved.startswith(old_prefix):
-                resolved = new_prefix + resolved[len(old_prefix) :]
-                break
-        return resolved
+    @staticmethod
+    def _canonical_path(value: str) -> str:
+        return str(Path(value).expanduser().resolve())
 
     @classmethod
     def _same_path(cls, left: str | None, right: str | None) -> bool:

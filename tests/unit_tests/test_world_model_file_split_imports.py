@@ -4,6 +4,7 @@ import inspect
 
 import pytest
 
+import dreamer_vla.models.world_model as world_model
 from dreamer_vla.models.encoder.base_encoder import BaseEncoder
 from dreamer_vla.models.world_model import dreamerv3_torch, tssm_torch
 from dreamer_vla.models.world_model.base_world_model import (
@@ -47,16 +48,22 @@ def test_model_base_interfaces_are_abstract() -> None:
         BaseWorldModel()
 
 
-def test_legacy_modules_reexport_split_world_model_classes() -> None:
-    assert dreamerv3_torch.DreamerV3PixelWorldModel is DreamerV3PixelWorldModel
-    assert dreamerv3_torch.DreamerV3TokenWorldModel is DreamerV3TokenWorldModel
+def test_world_model_package_exports_split_world_model_classes() -> None:
+    assert world_model.DreamerV3PixelWorldModel is DreamerV3PixelWorldModel
+    assert world_model.DreamerV3TokenWorldModel is DreamerV3TokenWorldModel
+    assert world_model.DreamerV3TokenFromPixelWorldModel is DreamerV3TokenFromPixelWorldModel
     assert (
-        dreamerv3_torch.DreamerV3TokenFromPixelWorldModel
-        is DreamerV3TokenFromPixelWorldModel
-    )
-    assert (
-        dreamerv3_torch.DreamerV3PixelRynnBackboneWorldModel
+        world_model.DreamerV3PixelRynnBackboneWorldModel
         is DreamerV3PixelRynnBackboneWorldModel
     )
-    assert tssm_torch.TSSMRynnBackboneWorldModel is TSSMRynnBackboneWorldModel
-    assert tssm_torch.TSSMTokenRynnBackboneWorldModel is TSSMTokenRynnBackboneWorldModel
+    assert world_model.TSSMRynnBackboneWorldModel is TSSMRynnBackboneWorldModel
+    assert world_model.TSSMTokenRynnBackboneWorldModel is TSSMTokenRynnBackboneWorldModel
+
+
+def test_foundation_modules_do_not_reexport_route_classes() -> None:
+    assert not hasattr(dreamerv3_torch, "DreamerV3PixelWorldModel")
+    assert not hasattr(dreamerv3_torch, "DreamerV3TokenWorldModel")
+    assert not hasattr(dreamerv3_torch, "DreamerV3TokenFromPixelWorldModel")
+    assert not hasattr(dreamerv3_torch, "DreamerV3PixelRynnBackboneWorldModel")
+    assert not hasattr(tssm_torch, "TSSMRynnBackboneWorldModel")
+    assert not hasattr(tssm_torch, "TSSMTokenRynnBackboneWorldModel")

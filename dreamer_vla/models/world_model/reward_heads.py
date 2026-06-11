@@ -4,60 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = float(eps)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dtype = x.dtype
-        x32 = x.float()
-        rms = x32.square().mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
-        return (x32 * rms).to(dtype) * self.weight.to(dtype=dtype)
-
-
-def _act(name: str) -> nn.Module:
-    name = str(name).lower()
-    if name in {"silu", "swish"}:
-        return nn.SiLU()
-    if name == "gelu":
-        return nn.GELU()
-    if name == "relu":
-        return nn.ReLU()
-    if name == "elu":
-        return nn.ELU()
-    raise ValueError(f"Unsupported activation: {name}")
-
-
-class MLPHead(nn.Module):
-    def __init__(
-        self,
-        in_dim: int,
-        out_dim: int,
-        layers: int = 1,
-        units: int = 1024,
-        act: str = "silu",
-        outscale: float = 1.0,
-    ) -> None:
-        super().__init__()
-        mods: list[nn.Module] = []
-        cur = int(in_dim)
-        for _ in range(int(layers)):
-            mods.extend([nn.Linear(cur, int(units)), RMSNorm(int(units)), _act(act)])
-            cur = int(units)
-        final = nn.Linear(cur, int(out_dim))
-        if float(outscale) != 1.0:
-            with torch.no_grad():
-                final.weight.mul_(float(outscale))
-                if final.bias is not None:
-                    final.bias.mul_(float(outscale))
-        mods.append(final)
-        self.net = nn.Sequential(*mods)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+from dreamer_vla.models.world_model.common import MLPHead
 
 
 def symexp(x: torch.Tensor) -> torch.Tensor:

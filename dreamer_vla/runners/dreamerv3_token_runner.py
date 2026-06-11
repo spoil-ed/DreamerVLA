@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
-import warnings
 
 import hydra
 import torch
@@ -13,7 +13,6 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from dreamer_vla.runners.base_runner import BaseRunner
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,8 +28,8 @@ def _to_device(value: Any, device: torch.device) -> Any:
 class DreamerV3TokenRunner(BaseRunner):
     """Standalone DreamerV3-style world-model trainer for image tokens."""
 
-    runner_name = "token_wm_compat"
-    runner_status = "compatibility"
+    runner_name = "token_wm"
+    runner_status = "secondary"
     runner_family = "world_model"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -180,7 +179,7 @@ class DreamerV3TokenRunner(BaseRunner):
             default=str(
                 PROJECT_ROOT
                 / "data"
-                / "ckpts"
+                / "checkpoints"
                 / "chameleon"
                 / "tokenizer"
                 / "vqgan.yaml"
@@ -192,7 +191,7 @@ class DreamerV3TokenRunner(BaseRunner):
             default=str(
                 PROJECT_ROOT
                 / "data"
-                / "ckpts"
+                / "checkpoints"
                 / "chameleon"
                 / "tokenizer"
                 / "vqgan.ckpt"

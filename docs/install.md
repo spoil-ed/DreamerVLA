@@ -1,88 +1,45 @@
 # Install Notes
 
-## PyTorch
+Use the resumable installer for a new machine:
 
 ```bash
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+bash scripts/install_env.sh
+conda activate dreamervla
 ```
 
-## LIBERO Editable Install Fix
-
-### Problem
-
-`LIBERO` upstream has an editable-install issue tracked in:
-
-- `Issue #31`: `No module named 'libero' when trying to run main.py`
-- `PR #84`: migrate packaging to `pyproject.toml`
-
-The root cause is that the old `setup.py`-only packaging can fail under recent `pip` / `setuptools` when using:
+The installer runs `scripts/install/*.sh` in order and records completed steps
+under `${DVLA_DATA_ROOT:-data}/install_state/`. Re-run a failed install with
+the same command; completed steps are skipped. To force a step, use:
 
 ```bash
-pip install -e .
+INSTALL_FORCE=1 INSTALL_ONLY=20_python_deps bash scripts/install_env.sh
 ```
 
-In that broken state:
+## Key Versions
 
-- `pip show libero` may still look correct
-- but `import libero` fails outside the repository root
-- scripts such as `python scripts/check_dataset_integrity.py` raise `ModuleNotFoundError: No module named 'libero'`
+| Component | Default |
+| --- | --- |
+| Python | 3.11 |
+| PyTorch | 2.5.1 |
+| CUDA wheel index | cu124 |
+| flash-attn | 2.7.1.post1 |
 
-### Fix Applied In This Repo
+## LIBERO
 
-This repository uses the same fix direction as upstream `PR #84`:
+`scripts/install/30_third_party.sh` clones LIBERO and installs it in editable
+mode after adding packaging metadata compatible with recent `pip` /
+`setuptools`.
 
-- add `pyproject.toml`
-- keep `setup.py` as a thin shim
-- reinstall `LIBERO` in editable mode
+Launch scripts write `${DVLA_DATA_ROOT}/.libero/config.yaml` and point LIBERO
+datasets to:
 
-### Install / Reinstall
-
-```bash
-cd "$DVLA_ROOT/third_party/LIBERO"
-python -m pip install --no-build-isolation -e .
+```text
+${DVLA_DATA_ROOT}/datasets/libero
 ```
 
-If you are using another checkout of `LIBERO`, apply the same packaging fix there and reinstall from that checkout instead.
-
-### Verify The Fix
-
-Check that `libero` is importable even outside the repo root:
+Verify the environment:
 
 ```bash
-cd /tmp
-python -c "import libero; print(libero.__path__)"
-```
-
-Then verify the dataset integrity script can run directly:
-
-```bash
-cd "$DVLA_ROOT/third_party/LIBERO"
-python scripts/check_dataset_integrity.py
-```
-
-If this command runs without `ModuleNotFoundError`, the packaging issue is fixed.
-
-## LIBERO Dataset Notes
-
-`LIBERO` does not always read datasets from the current repo. It uses the global config file:
-
-```bash
-$HOME/.libero/config.yaml
-```
-
-Check the active dataset path with:
-
-```bash
-grep '^datasets:' "$HOME/.libero/config.yaml"
-```
-
-The built-in checks mean:
-
-- `check_libero_dataset(...)`: verifies expected `.hdf5` file counts
-- `scripts/check_dataset_integrity.py`: verifies each `.hdf5` contains 50 demo trajectories and checks `tag == "libero-v1"`
-
-For the default in-repo setup, the dataset path is:
-
-```bash
-$DVLA_ROOT/third_party/LIBERO/libero/datasets
+bash scripts/install/40_verify.sh
+python -m pytest tests/unit_tests -q
 ```
