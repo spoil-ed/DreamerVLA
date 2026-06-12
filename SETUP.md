@@ -4,6 +4,11 @@ All commands run from the repository root. `DVLA_ROOT` is the checkout.
 `DVLA_DATA_ROOT` is the runtime asset root and can be any writable path. If
 unset, release scripts use relative `data`. See `docs/data_layout.md`.
 
+A fresh checkout contains source code, configs, scripts, tests, and docs only.
+`third_party/` and everything under `data/` are local install/download/generated
+state. Build the tree in order: install third-party code, download raw
+datasets/checkpoints, then generate `processed_data/*`.
+
 ```bash
 cd /path/to/DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
@@ -146,6 +151,9 @@ The default `FILTER_NOOPS=1` path does no-op handling before reward and hidden
 sidecar generation:
 
 ```text
+input: downloaded raw LIBERO HDF5 files
+  ${DVLA_DATA_ROOT}/datasets/libero/${TASK}/*.hdf5
+
 stage 1: replay and mark no-ops
   python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
   writes ${TASK}_marked_t_256 with data/demo_*/noop_mask

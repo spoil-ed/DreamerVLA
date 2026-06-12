@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -187,6 +189,125 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert 'PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-${DVLA_DATA_ROOT}/processed_data}"' in prepare_text
     assert "${TASK}_marked_t_${IMAGE_RESOLUTION}" in prepare_text
     assert "${TASK}_no_noops_t_${IMAGE_RESOLUTION}" in prepare_text
+
+
+def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
+    root = _project_root()
+    raw_dir = tmp_path / "raw" / "libero_goal"
+    marked_dir = tmp_path / "processed" / "libero_goal_marked_t_256"
+    hdf5_dir = tmp_path / "processed" / "libero_goal_no_noops_t_256"
+    log_path = tmp_path / "python_calls.log"
+    python_stub = tmp_path / "python_stub.sh"
+
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "placeholder_demo.hdf5").touch()
+    marked_dir.mkdir(parents=True)
+    python_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n"
+        "module=''\n"
+        "prev=''\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"${prev}\" == '-m' ]]; then module=\"${arg}\"; fi\n"
+        "  prev=\"${arg}\"\n"
+        "done\n"
+        "case \"${module}\" in\n"
+        "  dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op)\n"
+        "    prev=''\n"
+        "    for arg in \"$@\"; do\n"
+        "      if [[ \"${prev}\" == '--libero_target_dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
+        "      prev=\"${arg}\"\n"
+        "    done\n"
+        "    ;;\n"
+        "  dreamer_vla.preprocess.filter_marked_libero_hdf5)\n"
+        "    prev=''\n"
+        "    for arg in \"$@\"; do\n"
+        "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
+        "      prev=\"${arg}\"\n"
+        "    done\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DVLA_DATA_ROOT": str(tmp_path / "data"),
+            "RAW_LIBERO_DIR": str(raw_dir),
+            "PROCESSED_DATA_ROOT": str(tmp_path / "processed"),
+            "MARKED_DIR": str(marked_dir),
+            "HDF5_DIR": str(hdf5_dir),
+            "LIBERO_CONFIG_PATH": str(tmp_path / "libero_config"),
+            "PYTHON": str(python_stub),
+            "PYTHON_STUB_LOG": str(log_path),
+            "TASK": "libero_goal",
+            "RUN_REWARD": "0",
+            "RUN_PRETOKENIZE": "0",
+            "RUN_ACTION_HIDDEN": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/preprocess/prepare_libero_data.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = log_path.read_text(encoding="utf-8").splitlines()
+    assert any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
+
+
+def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: Path) -> None:
+    root = _project_root()
+    raw_dir = tmp_path / "raw" / "libero_goal"
+    log_path = tmp_path / "python_calls.log"
+    python_stub = tmp_path / "python_stub.sh"
+
+    raw_dir.mkdir(parents=True)
+    python_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n",
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DVLA_DATA_ROOT": str(tmp_path / "data"),
+            "RAW_LIBERO_DIR": str(raw_dir),
+            "PROCESSED_DATA_ROOT": str(tmp_path / "processed"),
+            "LIBERO_CONFIG_PATH": str(tmp_path / "libero_config"),
+            "PYTHON": str(python_stub),
+            "PYTHON_STUB_LOG": str(log_path),
+            "TASK": "libero_goal",
+            "RUN_REWARD": "0",
+            "RUN_PRETOKENIZE": "0",
+            "RUN_ACTION_HIDDEN": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/preprocess/prepare_libero_data.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert f"No raw LIBERO HDF5 files found under: {raw_dir}" in result.stderr
+    assert "DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1" in result.stderr
+    assert not log_path.exists()
 
 
 def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:

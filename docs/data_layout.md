@@ -5,6 +5,13 @@ for checkpoints, datasets, processed data, logs, and outputs.
 `DVLA_DATA_ROOT does not need to live inside DVLA_ROOT`. If it is unset, release
 scripts use the relative path `data` after entering the repository root.
 
+The tracked repository does not include `data/` or `third_party/`; both are
+local state. `scripts/install_env.sh` creates/populates `third_party/`,
+`scripts/download_assets.sh` downloads raw datasets and checkpoints, and
+`scripts/preprocess_libero.sh` generates `processed_data/*` from those raw HDF5
+files. A directory name alone is not a completed stage; each stage is complete
+only when the files consumed by the next stage exist.
+
 ## Tree
 
 ```text
