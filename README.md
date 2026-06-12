@@ -55,9 +55,9 @@ docs/               setup and data-layout reference
 | --- | --- |
 | Install | `bash scripts/install_env.sh` |
 | Download all | `bash scripts/download_assets.sh` |
-| Download WorldVLA | `bash scripts/download/10_worldvla.sh` |
-| Download Lumina | `bash scripts/download/20_lumina.sh` |
-| Download RynnVLA | `LIBERO_SUITES=libero_goal bash scripts/download/30_rynnvla.sh` |
+| Download RynnVLA weights | `LIBERO_SUITES=libero_goal bash scripts/download/10_rynnvla.sh` |
+| Download OpenVLA-OFT | `OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650 bash scripts/download/20_openvla_oft.sh` |
+| Download OpenVLA-OFT one-trajectory | `bash scripts/download/30_openvla_oft_one_trajectory.sh` |
 | Download LIBERO | `LIBERO_SUITES=libero_goal bash scripts/download/40_libero_dataset.sh` |
 | Download CALVIN | `bash scripts/download/50_calvin_dataset.sh` |
 | Preprocess | `TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh` |

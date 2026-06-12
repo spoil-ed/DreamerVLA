@@ -18,9 +18,11 @@ cd "${DVLA_ROOT}"
 INSTALL_STEPS=(
   "00_apt_tools.sh"
   "10_conda_env.sh"
-  "20_python_deps.sh"
-  "30_third_party.sh"
-  "40_verify.sh"
+  "20_torch.sh"
+  "30_python_deps.sh"
+  "40_third_party.sh"
+  "50_special_packages.sh"
+  "60_verify.sh"
 )
 
 step_selected() {
@@ -62,6 +64,8 @@ echo "[install_env] root=${DVLA_ROOT}"
 echo "[install_env] data_root=${DVLA_DATA_ROOT}"
 echo "[install_env] state_dir=${INSTALL_STATE_DIR}"
 echo "[install_env] force=${INSTALL_FORCE} only=${INSTALL_ONLY:-<all>}"
+echo "[install_env] planned_steps=${INSTALL_STEPS[*]}"
+echo "[install_env] resume_hint=rerun this command; use INSTALL_ONLY=<step> or INSTALL_FORCE=1 for targeted retries"
 
 mkdir -p "${INSTALL_STATE_DIR}"
 for step in "${INSTALL_STEPS[@]}"; do

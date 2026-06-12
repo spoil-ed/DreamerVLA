@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/_env.sh"
 activate_conda_env
 
+install_log "checking imports in conda env=${CONDA_ENV_NAME} python=${PYTHON}"
 install_log "verifying imports and CUDA visibility"
 "${PYTHON}" - <<'PY'
 import torch

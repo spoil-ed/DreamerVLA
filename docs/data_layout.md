@@ -50,17 +50,20 @@ bash scripts/download_assets.sh
 Download model families one at a time with:
 
 ```bash
-bash scripts/download/10_worldvla.sh
-bash scripts/download/20_lumina.sh
-LIBERO_SUITES="libero_goal libero_object" bash scripts/download/30_rynnvla.sh
-DOWNLOAD_ACTION_WM=0 LIBERO_SUITES=libero_goal bash scripts/download/30_rynnvla.sh
+LIBERO_SUITES="libero_goal libero_object" bash scripts/download/10_rynnvla.sh
+DOWNLOAD_RYNNVLA_LUMINA=0 DOWNLOAD_ACTION_WM=0 LIBERO_SUITES=libero_goal bash scripts/download/10_rynnvla.sh
+OPENVLA_OFT_REPOS="owner/repo:libero_goal_hdf5_latest_6650" bash scripts/download/20_openvla_oft.sh
+bash scripts/download/30_openvla_oft_one_trajectory.sh
 ```
 
-`scripts/download/10_worldvla.sh` creates `checkpoints/chameleon/` and related
-WorldVLA files. `scripts/download/20_lumina.sh` creates
-`checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768/`.
-`scripts/download/30_rynnvla.sh` creates `checkpoints/VLA_model_256/<suite>/`
-and, by default, `checkpoints/Action_World_model_512/<suite>/`.
+`scripts/download/10_rynnvla.sh` creates RynnVLA Chameleon assets,
+`checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768/`,
+`checkpoints/VLA_model_256/<suite>/`, and, by default,
+`checkpoints/Action_World_model_512/<suite>/`. The script is split into
+weight-level steps so each part can be disabled with environment flags.
+`scripts/download/20_openvla_oft.sh` writes HDF5 SFT checkpoints under
+`checkpoints/OpenVLA-OFT/<run>/`. `scripts/download/30_openvla_oft_one_trajectory.sh`
+writes one-trajectory checkpoints under `checkpoints/Openvla-oft-SFT-traj1/<name>/`.
 
 ## Datasets
 

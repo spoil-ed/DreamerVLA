@@ -45,18 +45,20 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
         for name in (
             "00_apt_tools.sh",
             "10_conda_env.sh",
-            "20_python_deps.sh",
-            "30_third_party.sh",
-            "40_verify.sh",
+            "20_torch.sh",
+            "30_python_deps.sh",
+            "40_third_party.sh",
+            "50_special_packages.sh",
+            "60_verify.sh",
         )
     ]
     download_steps = [
         root / "scripts" / "download" / name
         for name in (
             "_env.sh",
-            "10_worldvla.sh",
-            "20_lumina.sh",
-            "30_rynnvla.sh",
+            "10_rynnvla.sh",
+            "20_openvla_oft.sh",
+            "30_openvla_oft_one_trajectory.sh",
             "40_libero_dataset.sh",
             "50_calvin_dataset.sh",
         )
@@ -73,26 +75,43 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert ".done" in install_text
     assert "00_apt_tools.sh" in install_text
     assert "10_conda_env.sh" in install_text
-    assert "20_python_deps.sh" in install_text
-    assert "30_third_party.sh" in install_text
-    assert "40_verify.sh" in install_text
+    assert "20_torch.sh" in install_text
+    assert "30_python_deps.sh" in install_text
+    assert "40_third_party.sh" in install_text
+    assert "50_special_packages.sh" in install_text
+    assert "60_verify.sh" in install_text
+    assert "planned_steps=" in install_text
+    assert "resume_hint=" in install_text
     assert "sudo apt" not in install_text
     assert "uv pip install" not in install_text
 
     step_text = "\n".join(step.read_text(encoding="utf-8") for step in install_steps)
+    assert "target conda env=" in step_text
+    assert "cuda_index=" in step_text
+    assert "wheel_cache=" in step_text
+    assert "third_party_dir=" in step_text
+    assert "optional_third_party=" in step_text
+    assert "special_packages=" in step_text
+    assert "checking imports in conda env=" in step_text
     assert "apt update" in step_text
     assert "conda create -n" in step_text
     assert "uv pip install" in step_text
     assert "torch==2.5.1" in step_text
     assert "FLASH_ATTN" in step_text or "flash-attn" in step_text
     assert "third_party/LIBERO" in step_text
+    assert "third_party/opensora" in step_text
+    assert "third_party/openvla-oft" in step_text
+    assert "dlimp_openvla" in step_text
+    assert "transformers-openvla-oft" in step_text
     assert "egl_probe" in step_text
 
     download_text = download.read_text(encoding="utf-8")
     assert "DOWNLOAD_STEPS" in download_text
-    assert "10_worldvla.sh" in download_text
-    assert "20_lumina.sh" in download_text
-    assert "30_rynnvla.sh" in download_text
+    assert "10_rynnvla.sh" in download_text
+    assert "20_openvla_oft.sh" in download_text
+    assert "30_openvla_oft_one_trajectory.sh" in download_text
+    assert "10_rynnvla_chameleon.sh" not in download_text
+    assert "20_lumina.sh" not in download_text
     assert "40_libero_dataset.sh" in download_text
     assert "50_calvin_dataset.sh" in download_text
     assert "hf download" not in download_text
@@ -100,8 +119,11 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     download_step_text = "\n".join(step.read_text(encoding="utf-8") for step in download_steps)
     assert "hf download" in download_step_text
     assert "Alibaba-DAMO-Academy/WorldVLA" in download_step_text
+    assert "RYNNVLA_CHAMELEON_REPO" in download_step_text
     assert "Alpha-VLLM/Lumina-mGPT-7B-768" in download_step_text
     assert "Alibaba-DAMO-Academy/RynnVLA-002" in download_step_text
+    assert "Haozhan72/Openvla-oft-SFT-libero-spatial-traj1" in download_step_text
+    assert "OPENVLA_OFT_REPOS" in download_step_text
     assert "download_libero_datasets.py" in download_step_text
     assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_step_text
     assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_step_text
@@ -271,6 +293,9 @@ def test_portable_data_layout_manifest_exists_and_is_linked() -> None:
     assert "${DVLA_DATA_ROOT}/processed_data" in manifest_text
     assert "scripts/download_assets.sh" in manifest_text
     assert "scripts/download/40_libero_dataset.sh" in manifest_text
+    assert "scripts/download/10_rynnvla.sh" in manifest_text
+    assert "scripts/download/20_openvla_oft.sh" in manifest_text
+    assert "scripts/download/30_openvla_oft_one_trajectory.sh" in manifest_text
     assert "scripts/preprocess/prepare_libero_data.sh" in manifest_text
     assert "DVLA_DATA_ROOT does not need to live inside DVLA_ROOT" in manifest_text
     assert "docs/data_layout.md" in setup

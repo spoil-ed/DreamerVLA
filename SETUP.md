@@ -25,9 +25,11 @@ The installer runs these resumable steps and writes
 ```text
 scripts/install/00_apt_tools.sh
 scripts/install/10_conda_env.sh
-scripts/install/20_python_deps.sh
-scripts/install/30_third_party.sh
-scripts/install/40_verify.sh
+scripts/install/20_torch.sh
+scripts/install/30_python_deps.sh
+scripts/install/40_third_party.sh
+scripts/install/50_special_packages.sh
+scripts/install/60_verify.sh
 ```
 
 Run a single step when needed:
@@ -35,10 +37,24 @@ Run a single step when needed:
 ```bash
 bash scripts/install/00_apt_tools.sh
 bash scripts/install/10_conda_env.sh
-bash scripts/install/20_python_deps.sh
-bash scripts/install/30_third_party.sh
-bash scripts/install/40_verify.sh
+bash scripts/install/20_torch.sh
+bash scripts/install/30_python_deps.sh
+bash scripts/install/40_third_party.sh
+bash scripts/install/50_special_packages.sh
+bash scripts/install/60_verify.sh
 ```
+
+Install step map:
+
+| Step | Scope |
+| --- | --- |
+| `00_apt_tools.sh` | apt packages such as git-lfs, ffmpeg, OpenGL / OSMesa, cmake, ninja |
+| `10_conda_env.sh` | conda environment and Python version |
+| `20_torch.sh` | PyTorch / torchvision / torchaudio CUDA wheels |
+| `30_python_deps.sh` | DreamerVLA editable install and curated pip requirements |
+| `40_third_party.sh` | LIBERO, robosuite-family packages, OpenSora, OpenVLA-OFT helpers |
+| `50_special_packages.sh` | flash-attn, egl_probe, optional apex / TensorNVMe |
+| `60_verify.sh` | import and CUDA visibility checks |
 
 ## 2. Download Assets
 
@@ -51,9 +67,9 @@ bash scripts/download_assets.sh
 Single asset steps:
 
 ```bash
-bash scripts/download/10_worldvla.sh
-bash scripts/download/20_lumina.sh
-LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/30_rynnvla.sh
+LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/10_rynnvla.sh
+OPENVLA_OFT_REPOS="owner/repo:libero_goal_hdf5_latest_6650" bash scripts/download/20_openvla_oft.sh
+bash scripts/download/30_openvla_oft_one_trajectory.sh
 LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/40_libero_dataset.sh
 bash scripts/download/50_calvin_dataset.sh
 ```
@@ -64,7 +80,19 @@ Useful variants:
 LIBERO_SUITES="libero_goal libero_object" bash scripts/download_assets.sh
 DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1 LIBERO_SUITES=libero_spatial bash scripts/download_assets.sh
 DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=0 DOWNLOAD_CALVIN=1 CALVIN_TASKS=task_ABCD_D bash scripts/download_assets.sh
-DOWNLOAD_ONLY=10_worldvla bash scripts/download_assets.sh
+DOWNLOAD_ONLY=10_rynnvla bash scripts/download_assets.sh
+DOWNLOAD_OPENVLA_ONE_TRAJ=1 DOWNLOAD_ONLY=30_openvla_oft_one_trajectory bash scripts/download_assets.sh
+```
+
+OpenVLA-OFT one-trajectory checkpoints support both Hugging Face download
+methods:
+
+```bash
+# Method 1: git clone with Git LFS
+OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=git bash scripts/download/30_openvla_oft_one_trajectory.sh
+
+# Method 2: huggingface-hub; set HF_ENDPOINT=https://hf-mirror.com if needed
+OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=hf bash scripts/download/30_openvla_oft_one_trajectory.sh
 ```
 
 Canonical dataset roots:

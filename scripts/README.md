@@ -22,21 +22,28 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | --- | --- |
 | `install/00_apt_tools.sh` | System packages |
 | `install/10_conda_env.sh` | Conda environment |
-| `install/20_python_deps.sh` | PyTorch, repo package, Python deps, flash-attn |
-| `install/30_third_party.sh` | LIBERO / robosuite stack |
-| `install/40_verify.sh` | Import and CUDA visibility check |
+| `install/20_torch.sh` | PyTorch CUDA wheel set |
+| `install/30_python_deps.sh` | DreamerVLA editable package and pip dependencies |
+| `install/40_third_party.sh` | LIBERO, robosuite stack, OpenSora, and OpenVLA-OFT third-party packages |
+| `install/50_special_packages.sh` | flash-attn, egl_probe, and optional apex / TensorNVMe |
+| `install/60_verify.sh` | Import and CUDA visibility check |
 | `install/_env.sh` | Shared install-step environment |
 
 ## Download Steps
 
 | Script | Purpose |
 | --- | --- |
-| `download/10_worldvla.sh` | Download WorldVLA Chameleon tokenizer/base assets |
-| `download/20_lumina.sh` | Download Lumina-mGPT tokenizer/backbone assets |
-| `download/30_rynnvla.sh` | Download RynnVLA suite weights and optional action world-model weights |
+| `download/10_rynnvla.sh` | Download RynnVLA Chameleon, Lumina, VLA, and action-WM weights |
+| `download/20_openvla_oft.sh` | Download OpenVLA-OFT HDF5 SFT checkpoints from user-provided repos |
+| `download/30_openvla_oft_one_trajectory.sh` | Download OpenVLA-OFT one-trajectory checkpoints |
 | `download/40_libero_dataset.sh` | Download LIBERO suites into `datasets/libero/<suite>/` |
 | `download/50_calvin_dataset.sh` | Download CALVIN tasks into `datasets/calvin/` |
 | `download/_env.sh` | Shared download-step environment |
+
+Download steps are intentionally serial and numbered. To add a new asset
+family, create `download/NN_name.sh`, source `download/_env.sh`, write outputs
+only under `${DVLA_DATA_ROOT}`, then append the new script to
+`DOWNLOAD_STEPS` in `download_assets.sh`.
 
 ## Preprocessing
 

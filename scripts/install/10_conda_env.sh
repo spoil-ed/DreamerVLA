@@ -9,6 +9,7 @@ if ! command -v conda >/dev/null 2>&1; then
   exit 2
 fi
 
+install_log "target conda env=${CONDA_ENV_NAME} python=${PYTHON_VERSION}"
 install_log "ensuring conda env ${CONDA_ENV_NAME} with Python ${PYTHON_VERSION}"
 if ! conda env list | awk '{print $1}' | grep -qx "${CONDA_ENV_NAME}"; then
   conda create -n "${CONDA_ENV_NAME}" "python=${PYTHON_VERSION}" -y

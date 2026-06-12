@@ -9,6 +9,7 @@ if [[ "${INSTALL_APT_TOOLS:-1}" != "1" ]]; then
   exit 0
 fi
 
+install_log "system packages: build tools, git/git-lfs, ffmpeg, OpenGL/OSMesa, ninja, wget"
 APT_BIN="${APT_BIN:-apt}"
 APT_RUNNER=()
 if ! command -v "${APT_BIN}" >/dev/null 2>&1; then
