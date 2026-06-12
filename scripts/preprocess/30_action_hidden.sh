@@ -5,32 +5,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
-PYTHON="${PYTHON:-python}"
 TASK="${TASK:-libero_goal}"
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-}}"
 OVERWRITE="${OVERWRITE:-0}"
-
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --task) TASK="$2"; shift 2 ;;
-    --data-root) DVLA_DATA_ROOT="$2"; shift 2 ;;
-    --python) PYTHON="$2"; shift 2 ;;
-    --gpus)
-      export CUDA_VISIBLE_DEVICES="$2"
-      if [[ -z "${ACTION_HIDDEN_GPUS}" ]]; then
-        gpu_count=0
-        for _gpu in ${2//,/ }; do gpu_count=$((gpu_count + 1)); done
-        ACTION_HIDDEN_GPUS="${gpu_count}"
-      fi
-      shift 2
-      ;;
-    --ngpu) ACTION_HIDDEN_GPUS="$2"; shift 2 ;;
-    --overwrite) OVERWRITE=1; shift ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
-  esac
-done
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-1}"
-export PYTHON
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
@@ -49,13 +28,13 @@ fi
 
 if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)" ]]; then
   echo "No reward HDF5 files found under: ${REWARD_DIR}" >&2
-  echo "Run: bash scripts/preprocess/10_hdf5_reward.sh --task ${TASK}" >&2
+  echo "Run: bash scripts/preprocess/prepare_libero_data.sh task=${TASK} only=[10_hdf5_reward]" >&2
   exit 5
 fi
 
 if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
-  "${PYTHON}" -m torch.distributed.run \
+  python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
     --module dreamer_vla.preprocess.preprocess_rynn_pixel_hidden \
     --hdf5-dir "${REWARD_DIR}" \

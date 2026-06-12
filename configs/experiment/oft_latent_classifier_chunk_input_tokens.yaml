@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /classifier: openvla_oft_input_token_chunk
+  - _self_

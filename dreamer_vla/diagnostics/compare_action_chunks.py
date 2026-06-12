@@ -1,7 +1,7 @@
 """Compare action chunks: trained policy vs frozen RynnVLA-SFT baseline.
 
 Both policies are VLAActionHeadActor instances built from the same config
-(``configs/dreamervla_rynn_dino_wm_actor_critic.yaml``):
+(``configs/dreamervla/rynnvla_actor_critic.yaml``):
 
   - baseline: only the RynnVLA SFT warm-start via init_action_head_ckpt
               (adapter random-init, never updated)
@@ -60,7 +60,7 @@ def fmt_row(label: str, vec: torch.Tensor) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", default="configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
+        "--config", default="configs/dreamervla/rynnvla_actor_critic.yaml"
     )
     parser.add_argument(
         "--encoder-ckpt",

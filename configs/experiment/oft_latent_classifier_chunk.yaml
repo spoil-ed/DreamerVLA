@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /classifier: openvla_oft_action_chunk
+  - _self_

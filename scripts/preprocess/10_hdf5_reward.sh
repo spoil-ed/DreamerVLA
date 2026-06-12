@@ -5,20 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
-PYTHON="${PYTHON:-python}"
 TASK="${TASK:-libero_goal}"
 OVERWRITE="${OVERWRITE:-0}"
-
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --task) TASK="$2"; shift 2 ;;
-    --data-root) DVLA_DATA_ROOT="$2"; shift 2 ;;
-    --python) PYTHON="$2"; shift 2 ;;
-    --overwrite) OVERWRITE=1; shift ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
-  esac
-done
-export PYTHON
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
@@ -41,14 +29,14 @@ EOF
 raw_hdf5="$(find "${RAW_LIBERO_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${raw_hdf5}" ]]; then
   echo "No raw LIBERO HDF5 files found under: ${RAW_LIBERO_DIR}" >&2
-  echo "Run: LIBERO_SUITES=${TASK} DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1 bash scripts/download_assets.sh" >&2
+  echo "Run: bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=${TASK}" >&2
   exit 2
 fi
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" == "1" || -z "${marked_hdf5}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
-  "${PYTHON}" -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
+  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
     --libero_task_suite "${TASK}" \
     --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
     --libero_target_dir "${MARKED_DIR}" \
@@ -70,7 +58,7 @@ fi
 filtered_hdf5="$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" == "1" || -z "${filtered_hdf5}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HDF5_DIR}"
-  "${PYTHON}" -m dreamer_vla.preprocess.filter_marked_libero_hdf5 \
+  python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 \
     --input-dir "${MARKED_DIR}" \
     --output-dir "${HDF5_DIR}" \
     --filter-noops \
@@ -88,7 +76,7 @@ fi
 reward_hdf5="$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" == "1" || -z "${reward_hdf5}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${REWARD_DIR}"
-  "${PYTHON}" -m dreamer_vla.preprocess.preprocess_remaining_steps_reward \
+  python -m dreamer_vla.preprocess.preprocess_remaining_steps_reward \
     --input-dir "${HDF5_DIR}" \
     --output-dir "${REWARD_DIR}" \
     --metainfo-json "${META_JSON}" \

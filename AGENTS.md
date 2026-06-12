@@ -20,7 +20,11 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
   - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval, DDP/FSDP helpers, and standalone online/frozen training tools.
   - `utils/` – Checkpoint, logger, optim, EMA, visualization, shared helpers.
 
-- **`configs/`** – Hydra configs, one top-level YAML per training route (VLA, WM, DreamerVLA, OFT, classifier, eval); tasks under `task/libero_*.yaml`.
+- **`configs/`** – Hydra configs. `train.yaml` is the grouped training/eval
+  entry; `route/` selects experiments and composes smaller groups such as
+  `runner/`, `dataset/`, `world_model/`, `algorithm/`, `optim/`, and
+  `dataloader/`. Compatibility top-level route YAMLs may exist, but new
+  scripts and docs should use the grouped entry.
 
 - **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamer_vla/` and is launched with `python -m`.
 
@@ -40,15 +44,30 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How Dreamer-VLA runs
 
-You launch one Hydra config (e.g. `python -m dreamer_vla.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the multi-proc variant in `dreamer_vla.runners.online_dreamervla_multiproc`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
+You launch the grouped Hydra entry (e.g. `python -m dreamer_vla.train
+experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`).
+`dreamer_vla/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces
+`training.distributed_strategy=ddp` under `torchrun`, then resolves
+`cfg._target_` to a **Runner** class and runs `setup → execute → teardown`.
+The runner owns dataset, encoder, world model, actor / critic / reward,
+optimizer, logger, and checkpoints; there is no separate worker / scheduler
+layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the
+multi-proc variant in `dreamer_vla.runners.online_dreamervla_multiproc`).
+Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing,
+EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ---
 
 ## Configuration guides
 
-- **Route, not knob:** pick one top-level config and override task + run-tag + GPU count; don't recombine fields by hand. Registry in [configs/README.md](configs/README.md).
+- **Route, not knob:** pick one `experiment=<name>` and override task + run-tag +
+  GPU count; don't recombine fields by hand outside Hydra defaults. Registry
+  in [configs/README.md](configs/README.md).
 - **Task switch:** `task=libero_goal | libero_object | libero_spatial | libero_10` (or any `configs/task/*.yaml`) via Hydra; task YAMLs hold dataset paths, horizons, sidecar expectations, task-specific dims.
-- **One-trajectory SFT:** `CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal`; `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which demo.
+- **One-trajectory SFT:** `bash scripts/train_vla.sh
+  experiment=vla_sft_one_trajectory task=libero_goal`;
+  `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which
+  demo.
 - **OOM:** tune `dataloader.batch_size`, `dataloader.num_workers`, `training.gradient_accumulate_every`, `training.enable_activation_checkpointing`, FSDP mixed precision; for online RL also `env.num_envs` and chunk length. For VLA SFT, `training.vla_train_action_head_only=true` freezes the backbone.
 - **Resume:** runners respect `training.resume` + `resume_dir` under `data/outputs/.../checkpoints/`; `training.resume_advance_epoch` controls the epoch counter on resume.
 
@@ -76,7 +95,15 @@ remove them.
 
 ## Key ideas and plugging in
 
-**Config** (`configs/*.yaml`): each top-level YAML carries a `_target_` pointing at a runner class. New route = new YAML + new runner; do not add boolean switches to fork existing runners.
+**Config** (`configs/`): follow the standard Hydra template pattern. The stable
+training entry is `configs/train.yaml`; select recipes with
+`experiment=<name>`, tasks with `task=<suite>`, and detailed knobs with ordinary
+Hydra overrides. Experiments are composed from a small number of meaningful
+module groups: `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
+`evaluation/`, and `task/`. Do not split every knob into tiny groups; keep each
+module YAML readable and cohesive. Compatibility top-level YAMLs may remain,
+but new script and docs examples should use `python -m dreamer_vla.train
+experiment=<name>`.
 
 **Runner** (`dreamer_vla/runners/`): the training unit. Subclass BaseRunner and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per runner.
 
@@ -94,7 +121,12 @@ remove them.
 
 ### New training route
 
-Add a runner class under `dreamer_vla/runners/` subclassing BaseRunner; export it from the package init; add a YAML in `configs/` with a `_target_` pointing at the new class and `defaults: - /task: libero_<suite>`. Add a shell launcher in `scripts/` only if the invocation differs from `python -m dreamer_vla.train --config-name=<my_route>`.
+Add a runner class under `dreamer_vla/runners/` subclassing BaseRunner; export
+it from the package init; add the cohesive module YAML under the matching group
+(`VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`, or `evaluation/`), then add
+an `experiment/<name>.yaml` recipe that overrides the relevant group. Add a
+shell launcher in `scripts/` only if the invocation differs from
+`python -m dreamer_vla.train experiment=<name>`.
 
 ### New PPO variant
 
@@ -117,6 +149,22 @@ Not a stable extension surface. The data path and reward labels assume LIBERO HD
 ## Style and contributing
 
 Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `dreamer_vla/utils/json_logger.py` or runner loggers. Config YAML: static only, no computed fields; derive in the runner. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `dreamer_vla/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Script and launcher memory
+
+- Shell files are one-command launchers, not a code organization layer. Write
+  commands in a form that can be copied into a terminal.
+- Avoid shell loops, `case`, functions, and argument parsers. Use Python/Hydra
+  for iteration, dispatch, resume state, GPU counting, and parameter mapping.
+- Shell `if` is acceptable only for "should this step run?" checks, required
+  input checks, and simple skip/resume guards that cannot reasonably live in
+  Python.
+- Prefer `conda activate dreamervla` followed by direct `python -m ...` or
+  `uv pip install ...`; do not wrap everything in `exec "${PYTHON}" ...`.
+- Install, download, preprocess, train, world-model, classifier, DreamerVLA,
+  and eval entrypoints should all be Hydra-centered. Use config groups and
+  CLI overrides such as `experiment=world_model_dinowm_chunk task=libero_goal
+  gpus=0,1 batch_size=16 training.max_steps=1000`.
 
 ---
 

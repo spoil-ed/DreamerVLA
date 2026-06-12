@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /VLA: openvla_oft_one_trajectory
+  - _self_

@@ -2,54 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/_env.sh"
-activate_conda_env
+DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-dreamervla}"
+cd "${DVLA_ROOT}"
 
-install_log "checking imports in conda env=${CONDA_ENV_NAME} python=${PYTHON}"
-install_log "verifying imports and CUDA visibility"
-"${PYTHON}" - <<'PY'
-from __future__ import annotations
+if ! command -v conda >/dev/null 2>&1; then
+  echo "conda is required before running this install step." >&2
+  exit 2
+fi
+eval "$(conda shell.bash hook)"
+conda activate "${CONDA_ENV_NAME}"
 
-import importlib
-import os
-from pathlib import Path
-
-import torch
-import h5py
-import hydra
-import omegaconf
-import transformers
-import libero
-
-dvla_root = Path(os.environ["DVLA_ROOT"]).resolve()
-expected_third_party_imports = {
-    "libero": dvla_root / "third_party/LIBERO",
-    "robosuite": dvla_root / "third_party/robosuite",
-    "robomimic": dvla_root / "third_party/robomimic",
-    "mimicgen": dvla_root / "third_party/mimicgen",
-}
-
-
-def import_paths(package_name: str) -> list[Path]:
-    module = importlib.import_module(package_name)
-    paths: list[Path] = []
-    if getattr(module, "__file__", None):
-        paths.append(Path(module.__file__).resolve())
-    for item in getattr(module, "__path__", []):
-        if isinstance(item, str) and not item.startswith("__editable__"):
-            paths.append(Path(item).resolve())
-    return paths
-
-
-print("torch", torch.__version__, "cuda", torch.cuda.is_available(), torch.cuda.device_count())
-print("deps ok")
-print("libero", libero.__path__)
-
-for package_name, expected_root in expected_third_party_imports.items():
-    paths = import_paths(package_name)
-    if not any(str(path).startswith(str(expected_root)) for path in paths):
-        raise SystemExit(
-            f"{package_name} imported from {paths}; expected a path under {expected_root}"
-        )
-    print(package_name, paths)
-PY
+echo "[install:60_verify] checking imports in conda env=${CONDA_ENV_NAME}"
+echo "[install:60_verify] verifying imports and CUDA visibility"
+python -m dreamer_vla.diagnostics.verify_install

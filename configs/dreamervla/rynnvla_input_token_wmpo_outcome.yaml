@@ -1,7 +1,7 @@
 # @package _global_
 # Scheme B: DreamerVLA over RynnVLA frame-level input-token WM latents.
 defaults:
-  - dreamervla_rynn_dino_wm_wmpo_outcome
+  - rynnvla_wmpo_outcome
   - _self_
 
 training:

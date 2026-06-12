@@ -1,0 +1,76 @@
+name: download
+data_root: ${oc.env:DVLA_DATA_ROOT,data}
+python: python
+dry_run: false
+only: []
+download:
+  rynnvla: true
+  openvla_oft: false
+  openvla_one_traj: false
+  libero: true
+  calvin: false
+env:
+  RYNNVLA_CHAMELEON_REPO: Alibaba-DAMO-Academy/WorldVLA
+  LUMINA_REPO: Alpha-VLLM/Lumina-mGPT-7B-768
+  RYNNVLA_REPO: Alibaba-DAMO-Academy/RynnVLA-002
+  LIBERO_SUITES:
+    - libero_goal
+    - libero_object
+    - libero_spatial
+    - libero_10
+  DOWNLOAD_RYNNVLA_CHAMELEON: true
+  DOWNLOAD_RYNNVLA_LUMINA: true
+  DOWNLOAD_RYNNVLA_VLA: true
+  DOWNLOAD_ACTION_WM: true
+  OPENVLA_OFT_REPOS: []
+  OPENVLA_ONE_TRAJ_REPOS:
+    - Haozhan72/Openvla-oft-SFT-libero-spatial-traj1:Openvla-oft-SFT-libero-spatial-traj1
+    - Haozhan72/Openvla-oft-SFT-libero-object-traj1:Openvla-oft-SFT-libero-object-traj1
+    - Haozhan72/Openvla-oft-SFT-libero-goal-traj1:Openvla-oft-SFT-libero-goal-traj1
+    - Haozhan72/Openvla-oft-SFT-libero10-traj1:Openvla-oft-SFT-libero10-traj1
+  OPENVLA_OFT_DOWNLOAD_METHOD: hf
+  OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD: hf
+  CALVIN_DOWNLOAD_METHOD: official
+  CALVIN_TASKS:
+    - task_ABCD_D
+  EXTRACT_CALVIN: false
+steps:
+  - id: 10_rynnvla_common
+    script: scripts/download/10_rynnvla.sh
+    enabled: ${download.rynnvla}
+    env:
+      DOWNLOAD_RYNNVLA_VLA: false
+      DOWNLOAD_ACTION_WM: false
+      SUITE: ""
+  - id: 10_rynnvla_suite
+    script: scripts/download/10_rynnvla.sh
+    enabled: ${download.rynnvla}
+    for_each: ${env.LIBERO_SUITES}
+    env:
+      DOWNLOAD_RYNNVLA_CHAMELEON: false
+      DOWNLOAD_RYNNVLA_LUMINA: false
+      SUITE: "{item}"
+  - id: 20_openvla_oft
+    script: scripts/download/20_openvla_oft.sh
+    enabled: ${download.openvla_oft}
+    for_each: ${env.OPENVLA_OFT_REPOS}
+    env:
+      OPENVLA_OFT_REPO: "{item}"
+  - id: 30_openvla_oft_one_trajectory
+    script: scripts/download/30_openvla_oft_one_trajectory.sh
+    enabled: ${download.openvla_one_traj}
+    for_each: ${env.OPENVLA_ONE_TRAJ_REPOS}
+    env:
+      OPENVLA_ONE_TRAJ_REPO: "{item}"
+  - id: 40_libero_dataset
+    script: scripts/download/40_libero_dataset.sh
+    enabled: ${download.libero}
+    for_each: ${env.LIBERO_SUITES}
+    env:
+      SUITE: "{item}"
+  - id: 50_calvin_dataset
+    script: scripts/download/50_calvin_dataset.sh
+    enabled: ${download.calvin}
+    for_each: ${env.CALVIN_TASKS}
+    env:
+      CALVIN_TASK: "{item}"

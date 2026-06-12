@@ -46,7 +46,7 @@ def run(cfg: DictConfig) -> None:
 
 
 def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
-    config_name = "world_model_dinowm_chunk"
+    config_name = "train"
     overrides: list[str] = []
     i = 0
     while i < len(argv):
@@ -55,9 +55,9 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
             print(
                 "Usage: python -m dreamer_vla.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m dreamer_vla.train --config-name vla_rynnvla_action_head training.num_epochs=5\n"
-                "  python -m dreamer_vla.train --config-name world_model_dinowm_chunk training.max_steps=10\n"
-                "  python -m dreamer_vla.train --config-name dreamervla_rynn_dino_wm_actor_critic task=libero_object"
+                "  python -m dreamer_vla.train experiment=vla_rynnvla_action_head training.num_epochs=5\n"
+                "  python -m dreamer_vla.train experiment=world_model_dinowm_chunk training.max_steps=10\n"
+                "  python -m dreamer_vla.train experiment=dreamervla_rynn_dino_wm_actor_critic task=libero_object"
             )
             raise SystemExit(0)
         if arg in ("--config-name", "-cn"):

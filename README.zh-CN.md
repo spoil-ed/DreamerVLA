@@ -19,15 +19,15 @@ export DVLA_DATA_ROOT=/path/to/dvla_data
 bash scripts/install_env.sh
 conda activate dreamervla
 bash scripts/download_assets.sh
-TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
-CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal
+bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal
 ```
 
 ## 复现路线
 
-1. `scripts/install_env.sh` 一键安装环境，也可以单独运行 `scripts/install/*.sh`。
-2. `scripts/download_assets.sh` 一键下载权重和 LIBERO 数据，也可以单独运行 `scripts/download/*.sh`。
-3. `scripts/preprocess/prepare_libero_data.sh` 生成过滤 HDF5、reward、manifest 和 sidecar。
+1. `scripts/install_env.sh` 通过 Hydra 串联安装步骤；需要单步时用 `only=[20_torch]`。
+2. `scripts/download_assets.sh` 通过 Hydra 选择下载步骤；需要改资源时追加 `download.*` 或 `env.*` 覆盖。
+3. `scripts/preprocess/prepare_libero_data.sh task=libero_goal` 生成过滤 HDF5、reward、manifest 和 sidecar。
 4. `scripts/train_vla.sh` 训练 VLA。
 5. `scripts/train_wm.sh` 训练 chunk world model。
 6. `scripts/train_dreamervla.sh` 训练 DreamerVLA。

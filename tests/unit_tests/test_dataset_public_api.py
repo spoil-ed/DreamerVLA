@@ -59,11 +59,19 @@ def test_configs_use_importable_dreamer_vla_dataset_targets() -> None:
     config_names = sorted(
         str(path.relative_to(config_dir).with_suffix(""))
         for path in config_dir.rglob("*.yaml")
+        if "experiment" not in path.relative_to(config_dir).parts
     )
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        for config_name in config_names:
-            cfg = compose(config_name=config_name)
+        cfgs = [compose(config_name=config_name) for config_name in config_names]
+        experiment_names = sorted(
+            path.stem for path in (config_dir / "experiment").glob("*.yaml")
+        )
+        cfgs.extend(
+            compose(config_name="train", overrides=[f"experiment={experiment_name}"])
+            for experiment_name in experiment_names
+        )
+        for cfg in cfgs:
             for section in ("dataset", "dataset_val_ind", "dataset_val_ood"):
                 target = (
                     cfg.get(section, {}).get("_target_")

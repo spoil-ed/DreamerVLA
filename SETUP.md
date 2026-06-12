@@ -40,13 +40,8 @@ scripts/install/60_verify.sh
 Run a single step when needed:
 
 ```bash
-bash scripts/install/00_apt_tools.sh
-bash scripts/install/10_conda_env.sh
-bash scripts/install/20_torch.sh
-bash scripts/install/30_python_deps.sh
-bash scripts/install/40_third_party.sh
-bash scripts/install/50_special_packages.sh
-bash scripts/install/60_verify.sh
+bash scripts/install_env.sh only=[20_torch]
+bash scripts/install_env.sh only=[20_torch] force=true
 ```
 
 Install step map:
@@ -72,36 +67,40 @@ bash scripts/download_assets.sh
 Single asset steps:
 
 ```bash
-LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/10_rynnvla.sh
-OPENVLA_OFT_REPOS="owner/repo:libero_goal_hdf5_latest_6650" bash scripts/download/20_openvla_oft.sh
-bash scripts/download/30_openvla_oft_one_trajectory.sh
-LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/40_libero_dataset.sh
-bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh only=[10_rynnvla]
+bash scripts/download_assets.sh download.openvla_oft=true only=[20_openvla_oft] \
+  env.OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh download.rynnvla=false download.libero=true only=[40_libero_dataset]
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true
 ```
 
 Useful variants:
 
 ```bash
-LIBERO_SUITES="libero_goal libero_object" bash scripts/download_assets.sh
-DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1 LIBERO_SUITES=libero_spatial bash scripts/download_assets.sh
-DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=0 DOWNLOAD_CALVIN=1 CALVIN_TASKS=task_ABCD_D bash scripts/download_assets.sh
-DOWNLOAD_ONLY=10_rynnvla bash scripts/download_assets.sh
-DOWNLOAD_OPENVLA_ONE_TRAJ=1 DOWNLOAD_ONLY=30_openvla_oft_one_trajectory bash scripts/download_assets.sh
+bash scripts/download_assets.sh env.LIBERO_SUITES='"libero_goal libero_object"'
+bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_spatial
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true env.CALVIN_TASKS=task_ABCD_D
+bash scripts/download_assets.sh only=[10_rynnvla]
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
 ```
 
 CALVIN domestic / mirror-friendly options:
 
 ```bash
 # Hugging Face mirror, sharded 30 GB multi-part zip files for task_ABCD_D
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_shards
 
 # Hugging Face mirror, structured subset zips for task_ABCD_D
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_subsets
 
 # OpenDataLab domestic platform; requires login through openxlab
 pip install -U openxlab
 openxlab login
-CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.CALVIN_DOWNLOAD_METHOD=opendatalab
 ```
 
 OpenVLA-OFT one-trajectory checkpoints support both Hugging Face download
@@ -109,10 +108,12 @@ methods:
 
 ```bash
 # Method 1: git clone with Git LFS
-OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=git bash scripts/download/30_openvla_oft_one_trajectory.sh
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory] \
+  env.OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=git
 
 # Method 2: huggingface-hub; set HF_ENDPOINT=https://hf-mirror.com if needed
-OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=hf bash scripts/download/30_openvla_oft_one_trajectory.sh
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory] \
+  env.OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD=hf
 ```
 
 Canonical dataset roots:
@@ -138,20 +139,20 @@ delegates each suite to `scripts/preprocess/prepare_libero_data.sh`. To process
 a subset:
 
 ```bash
-bash scripts/preprocess_libero.sh --suites "libero_goal libero_object"
+bash scripts/preprocess_libero.sh tasks='"libero_goal libero_object"'
 ```
 
 For a single suite or a resumable rerun of one suite:
 
 ```bash
-bash scripts/preprocess/prepare_libero_data.sh --task libero_goal
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal
 ```
 
 The preprocessing path is split into numbered child scripts, matching the
 download and install flow. To rerun only one part:
 
 ```bash
-bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
 ```
 
 The standard path always writes fixed no-op-filtered artifacts before reward
@@ -183,10 +184,10 @@ ${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pre
 Useful variants:
 
 ```bash
-bash scripts/preprocess/prepare_libero_data.sh --task libero_10 --gpus 0,1,2,3 --ngpu 4
-bash scripts/preprocess/10_hdf5_reward.sh --task libero_goal
-bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
-bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal --gpus 0 --ngpu 1
+bash scripts/preprocess/prepare_libero_data.sh task=libero_10 gpus=0,1,2,3 ngpu=4
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[10_hdf5_reward]
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
+TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_token_hidden.sh
 ```
 
 ## 4. Train
@@ -194,17 +195,17 @@ bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal --gpus 0 --n
 VLA SFT:
 
 ```bash
-bash scripts/train_vla.sh --config vla_rynnvla_action_head --task libero_goal \
-  --gpus 0,1,2,3 --ngpu 4 --batch-size 20
+bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal \
+  gpus=0,1,2,3 ngpu=4 batch_size=20
 ```
 
 One-trajectory VLA:
 
 ```bash
-bash scripts/train_vla.sh --config vla_sft_one_trajectory --task libero_goal
-bash scripts/train_vla.sh --config vla_sft_one_trajectory --task libero_object dataset.trajectory_offset=2
-bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory --task libero_10
-bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory_l1 --task libero_goal
+bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal
+bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_object dataset.trajectory_offset=2
+bash scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory task=libero_10
+bash scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1 task=libero_goal
 ```
 
 `openvla_oft_hdf5_one_trajectory` trains the discrete LM-head action-token
@@ -232,12 +233,12 @@ projected vision patch tokens:
 
 ```bash
 # RynnVLA Scheme B:
-bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal --gpus 0 --ngpu 1
+TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_token_hidden.sh
 
 # OpenVLA-OFT Scheme B:
-bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
-  --scheme input_tokens \
-  --ckpt data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+TASK=libero_goal OFT_LATENT_SCHEME=input_tokens \
+OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
+bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
 First run on a new checkpoint: smoke-test by invoking the module directly with
@@ -258,7 +259,7 @@ training the WM on them, point the route at the sidecar and align the expected
 attrs, e.g.:
 
 ```bash
-bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk --task libero_goal \
+bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal \
   task.openvla_oft.ckpt_path=/abs/path/to/Openvla-oft-SFT-libero-goal-traj1 \
   task.openvla_oft.action_hidden_dir=/abs/path/to/<sidecar_dir> \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
@@ -269,50 +270,51 @@ bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk --task libero_goa
 World model:
 
 ```bash
-bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
-  --gpus 0,1,2,3 --ngpu 4 --batch-size 16
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+  gpus=0,1,2,3 ngpu=4 batch_size=16
 
 # Scheme B frame-token WM:
-bash scripts/train_wm.sh --config world_model_dinowm_chunk_input_tokens --task libero_goal
-bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk_input_tokens --task libero_goal
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal
+bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk_input_tokens task=libero_goal
 ```
 
 Classifier:
 
 ```bash
-bash scripts/train_wm.sh --config latent_classifier_libero_goal_chunk
-bash scripts/train_wm.sh --config latent_classifier_libero_goal_chunk_input_tokens
-bash scripts/train_wm.sh --config oft_latent_classifier_chunk_input_tokens --task libero_goal
+bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk
+bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk_input_tokens
+bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk_input_tokens task=libero_goal
 ```
 
 DreamerVLA:
 
 ```bash
 bash scripts/train_dreamervla.sh \
-  --config dreamervla_rynn_dino_wm_wmpo_outcome \
-  --task libero_goal \
-  --gpus 0,1,2,3 --ngpu 4 --batch-size 4 \
+  experiment=dreamervla_rynn_dino_wm_wmpo_outcome \
+  task=libero_goal \
+  gpus=0,1,2,3 ngpu=4 batch_size=4 \
   init.world_model_state_ckpt=/abs/path/to/wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/classifier.ckpt
 
 # Scheme B uses a bridge actor from frame tokens to action slots:
 bash scripts/train_dreamervla.sh \
-  --config dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
-  --task libero_goal \
+  experiment=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
+  task=libero_goal \
   init.world_model_state_ckpt=/abs/path/to/input_token_wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/input_token_classifier.ckpt
 ```
 
-Hydra overrides are passed after the script command, for example
-`task=libero_object`, `training.max_steps=1`, or
-`task.hdf5_dir=/abs/path`.
+Training launchers are Hydra wrappers: `experiment=...` selects a script-level
+config group under `configs/experiment/`, while overrides such as
+`training.max_steps=1`, `dataset.trajectory_offset=3`, or
+`task.hdf5_dir=/abs/path` are passed through to the real training route.
 
 ## 5. Evaluate
 
 VLA checkpoint:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
+bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=vla \
   eval.ckpt_path=/abs/path/to/vla.ckpt \
   eval.task_suite_name=libero_goal \
@@ -323,7 +325,7 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
 Dreamer checkpoint:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 bash scripts/eval_libero_vla.sh \
+bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
   eval.ckpt_path=/abs/path/to/dreamer.ckpt \
   eval.dreamer_policy_source=ckpt \
@@ -357,6 +359,6 @@ test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256"
 Smoke train:
 
 ```bash
-bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
-  --out-dir /tmp/dvla_wm_smoke --max-steps 1 --num-workers 0
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+  out_dir=/tmp/dvla_wm_smoke max_steps=1 num_workers=0
 ```

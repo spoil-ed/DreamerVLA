@@ -1,0 +1,25 @@
+name: preprocess_suite
+data_root: ${oc.env:DVLA_DATA_ROOT,data}
+python: python
+dry_run: false
+only: []
+task: libero_goal
+gpus: "0"
+ngpu: 1
+num_procs: 8
+overwrite: false
+env:
+  OVERWRITE: ${overwrite}
+  TASK: ${task}
+  PRETOKENIZE_PROCS: ${num_procs}
+  GPUS: ${gpus}
+  ACTION_HIDDEN_GPUS: ${ngpu}
+steps:
+  - id: 10_hdf5_reward
+    script: scripts/preprocess/10_hdf5_reward.sh
+  - id: 20_pretokenize_dataset
+    script: scripts/preprocess/20_pretokenize_dataset.sh
+  - id: 30_action_hidden
+    script: scripts/preprocess/30_action_hidden.sh
+  - id: 40_validate
+    script: scripts/preprocess/40_validate.sh

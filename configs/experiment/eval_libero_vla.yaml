@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /evaluation: libero_vla
+  - _self_

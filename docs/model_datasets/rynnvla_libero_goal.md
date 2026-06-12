@@ -68,8 +68,8 @@ WM consumes `token_count=35 × token_dim=1024` per frame
 (`task.legacy_action_hidden.*` in `configs/task/libero_goal.yaml`):
 
 ```bash
-bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal
-bash scripts/train_wm.sh --config world_model_dinowm_chunk_input_tokens --task libero_goal
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
@@ -82,7 +82,7 @@ Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
 
 Verified against on-disk artifacts: assets present (VLA ckpt, Lumina,
 Chameleon tokenizer/VQGAN); one-trajectory SFT dataset instantiates from
-its route config (133 samples, `wm_action [5,7]`); sidecar contract
+its Hydra experiment config (133 samples, `wm_action [5,7]`); sidecar contract
 `obs_embedding [T, 35840]`; chunk-WM constructed from config (58.3M params)
 and ran `loss()` on a real batch (chunk + rollout + reward terms); classifier
 dataset paired 433 success / 67 failure latent demos (`[8, 35840]` windows);

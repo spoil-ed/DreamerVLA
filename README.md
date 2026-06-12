@@ -20,8 +20,8 @@ export DVLA_DATA_ROOT=/path/to/dvla_data
 bash scripts/install_env.sh
 conda activate dreamervla
 bash scripts/download_assets.sh
-TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
-CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal
+bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal
 ```
 
 ## Reproduction Route
@@ -55,27 +55,28 @@ docs/               setup and data-layout reference
 | --- | --- |
 | Install | `bash scripts/install_env.sh` |
 | Download all | `bash scripts/download_assets.sh` |
-| Download RynnVLA weights | `LIBERO_SUITES=libero_goal bash scripts/download/10_rynnvla.sh` |
-| Download OpenVLA-OFT | `OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650 bash scripts/download/20_openvla_oft.sh` |
-| Download OpenVLA-OFT one-trajectory | `bash scripts/download/30_openvla_oft_one_trajectory.sh` |
-| Download LIBERO | `LIBERO_SUITES=libero_goal bash scripts/download/40_libero_dataset.sh` |
-| Download CALVIN | `bash scripts/download/50_calvin_dataset.sh` |
-| Preprocess | `TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh` |
-| VLA SFT | `CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal` |
-| One-trajectory VLA | `CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal` |
-| World model | `CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal` |
-| Classifier | `CONFIG=latent_classifier_libero_goal_chunk bash scripts/train_wm.sh` |
-| DreamerVLA | `CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh` |
-| Eval | `bash scripts/eval_libero_vla.sh eval.ckpt_path=<ckpt> eval.ckpt_kind=vla` |
+| Download RynnVLA weights | `bash scripts/download_assets.sh only=[10_rynnvla] env.LIBERO_SUITES=libero_goal` |
+| Download OpenVLA-OFT | `bash scripts/download_assets.sh download.openvla_oft=true only=[20_openvla_oft] env.OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650` |
+| Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]` |
+| Download LIBERO | `bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal` |
+| Download CALVIN | `bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true` |
+| Preprocess | `bash scripts/preprocess/prepare_libero_data.sh task=libero_goal` |
+| VLA SFT | `bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal` |
+| One-trajectory VLA | `bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal` |
+| World model | `bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal` |
+| Classifier | `bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk` |
+| DreamerVLA | `bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal` |
+| Eval | `bash scripts/eval_libero_vla.sh gpus=0 eval.ckpt_path=<ckpt> eval.ckpt_kind=vla` |
 
 Common overrides:
 
 ```bash
 DVLA_DATA_ROOT=/path/to/dvla_data
-CUDA_VISIBLE_DEVICES=0,1,2,3
-NGPU=4
-RUN_TAG=my_run
-OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run>"
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+  gpus=0,1,2,3 ngpu=4 batch_size=16 run_tag=my_run
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+  training.out_dir="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run>"
 ```
 
 `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared

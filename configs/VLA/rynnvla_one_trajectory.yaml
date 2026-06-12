@@ -1,5 +1,6 @@
+# @package _global_
 defaults:
-  - vla_rynnvla_action_head
+  - rynnvla_action_head
   - _self_
 
 training:

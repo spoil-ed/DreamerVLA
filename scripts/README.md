@@ -7,13 +7,13 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 
 | Script | Purpose |
 | --- | --- |
-| `install_env.sh` | Run resumable install steps under `scripts/install/` |
-| `download_assets.sh` | Run selected download steps under `scripts/download/` |
-| `preprocess_libero.sh` | Compatibility wrapper that preprocesses the standard LIBERO suites |
-| `preprocess/prepare_libero_data.sh` | Build LIBERO HDF5 views, reward labels, manifests, and action-hidden sidecars |
-| `train_vla.sh` | VLA SFT via Hydra route configs |
-| `train_wm.sh` | World-model and classifier training via Hydra route configs |
-| `train_dreamervla.sh` | DreamerVLA training via Hydra route configs |
+| `install_env.sh` | Hydra wrapper for resumable install steps under `scripts/install/` |
+| `download_assets.sh` | Hydra wrapper for selected download steps under `scripts/download/` |
+| `preprocess_libero.sh` | Hydra wrapper that preprocesses the standard LIBERO suites |
+| `preprocess/prepare_libero_data.sh` | Hydra wrapper for one LIBERO suite preprocessing chain |
+| `train_vla.sh` | VLA SFT via Hydra experiment configs |
+| `train_wm.sh` | World-model and classifier training via Hydra experiment configs |
+| `train_dreamervla.sh` | DreamerVLA training via Hydra experiment configs |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
 
 ## Install Steps
@@ -27,7 +27,6 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | `install/40_third_party.sh` | LIBERO, robosuite stack, OpenSora, and OpenVLA-OFT third-party packages |
 | `install/50_special_packages.sh` | flash-attn, egl_probe, and optional apex / TensorNVMe |
 | `install/60_verify.sh` | Import and CUDA visibility check |
-| `install/_env.sh` | Shared install-step environment |
 
 ## Download Steps
 
@@ -38,12 +37,11 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | `download/30_openvla_oft_one_trajectory.sh` | Download OpenVLA-OFT one-trajectory checkpoints |
 | `download/40_libero_dataset.sh` | Download LIBERO suites into `datasets/libero/<suite>/` |
 | `download/50_calvin_dataset.sh` | Download CALVIN tasks into `datasets/calvin/`; supports official, Hugging Face mirror, and OpenDataLab methods |
-| `download/_env.sh` | Shared download-step environment |
 
 Download steps are intentionally serial and numbered. To add a new asset
-family, create `download/NN_name.sh`, source `download/_env.sh`, write outputs
-only under `${DVLA_DATA_ROOT}`, then append the new script to
-`DOWNLOAD_STEPS` in `download_assets.sh`.
+family, create `download/NN_name.sh`, write outputs only under
+`${DVLA_DATA_ROOT}`, then append the new script to
+`configs/scripts/download.yaml`.
 
 ## Preprocessing
 
@@ -65,6 +63,7 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
+| `dreamer_vla.launchers.workflow` | Hydra workflow runner for install/download/preprocess shell steps |
 | `dreamer_vla.preprocess.filter_marked_libero_hdf5` | Filter no-op marked HDF5 files |
 | `dreamer_vla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
 | `dreamer_vla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
@@ -73,14 +72,17 @@ Python modules:
 
 Common launcher flags stay intentionally small:
 
-    bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
-      --gpus 0,1 --ngpu 2 --batch-size 16 --num-workers 4 training.max_steps=1000
+    bash scripts/install_env.sh only=[20_torch] force=true
+    bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal
+    bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 
-    bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal \
-      --gpus 0 --num-procs 8
+    bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+      gpus=0,1 ngpu=2 batch_size=16 num_workers=4 training.max_steps=1000
 
-Training launchers translate `--batch-size` to `dataloader.batch_size=...`
-and pass any remaining `key=value` arguments straight to Hydra.
+Training launchers are Hydra wrappers. `experiment=...` selects a config group under
+`configs/experiment/`; `task=...`, `gpus=...`, `ngpu=...`, `batch_size=...`,
+and `num_workers=...` are script-level overrides; any other `key=value`
+argument is passed to the real training config unchanged.
 
 ## Evaluation
 
@@ -150,7 +152,7 @@ experiments and are not part of the main release pipeline.
 
 - Use `DVLA_DATA_ROOT` for data location.
 - `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; if unset, scripts use relative `data`.
-- Use `CONFIG=<route>` for route selection.
+- Use `experiment=<name>` for experiment selection.
 - Pass Hydra overrides after launcher arguments.
 - Keep runtime outputs under `${DVLA_DATA_ROOT:-data}/outputs/`.
 - See `docs/data_layout.md` for the full runtime data layout.

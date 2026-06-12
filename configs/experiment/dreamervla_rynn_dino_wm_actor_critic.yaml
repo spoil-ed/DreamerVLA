@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: rynnvla_actor_critic
+  - _self_

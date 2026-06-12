@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - openvla_oft_hdf5
+  - openvla_oft
   - _self_
 
 training:

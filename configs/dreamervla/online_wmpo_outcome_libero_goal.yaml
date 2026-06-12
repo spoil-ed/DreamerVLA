@@ -1,9 +1,10 @@
+# @package _global_
 # DreamerVLA — online WMPO outcome route.
 #
 # Driven by:
-#   python -m dreamer_vla.train --config-name=online_wmpo_outcome_libero_goal
+#   python -m dreamer_vla.train experiment=online_wmpo_outcome_libero_goal
 #
-# Differences vs configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml:
+# Differences vs configs/dreamervla/rynnvla_wmpo_outcome.yaml:
 #   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,data}
 #   * world_model_state_ckpt points at a pinned ChunkAware checkpoint
 #   * classifier_state_ckpt points at the WMPO outcome classifier

@@ -114,7 +114,9 @@ def _build_runner(args: argparse.Namespace) -> EvalLiberoVLARunner:
     with initialize_config_dir(
         config_dir=str(PROJECT_ROOT / "configs"), version_base=None
     ):
-        eval_cfg = compose(config_name="eval_libero_vla", overrides=overrides)
+        eval_cfg = compose(
+            config_name="train", overrides=["experiment=eval_libero_vla", *overrides]
+        )
     bootstrap = EvalLiberoVLARunner(eval_cfg)
     payload = bootstrap._load_checkpoint_payload(str(args.ckpt))
     cfg = _merge_dreamer_eval_cfg(eval_cfg, payload)

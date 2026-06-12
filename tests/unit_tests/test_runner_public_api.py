@@ -6,6 +6,68 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 
 
+EXPERIMENT_MODULES = {
+    "vla_rynnvla_action_head": ("VLA", "rynnvla_action_head"),
+    "vla_sft_one_trajectory": ("VLA", "rynnvla_one_trajectory"),
+    "openvla_oft_hdf5": ("VLA", "openvla_oft"),
+    "openvla_oft_hdf5_one_trajectory": ("VLA", "openvla_oft_one_trajectory"),
+    "openvla_oft_hdf5_one_trajectory_l1": (
+        "VLA",
+        "openvla_oft_l1_one_trajectory",
+    ),
+    "world_model_dinowm_step": ("worldmodel", "rynnvla_action_step"),
+    "world_model_dinowm_chunk": ("worldmodel", "rynnvla_action_chunk"),
+    "world_model_dinowm_chunk_input_tokens": (
+        "worldmodel",
+        "rynnvla_input_token_chunk",
+    ),
+    "oft_world_model_dinowm_chunk": ("worldmodel", "openvla_oft_action_chunk"),
+    "oft_world_model_dinowm_chunk_input_tokens": (
+        "worldmodel",
+        "openvla_oft_input_token_chunk",
+    ),
+    "latent_classifier_libero_goal_chunk": ("classifier", "rynnvla_action_chunk"),
+    "latent_classifier_libero_goal_chunk_input_tokens": (
+        "classifier",
+        "rynnvla_input_token_chunk",
+    ),
+    "oft_latent_classifier_chunk": ("classifier", "openvla_oft_action_chunk"),
+    "oft_latent_classifier_chunk_input_tokens": (
+        "classifier",
+        "openvla_oft_input_token_chunk",
+    ),
+    "dreamervla_rynn_dino_wm_actor_critic": (
+        "dreamervla",
+        "rynnvla_actor_critic",
+    ),
+    "dreamervla_rynn_dino_wm_wmpo_outcome": (
+        "dreamervla",
+        "rynnvla_wmpo_outcome",
+    ),
+    "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": (
+        "dreamervla",
+        "rynnvla_input_token_wmpo_outcome",
+    ),
+    "dreamervla_oft_dino_wm_wmpo_outcome": (
+        "dreamervla",
+        "openvla_oft_wmpo_outcome",
+    ),
+    "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": (
+        "dreamervla",
+        "openvla_oft_input_token_wmpo_outcome",
+    ),
+    "online_wmpo_outcome_libero_goal": (
+        "dreamervla",
+        "online_wmpo_outcome_libero_goal",
+    ),
+    "eval_libero_vla": ("evaluation", "libero_vla"),
+}
+
+
+def _compose_experiment(name: str):
+    return compose(config_name="train", overrides=[f"experiment={name}"])
+
+
 def test_runner_public_api_exports_route_specific_names() -> None:
     import dreamer_vla.runners as runners
 
@@ -160,18 +222,28 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         for config_name, target in expected.items():
-            cfg = compose(config_name=config_name)
+            cfg = _compose_experiment(config_name)
             assert cfg._target_ == target
             assert "workspace" not in cfg
             cls = get_class(target)
             assert cls.__name__ == target.rsplit(".", 1)[-1]
 
 
+def test_train_config_experiments_compose_through_stage_modules() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        for experiment_name, (group_name, module_name) in EXPERIMENT_MODULES.items():
+            new_cfg = _compose_experiment(experiment_name)
+            module_cfg = compose(config_name=f"{group_name}/{module_name}")
+            assert new_cfg._target_ == module_cfg._target_
+            assert "workspace" not in new_cfg
+
+
 def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        lm_head = compose(config_name="openvla_oft_hdf5_one_trajectory")
-        l1 = compose(config_name="openvla_oft_hdf5_one_trajectory_l1")
+        lm_head = _compose_experiment("openvla_oft_hdf5_one_trajectory")
+        l1 = _compose_experiment("openvla_oft_hdf5_one_trajectory_l1")
 
     assert lm_head.policy.use_l1_regression is False
     assert l1.policy.use_l1_regression is True
@@ -186,10 +258,14 @@ def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        rynn_wm = compose(config_name="world_model_dinowm_chunk_input_tokens")
-        oft_wm = compose(config_name="oft_world_model_dinowm_chunk_input_tokens")
-        rynn_dreamer = compose(config_name="dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens")
-        oft_dreamer = compose(config_name="dreamervla_oft_dino_wm_wmpo_outcome_input_tokens")
+        rynn_wm = _compose_experiment("world_model_dinowm_chunk_input_tokens")
+        oft_wm = _compose_experiment("oft_world_model_dinowm_chunk_input_tokens")
+        rynn_dreamer = _compose_experiment(
+            "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens"
+        )
+        oft_dreamer = _compose_experiment(
+            "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens"
+        )
 
     assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
     assert rynn_wm.world_model.token_count == 2048
@@ -210,12 +286,12 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
     assert oft_dreamer.policy.action_hidden_dim == 4096
 
 
-def test_root_configs_resolve_public_route_defaults() -> None:
+def test_train_config_resolves_public_default_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     assert not (config_dir / "archive").exists()
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(config_name="world_model_dinowm_chunk")
+        cfg = compose(config_name="train")
         assert cfg._target_ == "dreamer_vla.runners.RynnDinoWMRunner"
         assert (
             cfg.dataset._target_
@@ -232,7 +308,7 @@ def test_cli_default_uses_current_public_runner_target() -> None:
     from dreamer_vla.train import _parse_hydra_like_args
 
     config_name, overrides = _parse_hydra_like_args([])
-    assert config_name == "world_model_dinowm_chunk"
+    assert config_name == "train"
     assert overrides == []
 
 
@@ -303,7 +379,9 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     config_names = sorted(
-        str(path.relative_to(config_dir).with_suffix("")) for path in config_dir.rglob("*.yaml")
+        str(path.relative_to(config_dir).with_suffix(""))
+        for path in config_dir.rglob("*.yaml")
+        if "experiment" not in path.relative_to(config_dir).parts
     )
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -315,3 +393,11 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
                 assert cls.__module__ == "dreamer_vla.runners"
                 assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
                 assert "workspace" not in cfg
+        for experiment_name in EXPERIMENT_MODULES:
+            cfg = _compose_experiment(experiment_name)
+            target = cfg.get("_target_")
+            assert target is not None
+            cls = get_class(str(target))
+            assert cls.__module__ == "dreamer_vla.runners"
+            assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
+            assert "workspace" not in cfg

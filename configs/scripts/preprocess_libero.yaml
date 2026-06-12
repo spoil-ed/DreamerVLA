@@ -1,0 +1,20 @@
+name: preprocess_libero
+data_root: ${oc.env:DVLA_DATA_ROOT,data}
+python: python
+dry_run: false
+only: []
+tasks: ${oc.env:LIBERO_SUITES,libero_goal libero_object libero_spatial libero_10}
+gpus: "0"
+ngpu: 1
+num_procs: 8
+overwrite: false
+env:
+  OVERWRITE: ${overwrite}
+  PRETOKENIZE_PROCS: ${num_procs}
+  GPUS: ${gpus}
+  ACTION_HIDDEN_GPUS: ${ngpu}
+steps:
+  - id: preprocess_suite
+    script: scripts/preprocess/prepare_libero_data.sh
+    for_each: ${tasks}
+    args: ["task={item}", "gpus=${gpus}", "ngpu=${ngpu}", "num_procs=${num_procs}", "overwrite=${overwrite}"]

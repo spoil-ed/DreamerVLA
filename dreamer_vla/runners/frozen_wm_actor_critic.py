@@ -46,9 +46,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default=str(
-            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
-        ),
+        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_actor_critic.yaml"),
     )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--world-model-ckpt", required=True)

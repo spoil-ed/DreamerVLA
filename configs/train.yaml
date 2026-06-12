@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - _self_
+  - VLA: null
+  - worldmodel: null
+  - classifier: null
+  - dreamervla: null
+  - evaluation: null
+  - experiment: world_model_dinowm_chunk

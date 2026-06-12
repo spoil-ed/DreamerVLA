@@ -81,7 +81,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Experimental multiprocess online collector with batched VLA encoder/policy learner."
     )
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs/online_wmpo_outcome_libero_goal.yaml"))
+    parser.add_argument(
+        "--config",
+        default=str(
+            PROJECT_ROOT / "configs/dreamervla/online_wmpo_outcome_libero_goal.yaml"
+        ),
+    )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--world-model-ckpt", required=True)
     parser.add_argument(

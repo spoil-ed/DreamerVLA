@@ -21,7 +21,7 @@ under `${DVLA_DATA_ROOT:-data}/install_state/`. Re-run a failed install with
 the same command; completed steps are skipped. To force a step, use:
 
 ```bash
-INSTALL_FORCE=1 INSTALL_ONLY=20_torch bash scripts/install_env.sh
+bash scripts/install_env.sh only=[20_torch] force=true
 ```
 
 Run install steps one at a time when debugging:
@@ -39,8 +39,8 @@ bash scripts/install/60_verify.sh
 | Step | Scope | How to extend |
 | --- | --- | --- |
 | `00_apt_tools.sh` | system packages | Add only apt-level dependencies needed before Python packages. |
-| `10_conda_env.sh` | conda environment | Change `CONDA_ENV_NAME` or `PYTHON_VERSION` through environment variables. |
-| `20_torch.sh` | PyTorch CUDA wheels | Override `CUDA_INDEX_URL` if using a different CUDA wheel index. |
+| `10_conda_env.sh` | conda environment | Change with `env.CONDA_ENV_NAME=...` or `env.PYTHON_VERSION=...` on `scripts/install_env.sh`. |
+| `20_torch.sh` | PyTorch CUDA wheels | Override `env.CUDA_INDEX_URL=...` if using a different CUDA wheel index. |
 | `30_python_deps.sh` | DreamerVLA editable package, pip requirements, and dev tools | Add normal Python runtime packages to `requirements.txt`; add lint/test tools to the `dev` dependency group in `pyproject.toml`. |
 | `40_third_party.sh` | LIBERO, robosuite-family packages, OpenSora, OpenVLA-OFT helpers | Add vendored upstream packages under `third_party/` and install them here. |
 | `50_special_packages.sh` | flash-attn, egl_probe, optional apex / TensorNVMe | Add fragile wheels or host-specific GPU extensions here. |
@@ -78,19 +78,22 @@ bash scripts/download_assets.sh
 Download assets one step at a time:
 
 ```bash
-LIBERO_SUITES=libero_goal bash scripts/download/10_rynnvla.sh
-OPENVLA_OFT_REPOS="owner/repo:libero_goal_hdf5_latest_6650" bash scripts/download/20_openvla_oft.sh
-bash scripts/download/30_openvla_oft_one_trajectory.sh
-LIBERO_SUITES=libero_goal bash scripts/download/40_libero_dataset.sh
-bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh only=[10_rynnvla] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh only=[20_openvla_oft] env.OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true
 ```
 
 CALVIN domestic / mirror-friendly download options:
 
 ```bash
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
-CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_shards
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_subsets
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.CALVIN_DOWNLOAD_METHOD=opendatalab
 ```
 
 Verify the environment:
@@ -103,5 +106,5 @@ ruff check dreamer_vla tests
 
 `30_python_deps.sh` installs the `pyproject.toml` `dev` dependency group by
 default so `pytest`, `ruff`, and `pre-commit` are available in the conda
-environment. Set `INSTALL_DEV_TOOLS=0` before running the installer to skip
-these developer-only tools.
+environment. Run `bash scripts/install_env.sh env.INSTALL_DEV_TOOLS=false` to
+skip these developer-only tools.

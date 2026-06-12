@@ -5,7 +5,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
-PYTHON="${PYTHON:-python}"
 TASK="${TASK:-libero_goal}"
 HIS=1
 ACTION_HORIZON=1
@@ -13,19 +12,7 @@ IMAGE_RESOLUTION=256
 PRETOKENIZE_PROCS="${PRETOKENIZE_PROCS:-8}"
 GPUS="${GPUS:-0}"
 OVERWRITE="${OVERWRITE:-0}"
-
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --task) TASK="$2"; shift 2 ;;
-    --data-root) DVLA_DATA_ROOT="$2"; shift 2 ;;
-    --python) PYTHON="$2"; shift 2 ;;
-    --gpus) GPUS="$2"; export CUDA_VISIBLE_DEVICES="$2"; shift 2 ;;
-    --num-procs) PRETOKENIZE_PROCS="$2"; shift 2 ;;
-    --overwrite) OVERWRITE=1; shift ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
-  esac
-done
-export PYTHON
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS}}"
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
@@ -42,13 +29,13 @@ TASK_NAME="${TASK#libero_}"
 mkdir -p "${CONVS_DIR}" "${TOKENS_DIR}" "${CONCATE_DIR}" "${CONFIG_DIR}"
 if [[ -z "$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)" ]]; then
   echo "No no-op-filtered HDF5 files found under: ${HDF5_DIR}" >&2
-  echo "Run: bash scripts/preprocess/10_hdf5_reward.sh --task ${TASK}" >&2
+  echo "Run: bash scripts/preprocess/prepare_libero_data.sh task=${TASK} only=[10_hdf5_reward]" >&2
   exit 5
 fi
 
 if [[ "${OVERWRITE}" == "1" || ! -d "${IMG_STATE_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${IMG_STATE_DIR}"
-  "${PYTHON}" -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
+  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
     --libero_task_suite "${TASK}" \
     --image_resolution "${IMAGE_RESOLUTION}" \
     --raw_data_dir "${HDF5_DIR}" \
@@ -57,7 +44,7 @@ else
   echo "[20_pretokenize_dataset] skip image/state/action: ${IMG_STATE_DIR}"
 fi
 
-"${PYTHON}" -m dreamer_vla.preprocess.action_state_model_conv_generation \
+python -m dreamer_vla.preprocess.action_state_model_conv_generation \
   --base_dir "${IMG_STATE_DIR}" \
   --his "${HIS}" \
   --len_action "${ACTION_HORIZON}" \
@@ -68,7 +55,7 @@ fi
   --output_dir "${CONVS_DIR}"
 
 if [[ "${OVERWRITE}" == "1" ]]; then
-  "${PYTHON}" -m dreamer_vla.preprocess.pretoken_state_action_model \
+  python -m dreamer_vla.preprocess.pretoken_state_action_model \
     --task "${TASK_NAME}" \
     --resolution "${IMAGE_RESOLUTION}" \
     --with_state \
@@ -82,7 +69,7 @@ if [[ "${OVERWRITE}" == "1" ]]; then
     --gpu_devices "${GPUS}" \
     --overwrite
 else
-  "${PYTHON}" -m dreamer_vla.preprocess.pretoken_state_action_model \
+  python -m dreamer_vla.preprocess.pretoken_state_action_model \
     --task "${TASK_NAME}" \
     --resolution "${IMAGE_RESOLUTION}" \
     --with_state \
@@ -98,12 +85,12 @@ fi
 
 bash "${DVLA_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
 
-"${PYTHON}" -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
+python -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
   --source_dir_patterns "${TASK}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
   --all_patterns "${TASK}_${SUFFIX}" \
   --processed_data_root "${PROCESSED_DATA_ROOT}"
 
-"${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
+python -m dreamer_vla.preprocess.validate_libero_data_prep \
   --data-root "${DVLA_DATA_ROOT}" \
   --processed-data-root "${PROCESSED_DATA_ROOT}" \
   --suites "${TASK}" \
@@ -128,7 +115,7 @@ META:
 prompt_text: 'Finish the task: {task_text}.'
 EOF
 
-"${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
+python -m dreamer_vla.preprocess.validate_libero_data_prep \
   --data-root "${DVLA_DATA_ROOT}" \
   --processed-data-root "${PROCESSED_DATA_ROOT}" \
   --suites "${TASK}" \

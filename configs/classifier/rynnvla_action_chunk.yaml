@@ -1,3 +1,4 @@
+# @package _global_
 # LatentSuccessClassifier — CHUNK-LEVEL variant aligned 1:1 with the
 # action-level small_tf baseline, with ONLY the time unit reinterpreted:
 #
@@ -18,8 +19,7 @@
 # predict_next_chunk hidden_seq[:, -1] emits at inference time.
 #
 # Launch:
-#   CONFIG=latent_classifier_libero_goal_chunk NGPU=1 CUDA_VISIBLE_DEVICES=4 \
-#     bash scripts/train_wm.sh
+#   bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk gpus=4
 
 _target_: dreamer_vla.runners.LatentClassifierRunner
 

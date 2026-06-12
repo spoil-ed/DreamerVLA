@@ -8,7 +8,7 @@ move from `src/` to `dreamer_vla/`.
 ```text
 DreamerVLA/
 ├── dreamer_vla/          # Python package imported as dreamer_vla
-├── configs/              # Hydra route configs and LIBERO task configs
+├── configs/              # Hydra train/experiment/module configs and LIBERO tasks
 ├── scripts/              # Shell launchers for install, data prep, train, eval
 ├── tests/                # Unit and e2e tests
 ├── docs/                 # Repository, install, data-layout, and paper notes

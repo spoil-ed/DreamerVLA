@@ -2,26 +2,32 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/_env.sh"
-activate_conda_env
+DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-dreamervla}"
+INSTALL_DEV_TOOLS="${INSTALL_DEV_TOOLS:-1}"
+cd "${DVLA_ROOT}"
 
-# Step 1: install the local DreamerVLA package in editable mode.
-install_log "target conda env=${CONDA_ENV_NAME} python=${PYTHON}"
-install_log "repo_package=${DVLA_ROOT}"
-uv pip install --python "${PYTHON}" -e "${DVLA_ROOT}"
+if ! command -v conda >/dev/null 2>&1; then
+  echo "conda is required before running this install step." >&2
+  exit 2
+fi
+eval "$(conda shell.bash hook)"
+conda activate "${CONDA_ENV_NAME}"
 
-# Step 2: install the curated runtime dependency list.
-install_log "requirements=${DVLA_ROOT}/requirements.txt"
-uv pip install --python "${PYTHON}" -r "${DVLA_ROOT}/requirements.txt"
+echo "[install:30_python_deps] target conda env=${CONDA_ENV_NAME}"
+echo "[install:30_python_deps] repo_package=${DVLA_ROOT}"
+uv pip install -e "${DVLA_ROOT}"
 
-# Step 3: pin transformers for compatibility with the VLA backbones.
-install_log "transformers=4.40.1"
-uv pip install --python "${PYTHON}" transformers==4.40.1
+echo "[install:30_python_deps] requirements=${DVLA_ROOT}/requirements.txt"
+uv pip install -r "${DVLA_ROOT}/requirements.txt"
 
-# Step 4: install lightweight developer tooling used by tests and lint checks.
+echo "[install:30_python_deps] transformers=4.40.1"
+uv pip install transformers==4.40.1
+
 if [[ "${INSTALL_DEV_TOOLS}" == "1" ]]; then
-  install_log "dev_dependency_group=dev"
-  uv pip install --python "${PYTHON}" --group dev
+  echo "[install:30_python_deps] dev_dependency_group=dev"
+  uv pip install --group dev
 else
-  install_log "dev_dependency_group=skipped"
+  echo "[install:30_python_deps] dev_dependency_group=skipped"
 fi

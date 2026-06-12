@@ -57,10 +57,12 @@ bash scripts/download_assets.sh
 Download model families one at a time with:
 
 ```bash
-LIBERO_SUITES="libero_goal libero_object" bash scripts/download/10_rynnvla.sh
-DOWNLOAD_RYNNVLA_LUMINA=0 DOWNLOAD_ACTION_WM=0 LIBERO_SUITES=libero_goal bash scripts/download/10_rynnvla.sh
-OPENVLA_OFT_REPOS="owner/repo:libero_goal_hdf5_latest_6650" bash scripts/download/20_openvla_oft.sh
-bash scripts/download/30_openvla_oft_one_trajectory.sh
+bash scripts/download_assets.sh only=[10_rynnvla] env.LIBERO_SUITES='"libero_goal libero_object"'
+bash scripts/download_assets.sh only=[10_rynnvla] env.LIBERO_SUITES=libero_goal \
+  env.DOWNLOAD_RYNNVLA_LUMINA=false env.DOWNLOAD_ACTION_WM=false
+bash scripts/download_assets.sh download.openvla_oft=true only=[20_openvla_oft] \
+  env.OPENVLA_OFT_REPOS=owner/repo:libero_goal_hdf5_latest_6650
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
 ```
 
 `scripts/download/10_rynnvla.sh` creates RynnVLA Chameleon assets,
@@ -92,11 +94,13 @@ ${DVLA_DATA_ROOT}/datasets/libero/libero_10/
 Download LIBERO data into the canonical tree with:
 
 ```bash
-bash scripts/download/40_libero_dataset.sh
-LIBERO_SUITES="libero_goal libero_10" bash scripts/download/40_libero_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=true
+bash scripts/download_assets.sh download.rynnvla=false download.libero=true \
+  env.LIBERO_SUITES='"libero_goal libero_10"'
 ```
 
 The LIBERO downloader writes into `${DVLA_DATA_ROOT}/datasets/libero` by default.
+The workflow step is `scripts/download/40_libero_dataset.sh`.
 Do not put suites directly under `${DVLA_DATA_ROOT}/datasets`; task configs and
 launch scripts expect the `datasets/libero/<suite>/` layer.
 
@@ -111,11 +115,15 @@ ${DVLA_DATA_ROOT}/datasets/calvin/task_ABCD_D/
 Download CALVIN data with:
 
 ```bash
-bash scripts/download/50_calvin_dataset.sh
-EXTRACT_CALVIN=1 bash scripts/download/50_calvin_dataset.sh
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
-HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
-CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.EXTRACT_CALVIN=true
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_shards
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.HF_ENDPOINT=https://hf-mirror.com env.CALVIN_DOWNLOAD_METHOD=hf_subsets
+bash scripts/download_assets.sh download.rynnvla=false download.libero=false download.calvin=true \
+  env.CALVIN_DOWNLOAD_METHOD=opendatalab
 ```
 
 `CALVIN_DOWNLOAD_METHOD=official` downloads Freiburg zip files directly.
@@ -131,7 +139,7 @@ stores `task_ABCD_D` as 30 GB multi-part zip shards under
 
 Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data`.
 
-`bash scripts/preprocess/prepare_libero_data.sh --task <suite>` writes:
+`bash scripts/preprocess/prepare_libero_data.sh task=<suite>` writes:
 
 ```text
 processed_data/<suite>_marked_t_256/
@@ -150,7 +158,7 @@ Preprocessing follows the same orchestrator-and-step style as install and
 download scripts. Run the full path with:
 
 ```bash
-bash scripts/preprocess/prepare_libero_data.sh --task libero_goal
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal
 ```
 
 Run or reproduce one step by calling the numbered child script directly:
@@ -200,4 +208,4 @@ export DVLA_DATA_ROOT=/path/to/dvla_data
 ```
 
 Create assets with `bash scripts/download_assets.sh`.
-Create processed data with `bash scripts/preprocess/prepare_libero_data.sh --task <suite>`.
+Create processed data with `bash scripts/preprocess/prepare_libero_data.sh task=<suite>`.

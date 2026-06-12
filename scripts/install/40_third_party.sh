@@ -2,45 +2,52 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/_env.sh"
-activate_conda_env
+DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-dreamervla}"
+INSTALL_OPTIONAL_THIRD_PARTY="${INSTALL_OPTIONAL_THIRD_PARTY:-0}"
+INSTALL_OPENSORA_THIRD_PARTY="${INSTALL_OPENSORA_THIRD_PARTY:-1}"
+INSTALL_OPENVLA_OFT_THIRD_PARTY="${INSTALL_OPENVLA_OFT_THIRD_PARTY:-1}"
+cd "${DVLA_ROOT}"
 
-clone_repo() {
-  local url="$1"
-  local dest="$2"
-  local ref="$3"
-  install_log "ensuring $(basename "${dest}") ref=${ref} -> ${dest}"
-  if [[ ! -d "${dest}/.git" ]]; then
-    git clone "${url}" "${dest}"
-  fi
-  git -C "${dest}" fetch --all --tags
-  git -C "${dest}" checkout "${ref}"
-}
+if ! command -v conda >/dev/null 2>&1; then
+  echo "conda is required before running this install step." >&2
+  exit 2
+fi
+eval "$(conda shell.bash hook)"
+conda activate "${CONDA_ENV_NAME}"
 
-install_log "third_party_dir=${DVLA_ROOT}/third_party"
-install_log "optional_third_party=${INSTALL_OPTIONAL_THIRD_PARTY}"
-install_log "opensora_third_party=${INSTALL_OPENSORA_THIRD_PARTY}"
-install_log "openvla_oft_third_party=${INSTALL_OPENVLA_OFT_THIRD_PARTY}"
-install_log "cloning pinned LIBERO and robosuite-family repositories"
+echo "[install:40_third_party] third_party_dir=${DVLA_ROOT}/third_party"
+echo "[install:40_third_party] optional_third_party=${INSTALL_OPTIONAL_THIRD_PARTY}"
+echo "[install:40_third_party] opensora_third_party=${INSTALL_OPENSORA_THIRD_PARTY}"
+echo "[install:40_third_party] openvla_oft_third_party=${INSTALL_OPENVLA_OFT_THIRD_PARTY}"
 mkdir -p "${DVLA_ROOT}/third_party"
 
-# Step 1: LIBERO benchmark package used by the offline and online LIBERO routes.
-clone_repo https://github.com/Lifelong-Robot-Learning/LIBERO.git "${DVLA_ROOT}/third_party/LIBERO" 8f1084e
+if [[ ! -d "${DVLA_ROOT}/third_party/LIBERO/.git" ]]; then git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git "${DVLA_ROOT}/third_party/LIBERO"; fi
+git -C "${DVLA_ROOT}/third_party/LIBERO" fetch --all --tags
+git -C "${DVLA_ROOT}/third_party/LIBERO" checkout 8f1084e
 
-# Step 2: WMPO-compatible robosuite stack, using the same refs as the related WMPO installer.
-clone_repo https://github.com/ARISE-Initiative/robosuite.git "${DVLA_ROOT}/third_party/robosuite" b9d8d3de5e3dfd1724f4a0e6555246c460407daa
-clone_repo https://github.com/ARISE-Initiative/robosuite-task-zoo "${DVLA_ROOT}/third_party/robosuite-task-zoo" 74eab7f88214c21ca1ae8617c2b2f8d19718a9ed
-clone_repo https://github.com/ARISE-Initiative/robomimic.git "${DVLA_ROOT}/third_party/robomimic" d0b37cf214bd24fb590d182edb6384333f67b661
-clone_repo https://github.com/NVlabs/mimicgen.git "${DVLA_ROOT}/third_party/mimicgen" 72bd767
+if [[ ! -d "${DVLA_ROOT}/third_party/robosuite/.git" ]]; then git clone https://github.com/ARISE-Initiative/robosuite.git "${DVLA_ROOT}/third_party/robosuite"; fi
+git -C "${DVLA_ROOT}/third_party/robosuite" fetch --all --tags
+git -C "${DVLA_ROOT}/third_party/robosuite" checkout b9d8d3de5e3dfd1724f4a0e6555246c460407daa
 
-install_log "installing third_party editable packages"
-uv pip install --python "${PYTHON}" --no-build-isolation -e "${DVLA_ROOT}/third_party/robosuite"
-uv pip install --python "${PYTHON}" --no-build-isolation -e "${DVLA_ROOT}/third_party/robosuite-task-zoo"
-uv pip install --python "${PYTHON}" --no-build-isolation -e "${DVLA_ROOT}/third_party/robomimic"
-uv pip install --python "${PYTHON}" --no-build-isolation -e "${DVLA_ROOT}/third_party/mimicgen"
+if [[ ! -d "${DVLA_ROOT}/third_party/robosuite-task-zoo/.git" ]]; then git clone https://github.com/ARISE-Initiative/robosuite-task-zoo "${DVLA_ROOT}/third_party/robosuite-task-zoo"; fi
+git -C "${DVLA_ROOT}/third_party/robosuite-task-zoo" fetch --all --tags
+git -C "${DVLA_ROOT}/third_party/robosuite-task-zoo" checkout 74eab7f88214c21ca1ae8617c2b2f8d19718a9ed
 
-# Step 3: LIBERO needs lightweight packaging metadata before editable install.
-install_log "applying LIBERO packaging compatibility"
+if [[ ! -d "${DVLA_ROOT}/third_party/robomimic/.git" ]]; then git clone https://github.com/ARISE-Initiative/robomimic.git "${DVLA_ROOT}/third_party/robomimic"; fi
+git -C "${DVLA_ROOT}/third_party/robomimic" fetch --all --tags
+git -C "${DVLA_ROOT}/third_party/robomimic" checkout d0b37cf214bd24fb590d182edb6384333f67b661
+
+if [[ ! -d "${DVLA_ROOT}/third_party/mimicgen/.git" ]]; then git clone https://github.com/NVlabs/mimicgen.git "${DVLA_ROOT}/third_party/mimicgen"; fi
+git -C "${DVLA_ROOT}/third_party/mimicgen" fetch --all --tags
+git -C "${DVLA_ROOT}/third_party/mimicgen" checkout 72bd767
+
+uv pip install --no-build-isolation -e "${DVLA_ROOT}/third_party/robosuite"
+uv pip install --no-build-isolation -e "${DVLA_ROOT}/third_party/robosuite-task-zoo"
+uv pip install --no-build-isolation -e "${DVLA_ROOT}/third_party/robomimic"
+uv pip install --no-build-isolation -e "${DVLA_ROOT}/third_party/mimicgen"
+
 cat > "${DVLA_ROOT}/third_party/LIBERO/pyproject.toml" <<'EOF'
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -49,7 +56,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "libero"
 version = "0.1.0"
-description = "LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning"
+description = "LIBERO benchmark package"
 requires-python = ">=3.8"
 
 [tool.setuptools.packages.find]
@@ -67,33 +74,17 @@ from setuptools import setup
 
 setup()
 EOF
-uv pip install --python "${PYTHON}" --no-build-isolation -e "${DVLA_ROOT}/third_party/LIBERO"
+uv pip install --no-build-isolation -e "${DVLA_ROOT}/third_party/LIBERO"
 
-# Step 4: OpenSora is vendored for OpenVLA-OFT/WMPO-compatible components.
-if [[ "${INSTALL_OPENSORA_THIRD_PARTY}" == "1" ]]; then
-  if [[ -d "${DVLA_ROOT}/third_party/opensora" ]]; then
-    install_log "installing third_party/opensora"
-    uv pip install --python "${PYTHON}" -v -e "${DVLA_ROOT}/third_party/opensora"
-  else
-    install_log "skip third_party/opensora because the directory is absent"
-  fi
-else
-  install_log "skip third_party/opensora because INSTALL_OPENSORA_THIRD_PARTY=${INSTALL_OPENSORA_THIRD_PARTY}"
+if [[ "${INSTALL_OPENSORA_THIRD_PARTY}" == "1" && -d "${DVLA_ROOT}/third_party/opensora" ]]; then
+  uv pip install -v -e "${DVLA_ROOT}/third_party/opensora"
 fi
 
-# Step 5: OpenVLA-OFT follows the related WMPO install style.
-if [[ "${INSTALL_OPENVLA_OFT_THIRD_PARTY}" == "1" ]]; then
-  if [[ -d "${DVLA_ROOT}/third_party/openvla-oft" ]]; then
-    install_log "installing third_party/openvla-oft and WMPO OpenVLA-OFT helper packages"
-    if [[ -f "${DVLA_ROOT}/third_party/openvla-oft/install_mujoco.sh" ]]; then
-      (cd "${DVLA_ROOT}/third_party/openvla-oft" && bash ./install_mujoco.sh)
-    fi
-    uv pip install --python "${PYTHON}" --no-deps -e "${DVLA_ROOT}/third_party/openvla-oft"
-    uv pip install --python "${PYTHON}" --no-deps git+https://github.com/moojink/dlimp_openvla
-    uv pip install --python "${PYTHON}" --no-deps "git+https://github.com/moojink/transformers-openvla-oft.git"
-  else
-    install_log "skip third_party/openvla-oft because the directory is absent"
+if [[ "${INSTALL_OPENVLA_OFT_THIRD_PARTY}" == "1" && -d "${DVLA_ROOT}/third_party/openvla-oft" ]]; then
+  if [[ -f "${DVLA_ROOT}/third_party/openvla-oft/install_mujoco.sh" ]]; then
+    (cd "${DVLA_ROOT}/third_party/openvla-oft" && bash ./install_mujoco.sh)
   fi
-else
-  install_log "skip third_party/openvla-oft because INSTALL_OPENVLA_OFT_THIRD_PARTY=${INSTALL_OPENVLA_OFT_THIRD_PARTY}"
+  uv pip install --no-deps -e "${DVLA_ROOT}/third_party/openvla-oft"
+  uv pip install --no-deps git+https://github.com/moojink/dlimp_openvla
+  uv pip install --no-deps "git+https://github.com/moojink/transformers-openvla-oft.git"
 fi

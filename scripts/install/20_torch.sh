@@ -2,17 +2,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/_env.sh"
-activate_conda_env
+DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-dreamervla}"
+CUDA_INDEX_URL="${CUDA_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+cd "${DVLA_ROOT}"
 
-# Step 1: install pip tooling used by the later Torch and pip dependency steps.
-install_log "target conda env=${CONDA_ENV_NAME} python=${PYTHON}"
-install_log "pip_tools=pip setuptools wheel uv"
-"${PYTHON}" -m pip install --upgrade pip setuptools wheel uv
+if ! command -v conda >/dev/null 2>&1; then
+  echo "conda is required before running this install step." >&2
+  exit 2
+fi
+eval "$(conda shell.bash hook)"
+conda activate "${CONDA_ENV_NAME}"
 
-# Step 2: install the CUDA 12.4 PyTorch wheel set expected by DreamerVLA.
-install_log "cuda_index=${CUDA_INDEX_URL}"
-install_log "torch_packages=torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1"
-uv pip install --python "${PYTHON}" \
-  torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-  --index-url "${CUDA_INDEX_URL}"
+echo "[install:20_torch] target conda env=${CONDA_ENV_NAME}"
+echo "[install:20_torch] pip_tools=pip setuptools wheel uv"
+python -m pip install --upgrade pip setuptools wheel uv
+
+echo "[install:20_torch] cuda_index=${CUDA_INDEX_URL}"
+echo "[install:20_torch] torch_packages=torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1"
+uv pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url "${CUDA_INDEX_URL}"

@@ -1,61 +1,12 @@
 #!/usr/bin/env bash
+# Concatenate LIBERO token record shards.
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-base_dir="${1:-${PROJECT_ROOT}/data/processed_data/tokens}"
-PYTHON="${PYTHON:-python}"
-case ":${PYTHONPATH:-}:" in
-  *":${PROJECT_ROOT}:"*) ;;
-  *) export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
-esac
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+TOKENS_DIR="${TOKENS_DIR:-${DVLA_DATA_ROOT}/processed_data/tokens}"
+export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+cd "${DVLA_ROOT}"
 
-# --------------------------------------------------------------------------
-# Dynamically find all directory names starting with "libero" under base_dir
-# --------------------------------------------------------------------------
-echo "Searching directories from $base_dir..."
-
-# Use the `find` command to locate all matching directories
-# -mindepth 1 and -maxdepth 1 ensure that only immediate subdirectories of base_dir are searched
-# -type d ensures that only directories are found
-# -name "libero*" ensures the directory names start with "libero"
-#
-# readarray (or mapfile) is a safe way to read the output of a command into an array
-# The -t option removes the trailing newline characters from each line
-readarray -t full_paths < <(find "$base_dir" -mindepth 1 -maxdepth 1 -type d -name "libero*")
-
-# Initialize an empty array to store plain directory names
-dir_names=()
-# Iterate over the paths found and use `basename` to extract the plain directory name
-for path in "${full_paths[@]}"; do
-    dir_names+=("$(basename "$path")")
-done
-
-# Check if any directories were found
-if [ ${#dir_names[@]} -eq 0 ]; then
-    echo "Warning: No subdirectories starting with 'libero' were found under '$base_dir'."
-    exit 0 # Exit normally, as there is no task to execute
-fi
-
-echo "Found ${#dir_names[@]} directories, starting processing..."
-# --------------------------------------------------------------------------
-
-
-# Iterate over each directory name in the array
-# "${dir_names[@]}" is the standard way to safely traverse all elements in an array
-for dir_name in "${dir_names[@]}"
-do
-    # Construct the full subdirectory path and save path
-    sub_record_dir="${base_dir}/${dir_name}"
-    save_path="${base_dir}/${dir_name}/record.json"
-
-    # Output the command to be executed (for debugging purposes)
-    echo "Executing: ${PYTHON} -u -m dreamer_vla.preprocess.concat_record --sub_record_dir ${sub_record_dir} --save_path ${save_path}"
-    
-    # Directly execute the command, which is safer than using eval
-    "${PYTHON}" -u -m dreamer_vla.preprocess.concat_record --sub_record_dir "${sub_record_dir}" --save_path "${save_path}"
-
-    echo "------------------------------------"
-done
-
-echo "All tasks have been completed."
+python -m dreamer_vla.preprocess.concat_record_libero --base-dir "${TOKENS_DIR}"

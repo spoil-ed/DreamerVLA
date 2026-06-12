@@ -21,9 +21,9 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "eval_wm.sh" not in readme
     assert "pretokenize_sft_wm_vla_smoke" not in scripts_readme
     assert "prepare_latent_data.sh" not in scripts_readme
-    assert "-m dreamer_vla.train" in train_script
-    assert "CONFIG=\"${CONFIG:-eval_libero_vla}\"" in eval_script
-    assert "-m dreamer_vla.train" in eval_script
+    assert "dreamer_vla.launchers.train" in train_script
+    assert "dreamer_vla.launchers.train" in eval_script
+    assert "dreamer_vla.launchers.train" in eval_script
     assert (
         project_root
         / "third_party"
@@ -62,6 +62,8 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
             for route_name in route_names
             if route_name != "CONFIG"
             if not (config_dir / f"{route_name}.yaml").is_file()
+            if not (config_dir / "scripts" / f"{route_name}.yaml").is_file()
+            if not (config_dir / "experiment" / f"{route_name}.yaml").is_file()
         )
         assert missing == [], f"{text_file.relative_to(project_root)}: {missing}"
 

@@ -32,7 +32,9 @@ def _load_eval_cfg(overrides: list[str]) -> DictConfig:
         config_dir=str(PROJECT_ROOT / "configs"),
         version_base=None,
     ):
-        return hydra.compose(config_name="eval_libero_vla", overrides=overrides)
+        return hydra.compose(
+            config_name="train", overrides=["experiment=eval_libero_vla", *overrides]
+        )
 
 
 def _hydra_quote(value: str) -> str:

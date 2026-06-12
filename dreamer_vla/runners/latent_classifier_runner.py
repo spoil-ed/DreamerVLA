@@ -1,8 +1,8 @@
 """LatentSuccessClassifier training runner (WMPO-aligned).
 
 Launch path:
-    CONFIG=latent_classifier_libero_goal_chunk bash scripts/train_wm.sh
-        → python -m dreamer_vla.train --config-name latent_classifier_libero_goal_chunk
+    bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk
+        → python -m dreamer_vla.train --config-name train experiment=latent_classifier_libero_goal_chunk
             → dreamer_vla.runners.LatentClassifierRunner.run()
                 → dreamer_vla.dataset.wmpo_aligned_latent_dataset
                 → dreamer_vla.models.reward.LatentSuccessClassifier

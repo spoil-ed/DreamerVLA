@@ -3,6 +3,7 @@ import os
 import re
 import warnings
 from argparse import ArgumentParser
+from pathlib import Path
 
 
 def find_sub_records(directory: str):
@@ -15,29 +16,18 @@ def find_sub_records(directory: str):
     return sorted_files
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--sub_record_dir",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--save_path",
-        type=str,
-        default=None,
-    )
-    args = parser.parse_args()
+def concat_records(sub_record_dir: str | Path, save_path: str | Path) -> None:
+    sub_record_dir = Path(sub_record_dir)
+    save_path = Path(save_path)
+    l_sub_records = find_sub_records(str(sub_record_dir))
 
-    l_sub_records = find_sub_records(args.sub_record_dir)
-
-    print(f"find {len(l_sub_records)} sub-records in {args.sub_record_dir}")
+    print(f"find {len(l_sub_records)} sub-records in {sub_record_dir}")
     print(str(l_sub_records) + "\n\n")
 
     complete_record_by_id = {}
     complete_record_without_id = []
     for sub_record in l_sub_records:
-        with open(os.path.join(args.sub_record_dir, sub_record)) as f:
+        with open(sub_record_dir / sub_record) as f:
             lines = f.readlines()
             for i, line in enumerate(lines):
                 try:
@@ -59,11 +49,27 @@ if __name__ == "__main__":
         complete_record_by_id[k] for k in sorted(complete_record_by_id)
     ]
     duplicate_count = sum(
-        len(open(os.path.join(args.sub_record_dir, f)).readlines())
-        for f in l_sub_records
+        len(open(sub_record_dir / f).readlines()) for f in l_sub_records
     ) - len(complete_record)
     if duplicate_count > 0:
         print(f"deduplicated {duplicate_count} records by id")
 
-    with open(args.save_path, "w") as f:
+    with open(save_path, "w") as f:
         json.dump(complete_record, f)
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--sub_record_dir",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--save_path",
+        type=str,
+        default=None,
+    )
+    args = parser.parse_args()
+
+    concat_records(args.sub_record_dir, args.save_path)

@@ -80,9 +80,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--config",
-        default=str(
-            PROJECT_ROOT / "configs/dreamervla_rynn_dino_wm_actor_critic.yaml"
-        ),
+        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_actor_critic.yaml"),
     )
     p.add_argument("--out-dir", required=True)
     p.add_argument(

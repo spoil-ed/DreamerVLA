@@ -86,7 +86,7 @@ def test_libero_image_rotation_matches_rlinf_contiguous_preprocessing(
 
 def test_eval_libero_config_uses_rlinf_protocol_defaults() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    cfg = OmegaConf.load(project_root / "configs" / "eval_libero_vla.yaml")
+    cfg = OmegaConf.load(project_root / "configs" / "evaluation" / "libero_vla.yaml")
 
     assert OmegaConf.select(cfg, "eval.seed") == 7
     assert OmegaConf.select(cfg, "eval.num_steps_wait") == 10
