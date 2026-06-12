@@ -1,6 +1,6 @@
 # Core DreamerVLA runtime dependencies.
 # Keep this list curated: do not mirror a developer machine's full pip list.
-# PyTorch is installed separately in scripts/install/20_python_deps.sh.
+# PyTorch is installed separately in scripts/install/20_torch.sh.
 
 diffusers==0.33.0
 dill

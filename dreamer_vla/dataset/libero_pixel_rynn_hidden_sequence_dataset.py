@@ -96,11 +96,26 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
     def _canonical_path(value: str) -> str:
         return str(Path(value).expanduser().resolve())
 
+    @staticmethod
+    def _legacy_data_checkpoint_suffix(value: str) -> tuple[str, ...] | None:
+        parts = Path(value).expanduser().parts
+        for index in range(len(parts) - 1):
+            if parts[index] == "data" and parts[index + 1] in {
+                "ckpts",
+                "checkpoints",
+            }:
+                return ("data", "checkpoints", *parts[index + 2 :])
+        return None
+
     @classmethod
     def _same_path(cls, left: str | None, right: str | None) -> bool:
         if not left or not right:
             return left == right
-        return cls._canonical_path(left) == cls._canonical_path(right)
+        if cls._canonical_path(left) == cls._canonical_path(right):
+            return True
+        left_suffix = cls._legacy_data_checkpoint_suffix(left)
+        right_suffix = cls._legacy_data_checkpoint_suffix(right)
+        return bool(left_suffix and right_suffix and left_suffix == right_suffix)
 
     @staticmethod
     def _as_bool(value: Any) -> bool:

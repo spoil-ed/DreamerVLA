@@ -104,6 +104,11 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "dlimp_openvla" in step_text
     assert "transformers-openvla-oft" in step_text
     assert "egl_probe" in step_text
+    assert "expected_third_party_imports" in step_text
+    assert "third_party/LIBERO" in step_text
+    assert "third_party/robosuite" in step_text
+    assert "third_party/robomimic" in step_text
+    assert "third_party/mimicgen" in step_text
 
     download_text = download.read_text(encoding="utf-8")
     assert "DOWNLOAD_STEPS" in download_text
@@ -256,6 +261,22 @@ def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
     assert offenders == {}
 
 
+def test_training_launchers_do_not_nest_out_dir_default_expansion() -> None:
+    root = _project_root()
+    launchers = [
+        root / "scripts" / "train_vla.sh",
+        root / "scripts" / "train_wm.sh",
+        root / "scripts" / "train_dreamervla.sh",
+    ]
+    offenders = [
+        str(path.relative_to(root))
+        for path in launchers
+        if "OUT_DIR:-<config default:" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
+
+
 def test_release_scripts_are_registered() -> None:
     root = _project_root()
     scripts = root / "scripts"
@@ -325,6 +346,38 @@ def test_release_docs_and_scripts_do_not_couple_data_root_to_repo_root() -> None
     ]
 
     assert coupled_defaults == []
+
+
+def test_release_text_does_not_reference_removed_setup_steps() -> None:
+    root = _project_root()
+    checked_paths = [
+        root / "README.md",
+        root / "README.zh-CN.md",
+        root / "SETUP.md",
+        root / "docs" / "install.md",
+        root / "docs" / "data_layout.md",
+        root / "scripts" / "README.md",
+        root / "requirements.txt",
+        *(
+            path
+            for path in (root / "scripts").rglob("*")
+            if path.is_file()
+            and path.suffix in {".sh", ".md"}
+            and "archive" not in path.relative_to(root / "scripts").parts
+            and "__pycache__" not in path.parts
+        ),
+    ]
+    removed_step_re = re.compile(
+        r"10_worldvla\.sh|20_lumina\.sh|30_rynnvla\.sh|"
+        r"20_python_deps\.sh|30_third_party\.sh|40_verify\.sh"
+    )
+    offenders = {
+        str(path.relative_to(root)): sorted(set(removed_step_re.findall(path.read_text(encoding="utf-8"))))
+        for path in checked_paths
+        if removed_step_re.search(path.read_text(encoding="utf-8"))
+    }
+
+    assert offenders == {}
 
 
 def test_active_shell_scripts_do_not_pin_machine_local_environment() -> None:

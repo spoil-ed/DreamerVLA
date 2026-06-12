@@ -63,7 +63,11 @@ MASTER_PORT="${MASTER_PORT:-29500}"
 echo "[train_wm] python=$(command -v "${PYTHON}")"
 echo "[train_wm] root=${DVLA_ROOT}  data_root=${DVLA_DATA_ROOT}"
 echo "[train_wm] config=${CONFIG}  ngpu=${NGPU}  gpus=${CUDA_VISIBLE_DEVICES:-<all>}"
-echo "[train_wm] out_dir=${OUT_DIR:-<config default: \${DVLA_DATA_ROOT}/outputs/worldmodel/.../<timestamp>>}"
+if [[ -n "${OUT_DIR:-}" ]]; then
+  echo "[train_wm] out_dir=${OUT_DIR}"
+else
+  echo "[train_wm] out_dir=<config default under \${DVLA_DATA_ROOT}/outputs/worldmodel/.../<timestamp>>"
+fi
 echo "[train_wm] extra hydra args: $*"
 
 if [ "${NGPU}" -gt 1 ]; then

@@ -81,6 +81,32 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
         )
 
 
+def test_rynn_hidden_sidecar_accepts_legacy_ckpts_checkpoint_alias(tmp_path) -> None:
+    (tmp_path / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "model_path": "/old/workspace/DreamerVLA/data/ckpts/VLA_model_256/libero_goal",
+                "time_horizon": 5,
+                "action_head_type": "legacy",
+            }
+        ),
+        encoding="utf-8",
+    )
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
+        LIBEROPixelRynnHiddenSequenceDataset
+    )
+    dataset.hidden_dir = tmp_path
+    dataset.load_actor_sequence = False
+
+    dataset._validate_hidden_sidecar(
+        expected_model_path="data/checkpoints/VLA_model_256/libero_goal",
+        expected_encoder_state_ckpt=None,
+        expected_time_horizon=5,
+        expected_action_head_type="legacy",
+        require_preprocess_config=True,
+    )
+
+
 def test_vla_action_head_actor_uses_rynnvla_action_tokens() -> None:
     actor = VLAActionHeadActor(
         hidden_dim=16,
