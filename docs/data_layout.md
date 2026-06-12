@@ -106,7 +106,19 @@ Download CALVIN data with:
 ```bash
 bash scripts/download/50_calvin_dataset.sh
 EXTRACT_CALVIN=1 bash scripts/download/50_calvin_dataset.sh
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
+CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
 ```
+
+`CALVIN_DOWNLOAD_METHOD=official` downloads Freiburg zip files directly.
+`hf_shards` uses the Hugging Face dataset `VyoJ/calvin-ABCD-D-shards`, which
+stores `task_ABCD_D` as 30 GB multi-part zip shards under
+`datasets/calvin/task_ABCD_D_shards/`. `hf_subsets` uses
+`VyoJ/calvin-ABCD-D-subsets`, which stores complete structured subset zips under
+`datasets/calvin/task_ABCD_D_subsets/`. `opendatalab` uses
+`OpenDataLab/CALVIN` through the `openxlab` CLI and writes under
+`datasets/calvin/opendatalab/`.
 
 ## Processed Data
 

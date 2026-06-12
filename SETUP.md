@@ -84,6 +84,21 @@ DOWNLOAD_ONLY=10_rynnvla bash scripts/download_assets.sh
 DOWNLOAD_OPENVLA_ONE_TRAJ=1 DOWNLOAD_ONLY=30_openvla_oft_one_trajectory bash scripts/download_assets.sh
 ```
 
+CALVIN domestic / mirror-friendly options:
+
+```bash
+# Hugging Face mirror, sharded 30 GB multi-part zip files for task_ABCD_D
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
+
+# Hugging Face mirror, structured subset zips for task_ABCD_D
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
+
+# OpenDataLab domestic platform; requires login through openxlab
+pip install -U openxlab
+openxlab login
+CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
+```
+
 OpenVLA-OFT one-trajectory checkpoints support both Hugging Face download
 methods:
 

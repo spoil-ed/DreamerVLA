@@ -37,7 +37,7 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | `download/20_openvla_oft.sh` | Download OpenVLA-OFT HDF5 SFT checkpoints from user-provided repos |
 | `download/30_openvla_oft_one_trajectory.sh` | Download OpenVLA-OFT one-trajectory checkpoints |
 | `download/40_libero_dataset.sh` | Download LIBERO suites into `datasets/libero/<suite>/` |
-| `download/50_calvin_dataset.sh` | Download CALVIN tasks into `datasets/calvin/` |
+| `download/50_calvin_dataset.sh` | Download CALVIN tasks into `datasets/calvin/`; supports official, Hugging Face mirror, and OpenDataLab methods |
 | `download/_env.sh` | Shared download-step environment |
 
 Download steps are intentionally serial and numbered. To add a new asset

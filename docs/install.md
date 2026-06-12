@@ -85,6 +85,14 @@ LIBERO_SUITES=libero_goal bash scripts/download/40_libero_dataset.sh
 bash scripts/download/50_calvin_dataset.sh
 ```
 
+CALVIN domestic / mirror-friendly download options:
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_shards bash scripts/download/50_calvin_dataset.sh
+HF_ENDPOINT=https://hf-mirror.com CALVIN_DOWNLOAD_METHOD=hf_subsets bash scripts/download/50_calvin_dataset.sh
+CALVIN_DOWNLOAD_METHOD=opendatalab bash scripts/download/50_calvin_dataset.sh
+```
+
 Verify the environment:
 
 ```bash

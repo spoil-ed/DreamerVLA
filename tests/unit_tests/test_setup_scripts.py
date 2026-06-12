@@ -133,6 +133,11 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_step_text
     assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_step_text
     assert "calvin" in download_step_text.lower()
+    assert "CALVIN_DOWNLOAD_METHOD" in download_step_text
+    assert "VyoJ/calvin-ABCD-D-shards" in download_step_text
+    assert "VyoJ/calvin-ABCD-D-subsets" in download_step_text
+    assert "OpenDataLab/CALVIN" in download_step_text
+    assert "HF_ENDPOINT=https://hf-mirror.com" in download_step_text
 
 
 def test_apt_install_step_handles_hosts_without_sudo() -> None:
