@@ -184,6 +184,35 @@ def _prepare_images_for_vla(images: list[np.ndarray], cfg: Any) -> list[Image.Im
     return processed_images
 
 
+def resolve_oft_policy_mode(checkpoint: str | Path, policy_mode: str = "auto") -> str:
+    """Resolve the OFT action-head mode for a checkpoint directory.
+
+    ``l1`` is the component-wise OFT format and requires
+    ``action_head--*_checkpoint.pt``; ``discrete`` is the merged LM-head
+    action-token format with no component files. ``auto`` probes for the
+    action-head component, mirroring the eval-side detection.
+    """
+    mode = str(policy_mode).lower()
+    if mode not in {"auto", "l1", "discrete"}:
+        raise ValueError(f"Unsupported policy mode: {policy_mode!r}")
+    checkpoint = Path(checkpoint).expanduser()
+    has_action_head = bool(sorted(checkpoint.glob("action_head--*_checkpoint.pt")))
+    if mode == "auto":
+        return "l1" if has_action_head else "discrete"
+    if mode == "l1" and not has_action_head:
+        raise FileNotFoundError(
+            f"Missing action_head--*_checkpoint.pt under {checkpoint}; "
+            "use --policy-mode discrete for merged LM-head checkpoints."
+        )
+    return mode
+
+
+def _resolve_num_images_in_input(args: argparse.Namespace) -> int:
+    if args.num_images_in_input is not None:
+        return int(args.num_images_in_input)
+    return int(args.history) * len(args.image_keys)
+
+
 def _load_oft_components(
     args: argparse.Namespace, device: torch.device
 ) -> dict[str, Any]:
@@ -196,13 +225,18 @@ def _load_oft_components(
     from dreamer_vla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
+    mode = resolve_oft_policy_mode(
+        _project_path(args.oft_ckpt), getattr(args, "policy_mode", "auto")
+    )
+    use_l1_regression = mode == "l1"
+    use_proprio = bool(args.include_state) and use_l1_regression
     cfg = SimpleNamespace(
         pretrained_checkpoint=str(_project_path(args.oft_ckpt)),
-        use_l1_regression=True,
+        use_l1_regression=use_l1_regression,
         use_diffusion=False,
         use_film=False,
-        num_images_in_input=int(args.num_images_in_input),
-        use_proprio=bool(args.include_state),
+        num_images_in_input=_resolve_num_images_in_input(args),
+        use_proprio=use_proprio,
         center_crop=bool(args.center_crop),
         unnorm_key=str(args.unnorm_key),
     )
@@ -212,7 +246,7 @@ def _load_oft_components(
         torch_dtype="bf16",
         num_images_in_input=cfg.num_images_in_input,
         use_lora=False,
-        use_l1_regression=True,
+        use_l1_regression=use_l1_regression,
         use_diffusion=False,
         use_proprio=cfg.use_proprio,
         use_film=False,
@@ -228,6 +262,7 @@ def _load_oft_components(
                 vla.norm_stats = json.load(handle)
     return {
         "cfg": cfg,
+        "mode": mode,
         "vla": vla,
         "processor": policy.processor,
         "action_head": policy.action_head,
@@ -362,29 +397,56 @@ def _predict_intermediates_chunk(
         )
         if proprio_projector is not None and proprio_batch is not None:
             num_patches += 1
-        _normalized_actions, actions_hidden_states, hidden_c, hidden_d = (
-            vla._regression_or_discrete_prediction(
-                input_embeddings,
-                all_actions_mask,
-                projected_patch_embeddings,
-                attention_mask,
-                labels,
-                num_patches,
-                num_prompt_tokens,
-                action_head,
-                return_intermediates=True,
+        if action_head is not None:
+            _normalized_actions, actions_hidden_states, hidden_c, hidden_d = (
+                vla._regression_or_discrete_prediction(
+                    input_embeddings,
+                    all_actions_mask,
+                    projected_patch_embeddings,
+                    attention_mask,
+                    labels,
+                    num_patches,
+                    num_prompt_tokens,
+                    action_head,
+                    return_intermediates=True,
+                )
             )
-        )
+        else:
+            # Discrete LM-head checkpoint: the action hidden states come from the
+            # same backbone layer, but there is no L1 MLP head, hence no C/D
+            # intermediates.
+            _normalized_actions, actions_hidden_states = (
+                vla._regression_or_discrete_prediction(
+                    input_embeddings,
+                    all_actions_mask,
+                    projected_patch_embeddings,
+                    attention_mask,
+                    labels,
+                    num_patches,
+                    num_prompt_tokens,
+                    action_head=None,
+                )
+            )
+            hidden_c = None
+            hidden_d = None
         expected = int(NUM_ACTIONS_CHUNK * ACTION_DIM)
         if int(actions_hidden_states.shape[1]) != expected:
             raise RuntimeError(
                 f"Unexpected OFT action hidden token count: {actions_hidden_states.shape[1]} != {expected}"
             )
     return (
-        hidden_c.reshape(hidden_c.shape[0], -1).float().cpu().numpy(),
-        hidden_d.reshape(hidden_d.shape[0], -1).float().cpu().numpy(),
+        None
+        if hidden_c is None
+        else hidden_c.reshape(hidden_c.shape[0], -1).float().cpu().numpy(),
+        None
+        if hidden_d is None
+        else hidden_d.reshape(hidden_d.shape[0], -1).float().cpu().numpy(),
         actions_hidden_states.float().cpu().numpy(),
     )
+
+
+def _action_head_type_for_mode(mode: str) -> str:
+    return "oft_l1_regression" if str(mode) == "l1" else "oft_discrete_token"
 
 
 def _write_attrs(
@@ -413,7 +475,9 @@ def _write_attrs(
     handle.attrs["model_path"] = str(_project_path(args.oft_ckpt))
     handle.attrs["encoder_state_ckpt"] = ""
     handle.attrs["pool"] = "none"
-    handle.attrs["action_head_type"] = "oft_l1_regression"
+    handle.attrs["action_head_type"] = _action_head_type_for_mode(
+        getattr(args, "resolved_policy_mode", "l1")
+    )
     handle.attrs["save_actor_sequence"] = False
     handle.attrs["save_action_hidden"] = bool(args.save_action_hidden)
     handle.attrs["action_trigger_token_id"] = -1
@@ -664,9 +728,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--unnorm-key", default="libero_goal_no_noops")
     parser.add_argument(
+        "--policy-mode",
+        default="auto",
+        choices=["auto", "l1", "discrete"],
+        help="OFT action-head format: component-wise L1 head or merged discrete "
+        "LM-head; auto probes for action_head--*_checkpoint.pt.",
+    )
+    parser.add_argument(
         "--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"]
     )
-    parser.add_argument("--num-images-in-input", type=int, default=4)
+    parser.add_argument(
+        "--num-images-in-input",
+        type=int,
+        default=None,
+        help="Defaults to history * len(image_keys).",
+    )
     parser.add_argument("--include-state", action="store_true", default=True)
     parser.add_argument("--center-crop", action="store_true", default=True)
     parser.add_argument("--history", type=int, default=2)
@@ -693,6 +769,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    args.resolved_policy_mode = resolve_oft_policy_mode(
+        _project_path(args.oft_ckpt), args.policy_mode
+    )
+    if args.resolved_policy_mode == "discrete":
+        if not args.skip_cd_sidecars:
+            raise SystemExit(
+                "C/D sidecars are L1 action-head MLP intermediates and do not "
+                "exist for discrete LM-head checkpoints; pass --skip-cd-sidecars."
+            )
+        # Merged discrete checkpoints carry no proprio_projector component.
+        args.include_state = False
     hdf5_dir = _project_path(args.hdf5_dir)
     out_c_dir = None if args.skip_cd_sidecars else _project_path(args.out_c_dir)
     out_d_dir = None if args.skip_cd_sidecars else _project_path(args.out_d_dir)
@@ -725,7 +812,9 @@ def main() -> None:
         base_config["start_time"] = time.time()
         base_config["model_path"] = str(_project_path(args.oft_ckpt))
         base_config["encoder_state_ckpt"] = ""
-        base_config["action_head_type"] = "oft_l1_regression"
+        base_config["action_head_type"] = _action_head_type_for_mode(
+            args.resolved_policy_mode
+        )
         base_config["prompt_style"] = str(args.prompt_style)
         base_config["history"] = int(args.history)
         base_config["include_state"] = bool(args.include_state)
@@ -746,7 +835,8 @@ def main() -> None:
                 json.dumps(config_action, indent=2, sort_keys=True) + "\n"
             )
         print(
-            f"[oft-hidden] source={hdf5_dir} files={len(files)} assigned/rank={len(assigned)} world_size={world_size}"
+            f"[oft-hidden] source={hdf5_dir} files={len(files)} assigned/rank={len(assigned)} "
+            f"world_size={world_size} policy_mode={args.resolved_policy_mode}"
         )
 
     using_torch_dist = bool(

@@ -55,6 +55,7 @@ only under `${DVLA_DATA_ROOT}`, then append the new script to
 | `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
 | `preprocess/20_pretokenize_dataset.sh` | Build image/state trees, conv JSONs, token records, manifests, and YAML configs |
 | `preprocess/30_action_hidden.sh` | Extract legacy RynnVLA action-hidden sidecars |
+| `preprocess/35_oft_action_hidden.sh` | Extract OpenVLA-OFT action-hidden sidecars (L1 or discrete checkpoints) |
 | `preprocess/40_validate.sh` | Validate generated LIBERO preprocessing artifacts |
 | `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |

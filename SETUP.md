@@ -216,6 +216,34 @@ variant; `openvla_oft_hdf5_one_trajectory_l1` keeps the standard OFT L1
 regression head, whose component checkpoints feed the action-hidden sidecar
 and world-model chain.
 
+OpenVLA-OFT action-hidden sidecar (feeds the OFT WM/classifier/DreamerVLA
+routes; both checkpoint formats extract the same backbone layer):
+
+```bash
+# Component-wise L1 checkpoint (auto-detected):
+TASK=libero_goal OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
+bash scripts/preprocess/35_oft_action_hidden.sh
+
+# Downloaded discrete one-trajectory weights (single view, no history/proprio):
+TASK=libero_goal \
+OFT_CKPT=data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
+OFT_POLICY_MODE=discrete OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
+bash scripts/preprocess/35_oft_action_hidden.sh
+```
+
+Discrete sidecars are written with `action_head_type=oft_discrete_token`; when
+training the WM on them, point the route at the sidecar and align the expected
+attrs, e.g.:
+
+```bash
+CONFIG=oft_world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal \
+  task.openvla_oft.ckpt_path=/abs/path/to/Openvla-oft-SFT-libero-goal-traj1 \
+  task.openvla_oft.action_hidden_dir=/abs/path/to/<sidecar_dir> \
+  task.openvla_oft.expected_action_head_type=oft_discrete_token \
+  task.openvla_oft.expected_history=1 \
+  task.openvla_oft.expected_include_state=false
+```
+
 World model:
 
 ```bash
