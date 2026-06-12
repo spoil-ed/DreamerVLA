@@ -41,6 +41,10 @@ class LatentSuccessClassifierConfig:
     granularity: str = "action"
     chunk_size: int = 1
     chunk_pool: str = "last"
+    # Tokenized frame windows [B,W,N,D] default to the historical flattened
+    # boundary. Scheme-B input-token latents can set "mean" to keep classifier
+    # size tied to token_dim instead of N*token_dim.
+    token_pool: str = "flat"
 
 
 class LatentSuccessClassifier(nn.Module):
@@ -57,16 +61,14 @@ class LatentSuccessClassifier(nn.Module):
         - ``mlp2``: Linear(L*W, hidden_dim) → GELU → Dropout → Linear(hidden_dim, 2)
     """
 
-    def __init__(
-        self, cfg: LatentSuccessClassifierConfig | None = None, **kwargs
-    ) -> None:
+    def __init__(self, cfg: LatentSuccessClassifierConfig | None = None, **kwargs) -> None:
         super().__init__()
         if cfg is None:
             cfg = LatentSuccessClassifierConfig(**kwargs)
+        if cfg.latent_dim is None and str(getattr(cfg, "token_pool", "flat")) == "mean":
+            cfg.latent_dim = int(cfg.token_dim)
         if cfg.latent_dim is None:
-            cfg.latent_dim = int(cfg.time_horizon) * int(cfg.action_dim) * int(
-                cfg.token_dim
-            )
+            cfg.latent_dim = int(cfg.time_horizon) * int(cfg.action_dim) * int(cfg.token_dim)
         self.cfg = cfg
         gran = str(getattr(cfg, "granularity", "action"))
         if gran not in ("action", "chunk"):
@@ -77,16 +79,15 @@ class LatentSuccessClassifier(nn.Module):
                     f"chunk granularity requires chunk_size >= 1, got {cfg.chunk_size}"
                 )
             if str(cfg.chunk_pool) not in ("last", "first", "mean"):
-                raise ValueError(
-                    f"chunk_pool must be last|first|mean, got {cfg.chunk_pool!r}"
-                )
+                raise ValueError(f"chunk_pool must be last|first|mean, got {cfg.chunk_pool!r}")
+        token_pool = str(getattr(cfg, "token_pool", "flat"))
+        if token_pool not in {"flat", "mean"}:
+            raise ValueError(f"token_pool must be flat|mean, got {token_pool!r}")
         ht = str(getattr(cfg, "head_type", "transformer"))
         if ht == "transformer":
             self.input_proj = nn.Linear(cfg.latent_dim, cfg.hidden_dim)
             self.cls_token = nn.Parameter(torch.zeros(1, 1, cfg.hidden_dim))
-            self.pos_embed = nn.Parameter(
-                torch.zeros(1, cfg.window + 1, cfg.hidden_dim)
-            )
+            self.pos_embed = nn.Parameter(torch.zeros(1, cfg.window + 1, cfg.hidden_dim))
             layer = nn.TransformerEncoderLayer(
                 d_model=cfg.hidden_dim,
                 nhead=cfg.num_heads,
@@ -115,13 +116,20 @@ class LatentSuccessClassifier(nn.Module):
     def forward(self, latent_window: torch.Tensor) -> torch.Tensor:
         """latent_window: [B, W, latent_dim] or [B, W, ...] -> logits [B, 2]."""
         if latent_window.shape[1] != self.cfg.window:
-            raise ValueError(
-                f"expected window={self.cfg.window}, got {latent_window.shape[1]}"
-            )
+            raise ValueError(f"expected window={self.cfg.window}, got {latent_window.shape[1]}")
         if latent_window.ndim > 3:
-            latent_window = latent_window.reshape(
-                latent_window.shape[0], latent_window.shape[1], -1
-            )
+            token_pool = str(getattr(self.cfg, "token_pool", "flat"))
+            if token_pool == "flat":
+                latent_window = latent_window.reshape(
+                    latent_window.shape[0], latent_window.shape[1], -1
+                )
+            else:
+                latent_window = latent_window.reshape(
+                    latent_window.shape[0],
+                    latent_window.shape[1],
+                    -1,
+                    latent_window.shape[-1],
+                ).mean(dim=2)
         ht = str(getattr(self.cfg, "head_type", "transformer"))
         if ht == "transformer":
             x = self.input_proj(latent_window.to(self.input_proj.weight.dtype))
@@ -196,9 +204,7 @@ class LatentSuccessClassifier(nn.Module):
         W = self.cfg.window
         device = latent_video.device
         gran = str(getattr(self.cfg, "granularity", "action"))
-        scan_video = (
-            self._chunk_aggregate(latent_video) if gran == "chunk" else latent_video
-        )
+        scan_video = self._chunk_aggregate(latent_video) if gran == "chunk" else latent_video
 
         T_scan = scan_video.shape[1]
         complete = torch.zeros(B, dtype=torch.bool, device=device)
@@ -211,9 +217,7 @@ class LatentSuccessClassifier(nn.Module):
             probs = torch.softmax(logits, dim=-1)[:, 1]
             hit = (probs >= threshold) & (~complete)
             if hit.any():
-                finish_step = torch.where(
-                    hit, torch.full_like(finish_step, end - 1), finish_step
-                )
+                finish_step = torch.where(hit, torch.full_like(finish_step, end - 1), finish_step)
                 complete = complete | hit
                 if complete.all():
                     break

@@ -227,6 +227,7 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         "10_hdf5_reward.sh",
         "20_pretokenize_dataset.sh",
         "30_action_hidden.sh",
+        "32_input_token_hidden.sh",
         "35_oft_action_hidden.sh",
         "40_validate.sh",
     )

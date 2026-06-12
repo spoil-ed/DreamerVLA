@@ -31,11 +31,35 @@ Sidecar attrs expected by the WM route
 Reference sidecar:
 `data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/`.
 
+This is the RynnVLA-002 latent contract.  The DINO-WM token axis is an
+action-slot axis (`time_horizon × action_dim`), so downstream actor code can
+decode it with the original action head.
+
+## Input tokens (Scheme B)
+
+Scheme B writes current-frame input image-token embeddings instead of
+action-query tokens.  For the default two-view LIBERO-Goal recipe:
+
+- token source: Chameleon VQ image tokens in the prompt, stripped of markers,
+  grid-size tokens, and newline tokens
+- views: current `agentview_rgb` + current `eye_in_hand_rgb`
+- `obs_embedding` (WM input): flat `[8388608]` (= 2048 × 4096)
+- sidecar attrs: `obs_hidden_source=input_token_embedding`,
+  `action_head_type=legacy`, `history=2`
+
+These tokens are frame-level visual observations.  They do not encode an
+action-slot axis, so B uses normal DINO-WM action conditioning plus a bridge
+actor (`LatentToActionHiddenActor`) to map predicted frame tokens to action
+slots.
+
 ## Extraction
 
 ```bash
 TASK=libero_goal bash scripts/preprocess/30_action_hidden.sh
 # or as part of: bash scripts/preprocess/prepare_libero_data.sh
+
+# Scheme B:
+TASK=libero_goal bash scripts/preprocess/32_input_token_hidden.sh
 ```
 
 ## Downstream chain
@@ -45,10 +69,13 @@ WM consumes `token_count=35 × token_dim=1024` per frame
 
 ```bash
 CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal
+CONFIG=world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
-`dreamervla_rynn_dino_wm_wmpo_outcome` / `_actor_critic` · Eval:
+`dreamervla_rynn_dino_wm_wmpo_outcome` / `_actor_critic` · Scheme B:
+`latent_classifier_libero_goal_chunk_input_tokens` and
+`dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens` · Eval:
 `bash scripts/eval_libero_vla.sh`.
 
 ## Workflow verification (2026-06-12, CPU interface level)

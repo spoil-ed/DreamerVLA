@@ -8,10 +8,14 @@
 #
 #  Available CONFIGs:
 #    world_model_dinowm_chunk        (default)   DINO-WM, K-step chunk predictor
+#    world_model_dinowm_chunk_input_tokens       RynnVLA frame-token Scheme B WM
 #    world_model_dinowm_step                     DINO-WM, per-frame predictor
 #    oft_world_model_dinowm_chunk                 OpenVLA-OFT hidden (56x4096), chunk WM
+#    oft_world_model_dinowm_chunk_input_tokens    OpenVLA-OFT frame-token Scheme B WM
 #    latent_classifier_libero_goal_chunk          chunk latent success classifier
+#    latent_classifier_libero_goal_chunk_input_tokens RynnVLA frame-token classifier
 #    oft_latent_classifier_chunk                  OpenVLA-OFT chunk latent classifier
+#    oft_latent_classifier_chunk_input_tokens     OpenVLA-OFT frame-token classifier
 #
 #  Examples:
 #    bash scripts/train_wm.sh

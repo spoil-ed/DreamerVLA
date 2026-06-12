@@ -26,6 +26,7 @@ pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_go
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256
 hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
 rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_pi0_input_token_embedding_vla_policy_h2
 
 legacy_action_hidden:
   expected_action_head_type: legacy
@@ -38,6 +39,20 @@ legacy_action_hidden:
   token_count: null
   token_dim: 1024
   chunk_size: 5
+
+legacy_input_tokens:
+  expected_action_head_type: legacy
+  expected_obs_hidden_source: input_token_embedding
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  wm_obs_dim: null
+  token_count: 2048
+  token_dim: 4096
+  chunk_size: ${task.time_horizon}
+  action_hidden_dim: 1024
+  latent_source: RynnVLA current-frame Chameleon VQ input tokens [2048,4096]
 
 openvla_oft:
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
@@ -55,8 +70,10 @@ openvla_oft:
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
   action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_oft_hdf5_6650_legacy_action_hidden_vla_policy_h2
+  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
   failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_failures
   failure_action_hidden_dir: null
+  failure_input_token_hidden_dir: null
   expected_action_head_type: oft_l1_regression
   expected_obs_hidden_source: action_query
   expected_prompt_style: vla_policy
@@ -68,6 +85,19 @@ openvla_oft:
   token_dim: 4096
   chunk_size: 8
   latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
+  input_tokens:
+    expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
+    expected_obs_hidden_source: input_token_embedding
+    expected_prompt_style: ${task.openvla_oft.expected_prompt_style}
+    expected_history: ${task.openvla_oft.expected_history}
+    expected_include_state: ${task.openvla_oft.expected_include_state}
+    expected_rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
+    wm_obs_dim: null
+    token_count: 512
+    token_dim: 4096
+    chunk_size: ${task.openvla_oft.chunk_size}
+    action_hidden_dim: 4096
+    latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
   sft_policy_target: dreamer_vla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamer_vla.dataset.OpenVLAOFTHDF5DatasetFactory
   wm_target: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel

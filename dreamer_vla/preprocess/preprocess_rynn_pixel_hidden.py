@@ -130,13 +130,9 @@ def _prepare_actor_sequence_arrays(
     trigger to the stored ids and mark it valid in the actor attention mask.
     """
     if hidden_states.ndim != 3:
-        raise ValueError(
-            f"hidden_states must be [B,L,D], got {tuple(hidden_states.shape)}"
-        )
+        raise ValueError(f"hidden_states must be [B,L,D], got {tuple(hidden_states.shape)}")
     if attention_mask.ndim != 2:
-        raise ValueError(
-            f"attention_mask must be [B,L], got {tuple(attention_mask.shape)}"
-        )
+        raise ValueError(f"attention_mask must be [B,L], got {tuple(attention_mask.shape)}")
     batch_size, seq_len, _hidden_dim = hidden_states.shape
     if attention_mask.shape != (batch_size, seq_len):
         raise ValueError(
@@ -144,9 +140,7 @@ def _prepare_actor_sequence_arrays(
             f"got {tuple(attention_mask.shape)}, expected {(batch_size, seq_len)}"
         )
     if len(input_ids) != batch_size:
-        raise ValueError(
-            f"input_ids batch mismatch: got {len(input_ids)}, expected {batch_size}"
-        )
+        raise ValueError(f"input_ids batch mismatch: got {len(input_ids)}, expected {batch_size}")
 
     input_rows = np.zeros((batch_size, seq_len + 1), dtype=np.int32)
     mask_rows = np.zeros((batch_size, seq_len + 1), dtype=np.bool_)
@@ -157,9 +151,7 @@ def _prepare_actor_sequence_arrays(
         if valid_len < 1:
             raise ValueError(f"sample {idx} has no valid hidden tokens")
         if valid_len > seq_len:
-            raise ValueError(
-                f"sample {idx} valid_len={valid_len} exceeds seq_len={seq_len}"
-            )
+            raise ValueError(f"sample {idx} valid_len={valid_len} exceeds seq_len={seq_len}")
         if len(input_ids[idx]) < valid_len:
             raise ValueError(
                 f"sample {idx} input_ids shorter than attention_mask: "
@@ -179,6 +171,76 @@ def _prepare_actor_sequence_arrays(
     }
 
 
+def _image_content_token_spans(
+    tokens: list[int], *, start_id: int, end_id: int, new_line_id: int
+) -> list[list[int]]:
+    """Per-image VQ content token ids; grid-size, newline, and marker tokens stripped."""
+    spans: list[list[int]] = []
+    inside = False
+    current: list[int] = []
+    skip = 0
+    for tok in tokens:
+        if tok == start_id:
+            inside, current, skip = True, [], 2
+            continue
+        if not inside:
+            continue
+        if tok == end_id:
+            spans.append(current)
+            inside = False
+            continue
+        if skip > 0:
+            skip -= 1
+            continue
+        if tok == new_line_id:
+            continue
+        current.append(tok)
+    return spans
+
+
+def _input_token_embedding_obs(
+    *,
+    encoder: RynnVLAEncoder,
+    processor: Any,
+    input_ids_list: list[list[int]],
+    num_views: int,
+) -> torch.Tensor:
+    """Scheme-B frame latent: current-frame VQ image tokens through the backbone
+    input-embedding table (no transformer forward). Returns [T, N*token_dim]."""
+    start_id = int(processor.token2id(processor.image_start_token))
+    end_id = int(processor.token2id(processor.image_end_token))
+    new_line_id = int(processor.token2id(processor.new_line_token))
+    backbone = encoder.backbone
+    embed = (
+        backbone.get_input_embeddings()
+        if hasattr(backbone, "get_input_embeddings")
+        else backbone.model.embed_tokens
+    )
+    frames: list[torch.Tensor] = []
+    expected: int | None = None
+    for tokens in input_ids_list:
+        spans = _image_content_token_spans(
+            tokens, start_id=start_id, end_id=end_id, new_line_id=new_line_id
+        )
+        if len(spans) < num_views:
+            raise RuntimeError(
+                f"expected at least {num_views} image spans per frame, got {len(spans)}"
+            )
+        # Record layout is [history ... current] x views; current frame is last.
+        current = [tok for span in spans[-num_views:] for tok in span]
+        if expected is None:
+            expected = len(current)
+        elif len(current) != expected:
+            raise RuntimeError(
+                f"inconsistent image token count across frames: {len(current)} != {expected}"
+            )
+        ids = torch.as_tensor(current, dtype=torch.long, device=encoder.device)
+        with torch.no_grad():
+            emb = embed(ids)
+        frames.append(emb.reshape(-1).float())
+    return torch.stack(frames, dim=0)
+
+
 def _select_obs_hidden(
     *,
     pooled_hidden: torch.Tensor,
@@ -193,9 +255,7 @@ def _select_obs_hidden(
     if action_hidden is None:
         raise ValueError("obs_hidden_source='action_query' requires action_hidden")
     if action_hidden.ndim != 3:
-        raise ValueError(
-            f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}"
-        )
+        raise ValueError(f"action_hidden must be [B,H,D], got {tuple(action_hidden.shape)}")
     return _legacy_flat_obs_embedding_from_action_hidden(action_hidden)
 
 
@@ -234,9 +294,7 @@ def _state_from_obs_group(obs_group: h5py.Group, index: int) -> np.ndarray:
         [
             np.asarray(obs_group["ee_pos"][index], dtype=np.float32).reshape(-1),
             np.asarray(obs_group["ee_ori"][index], dtype=np.float32).reshape(-1),
-            np.asarray(obs_group["gripper_states"][index], dtype=np.float32).reshape(
-                -1
-            ),
+            np.asarray(obs_group["gripper_states"][index], dtype=np.float32).reshape(-1),
         ],
         axis=0,
     )
@@ -282,9 +340,7 @@ def _build_vla_policy_record(
     for hidx in _history_indices(index, history):
         for key in image_keys:
             images.append(
-                _image_from_hdf5(
-                    obs_group, key, hidx, rotate_images_180=rotate_images_180
-                )
+                _image_from_hdf5(obs_group, key, hidx, rotate_images_180=rotate_images_180)
             )
     human_val = f"Finish the task: {prompt}."
     if include_state:
@@ -335,9 +391,7 @@ def _read_progress(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _read_rank_progress(
-    progress_dir: Path, rank: int, run_id: str
-) -> dict[str, Any] | None:
+def _read_rank_progress(progress_dir: Path, rank: int, run_id: str) -> dict[str, Any] | None:
     progress = _read_progress(progress_dir / f"rank{rank:03d}.json")
     if not progress or progress.get("run_id") != run_id:
         return None
@@ -419,9 +473,7 @@ def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEnco
         freeze_backbone=True,
     ).to(device)
     if args.encoder_state_ckpt:
-        payload = torch.load(
-            args.encoder_state_ckpt, map_location="cpu", weights_only=False
-        )
+        payload = torch.load(args.encoder_state_ckpt, map_location="cpu", weights_only=False)
         encoder_state = payload.get("state_dicts", {}).get("encoder")
         if encoder_state is None:
             raise RuntimeError(f"{args.encoder_state_ckpt} has no state_dicts.encoder")
@@ -490,6 +542,21 @@ def _encode_chunk(
         input_ids_list.append(tokens)
         labels_list.append([-100] * len(tokens))
     lengths = [len(seq) for seq in input_ids_list]
+
+    if str(obs_hidden_source).lower() == "input_token_embedding":
+        if bool(save_actor_sequence) or bool(save_action_hidden):
+            raise ValueError(
+                "obs_hidden_source='input_token_embedding' writes a pure input-token "
+                "sidecar; disable --save-actor-sequence and --save-action-hidden."
+            )
+        hidden = _input_token_embedding_obs(
+            encoder=encoder,
+            processor=processor,
+            input_ids_list=input_ids_list,
+            num_views=len(image_keys),
+        )
+        return {"hidden": hidden.detach().cpu().numpy()}
+
     with torch.no_grad():
         _, _, _, hidden_states, labels_tensor, _, _ = encoder.backbone(
             input_ids=input_ids_list,
@@ -534,9 +601,7 @@ def _encode_chunk(
     action_hidden = None
     if bool(save_action_hidden) or str(obs_hidden_source).lower() == "action_query":
         if actor_arrays is None:
-            raise RuntimeError(
-                "internal error: action hidden requested without actor input arrays"
-            )
+            raise RuntimeError("internal error: action hidden requested without actor input arrays")
         device = encoded.hidden_states.device
         input_ids = torch.as_tensor(
             actor_arrays["actor_input_ids"], device=device, dtype=torch.long
@@ -588,6 +653,7 @@ def _write_source_sidecar(
     demos_written = 0
     frames_written = 0
     hidden_dim: int | None = None
+    token_count: int | None = None
     actor_seq_len: int | None = None
     actor_hidden_dim: int | None = None
     action_hidden_seq_len: int | None = None
@@ -647,6 +713,20 @@ def _write_source_sidecar(
                 hidden = encoded["hidden"]
                 if dset is None:
                     hidden_dim = int(hidden.shape[-1])
+                    if str(args.obs_hidden_source).lower() == "input_token_embedding":
+                        token_dim = int(args.token_dim)
+                        if hidden_dim % token_dim != 0:
+                            raise RuntimeError(
+                                f"input-token hidden_dim={hidden_dim} is not divisible by token_dim={token_dim}"
+                            )
+                        demo_token_count = hidden_dim // token_dim
+                        if token_count is None:
+                            token_count = demo_token_count
+                        elif token_count != demo_token_count:
+                            raise RuntimeError(
+                                "inconsistent input-token count across demos: "
+                                f"{demo_token_count} != {token_count}"
+                            )
                     dset = demo_out.create_dataset(
                         args.hidden_key,
                         shape=(length, hidden_dim),
@@ -656,6 +736,9 @@ def _write_source_sidecar(
                     )
                     dset.attrs["hidden_dim"] = hidden_dim
                     dset.attrs["source_dtype"] = "float32"
+                    if token_count is not None:
+                        dset.attrs["token_count"] = int(token_count)
+                        dset.attrs["token_dim"] = int(args.token_dim)
                 dset[start:end] = hidden.astype(hidden_dtype, copy=False)
                 if bool(args.save_actor_sequence):
                     actor_hidden = encoded["actor_hidden_states"]
@@ -727,22 +810,14 @@ def _write_source_sidecar(
                         pad = target_seq_len - chunk_seq_len
                         actor_hidden = np.pad(actor_hidden, ((0, 0), (0, pad), (0, 0)))
                         actor_input_ids = np.pad(actor_input_ids, ((0, 0), (0, pad)))
-                        actor_attention_mask = np.pad(
-                            actor_attention_mask, ((0, 0), (0, pad))
-                        )
+                        actor_attention_mask = np.pad(actor_attention_mask, ((0, 0), (0, pad)))
 
-                    actor_hidden_dset[start:end] = actor_hidden.astype(
-                        hidden_dtype, copy=False
-                    )
-                    actor_input_ids_dset[start:end] = actor_input_ids.astype(
-                        np.int32, copy=False
-                    )
+                    actor_hidden_dset[start:end] = actor_hidden.astype(hidden_dtype, copy=False)
+                    actor_input_ids_dset[start:end] = actor_input_ids.astype(np.int32, copy=False)
                     actor_attention_mask_dset[start:end] = actor_attention_mask.astype(
                         np.bool_, copy=False
                     )
-                    actor_seq_lens_dset[start:end] = actor_seq_lens.astype(
-                        np.int32, copy=False
-                    )
+                    actor_seq_lens_dset[start:end] = actor_seq_lens.astype(np.int32, copy=False)
                 if bool(args.save_action_hidden):
                     action_hidden = encoded["action_hidden_states"]
                     chunk_action_horizon = int(action_hidden.shape[1])
@@ -759,9 +834,7 @@ def _write_source_sidecar(
                         action_hidden_dset.attrs["hidden_dim"] = action_hidden_dim
                         action_hidden_dset.attrs["source_dtype"] = "float32"
                         action_hidden_dset.attrs["sequence_dim"] = action_hidden_seq_len
-                    action_hidden_dset[start:end] = action_hidden.astype(
-                        hidden_dtype, copy=False
-                    )
+                    action_hidden_dset[start:end] = action_hidden.astype(hidden_dtype, copy=False)
                 frames_written += end - start
             demos_written += 1
             _write_rank_progress(
@@ -779,6 +852,9 @@ def _write_source_sidecar(
         out.attrs["source_hdf5_dir"] = str(source_path.parent)
         out.attrs["hidden_key"] = str(args.hidden_key)
         out.attrs["hidden_dim"] = int(hidden_dim or 0)
+        if token_count is not None:
+            out.attrs["token_count"] = int(token_count)
+            out.attrs["token_dim"] = int(args.token_dim)
         out.attrs["obs_hidden_source"] = str(args.obs_hidden_source)
         out.attrs["output_dtype"] = str(hidden_dtype)
         out.attrs["image_keys"] = json.dumps(list(image_keys))
@@ -836,9 +912,7 @@ def parse_args() -> argparse.Namespace:
             "the legacy RynnVLA action-hidden sidecar layout."
         ),
     )
-    parser.add_argument(
-        "--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"]
-    )
+    parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
     parser.add_argument(
         "--prompt-style",
         default="vla_policy",
@@ -867,7 +941,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--obs-hidden-source",
         default="action_query",
-        choices=["pooled", "action_query"],
+        choices=["pooled", "action_query", "input_token_embedding"],
         help=(
             "Which VLA representation is written to --hidden-key. "
             "'action_query' writes the flattened RynnVLA action hidden "
@@ -891,19 +965,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--action-trigger-token-id", type=int, default=10004)
     parser.add_argument("--chunk-size", type=int, default=16)
-    parser.add_argument(
-        "--output-dtype", default="float16", choices=["float16", "float32"]
-    )
-    parser.add_argument(
-        "--compression", default="none", choices=["none", "lzf", "gzip"]
-    )
+    parser.add_argument("--output-dtype", default="float16", choices=["float16", "float32"])
+    parser.add_argument("--compression", default="none", choices=["none", "lzf", "gzip"])
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-demos-per-file", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-global-progress", action="store_true")
-    parser.add_argument(
-        "--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal")
-    )
+    parser.add_argument("--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal"))
     parser.add_argument("--encoder-state-ckpt", default=None)
     parser.add_argument(
         "--tokenizer-path",
@@ -924,6 +992,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--time-horizon", type=int, default=5)
+    parser.add_argument("--token-dim", type=int, default=4096)
     parser.add_argument("--action-head-type", default="legacy", choices=["legacy"])
     parser.add_argument("--pool", default="mean", choices=["mean", "last"])
     return parser.parse_args()

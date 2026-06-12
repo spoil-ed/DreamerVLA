@@ -231,11 +231,32 @@ OFT_POLICY_MODE=discrete OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
 bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
+Scheme B input-token sidecars feed frame-level DINO-WM routes.  RynnVLA uses
+current-frame Chameleon VQ input-token embeddings; OFT uses current-frame
+projected vision patch tokens:
+
+```bash
+# RynnVLA Scheme B:
+TASK=libero_goal bash scripts/preprocess/32_input_token_hidden.sh
+
+# OpenVLA-OFT Scheme B:
+TASK=libero_goal OFT_LATENT_SCHEME=input_tokens \
+OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
+bash scripts/preprocess/35_oft_action_hidden.sh
+```
+
 First run on a new checkpoint: smoke-test by invoking the module directly with
 `--max-files 1 --max-demos-per-file 2` before committing GPU hours.
 Per model-on-dataset details (checkpoint formats, hidden shapes, expected
 attrs): [docs/model_datasets/openvla_oft_libero_goal.md](docs/model_datasets/openvla_oft_libero_goal.md)
 and [docs/model_datasets/rynnvla_libero_goal.md](docs/model_datasets/rynnvla_libero_goal.md).
+
+Scheme A is the RynnVLA-002 contract: action-query/action-slot hidden states
+are the WM observation tokens.  RynnVLA-002 uses 35 tokens (`5 × 7`) of dim
+1024; OFT Scheme A uses the same downstream contract with 56 tokens (`8 × 7`)
+of dim 4096.  Scheme B is intentionally different: input-side image tokens
+are frame-level visual tokens, so they enter the WM as per-frame observations
+and actions remain separate controls.
 
 Discrete sidecars are written with `action_head_type=oft_discrete_token`; when
 training the WM on them, point the route at the sidecar and align the expected
@@ -255,12 +276,18 @@ World model:
 ```bash
 CONFIG=world_model_dinowm_chunk NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash scripts/train_wm.sh task=libero_goal
+
+# Scheme B frame-token WM:
+CONFIG=world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
+CONFIG=oft_world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
 ```
 
 Classifier:
 
 ```bash
 CONFIG=latent_classifier_libero_goal_chunk bash scripts/train_wm.sh
+CONFIG=latent_classifier_libero_goal_chunk_input_tokens bash scripts/train_wm.sh
+CONFIG=oft_latent_classifier_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
 ```
 
 DreamerVLA:
@@ -271,6 +298,12 @@ bash scripts/train_dreamervla.sh \
   task=libero_goal \
   init.world_model_state_ckpt=/abs/path/to/wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/classifier.ckpt
+
+# Scheme B uses a bridge actor from frame tokens to action slots:
+CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens bash scripts/train_dreamervla.sh \
+  task=libero_goal \
+  init.world_model_state_ckpt=/abs/path/to/input_token_wm.ckpt \
+  init.classifier_state_ckpt=/abs/path/to/input_token_classifier.ckpt
 ```
 
 Hydra overrides are passed after the script command, for example

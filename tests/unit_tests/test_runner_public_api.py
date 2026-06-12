@@ -64,10 +64,7 @@ def test_removed_legacy_compatibility_shims_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
     assert not (
-        project_root
-        / "dreamer_vla"
-        / "dataset"
-        / "pretokenize_sequence_dataset.py"
+        project_root / "dreamer_vla" / "dataset" / "pretokenize_sequence_dataset.py"
     ).exists()
     assert not (project_root / "scripts" / "pretokenize_train_wm.sh").exists()
 
@@ -141,17 +138,23 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "vla_rynnvla_action_head": "dreamer_vla.runners.VLASFTRunner",
         "vla_sft_one_trajectory": "dreamer_vla.runners.VLASFTRunner",
         "world_model_dinowm_chunk": "dreamer_vla.runners.RynnDinoWMRunner",
+        "world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.RynnDinoWMRunner",
         "world_model_dinowm_step": "dreamer_vla.runners.RynnDinoWMRunner",
         "oft_world_model_dinowm_chunk": "dreamer_vla.runners.OFTDinoWMRunner",
+        "oft_world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.OFTDinoWMRunner",
         "dreamervla_rynn_dino_wm_actor_critic": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamer_vla.runners.LiberoEvalRunner",
         "openvla_oft_hdf5": "dreamer_vla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamer_vla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory_l1": "dreamer_vla.runners.OpenVLAOFTRunner",
         "latent_classifier_libero_goal_chunk": "dreamer_vla.runners.LatentClassifierRunner",
+        "latent_classifier_libero_goal_chunk_input_tokens": "dreamer_vla.runners.LatentClassifierRunner",
         "oft_latent_classifier_chunk": "dreamer_vla.runners.LatentClassifierRunner",
+        "oft_latent_classifier_chunk_input_tokens": "dreamer_vla.runners.LatentClassifierRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -178,6 +181,33 @@ def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
         assert cfg.dataset.max_demos_per_file is None
     assert "openvla_oft_l1_one_trajectory" in l1.training.out_dir
     assert "openvla_oft_lm_head_one_trajectory" in lm_head.training.out_dir
+
+
+def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        rynn_wm = compose(config_name="world_model_dinowm_chunk_input_tokens")
+        oft_wm = compose(config_name="oft_world_model_dinowm_chunk_input_tokens")
+        rynn_dreamer = compose(config_name="dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens")
+        oft_dreamer = compose(config_name="dreamervla_oft_dino_wm_wmpo_outcome_input_tokens")
+
+    assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
+    assert rynn_wm.world_model.token_count == 2048
+    assert rynn_wm.world_model.token_dim == 4096
+    assert "input_token" in rynn_wm.dataset.hidden_dir
+
+    assert oft_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
+    assert oft_wm.world_model.token_count == 512
+    assert oft_wm.world_model.token_dim == 4096
+    assert "input_token" in oft_wm.dataset.hidden_dir
+
+    assert rynn_dreamer.policy._target_ == "dreamer_vla.models.actor.LatentToActionHiddenActor"
+    assert rynn_dreamer.policy.source_token_count == 2048
+    assert rynn_dreamer.policy.action_hidden_dim == 1024
+
+    assert oft_dreamer.policy._target_ == "dreamer_vla.models.actor.LatentToActionHiddenActor"
+    assert oft_dreamer.policy.source_token_count == 512
+    assert oft_dreamer.policy.action_hidden_dim == 4096
 
 
 def test_root_configs_resolve_public_route_defaults() -> None:
@@ -273,8 +303,7 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     config_names = sorted(
-        str(path.relative_to(config_dir).with_suffix(""))
-        for path in config_dir.rglob("*.yaml")
+        str(path.relative_to(config_dir).with_suffix("")) for path in config_dir.rglob("*.yaml")
     )
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):

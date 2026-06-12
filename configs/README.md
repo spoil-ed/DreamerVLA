@@ -26,11 +26,18 @@ checkpoint paths, output tags, and smoke-test limits.
 | OpenVLA-OFT LM-head one-trajectory SFT | `openvla_oft_hdf5_one_trajectory` |
 | OpenVLA-OFT L1-regression one-trajectory SFT | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM DINO step | `world_model_dinowm_step` |
-| WM DINO chunk | `world_model_dinowm_chunk` |
+| WM DINO chunk, action-query Scheme A | `world_model_dinowm_chunk` |
+| WM DINO chunk, input-token Scheme B | `world_model_dinowm_chunk_input_tokens` |
 | DreamerVLA PPO, DINO-WM step | `dreamervla_rynn_dino_wm_actor_critic` |
-| DreamerVLA PPO, DINO-WM chunk/outcome | `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| DreamerVLA PPO, DINO-WM chunk/outcome Scheme A | `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| DreamerVLA PPO, DINO-WM chunk/outcome Scheme B | `dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens` |
 | DreamerVLA online WMPO outcome | `online_wmpo_outcome_libero_goal` |
-| DreamerVLA PPO, OpenVLA-OFT chunk/outcome | `dreamervla_oft_dino_wm_wmpo_outcome` |
+| DreamerVLA PPO, OpenVLA-OFT chunk/outcome Scheme A | `dreamervla_oft_dino_wm_wmpo_outcome` |
+| DreamerVLA PPO, OpenVLA-OFT chunk/outcome Scheme B | `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens` |
+| RynnVLA latent classifier Scheme A | `latent_classifier_libero_goal_chunk` |
+| RynnVLA latent classifier Scheme B | `latent_classifier_libero_goal_chunk_input_tokens` |
+| OpenVLA-OFT latent classifier Scheme A | `oft_latent_classifier_chunk` |
+| OpenVLA-OFT latent classifier Scheme B | `oft_latent_classifier_chunk_input_tokens` |
 | LIBERO rollout eval | `eval_libero_vla` |
 
 Route configs use Hydra defaults to include the task config:

@@ -1,0 +1,25 @@
+# @package _global_
+# Scheme B: DINO-WM over frame-level RynnVLA input image-token latents.
+defaults:
+  - world_model_dinowm_chunk
+  - _self_
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/dinowm_chunk_input_tokens/${task.name}/${now:%Y%m%d_%H%M%S}}
+
+dataset:
+  hidden_dir: ${task.rynnvla_input_token_hidden_dir}
+  expected_action_head_type: ${task.legacy_input_tokens.expected_action_head_type}
+  expected_obs_hidden_source: ${task.legacy_input_tokens.expected_obs_hidden_source}
+  expected_prompt_style: ${task.legacy_input_tokens.expected_prompt_style}
+  expected_history: ${task.legacy_input_tokens.expected_history}
+  expected_include_state: ${task.legacy_input_tokens.expected_include_state}
+  expected_rotate_images_180: ${task.legacy_input_tokens.expected_rotate_images_180}
+
+world_model:
+  chunk_size: ${task.legacy_input_tokens.chunk_size}
+  obs_dim: ${task.legacy_input_tokens.wm_obs_dim}
+  token_count: ${task.legacy_input_tokens.token_count}
+  token_dim: ${task.legacy_input_tokens.token_dim}
+  time_horizon: ${task.time_horizon}
+  latent_source: ${task.legacy_input_tokens.latent_source}

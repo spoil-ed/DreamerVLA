@@ -7,8 +7,10 @@
 #
 #  Available CONFIGs:
 #    dreamervla_rynn_dino_wm_wmpo_outcome (default) DINO-WM + WMPO outcome PPO
+#    dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens RynnVLA frame-token Scheme B
 #    dreamervla_rynn_dino_wm_actor_critic           DINO-WM + DreamerV3 AC
 #    dreamervla_oft_dino_wm_wmpo_outcome            OpenVLA-OFT DINO-WM + WMPO outcome PPO
+#    dreamervla_oft_dino_wm_wmpo_outcome_input_tokens OpenVLA-OFT frame-token Scheme B
 #
 #  The OFT variant requires a pre-trained classifier checkpoint:
 #    1. CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh   → produces .ckpt

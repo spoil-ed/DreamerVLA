@@ -15,6 +15,8 @@ from dreamer_vla.models.world_model.dreamerv3_torch import (
     DreamerV3LatentState,
 )
 from dreamer_vla.preprocess.preprocess_rynn_pixel_hidden import (
+    _image_content_token_spans,
+    _input_token_embedding_obs,
     _prepare_actor_sequence_arrays,
     _select_obs_hidden,
     parse_args,
@@ -77,6 +79,59 @@ def test_select_obs_hidden_can_flatten_action_query_hidden_for_wm() -> None:
     ).shape == (2, 8)
 
 
+def test_image_content_token_spans_strip_markers_grid_and_newlines() -> None:
+    spans = _image_content_token_spans(
+        [9, 101, 16, 16, 1, 2, 103, 3, 102, 101, 16, 16, 4, 5, 102],
+        start_id=101,
+        end_id=102,
+        new_line_id=103,
+    )
+
+    assert spans == [[1, 2, 3], [4, 5]]
+
+
+def test_input_token_embedding_obs_uses_current_frame_views() -> None:
+    class Processor:
+        image_start_token = "<image>"
+        image_end_token = "</image>"
+        new_line_token = "<n>"
+
+        def token2id(self, token: str) -> int:
+            return {"<image>": 101, "</image>": 102, "<n>": 103}[token]
+
+    class Backbone(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embed = torch.nn.Embedding(200, 3)
+            with torch.no_grad():
+                self.embed.weight.copy_(torch.arange(200 * 3, dtype=torch.float32).reshape(200, 3))
+
+        def get_input_embeddings(self) -> torch.nn.Embedding:
+            return self.embed
+
+    class Encoder:
+        device = torch.device("cpu")
+
+        def __init__(self) -> None:
+            self.backbone = Backbone()
+
+    image_a = [101, 16, 16, 10, 11, 102]
+    image_b = [101, 16, 16, 12, 13, 102]
+    current_a = [101, 16, 16, 20, 21, 102]
+    current_b = [101, 16, 16, 22, 23, 102]
+    hidden = _input_token_embedding_obs(
+        encoder=Encoder(),
+        processor=Processor(),
+        input_ids_list=[image_a + image_b + current_a + current_b],
+        num_views=2,
+    )
+
+    expected_ids = torch.tensor([20, 21, 22, 23], dtype=torch.long)
+    expected = Encoder().backbone.get_input_embeddings()(expected_ids).reshape(1, -1)
+    assert hidden.shape == (1, 12)
+    assert hidden.tolist() == expected.tolist()
+
+
 def test_preprocess_cli_defaults_to_rynnvla_action_hidden_sidecar(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["preprocess_rynn_pixel_hidden.py"])
 
@@ -93,12 +148,8 @@ def test_preprocess_cli_defaults_to_rynnvla_action_hidden_sidecar(monkeypatch) -
 def test_pad_or_truncate_actor_sequence_arrays() -> None:
     array = torch.arange(2 * 3).numpy().reshape(2, 3)
 
-    padded = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(
-        array, 5, axis=1
-    )
-    truncated = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(
-        array, 2, axis=1
-    )
+    padded = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 5, axis=1)
+    truncated = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 2, axis=1)
 
     assert padded.shape == (2, 5)
     assert padded[:, :3].tolist() == array.tolist()

@@ -10,7 +10,11 @@ from torch import nn
 from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from dreamer_vla.models.actor import RynnVLAActionHiddenActor, VLAActionHeadActor
+from dreamer_vla.models.actor import (
+    LatentToActionHiddenActor,
+    RynnVLAActionHiddenActor,
+    VLAActionHeadActor,
+)
 from dreamer_vla.models.reward import LatentSuccessClassifier
 from dreamer_vla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
 from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner
@@ -30,9 +34,7 @@ def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
-        LIBEROPixelRynnHiddenSequenceDataset
-    )
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -56,9 +58,7 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
-        LIBEROPixelRynnHiddenSequenceDataset
-    )
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -92,9 +92,7 @@ def test_rynn_hidden_sidecar_accepts_legacy_ckpts_checkpoint_alias(tmp_path) -> 
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(
-        LIBEROPixelRynnHiddenSequenceDataset
-    )
+    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -119,9 +117,9 @@ def test_vla_action_head_actor_uses_rynnvla_action_tokens() -> None:
         action_head_type="legacy",
     )
 
-    chunk = actor(
-        {"mode": "sample", "hidden": torch.randn(2, 16), "deterministic": True}
-    )[2]["action_chunk"]
+    chunk = actor({"mode": "sample", "hidden": torch.randn(2, 16), "deterministic": True})[2][
+        "action_chunk"
+    ]
 
     assert actor.action_token_embeddings.weight.shape == (1, 4 * 3 * 16)
     assert chunk.shape == (2, 4, 3)
@@ -129,9 +127,7 @@ def test_vla_action_head_actor_uses_rynnvla_action_tokens() -> None:
 
 def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> None:
     path = tmp_path / "vla_without_action_head.ckpt"
-    torch.save(
-        {"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path
-    )
+    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
 
     with pytest.raises(RuntimeError, match="action_head"):
         VLAActionHeadActor(
@@ -217,6 +213,61 @@ def test_rynnvla_action_hidden_actor_decodes_flattened_action_hidden() -> None:
     assert action.shape == (2, 3)
     assert log_prob.shape == (2,)
     assert extra["action_chunk"].shape == (2, 5, 3)
+
+
+def test_latent_to_action_hidden_actor_bridges_tokenized_input_latents() -> None:
+    actor = LatentToActionHiddenActor(
+        hidden_dim=6 * 4,
+        source_token_count=6,
+        source_token_dim=4,
+        action_hidden_dim=8,
+        action_dim=2,
+        time_horizon=3,
+        bridge_hidden_dim=16,
+        num_bridge_layers=1,
+        num_bridge_heads=2,
+        freeze_output_projection=False,
+    )
+
+    action, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": torch.randn(2, 6, 4),
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
+
+    assert action.shape == (2, 3, 2)
+    assert log_prob.shape == (2,)
+    assert extra["action_hidden"].shape == (2, 6, 8)
+    assert extra["action_chunk"].shape == (2, 3, 2)
+
+
+def test_latent_to_action_hidden_actor_accepts_flat_latents() -> None:
+    actor = LatentToActionHiddenActor(
+        hidden_dim=5 * 4,
+        source_token_count=5,
+        source_token_dim=4,
+        action_hidden_dim=8,
+        action_dim=2,
+        time_horizon=3,
+        bridge_hidden_dim=16,
+        num_bridge_layers=1,
+        num_bridge_heads=2,
+        adapter_type="identity",
+    )
+
+    action, _, _ = actor(
+        {
+            "mode": "sample",
+            "hidden": torch.randn(2, 5 * 4),
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
+
+    assert action.shape == (2, 3, 2)
 
 
 def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
@@ -316,6 +367,26 @@ def test_latent_success_classifier_accepts_tokenized_windows() -> None:
     assert logits.shape == (3, 2)
 
 
+def test_latent_success_classifier_can_mean_pool_tokenized_frames() -> None:
+    classifier = LatentSuccessClassifier(
+        latent_dim=None,
+        action_dim=3,
+        time_horizon=5,
+        token_dim=4,
+        window=2,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        head_type="transformer",
+        token_pool="mean",
+    )
+
+    logits = classifier(torch.randn(3, 2, 64, 4))
+
+    assert classifier.cfg.latent_dim == 4
+    assert logits.shape == (3, 2)
+
+
 def test_rynnvla_action_hidden_actor_loads_vla_output_projection(tmp_path) -> None:
     source = RynnVLAActionHiddenActor(
         action_hidden_dim=4,
@@ -350,9 +421,7 @@ def test_rynnvla_action_hidden_actor_rejects_ckpt_without_output_projection(
     tmp_path,
 ) -> None:
     path = tmp_path / "vla_without_projection.ckpt"
-    torch.save(
-        {"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path
-    )
+    torch.save({"state_dicts": {"encoder": {"backbone.other.weight": torch.ones(1)}}}, path)
 
     with pytest.raises(RuntimeError, match="output_projection"):
         RynnVLAActionHiddenActor(

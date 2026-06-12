@@ -7,6 +7,7 @@ import pytest
 
 from dreamer_vla.preprocess.preprocess_oft_action_hidden import (
     _action_head_type_for_mode,
+    _input_token_sidecar_dims,
     _resolve_num_images_in_input,
     resolve_oft_policy_mode,
 )
@@ -56,3 +57,21 @@ def test_num_images_defaults_to_history_times_views() -> None:
     assert _resolve_num_images_in_input(args) == 1
     args = Namespace(num_images_in_input=2, history=1, image_keys=["agentview_rgb"])
     assert _resolve_num_images_in_input(args) == 2
+
+
+def test_input_token_sidecar_dims_use_current_frame_patch_tokens() -> None:
+    class VisionBackbone:
+        def get_num_patches(self) -> int:
+            return 256
+
+    class VLA:
+        vision_backbone = VisionBackbone()
+
+    token_count, flat_dim = _input_token_sidecar_dims(
+        VLA(),
+        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+        token_dim=4096,
+    )
+
+    assert token_count == 512
+    assert flat_dim == 512 * 4096
