@@ -38,9 +38,9 @@ def test_online_training_script_separates_episode_horizon_from_training_budget()
     None
 ):
     repo = Path(__file__).resolve().parents[2]
-    script = (
-        repo / "dreamer_vla/training/train_online_rynnvla_action_hidden_dreamervla.py"
-    ).read_text(encoding="utf-8")
+    script = (repo / "dreamer_vla/runners/online_dreamervla.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "--episode-horizon" in script
     assert "--total-env-steps" in script

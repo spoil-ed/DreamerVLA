@@ -36,7 +36,7 @@ from dreamer_vla.dataset.libero_balanced_terminal_dataset import (
     LIBEROBalancedTerminalDataset,
 )
 from dreamer_vla.models.world_model.dreamerv3_torch import BinaryRewardHead
-from dreamer_vla.training.online_utils import (
+from dreamer_vla.runners.online_utils import (
     load_world_model_state,
 )
 from dreamer_vla.utils.seed import set_seed

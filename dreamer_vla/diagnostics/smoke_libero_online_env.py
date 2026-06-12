@@ -3,7 +3,7 @@
 """Smoke-test the online LIBERO env wrapper.
 
 Example:
-  MUJOCO_GL=osmesa python -m dreamer_vla.smoke.smoke_libero_online_env --task-id 0 --steps 3
+  MUJOCO_GL=osmesa python -m dreamer_vla.diagnostics.smoke_libero_online_env --task-id 0 --steps 3
 """
 
 from __future__ import annotations

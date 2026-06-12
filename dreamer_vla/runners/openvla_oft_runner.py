@@ -12,7 +12,7 @@ from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf
 
 from dreamer_vla.runners.base_runner import BaseRunner
-from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
+from dreamer_vla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.json_logger import JsonLogger
 from dreamer_vla.utils.optim import build_optimizer

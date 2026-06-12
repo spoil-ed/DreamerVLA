@@ -2,7 +2,7 @@
 
 End-to-end tests drive a full training or evaluation route. Unlike `unit_tests/`,
 they may spawn subprocesses, instantiate the real LIBERO env, load real
-checkpoints under `data/checkpoints/`, or call `python -m dreamer_vla.cli.train` with a
+checkpoints under `data/checkpoints/`, or call `python -m dreamer_vla.train` with a
 mainline route YAML — and they are expected to take minutes rather than
 seconds.
 

@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 
 from dreamer_vla.algorithms.dreamer_vla import imagine_actor_critic_step
 from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
-from dreamer_vla.training.train_frozen_wm_actor_critic import (
+from dreamer_vla.runners.frozen_wm_actor_critic import (
     actor_critic_obs,
     build_offline_loader,
 )

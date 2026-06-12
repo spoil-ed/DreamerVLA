@@ -1,7 +1,7 @@
 # DreamerVLA — online WMPO outcome route.
 #
 # Driven by:
-#   python -m dreamer_vla.cli.train --config-name=online_wmpo_outcome_libero_goal
+#   python -m dreamer_vla.train --config-name=online_wmpo_outcome_libero_goal
 #
 # Differences vs configs/dreamervla_rynn_dino_wm_wmpo_outcome.yaml:
 #   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,data}

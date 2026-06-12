@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dreamer-vla-train = "dreamer_vla.cli.train:main"
+dreamer-vla-train = "dreamer_vla.train:main"
 
 [dependency-groups]
 dev = [

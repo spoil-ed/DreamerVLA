@@ -31,8 +31,9 @@ Dot-prefixed local tool folders are ignored by this main structure map.
 ```text
 dreamer_vla/
 ├── algorithms/           # PPO, GRPO, DINO-WMPO, TD-MPC, actor-critic steps
-├── cli/                  # Hydra entrypoints
+├── train.py              # Canonical Hydra train/eval entrypoint
 ├── dataset/              # Offline datasets and online rollout dumpers
+├── diagnostics/          # Diagnostics, eval CLIs, smoke checks
 ├── envs/                 # LIBERO sim and online env wrappers
 ├── models/               # Encoders, actors, critics, rewards, world models
 │   ├── actor/            # BaseActor, VLAPolicy, RynnVLAActionHiddenActor, VLAActionHeadActor
@@ -42,9 +43,8 @@ dreamer_vla/
 │   └── world_model/      # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Dataset preprocessing, xllmx helpers, hidden extraction
 ├── legacy/               # Isolated non-mainline utilities for old artifacts
-├── trainer/              # Shared distributed training helpers
 ├── utils/                # Checkpoints, logging, optim, EMA, visualization
-└── runners/              # Public route runners and implementations
+└── runners/              # Public route runners, distributed and online-training helpers
 ```
 
 There is no active `src/`, `workspace/`, or Ray-style worker tree. The training
@@ -54,7 +54,7 @@ unit is a runner.
 
 ```text
 scripts/*.sh
-  -> python -m dreamer_vla.cli.train --config-name <route>
+  -> python -m dreamer_vla.train --config-name <route>
   -> configs/<route>.yaml with _target_: dreamer_vla.runners.<Runner>
   -> runner.setup() -> runner.execute() -> runner.teardown()
 ```

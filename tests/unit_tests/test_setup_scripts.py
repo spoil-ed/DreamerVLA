@@ -68,7 +68,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "uv pip install" not in install_text
 
     step_text = "\n".join(step.read_text(encoding="utf-8") for step in install_steps)
-    assert "sudo apt" in step_text
+    assert "apt update" in step_text
     assert "conda create -n" in step_text
     assert "uv pip install" in step_text
     assert "torch==2.5.1" in step_text
@@ -82,6 +82,35 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_text
     assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_text
     assert "calvin" in download_text.lower()
+
+
+def test_apt_install_step_handles_hosts_without_sudo() -> None:
+    root = _project_root()
+    apt_step = root / "scripts" / "install" / "00_apt_tools.sh"
+    text = apt_step.read_text(encoding="utf-8")
+
+    assert "command -v sudo" in text
+    assert "APT_RUNNER" in text
+    assert "INSTALL_APT_TOOLS=0" in text
+    assert "sudo apt" not in text
+
+
+def test_requirements_keep_runtime_dependency_set_curated() -> None:
+    root = _project_root()
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    package_names = {
+        re.split(r"[<>=!~\[]", line.strip(), maxsplit=1)[0].replace("_", "-").lower()
+        for line in requirements
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert "gym" in package_names
+    assert "easydict" in package_names
+    assert "ray" not in package_names
+    assert "tensorflow" not in package_names
+    assert "tensorflow-datasets" not in package_names
+    assert "torchdata" not in package_names
+    assert "webdataset" not in package_names
 
 
 def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> None:

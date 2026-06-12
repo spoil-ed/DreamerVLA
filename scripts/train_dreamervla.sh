@@ -71,7 +71,7 @@ echo "[train_dreamervla] extra hydra args: $*"
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.train --config-name "${CONFIG}" "$@"
 else
-  exec "${PYTHON}" -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "$@"
 fi

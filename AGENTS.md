@@ -11,19 +11,14 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - **`dreamer_vla/`** – Main package (installed as `dreamer_vla`):
   - `algorithms/` – PPO, GRPO, DINO-WMPO, TD-MPC; actor, critic, reward.
-  - `cli/` – Hydra entrypoints for training and evaluation.
   - `dataset/` – Offline datasets (LIBERO, OpenVLA-OFT) and online rollout dumpers.
-  - `diagnostics/` – Importable diagnostic CLI modules and analysis helpers.
+  - `diagnostics/` – Importable diagnostics, evaluation CLIs, smoke checks, and analysis helpers.
   - `envs/` – LIBERO sim and online env wrappers.
-  - `evaluation/` – Evaluation CLIs and policy adapters that are not Hydra runners.
   - `legacy/` – Isolated non-mainline utilities for old artifacts; do not import from active configs or runners.
   - `models/` – Encoder, world model, VLA backbones.
   - `preprocess/` – Dataset preprocessing and hidden extraction pipelines.
-  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval.
-  - `smoke/` – Lightweight smoke-test entrypoints.
-  - `trainer/` – Shared DDP / FSDP helper.
-  - `training/` – Standalone online/frozen training CLIs plus shared online helpers.
-  - `utils/` – Checkpoint, logger, optim, EMA, visualization, distributed helpers.
+  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval, DDP/FSDP helpers, and standalone online/frozen training tools.
+  - `utils/` – Checkpoint, logger, optim, EMA, visualization, shared helpers.
 
 - **`configs/`** – Hydra configs, one top-level YAML per training route (VLA, WM, DreamerVLA, OFT, classifier, eval); tasks under `task/libero_*.yaml`.
 
@@ -45,7 +40,7 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How Dreamer-VLA runs
 
-You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/cli/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the multi-proc variant in `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla_multiproc`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
+You launch one Hydra config (e.g. `python -m dreamer_vla.train --config-name=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`). `dreamer_vla/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces `training.distributed_strategy=ddp` under `torchrun`, then resolves `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`. The runner owns dataset, encoder, world model, actor / critic / reward, optimizer, logger, and checkpoints; there is no separate worker / scheduler layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the multi-proc variant in `dreamer_vla.runners.online_dreamervla_multiproc`). Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing, EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ---
 
@@ -71,7 +66,7 @@ You launch one Hydra config (e.g. `python -m dreamer_vla.cli.train --config-name
 
 Install (LIBERO editable install, flash-attn wheel, ColossalAI / TensorNVMe /
 APEX, egl_probe): see [docs/install.md](docs/install.md). Rendering: set
-`MUJOCO_GL=egl`; smoke-test via `python -m dreamer_vla.smoke.smoke_libero_online_env`.
+`MUJOCO_GL=egl`; smoke-test via `python -m dreamer_vla.diagnostics.smoke_libero_online_env`.
 NCCL / CUDA timeouts under DDP are usually one rank diverging (NaN, mismatched
 batch) — read the rank-0 log before assuming network; the DDP synchronization
 guards in `dreamer_vla/algorithms/ppo/outcome.py` exist for a reason, don't
@@ -99,7 +94,7 @@ remove them.
 
 ### New training route
 
-Add a runner class under `dreamer_vla/runners/` subclassing BaseRunner; export it from the package init; add a YAML in `configs/` with a `_target_` pointing at the new class and `defaults: - /task: libero_<suite>`. Add a shell launcher in `scripts/` only if the invocation differs from `python -m dreamer_vla.cli.train --config-name=<my_route>`.
+Add a runner class under `dreamer_vla/runners/` subclassing BaseRunner; export it from the package init; add a YAML in `configs/` with a `_target_` pointing at the new class and `defaults: - /task: libero_<suite>`. Add a shell launcher in `scripts/` only if the invocation differs from `python -m dreamer_vla.train --config-name=<my_route>`.
 
 ### New PPO variant
 

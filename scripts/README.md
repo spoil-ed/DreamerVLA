@@ -55,9 +55,9 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.evaluation.eval_openvla_oft_libero` | OpenVLA-OFT eval implementation |
-| `dreamer_vla.evaluation.openvla_oft_obs_action_policy` | OpenVLA-OFT policy adapter |
-| `dreamer_vla.evaluation.eval_frozen_wm_actor` | Frozen-WM actor evaluation |
+| `dreamer_vla.diagnostics.eval_openvla_oft_libero` | OpenVLA-OFT eval implementation |
+| `dreamer_vla.diagnostics.openvla_oft_obs_action_policy` | OpenVLA-OFT policy adapter |
+| `dreamer_vla.diagnostics.eval_frozen_wm_actor` | Frozen-WM actor evaluation |
 
 ## Advanced Training
 
@@ -65,10 +65,10 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla` | Online WMPO experiment loop |
-| `dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla_multiproc` | Multi-process online collector variant |
-| `dreamer_vla.training.train_frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
-| `dreamer_vla.training.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
+| `dreamer_vla.runners.online_dreamervla` | Online WMPO experiment loop |
+| `dreamer_vla.runners.online_dreamervla_multiproc` | Multi-process online collector variant |
+| `dreamer_vla.runners.frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
+| `dreamer_vla.runners.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
 
 ## Diagnostics And Smoke Tests
 
@@ -97,7 +97,7 @@ Python modules:
 | `dreamer_vla.diagnostics.validate_oft_rynn_style_sidecar` | Sidecar schema validation |
 | `dreamer_vla.diagnostics.validate_real_rollout_relabel` | Real-rollout relabel validation |
 | `dreamer_vla.diagnostics.visualize_dreamervla_reward` | Reward visualization |
-| `dreamer_vla.smoke.smoke_libero_online_env` | LIBERO online env smoke test |
+| `dreamer_vla.diagnostics.smoke_libero_online_env` | LIBERO online env smoke test |
 
 ## Legacy Utilities
 

@@ -182,7 +182,7 @@ def test_root_configs_resolve_public_route_defaults() -> None:
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
-    from dreamer_vla.cli.train import _parse_hydra_like_args
+    from dreamer_vla.train import _parse_hydra_like_args
 
     config_name, overrides = _parse_hydra_like_args([])
     assert config_name == "world_model_dinowm_chunk"

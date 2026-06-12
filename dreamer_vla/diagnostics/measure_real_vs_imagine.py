@@ -31,7 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamer_vla.models.world_model.dreamerv3_torch import DreamerV3LatentState
-from dreamer_vla.training.online_utils import (
+from dreamer_vla.runners.online_utils import (
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,

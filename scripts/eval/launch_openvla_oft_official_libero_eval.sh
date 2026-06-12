@@ -4,7 +4,7 @@ set -euo pipefail
 # Official-style OpenVLA-OFT LIBERO eval launcher for DreamerVLA.
 #
 # This uses the OpenVLA-OFT `experiments.robot.libero.run_libero_eval`
-# internals through dreamer_vla.evaluation.eval_openvla_oft_libero, but isolates each
+# internals through dreamer_vla.diagnostics.eval_openvla_oft_libero, but isolates each
 # LIBERO task in its own Python process. That mirrors the safer subprocess
 # lifecycle used by RLinf/SimpleVLA-RL and avoids robosuite render context
 # crashes when switching tasks in-process.
@@ -145,7 +145,7 @@ run_worker() {
     mkdir -p "${task_dir}"
     echo "starting task=${tid}" | tee -a "${worker_log}"
     set +e
-    "${PYTHON_BIN}" -u -m dreamer_vla.evaluation.eval_openvla_oft_libero \
+    "${PYTHON_BIN}" -u -m dreamer_vla.diagnostics.eval_openvla_oft_libero \
       --ckpt "${MODEL_FOR_RUN:-${CKPT}}" \
       --suite "${SUITE}" \
       --task-ids "${tid}" \

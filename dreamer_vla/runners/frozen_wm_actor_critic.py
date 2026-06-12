@@ -23,13 +23,13 @@ from dreamer_vla.algorithms.dreamer_vla import (  # noqa: E402
 )
 from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker  # noqa: E402
-from dreamer_vla.training.online_replay import OnlineReplay  # noqa: E402
-from dreamer_vla.training.online_utils import (  # noqa: E402
+from dreamer_vla.runners.online_replay import OnlineReplay  # noqa: E402
+from dreamer_vla.runners.online_utils import (  # noqa: E402
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,
 )
-from dreamer_vla.training.train_online_rynnvla_action_hidden_dreamervla import (  # noqa: E402
+from dreamer_vla.runners.online_dreamervla import (  # noqa: E402
     load_training_checkpoint,
     save_checkpoint,
 )

@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 
 from dreamer_vla.dataset import BaseDataset
 from dreamer_vla.runners.base_runner import BaseRunner
-from dreamer_vla.trainer import NopretokenizeSFTDistributedHelper
+from dreamer_vla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.optim import build_optimizer
 from dreamer_vla.utils.paths import checkpoints_path, data_path

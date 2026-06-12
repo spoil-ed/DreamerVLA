@@ -51,11 +51,11 @@ def _unwrap(module: torch.nn.Module) -> torch.nn.Module:
 
 from dreamer_vla.dataset.online_rollout_dumper import RolloutDumper
 from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
-from dreamer_vla.training.online_replay import (
+from dreamer_vla.runners.online_replay import (
     OnlineReplay,
     get_replay_task_stats_global,
 )
-from dreamer_vla.training.online_utils import (
+from dreamer_vla.runners.online_utils import (
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,

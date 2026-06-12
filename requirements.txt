@@ -1,46 +1,39 @@
-wandb 
-codetiming 
-cython==0.29.36 
-debugpy 
-dill 
-draccus 
-# egl_probe 
-GPUtil 
-h5py 
-hydra-core 
-imageio[ffmpeg] 
-json_numpy 
-jsonlines 
-jwt 
-matplotlib 
-mujoco 
-numba 
-numpy==1.26.4 
-ninja 
-nvitop 
-omegaconf 
-packaging 
-pandas 
-peft==0.11.0 
-protobuf 
-psutil 
-PyOpenGL==3.1.9 
-PyOpenGL_accelerate==3.1.9 
-pybind11 
-pylatexenc 
-pysnooper 
-ray[default] 
-scipy 
-scikit-learn 
-tensorflow==2.19.0 
-tensorboard
-tensorflow_datasets 
-tensordict 
-timm==0.9.10 
-tokenizers==0.19.1 
-torchdata 
-opencv-python 
-webdataset 
-xformers==v0.0.28.post3 
+# Core DreamerVLA runtime dependencies.
+# Keep this list curated: do not mirror a developer machine's full pip list.
+# PyTorch is installed separately in scripts/install/20_python_deps.sh.
+
 diffusers==0.33.0
+dill
+draccus
+easydict
+gym==0.25.2
+h5py
+hydra-core
+imageio[ffmpeg]
+matplotlib
+mujoco
+numpy==1.26.4
+omegaconf
+opencv-python
+packaging
+pandas
+peft==0.11.0
+protobuf
+psutil
+PyOpenGL==3.1.9
+PyOpenGL_accelerate==3.1.9
+pybind11
+scikit-learn
+scipy
+tensorboard
+timm==0.9.10
+tokenizers==0.19.1
+wandb
+
+# Build/runtime helpers used by local third_party installs and optional kernels.
+cython==0.29.36
+ninja
+numba
+
+# Installed separately by the installer when enabled.
 # flash-attn==2.5.5

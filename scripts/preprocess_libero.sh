@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+ #!/usr/bin/env bash
 # Compatibility wrapper for preprocessing all standard LIBERO suites.
 set -euo pipefail
 

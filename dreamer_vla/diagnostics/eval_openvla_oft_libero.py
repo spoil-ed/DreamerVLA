@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dreamer_vla.evaluation.openvla_oft_obs_action_policy import (
+from dreamer_vla.diagnostics.openvla_oft_obs_action_policy import (
     OpenVLAOFTObsActionPolicy,
     ensure_openvla_oft_importable,
     set_runtime_env,

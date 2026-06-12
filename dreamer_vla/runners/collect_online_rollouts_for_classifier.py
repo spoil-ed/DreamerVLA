@@ -19,7 +19,7 @@ Single GPU. Usage example::
 
     CUDA_VISIBLE_DEVICES=7 \\
         python -u \\
-        python -m dreamer_vla.training.collect_online_rollouts_for_classifier \\
+        python -m dreamer_vla.runners.collect_online_rollouts_for_classifier \\
             --config configs/online_wmpo_outcome_libero_goal.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
             --vla-ckpt-path ${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal \\
@@ -46,7 +46,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamer_vla.dataset.online_rollout_dumper import RolloutDumper  # noqa: E402
 from dreamer_vla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
-from dreamer_vla.training.online_utils import (  # noqa: E402
+from dreamer_vla.runners.online_utils import (  # noqa: E402
     build_encoder,
     load_world_model_state,
     obs_to_action_hidden,

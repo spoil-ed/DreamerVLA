@@ -9,19 +9,13 @@ import hydra
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
-# Import path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 from dreamer_vla.runners import BaseRunner
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _auto_apply_distributed(cfg: DictConfig) -> None:
-    """If launched under torchrun (RANK + WORLD_SIZE>1 in env), force DDP.
-
-    Lets shell wrappers stay distribution-agnostic: a single ``python -m
-    dreamer_vla.cli.train`` invocation works for both single-GPU and torchrun launches,
-    no need to forward ``training.distributed_strategy=ddp`` etc. by hand.
-    """
+    """Force DDP when launched under torchrun with more than one process."""
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return
     try:
@@ -40,13 +34,10 @@ def _auto_apply_distributed(cfg: DictConfig) -> None:
 
 
 def run(cfg: DictConfig) -> None:
-    # Resolve config
     _auto_apply_distributed(cfg)
     OmegaConf.resolve(cfg)
-    # Runner class
-    cls = hydra.utils.get_class(cfg._target_)
-    runner: BaseRunner = cls(cfg)
-    # Run through the public lifecycle API.
+    runner_cls = hydra.utils.get_class(cfg._target_)
+    runner: BaseRunner = runner_cls(cfg)
     runner.setup()
     try:
         runner.execute()
@@ -62,11 +53,11 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
         arg = argv[i]
         if arg in ("-h", "--help"):
             print(
-                "Usage: python -m dreamer_vla.cli.train --config-name CONFIG [overrides]\n\n"
+                "Usage: python -m dreamer_vla.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m dreamer_vla.cli.train --config-name vla_rynnvla_action_head training.num_epochs=5\n"
-                "  python -m dreamer_vla.cli.train --config-name world_model_dinowm_chunk training.max_steps=10\n"
-                "  python -m dreamer_vla.cli.train --config-name dreamervla_rynn_dino_wm_actor_critic task=libero_object"
+                "  python -m dreamer_vla.train --config-name vla_rynnvla_action_head training.num_epochs=5\n"
+                "  python -m dreamer_vla.train --config-name world_model_dinowm_chunk training.max_steps=10\n"
+                "  python -m dreamer_vla.train --config-name dreamervla_rynn_dino_wm_actor_critic task=libero_object"
             )
             raise SystemExit(0)
         if arg in ("--config-name", "-cn"):

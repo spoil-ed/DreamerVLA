@@ -44,4 +44,4 @@ echo "[eval_libero_vla] root=${DVLA_ROOT}  data_root=${DVLA_DATA_ROOT}"
 echo "[eval_libero_vla] config=${CONFIG}  gpus=${CUDA_VISIBLE_DEVICES:-<all>}"
 echo "[eval_libero_vla] extra hydra args: $*"
 
-exec "${PYTHON}" -m dreamer_vla.cli.train --config-name "${CONFIG}" "$@"
+exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "$@"
