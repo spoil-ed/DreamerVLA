@@ -79,6 +79,40 @@ Common launcher flags stay intentionally small:
     bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
       gpus=0,1 ngpu=2 batch_size=16 num_workers=4 training.max_steps=1000
 
+LIBERO preprocessing GPU and worker controls:
+
+- `gpus=0` selects visible GPUs and is passed through as `CUDA_VISIBLE_DEVICES`.
+- `ngpu=1` controls the action-hidden extraction `torchrun --nproc-per-node`
+  count. For multi-GPU extraction, keep it aligned with the number of selected
+  GPUs.
+- `num_procs=8` controls CPU worker processes for pretokenization. It is not
+  the same as training `num_workers`.
+
+Single-suite, single-GPU preprocessing:
+
+    bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
+      gpus=0 ngpu=1 num_procs=8
+
+Single-suite, multi-GPU preprocessing:
+
+    bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
+      gpus=0,1 ngpu=2 num_procs=16
+
+Run only the CPU pretokenization step:
+
+    bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
+      only='[20_pretokenize_dataset]' gpus=0 num_procs=8
+
+Run only the RynnVLA action-hidden extraction step:
+
+    bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
+      only='[30_action_hidden]' gpus=0,1 ngpu=2
+
+Process multiple LIBERO suites:
+
+    LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" \
+    bash scripts/preprocess_libero.sh gpus=0,1 ngpu=2 num_procs=16
+
 Training launchers are Hydra wrappers. `experiment=...` selects a config group under
 `configs/experiment/`; `task=...`, `gpus=...`, `ngpu=...`, `batch_size=...`,
 and `num_workers=...` are script-level overrides; any other `key=value`
