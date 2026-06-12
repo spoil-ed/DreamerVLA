@@ -18,6 +18,7 @@ dreamer-vla-train = "dreamer_vla.train:main"
 
 [dependency-groups]
 dev = [
+    "pre-commit",
     "pytest",
     "ruff",
 ]

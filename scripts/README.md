@@ -52,6 +52,7 @@ only under `${DVLA_DATA_ROOT}`, then append the new script to
 | `preprocess_libero.sh` | Top-level wrapper around `preprocess/prepare_libero_data.sh` for one or more LIBERO suites |
 | `preprocess/prepare_libero_data.sh` | End-to-end resumable LIBERO preprocessing path |
 | `preprocess/process_all_libero_data.sh` | Lower-level LIBERO image, conversation, token, and config generation |
+| `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
 
 Python modules:
@@ -60,6 +61,7 @@ Python modules:
 | --- | --- |
 | `dreamer_vla.preprocess.filter_marked_libero_hdf5` | Filter no-op marked HDF5 files |
 | `dreamer_vla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
+| `dreamer_vla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
 | `dreamer_vla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
 | `dreamer_vla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
 

@@ -61,9 +61,11 @@ Here documents the general guidelines that all contributors should follow to ens
   >
   > If you’re editing code, take a few minutes to look at the code around you and determine its style. If they use _idx suffixes in index variable names, you should too. If their comments have little boxes of hash marks around them, make your comments have little boxes of hash marks around them too.
 
-* **Lint**: The code should pass linter checks. You can run them locally using `pre-commit`.
+* **Lint**: The code should pass linter checks. The standard installer installs
+  the `pyproject.toml` `dev` dependency group, including `ruff` and
+  `pre-commit`. You can run checks locally with either command:
   ```bash
-  pip install pre-commit
+  ruff check dreamer_vla tests
   pre-commit install --hook-type commit-msg
   pre-commit run --all-files
   ```

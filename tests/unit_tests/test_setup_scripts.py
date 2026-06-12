@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 
@@ -25,6 +26,7 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         "scripts/download_assets.sh",
         "scripts/install_env.sh",
         "scripts/preprocess/process_all_libero_data.sh",
+        "scripts/preprocess/validate_libero_data.sh",
     )
     for relpath in release_entrypoints:
         text = (root / relpath).read_text(encoding="utf-8")
@@ -95,9 +97,11 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "optional_third_party=" in step_text
     assert "special_packages=" in step_text
     assert "checking imports in conda env=" in step_text
+    assert "INSTALL_DEV_TOOLS" in step_text
     assert "apt update" in step_text
     assert "conda create -n" in step_text
     assert "uv pip install" in step_text
+    assert "--group dev" in step_text
     assert "torch==2.5.1" in step_text
     assert "FLASH_ATTN" in step_text or "flash-attn" in step_text
     assert "third_party/LIBERO" in step_text
@@ -169,6 +173,12 @@ def test_requirements_keep_runtime_dependency_set_curated() -> None:
     assert "tensorflow-datasets" not in package_names
     assert "torchdata" not in package_names
     assert "webdataset" not in package_names
+    assert "ruff" not in package_names
+    assert "pre-commit" not in package_names
+
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_deps = set(pyproject["dependency-groups"]["dev"])
+    assert {"pytest", "ruff", "pre-commit"}.issubset(dev_deps)
 
 
 def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> None:

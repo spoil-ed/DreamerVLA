@@ -149,6 +149,20 @@ configs/<suite>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 If `DVLA_DATA_ROOT` changes after preprocessing, regenerate stage 4-5 or update
 absolute prefixes inside generated YAML / JSON manifests.
 
+Validate the generated tree with:
+
+```bash
+TASK=libero_goal bash scripts/preprocess/validate_libero_data.sh
+LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" \
+  bash scripts/preprocess/validate_libero_data.sh
+```
+
+The validator checks that HDF5/reward files exist, conv JSONs are non-empty,
+token pkl counts match conv counts, record files match token counts, the
+concatenated manifest matches records, and generated configs point at existing
+JSON files. Add `--check-action-hidden` when validating the legacy action-hidden
+sidecar after stage 5.
+
 ## Outputs
 
 Training runs write under `outputs/<route>/<run>/checkpoints/`. Evaluation

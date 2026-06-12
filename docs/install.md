@@ -41,7 +41,7 @@ bash scripts/install/60_verify.sh
 | `00_apt_tools.sh` | system packages | Add only apt-level dependencies needed before Python packages. |
 | `10_conda_env.sh` | conda environment | Change `CONDA_ENV_NAME` or `PYTHON_VERSION` through environment variables. |
 | `20_torch.sh` | PyTorch CUDA wheels | Override `CUDA_INDEX_URL` if using a different CUDA wheel index. |
-| `30_python_deps.sh` | DreamerVLA editable package and pip requirements | Add normal Python runtime packages to `requirements.txt`. |
+| `30_python_deps.sh` | DreamerVLA editable package, pip requirements, and dev tools | Add normal Python runtime packages to `requirements.txt`; add lint/test tools to the `dev` dependency group in `pyproject.toml`. |
 | `40_third_party.sh` | LIBERO, robosuite-family packages, OpenSora, OpenVLA-OFT helpers | Add vendored upstream packages under `third_party/` and install them here. |
 | `50_special_packages.sh` | flash-attn, egl_probe, optional apex / TensorNVMe | Add fragile wheels or host-specific GPU extensions here. |
 | `60_verify.sh` | import and CUDA checks | Add lightweight import checks for newly required packages. |
@@ -98,4 +98,10 @@ Verify the environment:
 ```bash
 bash scripts/install/60_verify.sh
 python -m pytest tests/unit_tests -q
+ruff check dreamer_vla tests
 ```
+
+`30_python_deps.sh` installs the `pyproject.toml` `dev` dependency group by
+default so `pytest`, `ruff`, and `pre-commit` are available in the conda
+environment. Set `INSTALL_DEV_TOOLS=0` before running the installer to skip
+these developer-only tools.

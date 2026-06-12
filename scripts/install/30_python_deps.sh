@@ -17,3 +17,11 @@ uv pip install --python "${PYTHON}" -r "${DVLA_ROOT}/requirements.txt"
 # Step 3: pin transformers for compatibility with the VLA backbones.
 install_log "transformers=4.40.1"
 uv pip install --python "${PYTHON}" transformers==4.40.1
+
+# Step 4: install lightweight developer tooling used by tests and lint checks.
+if [[ "${INSTALL_DEV_TOOLS}" == "1" ]]; then
+  install_log "dev_dependency_group=dev"
+  uv pip install --python "${PYTHON}" --group dev
+else
+  install_log "dev_dependency_group=skipped"
+fi

@@ -216,12 +216,21 @@ process_one_suite() {
     ) > "${log}" 2>&1
     local rc=$?
     echo "  [stage4] exit=${rc}"
-    for f in "${MANIFEST}" "${VAL_IND_REC}" "${VAL_OOD_REC}"; do
-      [[ -f "$f" ]] || { echo "  [stage4] FAIL: missing $f"; return 5; }
-    done
-    local n=$("${PYTHON}" -c "import json; print(len(json.load(open('${MANIFEST}'))))")
-    echo "  [stage4] manifest entries: ${n}"
   fi
+
+  echo "  [stage4] validating artifacts"
+  if ! "${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
+    --data-root "${DVLA_DATA_ROOT}" \
+    --processed-data-root "${PROCESSED_DATA_ROOT}" \
+    --suites "${SUITE}" \
+    --his "${HIS}" \
+    --action-horizon "${ACTION_HORIZON}" \
+    --image-resolution "${IMAGE_RESOLUTION}" \
+    --skip-configs; then
+    echo "  [stage4] FAIL: validation failed"; return 5
+  fi
+  local n=$("${PYTHON}" -c "import json; print(len(json.load(open('${MANIFEST}'))))")
+  echo "  [stage4] manifest entries: ${n}"
 
   # ── Stage 5 ── write training yaml configs ────────────────────────────────
   cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize.yaml" <<EOF
@@ -240,6 +249,16 @@ META:
 prompt_text: 'Finish the task: {task_text}.'
 EOF
   echo "  [stage5] wrote yaml configs to ${CONFIG_DIR}"
+  echo "  [stage5] validating configs"
+  if ! "${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
+    --data-root "${DVLA_DATA_ROOT}" \
+    --processed-data-root "${PROCESSED_DATA_ROOT}" \
+    --suites "${SUITE}" \
+    --his "${HIS}" \
+    --action-horizon "${ACTION_HORIZON}" \
+    --image-resolution "${IMAGE_RESOLUTION}"; then
+    echo "  [stage5] FAIL: validation failed"; return 6
+  fi
   echo "  ✓ SUITE ${SUITE} DONE"
 }
 
