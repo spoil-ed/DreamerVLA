@@ -149,6 +149,7 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "eval_libero_vla": "dreamer_vla.runners.LiberoEvalRunner",
         "openvla_oft_hdf5": "dreamer_vla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamer_vla.runners.OpenVLAOFTRunner",
+        "openvla_oft_hdf5_one_trajectory_l1": "dreamer_vla.runners.OpenVLAOFTRunner",
         "latent_classifier_libero_goal_chunk": "dreamer_vla.runners.LatentClassifierRunner",
         "oft_latent_classifier_chunk": "dreamer_vla.runners.LatentClassifierRunner",
     }
@@ -161,6 +162,22 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
             assert "workspace" not in cfg
             cls = get_class(target)
             assert cls.__name__ == target.rsplit(".", 1)[-1]
+
+
+def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        lm_head = compose(config_name="openvla_oft_hdf5_one_trajectory")
+        l1 = compose(config_name="openvla_oft_hdf5_one_trajectory_l1")
+
+    assert lm_head.policy.use_l1_regression is False
+    assert l1.policy.use_l1_regression is True
+    for cfg in (lm_head, l1):
+        assert cfg.dataset.demos_per_task == 1
+        assert cfg.dataset.demo_selection_seed == cfg.seed
+        assert cfg.dataset.max_demos_per_file is None
+    assert "openvla_oft_l1_one_trajectory" in l1.training.out_dir
+    assert "openvla_oft_lm_head_one_trajectory" in lm_head.training.out_dir
 
 
 def test_root_configs_resolve_public_route_defaults() -> None:

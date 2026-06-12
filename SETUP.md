@@ -208,7 +208,13 @@ One-trajectory VLA:
 CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
 CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
 CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
+CONFIG=openvla_oft_hdf5_one_trajectory_l1 bash scripts/train_vla.sh task=libero_goal
 ```
+
+`openvla_oft_hdf5_one_trajectory` trains the discrete LM-head action-token
+variant; `openvla_oft_hdf5_one_trajectory_l1` keeps the standard OFT L1
+regression head, whose component checkpoints feed the action-hidden sidecar
+and world-model chain.
 
 World model:
 

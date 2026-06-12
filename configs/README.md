@@ -11,6 +11,7 @@ checkpoint paths, output tags, and smoke-test limits.
 | VLA training | `scripts/train_vla.sh` | `vla_rynnvla_action_head` |
 | VLA one-trajectory SFT | `CONFIG=vla_sft_one_trajectory scripts/train_vla.sh` | `vla_sft_one_trajectory` |
 | OpenVLA-OFT one-trajectory SFT | `CONFIG=openvla_oft_hdf5_one_trajectory scripts/train_vla.sh` | `openvla_oft_hdf5_one_trajectory` |
+| OpenVLA-OFT L1 one-trajectory SFT | `CONFIG=openvla_oft_hdf5_one_trajectory_l1 scripts/train_vla.sh` | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM training | `scripts/train_wm.sh` | `world_model_dinowm_chunk` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
@@ -23,6 +24,7 @@ checkpoint paths, output tags, and smoke-test limits.
 | VLA one-trajectory SFT | `vla_sft_one_trajectory` |
 | OpenVLA-OFT HDF5 SFT | `openvla_oft_hdf5` |
 | OpenVLA-OFT LM-head one-trajectory SFT | `openvla_oft_hdf5_one_trajectory` |
+| OpenVLA-OFT L1-regression one-trajectory SFT | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM DINO step | `world_model_dinowm_step` |
 | WM DINO chunk | `world_model_dinowm_chunk` |
 | DreamerVLA PPO, DINO-WM step | `dreamervla_rynn_dino_wm_actor_critic` |

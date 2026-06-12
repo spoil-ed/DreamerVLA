@@ -70,6 +70,7 @@ VLA SFT:
   vla_sft_one_trajectory
   openvla_oft_hdf5
   openvla_oft_hdf5_one_trajectory
+  openvla_oft_hdf5_one_trajectory_l1
 
 World model / classifier:
   world_model_dinowm_step
