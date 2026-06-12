@@ -19,12 +19,11 @@
 #
 #  Examples:
 #    bash scripts/train_wm.sh
-#    CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh
-#    CONFIG=oft_world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal
-#    CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh task=libero_goal
-#    NGPU=4 bash scripts/train_wm.sh task=libero_object
-#    OUT_DIR=/tmp/smoke bash scripts/train_wm.sh \
-#        training.max_steps=1 dataloader.num_workers=0
+#    bash scripts/train_wm.sh --config world_model_dinowm_chunk
+#    bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk --task libero_goal
+#    bash scripts/train_wm.sh --config oft_latent_classifier_chunk --task libero_goal
+#    bash scripts/train_wm.sh --task libero_object --gpus 0,1,2,3 --ngpu 4
+#    bash scripts/train_wm.sh --out-dir /tmp/smoke --max-steps 1 --num-workers 0
 # ============================================================================
 set -euo pipefail
 
@@ -60,8 +59,62 @@ fi
 
 # ---- knobs -------------------------------------------------------------------
 CONFIG="${CONFIG:-world_model_dinowm_chunk}"
-NGPU="${NGPU:-1}"
+NGPU="${NGPU:-}"
 MASTER_PORT="${MASTER_PORT:-29500}"
+HYDRA_ARGS=()
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG="$2"
+      shift 2
+      ;;
+    --task)
+      HYDRA_ARGS+=("task=$2")
+      shift 2
+      ;;
+    --gpus)
+      export CUDA_VISIBLE_DEVICES="$2"
+      if [[ -z "${NGPU}" ]]; then
+        gpu_count=0
+        for _gpu in ${2//,/ }; do gpu_count=$((gpu_count + 1)); done
+        NGPU="${gpu_count}"
+      fi
+      shift 2
+      ;;
+    --ngpu)
+      NGPU="$2"
+      shift 2
+      ;;
+    --batch-size)
+      HYDRA_ARGS+=("dataloader.batch_size=$2")
+      shift 2
+      ;;
+    --num-workers)
+      HYDRA_ARGS+=("dataloader.num_workers=$2")
+      shift 2
+      ;;
+    --out-dir)
+      export OUT_DIR="$2"
+      HYDRA_ARGS+=("training.out_dir=$2")
+      shift 2
+      ;;
+    --max-steps)
+      HYDRA_ARGS+=("training.max_steps=$2")
+      shift 2
+      ;;
+    --)
+      shift
+      HYDRA_ARGS+=("$@")
+      break
+      ;;
+    *)
+      HYDRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+NGPU="${NGPU:-1}"
 
 # ---- launch ------------------------------------------------------------------
 echo "[train_wm] python=$(command -v "${PYTHON}")"
@@ -72,12 +125,12 @@ if [[ -n "${OUT_DIR:-}" ]]; then
 else
   echo "[train_wm] out_dir=<config default under \${DVLA_DATA_ROOT}/outputs/worldmodel/.../<timestamp>>"
 fi
-echo "[train_wm] extra hydra args: $*"
+echo "[train_wm] hydra args: ${HYDRA_ARGS[*]}"
 
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 else
-  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 fi

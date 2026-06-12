@@ -55,11 +55,11 @@ slots.
 ## Extraction
 
 ```bash
-TASK=libero_goal bash scripts/preprocess/30_action_hidden.sh
+bash scripts/preprocess/30_action_hidden.sh --task libero_goal
 # or as part of: bash scripts/preprocess/prepare_libero_data.sh
 
 # Scheme B:
-TASK=libero_goal bash scripts/preprocess/32_input_token_hidden.sh
+bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal
 ```
 
 ## Downstream chain
@@ -68,8 +68,8 @@ WM consumes `token_count=35 × token_dim=1024` per frame
 (`task.legacy_action_hidden.*` in `configs/task/libero_goal.yaml`):
 
 ```bash
-CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal
-CONFIG=world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
+bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal
+bash scripts/train_wm.sh --config world_model_dinowm_chunk_input_tokens --task libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:

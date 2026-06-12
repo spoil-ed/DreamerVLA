@@ -50,7 +50,7 @@ only under `${DVLA_DATA_ROOT}`, then append the new script to
 | Script | Purpose |
 | --- | --- |
 | `preprocess_libero.sh` | Top-level wrapper around `preprocess/prepare_libero_data.sh` for one or more LIBERO suites |
-| `preprocess/prepare_libero_data.sh` | Run selected numbered LIBERO preprocessing steps |
+| `preprocess/prepare_libero_data.sh` | Run the standard RynnVLA-002 LIBERO preprocessing chain |
 | `preprocess/process_all_libero_data.sh` | Compatibility wrapper for the pretokenized-dataset step across suites |
 | `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
 | `preprocess/20_pretokenize_dataset.sh` | Build image/state trees, conv JSONs, token records, manifests, and YAML configs |
@@ -60,7 +60,6 @@ only under `${DVLA_DATA_ROOT}`, then append the new script to
 | `preprocess/40_validate.sh` | Validate generated LIBERO preprocessing artifacts |
 | `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
-| `preprocess/_env.sh` | Shared preprocessing-step environment |
 
 Python modules:
 
@@ -71,6 +70,17 @@ Python modules:
 | `dreamer_vla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
 | `dreamer_vla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
 | `dreamer_vla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
+
+Common launcher flags stay intentionally small:
+
+    bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
+      --gpus 0,1 --ngpu 2 --batch-size 16 --num-workers 4 training.max_steps=1000
+
+    bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal \
+      --gpus 0 --num-procs 8
+
+Training launchers translate `--batch-size` to `dataloader.batch_size=...`
+and pass any remaining `key=value` arguments straight to Hydra.
 
 ## Evaluation
 

@@ -14,16 +14,16 @@
 #
 #  Examples:
 #    bash scripts/train_vla.sh
-#    bash scripts/train_vla.sh task=libero_object
-#    NGPU=4 bash scripts/train_vla.sh task=libero_10 training.num_epochs=5
-#    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
-#    CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh \
-#        dataset.trajectory_offset=3
-#    CONFIG=openvla_oft_hdf5 bash scripts/train_vla.sh task=libero_goal
-#    CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_goal
-#    CONFIG=openvla_oft_hdf5_one_trajectory_l1 bash scripts/train_vla.sh task=libero_goal
-#    OUT_DIR=data/outputs/vla/rynnvla_action_head/libero_object_run1 \
-#        bash scripts/train_vla.sh task=libero_object
+#    bash scripts/train_vla.sh --task libero_object
+#    bash scripts/train_vla.sh --task libero_10 --gpus 0,1,2,3 --ngpu 4 --epochs 5
+#    bash scripts/train_vla.sh --config vla_sft_one_trajectory --task libero_goal
+#    bash scripts/train_vla.sh --config vla_sft_one_trajectory \
+#        --task libero_goal dataset.trajectory_offset=3
+#    bash scripts/train_vla.sh --config openvla_oft_hdf5 --task libero_goal
+#    bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory --task libero_goal
+#    bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory_l1 --task libero_goal
+#    bash scripts/train_vla.sh --task libero_object \
+#        --out-dir data/outputs/vla/rynnvla_action_head/libero_object_run1
 # ============================================================================
 set -euo pipefail
 
@@ -59,8 +59,66 @@ fi
 
 # ---- knobs -------------------------------------------------------------------
 CONFIG="${CONFIG:-vla_rynnvla_action_head}"
-NGPU="${NGPU:-1}"
+NGPU="${NGPU:-}"
 MASTER_PORT="${MASTER_PORT:-29501}"
+HYDRA_ARGS=()
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG="$2"
+      shift 2
+      ;;
+    --task)
+      HYDRA_ARGS+=("task=$2")
+      shift 2
+      ;;
+    --gpus)
+      export CUDA_VISIBLE_DEVICES="$2"
+      if [[ -z "${NGPU}" ]]; then
+        gpu_count=0
+        for _gpu in ${2//,/ }; do gpu_count=$((gpu_count + 1)); done
+        NGPU="${gpu_count}"
+      fi
+      shift 2
+      ;;
+    --ngpu)
+      NGPU="$2"
+      shift 2
+      ;;
+    --batch-size)
+      HYDRA_ARGS+=("dataloader.batch_size=$2")
+      shift 2
+      ;;
+    --num-workers)
+      HYDRA_ARGS+=("dataloader.num_workers=$2")
+      shift 2
+      ;;
+    --out-dir)
+      export OUT_DIR="$2"
+      HYDRA_ARGS+=("training.out_dir=$2")
+      shift 2
+      ;;
+    --epochs|--num-epochs)
+      HYDRA_ARGS+=("training.num_epochs=$2")
+      shift 2
+      ;;
+    --max-steps)
+      HYDRA_ARGS+=("training.max_steps=$2")
+      shift 2
+      ;;
+    --)
+      shift
+      HYDRA_ARGS+=("$@")
+      break
+      ;;
+    *)
+      HYDRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+NGPU="${NGPU:-1}"
 
 # ---- launch ------------------------------------------------------------------
 echo "[train_vla] python=$(command -v "${PYTHON}")"
@@ -71,12 +129,12 @@ if [[ -n "${OUT_DIR:-}" ]]; then
 else
   echo "[train_vla] out_dir=<config default under \${DVLA_DATA_ROOT}/outputs/vla/.../<timestamp>>"
 fi
-echo "[train_vla] extra hydra args: $*"
+echo "[train_vla] hydra args: ${HYDRA_ARGS[*]}"
 
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 else
-  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 fi

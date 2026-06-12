@@ -37,13 +37,6 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
 
     for relpath in libero_entrypoints:
         text = (root / relpath).read_text(encoding="utf-8")
-        if relpath == "scripts/preprocess/prepare_libero_data.sh":
-            text += (root / "scripts" / "preprocess" / "_env.sh").read_text(
-                encoding="utf-8"
-            )
-            text += (root / "scripts" / "preprocess" / "10_hdf5_reward.sh").read_text(
-                encoding="utf-8"
-            )
         assert 'LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"' in text, relpath
         assert "datasets: ${DVLA_DATA_ROOT}/datasets/libero" in text, relpath
 
@@ -193,26 +186,32 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     root = _project_root()
     process_all = root / "scripts" / "preprocess" / "process_all_libero_data.sh"
     prepare = root / "scripts" / "preprocess" / "prepare_libero_data.sh"
-    preprocess_env = root / "scripts" / "preprocess" / "_env.sh"
+    pretokenize = root / "scripts" / "preprocess" / "20_pretokenize_dataset.sh"
+    reward = root / "scripts" / "preprocess" / "10_hdf5_reward.sh"
 
     assert prepare.is_file()
     process_text = process_all.read_text(encoding="utf-8")
     prepare_text = prepare.read_text(encoding="utf-8")
-    env_text = preprocess_env.read_text(encoding="utf-8")
+    pretokenize_text = pretokenize.read_text(encoding="utf-8")
+    reward_text = reward.read_text(encoding="utf-8")
 
-    assert 'HIS="${HIS:-1}"' in env_text
-    assert 'ACTION_HORIZON="${ACTION_HORIZON:-1}"' in env_text
+    assert 'HIS=1' in pretokenize_text
+    assert 'ACTION_HORIZON=1' in pretokenize_text
+    assert 'TASK_NAME="${TASK#libero_}"' in pretokenize_text
     assert "GPUS=4,5" not in process_text
-    assert 'TASK="${TASK:-libero_goal}"' in env_text
-    assert 'FILTER_NOOPS="${FILTER_NOOPS:-1}"' in env_text
-    assert 'RAW_LIBERO_DIR="${RAW_LIBERO_DIR:-${DVLA_DATA_ROOT}/datasets/libero/${TASK}}"' in env_text
-    assert 'PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-${DVLA_DATA_ROOT}/processed_data}"' in env_text
-    assert "${TASK}_marked_t_${IMAGE_RESOLUTION}" in env_text
-    assert "${TASK}_no_noops_t_${IMAGE_RESOLUTION}" in env_text
-    assert "PREPROCESS_ONLY" in prepare_text
+    assert 'TASK="${TASK:-libero_goal}"' in reward_text
+    assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${TASK}"' in reward_text
+    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"' in reward_text
+    assert '${TASK}_marked_t_256' in reward_text
+    assert '${TASK}_no_noops_t_256' in reward_text
+    assert "PREPROCESS_ONLY" not in prepare_text
+    assert "RUN_ACTION_HIDDEN" not in prepare_text
     assert "10_hdf5_reward.sh" in prepare_text
     assert "20_pretokenize_dataset.sh" in prepare_text
-    assert "PROCESS_ALL_STEPS" in process_text
+    assert "20_pretokenize_dataset.sh" in process_text
+    assert "chameleon/tokenizer/vqgan.yaml" in (
+        root / "scripts" / "preprocess" / "30_action_hidden.sh"
+    ).read_text(encoding="utf-8")
 
 
 def test_preprocess_steps_are_numbered_registered_and_individually_runnable() -> None:
@@ -231,7 +230,7 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         "35_oft_action_hidden.sh",
         "40_validate.sh",
     )
-    assert "PREPROCESS_ONLY" in prepare_text
+    assert "PREPROCESS_ONLY" not in prepare_text
     numbered_steps = sorted(
         path.name
         for path in preprocess_dir.glob("[0-9][0-9]_*.sh")
@@ -242,16 +241,151 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         script = preprocess_dir / step
         text = script.read_text(encoding="utf-8")
         assert script.is_file(), step
-        assert "source \"${SCRIPT_DIR}/_env.sh\"" in text, step
+        assert 'source "${SCRIPT_DIR}/_env.sh"' not in text, step
+        assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text, step
         assert f"`preprocess/{step}`" in registry, step
         assert step in prepare_text, step
 
 
+def test_preprocess_scripts_are_direct_copyable_commands() -> None:
+    root = _project_root()
+    preprocess_dir = root / "scripts" / "preprocess"
+    scripts = [
+        preprocess_dir / "10_hdf5_reward.sh",
+        preprocess_dir / "20_pretokenize_dataset.sh",
+        preprocess_dir / "30_action_hidden.sh",
+        preprocess_dir / "32_input_token_hidden.sh",
+        preprocess_dir / "35_oft_action_hidden.sh",
+        preprocess_dir / "40_validate.sh",
+    ]
+
+    assert not (preprocess_dir / "_env.sh").exists()
+    for script in scripts:
+        text = script.read_text(encoding="utf-8")
+        assert "cmd=(" not in text, script.name
+        assert "PREPROCESS_STEPS" not in text, script.name
+        assert "normalize_list" not in text, script.name
+        assert "${PROCESSED_DATA_ROOT:-" not in text, script.name
+        assert re.search(r'\n\s*"\$\{PYTHON\}" -m ', text), script.name
+
+
+def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
+    root = _project_root()
+    log_path = tmp_path / "train_stub.log"
+    python_stub = tmp_path / "python_stub.sh"
+    python_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf 'CUDA_VISIBLE_DEVICES=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\" >> \"${PYTHON_STUB_LOG}\"\n"
+        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n",
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON": str(python_stub),
+            "PYTHON_STUB_LOG": str(log_path),
+            "DVLA_DATA_ROOT": str(tmp_path / "data"),
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/train_wm.sh",
+            "--config",
+            "world_model_dinowm_chunk",
+            "--task",
+            "libero_goal",
+            "--gpus",
+            "2,3",
+            "--ngpu",
+            "2",
+            "--batch-size",
+            "7",
+            "--num-workers",
+            "0",
+            "--out-dir",
+            str(tmp_path / "out"),
+            "training.max_steps=1",
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "CUDA_VISIBLE_DEVICES=2,3" in log_text
+    assert "--nproc-per-node=2" in log_text
+    assert "--config-name world_model_dinowm_chunk" in log_text
+    assert "task=libero_goal" in log_text
+    assert "dataloader.batch_size=7" in log_text
+    assert "dataloader.num_workers=0" in log_text
+    assert f"training.out_dir={tmp_path / 'out'}" in log_text
+    assert "training.max_steps=1" in log_text
+
+
+def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
+    root = _project_root()
+    data_root = tmp_path / "data"
+    hdf5_dir = data_root / "processed_data" / "libero_goal_no_noops_t_256"
+    hdf5_dir.mkdir(parents=True)
+    (hdf5_dir / "demo.hdf5").touch()
+    (data_root / "processed_data" / "tokens" / "libero_goal_his_1_train_third_view_wrist_w_state_1_256").mkdir(parents=True)
+    log_path = tmp_path / "python_calls.log"
+    python_stub = tmp_path / "python_stub.sh"
+    python_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n",
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update({"PYTHON_STUB_LOG": str(log_path)})
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/preprocess/20_pretokenize_dataset.sh",
+            "--task",
+            "libero_goal",
+            "--data-root",
+            str(data_root),
+            "--python",
+            str(python_stub),
+            "--gpus",
+            "4,5",
+            "--num-procs",
+            "3",
+            "--overwrite",
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "--gpu_devices 4,5" in log_text
+    assert "--num_procs 3" in log_text
+    assert "--overwrite" in log_text
+
+
 def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     root = _project_root()
-    raw_dir = tmp_path / "raw" / "libero_goal"
-    marked_dir = tmp_path / "processed" / "libero_goal_marked_t_256"
-    hdf5_dir = tmp_path / "processed" / "libero_goal_no_noops_t_256"
+    data_root = tmp_path / "data"
+    raw_dir = data_root / "datasets" / "libero" / "libero_goal"
+    processed = data_root / "processed_data"
+    marked_dir = processed / "libero_goal_marked_t_256"
+    hdf5_dir = processed / "libero_goal_no_noops_t_256"
+    reward_dir = processed / "libero_goal_no_noops_t_256_pi06_remaining_reward"
     log_path = tmp_path / "python_calls.log"
     python_stub = tmp_path / "python_stub.sh"
 
@@ -283,6 +417,13 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
         "      prev=\"${arg}\"\n"
         "    done\n"
         "    ;;\n"
+        "  dreamer_vla.preprocess.preprocess_remaining_steps_reward)\n"
+        "    prev=''\n"
+        "    for arg in \"$@\"; do\n"
+        "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
+        "      prev=\"${arg}\"\n"
+        "    done\n"
+        "    ;;\n"
         "esac\n",
         encoding="utf-8",
     )
@@ -291,23 +432,15 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     env = os.environ.copy()
     env.update(
         {
-            "DVLA_DATA_ROOT": str(tmp_path / "data"),
-            "RAW_LIBERO_DIR": str(raw_dir),
-            "PROCESSED_DATA_ROOT": str(tmp_path / "processed"),
-            "MARKED_DIR": str(marked_dir),
-            "HDF5_DIR": str(hdf5_dir),
-            "LIBERO_CONFIG_PATH": str(tmp_path / "libero_config"),
+            "DVLA_DATA_ROOT": str(data_root),
             "PYTHON": str(python_stub),
             "PYTHON_STUB_LOG": str(log_path),
             "TASK": "libero_goal",
-            "RUN_REWARD": "0",
-            "RUN_PRETOKENIZE": "0",
-            "RUN_ACTION_HIDDEN": "0",
         }
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/prepare_libero_data.sh"],
+        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -318,11 +451,14 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     calls = log_path.read_text(encoding="utf-8").splitlines()
     assert any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
+    assert hdf5_dir.joinpath("stub_demo.hdf5").is_file()
+    assert reward_dir.joinpath("stub_demo.hdf5").is_file()
 
 
 def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: Path) -> None:
     root = _project_root()
-    raw_dir = tmp_path / "raw" / "libero_goal"
+    data_root = tmp_path / "data"
+    raw_dir = data_root / "datasets" / "libero" / "libero_goal"
     log_path = tmp_path / "python_calls.log"
     python_stub = tmp_path / "python_stub.sh"
 
@@ -338,21 +474,15 @@ def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: P
     env = os.environ.copy()
     env.update(
         {
-            "DVLA_DATA_ROOT": str(tmp_path / "data"),
-            "RAW_LIBERO_DIR": str(raw_dir),
-            "PROCESSED_DATA_ROOT": str(tmp_path / "processed"),
-            "LIBERO_CONFIG_PATH": str(tmp_path / "libero_config"),
+            "DVLA_DATA_ROOT": str(data_root),
             "PYTHON": str(python_stub),
             "PYTHON_STUB_LOG": str(log_path),
             "TASK": "libero_goal",
-            "RUN_REWARD": "0",
-            "RUN_PRETOKENIZE": "0",
-            "RUN_ACTION_HIDDEN": "0",
         }
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/prepare_libero_data.sh"],
+        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -437,8 +567,8 @@ def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) ->
     assert result.returncode == 1
     assert any("dreamer_vla.preprocess.pretoken_state_action_model" in call for call in calls)
     assert not any("dreamer_vla.preprocess.validate_libero_data_prep" in call for call in calls)
-    assert "stage 6 exit=42" in result.stdout
-    assert "stage 6 failed" in result.stderr
+    assert "[process_all_libero_data] TASK=libero_goal" in result.stdout
+    assert "[process_all_libero_data] libero_goal failed" in result.stderr
 
 
 def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
@@ -449,7 +579,7 @@ def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     assert "--keep-noops" in setup
     assert "stage 2: filter marked no-ops" in setup
     assert "dreamer_vla.preprocess.filter_marked_libero_hdf5" in setup
-    assert "FILTER_NOOPS=1" in setup
+    assert "${DVLA_DATA_ROOT}/processed_data/${TASK}_no_noops_t_256" in setup
 
 
 def test_setup_docs_explain_one_shot_four_suite_libero_preprocessing() -> None:
@@ -458,7 +588,7 @@ def test_setup_docs_explain_one_shot_four_suite_libero_preprocessing() -> None:
 
     assert "bash scripts/preprocess_libero.sh" in setup
     assert "libero_goal libero_object libero_spatial libero_10" in setup
-    assert "LIBERO_SUITES=" in setup
+    assert '--suites "libero_goal libero_object"' in setup
 
 
 def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> None:
@@ -472,7 +602,7 @@ def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> N
     assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text
     assert 'DEFAULT_SUITES=(libero_goal libero_object libero_spatial libero_10)' in text
     assert 'bash "${DVLA_ROOT}/scripts/preprocess/prepare_libero_data.sh"' in text
-    assert 'TASK="${suite}"' in text
+    assert '--task "${suite}"' in text
 
 
 def test_release_scripts_do_not_ship_common_env() -> None:

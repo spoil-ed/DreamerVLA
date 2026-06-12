@@ -1,27 +1,59 @@
 #!/usr/bin/env bash
-# Extract the legacy RynnVLA action-hidden sidecar used by world-model routes.
+# Extract the legacy RynnVLA action-hidden sidecar used by action-level WM routes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/_env.sh"
+DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+PYTHON="${PYTHON:-python}"
+TASK="${TASK:-libero_goal}"
+ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-}}"
+OVERWRITE="${OVERWRITE:-0}"
 
-if ! has_regular_files "${VLA_CKPT}"; then
-  echo "Missing VLA checkpoint files for action-hidden sidecar: ${VLA_CKPT}" >&2
-  echo "Run: LIBERO_SUITES=${TASK} DOWNLOAD_LIBERO=0 bash scripts/download_assets.sh" >&2
-  exit 4
-fi
-if ! has_regular_files "${TOKENIZER_PATH}"; then
-  echo "Missing Lumina tokenizer/backbone files for preprocessing: ${TOKENIZER_PATH}" >&2
-  echo "Run: DOWNLOAD_LIBERO=0 bash scripts/download_assets.sh" >&2
-  exit 4
-fi
-require_file "${TEXT_TOKENIZER_PATH}" "Missing Chameleon text tokenizer for preprocessing" 4
-require_file "${CHAMELEON_VQGAN_CONFIG}" "Missing Chameleon VQGAN config for preprocessing" 4
-require_file "${CHAMELEON_VQGAN_CKPT}" "Missing Chameleon VQGAN checkpoint for preprocessing" 4
-require_hdf5_files "${REWARD_DIR}" "[preprocess:30_action_hidden.sh] missing reward HDF5 input" 5
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --task) TASK="$2"; shift 2 ;;
+    --data-root) DVLA_DATA_ROOT="$2"; shift 2 ;;
+    --python) PYTHON="$2"; shift 2 ;;
+    --gpus)
+      export CUDA_VISIBLE_DEVICES="$2"
+      if [[ -z "${ACTION_HIDDEN_GPUS}" ]]; then
+        gpu_count=0
+        for _gpu in ${2//,/ }; do gpu_count=$((gpu_count + 1)); done
+        ACTION_HIDDEN_GPUS="${gpu_count}"
+      fi
+      shift 2
+      ;;
+    --ngpu) ACTION_HIDDEN_GPUS="$2"; shift 2 ;;
+    --overwrite) OVERWRITE=1; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-1}"
+export PYTHON
+cd "${DVLA_ROOT}"
 
-if [[ ! -d "${HIDDEN_DIR}" || "${OVERWRITE}" == "1" ]]; then
-  preprocess_log "stage 8: legacy action-hidden sidecar"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
+REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi06_remaining_reward"
+HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+VLA_CKPT="${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${TASK}"
+TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
+TEXT_TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json"
+CHAMELEON_VQGAN_CONFIG="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.yaml"
+CHAMELEON_VQGAN_CKPT="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.ckpt"
+
+TIME_HORIZON=5
+if [[ "${TASK}" == "libero_spatial" || "${TASK}" == "libero_10" ]]; then
+  TIME_HORIZON=10
+fi
+
+if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)" ]]; then
+  echo "No reward HDF5 files found under: ${REWARD_DIR}" >&2
+  echo "Run: bash scripts/preprocess/10_hdf5_reward.sh --task ${TASK}" >&2
+  exit 5
+fi
+
+if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
   "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
@@ -43,7 +75,5 @@ if [[ ! -d "${HIDDEN_DIR}" || "${OVERWRITE}" == "1" ]]; then
     --time-horizon "${TIME_HORIZON}" \
     --overwrite
 else
-  preprocess_log "stage 8 skipped: ${HIDDEN_DIR}"
+  echo "[30_action_hidden] skip action-hidden: ${HIDDEN_DIR}"
 fi
-
-require_hdf5_files "${HIDDEN_DIR}" "[preprocess:30_action_hidden.sh] stage 8 did not create action-hidden HDF5 files"

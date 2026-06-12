@@ -135,28 +135,27 @@ bash scripts/preprocess_libero.sh
 
 By default this runs `libero_goal libero_object libero_spatial libero_10` and
 delegates each suite to `scripts/preprocess/prepare_libero_data.sh`. To process
-a subset, set `LIBERO_SUITES`:
+a subset:
 
 ```bash
-LIBERO_SUITES="libero_goal libero_object" bash scripts/preprocess_libero.sh
+bash scripts/preprocess_libero.sh --suites "libero_goal libero_object"
 ```
 
 For a single suite or a resumable rerun of one suite:
 
 ```bash
-TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
+bash scripts/preprocess/prepare_libero_data.sh --task libero_goal
 ```
 
 The preprocessing path is split into numbered child scripts, matching the
 download and install flow. To rerun only one part:
 
 ```bash
-TASK=libero_goal PREPROCESS_ONLY=20_pretokenize_dataset bash scripts/preprocess/prepare_libero_data.sh
-TASK=libero_goal bash scripts/preprocess/20_pretokenize_dataset.sh
+bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
 ```
 
-The default `FILTER_NOOPS=1` path does no-op handling before reward and hidden
-sidecar generation:
+The standard path always writes fixed no-op-filtered artifacts before reward
+and hidden sidecar generation:
 
 ```text
 input: downloaded raw LIBERO HDF5 files
@@ -168,13 +167,8 @@ stage 1: replay and mark no-ops
 
 stage 2: filter marked no-ops
   python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 --filter-noops
-  writes ${TASK}_no_noops_t_256
+  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}_no_noops_t_256
 ```
-
-Keep `FILTER_NOOPS=1` for the standard configs. Setting `FILTER_NOOPS=0`
-writes `${TASK}_with_noops_t_256`, but the pretokenize configs in this release
-target `*_no_noops_t_*` paths, so also set `RUN_PRETOKENIZE=0` when using that
-debug path.
 
 Outputs:
 
@@ -189,8 +183,10 @@ ${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pre
 Useful variants:
 
 ```bash
-TASK=libero_10 ACTION_HIDDEN_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 bash scripts/preprocess/prepare_libero_data.sh
-TASK=libero_goal RUN_ACTION_HIDDEN=0 bash scripts/preprocess/prepare_libero_data.sh
+bash scripts/preprocess/prepare_libero_data.sh --task libero_10 --gpus 0,1,2,3 --ngpu 4
+bash scripts/preprocess/10_hdf5_reward.sh --task libero_goal
+bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
+bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal --gpus 0 --ngpu 1
 ```
 
 ## 4. Train
@@ -198,17 +194,17 @@ TASK=libero_goal RUN_ACTION_HIDDEN=0 bash scripts/preprocess/prepare_libero_data
 VLA SFT:
 
 ```bash
-CONFIG=vla_rynnvla_action_head NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/train_vla.sh task=libero_goal
+bash scripts/train_vla.sh --config vla_rynnvla_action_head --task libero_goal \
+  --gpus 0,1,2,3 --ngpu 4 --batch-size 20
 ```
 
 One-trajectory VLA:
 
 ```bash
-CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal
-CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_object dataset.trajectory_offset=2
-CONFIG=openvla_oft_hdf5_one_trajectory bash scripts/train_vla.sh task=libero_10
-CONFIG=openvla_oft_hdf5_one_trajectory_l1 bash scripts/train_vla.sh task=libero_goal
+bash scripts/train_vla.sh --config vla_sft_one_trajectory --task libero_goal
+bash scripts/train_vla.sh --config vla_sft_one_trajectory --task libero_object dataset.trajectory_offset=2
+bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory --task libero_10
+bash scripts/train_vla.sh --config openvla_oft_hdf5_one_trajectory_l1 --task libero_goal
 ```
 
 `openvla_oft_hdf5_one_trajectory` trains the discrete LM-head action-token
@@ -221,14 +217,13 @@ routes; both checkpoint formats extract the same backbone layer):
 
 ```bash
 # Component-wise L1 checkpoint (auto-detected):
-TASK=libero_goal OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
-bash scripts/preprocess/35_oft_action_hidden.sh
+bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
+  --ckpt data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
 
 # Downloaded discrete one-trajectory weights (single view, no history/proprio):
-TASK=libero_goal \
-OFT_CKPT=data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
-OFT_POLICY_MODE=discrete OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
-bash scripts/preprocess/35_oft_action_hidden.sh
+bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
+  --ckpt data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
+  --policy-mode discrete --history 1 --image-keys agentview_rgb
 ```
 
 Scheme B input-token sidecars feed frame-level DINO-WM routes.  RynnVLA uses
@@ -237,12 +232,12 @@ projected vision patch tokens:
 
 ```bash
 # RynnVLA Scheme B:
-TASK=libero_goal bash scripts/preprocess/32_input_token_hidden.sh
+bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal --gpus 0 --ngpu 1
 
 # OpenVLA-OFT Scheme B:
-TASK=libero_goal OFT_LATENT_SCHEME=input_tokens \
-OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
-bash scripts/preprocess/35_oft_action_hidden.sh
+bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
+  --scheme input_tokens \
+  --ckpt data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
 ```
 
 First run on a new checkpoint: smoke-test by invoking the module directly with
@@ -263,7 +258,7 @@ training the WM on them, point the route at the sidecar and align the expected
 attrs, e.g.:
 
 ```bash
-CONFIG=oft_world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal \
+bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk --task libero_goal \
   task.openvla_oft.ckpt_path=/abs/path/to/Openvla-oft-SFT-libero-goal-traj1 \
   task.openvla_oft.action_hidden_dir=/abs/path/to/<sidecar_dir> \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
@@ -274,34 +269,36 @@ CONFIG=oft_world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal \
 World model:
 
 ```bash
-CONFIG=world_model_dinowm_chunk NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/train_wm.sh task=libero_goal
+bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
+  --gpus 0,1,2,3 --ngpu 4 --batch-size 16
 
 # Scheme B frame-token WM:
-CONFIG=world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
-CONFIG=oft_world_model_dinowm_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
+bash scripts/train_wm.sh --config world_model_dinowm_chunk_input_tokens --task libero_goal
+bash scripts/train_wm.sh --config oft_world_model_dinowm_chunk_input_tokens --task libero_goal
 ```
 
 Classifier:
 
 ```bash
-CONFIG=latent_classifier_libero_goal_chunk bash scripts/train_wm.sh
-CONFIG=latent_classifier_libero_goal_chunk_input_tokens bash scripts/train_wm.sh
-CONFIG=oft_latent_classifier_chunk_input_tokens bash scripts/train_wm.sh task=libero_goal
+bash scripts/train_wm.sh --config latent_classifier_libero_goal_chunk
+bash scripts/train_wm.sh --config latent_classifier_libero_goal_chunk_input_tokens
+bash scripts/train_wm.sh --config oft_latent_classifier_chunk_input_tokens --task libero_goal
 ```
 
 DreamerVLA:
 
 ```bash
-CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome NGPU=4 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 bash scripts/train_dreamervla.sh \
-  task=libero_goal \
+  --config dreamervla_rynn_dino_wm_wmpo_outcome \
+  --task libero_goal \
+  --gpus 0,1,2,3 --ngpu 4 --batch-size 4 \
   init.world_model_state_ckpt=/abs/path/to/wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/classifier.ckpt
 
 # Scheme B uses a bridge actor from frame tokens to action slots:
-CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens bash scripts/train_dreamervla.sh \
-  task=libero_goal \
+bash scripts/train_dreamervla.sh \
+  --config dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
+  --task libero_goal \
   init.world_model_state_ckpt=/abs/path/to/input_token_wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/input_token_classifier.ckpt
 ```
@@ -360,6 +357,6 @@ test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256"
 Smoke train:
 
 ```bash
-OUT_DIR=/tmp/dvla_wm_smoke CONFIG=world_model_dinowm_chunk \
-bash scripts/train_wm.sh task=libero_goal training.max_steps=1 dataloader.num_workers=0
+bash scripts/train_wm.sh --config world_model_dinowm_chunk --task libero_goal \
+  --out-dir /tmp/dvla_wm_smoke --max-steps 1 --num-workers 0
 ```

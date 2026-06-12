@@ -13,17 +13,17 @@
 #    dreamervla_oft_dino_wm_wmpo_outcome_input_tokens OpenVLA-OFT frame-token Scheme B
 #
 #  The OFT variant requires a pre-trained classifier checkpoint:
-#    1. CONFIG=oft_latent_classifier_chunk bash scripts/train_wm.sh   → produces .ckpt
-#    2. CONFIG=dreamervla_oft_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh \
+#    1. bash scripts/train_wm.sh --config oft_latent_classifier_chunk  → produces .ckpt
+#    2. bash scripts/train_dreamervla.sh --config dreamervla_oft_dino_wm_wmpo_outcome \
 #         init.classifier_state_ckpt=<path-from-step-1>
 #
 #  Examples:
 #    bash scripts/train_dreamervla.sh
-#    CONFIG=dreamervla_rynn_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh
-#    CONFIG=dreamervla_oft_dino_wm_wmpo_outcome bash scripts/train_dreamervla.sh \
-#        task=libero_goal init.classifier_state_ckpt=path/to/classifier.ckpt
-#    NGPU=4 CONFIG=dreamervla_rynn_dino_wm_actor_critic \
-#        bash scripts/train_dreamervla.sh task=libero_object
+#    bash scripts/train_dreamervla.sh --config dreamervla_rynn_dino_wm_wmpo_outcome
+#    bash scripts/train_dreamervla.sh --config dreamervla_oft_dino_wm_wmpo_outcome \
+#        --task libero_goal init.classifier_state_ckpt=path/to/classifier.ckpt
+#    bash scripts/train_dreamervla.sh --config dreamervla_rynn_dino_wm_actor_critic \
+#        --task libero_object --gpus 0,1,2,3 --ngpu 4
 # ============================================================================
 set -euo pipefail
 
@@ -59,8 +59,62 @@ fi
 
 # ---- knobs -------------------------------------------------------------------
 CONFIG="${CONFIG:-dreamervla_rynn_dino_wm_wmpo_outcome}"
-NGPU="${NGPU:-1}"
+NGPU="${NGPU:-}"
 MASTER_PORT="${MASTER_PORT:-29502}"
+HYDRA_ARGS=()
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG="$2"
+      shift 2
+      ;;
+    --task)
+      HYDRA_ARGS+=("task=$2")
+      shift 2
+      ;;
+    --gpus)
+      export CUDA_VISIBLE_DEVICES="$2"
+      if [[ -z "${NGPU}" ]]; then
+        gpu_count=0
+        for _gpu in ${2//,/ }; do gpu_count=$((gpu_count + 1)); done
+        NGPU="${gpu_count}"
+      fi
+      shift 2
+      ;;
+    --ngpu)
+      NGPU="$2"
+      shift 2
+      ;;
+    --batch-size)
+      HYDRA_ARGS+=("dataloader.batch_size=$2")
+      shift 2
+      ;;
+    --num-workers)
+      HYDRA_ARGS+=("dataloader.num_workers=$2")
+      shift 2
+      ;;
+    --out-dir)
+      export OUT_DIR="$2"
+      HYDRA_ARGS+=("training.out_dir=$2")
+      shift 2
+      ;;
+    --max-steps)
+      HYDRA_ARGS+=("training.max_steps=$2")
+      shift 2
+      ;;
+    --)
+      shift
+      HYDRA_ARGS+=("$@")
+      break
+      ;;
+    *)
+      HYDRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+NGPU="${NGPU:-1}"
 
 # ---- launch ------------------------------------------------------------------
 echo "[train_dreamervla] python=$(command -v "${PYTHON}")"
@@ -71,12 +125,12 @@ if [[ -n "${OUT_DIR:-}" ]]; then
 else
   echo "[train_dreamervla] out_dir=<config default under \${DVLA_DATA_ROOT}/outputs/dreamervla/.../<timestamp>>"
 fi
-echo "[train_dreamervla] extra hydra args: $*"
+echo "[train_dreamervla] hydra args: ${HYDRA_ARGS[*]}"
 
 if [ "${NGPU}" -gt 1 ]; then
   exec "${PYTHON}" -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${NGPU}" --master_port="${MASTER_PORT}" \
-    -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+    -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 else
-  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "$@"
+  exec "${PYTHON}" -m dreamer_vla.train --config-name "${CONFIG}" "${HYDRA_ARGS[@]}"
 fi

@@ -5,6 +5,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+PYTHON="${PYTHON:-python}"
+SUITES="${SUITES:-}"
+PREPROCESS_ARGS=()
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --task) TASK="$2"; shift 2 ;;
+    --suites) SUITES="$2"; shift 2 ;;
+    --data-root) export DVLA_DATA_ROOT="$2"; PREPROCESS_ARGS+=("--data-root" "$2"); shift 2 ;;
+    --python) PYTHON="$2"; PREPROCESS_ARGS+=("--python" "$2"); shift 2 ;;
+    --gpus) PREPROCESS_ARGS+=("--gpus" "$2"); shift 2 ;;
+    --ngpu) PREPROCESS_ARGS+=("--ngpu" "$2"); shift 2 ;;
+    --num-procs) PREPROCESS_ARGS+=("--num-procs" "$2"); shift 2 ;;
+    --overwrite) PREPROCESS_ARGS+=("--overwrite"); shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+export PYTHON
 case ":${PYTHONPATH:-}:" in
   *":${DVLA_ROOT}:"*) ;;
   *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
@@ -40,7 +58,7 @@ echo "[preprocess_libero] suites=${suite_list[*]}"
 
 for suite in "${suite_list[@]}"; do
   echo "[preprocess_libero] running TASK=${suite}"
-  TASK="${suite}" bash "${DVLA_ROOT}/scripts/preprocess/prepare_libero_data.sh" "$@"
+  bash "${DVLA_ROOT}/scripts/preprocess/prepare_libero_data.sh" --task "${suite}" "${PREPROCESS_ARGS[@]}"
 done
 
 echo "[preprocess_libero] complete"

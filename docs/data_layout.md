@@ -131,7 +131,7 @@ stores `task_ABCD_D` as 30 GB multi-part zip shards under
 
 Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data`.
 
-`TASK=<suite> bash scripts/preprocess/prepare_libero_data.sh` writes:
+`bash scripts/preprocess/prepare_libero_data.sh --task <suite>` writes:
 
 ```text
 processed_data/<suite>_marked_t_256/
@@ -150,16 +150,13 @@ Preprocessing follows the same orchestrator-and-step style as install and
 download scripts. Run the full path with:
 
 ```bash
-TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
+bash scripts/preprocess/prepare_libero_data.sh --task libero_goal
 ```
 
-Run or reproduce one step with either `PREPROCESS_ONLY` or the numbered child
-script:
+Run or reproduce one step by calling the numbered child script directly:
 
 ```bash
-TASK=libero_goal PREPROCESS_ONLY=20_pretokenize_dataset \
-  bash scripts/preprocess/prepare_libero_data.sh
-TASK=libero_goal bash scripts/preprocess/20_pretokenize_dataset.sh
+bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
 ```
 
 The numbered steps are:
@@ -174,9 +171,9 @@ absolute prefixes inside generated YAML / JSON manifests.
 Validate the generated tree with:
 
 ```bash
-TASK=libero_goal bash scripts/preprocess/validate_libero_data.sh
-LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" \
-  bash scripts/preprocess/validate_libero_data.sh
+bash scripts/preprocess/validate_libero_data.sh --suites libero_goal
+bash scripts/preprocess/validate_libero_data.sh \
+  --suites libero_goal libero_object libero_spatial libero_10
 ```
 
 The validator checks that HDF5/reward files exist, conv JSONs are non-empty,
@@ -203,4 +200,4 @@ export DVLA_DATA_ROOT=/path/to/dvla_data
 ```
 
 Create assets with `bash scripts/download_assets.sh`.
-Create processed data with `TASK=<suite> bash scripts/preprocess/prepare_libero_data.sh`.
+Create processed data with `bash scripts/preprocess/prepare_libero_data.sh --task <suite>`.
