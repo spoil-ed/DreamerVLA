@@ -231,6 +231,12 @@ OFT_POLICY_MODE=discrete OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
 bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
+First run on a new checkpoint: smoke-test by invoking the module directly with
+`--max-files 1 --max-demos-per-file 2` before committing GPU hours.
+Per model-on-dataset details (checkpoint formats, hidden shapes, expected
+attrs): [docs/model_datasets/openvla_oft_libero_goal.md](docs/model_datasets/openvla_oft_libero_goal.md)
+and [docs/model_datasets/rynnvla_libero_goal.md](docs/model_datasets/rynnvla_libero_goal.md).
+
 Discrete sidecars are written with `action_head_type=oft_discrete_token`; when
 training the WM on them, point the route at the sidecar and align the expected
 attrs, e.g.:
