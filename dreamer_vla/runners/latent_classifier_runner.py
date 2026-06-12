@@ -86,6 +86,7 @@ class LatentClassifierRunner(BaseRunner):
     # --------------------------- setup ---------------------------------
 
     def setup(self) -> None:
+        super().setup()
         torch.manual_seed(int(OmegaConf.select(self.cfg, "training.seed") or 0))
         torch.backends.cudnn.benchmark = True
 

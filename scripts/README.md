@@ -119,7 +119,15 @@ and `num_workers=...` are script-level overrides; any other `key=value`
 argument is passed to the real training config unchanged.
 Grouped training defaults to `logger=tensorboard` and writes local TensorBoard
 events under `${training.out_dir}/log/tensorboard`; use `logger=wandb` to route
-main-process metrics through W&B online mode.
+main-process metrics through W&B online mode. Use `logger=tensorboard_wandb`
+when you want local TensorBoard events and online W&B tracking for the same
+run.
+
+Runner artifacts should stay under `${training.out_dir}`. The canonical
+checkpoint directory is `${training.out_dir}/checkpoints`; older
+`${training.out_dir}/ckpt/latest.ckpt` files are still recognized for resume.
+Grouped training writes `${training.out_dir}/resolved_config.yaml` and
+`${training.out_dir}/run_manifest.json` during runner setup.
 
 ## Evaluation
 

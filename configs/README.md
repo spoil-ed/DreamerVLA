@@ -23,12 +23,43 @@ tags, and smoke-test limits.
 
 `logger=tensorboard` is the default for grouped training and writes local
 TensorBoard event files under `${training.out_dir}/log/tensorboard`.
-Use `logger=wandb` to send main-process metrics to W&B online mode while
-keeping W&B run files under `${training.out_dir}/log/wandb`:
+Use `logger=wandb` to send main-process metrics to W&B online mode, or
+`logger=tensorboard_wandb` to run both backends in parallel while keeping W&B
+run files under `${training.out_dir}/log/wandb`:
 
 ```bash
 python -m dreamer_vla.train experiment=world_model_dinowm_chunk logger=wandb
+python -m dreamer_vla.train experiment=world_model_dinowm_chunk logger=tensorboard_wandb
 ```
+
+Before a runner is instantiated, `dreamer_vla.config.validate_cfg` performs
+RLinf-style lightweight checks: logger backend names, explicit resume paths,
+actor-update route names from `dreamer_vla.algorithms.registry`, sidecar route
+consistency, chunk / horizon compatibility, optional path existence via
+`validation.require_existing_paths=true`, and any configured
+`training.global_batch_size` divisibility by `WORLD_SIZE *
+training.gradient_accumulate_every`.
+
+Runtime artifacts should stay under one run root:
+
+```text
+${training.out_dir}/
+├── resolved_config.yaml
+├── run_manifest.json
+├── checkpoints/
+│   ├── latest.ckpt
+│   └── global_step_<N>/
+├── log/
+│   ├── tensorboard/
+│   └── wandb/
+├── video/
+│   ├── train/
+│   └── eval/
+└── diagnostics/
+```
+
+Older `ckpt/latest.ckpt` files remain load-compatible for resume, but new
+default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 
 ## Entry Points
 

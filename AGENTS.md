@@ -24,8 +24,9 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
   training/eval entry. `experiment/` selects recipes and composes cohesive
   groups such as `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
   `evaluation/`, `task/`, and `logger/`. Keep route selection in
-  `experiment=<name>` and operational logging in `logger=tensorboard|wandb`;
-  do not revive one-off top-level route YAMLs for new work.
+  `experiment=<name>` and operational logging in
+  `logger=tensorboard|wandb|tensorboard_wandb`; do not revive one-off
+  top-level route YAMLs for new work.
 
 - **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamer_vla/` and is launched with `python -m`.
 
@@ -59,6 +60,47 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ---
 
+## RLinf alignment lessons
+
+RLinf is the reference for engineering discipline, not for process topology.
+Dreamer-VLA should learn RLinf's configuration, logging, checkpointing, testing,
+and documentation habits while preserving the single-machine Runner design.
+
+- **Do not copy RLinf's Ray stack:** do not introduce Ray, Cluster,
+  WorkerGroup, placement strategies, or multi-node scheduler layers into
+  Dreamer-VLA. Use torchrun / DDP / FSDP plus `BaseRunner`.
+- **Copy the validation mindset:** prefer an early config validation pass before
+  runner setup. `dreamer_vla.config.validate_cfg` checks logger backend names,
+  actor-update route names, task / experiment compatibility, sidecar path
+  existence and naming, resume checkpoint shape, batch-size / world-size
+  divisibility, horizon / chunk-size consistency, and token / action-hidden
+  dimensions before training starts.
+- **Copy the run-artifact layout:** keep each run under one root, with stable
+  subdirectories for `checkpoints/`, `log/tensorboard/`, `log/wandb/`, JSONL
+  logs, `video/train/`, `video/eval/`, and diagnostics. BaseRunner writes
+  `resolved_config.yaml` and `run_manifest.json` at setup; avoid scattering
+  runtime artifacts across unrelated data folders.
+- **Copy multi-backend metric logging:** metric backends should compose as a
+  list, e.g. TensorBoard plus W&B online mode. Use `BaseRunner.log_metrics` and
+  normalized namespaces (`train/`, `eval/`, `env/`, `rollout/`, `time/`) rather
+  than ad hoc scalar names.
+- **Copy checkpoint boundaries:** runners should decide checkpoint cadence and
+  directory names; components should own their model / optimizer / scheduler /
+  RNG state. Prefer global-step checkpoint directories for long runs while
+  keeping compatibility with existing `latest.ckpt` / top-k checkpoints.
+- **Copy registry-style extension points:** algorithms, losses, reward heads,
+  encoders, world models, and environment adapters should be selected through
+  explicit registries, protocols, or Hydra targets. Avoid adding large
+  `if algorithm == ...` branches inside training loops.
+- **Copy executable config matrices:** every mainline recipe should have a
+  low-cost smoke / e2e config covering the intended task, logger backend,
+  sidecar style, checkpoint behavior, and eval path.
+- **Copy operational documentation:** when behavior changes, update the short
+  docs that operators need most: config registry, logging, resume/checkpoint,
+  run-artifact layout, data cleanup, and script registry.
+
+---
+
 ## Configuration guides
 
 - **Route, not knob:** pick one `experiment=<name>` and override task + run-tag +
@@ -67,15 +109,26 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
 - **Task switch:** `task=libero_goal | libero_object | libero_spatial | libero_10` (or any `configs/task/*.yaml`) via Hydra; task YAMLs hold dataset paths, horizons, sidecar expectations, task-specific dims.
 - **Logging switch:** grouped training defaults to `logger=tensorboard`, which
   writes local TensorBoard event files under `${training.out_dir}/log`. Use
-  `logger=wandb` for W&B online mode. Logger configs live under
-  `configs/logger/` and route main-process metrics through the runner
-  `MetricLogger`.
+  `logger=wandb` for W&B online mode and `logger=tensorboard_wandb` for both
+  backends in parallel. Logger configs live under `configs/logger/` and route
+  main-process metrics through the runner `MetricLogger`. When adding logger
+  configs, follow RLinf's list-backend pattern so TensorBoard, W&B, and any
+  future backend can run in parallel.
 - **One-trajectory SFT:** `bash scripts/train_vla.sh
   experiment=vla_sft_one_trajectory task=libero_goal`;
   `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which
   demo.
 - **OOM:** tune `dataloader.batch_size`, `dataloader.num_workers`, `training.gradient_accumulate_every`, `training.enable_activation_checkpointing`, FSDP mixed precision; for online RL also `env.num_envs` and chunk length. For VLA SFT, `training.vla_train_action_head_only=true` freezes the backbone.
-- **Resume:** runners respect `training.resume` + `resume_dir` under `data/outputs/.../checkpoints/`; `training.resume_advance_epoch` controls the epoch counter on resume.
+- **Resume:** runners respect `training.resume` plus an explicit resume path or
+  the latest checkpoint under `${training.out_dir}/checkpoints/`;
+  `training.resume_advance_epoch` controls the epoch counter on resume. Older
+  `${training.out_dir}/ckpt/latest.ckpt` files remain load-compatible.
+- **Run artifacts:** prefer one run root per invocation. Keep logs,
+  TensorBoard/W&B files, videos, diagnostics, and checkpoints under that root
+  so runs can be archived, compared, resumed, or deleted without chasing
+  scattered files. Canonical subdirs are `checkpoints/`, `log/tensorboard/`,
+  `log/wandb/`, `video/train/`, `video/eval/`, and `diagnostics/`; canonical
+  root files are `resolved_config.yaml` and `run_manifest.json`.
 
 ---
 
@@ -86,7 +139,9 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
   persists step records. Online RL emits chunk-credit, KL (k1 estimator),
   advantage, value, action-clipping; see
   `dreamer_vla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
-- **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`.
+  Prefer RLinf-style metric namespaces: `train/`, `eval/`, `env/`,
+  `rollout/`, and `time/`.
+- **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`. Use `BaseRunner.get_global_step_checkpoint_dir(step)` / `get_component_checkpoint_dir(component, step=...)` for RLinf-style component checkpoints instead of hand-building paths.
 - **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `python -m dreamer_vla.diagnostics.<module>`.
 
 ---
@@ -113,11 +168,13 @@ module groups: `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
 `evaluation/`, and `task/`. Do not split every knob into tiny groups; keep each
 module YAML readable and cohesive. Compatibility top-level YAMLs may remain,
 but new script and docs examples should use `python -m dreamer_vla.train
-experiment=<name>`.
+experiment=<name>`. New config-facing behavior should be validated early in a
+Dreamer-VLA equivalent of RLinf's config validation layer, not discovered deep
+inside a training loop.
 
 **Runner** (`dreamer_vla/runners/`): the training unit. Subclass BaseRunner and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per runner.
 
-**Algorithms** (`dreamer_vla/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so runners compose them without conditional branching.
+**Algorithms** (`dreamer_vla/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so runners compose them without conditional branching. Register non-Dreamer actor-update routes in `dreamer_vla/algorithms/registry.py` and reference them from config via `algorithm.update_type`.
 
 **Models** (`dreamer_vla/models/`): three trainable building blocks — encoder, world model, VLA backbone — each behind a protocol so a runner can swap implementations without changing the algorithm.
 
@@ -147,7 +204,7 @@ shell launcher in `scripts/` only if the invocation differs from
 
 ### New PPO variant
 
-Add a module under `dreamer_vla/algorithms/ppo/` matching the existing kwargs / return signature; wire it into the relevant runner. Do not branch existing variants with `if algorithm == "my_variant"`. Add regression tests in `tests/` covering the invariants the variant must hold.
+Add a module under `dreamer_vla/algorithms/ppo/` matching the existing kwargs / return signature; register it in `dreamer_vla/algorithms/registry.py` with canonical aliases and route metadata. Do not branch existing variants with `if algorithm == "my_variant"` inside training loops. Add regression tests in `tests/` covering the invariants the variant must hold.
 
 ### New world model
 
