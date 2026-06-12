@@ -18,8 +18,8 @@ venv/
 third_party/
 
 # Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
-# Everything under data/ is generated or downloaded per README; nothing here is source.
-data/
+# Everything under the repository-root data/ is generated or downloaded per README.
+/data/
 
 # Local training / experiment logs
 train.log
