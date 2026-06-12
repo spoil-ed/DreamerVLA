@@ -189,6 +189,26 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert "${TASK}_no_noops_t_${IMAGE_RESOLUTION}" in prepare_text
 
 
+def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
+    root = _project_root()
+    setup = (root / "SETUP.md").read_text(encoding="utf-8")
+
+    assert "stage 1: replay and mark no-ops" in setup
+    assert "--keep-noops" in setup
+    assert "stage 2: filter marked no-ops" in setup
+    assert "dreamer_vla.preprocess.filter_marked_libero_hdf5" in setup
+    assert "FILTER_NOOPS=1" in setup
+
+
+def test_setup_docs_explain_one_shot_four_suite_libero_preprocessing() -> None:
+    root = _project_root()
+    setup = (root / "SETUP.md").read_text(encoding="utf-8")
+
+    assert "bash scripts/preprocess_libero.sh" in setup
+    assert "libero_goal libero_object libero_spatial libero_10" in setup
+    assert "LIBERO_SUITES=" in setup
+
+
 def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> None:
     root = _project_root()
     wrapper = root / "scripts" / "preprocess_libero.sh"

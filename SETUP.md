@@ -122,9 +122,43 @@ ${DVLA_DATA_ROOT}/datasets/calvin/
 
 ## 3. Preprocess LIBERO
 
+Preprocess all four standard LIBERO suites in one run:
+
+```bash
+bash scripts/preprocess_libero.sh
+```
+
+By default this runs `libero_goal libero_object libero_spatial libero_10` and
+delegates each suite to `scripts/preprocess/prepare_libero_data.sh`. To process
+a subset, set `LIBERO_SUITES`:
+
+```bash
+LIBERO_SUITES="libero_goal libero_object" bash scripts/preprocess_libero.sh
+```
+
+For a single suite or a resumable rerun of one suite:
+
 ```bash
 TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
 ```
+
+The default `FILTER_NOOPS=1` path does no-op handling before reward and hidden
+sidecar generation:
+
+```text
+stage 1: replay and mark no-ops
+  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
+  writes ${TASK}_marked_t_256 with data/demo_*/noop_mask
+
+stage 2: filter marked no-ops
+  python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 --filter-noops
+  writes ${TASK}_no_noops_t_256
+```
+
+Keep `FILTER_NOOPS=1` for the standard configs. Setting `FILTER_NOOPS=0`
+writes `${TASK}_with_noops_t_256`, but the pretokenize configs in this release
+target `*_no_noops_t_*` paths, so also set `RUN_PRETOKENIZE=0` when using that
+debug path.
 
 Outputs:
 
