@@ -1,0 +1,4 @@
+# @package runner.logger
+project_name: dreamer_vla
+logger_backends: [tensorboard]
+log_path: ${training.out_dir}/log

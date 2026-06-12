@@ -117,6 +117,9 @@ Training launchers are Hydra wrappers. `experiment=...` selects a config group u
 `configs/experiment/`; `task=...`, `gpus=...`, `ngpu=...`, `batch_size=...`,
 and `num_workers=...` are script-level overrides; any other `key=value`
 argument is passed to the real training config unchanged.
+Grouped training defaults to `logger=tensorboard` and writes local TensorBoard
+events under `${training.out_dir}/log/tensorboard`; use `logger=wandb` to route
+main-process metrics through W&B online mode.
 
 ## Evaluation
 

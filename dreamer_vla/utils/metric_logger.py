@@ -123,6 +123,7 @@ class MetricLogger:
             raise ValueError(f"Unsupported logger backend: {unsupported}")
 
         self.wandb_proxy = _cfg_get(logger_cfg, "wandb_proxy", None)
+        self.wandb_mode = str(_cfg_get(logger_cfg, "wandb_mode", "online"))
         self.swanlab_mode = str(_cfg_get(logger_cfg, "swanlab_mode", "cloud"))
         self.config = OmegaConf.to_container(cfg, resolve=True)
         self._all_loggers: list[dict[str, Any]] = []
@@ -157,6 +158,7 @@ class MetricLogger:
                 config=self.config,
                 settings=settings,
                 dir=str(wandb_log_path),
+                mode=self.wandb_mode,
                 reinit=True,
             )
             bundle["wandb"] = wandb

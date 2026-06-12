@@ -20,11 +20,12 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
   - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval, DDP/FSDP helpers, and standalone online/frozen training tools.
   - `utils/` – Checkpoint, logger, optim, EMA, visualization, shared helpers.
 
-- **`configs/`** – Hydra configs. `train.yaml` is the grouped training/eval
-  entry; `route/` selects experiments and composes smaller groups such as
-  `runner/`, `dataset/`, `world_model/`, `algorithm/`, `optim/`, and
-  `dataloader/`. Compatibility top-level route YAMLs may exist, but new
-  scripts and docs should use the grouped entry.
+- **`configs/`** – Hydra configs. `train.yaml` is the stable grouped
+  training/eval entry. `experiment/` selects recipes and composes cohesive
+  groups such as `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
+  `evaluation/`, `task/`, and `logger/`. Keep route selection in
+  `experiment=<name>` and operational logging in `logger=tensorboard|wandb`;
+  do not revive one-off top-level route YAMLs for new work.
 
 - **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamer_vla/` and is launched with `python -m`.
 
@@ -64,6 +65,11 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
   GPU count; don't recombine fields by hand outside Hydra defaults. Registry
   in [configs/README.md](configs/README.md).
 - **Task switch:** `task=libero_goal | libero_object | libero_spatial | libero_10` (or any `configs/task/*.yaml`) via Hydra; task YAMLs hold dataset paths, horizons, sidecar expectations, task-specific dims.
+- **Logging switch:** grouped training defaults to `logger=tensorboard`, which
+  writes local TensorBoard event files under `${training.out_dir}/log`. Use
+  `logger=wandb` for W&B online mode. Logger configs live under
+  `configs/logger/` and route main-process metrics through the runner
+  `MetricLogger`.
 - **One-trajectory SFT:** `bash scripts/train_vla.sh
   experiment=vla_sft_one_trajectory task=libero_goal`;
   `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which
@@ -75,7 +81,11 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ## Metrics, checkpoints, and evaluation
 
-- **Metrics:** runners use `dreamer_vla/utils/json_logger.py` plus optional wandb / tensorboard. Online RL emits chunk-credit, KL (k1 estimator), advantage, value, action-clipping; see `dreamer_vla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
+- **Metrics:** runners use `BaseRunner.log_metrics` / `MetricLogger` for
+  TensorBoard or W&B scalar metrics, plus JSONL logs where a runner still
+  persists step records. Online RL emits chunk-credit, KL (k1 estimator),
+  advantage, value, action-clipping; see
+  `dreamer_vla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
 - **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`.
 - **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `python -m dreamer_vla.diagnostics.<module>`.
 
@@ -112,6 +122,13 @@ experiment=<name>`.
 **Models** (`dreamer_vla/models/`): three trainable building blocks — encoder, world model, VLA backbone — each behind a protocol so a runner can swap implementations without changing the algorithm.
 
 **Datasets** (`dreamer_vla/dataset/`): must expose a stable public API enforced by a test in `tests/`.
+
+**Preprocessed sidecars** (`data/processed_data/`): active task configs should
+consume the paths emitted by the Hydra-centered preprocess launchers. For OFT
+Scheme A, `scripts/preprocess/35_oft_action_hidden.sh` writes
+`${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2`; keep task YAMLs and
+docs aligned with that generated name unless an experiment explicitly
+overrides the path.
 
 **Envs** (`dreamer_vla/envs/`): split between offline (dataset-driven) and online (rollout-driven) wrappers.
 

@@ -69,7 +69,7 @@ openvla_oft:
   use_proprio: true
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_10_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
+  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
   input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
   failure_hdf5_dir: null
   failure_action_hidden_dir: null

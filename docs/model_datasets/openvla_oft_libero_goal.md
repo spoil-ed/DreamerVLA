@@ -32,7 +32,7 @@ Sidecar attrs (`data/<task>.hdf5` file level):
 | `prompt_style` / `rotate_images_180` | `vla_policy` / true | `vla_policy` / true |
 
 Reference sidecar:
-`data/processed_data/libero_goal_no_noops_t_256_oft_hdf5_6650_legacy_action_hidden_vla_policy_h2/`.
+`data/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2/`.
 
 This mirrors the RynnVLA-002 downstream contract: the WM observation tokens are
 action slots.  OFT differs in token count and width (`56 × 4096` instead of

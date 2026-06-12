@@ -64,8 +64,11 @@ EXPERIMENT_MODULES = {
 }
 
 
-def _compose_experiment(name: str):
-    return compose(config_name="train", overrides=[f"experiment={name}"])
+def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
+    overrides = [f"experiment={name}"]
+    if extra_overrides is not None:
+        overrides.extend(extra_overrides)
+    return compose(config_name="train", overrides=overrides)
 
 
 def test_runner_public_api_exports_route_specific_names() -> None:
@@ -239,6 +242,25 @@ def test_train_config_experiments_compose_through_stage_modules() -> None:
             assert "workspace" not in new_cfg
 
 
+def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        default_cfg = _compose_experiment("world_model_dinowm_chunk")
+        wandb_cfg = _compose_experiment(
+            "dreamervla_rynn_dino_wm_wmpo_outcome",
+            extra_overrides=["logger=wandb"],
+        )
+
+    assert default_cfg.runner.logger.project_name == "dreamer_vla"
+    assert default_cfg.runner.logger.logger_backends == ["tensorboard"]
+    assert default_cfg.runner.logger.log_path == f"{default_cfg.training.out_dir}/log"
+
+    assert wandb_cfg.runner.logger.project_name == "dreamer_vla"
+    assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
+    assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
+    assert wandb_cfg.runner.logger.wandb_mode == "online"
+
+
 def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -253,6 +275,25 @@ def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
         assert cfg.dataset.max_demos_per_file is None
     assert "openvla_oft_l1_one_trajectory" in l1.training.out_dir
     assert "openvla_oft_lm_head_one_trajectory" in lm_head.training.out_dir
+
+
+def test_openvla_oft_action_hidden_defaults_match_preprocess_output() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    suites = ("libero_goal", "libero_object", "libero_spatial", "libero_10")
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfgs = [
+            _compose_experiment(
+                "oft_world_model_dinowm_chunk",
+                extra_overrides=[f"task={suite}"],
+            )
+            for suite in suites
+        ]
+
+    for cfg in cfgs:
+        expected = f"{cfg.task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2"
+        assert cfg.task.openvla_oft.action_hidden_dir == expected
+        assert cfg.dataset.hidden_dir == expected
 
 
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:

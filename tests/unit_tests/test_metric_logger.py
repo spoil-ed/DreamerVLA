@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,66 @@ def test_metric_logger_defaults_to_training_output_log_dir(
     logger.finish()
 
     assert (out_dir / "log" / "tensorboard" / "config.yaml").is_file()
+
+
+def test_metric_logger_passes_online_mode_to_wandb_init(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    settings_calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        @staticmethod
+        def Settings(**kwargs):
+            settings_calls.append(dict(kwargs))
+            return {"settings": dict(kwargs)}
+
+        @staticmethod
+        def init(**kwargs) -> None:
+            calls.append(dict(kwargs))
+
+        @staticmethod
+        def log(*args, **kwargs) -> None:
+            return None
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    log_root = tmp_path / "logs"
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "project_name": "dreamer_vla",
+                    "experiment_name": "unit-online",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "online",
+                    "wandb_proxy": "http://proxy.local:8080",
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out")},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg)
+    logger.finish()
+
+    assert settings_calls == [{"https_proxy": "http://proxy.local:8080"}]
+    assert calls == [
+        {
+            "project": "dreamer_vla",
+            "name": "unit-online",
+            "config": OmegaConf.to_container(cfg, resolve=True),
+            "settings": {"settings": {"https_proxy": "http://proxy.local:8080"}},
+            "dir": str(log_root / "wandb"),
+            "mode": "online",
+            "reinit": True,
+        }
+    ]
 
 
 def test_base_runner_log_metrics_normalizes_current_metric_names(

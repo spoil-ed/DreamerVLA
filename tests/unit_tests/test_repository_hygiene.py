@@ -73,6 +73,48 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         assert stale == [], f"{text_file.relative_to(project_root)}: {stale}"
 
 
+def test_agent_brief_describes_current_hydra_config_groups() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    agents_text = (project_root / "AGENTS.md").read_text(encoding="utf-8")
+    config_section = agents_text.split("- **`configs/`**", maxsplit=1)[1].split(
+        "- **`scripts/`**", maxsplit=1
+    )[0]
+
+    for current_group in (
+        "experiment/",
+        "VLA/",
+        "worldmodel/",
+        "classifier/",
+        "dreamervla/",
+        "evaluation/",
+        "task/",
+        "logger/",
+    ):
+        assert current_group in config_section
+
+    for stale_group in (
+        "route/",
+        "runner/",
+        "dataset/",
+        "world_model/",
+        "algorithm/",
+        "dataloader/",
+    ):
+        assert stale_group not in config_section
+
+
+def test_claude_brief_delegates_to_current_agent_guidance() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    claude_text = (project_root / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "AGENTS.md" in claude_text
+    assert "experiment=<name>" in claude_text
+    assert "logger=tensorboard" in claude_text
+    assert "logger=wandb" in claude_text
+    assert "--config-name" not in claude_text
+    assert "one top-level YAML per training route" not in claude_text
+
+
 def test_active_sources_do_not_reference_removed_action_head_variant() -> None:
     project_root = Path(__file__).resolve().parents[2]
     removed_variant = "pi0" + "_query"

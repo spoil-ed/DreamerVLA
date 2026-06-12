@@ -11,7 +11,8 @@ configs/
 ├── classifier/
 ├── dreamervla/
 ├── evaluation/
-└── task/
+├── task/
+└── logger/
 ```
 
 `train.yaml` is the stable entrypoint. `experiment=<name>` selects a recipe
@@ -19,6 +20,15 @@ under `configs/experiment/`; that recipe overrides one cohesive module group
 (`VLA`, `worldmodel`, `classifier`, `dreamervla`, or `evaluation`). Keep shell
 overrides operational and small: GPUs, batch size, checkpoint paths, output
 tags, and smoke-test limits.
+
+`logger=tensorboard` is the default for grouped training and writes local
+TensorBoard event files under `${training.out_dir}/log/tensorboard`.
+Use `logger=wandb` to send main-process metrics to W&B online mode while
+keeping W&B run files under `${training.out_dir}/log/wandb`:
+
+```bash
+python -m dreamer_vla.train experiment=world_model_dinowm_chunk logger=wandb
+```
 
 ## Entry Points
 
