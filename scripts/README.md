@@ -50,10 +50,15 @@ only under `${DVLA_DATA_ROOT}`, then append the new script to
 | Script | Purpose |
 | --- | --- |
 | `preprocess_libero.sh` | Top-level wrapper around `preprocess/prepare_libero_data.sh` for one or more LIBERO suites |
-| `preprocess/prepare_libero_data.sh` | End-to-end resumable LIBERO preprocessing path |
-| `preprocess/process_all_libero_data.sh` | Lower-level LIBERO image, conversation, token, and config generation |
+| `preprocess/prepare_libero_data.sh` | Run selected numbered LIBERO preprocessing steps |
+| `preprocess/process_all_libero_data.sh` | Compatibility wrapper for the pretokenized-dataset step across suites |
+| `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
+| `preprocess/20_pretokenize_dataset.sh` | Build image/state trees, conv JSONs, token records, manifests, and YAML configs |
+| `preprocess/30_action_hidden.sh` | Extract legacy RynnVLA action-hidden sidecars |
+| `preprocess/40_validate.sh` | Validate generated LIBERO preprocessing artifacts |
 | `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
+| `preprocess/_env.sh` | Shared preprocessing-step environment |
 
 Python modules:
 

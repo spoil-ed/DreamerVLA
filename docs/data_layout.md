@@ -146,6 +146,28 @@ processed_data/<suite>_metainfo.json
 configs/<suite>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
+Preprocessing follows the same orchestrator-and-step style as install and
+download scripts. Run the full path with:
+
+```bash
+TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
+```
+
+Run or reproduce one step with either `PREPROCESS_ONLY` or the numbered child
+script:
+
+```bash
+TASK=libero_goal PREPROCESS_ONLY=20_pretokenize_dataset \
+  bash scripts/preprocess/prepare_libero_data.sh
+TASK=libero_goal bash scripts/preprocess/20_pretokenize_dataset.sh
+```
+
+The numbered steps are:
+
+```text
+10_hdf5_reward -> 20_pretokenize_dataset -> 30_action_hidden -> 40_validate
+```
+
 If `DVLA_DATA_ROOT` changes after preprocessing, regenerate stage 4-5 or update
 absolute prefixes inside generated YAML / JSON manifests.
 

@@ -147,6 +147,14 @@ For a single suite or a resumable rerun of one suite:
 TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
 ```
 
+The preprocessing path is split into numbered child scripts, matching the
+download and install flow. To rerun only one part:
+
+```bash
+TASK=libero_goal PREPROCESS_ONLY=20_pretokenize_dataset bash scripts/preprocess/prepare_libero_data.sh
+TASK=libero_goal bash scripts/preprocess/20_pretokenize_dataset.sh
+```
+
 The default `FILTER_NOOPS=1` path does no-op handling before reward and hidden
 sidecar generation:
 

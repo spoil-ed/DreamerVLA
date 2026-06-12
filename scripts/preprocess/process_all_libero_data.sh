@@ -1,272 +1,92 @@
 #!/usr/bin/env bash
-# Comprehensive LIBERO data preprocessing pipeline.
-# For each suite: stage 2 (img/state/action extract, CPU)
-#                 stage 3 (convs JSON,  CPU)
-#                 stage 4 (pretokenize + concat manifest, GPU)
-#                 stage 5 (write training yaml configs)
+# Compatibility wrapper for the lower LIBERO image/conversation/token/config path.
 #
-# libero_goal is fully processed already and is SKIPPED by default.
-#
-# Usage:
-#   tmux new-session -d -s libero_data \
-#     "bash scripts/preprocess/process_all_libero_data.sh"
-#
-# Env overrides:
-#   SUITES="libero_10 libero_object libero_spatial"  (default)
-#   GPUS=0
-#   PRETOKENIZE_PROCS=16
-#   FORCE=1   re-run even if outputs look complete
-set -uo pipefail
+# New code should prefer scripts/preprocess/prepare_libero_data.sh or the
+# numbered step scripts directly. This wrapper is kept for existing workflows
+# that already prepared final HDF5/reward files and want to process one or more
+# suites through the image -> conv -> token -> config stages.
+set -euo pipefail
 
-# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
-PROJECT_ROOT="${DVLA_ROOT}"
-case ":${PYTHONPATH:-}:" in
-  *":${DVLA_ROOT}:"*) ;;
-  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
-esac
-PYTHON="${PYTHON:-python}"
-
-export MUJOCO_GL="${MUJOCO_GL:-egl}"
-export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
-export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
-export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
-cd "${PROJECT_ROOT}"
-
-LOG_DIR="${DVLA_DATA_ROOT}/logs/libero_data_prep"
-mkdir -p "${LOG_DIR}"
+PREPROCESS_SCRIPT_DIR="${PREPROCESS_SCRIPT_DIR:-${SCRIPT_DIR}}"
+PROCESS_ALL_ONLY="${PROCESS_ALL_ONLY:-${PREPROCESS_ONLY:-}}"
+cd "${DVLA_ROOT}"
 
 SUITES="${SUITES:-libero_10 libero_object libero_spatial}"
-GPUS="${GPUS:-0}"
-PRETOKENIZE_PROCS="${PRETOKENIZE_PROCS:-16}"
-IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-256}"
-ACTION_HORIZON="${ACTION_HORIZON:-1}"           # atomic pretokenize
 HIS="${HIS:-1}"
-FORCE="${FORCE:-0}"
+ACTION_HORIZON="${ACTION_HORIZON:-1}"
+IMAGE_RESOLUTION="${IMAGE_RESOLUTION:-256}"
 
-TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
+PROCESS_ALL_STEPS=(
+  "20_pretokenize_dataset.sh"
+)
 
-CONVS_DIR="${PROCESSED_DATA_ROOT}/convs"
-TOKENS_DIR="${PROCESSED_DATA_ROOT}/tokens"
-CONCATE_DIR="${PROCESSED_DATA_ROOT}/concate_tokens"
-mkdir -p "${CONVS_DIR}" "${TOKENS_DIR}" "${CONCATE_DIR}"
-
-suite_task_name() {
-  printf '%s\n' "${1#libero_}"
+step_selected() {
+  local step="$1"
+  local item
+  [[ -z "${PROCESS_ALL_ONLY}" ]] && return 0
+  for item in ${PROCESS_ALL_ONLY//,/ }; do
+    [[ "${step}" == "${item}" || "${step}" == "${item}"*.sh ]] && return 0
+  done
+  return 1
 }
 
-json_len() {
-  [[ -f "$1" ]] || { echo 0; return; }
-  "${PYTHON}" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$1" 2>/dev/null || echo 0
+run_step() {
+  local suite="$1"
+  local step="$2"
+  local script="${PREPROCESS_SCRIPT_DIR}/${step}"
+
+  if ! step_selected "${step}"; then
+    echo "[process_all_libero_data] skip ${suite} ${step} (not selected by PROCESS_ALL_ONLY=${PROCESS_ALL_ONLY})"
+    return
+  fi
+  if [[ ! -f "${script}" ]]; then
+    echo "[process_all_libero_data] missing step script: ${script}" >&2
+    exit 2
+  fi
+
+  echo "[process_all_libero_data] start ${suite} ${step}"
+  set +e
+  TASK="${suite}" \
+  HIS="${HIS}" \
+  ACTION_HORIZON="${ACTION_HORIZON}" \
+  IMAGE_RESOLUTION="${IMAGE_RESOLUTION}" \
+    bash "${script}"
+  rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    echo "[process_all_libero_data] FAIL ${suite} ${step} exit=${rc}"
+    return "${rc}"
+  fi
+  echo "[process_all_libero_data] done ${suite} ${step}"
 }
 
-pkl_count() {
-  [[ -d "$1/files" ]] || { echo 0; return; }
-  find "$1/files" -maxdepth 1 -name '*.pkl' | wc -l
-}
-
-process_one_suite() {
-  local SUITE="$1"
-  local TASK_NAME
-  TASK_NAME="$(suite_task_name "${SUITE}")"
-  local RAW_DIR="${PROCESSED_DATA_ROOT}/${SUITE}_no_noops_t_${IMAGE_RESOLUTION}"
-  local IMG_STATE_DIR="${PROCESSED_DATA_ROOT}/${SUITE}_image_state_action_t_${IMAGE_RESOLUTION}"
-  local CONFIG_DIR="${DVLA_DATA_ROOT}/configs/${SUITE}"
-  local SUFFIX="his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}"
-  local MANIFEST="${CONCATE_DIR}/${SUITE}_${SUFFIX}.json"
-  local VAL_IND_REC="${TOKENS_DIR}/${SUITE}_his_${HIS}_val_ind_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}/record.json"
-  local VAL_OOD_REC="${TOKENS_DIR}/${SUITE}_his_${HIS}_val_ood_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}/record.json"
-  local STAMP
-  STAMP="$(date +%Y%m%d_%H%M%S)"
-  mkdir -p "${CONFIG_DIR}"
-
-  echo ""
-  echo "════════════════════════════════════════════════════════════════"
-  echo " SUITE = ${SUITE}   TASK = ${TASK_NAME}   ${STAMP}"
-  echo "════════════════════════════════════════════════════════════════"
-
-  # Sanity: raw must exist
-  if [[ ! -d "${RAW_DIR}" ]]; then
-    echo "ERROR: missing raw dir ${RAW_DIR}"; return 2
-  fi
-  local raw_n
-  raw_n=$(ls "${RAW_DIR}"/*.hdf5 2>/dev/null | wc -l)
-  echo "  raw hdf5 files: ${raw_n}"
-  if [[ "${raw_n}" -lt 1 ]]; then echo "  ERROR: no hdf5 in raw"; return 2; fi
-
-  # ── Stage 2 ── extract images/state/action ─────────────────────────────────
-  local need_stage2=1
-  if [[ -d "${IMG_STATE_DIR}" ]]; then
-    local td=$(ls "${IMG_STATE_DIR}" 2>/dev/null | wc -l)
-    if [[ "${td}" -ge "${raw_n}" ]] && [[ "${FORCE}" != "1" ]]; then
-      echo "  [stage2] ${td} task dirs present, skipping"
-      need_stage2=0
-    else
-      echo "  [stage2] only ${td}/${raw_n} task dirs — wiping and re-running"
-      rm -rf "${IMG_STATE_DIR}"
-    fi
-  fi
-  if [[ "${need_stage2}" == "1" ]]; then
-    local log="${LOG_DIR}/${SUITE}_stage2_${STAMP}.log"
-    echo "  [stage2] -> ${log}"
-    "${PYTHON}" -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
-      --libero_task_suite "${SUITE}" \
-      --image_resolution "${IMAGE_RESOLUTION}" \
-      --raw_data_dir "${RAW_DIR}" \
-      --save_dir "${IMG_STATE_DIR}" \
-      > "${log}" 2>&1
-    local rc=$?
-    local td=$(ls "${IMG_STATE_DIR}" 2>/dev/null | wc -l)
-    echo "  [stage2] exit=${rc}  task dirs ${td}/${raw_n}"
-    if [[ "${td}" -lt "${raw_n}" ]]; then
-      echo "  [stage2] FAIL: only ${td}/${raw_n} dirs created — aborting suite"; return 3
-    fi
-  fi
-
-  # ── Stage 3 ── generate conversation JSONs (his_1 / len_action=1) ──────────
-  local CONV_TRAIN="${CONVS_DIR}/${SUITE}_his_${HIS}_train_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json"
-  local CONV_VIND="${CONVS_DIR}/${SUITE}_his_${HIS}_val_ind_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json"
-  local CONV_VOOD="${CONVS_DIR}/${SUITE}_his_${HIS}_val_ood_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json"
-  if [[ -f "${CONV_TRAIN}" && -f "${CONV_VIND}" && -f "${CONV_VOOD}" && "${FORCE}" != "1" ]]; then
-    echo "  [stage3] convs present, skipping"
-  else
-    local log="${LOG_DIR}/${SUITE}_stage3_${STAMP}.log"
-    echo "  [stage3] -> ${log}"
-    (
-      "${PYTHON}" -m dreamer_vla.preprocess.action_state_model_conv_generation \
-        --base_dir "${IMG_STATE_DIR}" \
-        --his "${HIS}" \
-        --len_action "${ACTION_HORIZON}" \
-        --task_name "${TASK_NAME}" \
-        --resolution "${IMAGE_RESOLUTION}" \
-        --with_state \
-        --img_names imgs_third_view imgs_wrist \
-        --output_dir "${CONVS_DIR}"
-    ) > "${log}" 2>&1
-    local rc=$?
-    echo "  [stage3] exit=${rc}"
-    for f in "${CONV_TRAIN}" "${CONV_VIND}" "${CONV_VOOD}"; do
-      [[ -f "$f" ]] || { echo "  [stage3] FAIL: missing $f"; return 4; }
-    done
-  fi
-
-  # ── Stage 4 ── pretokenize + concat manifest (GPU ${GPUS}) ─────────────────
-  local TOK_TRAIN="${TOKENS_DIR}/${SUITE}_his_${HIS}_train_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}"
-  local TOK_VIND="${TOKENS_DIR}/${SUITE}_his_${HIS}_val_ind_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}"
-  local TOK_VOOD="${TOKENS_DIR}/${SUITE}_his_${HIS}_val_ood_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}"
-  local TRAIN_REC="${TOK_TRAIN}/record.json"
-  local n_conv_train n_conv_vind n_conv_vood n_tok_train n_tok_vind n_tok_vood
-  local n_rec_train n_rec_vind n_rec_vood n_manifest n_total
-  n_conv_train=$(json_len "${CONV_TRAIN}")
-  n_conv_vind=$(json_len "${CONV_VIND}")
-  n_conv_vood=$(json_len "${CONV_VOOD}")
-  n_tok_train=$(pkl_count "${TOK_TRAIN}")
-  n_tok_vind=$(pkl_count "${TOK_VIND}")
-  n_tok_vood=$(pkl_count "${TOK_VOOD}")
-  n_rec_train=$(json_len "${TRAIN_REC}")
-  n_rec_vind=$(json_len "${VAL_IND_REC}")
-  n_rec_vood=$(json_len "${VAL_OOD_REC}")
-  n_manifest=$(json_len "${MANIFEST}")
-  n_total=$((n_tok_train + n_tok_vind + n_tok_vood))
-  echo "  [stage4] counts train ${n_tok_train}/${n_conv_train}, val_ind ${n_tok_vind}/${n_conv_vind}, val_ood ${n_tok_vood}/${n_conv_vood}; records ${n_rec_train}/${n_rec_vind}/${n_rec_vood}; manifest ${n_manifest}/${n_total}"
-
-  local tokens_complete=0 records_complete=0
-  if [[ "${n_tok_train}" -eq "${n_conv_train}" && "${n_tok_vind}" -eq "${n_conv_vind}" && "${n_tok_vood}" -eq "${n_conv_vood}" ]]; then
-    tokens_complete=1
-  fi
-  if [[ "${tokens_complete}" == "1" && "${n_rec_train}" -eq "${n_tok_train}" && "${n_rec_vind}" -eq "${n_tok_vind}" && "${n_rec_vood}" -eq "${n_tok_vood}" && "${n_manifest}" -eq "${n_total}" ]]; then
-    records_complete=1
-  fi
-
-  if [[ "${tokens_complete}" == "1" && "${records_complete}" == "1" && "${FORCE}" != "1" ]]; then
-    echo "  [stage4] pkl + records complete, skipping"
-  else
-    local log="${LOG_DIR}/${SUITE}_stage4_${STAMP}.log"
-    echo "  [stage4] -> ${log}  (GPUs=${GPUS})"
-    (
-      if [[ "${tokens_complete}" != "1" || "${FORCE}" == "1" ]]; then
-        overwrite_arg=()
-        [[ "${OVERWRITE_TOKENS:-0}" == "1" ]] && overwrite_arg=(--overwrite)
-        "${PYTHON}" -m dreamer_vla.preprocess.pretoken_state_action_model \
-          --task "${TASK_NAME}" \
-          --resolution "${IMAGE_RESOLUTION}" \
-          --with_state \
-          --img_names imgs_third_view imgs_wrist \
-          --his "${HIS}" \
-          --len_action "${ACTION_HORIZON}" \
-          --num_procs "${PRETOKENIZE_PROCS}" \
-          --tokenizer_path "${TOKENIZER_PATH}" \
-          --in_filename_dir "${CONVS_DIR}" \
-          --out_root "${TOKENS_DIR}" \
-          --gpu_devices "${GPUS}" \
-          "${overwrite_arg[@]}"
-      else
-        echo "  [stage4] token pkl complete; rebuilding record/manifest only"
-      fi
-
-      bash "${PROJECT_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
-
-      "${PYTHON}" -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
-        --source_dir_patterns "${SUITE}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
-        --all_patterns "${SUITE}_his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
-        --processed_data_root "${PROCESSED_DATA_ROOT}"
-    ) > "${log}" 2>&1
-    local rc=$?
-    echo "  [stage4] exit=${rc}"
-  fi
-
-  echo "  [stage4] validating artifacts"
-  if ! "${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
-    --data-root "${DVLA_DATA_ROOT}" \
-    --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${SUITE}" \
-    --his "${HIS}" \
-    --action-horizon "${ACTION_HORIZON}" \
-    --image-resolution "${IMAGE_RESOLUTION}" \
-    --skip-configs; then
-    echo "  [stage4] FAIL: validation failed"; return 5
-  fi
-  local n=$("${PYTHON}" -c "import json; print(len(json.load(open('${MANIFEST}'))))")
-  echo "  [stage4] manifest entries: ${n}"
-
-  # ── Stage 5 ── write training yaml configs ────────────────────────────────
-  cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize.yaml" <<EOF
-META:
-  - path: '${MANIFEST}'
-prompt_text: 'Finish the task: {task_text}.'
-EOF
-  cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize_val_ind.yaml" <<EOF
-META:
-  - path: '${VAL_IND_REC}'
-prompt_text: 'Finish the task: {task_text}.'
-EOF
-  cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize_val_ood.yaml" <<EOF
-META:
-  - path: '${VAL_OOD_REC}'
-prompt_text: 'Finish the task: {task_text}.'
-EOF
-  echo "  [stage5] wrote yaml configs to ${CONFIG_DIR}"
-  echo "  [stage5] validating configs"
-  if ! "${PYTHON}" -m dreamer_vla.preprocess.validate_libero_data_prep \
-    --data-root "${DVLA_DATA_ROOT}" \
-    --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${SUITE}" \
-    --his "${HIS}" \
-    --action-horizon "${ACTION_HORIZON}" \
-    --image-resolution "${IMAGE_RESOLUTION}"; then
-    echo "  [stage5] FAIL: validation failed"; return 6
-  fi
-  echo "  ✓ SUITE ${SUITE} DONE"
-}
+echo "[process_all_libero_data] root=${DVLA_ROOT}"
+echo "[process_all_libero_data] data_root=${DVLA_DATA_ROOT}"
+echo "[process_all_libero_data] suites=${SUITES}"
+echo "[process_all_libero_data] planned_steps=${PROCESS_ALL_STEPS[*]}"
+echo "[process_all_libero_data] resume_hint=use PROCESS_ALL_ONLY=<step> or run scripts/preprocess/<step> directly"
 
 OVERALL_RC=0
 for suite in ${SUITES}; do
-  if ! process_one_suite "${suite}"; then
+  echo ""
+  echo "════════════════════════════════════════════════════════════════"
+  echo " SUITE = ${suite}"
+  echo "════════════════════════════════════════════════════════════════"
+  if ! (
+    set -e
+    for step in "${PROCESS_ALL_STEPS[@]}"; do
+      if ! run_step "${suite}" "${step}"; then
+        exit 1
+      fi
+    done
+  ); then
     echo "✗ ${suite} FAILED"
     OVERALL_RC=1
+  else
+    echo "✓ ${suite} DONE"
   fi
 done
 
@@ -274,13 +94,13 @@ echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo " ALL DONE  (overall_rc=${OVERALL_RC})  $(date)"
 echo "════════════════════════════════════════════════════════════════"
-for s in libero_goal libero_10 libero_object libero_spatial; do
-  f="${CONCATE_DIR}/${s}_his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json"
-  if [[ -f "$f" ]]; then
-    n=$("${PYTHON}" -c "import json; print(len(json.load(open('$f'))))" 2>/dev/null)
-    echo "  ${s}: ${n} manifest entries"
+for suite in libero_goal libero_10 libero_object libero_spatial; do
+  manifest="${DVLA_DATA_ROOT}/processed_data/concate_tokens/${suite}_his_${HIS}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}.json"
+  if [[ -f "${manifest}" ]]; then
+    n=$("${PYTHON:-python}" -c "import json; print(len(json.load(open('${manifest}'))))" 2>/dev/null)
+    echo "  ${suite}: ${n} manifest entries"
   else
-    echo "  ${s}: MISSING manifest"
+    echo "  ${suite}: MISSING manifest"
   fi
 done
-exit ${OVERALL_RC}
+exit "${OVERALL_RC}"
