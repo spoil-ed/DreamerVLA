@@ -50,3 +50,16 @@ CONFIG=world_model_dinowm_chunk bash scripts/train_wm.sh task=libero_goal
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
 `dreamervla_rynn_dino_wm_wmpo_outcome` / `_actor_critic` · Eval:
 `bash scripts/eval_libero_vla.sh`.
+
+## Workflow verification (2026-06-12, CPU interface level)
+
+Verified against on-disk artifacts: assets present (VLA ckpt, Lumina,
+Chameleon tokenizer/VQGAN); one-trajectory SFT dataset instantiates from
+its route config (133 samples, `wm_action [5,7]`); sidecar contract
+`obs_embedding [T, 35840]`; chunk-WM constructed from config (58.3M params)
+and ran `loss()` on a real batch (chunk + rollout + reward terms); classifier
+dataset paired 433 success / 67 failure latent demos (`[8, 35840]` windows);
+DreamerVLA and eval routes compose. GPU-bound steps (SFT training, sidecar
+re-extraction, joint training, sim eval) not executed in that pass.
+`*_marked_t_256` is a regenerable intermediate; `*_metainfo.json` is not
+referenced by any active config or module.
