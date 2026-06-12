@@ -1,14 +1,15 @@
- #!/usr/bin/env bash
+#!/usr/bin/env bash
 # Compatibility wrapper for preprocessing all standard LIBERO suites.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 case ":${PYTHONPATH:-}:" in
   *":${DVLA_ROOT}:"*) ;;
   *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
 esac
+cd "${DVLA_ROOT}"
 
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
 mkdir -p "${LIBERO_CONFIG_PATH}"
@@ -21,8 +22,6 @@ datasets: ${DVLA_DATA_ROOT}/datasets/libero
 assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
 EOF
 fi
-
-cd "${DVLA_ROOT}"
 
 DEFAULT_SUITES=(libero_goal libero_object libero_spatial libero_10)
 suite_list=()

@@ -16,9 +16,9 @@ LIBERO HDF5
 
 ```bash
 git clone <repo> && cd DreamerVLA
+export DVLA_DATA_ROOT=/path/to/dvla_data
 bash scripts/install_env.sh
 conda activate dreamervla
-export DVLA_DATA_ROOT=/path/to/dvla_data   # optional; defaults to ./data
 bash scripts/download_assets.sh
 TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh
 CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal
@@ -26,8 +26,10 @@ CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal
 
 ## Reproduction Route
 
-1. Install the environment with `scripts/install_env.sh`.
-2. Download weights and LIBERO assets with `scripts/download_assets.sh`.
+1. Install the environment with `scripts/install_env.sh` or a single
+   `scripts/install/*.sh` step.
+2. Download weights and LIBERO assets with `scripts/download_assets.sh` or a
+   single `scripts/download/*.sh` step.
 3. Build filtered HDF5 files, reward labels, manifests, and sidecars with
    `scripts/preprocess/prepare_libero_data.sh`.
 4. Train a VLA checkpoint with `scripts/train_vla.sh`.
@@ -43,7 +45,7 @@ configs/            Hydra routes and LIBERO task configs
 scripts/            shell launchers for install, download, preprocess, train, eval
 tests/              unit and smoke tests
 third_party/        editable upstream dependencies
-data/               default DVLA_DATA_ROOT
+data/               relative default runtime data root
 docs/               setup and data-layout reference
 ```
 
@@ -52,7 +54,12 @@ docs/               setup and data-layout reference
 | Stage | Command |
 | --- | --- |
 | Install | `bash scripts/install_env.sh` |
-| Download | `bash scripts/download_assets.sh` |
+| Download all | `bash scripts/download_assets.sh` |
+| Download WorldVLA | `bash scripts/download/10_worldvla.sh` |
+| Download Lumina | `bash scripts/download/20_lumina.sh` |
+| Download RynnVLA | `LIBERO_SUITES=libero_goal bash scripts/download/30_rynnvla.sh` |
+| Download LIBERO | `LIBERO_SUITES=libero_goal bash scripts/download/40_libero_dataset.sh` |
+| Download CALVIN | `bash scripts/download/50_calvin_dataset.sh` |
 | Preprocess | `TASK=libero_goal bash scripts/preprocess/prepare_libero_data.sh` |
 | VLA SFT | `CONFIG=vla_rynnvla_action_head bash scripts/train_vla.sh task=libero_goal` |
 | One-trajectory VLA | `CONFIG=vla_sft_one_trajectory bash scripts/train_vla.sh task=libero_goal` |
@@ -70,6 +77,9 @@ NGPU=4
 RUN_TAG=my_run
 OUT_DIR="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run>"
 ```
+
+`DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared
+storage path when that is more convenient.
 
 ## Config Fields
 

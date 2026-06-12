@@ -11,7 +11,7 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     text = launcher.read_text(encoding="utf-8")
 
     assert re.search(r"^\s*source\s+.*common_env\.sh", text, re.MULTILINE) is None
-    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
+    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text
     assert 'LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"' in text
     assert "datasets: ${DVLA_DATA_ROOT}/datasets/libero" in text
     assert 'CKPT_ROOT="${CKPT_ROOT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1}"' in text

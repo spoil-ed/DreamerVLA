@@ -1,90 +1,65 @@
 #!/usr/bin/env bash
-# Download model weights and benchmark datasets used by DreamerVLA.
-# All assets land under ${DVLA_DATA_ROOT} (default: <repo>/data).
+# One-command asset downloader for DreamerVLA.
+#
+# Each concrete download lives under scripts/download/ so individual model
+# families and datasets can be resumed or run by hand.
 set -euo pipefail
 
-# ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
-case ":${PYTHONPATH:-}:" in
-  *":${DVLA_ROOT}:"*) ;;
-  *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
-esac
-PYTHON="${PYTHON:-python}"
-cd "${DVLA_ROOT}"
-
-RYNNVLA_REPO="${RYNNVLA_REPO:-Alibaba-DAMO-Academy/RynnVLA-002}"
-WORLDVLA_REPO="${WORLDVLA_REPO:-Alibaba-DAMO-Academy/WorldVLA}"
-LUMINA_REPO="${LUMINA_REPO:-Alpha-VLLM/Lumina-mGPT-7B-768}"
-LIBERO_SUITES="${LIBERO_SUITES:-libero_goal libero_object libero_spatial libero_10}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+DOWNLOAD_SCRIPT_DIR="${DOWNLOAD_SCRIPT_DIR:-${SCRIPT_DIR}/download}"
 DOWNLOAD_WEIGHTS="${DOWNLOAD_WEIGHTS:-1}"
 DOWNLOAD_LIBERO="${DOWNLOAD_LIBERO:-1}"
 DOWNLOAD_CALVIN="${DOWNLOAD_CALVIN:-0}"
-DOWNLOAD_ACTION_WM="${DOWNLOAD_ACTION_WM:-1}"
+DOWNLOAD_ONLY="${DOWNLOAD_ONLY:-}"
+cd "${DVLA_ROOT}"
 
-CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"
-LIBERO_DATASET_DIR="${LIBERO_DATASET_DIR:-${DVLA_DATA_ROOT}/datasets/libero}"
-mkdir -p "${CHECKPOINT_DIR}" "${LIBERO_DATASET_DIR}"
+DOWNLOAD_STEPS=()
+if [[ "${DOWNLOAD_WEIGHTS}" == "1" ]]; then
+  DOWNLOAD_STEPS+=("10_worldvla.sh" "20_lumina.sh" "30_rynnvla.sh")
+fi
+if [[ "${DOWNLOAD_LIBERO}" == "1" ]]; then
+  DOWNLOAD_STEPS+=("40_libero_dataset.sh")
+fi
+if [[ "${DOWNLOAD_CALVIN}" == "1" ]]; then
+  DOWNLOAD_STEPS+=("50_calvin_dataset.sh")
+fi
 
-echo "[download_assets] data_root=${DVLA_DATA_ROOT}"
-
-normalize_list() {
-  printf '%s\n' "$1" | tr ',' ' '
+step_selected() {
+  local step="$1"
+  local item
+  [[ -z "${DOWNLOAD_ONLY}" ]] && return 0
+  for item in ${DOWNLOAD_ONLY//,/ }; do
+    [[ "${step}" == "${item}" || "${step}" == "${item}"*.sh ]] && return 0
+  done
+  return 1
 }
 
-if [[ "${DOWNLOAD_WEIGHTS}" == "1" ]]; then
-  echo "[download_assets] Hugging Face weights -> ${CHECKPOINT_DIR}"
-  hf download "${WORLDVLA_REPO}" --repo-type model \
-    --local-dir "${CHECKPOINT_DIR}" \
-    --include "chameleon/tokenizer/*" "chameleon/base_model/*" "base_model/*" "chameleon/starting_point/*"
+run_step() {
+  local step="$1"
+  local script="${DOWNLOAD_SCRIPT_DIR}/${step}"
 
-  hf download "${LUMINA_REPO}" --repo-type model \
-    --local-dir "${CHECKPOINT_DIR}/models--Alpha-VLLM--Lumina-mGPT-7B-768"
-
-  for suite in $(normalize_list "${LIBERO_SUITES}"); do
-    [[ -n "${suite}" ]] || continue
-    hf download "${RYNNVLA_REPO}" --repo-type model \
-      --local-dir "${CHECKPOINT_DIR}" \
-      --include "VLA_model_256/${suite}/*"
-    if [[ "${DOWNLOAD_ACTION_WM}" == "1" ]]; then
-      hf download "${RYNNVLA_REPO}" --repo-type model \
-        --local-dir "${CHECKPOINT_DIR}" \
-        --include "Action_World_model_512/${suite}/*"
-    fi
-  done
-fi
-
-if [[ "${DOWNLOAD_LIBERO}" == "1" ]]; then
-  echo "[download_assets] LIBERO datasets -> ${LIBERO_DATASET_DIR}"
-  if [[ ! -f "${DVLA_ROOT}/third_party/LIBERO/benchmark_scripts/download_libero_datasets.py" ]]; then
-    echo "Missing third_party/LIBERO. Run scripts/install_env.sh first." >&2
+  if ! step_selected "${step}"; then
+    echo "[download_assets] skip ${step} (not selected by DOWNLOAD_ONLY=${DOWNLOAD_ONLY})"
+    return
+  fi
+  if [[ ! -f "${script}" ]]; then
+    echo "[download_assets] missing step script: ${script}" >&2
     exit 2
   fi
-  for suite in $(normalize_list "${LIBERO_SUITES}"); do
-    [[ -n "${suite}" ]] || continue
-    "${PYTHON}" "${DVLA_ROOT}/third_party/LIBERO/benchmark_scripts/download_libero_datasets.py" \
-      --download-dir "${LIBERO_DATASET_DIR}" \
-      --datasets "${suite}" --use-huggingface
-  done
-fi
 
-if [[ "${DOWNLOAD_CALVIN}" == "1" ]]; then
-  echo "[download_assets] CALVIN datasets"
-  CALVIN_BASE_URL="${CALVIN_BASE_URL:-http://calvin.cs.uni-freiburg.de/dataset}"
-  CALVIN_TASKS="${CALVIN_TASKS:-task_ABCD_D}"
-  CALVIN_DIR="${CALVIN_DIR:-${DVLA_DATA_ROOT}/datasets/calvin}"
-  mkdir -p "${CALVIN_DIR}"
-  for task in $(normalize_list "${CALVIN_TASKS}"); do
-    [[ -n "${task}" ]] || continue
-    zip_path="${CALVIN_DIR}/${task}.zip"
-    if [[ ! -f "${zip_path}" ]]; then
-      curl -L -C - "${CALVIN_BASE_URL}/${task}.zip" -o "${zip_path}"
-    fi
-    if [[ "${EXTRACT_CALVIN:-0}" == "1" ]]; then
-      "${PYTHON}" -m zipfile -e "${zip_path}" "${CALVIN_DIR}/${task}"
-    fi
-  done
-fi
+  echo "[download_assets] start ${step}"
+  bash "${script}"
+  echo "[download_assets] done ${step}"
+}
+
+echo "[download_assets] root=${DVLA_ROOT}"
+echo "[download_assets] data_root=${DVLA_DATA_ROOT}"
+echo "[download_assets] weights=${DOWNLOAD_WEIGHTS} libero=${DOWNLOAD_LIBERO} calvin=${DOWNLOAD_CALVIN}"
+
+for step in "${DOWNLOAD_STEPS[@]}"; do
+  run_step "${step}"
+done
 
 echo "[download_assets] complete"

@@ -11,11 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 case ":${PYTHONPATH:-}:" in
   *":${DVLA_ROOT}:"*) ;;
   *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
 esac
+cd "${DVLA_ROOT}"
 
 # ---- LIBERO paths (datasets live under the data root) -----------------------
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"

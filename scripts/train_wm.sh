@@ -27,7 +27,7 @@ set -euo pipefail
 # ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 case ":${PYTHONPATH:-}:" in
   *":${DVLA_ROOT}:"*) ;;
   *) export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" ;;
@@ -39,6 +39,7 @@ export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+cd "${DVLA_ROOT}"
 
 # ---- LIBERO paths (datasets live under the data root) -----------------------
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
@@ -52,8 +53,6 @@ datasets: ${DVLA_DATA_ROOT}/datasets/libero
 assets: ${DVLA_ROOT}/third_party/LIBERO/libero/libero/assets
 EOF
 fi
-
-cd "${DVLA_ROOT}"
 
 # ---- knobs -------------------------------------------------------------------
 CONFIG="${CONFIG:-world_model_dinowm_chunk}"

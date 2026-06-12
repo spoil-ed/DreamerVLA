@@ -1,6 +1,9 @@
 # Data Layout
 
-`DVLA_DATA_ROOT` is the single data root. It defaults to `${DVLA_ROOT}/data`.
+`DVLA_ROOT` is the source checkout. `DVLA_DATA_ROOT` is the runtime asset root
+for checkpoints, datasets, processed data, logs, and outputs.
+`DVLA_DATA_ROOT does not need to live inside DVLA_ROOT`. If it is unset, release
+scripts use the relative path `data` after entering the repository root.
 
 ## Tree
 
@@ -38,6 +41,27 @@ Checkpoint assets resolve under `${DVLA_DATA_ROOT}/checkpoints`.
 | `checkpoints/OpenVLA-OFT/<run>/` | OpenVLA-OFT model and component checkpoints |
 | `checkpoints/Openvla-oft-SFT-traj1/<name>/` | one-trajectory OpenVLA-OFT checkpoints |
 
+Download all default Hugging Face weights with:
+
+```bash
+bash scripts/download_assets.sh
+```
+
+Download model families one at a time with:
+
+```bash
+bash scripts/download/10_worldvla.sh
+bash scripts/download/20_lumina.sh
+LIBERO_SUITES="libero_goal libero_object" bash scripts/download/30_rynnvla.sh
+DOWNLOAD_ACTION_WM=0 LIBERO_SUITES=libero_goal bash scripts/download/30_rynnvla.sh
+```
+
+`scripts/download/10_worldvla.sh` creates `checkpoints/chameleon/` and related
+WorldVLA files. `scripts/download/20_lumina.sh` creates
+`checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768/`.
+`scripts/download/30_rynnvla.sh` creates `checkpoints/VLA_model_256/<suite>/`
+and, by default, `checkpoints/Action_World_model_512/<suite>/`.
+
 ## Datasets
 
 | Path | Content |
@@ -46,6 +70,40 @@ Checkpoint assets resolve under `${DVLA_DATA_ROOT}/checkpoints`.
 | `datasets/calvin/` | CALVIN zip files and extracted data |
 
 Raw LIBERO suites resolve to `${DVLA_DATA_ROOT}/datasets/libero/<suite>`.
+The standard suite directories are:
+
+```text
+${DVLA_DATA_ROOT}/datasets/libero/libero_goal/
+${DVLA_DATA_ROOT}/datasets/libero/libero_object/
+${DVLA_DATA_ROOT}/datasets/libero/libero_spatial/
+${DVLA_DATA_ROOT}/datasets/libero/libero_10/
+```
+
+Download LIBERO data into the canonical tree with:
+
+```bash
+bash scripts/download/40_libero_dataset.sh
+LIBERO_SUITES="libero_goal libero_10" bash scripts/download/40_libero_dataset.sh
+```
+
+The LIBERO downloader writes into `${DVLA_DATA_ROOT}/datasets/libero` by default.
+Do not put suites directly under `${DVLA_DATA_ROOT}/datasets`; task configs and
+launch scripts expect the `datasets/libero/<suite>/` layer.
+
+CALVIN data resolves under:
+
+```text
+${DVLA_DATA_ROOT}/datasets/calvin/
+${DVLA_DATA_ROOT}/datasets/calvin/task_ABCD_D.zip
+${DVLA_DATA_ROOT}/datasets/calvin/task_ABCD_D/
+```
+
+Download CALVIN data with:
+
+```bash
+bash scripts/download/50_calvin_dataset.sh
+EXTRACT_CALVIN=1 bash scripts/download/50_calvin_dataset.sh
+```
 
 ## Processed Data
 

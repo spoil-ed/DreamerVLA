@@ -50,10 +50,22 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
             "40_verify.sh",
         )
     ]
+    download_steps = [
+        root / "scripts" / "download" / name
+        for name in (
+            "_env.sh",
+            "10_worldvla.sh",
+            "20_lumina.sh",
+            "30_rynnvla.sh",
+            "40_libero_dataset.sh",
+            "50_calvin_dataset.sh",
+        )
+    ]
 
     assert install.is_file()
     assert download.is_file()
     assert all(step.is_file() for step in install_steps)
+    assert all(step.is_file() for step in download_steps)
 
     install_text = install.read_text(encoding="utf-8")
     assert "INSTALL_STATE_DIR" in install_text
@@ -77,11 +89,23 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "egl_probe" in step_text
 
     download_text = download.read_text(encoding="utf-8")
-    assert "hf download" in download_text
-    assert "download_libero_datasets.py" in download_text
-    assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_text
-    assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_text
-    assert "calvin" in download_text.lower()
+    assert "DOWNLOAD_STEPS" in download_text
+    assert "10_worldvla.sh" in download_text
+    assert "20_lumina.sh" in download_text
+    assert "30_rynnvla.sh" in download_text
+    assert "40_libero_dataset.sh" in download_text
+    assert "50_calvin_dataset.sh" in download_text
+    assert "hf download" not in download_text
+
+    download_step_text = "\n".join(step.read_text(encoding="utf-8") for step in download_steps)
+    assert "hf download" in download_step_text
+    assert "Alibaba-DAMO-Academy/WorldVLA" in download_step_text
+    assert "Alpha-VLLM/Lumina-mGPT-7B-768" in download_step_text
+    assert "Alibaba-DAMO-Academy/RynnVLA-002" in download_step_text
+    assert "download_libero_datasets.py" in download_step_text
+    assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_step_text
+    assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_step_text
+    assert "calvin" in download_step_text.lower()
 
 
 def test_apt_install_step_handles_hosts_without_sudo() -> None:
@@ -141,7 +165,7 @@ def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> N
     text = wrapper.read_text(encoding="utf-8")
 
     assert 'export DVLA_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"' in text
-    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
+    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text
     assert 'DEFAULT_SUITES=(libero_goal libero_object libero_spatial libero_10)' in text
     assert 'bash "${DVLA_ROOT}/scripts/preprocess/prepare_libero_data.sh"' in text
     assert 'TASK="${suite}"' in text
@@ -171,6 +195,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "train_wm.sh",
     }
     assert top_level_dirs == {
+        "download",
         "eval",
         "install",
         "preprocess",
@@ -245,10 +270,36 @@ def test_portable_data_layout_manifest_exists_and_is_linked() -> None:
     assert "${DVLA_DATA_ROOT}/checkpoints" in manifest_text
     assert "${DVLA_DATA_ROOT}/processed_data" in manifest_text
     assert "scripts/download_assets.sh" in manifest_text
+    assert "scripts/download/40_libero_dataset.sh" in manifest_text
     assert "scripts/preprocess/prepare_libero_data.sh" in manifest_text
+    assert "DVLA_DATA_ROOT does not need to live inside DVLA_ROOT" in manifest_text
     assert "docs/data_layout.md" in setup
     assert "docs/data_layout.md" in readme
     assert "docs/data_layout.md" in scripts_readme
+
+
+def test_release_docs_and_scripts_do_not_couple_data_root_to_repo_root() -> None:
+    root = _project_root()
+    active_paths = [
+        root / "README.md",
+        root / "README.zh-CN.md",
+        root / "SETUP.md",
+        root / "docs" / "install.md",
+        root / "docs" / "data_layout.md",
+        root / "scripts" / "README.md",
+        *(
+            path
+            for path in (root / "scripts").rglob("*.sh")
+            if "archive" not in path.relative_to(root / "scripts").parts
+        ),
+    ]
+    coupled_defaults = [
+        str(path.relative_to(root))
+        for path in active_paths
+        if '${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}' in path.read_text(encoding="utf-8")
+    ]
+
+    assert coupled_defaults == []
 
 
 def test_active_shell_scripts_do_not_pin_machine_local_environment() -> None:

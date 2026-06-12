@@ -21,7 +21,7 @@ set -uo pipefail
 # ---- environment -------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 PROJECT_ROOT="${DVLA_ROOT}"
 case ":${PYTHONPATH:-}:" in
   *":${DVLA_ROOT}:"*) ;;

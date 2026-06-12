@@ -1,13 +1,18 @@
 # DreamerVLA Setup
 
-All commands run from the repository root. `DVLA_DATA_ROOT` is the only data
-root; it defaults to `${DVLA_ROOT}/data`. See `docs/data_layout.md`.
+All commands run from the repository root. `DVLA_ROOT` is the checkout.
+`DVLA_DATA_ROOT` is the runtime asset root and can be any writable path. If
+unset, release scripts use relative `data`. See `docs/data_layout.md`.
 
 ```bash
 cd /path/to/DreamerVLA
+export DVLA_ROOT="$(pwd -P)"
+export DVLA_DATA_ROOT=/path/to/dvla_data
 ```
 
 ## 1. Install
+
+One-command install:
 
 ```bash
 bash scripts/install_env.sh
@@ -28,13 +33,29 @@ scripts/install/40_verify.sh
 Run a single step when needed:
 
 ```bash
+bash scripts/install/00_apt_tools.sh
+bash scripts/install/10_conda_env.sh
 bash scripts/install/20_python_deps.sh
+bash scripts/install/30_third_party.sh
+bash scripts/install/40_verify.sh
 ```
 
 ## 2. Download Assets
 
+One-command download:
+
 ```bash
 bash scripts/download_assets.sh
+```
+
+Single asset steps:
+
+```bash
+bash scripts/download/10_worldvla.sh
+bash scripts/download/20_lumina.sh
+LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/30_rynnvla.sh
+LIBERO_SUITES="libero_goal libero_object libero_spatial libero_10" bash scripts/download/40_libero_dataset.sh
+bash scripts/download/50_calvin_dataset.sh
 ```
 
 Useful variants:
@@ -43,6 +64,17 @@ Useful variants:
 LIBERO_SUITES="libero_goal libero_object" bash scripts/download_assets.sh
 DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=1 LIBERO_SUITES=libero_spatial bash scripts/download_assets.sh
 DOWNLOAD_WEIGHTS=0 DOWNLOAD_LIBERO=0 DOWNLOAD_CALVIN=1 CALVIN_TASKS=task_ABCD_D bash scripts/download_assets.sh
+DOWNLOAD_ONLY=10_worldvla bash scripts/download_assets.sh
+```
+
+Canonical dataset roots:
+
+```text
+${DVLA_DATA_ROOT}/datasets/libero/libero_goal/
+${DVLA_DATA_ROOT}/datasets/libero/libero_object/
+${DVLA_DATA_ROOT}/datasets/libero/libero_spatial/
+${DVLA_DATA_ROOT}/datasets/libero/libero_10/
+${DVLA_DATA_ROOT}/datasets/calvin/
 ```
 
 ## 3. Preprocess LIBERO

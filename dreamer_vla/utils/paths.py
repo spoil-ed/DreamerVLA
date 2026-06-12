@@ -10,10 +10,10 @@ def data_root() -> Path:
     """Return the runtime data root.
 
     `DVLA_DATA_ROOT` is the release-facing override. When unset, runtime data
-    lives under the repository-local `data/` directory.
+    resolves from the relative `data/` path of the current process.
     """
 
-    return Path(os.environ.get("DVLA_DATA_ROOT", PROJECT_ROOT / "data")).expanduser()
+    return Path(os.environ.get("DVLA_DATA_ROOT", "data")).expanduser()
 
 
 def data_path(*parts: str | os.PathLike[str]) -> Path:

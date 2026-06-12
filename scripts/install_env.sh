@@ -8,11 +8,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(dirname "${SCRIPT_DIR}")}"
-export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 INSTALL_SCRIPT_DIR="${INSTALL_SCRIPT_DIR:-${SCRIPT_DIR}/install}"
 INSTALL_STATE_DIR="${INSTALL_STATE_DIR:-${DVLA_DATA_ROOT}/install_state}"
 INSTALL_FORCE="${INSTALL_FORCE:-0}"
 INSTALL_ONLY="${INSTALL_ONLY:-}"
+cd "${DVLA_ROOT}"
 
 INSTALL_STEPS=(
   "00_apt_tools.sh"

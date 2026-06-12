@@ -8,7 +8,7 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | Script | Purpose |
 | --- | --- |
 | `install_env.sh` | Run resumable install steps under `scripts/install/` |
-| `download_assets.sh` | Download checkpoints and LIBERO / CALVIN data |
+| `download_assets.sh` | Run selected download steps under `scripts/download/` |
 | `preprocess_libero.sh` | Compatibility wrapper that preprocesses the standard LIBERO suites |
 | `preprocess/prepare_libero_data.sh` | Build LIBERO HDF5 views, reward labels, manifests, and action-hidden sidecars |
 | `train_vla.sh` | VLA SFT via Hydra route configs |
@@ -26,6 +26,17 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | `install/30_third_party.sh` | LIBERO / robosuite stack |
 | `install/40_verify.sh` | Import and CUDA visibility check |
 | `install/_env.sh` | Shared install-step environment |
+
+## Download Steps
+
+| Script | Purpose |
+| --- | --- |
+| `download/10_worldvla.sh` | Download WorldVLA Chameleon tokenizer/base assets |
+| `download/20_lumina.sh` | Download Lumina-mGPT tokenizer/backbone assets |
+| `download/30_rynnvla.sh` | Download RynnVLA suite weights and optional action world-model weights |
+| `download/40_libero_dataset.sh` | Download LIBERO suites into `datasets/libero/<suite>/` |
+| `download/50_calvin_dataset.sh` | Download CALVIN tasks into `datasets/calvin/` |
+| `download/_env.sh` | Shared download-step environment |
 
 ## Preprocessing
 
@@ -112,6 +123,7 @@ experiments and are not part of the main release pipeline.
 ## Conventions
 
 - Use `DVLA_DATA_ROOT` for data location.
+- `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; if unset, scripts use relative `data`.
 - Use `CONFIG=<route>` for route selection.
 - Pass Hydra overrides after launcher arguments.
 - Keep runtime outputs under `${DVLA_DATA_ROOT:-data}/outputs/`.
