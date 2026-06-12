@@ -164,7 +164,7 @@ bash scripts/preprocess/prepare_libero_data.sh task=libero_goal
 Run or reproduce one step by calling the numbered child script directly:
 
 ```bash
-bash scripts/preprocess/20_pretokenize_dataset.sh --task libero_goal --gpus 0 --num-procs 8
+TASK=libero_goal GPUS=0 PRETOKENIZE_PROCS=8 bash scripts/preprocess/20_pretokenize_dataset.sh
 ```
 
 The numbered steps are:

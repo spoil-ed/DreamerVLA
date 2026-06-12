@@ -55,11 +55,11 @@ slots.
 ## Extraction
 
 ```bash
-bash scripts/preprocess/30_action_hidden.sh --task libero_goal
+TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/30_action_hidden.sh
 # or as part of: bash scripts/preprocess/prepare_libero_data.sh
 
 # Scheme B:
-bash scripts/preprocess/32_input_token_hidden.sh --task libero_goal
+TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_token_hidden.sh
 ```
 
 ## Downstream chain

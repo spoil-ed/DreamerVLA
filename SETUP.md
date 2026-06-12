@@ -15,6 +15,13 @@ export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT=/path/to/dvla_data
 ```
 
+Quick experiment tutorials:
+
+- [RynnVLA Scheme A on LIBERO-Goal](docs/experiment_tutorials/rynnvla_action_hidden_libero_goal.md)
+- [RynnVLA Scheme B on LIBERO-Goal](docs/experiment_tutorials/rynnvla_input_token_libero_goal.md)
+- [OpenVLA-OFT Scheme A on LIBERO-Goal](docs/experiment_tutorials/openvla_oft_action_hidden_libero_goal.md)
+- [OpenVLA-OFT Scheme B on LIBERO-Goal](docs/experiment_tutorials/openvla_oft_input_token_libero_goal.md)
+
 ## 1. Install
 
 One-command install:
@@ -63,6 +70,18 @@ One-command download:
 ```bash
 bash scripts/download_assets.sh
 ```
+
+This wrapper runs:
+
+```bash
+python -m dreamer_vla.launchers.workflow --config-name download "$@"
+```
+
+The shell file only sets `DVLA_ROOT`, `DVLA_DATA_ROOT`, and `PYTHONPATH`, then
+passes your Hydra overrides to `configs/scripts/download.yaml`. The Python
+launcher reads that YAML and executes the numbered shell steps. In practice,
+you still run simple commands such as `bash scripts/download_assets.sh
+only=[10_rynnvla]`.
 
 Single asset steps:
 
@@ -218,13 +237,19 @@ routes; both checkpoint formats extract the same backbone layer):
 
 ```bash
 # Component-wise L1 checkpoint (auto-detected):
-bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
-  --ckpt data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+TASK=libero_goal \
+OFT_CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650" \
+OFT_POLICY_MODE=auto \
+OFT_LATENT_SCHEME=action_hidden \
+bash scripts/preprocess/35_oft_action_hidden.sh
 
 # Downloaded discrete one-trajectory weights (single view, no history/proprio):
-bash scripts/preprocess/35_oft_action_hidden.sh --task libero_goal \
-  --ckpt data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
-  --policy-mode discrete --history 1 --image-keys agentview_rgb
+TASK=libero_goal \
+OFT_CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+OFT_POLICY_MODE=discrete \
+OFT_HISTORY=1 \
+OFT_IMAGE_KEYS=agentview_rgb \
+bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
 Scheme B input-token sidecars feed frame-level DINO-WM routes.  RynnVLA uses
@@ -338,8 +363,10 @@ bash scripts/eval_libero_vla.sh gpus=0 \
 OpenVLA-OFT one-trajectory checkpoint:
 
 ```bash
-CKPT_ROOT="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1" \
-SUITE=libero_goal bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
+CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+SUITE=libero_goal \
+GPU_ID=0 \
+bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
 ```
 
 ## 6. Verify
