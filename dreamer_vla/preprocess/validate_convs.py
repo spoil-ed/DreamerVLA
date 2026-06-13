@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 """
-Scan every conv JSON under ``data/processed_data/convs/`` (or a user-supplied
+Scan every conv JSON under ``data/processed_data/<suite>/convs/`` (or a user-supplied
 path) and check — without running the tokenizer — that each sample's files
 exist and that ``ensure_next_obs`` lands on real next-frame files.
 
@@ -19,7 +19,7 @@ Per sample we bucket into:
 
 Run:
     python -m dreamer_vla.preprocess.validate_convs \
-        --convs-dir data/processed_data/convs
+        --convs-dir data/processed_data/libero_goal/convs
 
 Reports per split + an aggregate.  Exits non-zero if any broken_* count > 0.
 """

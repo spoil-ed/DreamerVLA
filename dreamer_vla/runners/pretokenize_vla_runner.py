@@ -24,6 +24,7 @@ from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.ema import EMAHelper
+from dreamer_vla.utils.hf_checkpoint import resolve_hf_checkpoint_dir
 from dreamer_vla.utils.optim import build_optimizer
 from dreamer_vla.utils.paths import checkpoints_path, data_path
 from dreamer_vla.utils.seed import set_seed
@@ -112,6 +113,106 @@ class PretokenizeVLARunner(BaseRunner):
                 self.encoder.backbone, self.vla_optimizer
             )
         return value.state_dict()
+
+    def _save_checkpoint_sidecars(self, path: Path, payload: dict[str, Any]) -> None:
+        if self.encoder is None or not bool(
+            OmegaConf.select(self.cfg, "checkpoint.save_hf_encoder", default=True)
+        ):
+            return
+        hf_dir = self._hf_dir_for_runner_ckpt(path)
+        hf_dir.mkdir(parents=True, exist_ok=True)
+        backbone = self.distributed.unwrap_module(self.encoder.backbone)
+        if not hasattr(backbone, "save_pretrained"):
+            return
+        hf_state_dict = self._extract_backbone_state_for_hf(payload)
+        try:
+            backbone.save_pretrained(
+                str(hf_dir),
+                state_dict=hf_state_dict,
+                safe_serialization=bool(
+                    OmegaConf.select(
+                        self.cfg, "checkpoint.hf_safe_serialization", default=True
+                    )
+                ),
+            )
+        except TypeError:
+            try:
+                backbone.save_pretrained(str(hf_dir), state_dict=hf_state_dict)
+            except TypeError:
+                backbone.save_pretrained(str(hf_dir))
+        state_path = hf_dir / "dreamer_vla_runner_state.pt"
+        torch.save(
+            {
+                "global_step": int(self.global_step),
+                "epoch": int(self.epoch),
+                "source_ckpt": str(path.resolve()),
+            },
+            state_path,
+        )
+        if self.distributed.is_main_process:
+            print(f"  [Checkpoint] wrote HF VLA checkpoint: {hf_dir}")
+
+    @staticmethod
+    def _hf_dir_for_runner_ckpt(path: Path) -> Path:
+        if path.suffix:
+            return path.with_name(f"{path.stem}_hf")
+        return path
+
+    @staticmethod
+    def _extract_backbone_state_for_hf(
+        payload: dict[str, Any]
+    ) -> dict[str, torch.Tensor] | None:
+        encoder_state = payload.get("state_dicts", {}).get("encoder")
+        if not isinstance(encoder_state, dict):
+            return None
+        backbone_state: dict[str, torch.Tensor] = {}
+        for key, value in encoder_state.items():
+            if not isinstance(key, str) or not isinstance(value, torch.Tensor):
+                continue
+            if key.startswith("backbone.module."):
+                backbone_state[key[len("backbone.module.") :]] = value
+            elif key.startswith("backbone."):
+                backbone_state[key[len("backbone.") :]] = value
+        return backbone_state or None
+
+    def load_hf_checkpoint(self, path: str | Path, **_: Any) -> dict[str, Any]:
+        if self.encoder is None:
+            raise RuntimeError("Cannot load a VLA HF checkpoint before encoder setup.")
+        model_dir = resolve_hf_checkpoint_dir(path)
+        if self.distributed.is_main_process:
+            print(f"Loading VLA HF checkpoint weights from {model_dir}")
+        current_model_path = getattr(self.encoder, "model_path", None)
+        try:
+            self.encoder.model_path = str(model_dir)
+            reloaded = type(self.encoder)(
+                model_path=str(model_dir),
+                tokenizer_path=self.encoder.tokenizer_path,
+                text_tokenizer_path=self.encoder.text_tokenizer_path,
+                chameleon_vqgan_config=self.encoder.chameleon_vqgan_config,
+                chameleon_vqgan_ckpt=self.encoder.chameleon_vqgan_ckpt,
+                resolution=self.encoder.resolution,
+                action_dim=self.encoder.action_dim,
+                time_horizon=self.encoder.time_horizon,
+                action_head_type=self.encoder.action_head_type,
+                pool=self.encoder.pool,
+                freeze_backbone=False,
+            ).to(self.device)
+            self._load_state_dict_from_checkpoint(
+                "encoder", self.encoder, reloaded.state_dict(), strict=True
+            )
+            del reloaded
+        finally:
+            if current_model_path is not None:
+                self.encoder.model_path = current_model_path
+        state_path = model_dir / "dreamer_vla_runner_state.pt"
+        payload: dict[str, Any] = {"hf_checkpoint_dir": str(model_dir)}
+        if state_path.is_file():
+            state = torch.load(state_path, map_location="cpu", weights_only=False)
+            if isinstance(state, dict):
+                self.global_step = int(state.get("global_step", self.global_step))
+                self.epoch = int(state.get("epoch", self.epoch))
+                payload.update(state)
+        return payload
 
     def _load_state_dict_from_checkpoint(
         self,

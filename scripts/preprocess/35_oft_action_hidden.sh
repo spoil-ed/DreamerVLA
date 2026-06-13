@@ -17,7 +17,7 @@ OFT_ACTION_HIDDEN_GPUS="${OFT_ACTION_HIDDEN_GPUS:-1}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi06_remaining_reward"
 OFT_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h${OFT_HISTORY}"
 OFT_INPUT_TOKEN_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_oft_input_token_embedding_vla_policy_h${OFT_HISTORY}"

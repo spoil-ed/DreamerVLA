@@ -47,7 +47,7 @@ encoder:
 
 eval:
   ckpt_path: null
-  ckpt_kind: vla
+  ckpt_kind: auto
   seed: ${seed}
   task_suite_name: libero_goal
   num_episodes_per_task: 50

@@ -9,6 +9,7 @@ from dreamer_vla.models.actor.base_actor import BaseActor
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
 )
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 
 class VLAActionHeadActor(BaseActor):
@@ -96,6 +97,10 @@ class VLAActionHeadActor(BaseActor):
             self._load_action_head_from_vla_ckpt(str(init_action_head_ckpt))
 
     def _load_action_head_from_vla_ckpt(self, ckpt_path: str) -> None:
+        if is_hf_checkpoint(ckpt_path):
+            action_head_sd = load_hf_prefixed_tensors(ckpt_path, "action_head.")
+            self._load_action_head_state_dict(action_head_sd, ckpt_path)
+            return
         payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         encoder_sd = payload.get("state_dicts", {}).get("encoder")
         if encoder_sd is None:
@@ -106,9 +111,15 @@ class VLAActionHeadActor(BaseActor):
         action_head_sd = {
             k[len(prefix) :]: v for k, v in encoder_sd.items() if k.startswith(prefix)
         }
+        self._load_action_head_state_dict(action_head_sd, ckpt_path)
+        del payload
+
+    def _load_action_head_state_dict(
+        self, action_head_sd: dict[str, torch.Tensor], ckpt_path: str
+    ) -> None:
         if not action_head_sd:
             raise RuntimeError(
-                f"VLA action head checkpoint has no '{prefix}' tensors: {ckpt_path}"
+                f"VLA action head checkpoint has no action_head tensors: {ckpt_path}"
             )
         emb = action_head_sd.get("action_token_embeddings.weight")
         if emb is not None:
@@ -137,7 +148,6 @@ class VLAActionHeadActor(BaseActor):
             )
         if unexpected:
             print(f"[VLAActor] WARN unexpected (first 5): {unexpected[:5]}")
-        del payload
 
     def _action_chunk_from_single_context(self, wm_feat: torch.Tensor) -> torch.Tensor:
         """WM feat [B, hidden_dim] -> action chunk [B, T, A]."""

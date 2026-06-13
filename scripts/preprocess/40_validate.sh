@@ -8,7 +8,7 @@ DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 TASK="${TASK:-libero_goal}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
 
 python -m dreamer_vla.preprocess.validate_libero_data_prep \
   --data-root "${DVLA_DATA_ROOT}" \

@@ -97,8 +97,8 @@ if __name__ == "__main__":
 
     data_type = ["val_ind", "val_ood", "train"]
 
-    # in_filename_dir = 'data/processed_data/convs'
-    # out_root = 'data/processed_data/tokens'
+    # in_filename_dir = 'data/processed_data/libero_goal/convs'
+    # out_root = 'data/processed_data/libero_goal/tokens'
     in_filename_dir = Path(args.in_filename_dir)
     out_root = Path(args.out_root)
 

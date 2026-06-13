@@ -25,8 +25,8 @@ Single GPU. Usage example::
             --vla-ckpt-path ${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
             --num-episodes 200 --episodes-per-shard 25 \\
-            --out-raw-dir data/processed_data/libero_goal_online_rollouts_pi0_sft \\
-            --out-hidden-dir data/processed_data/libero_goal_online_rollouts_pi0_sft_hidden \\
+            --out-raw-dir data/processed_data/libero_goal/libero_goal_online_rollouts_pi0_sft \\
+            --out-hidden-dir data/processed_data/libero_goal/libero_goal_online_rollouts_pi0_sft_hidden \\
             --deterministic-collect
 """
 

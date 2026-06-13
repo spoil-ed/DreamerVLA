@@ -8,7 +8,7 @@ scripts use the relative path `data` after entering the repository root.
 The tracked repository does not include `data/` or `third_party/`; both are
 local state. `scripts/install_env.sh` creates/populates `third_party/`,
 `scripts/download_assets.sh` downloads raw datasets and checkpoints, and
-`scripts/preprocess_libero.sh` generates `processed_data/*` from those raw HDF5
+`scripts/preprocess_libero.sh` generates `processed_data/<suite>/*` from those raw HDF5
 files. A directory name alone is not a completed stage; each stage is complete
 only when the files consumed by the next stage exist.
 
@@ -137,20 +137,20 @@ stores `task_ABCD_D` as 30 GB multi-part zip shards under
 
 ## Processed Data
 
-Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data`.
+Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data/<suite>`.
 
 `bash scripts/preprocess/prepare_libero_data.sh task=<suite>` writes:
 
 ```text
-processed_data/<suite>_marked_t_256/
-processed_data/<suite>_no_noops_t_256/
-processed_data/<suite>_no_noops_t_256_pi06_remaining_reward/
-processed_data/<suite>_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/
-processed_data/<suite>_image_state_action_t_256/
-processed_data/convs/
-processed_data/tokens/
-processed_data/concate_tokens/
-processed_data/<suite>_metainfo.json
+processed_data/<suite>/<suite>_marked_t_256/
+processed_data/<suite>/<suite>_no_noops_t_256/
+processed_data/<suite>/<suite>_no_noops_t_256_pi06_remaining_reward/
+processed_data/<suite>/<suite>_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/
+processed_data/<suite>/<suite>_image_state_action_t_256/
+processed_data/<suite>/convs/
+processed_data/<suite>/tokens/
+processed_data/<suite>/concate_tokens/
+processed_data/<suite>/<suite>_metainfo.json
 configs/<suite>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 

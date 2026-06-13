@@ -17,7 +17,7 @@ def main():
         "-b",
         type=str,
         required=True,
-        help="The base directory where the Libero datasets are located (e.g., data/processed_data/libero_spatial_m_a_i_2_512)",
+        help="The base directory where the Libero datasets are located (e.g., data/processed_data/libero_spatial/libero_spatial_m_a_i_2_512)",
     )
 
     # Optional arguments with default values

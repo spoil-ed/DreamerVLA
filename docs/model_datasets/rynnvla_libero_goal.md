@@ -29,7 +29,7 @@ Sidecar attrs expected by the WM route
 `include_state=true`, `rotate_images_180=true`.
 
 Reference sidecar:
-`data/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/`.
+`data/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/`.
 
 This is the RynnVLA-002 latent contract.  The DINO-WM token axis is an
 action-slot axis (`time_horizon × action_dim`), so downstream actor code can

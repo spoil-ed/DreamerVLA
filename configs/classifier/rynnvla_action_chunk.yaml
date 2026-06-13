@@ -40,10 +40,10 @@ classifier:
   chunk_pool: last
 
 data:
-  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256
-  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-  failure_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_failures
-  failure_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_failures_pi0_legacy_action_hidden_vla_policy_h2
+  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256
+  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+  failure_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_failures
+  failure_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_failures_pi0_legacy_action_hidden_vla_policy_h2
   window: 8
   # stride values in env-step units; mapped to "chunks" by multiplying by K=5
   # so they match small_tf's stride semantics: stride_train = 1 window-length

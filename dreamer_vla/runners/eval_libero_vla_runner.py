@@ -36,6 +36,7 @@ from transformers import GenerationConfig
 
 from dreamer_vla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
 from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamer_vla.utils.torch_utils import freeze_module
 
 
@@ -79,7 +80,12 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         ckpt_kind = str(OmegaConf.select(cfg, "eval.ckpt_kind", default="auto")).lower()
         if ckpt_kind not in {"auto", "vla", "dreamer"}:
             raise ValueError("eval.ckpt_kind must be one of: auto, vla, dreamer")
-        if ckpt_path and ckpt_kind in {"auto", "dreamer"}:
+        ckpt_is_hf_vla = bool(ckpt_path and is_hf_checkpoint(ckpt_path))
+        if ckpt_is_hf_vla and ckpt_kind == "dreamer":
+            raise RuntimeError(
+                f"{ckpt_path} is a Hugging Face VLA checkpoint, not a Dreamer checkpoint."
+            )
+        if ckpt_path and not ckpt_is_hf_vla and ckpt_kind in {"auto", "dreamer"}:
             payload = self._load_checkpoint_payload(ckpt_path)
             state_keys = set(payload.get("state_dicts", {}).keys())
             is_dreamer = {"world_model", "policy"}.issubset(state_keys)
@@ -92,13 +98,16 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
 
         # ── encoder (inference only; no optimiser, no distributed wrapping) ──
         encoder_cfg = self._build_trainable_encoder_cfg(cfg)
+        if ckpt_is_hf_vla:
+            with open_dict(encoder_cfg):
+                encoder_cfg.model_path = ckpt_path
         with open_dict(encoder_cfg):
             encoder_cfg.freeze_backbone = True
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
         self.encoder.eval()
 
         # ── optional: load VLA checkpoint (produced by PretokenizeVLARunner) ─
-        if ckpt_path:
+        if ckpt_path and not ckpt_is_hf_vla:
             if self.distributed.is_main_process:
                 print(f"  [Eval] loading VLA checkpoint: {ckpt_path}")
             # Only restore the encoder; skip optimiser / EMA / step counters.
@@ -112,6 +121,9 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
                 exclude_keys=("vla_optimizer", "vla_ema"),
                 include_keys=(),  # don't restore global_step / epoch
             )
+        elif ckpt_is_hf_vla:
+            if self.distributed.is_main_process:
+                print(f"  [Eval] loaded HF VLA checkpoint: {ckpt_path}")
         else:
             if self.distributed.is_main_process:
                 print(
@@ -160,9 +172,7 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         if self.distributed.is_main_process:
             print(f"  [Eval] reading checkpoint: {ckpt_path}")
         try:
-            return torch.load(
-                ckpt_path, map_location="cpu", weights_only=False, mmap=True
-            )
+            return load_runner_payload(ckpt_path)
         except TypeError:
             return torch.load(ckpt_path, map_location="cpu", weights_only=False)
 

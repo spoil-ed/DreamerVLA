@@ -70,7 +70,7 @@ bash scripts/preprocess/35_oft_action_hidden.sh
 The wrapper writes:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
 ```
 
 ## 3. World Model
@@ -80,7 +80,7 @@ Pass the sidecar path if you use the wrapper output above:
 ```bash
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal \
   gpus=0 ngpu=1 batch_size=2 num_workers=4 \
-  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2"
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2"
 ```
 
 For a smoke run:
@@ -88,7 +88,7 @@ For a smoke run:
 ```bash
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal \
   gpus=0 ngpu=1 batch_size=1 num_workers=0 max_steps=1 out_dir=/tmp/dvla_oft_a_wm_smoke \
-  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2"
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2"
 ```
 
 ## 4. Classifier
@@ -98,7 +98,7 @@ required.
 
 ```bash
 bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk task=libero_goal gpus=0 \
-  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2" \
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2" \
   task.openvla_oft.failure_hdf5_dir=/abs/path/to/libero_goal_failures \
   task.openvla_oft.failure_action_hidden_dir=/abs/path/to/libero_goal_failures_oft_action_hidden \
   batch_size=8 num_workers=4
@@ -111,7 +111,7 @@ bash scripts/train_dreamervla.sh \
   experiment=dreamervla_oft_dino_wm_wmpo_outcome \
   task=libero_goal \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 \
-  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2" \
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2" \
   init.world_model_state_ckpt=/abs/path/to/oft_world_model.ckpt \
   init.classifier_state_ckpt=/abs/path/to/oft_classifier.ckpt
 ```

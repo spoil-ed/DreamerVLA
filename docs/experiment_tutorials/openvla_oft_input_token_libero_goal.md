@@ -54,7 +54,7 @@ bash scripts/preprocess/35_oft_action_hidden.sh
 Expected sidecar:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h2
 ```
 
 ## 3. World Model

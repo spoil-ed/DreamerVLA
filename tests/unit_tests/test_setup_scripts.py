@@ -256,7 +256,7 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
     assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${TASK}"' in reward_text
-    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"' in reward_text
+    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"' in reward_text
     assert '${TASK}_marked_t_256' in reward_text
     assert '${TASK}_no_noops_t_256' in reward_text
     assert "PREPROCESS_ONLY" not in prepare_text
@@ -387,10 +387,16 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
 def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
-    hdf5_dir = data_root / "processed_data" / "libero_goal_no_noops_t_256"
+    hdf5_dir = data_root / "processed_data" / "libero_goal" / "libero_goal_no_noops_t_256"
     hdf5_dir.mkdir(parents=True)
     (hdf5_dir / "demo.hdf5").touch()
-    (data_root / "processed_data" / "tokens" / "libero_goal_his_1_train_third_view_wrist_w_state_1_256").mkdir(parents=True)
+    (
+        data_root
+        / "processed_data"
+        / "libero_goal"
+        / "tokens"
+        / "libero_goal_his_1_train_third_view_wrist_w_state_1_256"
+    ).mkdir(parents=True)
     log_path = tmp_path / "python_calls.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -443,7 +449,7 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
     raw_dir = data_root / "datasets" / "libero" / "libero_goal"
-    processed = data_root / "processed_data"
+    processed = data_root / "processed_data" / "libero_goal"
     marked_dir = processed / "libero_goal_marked_t_256"
     hdf5_dir = processed / "libero_goal_no_noops_t_256"
     reward_dir = processed / "libero_goal_no_noops_t_256_pi06_remaining_reward"
@@ -564,8 +570,8 @@ def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: P
 def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
-    processed = data_root / "processed_data"
     suite = "libero_goal"
+    processed = data_root / "processed_data" / suite
     raw_dir = processed / f"{suite}_no_noops_t_256"
     image_dir = processed / f"{suite}_image_state_action_t_256"
     conv_dir = processed / "convs"
@@ -649,7 +655,7 @@ def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     assert "--keep-noops" in setup
     assert "stage 2: filter marked no-ops" in setup
     assert "dreamer_vla.preprocess.filter_marked_libero_hdf5" in setup
-    assert "${DVLA_DATA_ROOT}/processed_data/${TASK}_no_noops_t_256" in setup
+    assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/${TASK}_no_noops_t_256" in setup
 
 
 def test_setup_docs_explain_one_shot_four_suite_libero_preprocessing() -> None:

@@ -7,7 +7,7 @@ unset, release scripts use relative `data`. See `docs/data_layout.md`.
 A fresh checkout contains source code, configs, scripts, tests, and docs only.
 `third_party/` and everything under `data/` are local install/download/generated
 state. Build the tree in order: install third-party code, download raw
-datasets/checkpoints, then generate `processed_data/*`.
+datasets/checkpoints, then generate `processed_data/<task>/*`.
 
 ```bash
 cd /path/to/DreamerVLA
@@ -147,7 +147,12 @@ ${DVLA_DATA_ROOT}/datasets/calvin/
 
 ## 3. Preprocess LIBERO
 
-Preprocess all four standard LIBERO suites in one run:
+Preprocess has two phases. Run the base data phase first, train/evaluate the
+VLA checkpoint, then generate action-hidden sidecars from that trained VLA.
+Do not generate action-hidden before VLA SFT when the experiment is meant to
+use a trained policy head.
+
+Base preprocessing for all four standard LIBERO suites:
 
 ```bash
 bash scripts/preprocess_libero.sh
@@ -174,8 +179,8 @@ download and install flow. To rerun only one part:
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
 ```
 
-The standard path always writes fixed no-op-filtered artifacts before reward
-and hidden sidecar generation:
+The base path writes fixed no-op-filtered artifacts before reward and hidden
+sidecar generation:
 
 ```text
 input: downloaded raw LIBERO HDF5 files
@@ -187,16 +192,15 @@ stage 1: replay and mark no-ops
 
 stage 2: filter marked no-ops
   python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 --filter-noops
-  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}_no_noops_t_256
+  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/${TASK}_no_noops_t_256
 ```
 
-Outputs:
+Base outputs:
 
 ```text
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_marked_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256_pi06_remaining_reward
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_marked_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_no_noops_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_no_noops_t_256_pi06_remaining_reward
 ${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
@@ -206,7 +210,8 @@ Useful variants:
 bash scripts/preprocess/prepare_libero_data.sh task=libero_10 gpus=0,1,2,3 ngpu=4
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[10_hdf5_reward]
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
-TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_token_hidden.sh
+VLA_CKPT=/abs/path/to/latest_hf bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[30_action_hidden]
+bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[40_validate]
 ```
 
 ## 4. Train
@@ -216,6 +221,24 @@ VLA SFT:
 ```bash
 bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=20
+```
+
+RynnVLA SFT writes the legacy runner checkpoint and a Hugging Face sidecar
+directory for direct inference. For example:
+
+```text
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/ckpt/latest.ckpt
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/ckpt/latest_hf/
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/checkpoints/epoch=..._hf/
+```
+
+Use the `*_hf/` directory for VLA eval and for action-hidden extraction.
+Use `latest.ckpt` only when you need optimizer/epoch state for legacy resume.
+To resume from a HF directory as weights-only initialization:
+
+```bash
+bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal \
+  training.resume=true training.resume_dir=/abs/path/to/latest_hf
 ```
 
 One-trajectory VLA:
@@ -231,6 +254,15 @@ bash scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1 task=lib
 variant; `openvla_oft_hdf5_one_trajectory_l1` keeps the standard OFT L1
 regression head, whose component checkpoints feed the action-hidden sidecar
 and world-model chain.
+
+After VLA SFT, generate RynnVLA action-hidden from the trained HF checkpoint:
+
+```bash
+TASK=libero_goal \
+VLA_CKPT=/abs/path/to/vla_run/ckpt/latest_hf \
+GPUS=0 ACTION_HIDDEN_GPUS=1 \
+bash scripts/preprocess/30_action_hidden.sh
+```
 
 OpenVLA-OFT action-hidden sidecar (feeds the OFT WM/classifier/DreamerVLA
 routes; both checkpoint formats extract the same backbone layer):
@@ -257,8 +289,11 @@ current-frame Chameleon VQ input-token embeddings; OFT uses current-frame
 projected vision patch tokens:
 
 ```bash
-# RynnVLA Scheme B:
-TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_token_hidden.sh
+# RynnVLA Scheme B from a trained HF checkpoint:
+TASK=libero_goal \
+VLA_CKPT=/abs/path/to/vla_run/ckpt/latest_hf \
+GPUS=0 ACTION_HIDDEN_GPUS=1 \
+bash scripts/preprocess/32_input_token_hidden.sh
 
 # OpenVLA-OFT Scheme B:
 TASK=libero_goal OFT_LATENT_SCHEME=input_tokens \
@@ -340,12 +375,16 @@ VLA checkpoint:
 
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
-  eval.ckpt_kind=vla \
-  eval.ckpt_path=/abs/path/to/vla.ckpt \
+  eval.ckpt_kind=auto \
+  eval.ckpt_path=/abs/path/to/vla_run/ckpt/latest_hf \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=10 \
   training.device=cuda:0
 ```
+
+`eval.ckpt_path` accepts both trained RynnVLA HF directories and legacy
+DreamerVLA `.ckpt` payloads. For a downloaded base VLA with no SFT checkpoint,
+omit `eval.ckpt_path` and set `init.vla_ckpt_path=/abs/path/to/hf_dir`.
 
 Dreamer checkpoint:
 
@@ -380,7 +419,7 @@ Path checks:
 ```bash
 test -d "${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal"
 test -d "${DVLA_DATA_ROOT:-data}/datasets/libero/libero_goal"
-test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal_no_noops_t_256"
+test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal/libero_goal_no_noops_t_256"
 ```
 
 Smoke train:

@@ -33,8 +33,8 @@ The standard preprocessing chain writes the reward HDF5 and the Scheme-A
 RynnVLA sidecar:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi06_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
 ```
 
 To rerun only the sidecar:

@@ -24,7 +24,7 @@ Per-split + aggregate counts are printed; exit code 1 if any broken_* > 0.
 
 Run:
     python -m dreamer_vla.preprocess.validate_pretokenized \
-        --tokens-dir data/processed_data/tokens
+        --tokens-dir data/processed_data/libero_goal/tokens
 
 The walk is read-only.  Use --sample-every N for a spot-check.
 """

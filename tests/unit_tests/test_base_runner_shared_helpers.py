@@ -10,6 +10,11 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 from dreamer_vla.runners.base_runner import BaseRunner
+from dreamer_vla.utils.hf_checkpoint import (
+    is_hf_checkpoint,
+    load_hf_prefixed_tensors,
+    resolve_hf_checkpoint_dir,
+)
 
 
 class _ConcreteRunner(BaseRunner):
@@ -47,6 +52,29 @@ def test_base_runner_resolves_vla_init_path_and_frozen_encoder_cfg(
     assert encoder_cfg.model_path == str(nested.resolve())
     assert encoder_cfg.freeze_backbone is True
     assert encoder_cfg.time_horizon == 5
+
+
+def test_hf_checkpoint_helpers_resolve_nested_and_load_prefixed_tensors(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "run"
+    hf_dir = root / "checkpoint-1"
+    hf_dir.mkdir(parents=True)
+    (hf_dir / "config.json").write_text("{}", encoding="utf-8")
+    torch.save(
+        {
+            "action_head.output_projection.weight": torch.ones(2, 3),
+            "other.weight": torch.zeros(1),
+        },
+        hf_dir / "pytorch_model.bin",
+    )
+
+    assert is_hf_checkpoint(root)
+    assert resolve_hf_checkpoint_dir(root) == hf_dir.resolve()
+    tensors = load_hf_prefixed_tensors(root, "action_head.")
+
+    assert set(tensors) == {"output_projection.weight"}
+    assert torch.equal(tensors["output_projection.weight"], torch.ones(2, 3))
 
 
 class _ToyDataset(Dataset[int]):
@@ -233,3 +261,22 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
     ):
         assert cls.save_checkpoint is BaseRunner.save_checkpoint
         assert cls.load_payload is BaseRunner.load_payload
+
+
+def test_vla_hf_sidecar_strips_encoder_backbone_prefix() -> None:
+    from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+
+    state = PretokenizeVLARunner._extract_backbone_state_for_hf(
+        {
+            "state_dicts": {
+                "encoder": {
+                    "backbone.model.weight": torch.ones(1),
+                    "backbone.module.action_head.bias": torch.zeros(1),
+                    "other.weight": torch.full((1,), 2.0),
+                }
+            }
+        }
+    )
+
+    assert state is not None
+    assert set(state) == {"model.weight", "action_head.bias"}

@@ -2,7 +2,7 @@ name: preprocess_suite
 data_root: ${oc.env:DVLA_DATA_ROOT,data}
 python: python
 dry_run: false
-only: []
+only: [10_hdf5_reward, 20_pretokenize_dataset]
 task: libero_goal
 gpus: "0"
 ngpu: 1

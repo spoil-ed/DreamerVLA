@@ -11,8 +11,8 @@ classifier:
   chunk_size: 5
 
 data:
-  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2
-  failure_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal_no_noops_t_256_failures_pi0_input_token_embedding_vla_policy_h2
+  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2
+  failure_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_failures_pi0_input_token_embedding_vla_policy_h2
   chunk_subsample: 5
 
 training:

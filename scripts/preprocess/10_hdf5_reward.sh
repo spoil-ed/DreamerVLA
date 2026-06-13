@@ -9,7 +9,7 @@ TASK="${TASK:-libero_goal}"
 OVERWRITE="${OVERWRITE:-0}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
 RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${TASK}"
 MARKED_DIR="${PROCESSED_DATA_ROOT}/${TASK}_marked_t_256"
 HDF5_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256"

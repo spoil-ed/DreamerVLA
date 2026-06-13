@@ -24,7 +24,7 @@ Example:
     python regenerate_libero_failure_demos.py \
         --libero_task_suite libero_goal \
         --libero_raw_data_dir /path/data/libero/datasets/libero_goal \
-        --libero_target_dir /path/data/processed_data/libero_goal_no_noops_t_256_failures \
+        --libero_target_dir /path/data/processed_data/libero_goal/libero_goal_no_noops_t_256_failures \
         --libero_metainfo_json /path/libero_goal_metainfo.json \
         --image_resolution 256
 """

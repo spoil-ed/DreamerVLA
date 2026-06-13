@@ -143,6 +143,43 @@ def test_vla_action_head_actor_rejects_ckpt_without_action_head(tmp_path) -> Non
         )
 
 
+def test_vla_action_head_actor_loads_hf_action_head(tmp_path) -> None:
+    source = VLAActionHeadActor(
+        hidden_dim=16,
+        action_dim=3,
+        time_horizon=4,
+        vla_hidden_size=16,
+        hidden_size_factor=0.25,
+        num_encoder_layers=1,
+        adapter_type="identity",
+        action_head_type="legacy",
+    )
+    hf_dir = tmp_path / "vla_hf"
+    hf_dir.mkdir()
+    (hf_dir / "config.json").write_text("{}", encoding="utf-8")
+    torch.save(
+        {f"action_head.{key}": value for key, value in source.state_dict().items()},
+        hf_dir / "pytorch_model.bin",
+    )
+
+    actor = VLAActionHeadActor(
+        hidden_dim=16,
+        action_dim=3,
+        time_horizon=4,
+        vla_hidden_size=16,
+        hidden_size_factor=0.25,
+        num_encoder_layers=1,
+        adapter_type="identity",
+        action_head_type="legacy",
+        init_action_head_ckpt=str(hf_dir),
+    )
+
+    assert torch.equal(
+        actor.action_token_embeddings.weight,
+        source.action_token_embeddings.weight,
+    )
+
+
 def test_dreamer_eval_keeps_rynnvla_action_hidden_tokens_for_wm() -> None:
     workspace = EvalLiberoVLARunner.__new__(EvalLiberoVLARunner)
     workspace.cfg = OmegaConf.create(

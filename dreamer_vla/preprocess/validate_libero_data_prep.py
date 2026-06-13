@@ -537,7 +537,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--processed-data-root",
         type=Path,
         default=None,
-        help="Processed data root. Defaults to <data-root>/processed_data.",
+        help=(
+            "Processed data root. Defaults to "
+            "<data-root>/processed_data/<suite>."
+        ),
     )
     parser.add_argument("--his", type=int, default=1)
     parser.add_argument("--action-horizon", type=int, default=1)
@@ -560,20 +563,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_root = args.data_root.expanduser()
-    processed_root = (
+    processed_root_base = (
         args.processed_data_root.expanduser()
         if args.processed_data_root is not None
         else processed_data_path()
     )
     if args.processed_data_root is None and args.data_root != default_data_root():
-        processed_root = data_root / "processed_data"
+        processed_root_base = data_root / "processed_data"
 
     reports = [
         validate_suite(
             LiberoDataPrepSpec(
                 suite=suite,
                 data_root=data_root,
-                processed_data_root=processed_root,
+                processed_data_root=(
+                    processed_root_base
+                    if args.processed_data_root is not None
+                    else processed_root_base / suite
+                ),
                 his=args.his,
                 action_horizon=args.action_horizon,
                 image_resolution=args.image_resolution,
@@ -586,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"[validate_libero_data_prep] data_root={data_root} "
-        f"processed_data_root={processed_root}"
+        f"processed_data_root={processed_root_base}"
     )
     print()
     for report in reports:

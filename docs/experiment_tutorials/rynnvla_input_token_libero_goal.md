@@ -37,7 +37,7 @@ TASK=libero_goal GPUS=0 ACTION_HIDDEN_GPUS=1 bash scripts/preprocess/32_input_to
 Expected sidecar:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2
 ```
 
 ## 3. Optional VLA SFT

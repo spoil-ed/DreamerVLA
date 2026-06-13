@@ -16,6 +16,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamer_vla.utils.metric_logger import MetricLogger, NullMetricLogger
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -373,15 +374,36 @@ class BaseRunner(ABC):
         return True
 
     def resume(self, cfg: DictConfig | None = None) -> None:
-        """Load latest checkpoint when training.resume=True (mirrors diffusion_policy convention)."""
+        """Load latest checkpoint when training.resume=True."""
         if cfg is None:
             cfg = self.cfg
         if cfg.training.resume:
+            explicit_resume_dir = OmegaConf.select(
+                cfg, "training.resume_dir", default=None
+            )
+            if explicit_resume_dir is not None:
+                resume_path = (
+                    pathlib.Path(str(explicit_resume_dir)).expanduser().resolve()
+                )
+                if is_hf_checkpoint(resume_path):
+                    self.load_hf_checkpoint(resume_path)
+                    return
+                if resume_path.is_dir():
+                    resume_path = resume_path / "ckpt" / "latest.ckpt"
+                if resume_path.is_file():
+                    if self.is_main_process:
+                        print(f"Resuming from checkpoint {resume_path}")
+                    self.load_checkpoint(path=resume_path)
+                    return
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 if self.is_main_process:
                     print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+                return
+            latest_hf_path = self.get_hf_checkpoint_path()
+            if latest_hf_path.is_dir():
+                self.load_hf_checkpoint(latest_hf_path)
 
     def print_history(self, history: list[dict[str, float | str | int]]) -> None:
         # Metric print
@@ -566,11 +588,21 @@ class BaseRunner(ABC):
         if is_main_process:
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(payload, path)
+            self._save_checkpoint_sidecars(path, payload)
         return str(path.absolute())
 
     def get_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
         # Checkpoint file
         return self.get_checkpoint_dir().joinpath(f"{tag}.ckpt")
+
+    def get_hf_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
+        # HF sidecar directory for VLA-compatible checkpoints.
+        return self.get_checkpoint_dir().joinpath(f"{tag}_hf")
+
+    def _save_checkpoint_sidecars(
+        self, path: pathlib.Path, payload: dict[str, Any]
+    ) -> None:
+        return None
 
     def load_payload(
         self,
@@ -632,13 +664,26 @@ class BaseRunner(ABC):
             path = self.get_checkpoint_path(tag=tag)
         path = pathlib.Path(path)
 
-        payload = torch.load(path, **kwargs)
+        if is_hf_checkpoint(path):
+            payload = self.load_hf_checkpoint(path, **kwargs)
+            return payload
+
+        payload = load_runner_payload(path, **kwargs)
         self.load_payload(
             payload=payload,
             exclude_keys=exclude_keys,
             include_keys=include_keys,
         )
         return payload
+
+    def load_hf_checkpoint(
+        self,
+        path: str | pathlib.Path,
+        **_: Any,
+    ) -> dict[str, Any]:
+        raise RuntimeError(
+            f"{type(self).__name__} does not support loading Hugging Face checkpoints: {path}"
+        )
 
     def setup(self) -> None:
         """Optional lifecycle hook before execution.

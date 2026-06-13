@@ -96,6 +96,8 @@ eval:
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
+  save_hf_encoder: true
+  hf_safe_serialization: true
   topk:
     monitor_key: train_vla_loss
     mode: min

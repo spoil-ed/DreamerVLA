@@ -19,6 +19,7 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamer_vla.models.encoder.rynnvla_encoder import RynnVLAEncoder
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamer_vla.utils.paths import checkpoints_path, processed_data_path
 
 
@@ -459,8 +460,14 @@ def _monitor_global_progress(
 
 
 def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEncoder:
+    model_path = args.model_path
+    encoder_state_is_hf = bool(
+        args.encoder_state_ckpt and is_hf_checkpoint(args.encoder_state_ckpt)
+    )
+    if encoder_state_is_hf:
+        model_path = args.encoder_state_ckpt
     encoder = RynnVLAEncoder(
-        model_path=args.model_path,
+        model_path=model_path,
         tokenizer_path=args.tokenizer_path,
         text_tokenizer_path=args.text_tokenizer_path,
         chameleon_vqgan_config=args.chameleon_vqgan_config,
@@ -472,8 +479,8 @@ def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEnco
         pool=args.pool,
         freeze_backbone=True,
     ).to(device)
-    if args.encoder_state_ckpt:
-        payload = torch.load(args.encoder_state_ckpt, map_location="cpu", weights_only=False)
+    if args.encoder_state_ckpt and not encoder_state_is_hf:
+        payload = load_runner_payload(args.encoder_state_ckpt)
         encoder_state = payload.get("state_dicts", {}).get("encoder")
         if encoder_state is None:
             raise RuntimeError(f"{args.encoder_state_ckpt} has no state_dicts.encoder")
