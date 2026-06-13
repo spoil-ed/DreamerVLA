@@ -9,6 +9,7 @@ import hydra
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
+from dreamer_vla.config import validate_cfg
 from dreamer_vla.runners import BaseRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,7 @@ def _auto_apply_distributed(cfg: DictConfig) -> None:
 def run(cfg: DictConfig) -> None:
     _auto_apply_distributed(cfg)
     OmegaConf.resolve(cfg)
+    cfg = validate_cfg(cfg)
     runner_cls = hydra.utils.get_class(cfg._target_)
     runner: BaseRunner = runner_cls(cfg)
     runner.setup()

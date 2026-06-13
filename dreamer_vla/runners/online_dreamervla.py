@@ -24,7 +24,7 @@ from dreamer_vla.algorithms.dreamer_vla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
-from dreamer_vla.algorithms.ppo import dino_wmpo_dense_chunk_step, dino_wmpo_outcome_step
+from dreamer_vla.algorithms.registry import get_actor_update_route
 from dreamer_vla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
@@ -537,6 +537,11 @@ def load_training_checkpoint(
 
 def main() -> None:
     args = parse_args()
+    actor_update_route = (
+        None
+        if args.actor_update_kind == "dreamer"
+        else get_actor_update_route(args.actor_update_kind)
+    )
     rank, world_size, local_rank, is_dist = _init_distributed()
     is_rank0 = rank == 0
     # Per-rank seed offset → each rank's env explores independently.
@@ -736,10 +741,10 @@ def main() -> None:
     classifier: torch.nn.Module | None = None
     classifier_optimizer: torch.optim.Optimizer | None = None
     classifier_threshold: float = 0.5
-    if args.actor_update_kind == "outcome":
+    if actor_update_route is not None and actor_update_route.requires_classifier:
         if not args.classifier_ckpt:
             raise ValueError(
-                "--actor-update-kind=outcome requires --classifier-ckpt pointing to a "
+                f"--actor-update-kind={args.actor_update_kind} requires --classifier-ckpt pointing to a "
                 "LatentSuccessClassifier .ckpt (model+threshold+config)."
             )
         cls_payload = torch.load(
@@ -1146,9 +1151,13 @@ def main() -> None:
                                     ]
                                 )
 
-                            ac_metrics = dino_wmpo_outcome_step(
+                            if actor_update_route is None:
+                                raise RuntimeError(
+                                    "Actor update route was not resolved."
+                                )
+                            ac_metrics = actor_update_route.step_fn(
                                 policy=policy,
-                                chunk_world_model=world_model,
+                                **{actor_update_route.world_model_arg: world_model},
                                 classifier=classifier,
                                 classifier_threshold=classifier_threshold,
                                 actor_optimizer=policy_optimizer,
@@ -1359,9 +1368,13 @@ def main() -> None:
                         elif args.actor_update_kind == "dense_chunk":
                             # WMPO chunk-WM PPO with dense per-step state-reward.
                             # No critic — TD-MPC/relabel side losses not yet wired.
-                            ac_metrics = dino_wmpo_dense_chunk_step(
+                            if actor_update_route is None:
+                                raise RuntimeError(
+                                    "Actor update route was not resolved."
+                                )
+                            ac_metrics = actor_update_route.step_fn(
                                 policy=policy,
-                                chunk_world_model=world_model,
+                                **{actor_update_route.world_model_arg: world_model},
                                 actor_optimizer=policy_optimizer,
                                 obs=obs_for_update,
                                 device=device,

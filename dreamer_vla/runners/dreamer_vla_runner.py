@@ -39,11 +39,7 @@ from dreamer_vla.algorithms.dreamer_vla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
-from dreamer_vla.algorithms.ppo import (
-    dino_wmpo_dense_chunk_step,
-    dino_wmpo_dense_step,
-    dino_wmpo_outcome_step,
-)
+from dreamer_vla.algorithms.registry import get_actor_update_route
 from dreamer_vla.dataset import BaseDataset
 from dreamer_vla.models.critic.twohot_critic import ReturnPercentileTracker
 from dreamer_vla.runners.base_runner import BaseRunner
@@ -123,6 +119,7 @@ class DreamerVLARunner(BaseRunner):
         self.world_model_ema: EMAHelper | None = None
         self.return_tracker: ReturnPercentileTracker | None = None
         self.vq_model = None
+        self.actor_update_route = None
         self._real_relabel_steps: list[dict[str, Any]] = []
         self._real_relabel_rng = random.Random(
             int(OmegaConf.select(config, "seed", default=0)) + 1701
@@ -1499,7 +1496,15 @@ class DreamerVLARunner(BaseRunner):
         actor_update_kind = str(
             OmegaConf.select(cfg, "algorithm.update_type", default="dreamer")
         ).lower()
-        if actor_update_kind == "wmpo_outcome":
+        self.actor_update_route = (
+            None
+            if actor_update_kind == "dreamer"
+            else get_actor_update_route(actor_update_kind)
+        )
+        if (
+            self.actor_update_route is not None
+            and self.actor_update_route.requires_classifier
+        ):
             from dreamer_vla.models.reward import (
                 LatentSuccessClassifier,
                 LatentSuccessClassifierConfig,
@@ -1510,7 +1515,7 @@ class DreamerVLARunner(BaseRunner):
             )
             if not classifier_ckpt_path:
                 raise ValueError(
-                    "update_type=wmpo_outcome requires init.classifier_state_ckpt — "
+                    f"update_type={actor_update_kind} requires init.classifier_state_ckpt — "
                     "path to a LatentSuccessClassifier .ckpt (model+threshold+config)."
                 )
             cls_payload = torch.load(
@@ -1633,6 +1638,9 @@ class DreamerVLARunner(BaseRunner):
         actor_update_kind = str(
             OmegaConf.select(algorithm_cfg, "update_type", default="dreamer")
         ).lower()
+        actor_update_route = getattr(self, "actor_update_route", None)
+        if actor_update_kind != "dreamer" and actor_update_route is None:
+            actor_update_route = get_actor_update_route(actor_update_kind)
         optim_cfg = OmegaConf.select(cfg, "optim")
         self._real_relabel_steps = self._load_real_relabel_steps(cfg)
 
@@ -1725,61 +1733,7 @@ class DreamerVLARunner(BaseRunner):
                                 ac_batch = self._build_actor_critic_batch(batch)
                                 if ac_batch is not None:
                                     self.world_model.eval()
-                                    if actor_update_kind in {"wmpo_outcome", "outcome"}:
-                                        # WMPO/verl reference: chunk-WM imagination +
-                                        # LatentSuccessClassifier outcome reward. Pure
-                                        # imagination — no env rollout needed.
-                                        ac_metrics = dino_wmpo_outcome_step(
-                                            policy=self.policy,
-                                            chunk_world_model=self.world_model,
-                                            classifier=self.classifier,
-                                            classifier_threshold=self.classifier_threshold,
-                                            actor_optimizer=self.policy_optimizer,
-                                            obs=ac_batch["obs"],
-                                            device=self.device,
-                                            algorithm_cfg=algorithm_cfg,
-                                            optim_cfg=optim_cfg,
-                                            ref_policy=self.ref_policy,
-                                        )
-                                    elif actor_update_kind in {
-                                        "wmpo_dense_chunk",
-                                        "dense_chunk",
-                                    }:
-                                        # Chunk-WM-driven dense-reward PPO. The configured
-                                        # world_model._target_ must be ChunkAwareRynnDinoWMWorldModel
-                                        # so self.world_model exposes predict_next_chunk.
-                                        ac_metrics = dino_wmpo_dense_chunk_step(
-                                            policy=self.policy,
-                                            chunk_world_model=self.world_model,
-                                            actor_optimizer=self.policy_optimizer,
-                                            obs=ac_batch["obs"],
-                                            device=self.device,
-                                            algorithm_cfg=algorithm_cfg,
-                                            optim_cfg=optim_cfg,
-                                            ref_policy=self.ref_policy,
-                                        )
-                                    elif actor_update_kind in {
-                                        "wmpo_ppo",
-                                        "ppo",
-                                        "grpo",
-                                    }:
-                                        ac_metrics = dino_wmpo_dense_step(
-                                            policy=self.policy,
-                                            world_model=self.world_model,
-                                            actor_optimizer=self.policy_optimizer,
-                                            obs=ac_batch["obs"],
-                                            device=self.device,
-                                            algorithm_cfg=algorithm_cfg,
-                                            optim_cfg=optim_cfg,
-                                            ref_policy=self.ref_policy,
-                                            real_relabel_batch=self._sample_real_relabel_batch(
-                                                algorithm_cfg
-                                            ),
-                                            critic=self.critic,
-                                            target_critic=self.target_critic,
-                                            critic_optimizer=self.critic_optimizer,
-                                        )
-                                    else:
+                                    if actor_update_kind == "dreamer":
                                         ac_metrics = imagine_actor_critic_step(
                                             policy=self.policy,
                                             world_model=self.world_model,
@@ -1793,6 +1747,45 @@ class DreamerVLARunner(BaseRunner):
                                             algorithm_cfg=algorithm_cfg,
                                             optim_cfg=optim_cfg,
                                             ref_policy=self.ref_policy,
+                                        )
+                                    else:
+                                        if actor_update_route is None:
+                                            raise RuntimeError(
+                                                "Actor update route was not resolved."
+                                            )
+                                        actor_kwargs = {
+                                            "policy": self.policy,
+                                            actor_update_route.world_model_arg: self.world_model,
+                                            "actor_optimizer": self.policy_optimizer,
+                                            "obs": ac_batch["obs"],
+                                            "device": self.device,
+                                            "algorithm_cfg": algorithm_cfg,
+                                            "optim_cfg": optim_cfg,
+                                            "ref_policy": self.ref_policy,
+                                        }
+                                        if actor_update_route.requires_classifier:
+                                            actor_kwargs.update(
+                                                {
+                                                    "classifier": self.classifier,
+                                                    "classifier_threshold": self.classifier_threshold,
+                                                }
+                                            )
+                                        if actor_update_route.uses_real_relabel:
+                                            actor_kwargs["real_relabel_batch"] = (
+                                                self._sample_real_relabel_batch(
+                                                    algorithm_cfg
+                                                )
+                                            )
+                                        if actor_update_route.uses_critic:
+                                            actor_kwargs.update(
+                                                {
+                                                    "critic": self.critic,
+                                                    "target_critic": self.target_critic,
+                                                    "critic_optimizer": self.critic_optimizer,
+                                                }
+                                            )
+                                        ac_metrics = actor_update_route.step_fn(
+                                            **actor_kwargs
                                         )
                                     epoch_actor_losses.append(ac_metrics["actor_loss"])
                                     epoch_critic_losses.append(

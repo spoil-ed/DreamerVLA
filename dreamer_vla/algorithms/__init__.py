@@ -31,6 +31,7 @@ from .ppo import (
     dino_wmpo_dense_step,
     dino_wmpo_outcome_step,
 )
+from .registry import ActorUpdateRoute, actor_update_names, get_actor_update_route
 
 __all__ = [
     # DreamerV3 actor-critic route.
@@ -42,4 +43,7 @@ __all__ = [
     "dino_wmpo_dense_step",
     "dino_wmpo_dense_chunk_step",
     "dino_wmpo_outcome_step",
+    "ActorUpdateRoute",
+    "actor_update_names",
+    "get_actor_update_route",
 ]

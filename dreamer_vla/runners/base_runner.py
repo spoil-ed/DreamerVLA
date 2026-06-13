@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import numbers
 import pathlib
 import pickle
+import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pprint import pprint
 from typing import Any
 
 import hydra
 import torch
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
@@ -43,6 +46,7 @@ class BaseRunner(ABC):
         self.global_step = 0
         self.epoch = 0
         self._metric_logger: Any | None = None
+        self._run_artifacts_written = False
 
     @property
     def output_dir(self) -> str:
@@ -62,12 +66,56 @@ class BaseRunner(ABC):
             return str(pathlib.Path(".").resolve())
 
     def get_checkpoint_dir(self) -> pathlib.Path:
-        # Checkpoint dir
-        return pathlib.Path(self.output_dir).joinpath("ckpt")
+        # RLinf-style canonical checkpoint directory.
+        return self.get_run_dir().joinpath("checkpoints")
+
+    def get_legacy_checkpoint_dir(self) -> pathlib.Path:
+        # Compatibility with older DreamerVLA latest.ckpt checkpoints.
+        return self.get_run_dir().joinpath("ckpt")
+
+    def get_run_dir(self) -> pathlib.Path:
+        return pathlib.Path(self.output_dir)
+
+    def get_artifact_dir(self, *parts: str) -> pathlib.Path:
+        return self.get_run_dir().joinpath(*parts)
 
     def get_log_dir(self) -> pathlib.Path:
         # Log dir
-        return pathlib.Path(self.output_dir).joinpath("log")
+        return self.get_artifact_dir("log")
+
+    def get_tensorboard_dir(self) -> pathlib.Path:
+        return self.get_log_dir().joinpath("tensorboard")
+
+    def get_wandb_dir(self) -> pathlib.Path:
+        return self.get_log_dir().joinpath("wandb")
+
+    def get_video_dir(self, split: str = "eval") -> pathlib.Path:
+        return self.get_artifact_dir("video", str(split))
+
+    def get_diagnostics_dir(self) -> pathlib.Path:
+        return self.get_artifact_dir("diagnostics")
+
+    def get_resolved_config_path(self) -> pathlib.Path:
+        return self.get_artifact_dir("resolved_config.yaml")
+
+    def get_run_manifest_path(self) -> pathlib.Path:
+        return self.get_artifact_dir("run_manifest.json")
+
+    def get_global_step_checkpoint_dir(self, step: int) -> pathlib.Path:
+        return self.get_checkpoint_dir().joinpath(f"global_step_{int(step)}")
+
+    def get_component_checkpoint_dir(
+        self,
+        component: str,
+        *,
+        step: int | None = None,
+    ) -> pathlib.Path:
+        root = (
+            self.get_checkpoint_dir()
+            if step is None
+            else self.get_global_step_checkpoint_dir(int(step))
+        )
+        return root.joinpath(str(component))
 
     def get_log_path(self, name: str = "logs.json.txt") -> pathlib.Path:
         # Log file
@@ -76,6 +124,105 @@ class BaseRunner(ABC):
     def print_config(self) -> None:
         # Config dump
         pprint(OmegaConf.to_container(self.config, resolve=True))
+
+    def write_run_artifacts(self) -> dict[str, Any] | None:
+        """Write reproducibility artifacts for the current run."""
+
+        if not self.is_main_process:
+            return None
+
+        self.get_run_dir().mkdir(parents=True, exist_ok=True)
+        self.get_log_dir().mkdir(parents=True, exist_ok=True)
+        OmegaConf.save(
+            config=self.cfg,
+            f=str(self.get_resolved_config_path()),
+            resolve=True,
+        )
+        manifest = self.build_run_manifest()
+        self.get_run_manifest_path().write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self._run_artifacts_written = True
+        return manifest
+
+    def build_run_manifest(self) -> dict[str, Any]:
+        """Build a compact RLinf-style run manifest."""
+
+        logger_cfg = OmegaConf.select(self.cfg, "runner.logger", default=None)
+        if logger_cfg is None:
+            logger_cfg = OmegaConf.select(self.cfg, "logging", default=None)
+        backends = _normalise_logger_backends(
+            _mapping_get(logger_cfg, "logger_backends", ["tensorboard"])
+        )
+
+        distributed = getattr(self, "distributed", None)
+        return {
+            "schema_version": 1,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "runner": {
+                "class": type(self).__name__,
+                "name": str(self.runner_name),
+                "family": str(self.runner_family),
+                "status": str(self.runner_status),
+            },
+            "run_dir": str(self.get_run_dir()),
+            "artifact_dirs": {
+                "checkpoints": str(self.get_checkpoint_dir()),
+                "diagnostics": str(self.get_diagnostics_dir()),
+                "log": str(self.get_log_dir()),
+                "tensorboard": str(self.get_tensorboard_dir()),
+                "wandb": str(self.get_wandb_dir()),
+                "video_eval": str(self.get_video_dir("eval")),
+            },
+            "state": {
+                "global_step": int(self.global_step),
+                "epoch": int(self.epoch),
+            },
+            "distributed": {
+                "strategy": str(
+                    OmegaConf.select(
+                        self.cfg,
+                        "training.distributed_strategy",
+                        default="ddp",
+                    )
+                ),
+                "rank": int(getattr(distributed, "rank", 0) or 0),
+                "local_rank": int(getattr(distributed, "local_rank", 0) or 0),
+                "world_size": int(getattr(distributed, "world_size", 1) or 1),
+            },
+            "logging": {
+                "backends": backends,
+                "log_path": str(self.get_log_dir()),
+            },
+            "config": {
+                "resolved_config_path": str(self.get_resolved_config_path()),
+            },
+            "git": self._git_metadata(),
+        }
+
+    @staticmethod
+    def _git_metadata() -> dict[str, Any]:
+        def capture(*args: str) -> str | None:
+            try:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=str(PROJECT_ROOT),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                )
+            except Exception:
+                return None
+            return result.stdout.strip()
+
+        status = capture("status", "--short")
+        return {
+            "commit": capture("rev-parse", "HEAD"),
+            "branch": capture("rev-parse", "--abbrev-ref", "HEAD"),
+            "is_dirty": None if status is None else bool(status),
+        }
 
     def build_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
         # Encoder config
@@ -389,13 +536,29 @@ class BaseRunner(ABC):
                     self.load_hf_checkpoint(resume_path)
                     return
                 if resume_path.is_dir():
-                    resume_path = resume_path / "ckpt" / "latest.ckpt"
+                    hf_candidates = (
+                        resume_path / "checkpoints" / "latest_hf",
+                        resume_path / "latest_hf",
+                    )
+                    for hf_path in hf_candidates:
+                        if is_hf_checkpoint(hf_path):
+                            self.load_hf_checkpoint(hf_path)
+                            return
+                    ckpt_candidates = (
+                        resume_path / "checkpoints" / "latest.ckpt",
+                        resume_path / "ckpt" / "latest.ckpt",
+                        resume_path / "latest.ckpt",
+                    )
+                    resume_path = next(
+                        (candidate for candidate in ckpt_candidates if candidate.is_file()),
+                        ckpt_candidates[0],
+                    )
                 if resume_path.is_file():
                     if self.is_main_process:
                         print(f"Resuming from checkpoint {resume_path}")
                     self.load_checkpoint(path=resume_path)
                     return
-            lastest_ckpt_path = self.get_checkpoint_path()
+            lastest_ckpt_path = self.get_checkpoint_path(prefer_existing=True)
             if lastest_ckpt_path.is_file():
                 if self.is_main_process:
                     print(f"Resuming from checkpoint {lastest_ckpt_path}")
@@ -531,6 +694,10 @@ class BaseRunner(ABC):
             return f"eval/{key[len('val_'):]}"
         if key.startswith("eval_"):
             return f"eval/{key[len('eval_'):]}"
+        if key.startswith("env_"):
+            return f"env/{key[len('env_'):]}"
+        if key.startswith("rollout_"):
+            return f"rollout/{key[len('rollout_'):]}"
         if key.startswith("time_"):
             return f"time/{key[len('time_'):]}"
         if key.startswith("wall_"):
@@ -591,9 +758,22 @@ class BaseRunner(ABC):
             self._save_checkpoint_sidecars(path, payload)
         return str(path.absolute())
 
-    def get_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
+    def get_checkpoint_path(
+        self,
+        tag: str = "latest",
+        *,
+        prefer_existing: bool = False,
+    ) -> pathlib.Path:
         # Checkpoint file
-        return self.get_checkpoint_dir().joinpath(f"{tag}.ckpt")
+        canonical_path = self.get_checkpoint_dir().joinpath(f"{tag}.ckpt")
+        if not prefer_existing:
+            return canonical_path
+        if canonical_path.is_file():
+            return canonical_path
+        legacy_path = self.get_legacy_checkpoint_dir().joinpath(f"{tag}.ckpt")
+        if legacy_path.is_file():
+            return legacy_path
+        return canonical_path
 
     def get_hf_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
         # HF sidecar directory for VLA-compatible checkpoints.
@@ -661,7 +841,7 @@ class BaseRunner(ABC):
     ) -> dict[str, Any]:
         # Checkpoint path
         if path is None:
-            path = self.get_checkpoint_path(tag=tag)
+            path = self.get_checkpoint_path(tag=tag, prefer_existing=True)
         path = pathlib.Path(path)
 
         if is_hf_checkpoint(path):
@@ -692,6 +872,7 @@ class BaseRunner(ABC):
         new runners a common interface without forcing a large rewrite of
         the current training loops.
         """
+        self.write_run_artifacts()
         return None
 
     def execute(self) -> object:
@@ -717,3 +898,32 @@ def _copy_to_cpu(value: Any) -> Any:
     if isinstance(value, list):
         return [_copy_to_cpu(item) for item in value]
     return copy.deepcopy(value)
+
+
+def _mapping_get(cfg: Any, key: str, default: Any = None) -> Any:
+    if cfg is None:
+        return default
+    if isinstance(cfg, DictConfig):
+        return cfg.get(key, default)
+    if isinstance(cfg, Mapping):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def _normalise_logger_backends(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_backends = [value]
+    elif isinstance(value, (list, tuple, ListConfig)):
+        raw_backends = list(value)
+    else:
+        raw_backends = [value]
+
+    backends: list[str] = []
+    for backend in raw_backends:
+        backend_name = str(backend).strip().lower()
+        if backend_name in {"", "none", "null", "false", "off", "disabled"}:
+            continue
+        backends.append(backend_name)
+    return backends
