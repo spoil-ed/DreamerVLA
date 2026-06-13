@@ -210,7 +210,7 @@ Useful variants:
 bash scripts/preprocess/prepare_libero_data.sh task=libero_10 gpus=0,1,2,3 ngpu=4
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[10_hdf5_reward]
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
-VLA_CKPT=/abs/path/to/latest_hf bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[30_action_hidden]
+VLA_CKPT=/abs/path/to/vla_run/checkpoints/latest_hf bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[30_action_hidden]
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[40_validate]
 ```
 
@@ -227,13 +227,16 @@ RynnVLA SFT writes the legacy runner checkpoint and a Hugging Face sidecar
 directory for direct inference. For example:
 
 ```text
-${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/ckpt/latest.ckpt
-${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/ckpt/latest_hf/
-${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/libero_goal/<run>/checkpoints/epoch=..._hf/
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/<run>/checkpoints/latest.ckpt
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/<run>/checkpoints/latest_hf/
+${DVLA_DATA_ROOT}/outputs/vla/rynnvla_action_head/<run>/checkpoints/epoch=..._hf/
 ```
 
-Use the `*_hf/` directory for VLA eval and for action-hidden extraction.
-Use `latest.ckpt` only when you need optimizer/epoch state for legacy resume.
+The pipeline is serial: train or download the VLA first, then generate
+action-hidden sidecars from that exact VLA checkpoint, then train the world
+model/classifier/DreamerVLA routes. Use the `*_hf/` directory for VLA eval and
+for action-hidden extraction. Use `latest.ckpt` only when you need
+optimizer/epoch state for legacy resume.
 To resume from a HF directory as weights-only initialization:
 
 ```bash
@@ -259,10 +262,16 @@ After VLA SFT, generate RynnVLA action-hidden from the trained HF checkpoint:
 
 ```bash
 TASK=libero_goal \
-VLA_CKPT=/abs/path/to/vla_run/ckpt/latest_hf \
+VLA_CKPT=/abs/path/to/vla_run/checkpoints/latest_hf \
 GPUS=0 ACTION_HIDDEN_GPUS=1 \
 bash scripts/preprocess/30_action_hidden.sh
 ```
+
+`scripts/preprocess/30_action_hidden.sh` also accepts a legacy runner
+checkpoint file via `VLA_CKPT=/abs/path/to/latest.ckpt`; in that case it uses
+the base VLA under `BASE_VLA_CKPT` for assets and loads the trained encoder
+state from the `.ckpt` file. Prefer the HF sidecar when it exists because the
+same path can be passed directly to eval.
 
 OpenVLA-OFT action-hidden sidecar (feeds the OFT WM/classifier/DreamerVLA
 routes; both checkpoint formats extract the same backbone layer):
@@ -291,7 +300,7 @@ projected vision patch tokens:
 ```bash
 # RynnVLA Scheme B from a trained HF checkpoint:
 TASK=libero_goal \
-VLA_CKPT=/abs/path/to/vla_run/ckpt/latest_hf \
+VLA_CKPT=/abs/path/to/vla_run/checkpoints/latest_hf \
 GPUS=0 ACTION_HIDDEN_GPUS=1 \
 bash scripts/preprocess/32_input_token_hidden.sh
 
@@ -331,10 +340,12 @@ World model:
 
 ```bash
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
-  gpus=0,1,2,3 ngpu=4 batch_size=16
+  gpus=0,1,2,3 ngpu=4 batch_size=16 \
+  task.vla_ckpt_path=/abs/path/to/vla_run/checkpoints/latest_hf
 
 # Scheme B frame-token WM:
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal \
+  task.vla_ckpt_path=/abs/path/to/vla_run/checkpoints/latest_hf
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk_input_tokens task=libero_goal
 ```
 
@@ -353,6 +364,7 @@ bash scripts/train_dreamervla.sh \
   experiment=dreamervla_rynn_dino_wm_wmpo_outcome \
   task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=4 \
+  task.vla_ckpt_path=/abs/path/to/vla_run/checkpoints/latest_hf \
   init.world_model_state_ckpt=/abs/path/to/wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/classifier.ckpt
 
@@ -360,6 +372,7 @@ bash scripts/train_dreamervla.sh \
 bash scripts/train_dreamervla.sh \
   experiment=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
   task=libero_goal \
+  task.vla_ckpt_path=/abs/path/to/vla_run/checkpoints/latest_hf \
   init.world_model_state_ckpt=/abs/path/to/input_token_wm.ckpt \
   init.classifier_state_ckpt=/abs/path/to/input_token_classifier.ckpt
 ```
@@ -376,7 +389,7 @@ VLA checkpoint:
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=auto \
-  eval.ckpt_path=/abs/path/to/vla_run/ckpt/latest_hf \
+  eval.ckpt_path=/abs/path/to/vla_run/checkpoints/latest_hf \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=10 \
   training.device=cuda:0

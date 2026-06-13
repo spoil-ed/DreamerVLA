@@ -19,7 +19,11 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
-from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
+from dreamer_vla.utils.hf_checkpoint import (
+    is_hf_checkpoint,
+    load_runner_payload,
+    resolve_hf_checkpoint_dir,
+)
 from dreamer_vla.utils.metric_logger import MetricLogger, NullMetricLogger
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -243,6 +247,8 @@ class BaseRunner(ABC):
             if configured is not None
             else pathlib.Path(str(default_dir)).expanduser().resolve()
         )
+        if is_hf_checkpoint(candidate):
+            return str(resolve_hf_checkpoint_dir(candidate))
         if candidate.is_dir():
             if (candidate / "config.json").is_file():
                 return str(candidate)
@@ -564,7 +570,7 @@ class BaseRunner(ABC):
                     print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
                 return
-            latest_hf_path = self.get_hf_checkpoint_path()
+            latest_hf_path = self.get_hf_checkpoint_path(prefer_existing=True)
             if latest_hf_path.is_dir():
                 self.load_hf_checkpoint(latest_hf_path)
 
@@ -775,9 +781,22 @@ class BaseRunner(ABC):
             return legacy_path
         return canonical_path
 
-    def get_hf_checkpoint_path(self, tag: str = "latest") -> pathlib.Path:
+    def get_hf_checkpoint_path(
+        self,
+        tag: str = "latest",
+        *,
+        prefer_existing: bool = False,
+    ) -> pathlib.Path:
         # HF sidecar directory for VLA-compatible checkpoints.
-        return self.get_checkpoint_dir().joinpath(f"{tag}_hf")
+        canonical_path = self.get_checkpoint_dir().joinpath(f"{tag}_hf")
+        if not prefer_existing:
+            return canonical_path
+        if canonical_path.is_dir():
+            return canonical_path
+        legacy_path = self.get_legacy_checkpoint_dir().joinpath(f"{tag}_hf")
+        if legacy_path.is_dir():
+            return legacy_path
+        return canonical_path
 
     def _save_checkpoint_sidecars(
         self, path: pathlib.Path, payload: dict[str, Any]

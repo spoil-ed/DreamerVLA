@@ -454,6 +454,36 @@ def test_rynnvla_action_hidden_actor_loads_vla_output_projection(tmp_path) -> No
         assert torch.equal(actor.output_projection.state_dict()[key], value)
 
 
+def test_rynnvla_action_hidden_actor_loads_hf_bin_output_projection(tmp_path) -> None:
+    source = RynnVLAActionHiddenActor(
+        action_hidden_dim=4,
+        action_dim=3,
+        time_horizon=5,
+        adapter_type="identity",
+    )
+    hf_dir = tmp_path / "checkpoint-1"
+    hf_dir.mkdir()
+    (hf_dir / "config.json").write_text("{}", encoding="utf-8")
+    torch.save(
+        {
+            f"action_head.output_projection.{key}": value.detach().clone()
+            for key, value in source.output_projection.state_dict().items()
+        },
+        hf_dir / "pytorch_model.bin",
+    )
+
+    actor = RynnVLAActionHiddenActor(
+        action_hidden_dim=4,
+        action_dim=3,
+        time_horizon=5,
+        adapter_type="identity",
+        init_action_head_ckpt=str(tmp_path),
+    )
+
+    for key, value in source.output_projection.state_dict().items():
+        assert torch.equal(actor.output_projection.state_dict()[key], value)
+
+
 def test_rynnvla_action_hidden_actor_rejects_ckpt_without_output_projection(
     tmp_path,
 ) -> None:

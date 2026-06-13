@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 import tqdm
 from diffusers.optimization import get_scheduler
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamer_vla.algorithms.dreamer_vla import (
@@ -46,6 +46,10 @@ from dreamer_vla.runners.base_runner import BaseRunner
 from dreamer_vla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamer_vla.utils.checkpoint_util import TopKCheckpointManager
 from dreamer_vla.utils.ema import EMAHelper
+from dreamer_vla.utils.hf_checkpoint import (
+    is_hf_checkpoint,
+    resolve_hf_checkpoint_dir,
+)
 from dreamer_vla.utils.optim import build_optimizer
 from dreamer_vla.utils.seed import set_seed
 from dreamer_vla.utils.torch_utils import freeze_module
@@ -894,6 +898,13 @@ class DreamerVLARunner(BaseRunner):
         encoder ckpt at the start of cotrain.
         """
         path = pathlib.Path(ckpt_path).expanduser().resolve()
+        if is_hf_checkpoint(path):
+            if self.distributed.is_main_process:
+                print(
+                    "[init] encoder weights already come from HF checkpoint "
+                    f"{resolve_hf_checkpoint_dir(path)}"
+                )
+            return
         if not path.is_file():
             raise FileNotFoundError(f"init.encoder_state_ckpt not found: {path}")
         if self.distributed.is_main_process:
@@ -1334,11 +1345,16 @@ class DreamerVLARunner(BaseRunner):
             self.encoder = None
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-            freeze_module(self.encoder)
             encoder_init_ckpt = OmegaConf.select(
                 cfg, "init.encoder_state_ckpt", default=None
             )
+            if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
+                with open_dict(encoder_cfg):
+                    encoder_cfg.model_path = str(
+                        resolve_hf_checkpoint_dir(encoder_init_ckpt)
+                    )
+            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
+            freeze_module(self.encoder)
             if encoder_init_ckpt:
                 self._load_encoder_init_ckpt(str(encoder_init_ckpt))
 

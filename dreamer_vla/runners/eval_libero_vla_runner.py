@@ -36,7 +36,11 @@ from transformers import GenerationConfig
 
 from dreamer_vla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
 from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
-from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
+from dreamer_vla.utils.hf_checkpoint import (
+    is_hf_checkpoint,
+    load_runner_payload,
+    resolve_hf_checkpoint_dir,
+)
 from dreamer_vla.utils.torch_utils import freeze_module
 
 
@@ -1056,15 +1060,20 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         state_dicts = payload.get("state_dicts", {})
 
         encoder_cfg = self._build_frozen_encoder_cfg(cfg)
+        encoder_init_ckpt = OmegaConf.select(
+            cfg, "init.encoder_state_ckpt", default=None
+        )
+        if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
+            with open_dict(encoder_cfg):
+                encoder_cfg.model_path = str(
+                    resolve_hf_checkpoint_dir(encoder_init_ckpt)
+                )
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
         freeze_module(self.encoder)
         if "encoder" in state_dicts:
             self._load_module_state(self.encoder, state_dicts["encoder"], "encoder")
         else:
-            encoder_init_ckpt = OmegaConf.select(
-                cfg, "init.encoder_state_ckpt", default=None
-            )
-            if encoder_init_ckpt:
+            if encoder_init_ckpt and not is_hf_checkpoint(encoder_init_ckpt):
                 encoder_payload = self._load_checkpoint_payload(str(encoder_init_ckpt))
                 encoder_sd = encoder_payload.get("state_dicts", {}).get("encoder")
                 if encoder_sd is None:

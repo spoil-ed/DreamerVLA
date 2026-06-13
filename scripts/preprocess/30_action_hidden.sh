@@ -15,7 +15,10 @@ cd "${DVLA_ROOT}"
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi06_remaining_reward"
 HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
-VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${TASK}}"
+BASE_VLA_CKPT="${BASE_VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${TASK}}"
+VLA_CKPT="${VLA_CKPT:-${BASE_VLA_CKPT}}"
+VLA_MODEL_PATH="${VLA_MODEL_PATH:-${VLA_CKPT}}"
+ENCODER_STATE_CKPT="${ENCODER_STATE_CKPT:-}"
 TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 TEXT_TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json"
 CHAMELEON_VQGAN_CONFIG="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.yaml"
@@ -24,6 +27,11 @@ CHAMELEON_VQGAN_CKPT="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.ck
 TIME_HORIZON=5
 if [[ "${TASK}" == "libero_spatial" || "${TASK}" == "libero_10" ]]; then
   TIME_HORIZON=10
+fi
+
+if [[ -z "${ENCODER_STATE_CKPT}" && -f "${VLA_CKPT}" ]]; then
+  VLA_MODEL_PATH="${BASE_VLA_CKPT}"
+  ENCODER_STATE_CKPT="${VLA_CKPT}"
 fi
 
 if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)" ]]; then
@@ -39,7 +47,8 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
     --module dreamer_vla.preprocess.preprocess_rynn_pixel_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-dir "${HIDDEN_DIR}" \
-    --model-path "${VLA_CKPT}" \
+    --model-path "${VLA_MODEL_PATH}" \
+    --encoder-state-ckpt "${ENCODER_STATE_CKPT}" \
     --tokenizer-path "${TOKENIZER_PATH}" \
     --text-tokenizer-path "${TEXT_TOKENIZER_PATH}" \
     --chameleon-vqgan-config "${CHAMELEON_VQGAN_CONFIG}" \

@@ -9,6 +9,7 @@ from dreamer_vla.models.actor.base_actor import BaseActor
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
 )
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 
 class RynnVLAActionHiddenActor(BaseActor):
@@ -85,9 +86,7 @@ class RynnVLAActionHiddenActor(BaseActor):
 
         if init_action_head_ckpt:
             ckpt_path = str(init_action_head_ckpt)
-            import os as _os
-
-            if _os.path.isdir(ckpt_path):
+            if is_hf_checkpoint(ckpt_path):
                 self._load_output_projection_from_hf_dir(ckpt_path)
             else:
                 self._load_output_projection_from_vla_ckpt(ckpt_path)
@@ -97,33 +96,8 @@ class RynnVLAActionHiddenActor(BaseActor):
 
     def _load_output_projection_from_hf_dir(self, model_dir: str) -> None:
         """Load output_projection weights from a HuggingFace safetensors directory."""
-        import glob as _glob
-        import json as _json
-        import os as _os
-
-        from safetensors.torch import load_file as _load_safetensors
-
         prefix = "action_head.output_projection."
-        index_path = _os.path.join(model_dir, "model.safetensors.index.json")
-        files: list[str]
-        if _os.path.isfile(index_path):
-            with open(index_path) as fh:
-                index = _json.load(fh).get("weight_map", {})
-            files = sorted(
-                {
-                    _os.path.join(model_dir, p)
-                    for k, p in index.items()
-                    if k.startswith(prefix)
-                }
-            )
-        else:
-            files = sorted(_glob.glob(_os.path.join(model_dir, "*.safetensors")))
-        output_projection_sd: dict[str, torch.Tensor] = {}
-        for path in files:
-            tensors = _load_safetensors(path)
-            for k, v in tensors.items():
-                if k.startswith(prefix):
-                    output_projection_sd[k[len(prefix) :]] = v.to(dtype=torch.float32)
+        output_projection_sd = load_hf_prefixed_tensors(model_dir, prefix)
         if not output_projection_sd:
             raise RuntimeError(f"No '{prefix}' tensors found in HF dir: {model_dir}")
         missing, unexpected = self.output_projection.load_state_dict(

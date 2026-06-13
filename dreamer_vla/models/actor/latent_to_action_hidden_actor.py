@@ -9,6 +9,7 @@ from dreamer_vla.models.actor.base_actor import BaseActor
 from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
 )
+from dreamer_vla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 
 class LatentToActionHiddenActor(BaseActor):
@@ -182,33 +183,12 @@ class LatentToActionHiddenActor(BaseActor):
         return chunk, action_hidden.float()
 
     def _load_output_projection(self, ckpt_path: str) -> None:
-        import glob
-        import json
-        import os
-
         payload: Any | None = None
         tensors: dict[str, torch.Tensor] = {}
-        if os.path.isdir(ckpt_path):
-            from safetensors.torch import load_file
-
-            prefix = "action_head.output_projection."
-            index_path = os.path.join(ckpt_path, "model.safetensors.index.json")
-            if os.path.isfile(index_path):
-                with open(index_path) as fh:
-                    index = json.load(fh).get("weight_map", {})
-                files = sorted(
-                    {
-                        os.path.join(ckpt_path, p)
-                        for key, p in index.items()
-                        if key.startswith(prefix)
-                    }
-                )
-            else:
-                files = sorted(glob.glob(os.path.join(ckpt_path, "*.safetensors")))
-            for path in files:
-                for key, value in load_file(path).items():
-                    if key.startswith(prefix):
-                        tensors[key[len(prefix) :]] = value.to(dtype=torch.float32)
+        if is_hf_checkpoint(ckpt_path):
+            tensors = load_hf_prefixed_tensors(
+                ckpt_path, "action_head.output_projection."
+            )
         else:
             payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             tensors = self._extract_output_projection_state_dict(payload)
