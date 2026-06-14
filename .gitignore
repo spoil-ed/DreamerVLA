@@ -22,6 +22,7 @@ third_party/
 /data/
 
 # Local training / experiment logs
+logs/
 train.log
 *.log
 wandb/
