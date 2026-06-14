@@ -266,6 +266,9 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert "RUN_ACTION_HIDDEN" not in prepare_text
     assert "--config-name preprocess_suite" in prepare_text
     assert "--config-name preprocess_all" in process_text
+    assert "OFT_HISTORY: null" in preprocess_cfg
+    assert "OFT_IMAGE_KEYS: null" in preprocess_cfg
+    assert "OFT_ACTION_HIDDEN_GPUS: ${ngpu}" in preprocess_cfg
     assert "10_hdf5_reward.sh" in preprocess_cfg
     assert "20_pretokenize_dataset.sh" in preprocess_cfg
     assert "chameleon/tokenizer/vqgan.yaml" in (

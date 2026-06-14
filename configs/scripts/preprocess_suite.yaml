@@ -22,6 +22,9 @@ env:
   OFT_CKPT: null
   OFT_POLICY_MODE: null
   OFT_LATENT_SCHEME: null
+  OFT_HISTORY: null
+  OFT_IMAGE_KEYS: null
+  OFT_ACTION_HIDDEN_GPUS: ${ngpu}
   PRETOKENIZE_PROCS: ${num_procs}
   GPUS: ${gpus}
   ACTION_HIDDEN_GPUS: ${ngpu}
