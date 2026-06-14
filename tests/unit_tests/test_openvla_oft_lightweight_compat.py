@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-VENDORED_OPENVLA_OFT = PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"
+VENDORED_OPENVLA_OFT = PROJECT_ROOT / "third_party" / "openvla-oft"
 
 
 class _TinyTokenizer:

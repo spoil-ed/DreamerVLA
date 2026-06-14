@@ -213,7 +213,7 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert not (project_root / "dreamer_vla" / "models" / "xllmx").exists()
     assert not (project_root / "dreamer_vla" / "models" / "openvla-oft").exists()
     assert (preprocess_dir / "libero_utils").is_dir()
-    assert (project_root / "third_party" / "openvla-oft-lightweight").is_dir()
+    assert (project_root / "third_party" / "openvla-oft").is_dir()
 
     assert not (project_root / "scripts" / "archive").exists()
     assert not (project_root / "scripts" / "paper_tables").exists()

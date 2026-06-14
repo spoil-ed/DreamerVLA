@@ -745,7 +745,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--openvla-oft-dir",
-        default=str(PROJECT_ROOT / "third_party" / "openvla-oft-lightweight"),
+        default=str(PROJECT_ROOT / "third_party" / "openvla-oft"),
     )
     parser.add_argument(
         "--hdf5-dir",

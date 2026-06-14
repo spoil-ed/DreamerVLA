@@ -15,9 +15,7 @@ DreamerVLA/
 ├── data/                 # Runtime datasets, checkpoints, outputs
 ├── third_party/          # Vendored/local upstream checkouts and wheels
 │   ├── LIBERO/           # Local LIBERO checkout
-│   ├── openvla-oft/      # Official OpenVLA-OFT checkout for eval
-│   └── openvla-oft-lightweight/
-│                         # Lightweight OpenVLA-OFT compatibility tree
+│   └── openvla-oft/      # OpenVLA-OFT checkout used by eval and compatibility helpers
 ├── pyproject.toml        # Editable install metadata
 └── requirements.txt      # Runtime dependencies
 ```
