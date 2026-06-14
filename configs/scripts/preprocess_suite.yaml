@@ -4,6 +4,9 @@ python: python
 dry_run: false
 only: [10_hdf5_reward, 20_pretokenize_dataset]
 task: libero_goal
+libero_suite: ${task}
+task_name: ${task}
+task_label: null
 gpus: "0"
 ngpu: 1
 num_procs: 8
@@ -11,6 +14,12 @@ overwrite: false
 env:
   OVERWRITE: ${overwrite}
   TASK: ${task}
+  LIBERO_SUITE: ${libero_suite}
+  TASK_NAME: ${task_name}
+  TASK_LABEL: ${task_label}
+  OFT_CKPT: null
+  OFT_POLICY_MODE: null
+  OFT_LATENT_SCHEME: null
   PRETOKENIZE_PROCS: ${num_procs}
   GPUS: ${gpus}
   ACTION_HIDDEN_GPUS: ${ngpu}
@@ -21,5 +30,9 @@ steps:
     script: scripts/preprocess/20_pretokenize_dataset.sh
   - id: 30_action_hidden
     script: scripts/preprocess/30_action_hidden.sh
+  - id: 32_input_token_hidden
+    script: scripts/preprocess/32_input_token_hidden.sh
+  - id: 35_oft_action_hidden
+    script: scripts/preprocess/35_oft_action_hidden.sh
   - id: 40_validate
     script: scripts/preprocess/40_validate.sh

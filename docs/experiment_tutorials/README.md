@@ -16,17 +16,18 @@ normal Hydra keys.
 
 ## Recipes
 
-| Recipe | Latent | Main configs |
+| Pipeline | Processed-data task name | Main configs |
 | --- | --- | --- |
-| [RynnVLA Scheme A](rynnvla_action_hidden_libero_goal.md) | action-query hidden tokens | `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome` |
-| [RynnVLA Scheme B](rynnvla_input_token_libero_goal.md) | current-frame Chameleon input tokens | `world_model_dinowm_chunk_input_tokens`, `dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens` |
-| [OpenVLA-OFT Scheme A](openvla_oft_action_hidden_libero_goal.md) | OFT action-slot hidden tokens | `oft_world_model_dinowm_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome` |
-| [OpenVLA-OFT Scheme B](openvla_oft_input_token_libero_goal.md) | current-frame projected vision tokens | `oft_world_model_dinowm_chunk_input_tokens`, `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens` |
+| [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `RynnVLA_LIBERO` | `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| [OpenVLA_Onetraj_LIBERO](OpenVLA_Onetraj_LIBERO.md) | `OpenVLA_Onetraj_LIBERO` | `oft_world_model_dinowm_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome` |
 
-Scheme A is the RynnVLA-002 contract: the WM token axis is an action-slot axis.
-OFT Scheme A uses the same downstream contract, with different token shape.
-Scheme B is frame-level visual input tokens; the WM receives actions through
-its action input and DreamerVLA uses a bridge actor to produce action slots.
+The pipeline task name is both the Hydra `task=` value and the prefix used for
+processed-data intermediate folders and sidecars. The raw benchmark suite is
+still `libero_goal` in these tutorials.
+
+Scheme A is the action-slot hidden-token route. Scheme B is the optional
+frame-level visual input-token route; the WM receives actions through its
+action input and DreamerVLA uses a bridge actor to produce action slots.
 
 Classifier and WMPO training need both success and failure rollout corpora. The
 standard LIBERO download gives success demos. If you do not have failure demos

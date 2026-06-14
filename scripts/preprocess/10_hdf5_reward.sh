@@ -6,15 +6,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 TASK="${TASK:-libero_goal}"
+LIBERO_SUITE="${LIBERO_SUITE:-${TASK}}"
+TASK_NAME="${TASK_NAME:-${TASK}}"
+if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
+  case "${TASK_NAME}" in
+    RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
+  esac
+fi
 OVERWRITE="${OVERWRITE:-0}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
-RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${TASK}"
-MARKED_DIR="${PROCESSED_DATA_ROOT}/${TASK}_marked_t_256"
-HDF5_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
+RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"
+MARKED_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_marked_t_256"
+HDF5_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256"
 REWARD_DIR="${HDF5_DIR}_pi06_remaining_reward"
-META_JSON="${PROCESSED_DATA_ROOT}/${TASK}_metainfo.json"
+META_JSON="${PROCESSED_DATA_ROOT}/${TASK_NAME}_metainfo.json"
 LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
 
 mkdir -p "${LIBERO_CONFIG_PATH}" "${PROCESSED_DATA_ROOT}"
@@ -29,7 +36,7 @@ EOF
 raw_hdf5="$(find "${RAW_LIBERO_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${raw_hdf5}" ]]; then
   echo "No raw LIBERO HDF5 files found under: ${RAW_LIBERO_DIR}" >&2
-  echo "Run: bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=${TASK}" >&2
+  echo "Run: bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=${LIBERO_SUITE}" >&2
   exit 2
 fi
 
@@ -37,12 +44,14 @@ marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -q
 if [[ "${OVERWRITE}" == "1" || -z "${marked_hdf5}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
   python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
-    --libero_task_suite "${TASK}" \
+    --libero_task_suite "${LIBERO_SUITE}" \
     --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
     --libero_target_dir "${MARKED_DIR}" \
     --image_resolution 256 \
     --keep-noops
-  if [[ -f "${TASK}_metainfo.json" ]]; then
+  if [[ -f "${LIBERO_SUITE}_metainfo.json" ]]; then
+    mv "${LIBERO_SUITE}_metainfo.json" "${META_JSON}"
+  elif [[ -f "${TASK}_metainfo.json" ]]; then
     mv "${TASK}_metainfo.json" "${META_JSON}"
   fi
 else

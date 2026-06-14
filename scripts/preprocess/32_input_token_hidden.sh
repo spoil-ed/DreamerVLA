@@ -6,23 +6,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 TASK="${TASK:-libero_goal}"
+LIBERO_SUITE="${LIBERO_SUITE:-${TASK}}"
+TASK_NAME="${TASK_NAME:-${TASK}}"
+if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
+  case "${TASK_NAME}" in
+    RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
+  esac
+fi
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-}}"
 OVERWRITE="${OVERWRITE:-0}"
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-1}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"
-REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi06_remaining_reward"
-INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK}_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2"
-VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${TASK}}"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
+REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_pi06_remaining_reward"
+INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_pi0_input_token_embedding_vla_policy_h2"
+VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${LIBERO_SUITE}}"
 TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 TEXT_TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json"
 CHAMELEON_VQGAN_CONFIG="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.yaml"
 CHAMELEON_VQGAN_CKPT="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/vqgan.ckpt"
 
 TIME_HORIZON=5
-if [[ "${TASK}" == "libero_spatial" || "${TASK}" == "libero_10" ]]; then
+if [[ "${LIBERO_SUITE}" == "libero_spatial" || "${LIBERO_SUITE}" == "libero_10" ]]; then
   TIME_HORIZON=10
 fi
 

@@ -19,15 +19,19 @@
 # predict_next_chunk hidden_seq[:, -1] emits at inference time.
 #
 # Launch:
-#   bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk gpus=4
+#   bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=RynnVLA_LIBERO gpus=4
+
+defaults:
+  - _self_
+  - /task: libero_goal
 
 _target_: dreamer_vla.runners.LatentClassifierRunner
 
 classifier:
   latent_dim: null
-  action_dim: 7
-  time_horizon: 5
-  token_dim: 1024
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.time_horizon}
+  token_dim: ${task.legacy_action_hidden.token_dim}
   window: 8
   head_type: transformer
   hidden_dim: 256
@@ -40,10 +44,10 @@ classifier:
   chunk_pool: last
 
 data:
-  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256
-  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-  failure_dir_raw: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_failures
-  failure_dir_hidden: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_failures_pi0_legacy_action_hidden_vla_policy_h2
+  success_dir_raw: ${task.hdf5_dir}
+  success_dir_hidden: ${task.rynnvla_action_hidden_dir}
+  failure_dir_raw: ${task.hdf5_dir}_failures
+  failure_dir_hidden: ${task.hdf5_dir}_failures_pi0_legacy_action_hidden_vla_policy_h2
   window: 8
   # stride values in env-step units; mapped to "chunks" by multiplying by K=5
   # so they match small_tf's stride semantics: stride_train = 1 window-length
@@ -54,7 +58,7 @@ data:
   chunk_pool: last
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf_chunk
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/${task.name}/wmpo_aligned_small_tf_chunk}
   device: cuda
   seed: 0
   resume: false

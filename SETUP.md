@@ -17,10 +17,8 @@ export DVLA_DATA_ROOT=/path/to/dvla_data
 
 Quick experiment tutorials:
 
-- [RynnVLA Scheme A on LIBERO-Goal](docs/experiment_tutorials/rynnvla_action_hidden_libero_goal.md)
-- [RynnVLA Scheme B on LIBERO-Goal](docs/experiment_tutorials/rynnvla_input_token_libero_goal.md)
-- [OpenVLA-OFT Scheme A on LIBERO-Goal](docs/experiment_tutorials/openvla_oft_action_hidden_libero_goal.md)
-- [OpenVLA-OFT Scheme B on LIBERO-Goal](docs/experiment_tutorials/openvla_oft_input_token_libero_goal.md)
+- [RynnVLA_LIBERO](docs/experiment_tutorials/RynnVLA_LIBERO.md)
+- [OpenVLA_Onetraj_LIBERO](docs/experiment_tutorials/OpenVLA_Onetraj_LIBERO.md)
 
 ## 1. Install
 
