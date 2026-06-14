@@ -41,9 +41,27 @@ from dreamer_vla.preprocess.libero_utils.noop_marking import (
 NOOP_MARKING_SCHEME = SCHEME_NAME
 
 
+def _complete_demo_group(group):
+    required = (
+        "actions",
+        "states",
+        "robot_states",
+        "rewards",
+        "dones",
+        "noop_mask",
+        "source_indices",
+        "obs",
+    )
+    if any(key not in group for key in required):
+        return False
+    obs = group["obs"]
+    return "agentview_rgb" in obs and "eye_in_hand_rgb" in obs
+
+
 def main(args):
     print(f"Regenerating {args.libero_task_suite} dataset!")
     keep_noops = bool(getattr(args, "keep_noops", False))
+    resume = bool(getattr(args, "resume", False))
     if keep_noops:
         print("No-op actions will be kept and marked with data/demo_*/noop_mask.")
     else:
@@ -51,19 +69,41 @@ def main(args):
 
     # Create target directory
     if os.path.isdir(args.libero_target_dir):
-        user_input = input(
-            f"Target directory already exists at path: {args.libero_target_dir}\nEnter 'y' to overwrite the directory, or anything else to exit: "
-        )
-        if user_input != "y":
-            exit()
+        if resume:
+            print(f"Resuming existing target directory: {args.libero_target_dir}")
+        else:
+            user_input = input(
+                f"Target directory already exists at path: {args.libero_target_dir}\nEnter 'y' to overwrite the directory, or anything else to exit: "
+            )
+            if user_input != "y":
+                exit()
     os.makedirs(args.libero_target_dir, exist_ok=True)
 
     # Prepare JSON file to record success/false and initial states per episode
-    metainfo_json_dict = {}
-    metainfo_json_out_path = f"{args.libero_task_suite}_metainfo.json"
-    with open(metainfo_json_out_path, "w") as f:
-        # Just test that we can write to this file (we overwrite it later)
-        json.dump(metainfo_json_dict, f)
+    metainfo_json_out_path = (
+        args.metainfo_json_out
+        if args.metainfo_json_out
+        else f"{args.libero_task_suite}_metainfo.json"
+    )
+    if resume and os.path.isfile(metainfo_json_out_path):
+        try:
+            with open(metainfo_json_out_path, "r") as f:
+                metainfo_json_dict = json.load(f)
+            if not isinstance(metainfo_json_dict, dict):
+                raise ValueError(
+                    f"metainfo JSON must be an object: {metainfo_json_out_path}"
+                )
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(
+                f"[resume] ignoring invalid metainfo JSON "
+                f"{metainfo_json_out_path}: {exc}"
+            )
+            metainfo_json_dict = {}
+    else:
+        metainfo_json_dict = {}
+        with open(metainfo_json_out_path, "w") as f:
+            # Just test that we can write to this file (we overwrite it later)
+            json.dump(metainfo_json_dict, f)
 
     # Get task suite
     benchmark_dict = benchmark.get_benchmark_dict()
@@ -95,14 +135,34 @@ def main(args):
 
         # Create new HDF5 file for regenerated demos
         new_data_path = os.path.join(args.libero_target_dir, f"{task.name}_demo.hdf5")
-        new_data_file = h5py.File(new_data_path, "w")
+        new_data_file = h5py.File(new_data_path, "a" if resume else "w")
         new_data_file.attrs["noop_marking_scheme"] = NOOP_MARKING_SCHEME
         new_data_file.attrs["noop_keep_noops"] = bool(keep_noops)
-        grp = new_data_file.create_group("data")
+        grp = new_data_file.require_group("data")
+        task_key = task_description.replace(" ", "_")
 
         for i in range(len(orig_data.keys())):
+            episode_key = f"demo_{i}"
+            hdf5_complete = episode_key in grp and _complete_demo_group(
+                grp[episode_key]
+            )
+            existing_episode = metainfo_json_dict.get(task_key, {}).get(episode_key)
+            if resume and existing_episode is not None:
+                success = bool(existing_episode.get("success", False))
+                if (not success) or hdf5_complete:
+                    num_replays += 1
+                    num_success += int(success)
+                    print(
+                        f"[resume] skip {task_key}/{episode_key}: "
+                        f"success={success} hdf5_complete={hdf5_complete}"
+                    )
+                    continue
+
+            if resume and episode_key in grp and not hdf5_complete:
+                del grp[episode_key]
+
             # Get demo data
-            demo_data = orig_data[f"demo_{i}"]
+            demo_data = orig_data[episode_key]
             orig_actions = demo_data["actions"][()]
             orig_states = demo_data["states"][()]
 
@@ -183,13 +243,15 @@ def main(args):
 
             # At end of episode, save replayed trajectories to new HDF5 files (only keep successes)
             if done and len(actions) > 0:
+                if episode_key in grp:
+                    del grp[episode_key]
                 dones = np.zeros(len(actions)).astype(np.uint8)
                 dones[-1] = 1
                 rewards = np.zeros(len(actions)).astype(np.uint8)
                 rewards[-1] = 1
                 assert len(actions) == len(agentview_images)
 
-                ep_data_grp = grp.create_group(f"demo_{i}")
+                ep_data_grp = grp.create_group(episode_key)
                 obs_grp = ep_data_grp.create_group("obs")
                 obs_grp.create_dataset(
                     "gripper_states", data=np.stack(gripper_states, axis=0)
@@ -235,8 +297,6 @@ def main(args):
             num_replays += 1
 
             # Record success/false and initial environment state in metainfo dict
-            task_key = task_description.replace(" ", "_")
-            episode_key = f"demo_{i}"
             if task_key not in metainfo_json_dict:
                 metainfo_json_dict[task_key] = {}
             if episode_key not in metainfo_json_dict[task_key]:
@@ -314,6 +374,16 @@ if __name__ == "__main__":
             "data/demo_*/noop_mask. Without this flag, no-ops are marked then "
             "filtered to preserve the historical *_no_noops_t_* output."
         ),
+    )
+    parser.add_argument(
+        "--metainfo-json-out",
+        default=None,
+        help="Path to the metainfo JSON to write; defaults to <suite>_metainfo.json.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from an existing target directory and metainfo JSON.",
     )
     args = parser.parse_args()
 

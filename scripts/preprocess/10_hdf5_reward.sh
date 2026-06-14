@@ -50,8 +50,15 @@ if [[ "${OVERWRITE}" != "1" && -n "${marked_hdf5}" ]]; then
      python -m dreamer_vla.preprocess.check_artifacts hdf5-dir --dir "${MARKED_DIR}"; then
     echo "[10_hdf5_reward] skip mark: ${MARKED_DIR}"
   else
-    echo "[10_hdf5_reward] existing marked stage is incomplete; rerun with OVERWRITE=1 to rebuild ${MARKED_DIR}" >&2
-    exit 6
+    echo "[10_hdf5_reward] existing marked stage is incomplete; resuming ${MARKED_DIR}" >&2
+    python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
+      --libero_task_suite "${LIBERO_SUITE}" \
+      --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
+      --libero_target_dir "${MARKED_DIR}" \
+      --image_resolution 256 \
+      --keep-noops \
+      --metainfo-json-out "${META_JSON}" \
+      --resume
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
@@ -60,12 +67,8 @@ else
     --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
     --libero_target_dir "${MARKED_DIR}" \
     --image_resolution 256 \
-    --keep-noops
-  if [[ -f "${LIBERO_SUITE}_metainfo.json" ]]; then
-    mv "${LIBERO_SUITE}_metainfo.json" "${META_JSON}"
-  elif [[ -f "${TASK_NAME}_metainfo.json" ]]; then
-    mv "${TASK_NAME}_metainfo.json" "${META_JSON}"
-  fi
+    --keep-noops \
+    --metainfo-json-out "${META_JSON}"
 fi
 
 python -m dreamer_vla.preprocess.check_artifacts metainfo --path "${META_JSON}"
