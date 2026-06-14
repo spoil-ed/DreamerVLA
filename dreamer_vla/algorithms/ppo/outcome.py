@@ -119,17 +119,20 @@ def _build_reward_tensor(
 def _zip_lists(
     actor_feats: list[torch.Tensor],
     actions: list[torch.Tensor],
+    action_token_ids: list[torch.Tensor | None],
     old_log_probs: list[torch.Tensor],
     ref_kls: list[torch.Tensor] | None,
 ):
     if ref_kls is None:
-        for a, b, c in zip(actor_feats, actions, old_log_probs, strict=True):
-            yield a, b, c, None
-    else:
         for a, b, c, d in zip(
-            actor_feats, actions, old_log_probs, ref_kls, strict=True
+            actor_feats, actions, action_token_ids, old_log_probs, strict=True
         ):
-            yield a, b, c, d
+            yield a, b, c, d, None
+    else:
+        for a, b, c, d, e in zip(
+            actor_feats, actions, action_token_ids, old_log_probs, ref_kls, strict=True
+        ):
+            yield a, b, c, d, e
 
 
 def dino_wmpo_outcome_step(
@@ -208,6 +211,7 @@ def dino_wmpo_outcome_step(
 
     actor_feats: list[torch.Tensor] = []
     actions: list[torch.Tensor] = []
+    action_token_ids: list[torch.Tensor | None] = []
     old_log_probs: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
     video_latents: list[torch.Tensor] = []
@@ -235,17 +239,24 @@ def dino_wmpo_outcome_step(
                 )
             actor_feats.append(actor_feat)
             actions.append(action_chunk.detach())
+            sampled_token_ids = _sample_extra.get("action_token_ids")
+            action_token_ids.append(
+                sampled_token_ids.detach()
+                if isinstance(sampled_token_ids, torch.Tensor)
+                else None
+            )
             old_log_probs.append(old_lp.detach())
 
             if use_ref:
                 with torch.no_grad():
-                    ref_lp, _, _ = ref_policy(
-                        {
-                            "mode": "evaluate",
-                            "hidden": actor_feat,
-                            "action": action_chunk.detach(),
-                        }
-                    )
+                    ref_eval_batch = {
+                        "mode": "evaluate",
+                        "hidden": actor_feat,
+                        "action": action_chunk.detach(),
+                    }
+                    if action_token_ids[-1] is not None:
+                        ref_eval_batch["action_token_ids"] = action_token_ids[-1]
+                    ref_lp, _, _ = ref_policy(ref_eval_batch)
                 # k1 KL estimator (signed) — unbiased in expectation but
                 # can go negative on individual samples; this is the
                 # verl/DAPO convention used here (subtract from reward
@@ -423,18 +434,29 @@ def dino_wmpo_outcome_step(
         epoch_bc_ref_count = 0
         if epoch_idx == update_epochs - 1:
             last_epoch_ratio_records = []
-        for c, (actor_feat, action_detached, old_lp, _ref_kl_unused) in enumerate(
+        for c, (
+            actor_feat,
+            action_detached,
+            token_ids,
+            old_lp,
+            _ref_kl_unused,
+        ) in enumerate(
             _zip_lists(
-                actor_feats, actions, old_log_probs, ref_kls if use_ref else None
+                actor_feats,
+                actions,
+                action_token_ids,
+                old_log_probs,
+                ref_kls if use_ref else None,
             )
         ):
-            new_lp, entropy_t, _ = policy(
-                {
-                    "mode": "evaluate",
-                    "hidden": actor_feat,
-                    "action": action_detached,
-                }
-            )
+            eval_batch = {
+                "mode": "evaluate",
+                "hidden": actor_feat,
+                "action": action_detached,
+            }
+            if token_ids is not None:
+                eval_batch["action_token_ids"] = token_ids
+            new_lp, entropy_t, _ = policy(eval_batch)
             mask_c = chunk_mask[c]  # [B_eff], 0/1 per rollout
             ratio = torch.exp(new_lp - old_lp)
             unclipped = ratio * advantages

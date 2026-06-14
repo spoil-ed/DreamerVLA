@@ -12,6 +12,7 @@ from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
 )
 from dreamer_vla.models.actor import (
     LatentToActionHiddenActor,
+    OpenVLADiscreteTokenActor,
     RynnVLAActionHiddenActor,
     VLAActionHeadActor,
 )
@@ -305,6 +306,47 @@ def test_latent_to_action_hidden_actor_accepts_flat_latents() -> None:
     )
 
     assert action.shape == (2, 3, 2)
+
+
+def test_openvla_discrete_token_actor_uses_token_categorical_log_probs() -> None:
+    actor = OpenVLADiscreteTokenActor(
+        hidden_dim=2 * 2 * 4,
+        action_hidden_dim=4,
+        action_dim=2,
+        time_horizon=2,
+        vocab_size=16,
+        action_token_bins=4,
+        adapter_type="identity",
+        freeze_lm_head=False,
+    )
+    with torch.no_grad():
+        actor.lm_head.weight.zero_()
+
+    action_chunk, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": torch.zeros(3, 4, 4),
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
+
+    assert action_chunk.shape == (3, 2, 2)
+    assert extra["action_token_ids"].shape == (3, 2, 2)
+    assert torch.all(extra["action_token_ids"] == 12)
+    assert torch.allclose(log_prob, torch.full((3,), -4 * torch.log(torch.tensor(4.0))))
+
+    eval_log_prob, entropy, _ = actor(
+        {
+            "mode": "evaluate",
+            "hidden": torch.zeros(3, 4, 4),
+            "action": action_chunk,
+            "action_token_ids": extra["action_token_ids"],
+        }
+    )
+
+    assert torch.allclose(eval_log_prob, log_prob)
+    assert torch.allclose(entropy, torch.full((3,), 4 * torch.log(torch.tensor(4.0))))
 
 
 def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:

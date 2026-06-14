@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: openvla_oft_discrete_token_wmpo_outcome
+  - _self_

@@ -19,9 +19,23 @@ The raw benchmark suite is still `libero_goal`; `OpenVLA_Onetraj_LIBERO` is the
 pipeline task name and `OpenVLA_Onetraj_LIBERO_libero_goal` is the
 preprocessing artifact name.
 
-Use an L1 OFT checkpoint for the full DreamerVLA WMPO chain. Discrete
-OpenVLA-OFT checkpoints can be used for sidecar experiments, but the current
-DreamerVLA actor route expects an L1 action head.
+Current OpenVLA-OFT DreamerVLA implementation keeps one action-probability
+route for the downloaded one-trajectory checkpoint:
+
+- Discrete token: use the OpenVLA LM head over action-token slots, sample
+  OpenVLA action token IDs, and decode those IDs to continuous actions with
+  the OpenVLA action-token bin mapping.
+
+TODO(agent): add and validate the OpenVLA-OFT L1 Gaussian route separately.
+That route needs a real `action_head--*_checkpoint.pt`, decodes action-hidden
+slots to continuous means, and learns the diagonal Gaussian std. Do not treat
+the downloaded one-trajectory HF checkpoint as that route; it has no L1 action
+head.
+
+If the goal is a one-trajectory baseline without depending on OpenVLA-OFT L1
+components, train a one-trajectory RynnVLA checkpoint instead. That path writes
+a Hugging Face sidecar (`latest_hf/`) and uses the RynnVLA action head in the
+regular RynnVLA pipeline.
 
 ## 0. System
 
@@ -53,20 +67,43 @@ The downloaded one-trajectory checkpoint path is:
 ${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
 ```
 
-That downloaded checkpoint is a discrete OpenVLA-OFT checkpoint. Train or
-provide an L1 one-trajectory checkpoint for the full WMPO chain:
+That downloaded checkpoint is a discrete OpenVLA-OFT checkpoint. It has no
+`action_head--*_checkpoint.pt`, so do not run it with `OFT_POLICY_MODE=l1`.
+The L1/Gaussian DreamerVLA chain is a TODO, not the default path in this
+tutorial.
+
+Alternative one-trajectory RynnVLA baseline:
+
+```bash
+bash scripts/preprocess/prepare_libero_data.sh \
+  task=RynnVLA_LIBERO \
+  libero_suite=libero_goal \
+  only=[20_pretokenize_dataset] \
+  gpus=0 ngpu=1
+```
 
 ```bash
 bash scripts/train_vla.sh \
-  experiment=openvla_oft_hdf5_one_trajectory_l1 \
-  task=OpenVLA_Onetraj_LIBERO \
-  gpus=0 ngpu=1 batch_size=1 num_workers=4
+  experiment=vla_sft_one_trajectory \
+  task=RynnVLA_LIBERO \
+  gpus=0 ngpu=1 batch_size=4 num_workers=4
 ```
 
-Use the resulting L1 checkpoint directory as `OFT_CKPT` during sidecar
-extraction. For DreamerVLA actor initialization, set
-`task.openvla_oft.action_head_ckpt` to that checkpoint directory's
-`action_head--<step>_checkpoint.pt`.
+The one-trajectory RynnVLA SFT route reads
+`${DVLA_DATA_ROOT}/configs/RynnVLA_LIBERO_libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml`
+and filters each split to one selected `task/trj_*` trajectory.
+
+Use the produced HF directory for RynnVLA hidden extraction and eval:
+
+```bash
+VLA_CKPT=/abs/path/to/rynnvla_run/checkpoints/latest_hf \
+bash scripts/preprocess/prepare_libero_data.sh \
+  task=RynnVLA_LIBERO \
+  libero_suite=libero_goal \
+  only=[30_action_hidden] \
+  gpus=0 ngpu=1 \
+  env.VLA_CKPT="${VLA_CKPT}"
+```
 
 ## 2. Preprocess
 
@@ -86,33 +123,43 @@ bash scripts/preprocess/prepare_libero_data.sh \
   gpus=0 ngpu=1
 ```
 
-Extract OpenVLA-OFT action-hidden Scheme A sidecars:
+Extract OpenVLA-OFT action-hidden Scheme A sidecars in discrete mode. This loads
+the merged LM-head checkpoint directly and leaves `action_head=None`; the
+hidden states still come from the OpenVLA-OFT backbone layer, but there are no
+L1 C/D action-head intermediates:
 
 ```bash
-OFT_L1_CKPT=/abs/path/to/openvla_oft_l1_onetraj_ckpt
+OFT_DISCRETE_CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
 bash scripts/preprocess/prepare_libero_data.sh \
   task=OpenVLA_Onetraj_LIBERO \
   libero_suite=libero_goal \
   only=[35_oft_action_hidden] \
   gpus=0 ngpu=1 \
   env.OFT_LATENT_SCHEME=action_hidden \
-  env.OFT_POLICY_MODE=l1 \
-  env.OFT_CKPT="${OFT_L1_CKPT}"
+  env.OFT_POLICY_MODE=discrete \
+  env.OFT_HISTORY=1 \
+  env.OFT_IMAGE_KEYS=agentview_rgb \
+  env.OFT_CKPT="${OFT_DISCRETE_CKPT}"
 ```
+
+The classifier does not introduce another action-probability scheme. It is
+compatible with action-hidden sidecars generally; for this discrete-token
+OpenVLA path, point the existing OpenVLA classifier route at the same `h1`
+sidecar family used by WM and DreamerVLA.
 
 Expected artifacts:
 
 ```text
 ${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256
 ${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1
 ```
 
 ## 3. World Model
 
 ```bash
 bash scripts/train_wm.sh \
-  experiment=oft_world_model_dinowm_chunk \
+  experiment=oft_discrete_token_world_model_dinowm_chunk \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
@@ -121,10 +168,10 @@ Smoke run:
 
 ```bash
 bash scripts/train_wm.sh \
-  experiment=oft_world_model_dinowm_chunk \
+  experiment=oft_discrete_token_world_model_dinowm_chunk \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=1 num_workers=0 max_steps=1 \
-  out_dir=/tmp/openvla_onetraj_libero_wm_smoke
+  out_dir=/tmp/openvla_onetraj_libero_discrete_wm_smoke
 ```
 
 ## 4. Classifier
@@ -135,24 +182,26 @@ WMPO needs failure rollout HDF5 files and matching OFT failure sidecars.
 bash scripts/train_wm.sh \
   experiment=oft_latent_classifier_chunk \
   task=OpenVLA_Onetraj_LIBERO \
-  gpus=0 \
-  batch_size=8 num_workers=4 \
+  gpus=0 batch_size=8 num_workers=4 \
   -- \
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1" \
+  task.openvla_oft.expected_action_head_type=oft_discrete_token \
+  task.openvla_oft.expected_include_state=false \
+  task.openvla_oft.expected_history=1 \
   task.openvla_oft.failure_hdf5_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures \
-  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures_oft_action_hidden
+  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures_oft_discrete_action_hidden
 ```
 
 ## 5. DreamerVLA
 
 ```bash
 bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_oft_dino_wm_wmpo_outcome \
+  experiment=dreamervla_oft_discrete_token_dino_wm_wmpo_outcome \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 \
   -- \
-  task.openvla_oft.action_head_ckpt=/abs/path/to/action_head--step_checkpoint.pt \
-  init.world_model_state_ckpt=/abs/path/to/oft_world_model.ckpt \
-  init.classifier_state_ckpt=/abs/path/to/oft_classifier.ckpt
+  init.world_model_state_ckpt=/abs/path/to/oft_discrete_token_world_model.ckpt \
+  init.classifier_state_ckpt=/abs/path/to/openvla_action_hidden_classifier.ckpt
 ```
 
 ## 6. Eval

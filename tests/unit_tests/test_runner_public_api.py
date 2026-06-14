@@ -22,6 +22,10 @@ EXPERIMENT_MODULES = {
         "rynnvla_input_token_chunk",
     ),
     "oft_world_model_dinowm_chunk": ("worldmodel", "openvla_oft_action_chunk"),
+    "oft_discrete_token_world_model_dinowm_chunk": (
+        "worldmodel",
+        "openvla_oft_discrete_token_action_chunk",
+    ),
     "oft_world_model_dinowm_chunk_input_tokens": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
@@ -51,6 +55,10 @@ EXPERIMENT_MODULES = {
     "dreamervla_oft_dino_wm_wmpo_outcome": (
         "dreamervla",
         "openvla_oft_wmpo_outcome",
+    ),
+    "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": (
+        "dreamervla",
+        "openvla_oft_discrete_token_wmpo_outcome",
     ),
     "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": (
         "dreamervla",
@@ -206,11 +214,13 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.RynnDinoWMRunner",
         "world_model_dinowm_step": "dreamer_vla.runners.RynnDinoWMRunner",
         "oft_world_model_dinowm_chunk": "dreamer_vla.runners.OFTDinoWMRunner",
+        "oft_discrete_token_world_model_dinowm_chunk": "dreamer_vla.runners.OFTDinoWMRunner",
         "oft_world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.OFTDinoWMRunner",
         "dreamervla_rynn_dino_wm_actor_critic": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamer_vla.runners.LiberoEvalRunner",
         "openvla_oft_hdf5": "dreamer_vla.runners.OpenVLAOFTRunner",
@@ -275,6 +285,25 @@ def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
         assert cfg.dataset.max_demos_per_file is None
     assert "openvla_oft_l1_one_trajectory" in l1.training.out_dir
     assert "openvla_oft_lm_head_one_trajectory" in lm_head.training.out_dir
+
+
+def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        discrete_wm = _compose_experiment("oft_discrete_token_world_model_dinowm_chunk")
+        discrete = _compose_experiment(
+            "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome"
+        )
+
+    assert discrete.policy._target_ == "dreamer_vla.models.actor.OpenVLADiscreteTokenActor"
+    assert discrete.policy.head_type == "oft_discrete_token"
+    assert discrete.policy.init_lm_head_ckpt == discrete.task.openvla_oft.ckpt_path
+    assert discrete.task.openvla_oft.expected_action_head_type == "oft_discrete_token"
+    assert discrete.dataset.expected_include_state is False
+    assert discrete.dataset.expected_history == 1
+    assert discrete.dataset.hidden_dir.endswith("_h1")
+    assert discrete_wm.dataset.expected_action_head_type == "oft_discrete_token"
+    assert discrete_wm.dataset.hidden_dir.endswith("_h1")
 
 
 def test_openvla_oft_action_hidden_defaults_match_preprocess_output() -> None:

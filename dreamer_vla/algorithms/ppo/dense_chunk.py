@@ -133,6 +133,7 @@ def dino_wmpo_dense_chunk_step(
     action_chunks: list[
         torch.Tensor
     ] = []  # [B_eff, K, A] per chunk — basis for PPO ratio
+    action_token_ids: list[torch.Tensor | None] = []
     old_log_probs: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
     chunk_rewards: list[torch.Tensor] = []  # [B_eff, K] dense state-reward per chunk
@@ -164,17 +165,24 @@ def dino_wmpo_dense_chunk_step(
 
             actor_feats.append(actor_feat)
             action_chunks.append(action_chunk.detach())
+            sampled_token_ids = _sample_extra.get("action_token_ids")
+            action_token_ids.append(
+                sampled_token_ids.detach()
+                if isinstance(sampled_token_ids, torch.Tensor)
+                else None
+            )
             old_log_probs.append(old_lp.detach())
 
             if use_ref:
                 with torch.no_grad():
-                    ref_lp, _, _ = ref_policy(
-                        {
-                            "mode": "evaluate",
-                            "hidden": actor_feat,
-                            "action": action_chunk.detach(),
-                        }
-                    )
+                    ref_eval_batch = {
+                        "mode": "evaluate",
+                        "hidden": actor_feat,
+                        "action": action_chunk.detach(),
+                    }
+                    if action_token_ids[-1] is not None:
+                        ref_eval_batch["action_token_ids"] = action_token_ids[-1]
+                    ref_lp, _, _ = ref_policy(ref_eval_batch)
                 # k1 KL estimator (signed) — unbiased in expectation but can
                 # go negative on individual samples; this is the verl/DAPO
                 # convention used downstream (subtract from reward before
@@ -276,17 +284,20 @@ def dino_wmpo_dense_chunk_step(
     for _ in range(update_epochs):
         new_log_probs: list[torch.Tensor] = []
         entropies: list[torch.Tensor] = []
-        for actor_feat, action_detached in zip(actor_feats, action_chunks, strict=True):
+        for actor_feat, action_detached, token_ids in zip(
+            actor_feats, action_chunks, action_token_ids, strict=True
+        ):
             # action_detached is [B_eff, K, A]; actor's evaluate path with ndim==3
             # returns chunk-level log_prob and entropy summed over (K, action_dim),
             # matching the chunk-level old_lp recorded above.
-            new_lp, entropy_t, _ = policy(
-                {
-                    "mode": "evaluate",
-                    "hidden": actor_feat,
-                    "action": action_detached,
-                }
-            )
+            eval_batch = {
+                "mode": "evaluate",
+                "hidden": actor_feat,
+                "action": action_detached,
+            }
+            if token_ids is not None:
+                eval_batch["action_token_ids"] = token_ids
+            new_lp, entropy_t, _ = policy(eval_batch)
             new_log_probs.append(new_lp)
             entropies.append(entropy_t)
 

@@ -145,6 +145,7 @@ def dino_wmpo_dense_step(
     latents: list[Any] = [current_latent]
     actor_feats: list[torch.Tensor] = []
     actions: list[torch.Tensor] = []
+    action_token_ids: list[torch.Tensor | None] = []
     old_log_probs: list[torch.Tensor] = []
     rewards: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
@@ -167,17 +168,24 @@ def dino_wmpo_dense_step(
             action_detached = action.detach()
             actor_feats.append(actor_feat)
             actions.append(action_detached)
+            sampled_token_ids = extra.get("action_token_ids")
+            action_token_ids.append(
+                sampled_token_ids.detach()
+                if isinstance(sampled_token_ids, torch.Tensor)
+                else None
+            )
             old_log_probs.append(old_log_prob_t.detach())
 
             if use_ref:
                 with torch.no_grad():
-                    ref_log_prob_t, _, ref_extra_eval = ref_policy(
-                        {
-                            "mode": "evaluate",
-                            "hidden": actor_feat,
-                            "action": action_detached,
-                        }
-                    )
+                    ref_eval_batch = {
+                        "mode": "evaluate",
+                        "hidden": actor_feat,
+                        "action": action_detached,
+                    }
+                    if action_token_ids[-1] is not None:
+                        ref_eval_batch["action_token_ids"] = action_token_ids[-1]
+                    ref_log_prob_t, _, ref_extra_eval = ref_policy(ref_eval_batch)
                 ref_kls.append((old_log_prob_t.detach() - ref_log_prob_t).detach())
                 del ref_extra_eval
 
@@ -206,14 +214,17 @@ def dino_wmpo_dense_step(
 
     new_log_probs: list[torch.Tensor] = []
     entropies: list[torch.Tensor] = []
-    for actor_feat, action_detached in zip(actor_feats, actions, strict=True):
-        log_prob_t, entropy_t, _ = policy(
-            {
-                "mode": "evaluate",
-                "hidden": actor_feat,
-                "action": action_detached,
-            }
-        )
+    for actor_feat, action_detached, token_ids in zip(
+        actor_feats, actions, action_token_ids, strict=True
+    ):
+        eval_batch = {
+            "mode": "evaluate",
+            "hidden": actor_feat,
+            "action": action_detached,
+        }
+        if token_ids is not None:
+            eval_batch["action_token_ids"] = token_ids
+        log_prob_t, entropy_t, _ = policy(eval_batch)
         new_log_probs.append(log_prob_t)
         entropies.append(entropy_t)
 
@@ -567,14 +578,17 @@ def dino_wmpo_dense_step(
         drift_env_mses = []
         drift_env_clip_mses = []
         drift_env_maes = []
-        for actor_feat, action_detached in zip(actor_feats, actions, strict=True):
-            log_prob_t, entropy_t, _ = policy(
-                {
-                    "mode": "evaluate",
-                    "hidden": actor_feat,
-                    "action": action_detached,
-                }
-            )
+        for actor_feat, action_detached, token_ids in zip(
+            actor_feats, actions, action_token_ids, strict=True
+        ):
+            eval_batch = {
+                "mode": "evaluate",
+                "hidden": actor_feat,
+                "action": action_detached,
+            }
+            if token_ids is not None:
+                eval_batch["action_token_ids"] = token_ids
+            log_prob_t, entropy_t, _ = policy(eval_batch)
             new_log_probs.append(log_prob_t)
             entropies.append(entropy_t)
 

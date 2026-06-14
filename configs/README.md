@@ -70,7 +70,9 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | OpenVLA-OFT one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory` | `openvla_oft_hdf5_one_trajectory` |
 | OpenVLA-OFT L1 one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1` | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM training | `scripts/train_wm.sh` | `world_model_dinowm_chunk` |
+| OpenVLA discrete-token WM training | `scripts/train_wm.sh experiment=oft_discrete_token_world_model_dinowm_chunk` | `oft_discrete_token_world_model_dinowm_chunk` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| OpenVLA discrete-token DreamerVLA | `scripts/train_dreamervla.sh experiment=dreamervla_oft_discrete_token_dino_wm_wmpo_outcome` | `dreamervla_oft_discrete_token_dino_wm_wmpo_outcome` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Experiments
@@ -85,11 +87,13 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `world_model_dinowm_step` | `worldmodel/rynnvla_action_step` |
 | `world_model_dinowm_chunk` | `worldmodel/rynnvla_action_chunk` |
 | `oft_world_model_dinowm_chunk` | `worldmodel/openvla_oft_action_chunk` |
+| `oft_discrete_token_world_model_dinowm_chunk` | `worldmodel/openvla_oft_discrete_token_action_chunk` |
 | `latent_classifier_libero_goal_chunk` | `classifier/rynnvla_action_chunk` |
 | `oft_latent_classifier_chunk` | `classifier/openvla_oft_action_chunk` |
 | `dreamervla_rynn_dino_wm_actor_critic` | `dreamervla/rynnvla_actor_critic` |
 | `dreamervla_rynn_dino_wm_wmpo_outcome` | `dreamervla/rynnvla_wmpo_outcome` |
 | `dreamervla_oft_dino_wm_wmpo_outcome` | `dreamervla/openvla_oft_wmpo_outcome` |
+| `dreamervla_oft_discrete_token_dino_wm_wmpo_outcome` | `dreamervla/openvla_oft_discrete_token_wmpo_outcome` |
 | `online_wmpo_outcome_libero_goal` | `dreamervla/online_wmpo_outcome_libero_goal` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 

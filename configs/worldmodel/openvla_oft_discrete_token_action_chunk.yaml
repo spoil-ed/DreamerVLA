@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - openvla_oft_action_chunk
+  - _self_
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/oft_discrete_token_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
+
+task:
+  openvla_oft:
+    action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
+    expected_action_head_type: oft_discrete_token
+    expected_include_state: false
+    expected_history: 1
+    token_count: null
+    token_dim: 4096
+    chunk_size: 8
+    time_horizon: 8
+
+dataset:
+  hidden_dir: ${task.openvla_oft.action_hidden_dir}
+  expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
+  expected_include_state: ${task.openvla_oft.expected_include_state}
+  expected_history: ${task.openvla_oft.expected_history}

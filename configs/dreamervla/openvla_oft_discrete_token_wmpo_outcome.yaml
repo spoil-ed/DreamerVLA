@@ -1,0 +1,46 @@
+# @package _global_
+# OpenVLA-OFT discrete LM-head action-token probabilities over OpenVLA action-hidden sidecars.
+defaults:
+  - openvla_oft_wmpo_outcome
+  - _self_
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/oft_discrete_token_wmpo_outcome/${task.name}/${now:%Y%m%d_%H%M%S}}
+
+task:
+  openvla_oft:
+    action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
+    expected_action_head_type: oft_discrete_token
+    expected_include_state: false
+    expected_history: 1
+    token_count: null
+    token_dim: 4096
+    chunk_size: 8
+    time_horizon: 8
+    actor_target: dreamer_vla.models.actor.OpenVLADiscreteTokenActor
+    actor_head_type: oft_discrete_token
+    actor_adapter_type: residual_mlp
+    actor_adapter_hidden_dim: 1024
+    actor_freeze_lm_head: true
+
+dataset:
+  hidden_dir: ${task.openvla_oft.action_hidden_dir}
+  expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
+  expected_include_state: ${task.openvla_oft.expected_include_state}
+  expected_history: ${task.openvla_oft.expected_history}
+
+policy:
+  _target_: ${task.openvla_oft.actor_target}
+  hidden_dim: null
+  action_hidden_dim: ${task.openvla_oft.token_dim}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.openvla_oft.chunk_size}
+  head_type: ${task.openvla_oft.actor_head_type}
+  adapter_type: ${task.openvla_oft.actor_adapter_type}
+  adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
+  freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
+  init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
+  vocab_size: 32000
+  action_token_bins: 256
+  min_action: -1.0
+  max_action: 1.0
