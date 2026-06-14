@@ -12,11 +12,12 @@ RynnVLA_LIBERO
 This writes intermediate data under:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/
 ```
 
 The raw benchmark suite is still `libero_goal`; `RynnVLA_LIBERO` is the
-pipeline/artifact name.
+pipeline task name and `RynnVLA_LIBERO_libero_goal` is the preprocessing
+artifact name.
 
 ## 0. System
 
@@ -52,9 +53,9 @@ bash scripts/preprocess/prepare_libero_data.sh \
 Expected artifacts:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2
 ```
 
 ## 3. Optional VLA SFT
@@ -90,8 +91,8 @@ WMPO needs failure rollout HDF5 files and matching failure sidecars.
 
 ```bash
 bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=RynnVLA_LIBERO gpus=0 \
-  data.failure_dir_raw=/abs/path/to/RynnVLA_LIBERO_failures \
-  data.failure_dir_hidden=/abs/path/to/RynnVLA_LIBERO_failures_action_hidden \
+  data.failure_dir_raw=/abs/path/to/RynnVLA_LIBERO_libero_goal_failures \
+  data.failure_dir_hidden=/abs/path/to/RynnVLA_LIBERO_libero_goal_failures_action_hidden \
   batch_size=32 num_workers=4
 ```
 

@@ -13,15 +13,19 @@ if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
     RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
+ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
+if [[ "${ARTIFACT_NAME}" == "${TASK_NAME}" && "${TASK_NAME}" != "${LIBERO_SUITE}" ]]; then
+  ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"
+fi
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-${NGPU:-}}"
 OVERWRITE="${OVERWRITE:-0}"
 ACTION_HIDDEN_GPUS="${ACTION_HIDDEN_GPUS:-1}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
-REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_remaining_reward"
-INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_input_token_embedding_vla_policy_h2"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
+REWARD_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_no_noops_t_256_remaining_reward"
+INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_no_noops_t_256_input_token_embedding_vla_policy_h2"
 VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${LIBERO_SUITE}}"
 TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 TEXT_TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json"

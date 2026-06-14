@@ -129,5 +129,6 @@ bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=OpenVLA_On
 ```
 
 `RynnVLA_LIBERO` and `OpenVLA_Onetraj_LIBERO` are pipeline task aliases over
-the raw `libero_goal` benchmark suite. They intentionally use matching
-processed-data prefixes under `processed_data/<task>/<task>_*`.
+the raw `libero_goal` benchmark suite. Their preprocessing artifact names append
+the dataset suite, e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`, and use matching
+processed-data prefixes under `processed_data/<artifact>/<artifact>_*`.

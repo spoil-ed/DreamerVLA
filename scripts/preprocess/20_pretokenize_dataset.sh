@@ -13,6 +13,10 @@ if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
     RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
+ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
+if [[ "${ARTIFACT_NAME}" == "${TASK_NAME}" && "${TASK_NAME}" != "${LIBERO_SUITE}" ]]; then
+  ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"
+fi
 HIS=1
 ACTION_HORIZON=1
 IMAGE_RESOLUTION=256
@@ -22,13 +26,13 @@ OVERWRITE="${OVERWRITE:-0}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS}}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
-HDF5_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256"
-IMG_STATE_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_image_state_action_t_256"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
+HDF5_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_no_noops_t_256"
+IMG_STATE_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_image_state_action_t_256"
 CONVS_DIR="${PROCESSED_DATA_ROOT}/convs"
 TOKENS_DIR="${PROCESSED_DATA_ROOT}/tokens"
 CONCATE_DIR="${PROCESSED_DATA_ROOT}/concate_tokens"
-CONFIG_DIR="${DVLA_DATA_ROOT}/configs/${TASK_NAME}"
+CONFIG_DIR="${DVLA_DATA_ROOT}/configs/${ARTIFACT_NAME}"
 TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 SUFFIX="his_1_third_view_wrist_w_state_1_256"
 TASK_LABEL="${TASK_LABEL:-}"
@@ -101,14 +105,14 @@ bash "${DVLA_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
 
 python -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
   --source_dir_patterns "libero_${TASK_LABEL}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
-  --all_patterns "${TASK_NAME}_${SUFFIX}" \
+  --all_patterns "${ARTIFACT_NAME}_${SUFFIX}" \
   --processed_data_root "${PROCESSED_DATA_ROOT}"
 
-if [[ "${TASK_NAME}" == "${LIBERO_SUITE}" ]]; then
+if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
   python -m dreamer_vla.preprocess.validate_libero_data_prep \
     --data-root "${DVLA_DATA_ROOT}" \
     --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${TASK_NAME}" \
+    --suites "${ARTIFACT_NAME}" \
     --his "${HIS}" \
     --action-horizon "${ACTION_HORIZON}" \
     --image-resolution "${IMAGE_RESOLUTION}" \
@@ -117,7 +121,7 @@ fi
 
 cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize.yaml" <<EOF
 META:
-  - path: '${CONCATE_DIR}/${TASK_NAME}_${SUFFIX}.json'
+  - path: '${CONCATE_DIR}/${ARTIFACT_NAME}_${SUFFIX}.json'
 prompt_text: 'Finish the task: {task_text}.'
 EOF
 cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize_val_ind.yaml" <<EOF
@@ -131,11 +135,11 @@ META:
 prompt_text: 'Finish the task: {task_text}.'
 EOF
 
-if [[ "${TASK_NAME}" == "${LIBERO_SUITE}" ]]; then
+if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
   python -m dreamer_vla.preprocess.validate_libero_data_prep \
     --data-root "${DVLA_DATA_ROOT}" \
     --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${TASK_NAME}" \
+    --suites "${ARTIFACT_NAME}" \
     --his "${HIS}" \
     --action-horizon "${ACTION_HORIZON}" \
     --image-resolution "${IMAGE_RESOLUTION}"

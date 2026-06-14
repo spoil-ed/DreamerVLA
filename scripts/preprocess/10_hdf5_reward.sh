@@ -13,15 +13,19 @@ if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
     RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
+ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
+if [[ "${ARTIFACT_NAME}" == "${TASK_NAME}" && "${TASK_NAME}" != "${LIBERO_SUITE}" ]]; then
+  ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"
+fi
 OVERWRITE="${OVERWRITE:-0}"
 cd "${DVLA_ROOT}"
 
-PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
+PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"
-MARKED_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_marked_t_256"
-HDF5_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256"
+MARKED_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_marked_t_256"
+HDF5_DIR="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_no_noops_t_256"
 REWARD_DIR="${HDF5_DIR}_remaining_reward"
-META_JSON="${PROCESSED_DATA_ROOT}/${TASK_NAME}_metainfo.json"
+META_JSON="${PROCESSED_DATA_ROOT}/${ARTIFACT_NAME}_metainfo.json"
 LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${DVLA_DATA_ROOT}/.libero}"
 
 mkdir -p "${LIBERO_CONFIG_PATH}" "${PROCESSED_DATA_ROOT}"
@@ -51,8 +55,8 @@ if [[ "${OVERWRITE}" == "1" || -z "${marked_hdf5}" ]]; then
     --keep-noops
   if [[ -f "${LIBERO_SUITE}_metainfo.json" ]]; then
     mv "${LIBERO_SUITE}_metainfo.json" "${META_JSON}"
-  elif [[ -f "${TASK}_metainfo.json" ]]; then
-    mv "${TASK}_metainfo.json" "${META_JSON}"
+  elif [[ -f "${TASK_NAME}_metainfo.json" ]]; then
+    mv "${TASK_NAME}_metainfo.json" "${META_JSON}"
   fi
 else
   echo "[10_hdf5_reward] skip mark: ${MARKED_DIR}"

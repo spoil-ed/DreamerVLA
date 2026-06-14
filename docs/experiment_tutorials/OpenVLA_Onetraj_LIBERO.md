@@ -12,11 +12,12 @@ OpenVLA_Onetraj_LIBERO
 This writes intermediate data under:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/
 ```
 
 The raw benchmark suite is still `libero_goal`; `OpenVLA_Onetraj_LIBERO` is the
-pipeline/artifact name.
+pipeline task name and `OpenVLA_Onetraj_LIBERO_libero_goal` is the
+preprocessing artifact name.
 
 Use an L1 OFT checkpoint for the full DreamerVLA WMPO chain. Discrete
 OpenVLA-OFT checkpoints can be used for sidecar experiments, but the current
@@ -102,9 +103,9 @@ bash scripts/preprocess/prepare_libero_data.sh \
 Expected artifacts:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/OpenVLA_Onetraj_LIBERO_libero_goal_no_noops_t_256
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/OpenVLA_Onetraj_LIBERO_libero_goal_no_noops_t_256_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/OpenVLA_Onetraj_LIBERO_libero_goal_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
 ```
 
 ## 3. World Model
@@ -137,8 +138,8 @@ bash scripts/train_wm.sh \
   gpus=0 \
   batch_size=8 num_workers=4 \
   -- \
-  task.openvla_oft.failure_hdf5_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_failures \
-  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_failures_oft_action_hidden
+  task.openvla_oft.failure_hdf5_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures \
+  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures_oft_action_hidden
 ```
 
 ## 5. DreamerVLA

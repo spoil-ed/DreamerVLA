@@ -253,13 +253,15 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert 'HIS=1' in pretokenize_text
     assert 'ACTION_HORIZON=1' in pretokenize_text
     assert 'TASK_NAME="${TASK_NAME:-${TASK}}"' in pretokenize_text
+    assert 'ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"' in pretokenize_text
+    assert 'ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"' in pretokenize_text
     assert "RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO" in pretokenize_text
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
     assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"' in reward_text
-    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"' in reward_text
-    assert '${TASK_NAME}_marked_t_256' in reward_text
-    assert '${TASK_NAME}_no_noops_t_256' in reward_text
+    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"' in reward_text
+    assert '${ARTIFACT_NAME}_marked_t_256' in reward_text
+    assert '${ARTIFACT_NAME}_no_noops_t_256' in reward_text
     assert "PREPROCESS_ONLY" not in prepare_text
     assert "RUN_ACTION_HIDDEN" not in prepare_text
     assert "--config-name preprocess_suite" in prepare_text

@@ -6,6 +6,7 @@ only: [10_hdf5_reward, 20_pretokenize_dataset]
 task: libero_goal
 libero_suite: ${task}
 task_name: ${task}
+artifact_name: null
 task_label: null
 gpus: "0"
 ngpu: 1
@@ -16,6 +17,7 @@ env:
   TASK: ${task}
   LIBERO_SUITE: ${libero_suite}
   TASK_NAME: ${task_name}
+  ARTIFACT_NAME: ${artifact_name}
   TASK_LABEL: ${task_label}
   OFT_CKPT: null
   OFT_POLICY_MODE: null
