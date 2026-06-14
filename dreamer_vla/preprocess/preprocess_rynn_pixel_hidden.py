@@ -909,7 +909,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--hdf5-dir",
-        default=str(processed_data_path("libero_goal_no_noops_t_256")),
+        default=str(processed_data_path("libero_goal/no_noops_t_256")),
     )
     parser.add_argument(
         "--out-dir",
@@ -1013,7 +1013,7 @@ def main() -> None:
             PROJECT_ROOT
             / "data"
             / "processed_data"
-            / "libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+            / "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
         )
     out_dir = _project_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -64,9 +64,9 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
 
         removed_route_names = {
             "world_model_rssm_step",
-            "dreamervla_pi0_action_hidden_head_actor",
+            "dreamervla_" + "pi" + "0" + "_action_hidden_head_actor",
             "pretokenize_vla_libero_goal",
-            "pretokenize_vla_libero_goal_" + "pi0" + "_query",
+            "pretokenize_vla_libero_goal_" + "pi" + "0" + "_query",
             "rynn_backbone_dreamerv3_action_hidden_wm_libero_goal_precomputed",
         }
         stale = sorted(name for name in removed_route_names if name in text)

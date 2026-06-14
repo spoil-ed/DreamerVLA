@@ -8,7 +8,7 @@ scripts use the relative path `data` after entering the repository root.
 The tracked repository does not include `data/` or `third_party/`; both are
 local state. `scripts/install_env.sh` creates/populates `third_party/`,
 `scripts/download_assets.sh` downloads raw datasets and checkpoints, and
-`scripts/preprocess_libero.sh` generates `processed_data/<suite>/*` from those raw HDF5
+`scripts/preprocess_libero.sh` generates `processed_data/<artifact>/*` from those raw HDF5
 files. A directory name alone is not a completed stage; each stage is complete
 only when the files consumed by the next stage exist.
 
@@ -137,21 +137,21 @@ stores `task_ABCD_D` as 30 GB multi-part zip shards under
 
 ## Processed Data
 
-Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data/<suite>`.
+Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data/<artifact>`.
 
 `bash scripts/preprocess/prepare_libero_data.sh task=<suite>` writes:
 
 ```text
-processed_data/<suite>/<suite>_marked_t_256/
-processed_data/<suite>/<suite>_no_noops_t_256/
-processed_data/<suite>/<suite>_no_noops_t_256_remaining_reward/
-processed_data/<suite>/<suite>_no_noops_t_256_legacy_action_hidden_vla_policy_h2/
-processed_data/<suite>/<suite>_image_state_action_t_256/
-processed_data/<suite>/convs/
-processed_data/<suite>/tokens/
-processed_data/<suite>/concate_tokens/
-processed_data/<suite>/<suite>_metainfo.json
-configs/<suite>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
+processed_data/<artifact>/marked_t_256/
+processed_data/<artifact>/no_noops_t_256/
+processed_data/<artifact>/no_noops_t_256_remaining_reward/
+processed_data/<artifact>/no_noops_t_256_legacy_action_hidden_vla_policy_h2/
+processed_data/<artifact>/image_state_action_t_256/
+processed_data/<artifact>/convs/
+processed_data/<artifact>/tokens/
+processed_data/<artifact>/concate_tokens/
+processed_data/<artifact>/metainfo.json
+configs/<artifact>/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
 Preprocessing follows the same orchestrator-and-step style as install and

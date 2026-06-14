@@ -54,10 +54,7 @@ class LiberoDataPrepSpec:
 
     @property
     def hdf5_dir(self) -> Path:
-        return (
-            self.processed_data_root
-            / f"{self.suite}_no_noops_t_{self.image_resolution}"
-        )
+        return self.processed_data_root / f"no_noops_t_{self.image_resolution}"
 
     @property
     def reward_dir(self) -> Path:
@@ -65,14 +62,24 @@ class LiberoDataPrepSpec:
 
     @property
     def image_state_dir(self) -> Path:
-        return (
-            self.processed_data_root
-            / f"{self.suite}_image_state_action_t_{self.image_resolution}"
-        )
+        return self.processed_data_root / f"image_state_action_t_{self.image_resolution}"
 
     @property
     def hidden_dir(self) -> Path:
         return Path(f"{self.hdf5_dir}_legacy_action_hidden_vla_policy_h2")
+
+    @property
+    def legacy_prefixed_stage_dirs(self) -> tuple[Path, ...]:
+        """Old stage layout that repeated the artifact name inside its root."""
+
+        return (
+            self.processed_data_root
+            / f"{self.suite}_no_noops_t_{self.image_resolution}",
+            self.processed_data_root
+            / f"{self.suite}_no_noops_t_{self.image_resolution}_remaining_reward",
+            self.processed_data_root
+            / f"{self.suite}_image_state_action_t_{self.image_resolution}",
+        )
 
     def conv_path(self, split: str) -> Path:
         return (
@@ -304,6 +311,28 @@ def validate_suite(spec: LiberoDataPrepSpec) -> SuiteValidationReport:
 
     issues: list[ValidationIssue] = []
     summary: dict[str, int] = {}
+
+    if not spec.processed_data_root.is_dir():
+        issues.append(
+            ValidationIssue(
+                "artifact_root_missing",
+                str(spec.processed_data_root),
+                f"preprocessing artifact root does not exist: {spec.processed_data_root}",
+            )
+        )
+    for legacy_dir in spec.legacy_prefixed_stage_dirs:
+        if legacy_dir.exists():
+            issues.append(
+                ValidationIssue(
+                    "legacy_prefixed_stage_dir",
+                    str(legacy_dir),
+                    (
+                        "found old repeated-prefix stage directory; expected "
+                        f"stage directories directly under {spec.processed_data_root}: "
+                        f"{legacy_dir}"
+                    ),
+                )
+            )
 
     raw_hdf5 = _count_hdf5(spec.hdf5_dir)
     reward_hdf5 = _count_hdf5(spec.reward_dir)
@@ -539,7 +568,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Processed data root. Defaults to "
-            "<data-root>/processed_data/<suite>."
+            "<data-root>/processed_data/<artifact>."
         ),
     )
     parser.add_argument("--his", type=int, default=1)

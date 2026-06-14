@@ -186,19 +186,19 @@ input: downloaded raw LIBERO HDF5 files
 
 stage 1: replay and mark no-ops
   python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
-  writes ${TASK}_marked_t_256 with data/demo_*/noop_mask
+  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256 with data/demo_*/noop_mask
 
 stage 2: filter marked no-ops
   python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 --filter-noops
-  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/${TASK}_no_noops_t_256
+  writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256
 ```
 
 Base outputs:
 
 ```text
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_marked_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_no_noops_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/${TASK}_no_noops_t_256_pi06_remaining_reward
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/marked_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/no_noops_t_256
+${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/no_noops_t_256_remaining_reward
 ${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
@@ -430,7 +430,7 @@ Path checks:
 ```bash
 test -d "${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal"
 test -d "${DVLA_DATA_ROOT:-data}/datasets/libero/libero_goal"
-test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal/libero_goal_no_noops_t_256"
+test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal/no_noops_t_256"
 ```
 
 Smoke train:

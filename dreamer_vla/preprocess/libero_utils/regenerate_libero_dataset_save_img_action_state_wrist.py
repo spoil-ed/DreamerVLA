@@ -13,14 +13,14 @@ DEFAULT_RAW_DATA_DIR = (
     / "data"
     / "preprocess"
     / "processed_data"
-    / "libero_goal_no_noops_t_256"
+    / "libero_goal/no_noops_t_256"
 )
 DEFAULT_SAVE_DIR = (
     PROJECT_ROOT
     / "data"
     / "preprocess"
     / "processed_data"
-    / "libero_goal_image_state_action_t_256"
+    / "libero_goal/image_state_action_t_256"
 )
 
 

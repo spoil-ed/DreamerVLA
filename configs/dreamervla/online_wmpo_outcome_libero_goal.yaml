@@ -58,8 +58,8 @@ encoder: null
 
 dataset:
   _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
-  hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_remaining_reward
-  hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2
+  hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
   # Sidecar metadata stores the model_path used during preprocessing. Keep this
   # aligned with the path used to generate hidden_dir; override on the CLI if
   # reusing old sidecars whose stored model_path differs.

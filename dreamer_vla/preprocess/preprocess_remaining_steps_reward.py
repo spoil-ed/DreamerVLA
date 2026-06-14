@@ -232,12 +232,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input-dir",
-        default=str(processed_data_path("libero_goal_no_noops_t_256")),
+        default=str(processed_data_path("libero_goal/no_noops_t_256")),
     )
     parser.add_argument(
         "--output-dir",
         default=str(
-            processed_data_path("libero_goal_no_noops_t_256_remaining_reward")
+            processed_data_path("libero_goal/no_noops_t_256_remaining_reward")
         ),
     )
     parser.add_argument("--metainfo-json", default=None)

@@ -53,9 +53,9 @@ bash scripts/preprocess/prepare_libero_data.sh \
 Expected artifacts:
 
 ```text
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/RynnVLA_LIBERO_libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
 ```
 
 ## 3. Optional VLA SFT

@@ -29,7 +29,7 @@ from dreamer_vla.utils.paths import data_path, processed_data_path
 
 DEFAULT_HIDDEN_DIR = str(
     processed_data_path(
-        "libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+        "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
     )
 )
 

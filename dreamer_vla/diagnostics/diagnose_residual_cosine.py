@@ -25,7 +25,7 @@ DEFAULT_DATA_DIR = (
     PROJECT_ROOT
     / "data"
     / "processed_data"
-    / "libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+    / "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
 )
 DEFAULT_OUT_DIR = PROJECT_ROOT / "data" / "diagnostics" / "hidden_token_structure"
 

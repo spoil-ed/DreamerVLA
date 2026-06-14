@@ -29,7 +29,7 @@ Sidecar attrs expected by the WM route
 `include_state=true`, `rotate_images_180=true`.
 
 Reference sidecar:
-`data/processed_data/libero_goal/libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2/`.
+`data/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2/`.
 
 This is the RynnVLA-002 latent contract.  The DINO-WM token axis is an
 action-slot axis (`time_horizon × action_dim`), so downstream actor code can
@@ -65,5 +65,5 @@ and ran `loss()` on a real batch (chunk + rollout + reward terms); classifier
 dataset paired 433 success / 67 failure latent demos (`[8, 35840]` windows);
 DreamerVLA and eval routes compose. GPU-bound steps (SFT training, sidecar
 re-extraction, joint training, sim eval) not executed in that pass.
-`*_marked_t_256` is a regenerable intermediate; `*_metainfo.json` is not
+`marked_t_256` is a regenerable intermediate; `metainfo.json` is not
 referenced by any active config or module.

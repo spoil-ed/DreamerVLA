@@ -749,15 +749,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--hdf5-dir",
-        default=str(processed_data_path("libero_goal_no_noops_t_256")),
+        default=str(processed_data_path("libero_goal/no_noops_t_256")),
     )
     parser.add_argument(
         "--out-c-dir",
-        default=str(processed_data_path("libero_goal_no_noops_t_256_oft_action_hidden_c_h8")),
+        default=str(processed_data_path("libero_goal/no_noops_t_256_oft_action_hidden_c_h8")),
     )
     parser.add_argument(
         "--out-d-dir",
-        default=str(processed_data_path("libero_goal_no_noops_t_256_oft_action_hidden_d_h8")),
+        default=str(processed_data_path("libero_goal/no_noops_t_256_oft_action_hidden_d_h8")),
     )
     parser.add_argument("--out-action-dir", default=None)
     parser.add_argument(
