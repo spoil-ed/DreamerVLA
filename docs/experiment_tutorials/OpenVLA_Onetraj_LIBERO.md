@@ -140,9 +140,10 @@ bash scripts/train_wm.sh \
   experiment=oft_latent_classifier_chunk \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 \
+  batch_size=8 num_workers=4 \
+  -- \
   task.openvla_oft.failure_hdf5_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_failures \
-  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_failures_oft_action_hidden \
-  batch_size=8 num_workers=4
+  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_failures_oft_action_hidden
 ```
 
 ## 5. DreamerVLA
@@ -152,6 +153,7 @@ bash scripts/train_dreamervla.sh \
   experiment=dreamervla_oft_dino_wm_wmpo_outcome \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 \
+  -- \
   task.openvla_oft.action_head_ckpt=/abs/path/to/action_head--step_checkpoint.pt \
   init.world_model_state_ckpt=/abs/path/to/oft_world_model.ckpt \
   init.classifier_state_ckpt=/abs/path/to/oft_classifier.ckpt
