@@ -42,6 +42,13 @@ This downloads RynnVLA assets and the LIBERO-Goal raw dataset.
 
 Action-hidden Scheme A:
 
+RynnVLA action-hidden WM/DreamerVLA routes use reward-labeled HDF5 from
+`10_hdf5_reward` plus the legacy RynnVLA sidecar from `30_action_hidden`. They
+do not need `20_pretokenize_dataset`; that step is for token-record SFT and
+older pretokenized dataset routes. OpenVLA-OFT uses the same reward stage but a
+different sidecar extractor, `35_oft_action_hidden`, because its action head and
+hidden-state layout are different.
+
 ```bash
 bash scripts/preprocess/prepare_libero_data.sh \
   task=RynnVLA_LIBERO \

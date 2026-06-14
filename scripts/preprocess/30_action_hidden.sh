@@ -51,7 +51,19 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
   exit 5
 fi
 
-if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
+if [[ "${OVERWRITE}" != "1" && -d "${HIDDEN_DIR}" ]]; then
+  if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+    --dir "${HIDDEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset action_hidden_states; then
+    echo "[30_action_hidden] skip action-hidden: ${HIDDEN_DIR}"
+    exit 0
+  fi
+  echo "[30_action_hidden] existing action-hidden sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${HIDDEN_DIR}" >&2
+  exit 6
+else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
@@ -73,6 +85,4 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
     --action-dim 7 \
     --time-horizon "${TIME_HORIZON}" \
     --overwrite
-else
-  echo "[30_action_hidden] skip action-hidden: ${HIDDEN_DIR}"
 fi

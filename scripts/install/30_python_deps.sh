@@ -16,14 +16,11 @@ eval "$(conda shell.bash hook)"
 conda activate "${CONDA_ENV_NAME}"
 
 echo "[install:30_python_deps] target conda env=${CONDA_ENV_NAME}"
-echo "[install:30_python_deps] repo_package=${DVLA_ROOT}"
-uv pip install -e "${DVLA_ROOT}"
-
 echo "[install:30_python_deps] requirements=${DVLA_ROOT}/requirements.txt"
 uv pip install -r "${DVLA_ROOT}/requirements.txt"
 
-echo "[install:30_python_deps] transformers=4.40.1"
-uv pip install transformers==4.40.1
+echo "[install:30_python_deps] transformers=4.43.0"
+uv pip install transformers==4.43.0
 
 if [[ "${INSTALL_DEV_TOOLS}" == "1" ]]; then
   echo "[install:30_python_deps] dev_dependency_group=dev"

@@ -41,7 +41,7 @@ bash scripts/install/60_verify.sh
 | `00_apt_tools.sh` | system packages | Add only apt-level dependencies needed before Python packages. |
 | `10_conda_env.sh` | conda environment | Change with `env.CONDA_ENV_NAME=...` or `env.PYTHON_VERSION=...` on `scripts/install_env.sh`. |
 | `20_torch.sh` | PyTorch CUDA wheels | Override `env.CUDA_INDEX_URL=...` if using a different CUDA wheel index. |
-| `30_python_deps.sh` | DreamerVLA editable package, pip requirements, and dev tools | Add normal Python runtime packages to `requirements.txt`; add lint/test tools to the `dev` dependency group in `pyproject.toml`. |
+| `30_python_deps.sh` | Pip requirements and dev tools | Add normal Python runtime packages to `requirements.txt`; add lint/test tools to the `dev` dependency group in `pyproject.toml`. |
 | `40_third_party.sh` | LIBERO, robosuite-family packages, OpenSora, OpenVLA-OFT helpers | Add vendored upstream packages under `third_party/` and install them here. |
 | `50_special_packages.sh` | flash-attn, egl_probe, optional apex / TensorNVMe | Add fragile wheels or host-specific GPU extensions here. |
 | `60_verify.sh` | import and CUDA checks | Add lightweight import checks for newly required packages. |

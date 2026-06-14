@@ -23,7 +23,7 @@ lives under the `dreamer_vla` package and is launched with `python -m`.
 | `install/00_apt_tools.sh` | System packages |
 | `install/10_conda_env.sh` | Conda environment |
 | `install/20_torch.sh` | PyTorch CUDA wheel set |
-| `install/30_python_deps.sh` | DreamerVLA editable package and pip dependencies |
+| `install/30_python_deps.sh` | Python runtime and dev dependencies |
 | `install/40_third_party.sh` | LIBERO, robosuite stack, OpenSora, and OpenVLA-OFT third-party packages |
 | `install/50_special_packages.sh` | flash-attn, egl_probe, and optional apex / TensorNVMe |
 | `install/60_verify.sh` | Import and CUDA visibility check |

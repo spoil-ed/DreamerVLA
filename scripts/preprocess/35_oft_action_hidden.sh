@@ -41,6 +41,19 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
 fi
 
 if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
+  if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" ]]; then
+    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+      --dir "${OFT_HIDDEN_DIR}" \
+      --reference-dir "${REWARD_DIR}" \
+      --require-complete-attr \
+      --require-config \
+      --required-demo-dataset action_hidden_states; then
+      echo "[35_oft_action_hidden] skip action-hidden: ${OFT_HIDDEN_DIR}"
+      exit 0
+    fi
+    echo "[35_oft_action_hidden] existing action-hidden sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${OFT_HIDDEN_DIR}" >&2
+    exit 6
+  fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
@@ -56,6 +69,19 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --image-keys ${OFT_IMAGE_KEYS} \
     --overwrite
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
+  if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
+    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+      --dir "${OFT_INPUT_TOKEN_DIR}" \
+      --reference-dir "${REWARD_DIR}" \
+      --require-complete-attr \
+      --require-config \
+      --required-demo-dataset obs_embedding; then
+      echo "[35_oft_action_hidden] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
+      exit 0
+    fi
+    echo "[35_oft_action_hidden] existing input-token sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${OFT_INPUT_TOKEN_DIR}" >&2
+    exit 6
+  fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_INPUT_TOKEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
@@ -71,6 +97,25 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --image-keys ${OFT_IMAGE_KEYS} \
     --overwrite
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
+  if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
+    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+      --dir "${OFT_HIDDEN_DIR}" \
+      --reference-dir "${REWARD_DIR}" \
+      --require-complete-attr \
+      --require-config \
+      --required-demo-dataset action_hidden_states && \
+       python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+      --dir "${OFT_INPUT_TOKEN_DIR}" \
+      --reference-dir "${REWARD_DIR}" \
+      --require-complete-attr \
+      --require-config \
+      --required-demo-dataset obs_embedding; then
+      echo "[35_oft_action_hidden] skip OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}"
+      exit 0
+    fi
+    echo "[35_oft_action_hidden] existing OFT sidecars are incomplete; rerun with OVERWRITE=1 to rebuild them" >&2
+    exit 6
+  fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}" "${OFT_INPUT_TOKEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
