@@ -25,8 +25,8 @@ Single GPU. Usage example::
             --vla-ckpt-path ${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
             --num-episodes 200 --episodes-per-shard 25 \\
-            --out-raw-dir data/processed_data/libero_goal/libero_goal_online_rollouts_pi0_sft \\
-            --out-hidden-dir data/processed_data/libero_goal/libero_goal_online_rollouts_pi0_sft_hidden \\
+            --out-raw-dir data/processed_data/libero_goal/libero_goal_online_rollouts_vla_sft \\
+            --out-hidden-dir data/processed_data/libero_goal/libero_goal_online_rollouts_vla_sft_hidden \\
             --deterministic-collect
 """
 
@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_actor_critic.yaml"),
         help="Defaults to the legacy RynnVLA action-hidden config that matches the m1024 chunk WM "
-        "and the *_pi0_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
+        "and the *_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
         "WMReplayClassifierDataset.",
     )
     parser.add_argument("--world-model-ckpt", required=True)
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
         default="legacy",
         choices=["legacy"],
         help="Encoder action-head variant. ``legacy`` produces RynnVLA hidden matching the "
-        "m1024 chunk WM and the *_pi0_legacy_action_hidden_vla_policy_h2 sidecars used by "
+        "m1024 chunk WM and the *_legacy_action_hidden_vla_policy_h2 sidecars used by "
         "WMReplayClassifierDataset.",
     )
     parser.add_argument("--task-suite", default="libero_goal")

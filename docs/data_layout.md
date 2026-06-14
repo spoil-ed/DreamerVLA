@@ -144,8 +144,8 @@ Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data/<suite>`.
 ```text
 processed_data/<suite>/<suite>_marked_t_256/
 processed_data/<suite>/<suite>_no_noops_t_256/
-processed_data/<suite>/<suite>_no_noops_t_256_pi06_remaining_reward/
-processed_data/<suite>/<suite>_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2/
+processed_data/<suite>/<suite>_no_noops_t_256_remaining_reward/
+processed_data/<suite>/<suite>_no_noops_t_256_legacy_action_hidden_vla_policy_h2/
 processed_data/<suite>/<suite>_image_state_action_t_256/
 processed_data/<suite>/convs/
 processed_data/<suite>/tokens/

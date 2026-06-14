@@ -60,6 +60,7 @@ eval:
   save_video: false
   video_max_episodes: 1
   dreamer_deterministic: true
+  dreamer_policy_source: ckpt
   dreamer_action_repeat: 1
   dreamer_clip_actions: true
   dreamer_unnorm_actions: auto

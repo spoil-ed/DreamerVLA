@@ -15,7 +15,7 @@ from dreamer_vla.utils.paths import processed_data_path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-SCHEME_NAME = "pi06_remaining_steps_v1"
+SCHEME_NAME = "remaining_steps_v1"
 
 
 def _project_path(path: str | Path) -> Path:
@@ -237,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         default=str(
-            processed_data_path("libero_goal_no_noops_t_256_pi06_remaining_reward")
+            processed_data_path("libero_goal_no_noops_t_256_remaining_reward")
         ),
     )
     parser.add_argument("--metainfo-json", default=None)

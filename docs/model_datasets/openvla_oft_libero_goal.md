@@ -39,24 +39,6 @@ action slots.  OFT differs in token count and width (`56 × 4096` instead of
 RynnVLA's `35 × 1024`), but the dataset/WM/classifier/DreamerVLA interface is
 the same.
 
-## Input tokens (Scheme B)
-
-Scheme B writes current-frame projected vision patch tokens from the OFT
-vision tower before the action-slot prediction branch.  For the default L1
-two-view recipe:
-
-- token source: `vla._process_vision_features(...)`
-- views: current `agentview_rgb` + current `eye_in_hand_rgb`
-- `obs_embedding` (WM input): flat `[2097152]` (= 512 × 4096)
-- sidecar attrs: `obs_hidden_source=input_token_embedding`,
-  `action_head_type=oft_l1_regression`, `history=2`
-
-For downloaded discrete one-trajectory checkpoints with a single view, set
-`OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb`; the token count becomes `256`.
-B tokens are frame-level visual observations, not action slots.  The WM handles
-actions through its action input, and DreamerVLA uses `LatentToActionHiddenActor`
-when a continuous L1 output head is available or explicitly configured.
-
 ## Extraction
 
 ```bash
@@ -68,11 +50,6 @@ bash scripts/preprocess/35_oft_action_hidden.sh
 TASK=libero_goal \
 OFT_CKPT=data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
 OFT_POLICY_MODE=discrete OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
-bash scripts/preprocess/35_oft_action_hidden.sh
-
-# Scheme B input tokens:
-TASK=libero_goal OFT_LATENT_SCHEME=input_tokens \
-OFT_CKPT=data/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650 \
 bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
@@ -86,15 +63,12 @@ WM consumes `token_count=56 × token_dim=4096` per frame
 
 ```bash
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal
-bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk_input_tokens task=libero_goal
 # discrete sidecars: override ckpt_path / action_hidden_dir /
 # expected_action_head_type=oft_discrete_token / expected_history=1 /
 # expected_include_state=false (see SETUP.md)
 ```
 
 Classifier: `oft_latent_classifier_chunk` · DreamerVLA:
-`dreamervla_oft_dino_wm_wmpo_outcome` · Scheme B:
-`oft_latent_classifier_chunk_input_tokens` and
-`dreamervla_oft_dino_wm_wmpo_outcome_input_tokens` · Eval:
+`dreamervla_oft_dino_wm_wmpo_outcome` · Eval:
 `scripts/eval/launch_openvla_oft_official_libero_eval.sh` (policy mode
 auto-detected the same way).

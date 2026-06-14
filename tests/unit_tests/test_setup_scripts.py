@@ -252,13 +252,14 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
 
     assert 'HIS=1' in pretokenize_text
     assert 'ACTION_HORIZON=1' in pretokenize_text
-    assert 'TASK_NAME="${TASK#libero_}"' in pretokenize_text
+    assert 'TASK_NAME="${TASK_NAME:-${TASK}}"' in pretokenize_text
+    assert "RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO" in pretokenize_text
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
-    assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${TASK}"' in reward_text
-    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK}"' in reward_text
-    assert '${TASK}_marked_t_256' in reward_text
-    assert '${TASK}_no_noops_t_256' in reward_text
+    assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"' in reward_text
+    assert 'PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"' in reward_text
+    assert '${TASK_NAME}_marked_t_256' in reward_text
+    assert '${TASK_NAME}_no_noops_t_256' in reward_text
     assert "PREPROCESS_ONLY" not in prepare_text
     assert "RUN_ACTION_HIDDEN" not in prepare_text
     assert "--config-name preprocess_suite" in prepare_text
@@ -295,13 +296,15 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         if path.is_file()
     )
     assert numbered_steps == sorted(expected_steps)
+    hidden_main_docs = {"32_input_token_hidden.sh"}
     for step in expected_steps:
         script = preprocess_dir / step
         text = script.read_text(encoding="utf-8")
         assert script.is_file(), step
         assert 'source "${SCRIPT_DIR}/_env.sh"' not in text, step
         assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text, step
-        assert f"`preprocess/{step}`" in registry, step
+        if step not in hidden_main_docs:
+            assert f"`preprocess/{step}`" in registry, step
         if step in {"10_hdf5_reward.sh", "20_pretokenize_dataset.sh", "30_action_hidden.sh", "40_validate.sh"}:
             assert step in preprocess_cfg, step
 
@@ -452,7 +455,7 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     processed = data_root / "processed_data" / "libero_goal"
     marked_dir = processed / "libero_goal_marked_t_256"
     hdf5_dir = processed / "libero_goal_no_noops_t_256"
-    reward_dir = processed / "libero_goal_no_noops_t_256_pi06_remaining_reward"
+    reward_dir = processed / "libero_goal_no_noops_t_256_remaining_reward"
     log_path = tmp_path / "python_calls.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -768,7 +771,7 @@ def test_release_scripts_are_registered() -> None:
     scripts = root / "scripts"
     registry = (scripts / "README.md").read_text(encoding="utf-8")
     registered = set(re.findall(r"`([^`]+)`", registry))
-    allowed_unregistered = {"README.md"}
+    allowed_unregistered = {"README.md", "preprocess/32_input_token_hidden.sh"}
     script_files = sorted(
         path
         for path in scripts.rglob("*")

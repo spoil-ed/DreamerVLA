@@ -61,7 +61,7 @@ class LiberoDataPrepSpec:
 
     @property
     def reward_dir(self) -> Path:
-        return Path(f"{self.hdf5_dir}_pi06_remaining_reward")
+        return Path(f"{self.hdf5_dir}_remaining_reward")
 
     @property
     def image_state_dir(self) -> Path:
@@ -72,7 +72,7 @@ class LiberoDataPrepSpec:
 
     @property
     def hidden_dir(self) -> Path:
-        return Path(f"{self.hdf5_dir}_pi0_legacy_action_hidden_vla_policy_h2")
+        return Path(f"{self.hdf5_dir}_legacy_action_hidden_vla_policy_h2")
 
     def conv_path(self, split: str) -> Path:
         return (

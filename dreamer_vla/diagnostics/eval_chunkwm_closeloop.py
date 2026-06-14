@@ -199,7 +199,7 @@ def main() -> None:
             PROJECT_ROOT
             / "data"
             / "processed_data"
-            / "libero_goal_no_noops_t_256_pi06_remaining_reward"
+            / "libero_goal_no_noops_t_256_remaining_reward"
         ),
     )
     parser.add_argument(
@@ -208,7 +208,7 @@ def main() -> None:
             PROJECT_ROOT
             / "data"
             / "processed_data"
-            / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+            / "libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2"
         ),
     )
     parser.add_argument("--num-demos", type=int, default=16)

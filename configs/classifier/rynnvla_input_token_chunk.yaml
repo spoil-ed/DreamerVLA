@@ -12,7 +12,7 @@ classifier:
 
 data:
   success_dir_hidden: ${task.rynnvla_input_token_hidden_dir}
-  failure_dir_hidden: ${task.hdf5_dir}_failures_pi0_input_token_embedding_vla_policy_h2
+  failure_dir_hidden: ${task.hdf5_dir}_failures_input_token_embedding_vla_policy_h2
   chunk_subsample: 5
 
 training:

@@ -46,13 +46,14 @@ bash scripts/download_assets.sh \
   only=[30_openvla_oft_one_trajectory,40_libero_dataset]
 ```
 
-The default one-trajectory checkpoint path is:
+The downloaded one-trajectory checkpoint path is:
 
 ```text
 ${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
 ```
 
-To train a local L1 one-trajectory checkpoint instead:
+That downloaded checkpoint is a discrete OpenVLA-OFT checkpoint. Train or
+provide an L1 one-trajectory checkpoint for the full WMPO chain:
 
 ```bash
 bash scripts/train_vla.sh \
@@ -61,14 +62,20 @@ bash scripts/train_vla.sh \
   gpus=0 ngpu=1 batch_size=1 num_workers=4
 ```
 
-Use the resulting checkpoint directory as `OFT_CKPT` during sidecar extraction.
-For DreamerVLA actor initialization, set
+Use the resulting L1 checkpoint directory as `OFT_CKPT` during sidecar
+extraction. For DreamerVLA actor initialization, set
 `task.openvla_oft.action_head_ckpt` to that checkpoint directory's
 `action_head--<step>_checkpoint.pt`.
 
 ## 2. Preprocess
 
-Build the renamed reward HDF5:
+OpenVLA-OFT Scheme A does not use `20_pretokenize_dataset`. That step builds
+RynnVLA token-record configs for tokenized VLA SFT and older pretokenized
+dataset routes. The OFT action-hidden WM/DreamerVLA path only needs the
+reward-labeled HDF5 from `10_hdf5_reward` plus the OFT action-hidden sidecar
+from `35_oft_action_hidden`.
+
+Build the reward HDF5:
 
 ```bash
 bash scripts/preprocess/prepare_libero_data.sh \
@@ -81,6 +88,7 @@ bash scripts/preprocess/prepare_libero_data.sh \
 Extract OpenVLA-OFT action-hidden Scheme A sidecars:
 
 ```bash
+OFT_L1_CKPT=/abs/path/to/openvla_oft_l1_onetraj_ckpt
 bash scripts/preprocess/prepare_libero_data.sh \
   task=OpenVLA_Onetraj_LIBERO \
   libero_suite=libero_goal \
@@ -88,28 +96,15 @@ bash scripts/preprocess/prepare_libero_data.sh \
   gpus=0 ngpu=1 \
   env.OFT_LATENT_SCHEME=action_hidden \
   env.OFT_POLICY_MODE=l1 \
-  env.OFT_CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
+  env.OFT_CKPT="${OFT_L1_CKPT}"
 ```
 
 Expected artifacts:
 
 ```text
 ${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256_pi06_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256_remaining_reward
 ${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO/OpenVLA_Onetraj_LIBERO_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
-```
-
-Optional input-token Scheme B:
-
-```bash
-bash scripts/preprocess/prepare_libero_data.sh \
-  task=OpenVLA_Onetraj_LIBERO \
-  libero_suite=libero_goal \
-  only=[35_oft_action_hidden] \
-  gpus=0 ngpu=1 \
-  env.OFT_LATENT_SCHEME=input_tokens \
-  env.OFT_POLICY_MODE=l1 \
-  env.OFT_CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
 ```
 
 ## 3. World Model
@@ -178,9 +173,9 @@ Raw OpenVLA-OFT checkpoint eval:
 CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
 SUITE=libero_goal \
 GPU_ID=0 \
-POLICY_MODE=l1 \
-CAMERA_INPUTS=primary,wrist \
-NUM_IMAGES=2 \
-USE_PROPRIO=1 \
+POLICY_MODE=discrete \
+CAMERA_INPUTS=primary \
+NUM_IMAGES=1 \
+USE_PROPRIO=0 \
 bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
 ```

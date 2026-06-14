@@ -1013,7 +1013,7 @@ def main() -> None:
             PROJECT_ROOT
             / "data"
             / "processed_data"
-            / "libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2"
+            / "libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2"
         )
     out_dir = _project_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

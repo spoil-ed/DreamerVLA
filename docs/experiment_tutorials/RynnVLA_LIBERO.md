@@ -53,18 +53,8 @@ Expected artifacts:
 
 ```text
 ${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_pi06_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-```
-
-Optional input-token Scheme B:
-
-```bash
-bash scripts/preprocess/prepare_libero_data.sh \
-  task=RynnVLA_LIBERO \
-  libero_suite=libero_goal \
-  only=[32_input_token_hidden] \
-  gpus=0 ngpu=1
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_remaining_reward
+${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO/RynnVLA_LIBERO_no_noops_t_256_legacy_action_hidden_vla_policy_h2
 ```
 
 ## 3. Optional VLA SFT

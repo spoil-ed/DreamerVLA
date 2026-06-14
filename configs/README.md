@@ -84,18 +84,12 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `openvla_oft_hdf5_one_trajectory_l1` | `VLA/openvla_oft_l1_one_trajectory` |
 | `world_model_dinowm_step` | `worldmodel/rynnvla_action_step` |
 | `world_model_dinowm_chunk` | `worldmodel/rynnvla_action_chunk` |
-| `world_model_dinowm_chunk_input_tokens` | `worldmodel/rynnvla_input_token_chunk` |
 | `oft_world_model_dinowm_chunk` | `worldmodel/openvla_oft_action_chunk` |
-| `oft_world_model_dinowm_chunk_input_tokens` | `worldmodel/openvla_oft_input_token_chunk` |
 | `latent_classifier_libero_goal_chunk` | `classifier/rynnvla_action_chunk` |
-| `latent_classifier_libero_goal_chunk_input_tokens` | `classifier/rynnvla_input_token_chunk` |
 | `oft_latent_classifier_chunk` | `classifier/openvla_oft_action_chunk` |
-| `oft_latent_classifier_chunk_input_tokens` | `classifier/openvla_oft_input_token_chunk` |
 | `dreamervla_rynn_dino_wm_actor_critic` | `dreamervla/rynnvla_actor_critic` |
 | `dreamervla_rynn_dino_wm_wmpo_outcome` | `dreamervla/rynnvla_wmpo_outcome` |
-| `dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens` | `dreamervla/rynnvla_input_token_wmpo_outcome` |
 | `dreamervla_oft_dino_wm_wmpo_outcome` | `dreamervla/openvla_oft_wmpo_outcome` |
-| `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens` | `dreamervla/openvla_oft_input_token_wmpo_outcome` |
 | `online_wmpo_outcome_libero_goal` | `dreamervla/online_wmpo_outcome_libero_goal` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 

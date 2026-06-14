@@ -24,9 +24,9 @@ pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_go
 pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
 
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256
-hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi06_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_pi0_legacy_action_hidden_vla_policy_h2
-rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_pi0_input_token_embedding_vla_policy_h2
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/libero_goal_no_noops_t_256_legacy_action_hidden_vla_policy_h2
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
 
 legacy_action_hidden:
   expected_action_head_type: legacy

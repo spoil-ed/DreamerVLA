@@ -25,7 +25,7 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${TASK_NAME}"
-REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_pi06_remaining_reward"
+REWARD_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_remaining_reward"
 OFT_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_oft_legacy_action_hidden_vla_policy_h${OFT_HISTORY}"
 OFT_INPUT_TOKEN_DIR="${PROCESSED_DATA_ROOT}/${TASK_NAME}_no_noops_t_256_oft_input_token_embedding_vla_policy_h${OFT_HISTORY}"
 UNNORM_KEY="${UNNORM_KEY:-${LIBERO_SUITE}_no_noops}"

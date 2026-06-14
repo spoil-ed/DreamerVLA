@@ -32,8 +32,8 @@ class LIBEROBalancedTerminalDataset(LIBEROPixelRynnHiddenSequenceDataset):
         positive, not just "I am the terminal frame".
       * ``"from_hdf5"``: pass-through. Use the HDF5 ``rewards`` field as-is
         (sliced to the window). Intended for datasets that already shape the
-        per-step reward (e.g. ``pi06_progress_delta`` telescoping deltas, or
-        ``pi06_remaining_steps`` success-to-go). Does not modify the value.
+        per-step reward (e.g. ``progress_delta`` telescoping deltas, or
+        ``remaining_steps`` success-to-go). Does not modify the value.
     """
 
     def __init__(

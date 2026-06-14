@@ -31,7 +31,7 @@ def test_libero_data_prep_validation_flags_empty_stage4_outputs(tmp_path: Path) 
     suite = "libero_goal"
 
     raw_dir = processed / f"{suite}_no_noops_t_256"
-    reward_dir = processed / f"{suite}_no_noops_t_256_pi06_remaining_reward"
+    reward_dir = processed / f"{suite}_no_noops_t_256_remaining_reward"
     image_dir = processed / f"{suite}_image_state_action_t_256"
     for idx in range(2):
         (raw_dir / f"demo_{idx}.hdf5").parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,7 @@ def test_libero_data_prep_validation_accepts_complete_stage4_outputs(tmp_path: P
     splits = {"train": 2, "val_ind": 1, "val_ood": 1}
 
     raw_dir = processed / f"{suite}_no_noops_t_256"
-    reward_dir = processed / f"{suite}_no_noops_t_256_pi06_remaining_reward"
+    reward_dir = processed / f"{suite}_no_noops_t_256_remaining_reward"
     image_dir = processed / f"{suite}_image_state_action_t_256"
     for idx in range(2):
         (raw_dir / f"demo_{idx}.hdf5").parent.mkdir(parents=True, exist_ok=True)
