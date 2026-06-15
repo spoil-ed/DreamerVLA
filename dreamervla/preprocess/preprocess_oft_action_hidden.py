@@ -210,7 +210,49 @@ def _resolve_num_images_in_input(args: argparse.Namespace) -> int:
     return int(args.history) * len(args.image_keys)
 
 
+class _FakeVisionBackbone:
+    def __init__(self, *, num_patches: int, num_images_in_input: int) -> None:
+        self._num_patches = int(num_patches)
+        self._num_images_in_input = int(num_images_in_input)
+
+    def get_num_patches(self) -> int:
+        return self._num_patches
+
+    def get_num_images_in_input(self) -> int:
+        return self._num_images_in_input
+
+
 def _load_oft_components(args: argparse.Namespace, device: torch.device) -> dict[str, Any]:
+    if bool(args.fake_oft_components):
+        vla = SimpleNamespace(
+            vision_backbone=_FakeVisionBackbone(
+                num_patches=int(args.fake_num_patches),
+                num_images_in_input=_resolve_num_images_in_input(args),
+            )
+        )
+        cfg = SimpleNamespace(
+            pretrained_checkpoint=str(_project_path(args.oft_ckpt)),
+            use_l1_regression=False,
+            use_diffusion=False,
+            use_film=False,
+            num_images_in_input=_resolve_num_images_in_input(args),
+            use_proprio=False,
+            center_crop=bool(args.center_crop),
+            unnorm_key=str(args.unnorm_key),
+        )
+        return {
+            "cfg": cfg,
+            "mode": "fake",
+            "vla": vla,
+            "processor": None,
+            "action_head": None,
+            "proprio_projector": None,
+            "normalize_proprio": _normalize_proprio,
+            "prepare_images_for_vla": _prepare_images_for_vla,
+            "device": device,
+            "fake": True,
+        }
+
     if bool(args.load_in_8bit) or bool(args.load_in_4bit):
         raise NotImplementedError(
             "The lightweight OpenVLA-OFT loader does not support 8-bit or 4-bit loading."
@@ -291,6 +333,47 @@ def _predict_intermediates_chunk(
     device = components["device"]
 
     model_prompt = f"In: What action should the robot take to {prompt.lower()}?\nOut:"
+
+    if bool(components.get("fake", False)):
+        batch = int(end - start)
+        for index in range(start, end):
+            for hidx in _history_indices(index, int(args.history)):
+                for key in image_keys:
+                    _image_from_hdf5(
+                        obs_group,
+                        key,
+                        hidx,
+                        rotate_images_180=bool(args.rotate_images_180),
+                    )
+            if bool(args.include_state):
+                _state_from_obs_group(obs_group, index)
+        hidden_c = (
+            np.zeros((batch, int(args.time_horizon * args.token_dim)), dtype=np.float32)
+            if want_action
+            else None
+        )
+        hidden_d = (
+            np.zeros((batch, int(args.time_horizon * args.token_dim)), dtype=np.float32)
+            if want_action
+            else None
+        )
+        action_hidden = (
+            np.zeros(
+                (batch, int(args.time_horizon * args.action_dim), int(args.token_dim)),
+                dtype=np.float32,
+            )
+            if want_action
+            else None
+        )
+        input_tokens = None
+        if want_input_tokens:
+            token_count, input_flat_dim = _input_token_sidecar_dims(
+                vla, image_keys=image_keys, token_dim=int(args.token_dim)
+            )
+            del token_count
+            input_tokens = np.zeros((batch, input_flat_dim), dtype=np.float32)
+        return hidden_c, hidden_d, action_hidden, input_tokens
+
     input_ids: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
     primary_pixels: list[torch.Tensor] = []
@@ -805,14 +888,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-demos-per-file", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--fake-oft-components",
+        action="store_true",
+        help="Use deterministic fake OFT tensors for structural HDF5 pipeline tests.",
+    )
+    parser.add_argument(
+        "--fake-num-patches",
+        type=int,
+        default=4,
+        help="Patch count per image for --fake-oft-components input-token sidecars.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    args.resolved_policy_mode = resolve_oft_policy_mode(
-        _project_path(args.oft_ckpt), args.policy_mode
-    )
+    if bool(args.fake_oft_components):
+        args.resolved_policy_mode = "discrete" if args.skip_cd_sidecars else "l1"
+    else:
+        args.resolved_policy_mode = resolve_oft_policy_mode(
+            _project_path(args.oft_ckpt), args.policy_mode
+        )
     if args.resolved_policy_mode == "discrete":
         if not args.skip_cd_sidecars:
             raise SystemExit(

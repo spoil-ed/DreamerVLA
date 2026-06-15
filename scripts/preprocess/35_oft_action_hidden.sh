@@ -22,6 +22,8 @@ OFT_POLICY_MODE="${OFT_POLICY_MODE:-auto}"
 OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-action_hidden}"
 OFT_HISTORY="${OFT_HISTORY:-2}"
 OFT_IMAGE_KEYS="${OFT_IMAGE_KEYS:-agentview_rgb eye_in_hand_rgb}"
+OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"
+OFT_FAKE_COMPONENTS="${OFT_FAKE_COMPONENTS:-0}"
 OFT_ACTION_HIDDEN_GPUS="${OFT_ACTION_HIDDEN_GPUS:-${NGPU:-}}"
 OVERWRITE="${OVERWRITE:-0}"
 OFT_ACTION_HIDDEN_GPUS="${OFT_ACTION_HIDDEN_GPUS:-1}"
@@ -63,6 +65,10 @@ OVERWRITE_ARGS=()
 if [[ "${OVERWRITE}" == "1" ]]; then
   OVERWRITE_ARGS=(--overwrite)
 fi
+FAKE_ARGS=()
+if [[ "${OFT_FAKE_COMPONENTS}" == "1" ]]; then
+  FAKE_ARGS=(--fake-oft-components)
+fi
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
@@ -90,7 +96,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     echo "[35_oft_action_hidden] resume incomplete action-hidden sidecar: ${OFT_HIDDEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}"
-  _check_openvla_oft_env
+  [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -102,7 +108,9 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --unnorm-key "${UNNORM_KEY}" \
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
+    --chunk-size "${OFT_CHUNK_SIZE}" \
     --image-keys ${OFT_IMAGE_KEYS} \
+    "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
@@ -118,7 +126,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     echo "[35_oft_action_hidden] resume incomplete input-token sidecar: ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_INPUT_TOKEN_DIR}"
-  _check_openvla_oft_env
+  [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -130,7 +138,9 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --unnorm-key "${UNNORM_KEY}" \
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
+    --chunk-size "${OFT_CHUNK_SIZE}" \
     --image-keys ${OFT_IMAGE_KEYS} \
+    "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
@@ -152,7 +162,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
     echo "[35_oft_action_hidden] resume incomplete OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}" "${OFT_INPUT_TOKEN_DIR}"
-  _check_openvla_oft_env
+  [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -165,7 +175,9 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
     --unnorm-key "${UNNORM_KEY}" \
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
+    --chunk-size "${OFT_CHUNK_SIZE}" \
     --image-keys ${OFT_IMAGE_KEYS} \
+    "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
 else
   echo "Unsupported OFT_LATENT_SCHEME=${OFT_LATENT_SCHEME}; use action_hidden, input_tokens, or both." >&2
