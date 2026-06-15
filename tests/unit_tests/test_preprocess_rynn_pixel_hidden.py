@@ -4,17 +4,17 @@ import sys
 
 import torch
 
-from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
+from dreamervla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from dreamer_vla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
+from dreamervla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
     DreamerV3PixelRynnBackboneWorldModel,
 )
-from dreamer_vla.models.world_model.dreamerv3_torch import (
+from dreamervla.models.world_model.dreamerv3_torch import (
     CompactTokenSequenceAutoencoder,
     DreamerV3LatentState,
 )
-from dreamer_vla.preprocess.preprocess_rynn_pixel_hidden import (
+from dreamervla.preprocess.preprocess_rynn_pixel_hidden import (
     _image_content_token_spans,
     _input_token_embedding_obs,
     _prepare_actor_sequence_arrays,

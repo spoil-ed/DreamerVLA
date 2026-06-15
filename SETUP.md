@@ -72,7 +72,7 @@ bash scripts/download_assets.sh
 This wrapper runs:
 
 ```bash
-python -m dreamer_vla.launchers.workflow --config-name download "$@"
+python -m dreamervla.launchers.workflow --config-name download "$@"
 ```
 
 The shell file only sets `DVLA_ROOT`, `DVLA_DATA_ROOT`, and `PYTHONPATH`, then
@@ -185,11 +185,11 @@ input: downloaded raw LIBERO HDF5 files
   ${DVLA_DATA_ROOT}/datasets/libero/${TASK}/*.hdf5
 
 stage 1: replay and mark no-ops
-  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
+  python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
   writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256 with data/demo_*/noop_mask
 
 stage 2: filter marked no-ops
-  python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 --filter-noops
+  python -m dreamervla.preprocess.filter_marked_libero_hdf5 --filter-noops
   writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256
 ```
 

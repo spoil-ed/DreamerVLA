@@ -12,4 +12,4 @@ if ! python -c "import hydra, omegaconf" >/dev/null 2>&1; then
   python -m pip install --user hydra-core omegaconf
 fi
 
-python -m dreamer_vla.launchers.workflow --config-name install "$@"
+python -m dreamervla.launchers.workflow --config-name install "$@"

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from dreamer_vla.algorithms.ppo import (
+from dreamervla.algorithms.ppo import (
     dino_wmpo_dense_chunk_step,
     dino_wmpo_dense_step,
     dino_wmpo_outcome_step,
 )
-from dreamer_vla.algorithms.registry import (
+from dreamervla.algorithms.registry import (
     actor_update_names,
     get_actor_update_route,
 )
@@ -48,8 +48,8 @@ def test_actor_update_registry_reports_available_names() -> None:
 def test_online_runner_uses_actor_update_registry() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (
-        project_root / "dreamer_vla" / "runners" / "online_dreamervla.py"
+        project_root / "dreamervla" / "runners" / "online_dreamervla.py"
     ).read_text(encoding="utf-8")
 
     assert "get_actor_update_route" in source
-    assert "from dreamer_vla.algorithms.ppo import" not in source
+    assert "from dreamervla.algorithms.ppo import" not in source

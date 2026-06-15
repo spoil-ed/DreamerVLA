@@ -21,7 +21,7 @@ def _split_stem(suite: str, split: str) -> str:
 
 
 def test_libero_data_prep_validation_flags_empty_stage4_outputs(tmp_path: Path) -> None:
-    from dreamer_vla.preprocess.validate_libero_data_prep import (
+    from dreamervla.preprocess.validate_libero_data_prep import (
         LiberoDataPrepSpec,
         validate_suite,
     )
@@ -72,7 +72,7 @@ def test_libero_data_prep_validation_flags_empty_stage4_outputs(tmp_path: Path) 
 
 
 def test_libero_data_prep_validation_accepts_complete_stage4_outputs(tmp_path: Path) -> None:
-    from dreamer_vla.preprocess.validate_libero_data_prep import (
+    from dreamervla.preprocess.validate_libero_data_prep import (
         LiberoDataPrepSpec,
         validate_suite,
     )
@@ -146,7 +146,7 @@ def test_libero_data_prep_validation_accepts_complete_stage4_outputs(tmp_path: P
 def test_libero_data_prep_validation_rejects_repeated_prefix_stage_dirs(
     tmp_path: Path,
 ) -> None:
-    from dreamer_vla.preprocess.validate_libero_data_prep import (
+    from dreamervla.preprocess.validate_libero_data_prep import (
         LiberoDataPrepSpec,
         validate_suite,
     )

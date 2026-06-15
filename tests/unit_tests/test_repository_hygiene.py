@@ -16,9 +16,9 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "eval_wm.sh" not in readme
     assert "pretokenize_sft_wm_vla_smoke" not in scripts_readme
     assert "prepare_latent_data.sh" not in scripts_readme
-    assert "dreamer_vla.launchers.train" in train_script
-    assert "dreamer_vla.launchers.train" in eval_script
-    assert "dreamer_vla.launchers.train" in eval_script
+    assert "dreamervla.launchers.train" in train_script
+    assert "dreamervla.launchers.train" in eval_script
+    assert "dreamervla.launchers.train" in eval_script
     assert (
         project_root
         / "third_party"
@@ -37,13 +37,13 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         project_root / "README.md",
         config_dir / "README.md",
         project_root / "scripts" / "README.md",
-        project_root / "dreamer_vla" / "train.py",
+        project_root / "dreamervla" / "train.py",
         project_root / "scripts" / "train_wm.sh",
         project_root / "scripts" / "train_dreamervla.sh",
-        project_root / "dreamer_vla" / "runners" / "online_dreamervla.py",
-        project_root / "dreamer_vla" / "runners" / "frozen_wm_actor_critic.py",
-        project_root / "dreamer_vla" / "diagnostics" / "eval_frozen_wm_actor.py",
-        project_root / "dreamer_vla" / "diagnostics" / "compare_action_chunks.py",
+        project_root / "dreamervla" / "runners" / "online_dreamervla.py",
+        project_root / "dreamervla" / "runners" / "frozen_wm_actor_critic.py",
+        project_root / "dreamervla" / "diagnostics" / "eval_frozen_wm_actor.py",
+        project_root / "dreamervla" / "diagnostics" / "compare_action_chunks.py",
     ]
 
     for text_file in active_text_files:
@@ -123,7 +123,7 @@ def test_active_sources_do_not_reference_removed_action_head_variant() -> None:
         project_root / "README.md",
         project_root / "configs",
         project_root / "docs",
-        project_root / "dreamer_vla",
+        project_root / "dreamervla",
         project_root / "scripts",
         project_root / "tests",
     ]
@@ -156,7 +156,7 @@ def test_repository_structure_doc_and_editable_package_metadata_exist() -> None:
     assert pyproject.is_file()
     text = pyproject.read_text(encoding="utf-8")
     assert 'name = "dreamer-vla"' in text
-    assert 'include = ["dreamer_vla*"]' in text
+    assert 'include = ["dreamervla*"]' in text
 
 
 def test_files_live_under_their_architecture_domains() -> None:
@@ -165,7 +165,7 @@ def test_files_live_under_their_architecture_domains() -> None:
     expected_top_level_dirs = {
         "configs",
         "docs",
-        "dreamer_vla",
+        "dreamervla",
         "scripts",
         "tests",
     }
@@ -175,7 +175,6 @@ def test_files_live_under_their_architecture_domains() -> None:
     forbidden_top_level_dirs = {
         "graveyard",
         "LIBERO",
-        "logs",
         "runner",
         "src",
         "workspace",
@@ -183,6 +182,14 @@ def test_files_live_under_their_architecture_domains() -> None:
     }
     for dirname in forbidden_top_level_dirs:
         assert not (project_root / dirname).exists(), dirname
+    tracked_logs = subprocess.run(
+        ["git", "ls-files", "logs"],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    assert tracked_logs == []
 
     assert not (project_root / ".claude").exists()
     assert not (project_root / ".cursor").exists()
@@ -191,11 +198,11 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert not (project_root / "data" / "libero_goal_metainfo.json").exists()
 
     for dirname in ("cli", "trainer", "smoke", "evaluation", "training"):
-        assert not (project_root / "dreamer_vla" / dirname).exists(), dirname
+        assert not (project_root / "dreamervla" / dirname).exists(), dirname
 
-    assert (project_root / "dreamer_vla" / "train.py").is_file()
+    assert (project_root / "dreamervla" / "train.py").is_file()
 
-    preprocess_dir = project_root / "dreamer_vla" / "preprocess"
+    preprocess_dir = project_root / "dreamervla" / "preprocess"
     assert not (preprocess_dir / "convertsation.py").exists()
     assert not (preprocess_dir / "concate_record.py").exists()
     assert not (preprocess_dir / "concate_action_world_model_data_libero.py").exists()
@@ -205,15 +212,20 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert (preprocess_dir / "concat_action_world_model_data_libero.py").is_file()
     assert not (preprocess_dir / "collect_online_rollouts_for_classifier.py").exists()
     assert (
-        project_root / "dreamer_vla" / "runners" / "collect_online_rollouts_for_classifier.py"
+        project_root / "dreamervla" / "runners" / "collect_online_rollouts_for_classifier.py"
     ).is_file()
     assert (preprocess_dir / "xllmx").is_dir()
 
-    assert not (project_root / "dreamer_vla" / "utils" / "libero_utils").exists()
-    assert not (project_root / "dreamer_vla" / "models" / "xllmx").exists()
-    assert not (project_root / "dreamer_vla" / "models" / "openvla-oft").exists()
+    assert not (project_root / "dreamervla" / "utils" / "libero_utils").exists()
+    assert not (project_root / "dreamervla" / "models" / "xllmx").exists()
+    assert not (project_root / "dreamervla" / "models" / "openvla-oft").exists()
     assert (preprocess_dir / "libero_utils").is_dir()
-    assert (project_root / "third_party" / "openvla-oft").is_dir()
+    assert (
+        project_root / "dreamervla" / "models" / "embodiment" / "openvla_oft"
+    ).is_dir()
+    assert (
+        project_root / "dreamervla" / "models" / "embodiment" / "chameleon_model"
+    ).is_dir()
 
     assert not (project_root / "scripts" / "archive").exists()
     assert not (project_root / "scripts" / "paper_tables").exists()
@@ -223,7 +235,7 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert not (project_root / "scripts" / "eval" / "eval_libero_legacy.py").exists()
     assert (project_root / "scripts" / "preprocess" / "process_all_libero_data.sh").is_file()
     assert not (project_root / "scripts" / "diagnostics").exists()
-    diagnostics_dir = project_root / "dreamer_vla" / "diagnostics"
+    diagnostics_dir = project_root / "dreamervla" / "diagnostics"
     assert (diagnostics_dir / "eval_chunkwm_closeloop.py").is_file()
     assert (diagnostics_dir / "eval_openvla_oft_libero.py").is_file()
     assert (diagnostics_dir / "openvla_oft_obs_action_policy.py").is_file()
@@ -248,21 +260,21 @@ def test_active_targets_use_canonical_module_paths() -> None:
     project_root = Path(__file__).resolve().parents[2]
     active_files = [
         *sorted((project_root / "configs").glob("*.yaml")),
-        project_root / "dreamer_vla" / "diagnostics" / "diagnose_dreamervla_latent_distribution.py",
+        project_root / "dreamervla" / "diagnostics" / "diagnose_dreamervla_latent_distribution.py",
     ]
 
     for path in active_files:
         text = path.read_text(encoding="utf-8")
-        assert "dreamer_vla.models.vla_actor" not in text, path.relative_to(project_root)
-        assert "dreamer_vla.models.vla_policy" not in text, path.relative_to(project_root)
+        assert "dreamervla.models.vla_actor" not in text, path.relative_to(project_root)
+        assert "dreamervla.models.vla_policy" not in text, path.relative_to(project_root)
 
 
 def test_preprocess_libero_utils_reexports_canonical_env_helpers() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    compat_path = project_root / "dreamer_vla" / "preprocess" / "libero_utils" / "libero_utils.py"
+    compat_path = project_root / "dreamervla" / "preprocess" / "libero_utils" / "libero_utils.py"
     text = compat_path.read_text(encoding="utf-8")
 
-    assert "from dreamer_vla.envs.libero_env import" in text
+    assert "from dreamervla.envs.libero_env import" in text
     assert "OffScreenRenderEnv" not in text
     assert "def get_libero_env" not in text
     assert "def get_libero_image" not in text
@@ -271,21 +283,21 @@ def test_preprocess_libero_utils_reexports_canonical_env_helpers() -> None:
 
 def test_rynnvla_processor_shared_helpers_have_single_home() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    runtime_path = project_root / "dreamer_vla" / "models" / "encoder" / "rynnvla_runtime.py"
-    preprocess_path = project_root / "dreamer_vla" / "preprocess" / "item_processor.py"
-    conversation_path = project_root / "dreamer_vla" / "preprocess" / "conversation.py"
+    runtime_path = project_root / "dreamervla" / "models" / "encoder" / "rynnvla_runtime.py"
+    preprocess_path = project_root / "dreamervla" / "preprocess" / "item_processor.py"
+    conversation_path = project_root / "dreamervla" / "preprocess" / "conversation.py"
 
     runtime_text = runtime_path.read_text(encoding="utf-8")
     preprocess_text = preprocess_path.read_text(encoding="utf-8")
     conversation_text = conversation_path.read_text(encoding="utf-8")
 
-    assert "from dreamer_vla.utils.conversation import Conversation" in runtime_text
-    assert "from dreamer_vla.utils.conversation import Conversation" in conversation_text
+    assert "from dreamervla.utils.conversation import Conversation" in runtime_text
+    assert "from dreamervla.utils.conversation import Conversation" in conversation_text
     for text, path in (
         (runtime_text, runtime_path),
         (preprocess_text, preprocess_path),
     ):
-        assert "from dreamer_vla.models.encoder.rynnvla_image_ops import" in text, path.relative_to(
+        assert "from dreamervla.models.encoder.rynnvla_image_ops import" in text, path.relative_to(
             project_root
         )
         assert "def center_crop" not in text, path.relative_to(project_root)
@@ -295,11 +307,11 @@ def test_rynnvla_processor_shared_helpers_have_single_home() -> None:
 
 def test_online_replay_is_library_module_not_cli_local_class() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    cli_path = project_root / "dreamer_vla" / "runners" / "online_dreamervla.py"
+    cli_path = project_root / "dreamervla" / "runners" / "online_dreamervla.py"
     cli_text = cli_path.read_text(encoding="utf-8")
 
-    assert (project_root / "dreamer_vla" / "runners" / "online_replay.py").is_file()
-    assert "from dreamer_vla.runners.online_replay import" in cli_text
+    assert (project_root / "dreamervla" / "runners" / "online_replay.py").is_file()
+    assert "from dreamervla.runners.online_replay import" in cli_text
     assert "class OnlineReplay" not in cli_text
     assert "def pack_replay_task_stats_for_ddp" not in cli_text
     assert "def unpack_replay_task_stats_from_ddp" not in cli_text
@@ -307,15 +319,15 @@ def test_online_replay_is_library_module_not_cli_local_class() -> None:
 
 def test_distributed_training_helper_lives_with_runners() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    helper_path = project_root / "dreamer_vla" / "runners" / "distributed.py"
+    helper_path = project_root / "dreamervla" / "runners" / "distributed.py"
 
     assert helper_path.is_file()
     assert "class NopretokenizeSFTDistributedHelper" in helper_path.read_text(encoding="utf-8")
-    assert not (project_root / "dreamer_vla" / "trainer").exists()
+    assert not (project_root / "dreamervla" / "trainer").exists()
 
     runner_import_offenders: dict[str, str] = {}
-    old_trainer_import = "dreamer_vla." + "trainer"
-    for path in (project_root / "dreamer_vla" / "runners").glob("*.py"):
+    old_trainer_import = "dreamervla." + "trainer"
+    for path in (project_root / "dreamervla" / "runners").glob("*.py"):
         text = path.read_text(encoding="utf-8")
         if old_trainer_import in text:
             runner_import_offenders[str(path.relative_to(project_root))] = old_trainer_import
@@ -330,14 +342,14 @@ def test_package_has_no_redundant_top_level_command_groups() -> None:
         project_root / "README.md",
         project_root / "SETUP.md",
         project_root / "docs",
-        project_root / "dreamer_vla",
+        project_root / "dreamervla",
         project_root / "scripts",
         project_root / "tests",
     ]
     skipped_parts = {"__pycache__", "superpowers"}
     checked_suffixes = {".py", ".md", ".sh", ".yaml", ".yml"}
     old_paths = tuple(
-        "dreamer_vla." + suffix
+        "dreamervla." + suffix
         for suffix in (
             "cli",
             "trainer",
@@ -365,7 +377,7 @@ def test_package_has_no_redundant_top_level_command_groups() -> None:
 def test_chameleon_lazy_exports_only_existing_modeling_symbols() -> None:
     project_root = Path(__file__).resolve().parents[2]
     init_path = (
-        project_root / "dreamer_vla" / "models" / "chameleon_model" / "chameleon" / "__init__.py"
+        project_root / "dreamervla" / "models" / "chameleon_model" / "chameleon" / "__init__.py"
     )
     text = init_path.read_text(encoding="utf-8")
 
@@ -374,7 +386,7 @@ def test_chameleon_lazy_exports_only_existing_modeling_symbols() -> None:
 
 def test_models_package_does_not_hide_import_failures() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    text = (project_root / "dreamer_vla" / "models" / "__init__.py").read_text(encoding="utf-8")
+    text = (project_root / "dreamervla" / "models" / "__init__.py").read_text(encoding="utf-8")
 
     assert "except Exception" not in text
     assert "= None" not in text
@@ -383,7 +395,7 @@ def test_models_package_does_not_hide_import_failures() -> None:
 def test_package_modules_do_not_insert_project_root_into_sys_path() -> None:
     project_root = Path(__file__).resolve().parents[2]
     offenders: list[str] = []
-    for path in (project_root / "dreamer_vla").rglob("*.py"):
+    for path in (project_root / "dreamervla").rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -396,8 +408,8 @@ def test_package_modules_do_not_insert_project_root_into_sys_path() -> None:
 def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for relpath in (
-        "dreamer_vla/models/world_model/dreamerv3_torch.py",
-        "dreamer_vla/models/world_model/tssm_torch.py",
+        "dreamervla/models/world_model/dreamerv3_torch.py",
+        "dreamervla/models/world_model/tssm_torch.py",
     ):
         text = (project_root / relpath).read_text(encoding="utf-8")
         assert "_WORLD_MODEL_EXPORTS" not in text, relpath
@@ -406,7 +418,7 @@ def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
     config_text = "\n".join(
         path.read_text(encoding="utf-8") for path in (project_root / "configs").rglob("*.yaml")
     )
-    assert "dreamer_vla.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel" not in config_text
+    assert "dreamervla.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel" not in config_text
 
 
 def test_active_configs_do_not_describe_ignored_targets() -> None:
@@ -428,7 +440,7 @@ def test_active_configs_do_not_describe_ignored_targets() -> None:
 
 def test_residual_cosine_diagnostic_has_no_import_time_io() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    path = project_root / "dreamer_vla" / "diagnostics" / "diagnose_residual_cosine.py"
+    path = project_root / "dreamervla" / "diagnostics" / "diagnose_residual_cosine.py"
     text = path.read_text(encoding="utf-8")
 
     assert "def main(" in text
@@ -469,7 +481,7 @@ def test_active_files_do_not_pin_machine_local_roots() -> None:
         project_root / "SETUP.md",
         project_root / "configs",
         project_root / "docs",
-        project_root / "dreamer_vla",
+        project_root / "dreamervla",
         project_root / "scripts",
         project_root / "tests",
     ]
@@ -501,9 +513,9 @@ def test_active_files_do_not_pin_machine_local_roots() -> None:
 def test_source_package_data_helpers_are_not_gitignored() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source_files = [
-        "dreamer_vla/preprocess/xllmx/data/__init__.py",
-        "dreamer_vla/preprocess/xllmx/data/data_reader.py",
-        "dreamer_vla/preprocess/xllmx/data/item_processor.py",
+        "dreamervla/preprocess/xllmx/data/__init__.py",
+        "dreamervla/preprocess/xllmx/data/data_reader.py",
+        "dreamervla/preprocess/xllmx/data/item_processor.py",
     ]
 
     missing = [path for path in source_files if not (project_root / path).is_file()]
@@ -533,13 +545,13 @@ def test_active_docs_do_not_describe_removed_source_roots() -> None:
     stale_patterns = [
         "from src.",
         "import src.",
-        "dreamer_vla.workspace",
-        "dreamer_vla.dataloader",
-        "dreamer_vla.env.",
-        "dreamer_vla.env import",
-        "dreamer_vla/workspace",
-        "dreamer_vla/dataloader",
-        "dreamer_vla/env/",
+        "dreamervla.workspace",
+        "dreamervla.dataloader",
+        "dreamervla.env.",
+        "dreamervla.env import",
+        "dreamervla/workspace",
+        "dreamervla/dataloader",
+        "dreamervla/env/",
     ]
     for path in active_docs:
         text = path.read_text(encoding="utf-8")

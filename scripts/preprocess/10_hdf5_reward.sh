@@ -46,12 +46,12 @@ fi
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" != "1" && -n "${marked_hdf5}" ]]; then
-  if python -m dreamer_vla.preprocess.check_artifacts metainfo --path "${META_JSON}" && \
-     python -m dreamer_vla.preprocess.check_artifacts hdf5-dir --dir "${MARKED_DIR}"; then
+  if python -m dreamervla.preprocess.check_artifacts metainfo --path "${META_JSON}" && \
+     python -m dreamervla.preprocess.check_artifacts hdf5-dir --dir "${MARKED_DIR}"; then
     echo "[10_hdf5_reward] skip mark: ${MARKED_DIR}"
   else
     echo "[10_hdf5_reward] existing marked stage is incomplete; resuming ${MARKED_DIR}" >&2
-    python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
+    python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
       --libero_task_suite "${LIBERO_SUITE}" \
       --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
       --libero_target_dir "${MARKED_DIR}" \
@@ -62,7 +62,7 @@ if [[ "${OVERWRITE}" != "1" && -n "${marked_hdf5}" ]]; then
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
-  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
+  python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
     --libero_task_suite "${LIBERO_SUITE}" \
     --libero_raw_data_dir "${RAW_LIBERO_DIR}" \
     --libero_target_dir "${MARKED_DIR}" \
@@ -71,7 +71,7 @@ else
     --metainfo-json-out "${META_JSON}"
 fi
 
-python -m dreamer_vla.preprocess.check_artifacts metainfo --path "${META_JSON}"
+python -m dreamervla.preprocess.check_artifacts metainfo --path "${META_JSON}"
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${marked_hdf5}" ]]; then
@@ -81,7 +81,7 @@ fi
 
 filtered_hdf5="$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" != "1" && -n "${filtered_hdf5}" ]]; then
-  if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir --dir "${HDF5_DIR}" --reference-dir "${MARKED_DIR}"; then
+  if python -m dreamervla.preprocess.check_artifacts hdf5-dir --dir "${HDF5_DIR}" --reference-dir "${MARKED_DIR}"; then
     echo "[10_hdf5_reward] skip filter: ${HDF5_DIR}"
   else
     echo "[10_hdf5_reward] existing filtered stage is incomplete; rerun with OVERWRITE=1 to rebuild ${HDF5_DIR}" >&2
@@ -89,7 +89,7 @@ if [[ "${OVERWRITE}" != "1" && -n "${filtered_hdf5}" ]]; then
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HDF5_DIR}"
-  python -m dreamer_vla.preprocess.filter_marked_libero_hdf5 \
+  python -m dreamervla.preprocess.filter_marked_libero_hdf5 \
     --input-dir "${MARKED_DIR}" \
     --output-dir "${HDF5_DIR}" \
     --filter-noops \
@@ -104,7 +104,7 @@ fi
 
 reward_hdf5="$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" != "1" && -n "${reward_hdf5}" ]]; then
-  if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir --dir "${REWARD_DIR}" --reference-dir "${HDF5_DIR}"; then
+  if python -m dreamervla.preprocess.check_artifacts hdf5-dir --dir "${REWARD_DIR}" --reference-dir "${HDF5_DIR}"; then
     echo "[10_hdf5_reward] skip reward: ${REWARD_DIR}"
   else
     echo "[10_hdf5_reward] existing reward stage is incomplete; rerun with OVERWRITE=1 to rebuild ${REWARD_DIR}" >&2
@@ -112,7 +112,7 @@ if [[ "${OVERWRITE}" != "1" && -n "${reward_hdf5}" ]]; then
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${REWARD_DIR}"
-  python -m dreamer_vla.preprocess.preprocess_remaining_steps_reward \
+  python -m dreamervla.preprocess.preprocess_remaining_steps_reward \
     --input-dir "${HDF5_DIR}" \
     --output-dir "${REWARD_DIR}" \
     --metainfo-json "${META_JSON}" \

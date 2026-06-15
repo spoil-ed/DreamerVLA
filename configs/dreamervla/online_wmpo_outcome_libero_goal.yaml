@@ -2,14 +2,14 @@
 # DreamerVLA — online WMPO outcome route.
 #
 # Driven by:
-#   python -m dreamer_vla.train experiment=online_wmpo_outcome_libero_goal
+#   python -m dreamervla.train experiment=online_wmpo_outcome_libero_goal
 #
 # Differences vs configs/dreamervla/rynnvla_wmpo_outcome.yaml:
 #   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,data}
 #   * world_model_state_ckpt points at a pinned ChunkAware checkpoint
 #   * classifier_state_ckpt points at the WMPO outcome classifier
 
-_target_: dreamer_vla.runners.JointDreamerVLARunner
+_target_: dreamervla.runners.JointDreamerVLARunner
 seed: 7
 
 hydra:
@@ -57,7 +57,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
   hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
   # Sidecar metadata stores the model_path used during preprocessing. Keep this
@@ -96,7 +96,7 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  _target_: dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  _target_: dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
   chunk_size: 5
   obs_dim: null
   action_dim: 7
@@ -126,7 +126,7 @@ world_model:
   freeze_backbone: true
 
 policy:
-  _target_: dreamer_vla.models.actor.RynnVLAActionHiddenActor
+  _target_: dreamervla.models.actor.RynnVLAActionHiddenActor
   hidden_dim: null
   action_hidden_dim: 1024
   action_dim: 7
@@ -142,7 +142,7 @@ policy:
   init_action_head_ckpt: ${init.vla_ckpt_path}
 
 critic:
-  _target_: dreamer_vla.models.critic.twohot_critic.TwohotCritic
+  _target_: dreamervla.models.critic.twohot_critic.TwohotCritic
   hidden_dim: 1024
   critic_hidden_dim: 1024
   critic_layers: 3

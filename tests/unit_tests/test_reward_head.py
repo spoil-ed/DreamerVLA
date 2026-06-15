@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamer_vla.models.world_model.dreamerv3_torch import BinaryRewardHead
+from dreamervla.models.world_model.dreamerv3_torch import BinaryRewardHead
 
 
 def test_binary_reward_head_applies_positive_weight() -> None:

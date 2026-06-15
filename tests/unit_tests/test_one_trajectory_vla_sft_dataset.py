@@ -54,7 +54,7 @@ def _write_payload(
 def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(
     tmp_path: Path,
 ) -> None:
-    from dreamer_vla.dataset.one_trajectory_pretokenize_dataset import (
+    from dreamervla.dataset.one_trajectory_pretokenize_dataset import (
         OneTrajectoryPretokenizeActionChunkDataset,
     )
 
@@ -101,7 +101,7 @@ def test_one_trajectory_action_chunk_dataset_keeps_one_traj_per_task(
 
 
 def test_one_trajectory_action_chunk_dataset_can_select_offset(tmp_path: Path) -> None:
-    from dreamer_vla.dataset.one_trajectory_pretokenize_dataset import (
+    from dreamervla.dataset.one_trajectory_pretokenize_dataset import (
         OneTrajectoryPretokenizeActionChunkDataset,
     )
 

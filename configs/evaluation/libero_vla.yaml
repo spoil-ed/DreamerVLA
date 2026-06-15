@@ -1,5 +1,5 @@
 # @package _global_
-_target_: dreamer_vla.runners.LiberoEvalRunner
+_target_: dreamervla.runners.LiberoEvalRunner
 seed: 7
 
 hydra:
@@ -33,7 +33,7 @@ init:
   encoder_state_ckpt: null
 
 encoder:
-  _target_: dreamer_vla.models.encoder.RynnVLAEncoder
+  _target_: dreamervla.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
   tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
   text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/text_tokenizer.json

@@ -21,7 +21,7 @@ cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 
-python -m dreamer_vla.preprocess.validate_libero_data_prep \
+python -m dreamervla.preprocess.validate_libero_data_prep \
   --data-root "${DVLA_DATA_ROOT}" \
   --processed-data-root "${PROCESSED_DATA_ROOT}" \
   --suites "${ARTIFACT_NAME}" \

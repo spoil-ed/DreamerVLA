@@ -1,13 +1,14 @@
 # Repository Structure
 
 This is the current source-of-truth map for Dreamer-VLA after the package
-move from `src/` to `dreamer_vla/`.
+move from `src/` to `dreamervla/`.
 
 ## Top Level
 
 ```text
 DreamerVLA/
-├── dreamer_vla/          # Python package imported as dreamer_vla
+├── dreamervla/          # Python package imported as dreamervla
+│   └── models/embodiment # Vendored embodiment model code used at runtime
 ├── configs/              # Hydra train/experiment/module configs and LIBERO tasks
 ├── scripts/              # Shell launchers for install, data prep, train, eval
 ├── tests/                # Unit and e2e tests
@@ -15,25 +16,28 @@ DreamerVLA/
 ├── data/                 # Runtime datasets, checkpoints, outputs
 ├── third_party/          # Vendored/local upstream checkouts and wheels
 │   ├── LIBERO/           # Local LIBERO checkout
-│   └── openvla-oft/      # OpenVLA-OFT checkout used by eval and compatibility helpers
+│   └── openvla-oft/      # OpenVLA-OFT upstream checkout used for setup/fallback
 ├── pyproject.toml        # Editable install metadata
 └── requirements.txt      # Runtime dependencies
 ```
 
-`data/` and `third_party/` are runtime inputs. Keep generated
+`data/` and `third_party/` are runtime inputs. Embodiment model code that
+DreamerVLA imports directly lives under `dreamervla/models/embodiment`.
+Keep generated
 artifacts out of source commits unless a small summary belongs in `docs/`.
 Dot-prefixed local tool folders are ignored by this main structure map.
 
 ## Package Layout
 
 ```text
-dreamer_vla/
+dreamervla/
 ├── algorithms/           # PPO, GRPO, DINO-WMPO, TD-MPC, actor-critic steps
 ├── train.py              # Canonical Hydra train/eval entrypoint
 ├── dataset/              # Offline datasets and online rollout dumpers
 ├── diagnostics/          # Diagnostics, eval CLIs, smoke checks
 ├── envs/                 # LIBERO sim and online env wrappers
 ├── models/               # Encoders, actors, critics, rewards, world models
+│   ├── embodiment/       # Vendored OpenVLA-OFT and Chameleon/RynnVLA components
 │   ├── actor/            # BaseActor, VLAPolicy, RynnVLAActionHiddenActor, VLAActionHeadActor
 │   ├── critic/           # Critic modules
 │   ├── encoder/          # BaseEncoder plus encoder input protocol helpers
@@ -52,12 +56,12 @@ unit is a runner.
 
 ```text
 scripts/*.sh
-  -> python -m dreamer_vla.train --config-name <route>
-  -> configs/<route>.yaml with _target_: dreamer_vla.runners.<Runner>
+  -> python -m dreamervla.train --config-name <route>
+  -> configs/<route>.yaml with _target_: dreamervla.runners.<Runner>
   -> runner.setup() -> runner.execute() -> runner.teardown()
 ```
 
-Public runner classes are exported from `dreamer_vla.runners`. Route
+Public runner classes are exported from `dreamervla.runners`. Route
 configs should target those public names rather than implementation classes.
 
 ## Active Routes
@@ -93,14 +97,14 @@ top-level config only when they have a runner, defaults, and tests.
 
 Runners own orchestration: datasets, encoders, world models, actors,
 critics, optimizers, logging, and checkpoints. Shared lifecycle and checkpoint
-plumbing belongs in `dreamer_vla/runners/base_runner.py`.
+plumbing belongs in `dreamervla/runners/base_runner.py`.
 
 Models stay behind focused public interfaces:
 
 - Encoders inherit `BaseEncoder` and use `encoder/protocol.py` helpers for
   structured VLA input batches.
 - Actors inherit `BaseActor`; canonical implementations live in
-  `dreamer_vla/models/actor/`.
+  `dreamervla/models/actor/`.
 - World models inherit `BaseWorldModel`; Dreamer-style actor adapters live in
   `base_world_model.py`.
 - Datasets inherit `BaseDataset` and expose `data_spec` plus

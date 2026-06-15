@@ -8,4 +8,4 @@ export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
-python -m dreamer_vla.launchers.train --config-name train_dreamervla "$@"
+python -m dreamervla.launchers.train --config-name train_dreamervla "$@"

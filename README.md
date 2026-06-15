@@ -40,7 +40,7 @@ bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal
 ## Repository Layout
 
 ```text
-dreamer_vla/        Python package: runners, models, datasets, algorithms, envs
+dreamervla/        Python package: runners, models, datasets, algorithms, envs
 configs/            Hydra routes and LIBERO task configs
 scripts/            shell launchers for install, download, preprocess, train, eval
 tests/              unit and smoke tests

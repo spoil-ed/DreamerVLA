@@ -5,7 +5,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: dreamer_vla.runners.JointDreamerVLARunner
+_target_: dreamervla.runners.JointDreamerVLARunner
 seed: 7
 
 hydra:
@@ -54,7 +54,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
   hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
@@ -90,7 +90,7 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  _target_: dreamer_vla.models.world_model.rynn_dino_wm.RynnDinoWMWorldModel
+  _target_: dreamervla.models.world_model.rynn_dino_wm.RynnDinoWMWorldModel
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
@@ -118,7 +118,7 @@ world_model:
   freeze_backbone: true
 
 policy:
-  _target_: dreamer_vla.models.actor.RynnVLAActionHiddenActor
+  _target_: dreamervla.models.actor.RynnVLAActionHiddenActor
   hidden_dim: null
   action_hidden_dim: ${task.legacy_action_hidden.token_dim}
   action_dim: ${task.action_dim}
@@ -134,7 +134,7 @@ policy:
   init_action_head_ckpt: ${init.vla_ckpt_path}
 
 critic:
-  _target_: dreamer_vla.models.critic.twohot_critic.TwohotCritic
+  _target_: dreamervla.models.critic.twohot_critic.TwohotCritic
   hidden_dim: 1024
   critic_hidden_dim: 1024
   critic_layers: 3
@@ -146,10 +146,10 @@ critic:
   bin_max: 20.0
 
 algorithm:
-  # Mainline: PPO/WMPO-style imagined-trajectory actor update (dreamer_vla/algorithms/ppo/).
-  # The dreamer-style lambda-return AC path (dreamer_vla/algorithms/dreamer_vla.py:imagine_actor_critic_step)
+  # Mainline: PPO/WMPO-style imagined-trajectory actor update (dreamervla/algorithms/ppo/).
+  # The dreamer-style lambda-return AC path (dreamervla/algorithms/dreamervla.py:imagine_actor_critic_step)
   # is preserved as an optional fallback: set `update_type=dreamer` to use it.
-  # Dispatch is in dreamer_vla/runners/dreamer_vla_runner.py:~1105.
+  # Dispatch is in dreamervla/runners/dreamervla_runner.py:~1105.
   update_type: wmpo_ppo
   actor_input_mode: pooled
   rssm_action_scale: env

@@ -18,7 +18,7 @@ NUM_OPEN_LOOP_STEPS="${NUM_OPEN_LOOP_STEPS:-8}"
 ENV_IMG_RES="${ENV_IMG_RES:-256}"
 SEED="${SEED:-7}"
 OUTPUT_DIR="${OUTPUT_DIR:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"
-OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${DVLA_ROOT}/third_party/openvla-oft}"
+OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${DVLA_ROOT}/../WMPO/dependencies/openvla-oft}"
 
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
@@ -33,7 +33,7 @@ else
   PROPRIO_FLAG="--no-use-proprio"
 fi
 
-python -m dreamer_vla.diagnostics.eval_openvla_oft_libero \
+python -m dreamervla.diagnostics.eval_openvla_oft_libero \
   --ckpt "${CKPT}" \
   --suite "${SUITE}" \
   --task-ids "${TASK_IDS}" \

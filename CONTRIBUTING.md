@@ -65,7 +65,7 @@ Here documents the general guidelines that all contributors should follow to ens
   the `pyproject.toml` `dev` dependency group, including `ruff` and
   `pre-commit`. You can run checks locally with either command:
   ```bash
-  ruff check dreamer_vla tests
+  ruff check dreamervla tests
   pre-commit install --hook-type commit-msg
   pre-commit run --all-files
   ```
@@ -79,7 +79,7 @@ Here documents the general guidelines that all contributors should follow to ens
 
 * **Error Handling**: All assertions and exceptions should be accompanied with a clear and meaningful error messages. Empty messages and messages that reiterate the assertion itself like `xxx != yyy` is unacceptable. Add assertion to check for invalid inputs and states as early as possible, e.g., before performing division or array indexing.
 
-* **Logging**: Use logging instead of print statements for logging information, warnings, and errors. Training routes should use the runner logger / `dreamer_vla.utils.json_logger` path where available. For module-level logging, use the standard library logger:
+* **Logging**: Use logging instead of print statements for logging information, warnings, and errors. Training routes should use the runner logger / `dreamervla.utils.json_logger` path where available. For module-level logging, use the standard library logger:
   ```python
   import logging
 

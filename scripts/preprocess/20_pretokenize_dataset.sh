@@ -53,7 +53,7 @@ fi
 
 if [[ "${OVERWRITE}" == "1" || ! -d "${IMG_STATE_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${IMG_STATE_DIR}"
-  python -m dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
+  python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
     --libero_task_suite "${LIBERO_SUITE}" \
     --image_resolution "${IMAGE_RESOLUTION}" \
     --raw_data_dir "${HDF5_DIR}" \
@@ -62,7 +62,7 @@ else
   echo "[20_pretokenize_dataset] skip image/state/action: ${IMG_STATE_DIR}"
 fi
 
-python -m dreamer_vla.preprocess.action_state_model_conv_generation \
+python -m dreamervla.preprocess.action_state_model_conv_generation \
   --base_dir "${IMG_STATE_DIR}" \
   --his "${HIS}" \
   --len_action "${ACTION_HORIZON}" \
@@ -73,7 +73,7 @@ python -m dreamer_vla.preprocess.action_state_model_conv_generation \
   --output_dir "${CONVS_DIR}"
 
 if [[ "${OVERWRITE}" == "1" ]]; then
-  python -m dreamer_vla.preprocess.pretoken_state_action_model \
+  python -m dreamervla.preprocess.pretoken_state_action_model \
     --task "${TASK_LABEL}" \
     --resolution "${IMAGE_RESOLUTION}" \
     --with_state \
@@ -87,7 +87,7 @@ if [[ "${OVERWRITE}" == "1" ]]; then
     --gpu_devices "${GPUS}" \
     --overwrite
 else
-  python -m dreamer_vla.preprocess.pretoken_state_action_model \
+  python -m dreamervla.preprocess.pretoken_state_action_model \
     --task "${TASK_LABEL}" \
     --resolution "${IMAGE_RESOLUTION}" \
     --with_state \
@@ -103,13 +103,13 @@ fi
 
 bash "${DVLA_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
 
-python -m dreamer_vla.preprocess.concat_action_world_model_data_libero \
+python -m dreamervla.preprocess.concat_action_world_model_data_libero \
   --source_dir_patterns "libero_${TASK_LABEL}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
   --all_patterns "${ARTIFACT_NAME}_${SUFFIX}" \
   --processed_data_root "${PROCESSED_DATA_ROOT}"
 
 if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
-  python -m dreamer_vla.preprocess.validate_libero_data_prep \
+  python -m dreamervla.preprocess.validate_libero_data_prep \
     --data-root "${DVLA_DATA_ROOT}" \
     --processed-data-root "${PROCESSED_DATA_ROOT}" \
     --suites "${ARTIFACT_NAME}" \
@@ -136,7 +136,7 @@ prompt_text: 'Finish the task: {task_text}.'
 EOF
 
 if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
-  python -m dreamer_vla.preprocess.validate_libero_data_prep \
+  python -m dreamervla.preprocess.validate_libero_data_prep \
     --data-root "${DVLA_DATA_ROOT}" \
     --processed-data-root "${PROCESSED_DATA_ROOT}" \
     --suites "${ARTIFACT_NAME}" \

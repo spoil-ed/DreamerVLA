@@ -29,7 +29,7 @@ world_model:
   latent_source: ${task.legacy_input_tokens.latent_source}
 
 policy:
-  _target_: dreamer_vla.models.actor.LatentToActionHiddenActor
+  _target_: dreamervla.models.actor.LatentToActionHiddenActor
   hidden_dim: null
   source_token_count: ${task.legacy_input_tokens.token_count}
   source_token_dim: ${task.legacy_input_tokens.token_dim}

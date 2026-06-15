@@ -42,7 +42,7 @@ fi
 
 if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" ]]; then
-    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_HIDDEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
       --require-complete-attr \
@@ -57,7 +57,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
-    --module dreamer_vla.preprocess.preprocess_oft_action_hidden \
+    --module dreamervla.preprocess.preprocess_oft_action_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-action-dir "${OFT_HIDDEN_DIR}" \
     --skip-cd-sidecars \
@@ -70,7 +70,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --overwrite
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
-    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_INPUT_TOKEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
       --require-complete-attr \
@@ -85,7 +85,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_INPUT_TOKEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
-    --module dreamer_vla.preprocess.preprocess_oft_action_hidden \
+    --module dreamervla.preprocess.preprocess_oft_action_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-input-token-dir "${OFT_INPUT_TOKEN_DIR}" \
     --skip-cd-sidecars \
@@ -98,13 +98,13 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --overwrite
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
-    if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_HIDDEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
       --require-complete-attr \
       --require-config \
       --required-demo-dataset action_hidden_states && \
-       python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+       python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_INPUT_TOKEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
       --require-complete-attr \
@@ -119,7 +119,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}" "${OFT_INPUT_TOKEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
-    --module dreamer_vla.preprocess.preprocess_oft_action_hidden \
+    --module dreamervla.preprocess.preprocess_oft_action_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-action-dir "${OFT_HIDDEN_DIR}" \
     --out-input-token-dir "${OFT_INPUT_TOKEN_DIR}" \

@@ -9,7 +9,7 @@ SUITES="${SUITES:-${LIBERO_SUITES:-${TASK:-libero_goal}}}"
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
-python -m dreamer_vla.preprocess.validate_libero_data_prep \
+python -m dreamervla.preprocess.validate_libero_data_prep \
   --data-root "${DVLA_DATA_ROOT}" \
   --suites ${SUITES} \
   "$@"

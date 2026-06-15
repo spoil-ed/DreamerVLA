@@ -11,7 +11,7 @@ from AGENTS.md.
 ## Current Routing Snapshot
 
 - Launch the grouped Hydra entry with
-  `python -m dreamer_vla.train experiment=<name> task=<suite>`.
+  `python -m dreamervla.train experiment=<name> task=<suite>`.
 - Shell launchers such as `scripts/train_vla.sh`, `scripts/train_wm.sh`, and
   `scripts/train_dreamervla.sh` forward ordinary `key=value` overrides to the
   same grouped entry.
@@ -45,9 +45,9 @@ from AGENTS.md.
 - Do not add new top-level route YAMLs for grouped training; use
   `experiment=<name>` plus cohesive module groups.
 - Register non-Dreamer actor-update variants in
-  `dreamer_vla/algorithms/registry.py` instead of adding new training-loop
+  `dreamervla/algorithms/registry.py` instead of adding new training-loop
   dispatch branches.
-- Keep implementation code under `dreamer_vla/`; shell files stay thin,
+- Keep implementation code under `dreamervla/`; shell files stay thin,
   resumable launchers.
 - Prefer small, tested changes that preserve the Runner pattern and existing
   Hydra composition.

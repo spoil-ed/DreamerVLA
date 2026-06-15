@@ -31,7 +31,7 @@ def _load_libero_env_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "libero.libero.envs", fake_libero_envs)
 
     project_root = Path(__file__).resolve().parents[2]
-    module_path = project_root / "dreamer_vla" / "envs" / "libero_env.py"
+    module_path = project_root / "dreamervla" / "envs" / "libero_env.py"
     spec = importlib.util.spec_from_file_location("_test_libero_env", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

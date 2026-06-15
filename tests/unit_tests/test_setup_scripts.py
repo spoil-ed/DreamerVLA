@@ -42,9 +42,9 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         "scripts/eval_libero_vla.sh",
     ):
         text = (root / relpath).read_text(encoding="utf-8")
-        assert "dreamer_vla.launchers.train" in text, relpath
+        assert "dreamervla.launchers.train" in text, relpath
         assert "LIBERO_CONFIG_PATH=" not in text, relpath
-    launcher_text = (root / "dreamer_vla" / "launchers" / "train.py").read_text(
+    launcher_text = (root / "dreamervla" / "launchers" / "train.py").read_text(
         encoding="utf-8"
     )
     assert "LIBERO_CONFIG_PATH" in launcher_text
@@ -84,7 +84,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert all(step.is_file() for step in download_steps)
 
     install_text = install.read_text(encoding="utf-8")
-    assert "dreamer_vla.launchers.workflow" in install_text
+    assert "dreamervla.launchers.workflow" in install_text
     assert "--config-name install" in install_text
     assert "INSTALL_STEPS" not in install_text
     assert "run_step" not in install_text
@@ -115,7 +115,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "dlimp_openvla" in step_text
     assert "transformers-openvla-oft" in step_text
     assert "egl_probe" in step_text
-    verify_text = (root / "dreamer_vla" / "diagnostics" / "verify_install.py").read_text(
+    verify_text = (root / "dreamervla" / "diagnostics" / "verify_install.py").read_text(
         encoding="utf-8"
     )
     assert "expected_third_party_imports" in verify_text
@@ -125,7 +125,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "third_party/mimicgen" in step_text
 
     download_text = download.read_text(encoding="utf-8")
-    assert "dreamer_vla.launchers.workflow" in download_text
+    assert "dreamervla.launchers.workflow" in download_text
     assert "--config-name download" in download_text
     assert "DOWNLOAD_STEPS" not in download_text
     assert "DOWNLOAD_ONLY" not in download_text
@@ -159,7 +159,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
 
 def test_script_orchestration_is_hydra_centered() -> None:
     root = _project_root()
-    workflow = root / "dreamer_vla" / "launchers" / "workflow.py"
+    workflow = root / "dreamervla" / "launchers" / "workflow.py"
     configs_dir = root / "configs" / "scripts"
     top_level = {
         "scripts/install_env.sh": "install",
@@ -177,7 +177,7 @@ def test_script_orchestration_is_hydra_centered() -> None:
 
     for relpath, config_name in top_level.items():
         text = (root / relpath).read_text(encoding="utf-8")
-        assert "dreamer_vla.launchers.workflow" in text, relpath
+        assert "dreamervla.launchers.workflow" in text, relpath
         assert f"--config-name {config_name}" in text, relpath
         assert "run_step" not in text, relpath
         assert "_STEPS=(" not in text, relpath
@@ -412,7 +412,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     python_stub.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamer_vla.launchers.workflow' ]]; then\n"
+        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamervla.launchers.workflow' ]]; then\n"
         "  exec \"${REAL_PYTHON}\" \"$@\"\n"
         "fi\n"
         "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n",
@@ -480,21 +480,21 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
         "  prev=\"${arg}\"\n"
         "done\n"
         "case \"${module}\" in\n"
-        "  dreamer_vla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op)\n"
+        "  dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op)\n"
         "    prev=''\n"
         "    for arg in \"$@\"; do\n"
         "      if [[ \"${prev}\" == '--libero_target_dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
         "      prev=\"${arg}\"\n"
         "    done\n"
         "    ;;\n"
-        "  dreamer_vla.preprocess.filter_marked_libero_hdf5)\n"
+        "  dreamervla.preprocess.filter_marked_libero_hdf5)\n"
         "    prev=''\n"
         "    for arg in \"$@\"; do\n"
         "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
         "      prev=\"${arg}\"\n"
         "    done\n"
         "    ;;\n"
-        "  dreamer_vla.preprocess.preprocess_remaining_steps_reward)\n"
+        "  dreamervla.preprocess.preprocess_remaining_steps_reward)\n"
         "    prev=''\n"
         "    for arg in \"$@\"; do\n"
         "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
@@ -604,7 +604,7 @@ def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) ->
     python_stub.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamer_vla.launchers.workflow' ]]; then\n"
+        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamervla.launchers.workflow' ]]; then\n"
         "  exec \"${REAL_PYTHON}\" \"$@\"\n"
         "fi\n"
         "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n"
@@ -616,10 +616,10 @@ def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) ->
         "  prev=\"${arg}\"\n"
         "done\n"
         "case \"${module}\" in\n"
-        "  dreamer_vla.preprocess.pretoken_state_action_model) exit 42 ;;\n"
-        "  dreamer_vla.preprocess.validate_libero_data_prep) exit 77 ;;\n"
-        "  dreamer_vla.preprocess.concat_action_world_model_data_libero) exit 0 ;;\n"
-        "  dreamer_vla.preprocess.concat_record) exit 0 ;;\n"
+        "  dreamervla.preprocess.pretoken_state_action_model) exit 42 ;;\n"
+        "  dreamervla.preprocess.validate_libero_data_prep) exit 77 ;;\n"
+        "  dreamervla.preprocess.concat_action_world_model_data_libero) exit 0 ;;\n"
+        "  dreamervla.preprocess.concat_record) exit 0 ;;\n"
         "  *) exit 0 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -649,8 +649,8 @@ def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) ->
 
     calls = log_path.read_text(encoding="utf-8").splitlines()
     assert result.returncode == 1
-    assert any("dreamer_vla.preprocess.pretoken_state_action_model" in call for call in calls)
-    assert not any("dreamer_vla.preprocess.validate_libero_data_prep" in call for call in calls)
+    assert any("dreamervla.preprocess.pretoken_state_action_model" in call for call in calls)
+    assert not any("dreamervla.preprocess.validate_libero_data_prep" in call for call in calls)
     assert "[workflow:preprocess_all] run 20_pretokenize_dataset" in result.stdout
     assert "returned non-zero exit status 42" in result.stderr
 
@@ -662,7 +662,7 @@ def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     assert "stage 1: replay and mark no-ops" in setup
     assert "--keep-noops" in setup
     assert "stage 2: filter marked no-ops" in setup
-    assert "dreamer_vla.preprocess.filter_marked_libero_hdf5" in setup
+    assert "dreamervla.preprocess.filter_marked_libero_hdf5" in setup
     assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256" in setup
     assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256" in setup
     removed_reward_dir = "${TASK}_" + "no_noops_t_256_" + "pi" + "06"
@@ -748,7 +748,7 @@ def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
         for path in (root / "scripts").rglob("*.sh")
         if "archive" not in path.relative_to(root / "scripts").parts
     )
-    path_script_re = re.compile(r"dreamer_vla/[^\s\"']+\.py")
+    path_script_re = re.compile(r"dreamervla/[^\s\"']+\.py")
     offenders = {
         str(path.relative_to(root)): path_script_re.findall(path.read_text(encoding="utf-8"))
         for path in active_shells

@@ -28,13 +28,13 @@ Use `logger=wandb` to send main-process metrics to W&B online mode, or
 run files under `${training.out_dir}/log/wandb`:
 
 ```bash
-python -m dreamer_vla.train experiment=world_model_dinowm_chunk logger=wandb
-python -m dreamer_vla.train experiment=world_model_dinowm_chunk logger=tensorboard_wandb
+python -m dreamervla.train experiment=world_model_dinowm_chunk logger=wandb
+python -m dreamervla.train experiment=world_model_dinowm_chunk logger=tensorboard_wandb
 ```
 
-Before a runner is instantiated, `dreamer_vla.config.validate_cfg` performs
+Before a runner is instantiated, `dreamervla.config.validate_cfg` performs
 RLinf-style lightweight checks: logger backend names, explicit resume paths,
-actor-update route names from `dreamer_vla.algorithms.registry`, sidecar route
+actor-update route names from `dreamervla.algorithms.registry`, sidecar route
 consistency, chunk / horizon compatibility, optional path existence via
 `validation.require_existing_paths=true`, and any configured
 `training.global_batch_size` divisibility by `WORLD_SIZE *

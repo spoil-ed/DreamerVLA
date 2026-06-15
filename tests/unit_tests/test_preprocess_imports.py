@@ -4,7 +4,7 @@ import importlib
 
 
 def test_preprocess_item_processor_imports_from_preprocess_helpers() -> None:
-    module = importlib.import_module("dreamer_vla.preprocess.item_processor")
+    module = importlib.import_module("dreamervla.preprocess.item_processor")
 
     assert hasattr(module, "FlexARItemProcessorAction")
     assert hasattr(module, "FlexARItemProcessorActionState")

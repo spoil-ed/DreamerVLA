@@ -7,19 +7,19 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
-from dreamer_vla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
+from dreamervla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
     LIBEROPixelRynnHiddenSequenceDataset,
 )
-from dreamer_vla.models.actor import (
+from dreamervla.models.actor import (
     LatentToActionHiddenActor,
     OpenVLADiscreteTokenActor,
     RynnVLAActionHiddenActor,
     VLAActionHeadActor,
 )
-from dreamer_vla.models.reward import LatentSuccessClassifier
-from dreamer_vla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
-from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner
-from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+from dreamervla.models.reward import LatentSuccessClassifier
+from dreamervla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
+from dreamervla.runners.dreamervla_runner import DreamerVLARunner
+from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
 
 
 def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:

@@ -7,7 +7,7 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from dreamer_vla.config import validate_cfg
+from dreamervla.config import validate_cfg
 
 
 def test_validate_cfg_rejects_unknown_logger_backend() -> None:
@@ -130,7 +130,7 @@ def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
 
 
 def test_train_run_validates_config_before_runner_setup(monkeypatch) -> None:
-    import dreamer_vla.train as train
+    import dreamervla.train as train
 
     events: list[str] = []
 

@@ -83,7 +83,7 @@ def _write_demo_file(path: Path, num_demos: int = 3, length: int = 2) -> None:
 
 
 def test_openvla_oft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -> None:
-    from dreamer_vla.dataset.openvla_oft_hdf5_dataset import OpenVLAOFTHDF5Dataset
+    from dreamervla.dataset.openvla_oft_hdf5_dataset import OpenVLAOFTHDF5Dataset
 
     _write_demo_file(tmp_path / "task_alpha_demo.hdf5")
     _write_demo_file(tmp_path / "task_beta_demo.hdf5")
@@ -126,7 +126,7 @@ def test_openvla_oft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Pat
 
 
 def test_openvla_oft_component_save_allows_lm_head_mode_without_action_head(tmp_path: Path) -> None:
-    from dreamer_vla.runners.openvla_oft_runner import OpenVLAOFTTrainingRunner
+    from dreamervla.runners.openvla_oft_runner import OpenVLAOFTTrainingRunner
 
     workspace = OpenVLAOFTTrainingRunner.__new__(OpenVLAOFTTrainingRunner)
     workspace._output_dir = str(tmp_path)
@@ -146,7 +146,7 @@ def test_openvla_oft_component_save_allows_lm_head_mode_without_action_head(tmp_
 
 
 def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> None:
-    from dreamer_vla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
 
     policy = OpenVLAOFTPolicy.from_modules(
         vla=_TinyForwardVLA(),

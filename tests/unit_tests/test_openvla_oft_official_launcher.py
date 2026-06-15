@@ -27,5 +27,5 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     assert '--task-ids "${TASK_IDS}"' in text
     assert "--no-use-proprio" in text
     assert "--policy-mode" in text
-    assert 'OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${DVLA_ROOT}/third_party/openvla-oft}"' in text
-    assert "python -m dreamer_vla.diagnostics.eval_openvla_oft_libero" in text
+    assert 'OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${DVLA_ROOT}/../WMPO/dependencies/openvla-oft}"' in text
+    assert "python -m dreamervla.diagnostics.eval_openvla_oft_libero" in text

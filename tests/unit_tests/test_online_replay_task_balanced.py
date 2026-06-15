@@ -4,7 +4,7 @@ import random
 
 import numpy as np
 
-from dreamer_vla.runners.online_replay import (
+from dreamervla.runners.online_replay import (
     OnlineReplay,
     pack_replay_task_stats_for_ddp,
     unpack_replay_task_stats_from_ddp,

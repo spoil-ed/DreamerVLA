@@ -36,7 +36,7 @@ bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal
 ## 仓库结构
 
 ```text
-dreamer_vla/        Python 包：runner、model、dataset、algorithm、env
+dreamervla/        Python 包：runner、model、dataset、algorithm、env
 configs/            Hydra route 和 LIBERO task 配置
 scripts/            install、download、preprocess、train、eval 的 shell 入口
 tests/              单元测试和 smoke 测试

@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from dreamer_vla.algorithms.ppo.grpo import _group_advantage
+from dreamervla.algorithms.ppo.grpo import _group_advantage
 
 
 def test_group_advantage_raises_on_misaligned_batch():

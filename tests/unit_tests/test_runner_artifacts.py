@@ -5,7 +5,7 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from dreamer_vla.runners.base_runner import BaseRunner
+from dreamervla.runners.base_runner import BaseRunner
 
 
 class _ConcreteRunner(BaseRunner):

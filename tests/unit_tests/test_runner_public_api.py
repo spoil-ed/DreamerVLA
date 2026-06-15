@@ -80,7 +80,7 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
 
 
 def test_runner_public_api_exports_route_specific_names() -> None:
-    import dreamer_vla.runners as runners
+    import dreamervla.runners as runners
 
     expected = {
         "ActionHiddenWMRunner",
@@ -109,13 +109,13 @@ def test_runner_public_api_exports_route_specific_names() -> None:
 
 
 def test_runner_directory_contains_route_specific_runners() -> None:
-    runner_dir = Path(__file__).resolve().parents[2] / "dreamer_vla" / "runners"
+    runner_dir = Path(__file__).resolve().parents[2] / "dreamervla" / "runners"
     top_level_python_files = {path.name for path in runner_dir.glob("*.py")}
     assert {
         "__init__.py",
         "base_runner.py",
         "chameleon_latent_action_wm_runner.py",
-        "dreamer_vla_runner.py",
+        "dreamervla_runner.py",
         "dreamerv3_pixel_runner.py",
         "dreamerv3_token_runner.py",
         "eval_libero_vla_runner.py",
@@ -137,7 +137,7 @@ def test_removed_legacy_compatibility_shims_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
     assert not (
-        project_root / "dreamer_vla" / "dataset" / "pretokenize_sequence_dataset.py"
+        project_root / "dreamervla" / "dataset" / "pretokenize_sequence_dataset.py"
     ).exists()
     assert not (project_root / "scripts" / "pretokenize_train_wm.sh").exists()
 
@@ -145,54 +145,54 @@ def test_removed_legacy_compatibility_shims_are_absent() -> None:
 def test_removed_route_files_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
     removed_files = {
-        "configs/dreamer_vla_libero_goal.yaml",
-        "configs/dreamer_vla_libero_goal_dreamerv3_pixel_actor.yaml",
-        "configs/dreamer_vla_libero_goal_dreamerv3_pixel_vlaactor.yaml",
-        "configs/dreamer_vla_libero_goal_dreamerv3_token_actor.yaml",
-        "configs/dreamer_vla_libero_goal_dreamerv3_token_actor_epoch6.yaml",
-        "configs/dreamer_vla_libero_goal_rynn_pixel_precomputed_actor.yaml",
-        "configs/dreamer_vla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml",
+        "configs/dreamervla_libero_goal.yaml",
+        "configs/dreamervla_libero_goal_dreamerv3_pixel_actor.yaml",
+        "configs/dreamervla_libero_goal_dreamerv3_pixel_vlaactor.yaml",
+        "configs/dreamervla_libero_goal_dreamerv3_token_actor.yaml",
+        "configs/dreamervla_libero_goal_dreamerv3_token_actor_epoch6.yaml",
+        "configs/dreamervla_libero_goal_rynn_pixel_precomputed_actor.yaml",
+        "configs/dreamervla_libero_goal_rynn_pixel_precomputed_vlaactor.yaml",
         "configs/pretokenize_wm_libero_goal.yaml",
         "configs/pretokenize_wm_libero_goal_transdreamer.yaml",
         "configs/pretokenize_wm_libero_goal_warmup.yaml",
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal.yaml",
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml",
         "configs/semantic_bottleneck_wm_libero_goal.yaml",
-        "dreamer_vla/algorithms/dino_wmpo.py",
-        "dreamer_vla/algorithms/dino_wmpo_chunk.py",
+        "dreamervla/algorithms/dino_wmpo.py",
+        "dreamervla/algorithms/dino_wmpo_chunk.py",
         "scripts/diagnose_wm.sh",
         "scripts/eval_wm.sh",
         "scripts/prepare_latent_data.sh",
         "scripts/run_rynn_meanpool_offline_long.sh",
         "scripts/run_rynn_meanpool_online_worker.sh",
-        "scripts/train_dreamer_vla_pixel.sh",
-        "scripts/train_dreamer_vla_rynn_pixel.sh",
+        "scripts/train_dreamervla_pixel.sh",
+        "scripts/train_dreamervla_rynn_pixel.sh",
         "scripts/train_online_rynn_meanpool_dreamer_actor.py",
         "scripts/train_rynn_backbone_dreamerv3_wm.sh",
         "scripts/train_semantic_bottleneck_wm.sh",
-        "dreamer_vla/cli/diagnose_action_sensitivity.py",
-        "dreamer_vla/cli/diagnose_decoder_zh.py",
-        "dreamer_vla/cli/diagnose_wm.py",
-        "dreamer_vla/cli/diagnose_wm_checklist.py",
-        "dreamer_vla/cli/diagnose_wm_collapse.py",
-        "dreamer_vla/cli/diagnose_wm_layers.py",
-        "dreamer_vla/cli/eval_embedding_distribution.py",
-        "dreamer_vla/cli/eval_wm.py",
-        "dreamer_vla/cli/train_pure_vae.py",
-        "dreamer_vla/models/world_model/causal_transformer.py",
-        "dreamer_vla/models/world_model/causal_transformer_v2.py",
-        "dreamer_vla/models/world_model/image_codec.py",
-        "dreamer_vla/models/world_model/semantic_bottleneck.py",
-        "dreamer_vla/models/world_model/token_io.py",
-        "dreamer_vla/models/world_model/transdreamer_original.py",
-        "dreamer_vla/models/world_model/transdreamer_transformer.py",
-        "dreamer_vla/models/world_model/tssm.py",
-        "dreamer_vla/models/world_model/tssm_discrete.py",
-        "dreamer_vla/models/vla_actor.py",
-        "dreamer_vla/models/vla_policy.py",
-        "dreamer_vla/runners/pretokenize_sft_runner.py",
-        "dreamer_vla/runners/pretokenize_wm_runner.py",
-        "dreamer_vla/runners/semantic_bottleneck_wm_runner.py",
+        "dreamervla/cli/diagnose_action_sensitivity.py",
+        "dreamervla/cli/diagnose_decoder_zh.py",
+        "dreamervla/cli/diagnose_wm.py",
+        "dreamervla/cli/diagnose_wm_checklist.py",
+        "dreamervla/cli/diagnose_wm_collapse.py",
+        "dreamervla/cli/diagnose_wm_layers.py",
+        "dreamervla/cli/eval_embedding_distribution.py",
+        "dreamervla/cli/eval_wm.py",
+        "dreamervla/cli/train_pure_vae.py",
+        "dreamervla/models/world_model/causal_transformer.py",
+        "dreamervla/models/world_model/causal_transformer_v2.py",
+        "dreamervla/models/world_model/image_codec.py",
+        "dreamervla/models/world_model/semantic_bottleneck.py",
+        "dreamervla/models/world_model/token_io.py",
+        "dreamervla/models/world_model/transdreamer_original.py",
+        "dreamervla/models/world_model/transdreamer_transformer.py",
+        "dreamervla/models/world_model/tssm.py",
+        "dreamervla/models/world_model/tssm_discrete.py",
+        "dreamervla/models/vla_actor.py",
+        "dreamervla/models/vla_policy.py",
+        "dreamervla/runners/pretokenize_sft_runner.py",
+        "dreamervla/runners/pretokenize_wm_runner.py",
+        "dreamervla/runners/semantic_bottleneck_wm_runner.py",
         "tests/test_semantic_bottleneck_world_model.py",
     }
 
@@ -201,35 +201,35 @@ def test_removed_route_files_are_absent() -> None:
 
 
 def test_base_dataset_no_longer_exposes_spec_alias() -> None:
-    from dreamer_vla.dataset.base_dataset import BaseDataset
+    from dreamervla.dataset.base_dataset import BaseDataset
 
     assert not hasattr(BaseDataset, "spec")
 
 
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
-        "vla_rynnvla_action_head": "dreamer_vla.runners.VLASFTRunner",
-        "vla_sft_one_trajectory": "dreamer_vla.runners.VLASFTRunner",
-        "world_model_dinowm_chunk": "dreamer_vla.runners.RynnDinoWMRunner",
-        "world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.RynnDinoWMRunner",
-        "world_model_dinowm_step": "dreamer_vla.runners.RynnDinoWMRunner",
-        "oft_world_model_dinowm_chunk": "dreamer_vla.runners.OFTDinoWMRunner",
-        "oft_discrete_token_world_model_dinowm_chunk": "dreamer_vla.runners.OFTDinoWMRunner",
-        "oft_world_model_dinowm_chunk_input_tokens": "dreamer_vla.runners.OFTDinoWMRunner",
-        "dreamervla_rynn_dino_wm_actor_critic": "dreamer_vla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": "dreamer_vla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamer_vla.runners.JointDreamerVLARunner",
-        "eval_libero_vla": "dreamer_vla.runners.LiberoEvalRunner",
-        "openvla_oft_hdf5": "dreamer_vla.runners.OpenVLAOFTRunner",
-        "openvla_oft_hdf5_one_trajectory": "dreamer_vla.runners.OpenVLAOFTRunner",
-        "openvla_oft_hdf5_one_trajectory_l1": "dreamer_vla.runners.OpenVLAOFTRunner",
-        "latent_classifier_libero_goal_chunk": "dreamer_vla.runners.LatentClassifierRunner",
-        "latent_classifier_libero_goal_chunk_input_tokens": "dreamer_vla.runners.LatentClassifierRunner",
-        "oft_latent_classifier_chunk": "dreamer_vla.runners.LatentClassifierRunner",
-        "oft_latent_classifier_chunk_input_tokens": "dreamer_vla.runners.LatentClassifierRunner",
+        "vla_rynnvla_action_head": "dreamervla.runners.VLASFTRunner",
+        "vla_sft_one_trajectory": "dreamervla.runners.VLASFTRunner",
+        "world_model_dinowm_chunk": "dreamervla.runners.RynnDinoWMRunner",
+        "world_model_dinowm_chunk_input_tokens": "dreamervla.runners.RynnDinoWMRunner",
+        "world_model_dinowm_step": "dreamervla.runners.RynnDinoWMRunner",
+        "oft_world_model_dinowm_chunk": "dreamervla.runners.OFTDinoWMRunner",
+        "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.OFTDinoWMRunner",
+        "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.OFTDinoWMRunner",
+        "dreamervla_rynn_dino_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "eval_libero_vla": "dreamervla.runners.LiberoEvalRunner",
+        "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
+        "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
+        "openvla_oft_hdf5_one_trajectory_l1": "dreamervla.runners.OpenVLAOFTRunner",
+        "latent_classifier_libero_goal_chunk": "dreamervla.runners.LatentClassifierRunner",
+        "latent_classifier_libero_goal_chunk_input_tokens": "dreamervla.runners.LatentClassifierRunner",
+        "oft_latent_classifier_chunk": "dreamervla.runners.LatentClassifierRunner",
+        "oft_latent_classifier_chunk_input_tokens": "dreamervla.runners.LatentClassifierRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -261,11 +261,11 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
             extra_overrides=["logger=wandb"],
         )
 
-    assert default_cfg.runner.logger.project_name == "dreamer_vla"
+    assert default_cfg.runner.logger.project_name == "dreamervla"
     assert default_cfg.runner.logger.logger_backends == ["tensorboard"]
     assert default_cfg.runner.logger.log_path == f"{default_cfg.training.out_dir}/log"
 
-    assert wandb_cfg.runner.logger.project_name == "dreamer_vla"
+    assert wandb_cfg.runner.logger.project_name == "dreamervla"
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
     assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
     assert wandb_cfg.runner.logger.wandb_mode == "online"
@@ -295,7 +295,7 @@ def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
             "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome"
         )
 
-    assert discrete.policy._target_ == "dreamer_vla.models.actor.OpenVLADiscreteTokenActor"
+    assert discrete.policy._target_ == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
     assert discrete.policy.head_type == "oft_discrete_token"
     assert discrete.policy.init_lm_head_ckpt == discrete.task.openvla_oft.ckpt_path
     assert discrete.task.openvla_oft.expected_action_head_type == "oft_discrete_token"
@@ -347,11 +347,11 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
     assert oft_wm.world_model.token_dim == 4096
     assert "input_token" in oft_wm.dataset.hidden_dir
 
-    assert rynn_dreamer.policy._target_ == "dreamer_vla.models.actor.LatentToActionHiddenActor"
+    assert rynn_dreamer.policy._target_ == "dreamervla.models.actor.LatentToActionHiddenActor"
     assert rynn_dreamer.policy.source_token_count == 2048
     assert rynn_dreamer.policy.action_hidden_dim == 1024
 
-    assert oft_dreamer.policy._target_ == "dreamer_vla.models.actor.LatentToActionHiddenActor"
+    assert oft_dreamer.policy._target_ == "dreamervla.models.actor.LatentToActionHiddenActor"
     assert oft_dreamer.policy.source_token_count == 512
     assert oft_dreamer.policy.action_hidden_dim == 4096
 
@@ -362,20 +362,20 @@ def test_train_config_resolves_public_default_experiment() -> None:
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
-        assert cfg._target_ == "dreamer_vla.runners.RynnDinoWMRunner"
+        assert cfg._target_ == "dreamervla.runners.RynnDinoWMRunner"
         assert (
             cfg.dataset._target_
-            == "dreamer_vla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+            == "dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
         )
         assert (
             cfg.world_model._target_
-            == "dreamer_vla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel"
+            == "dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel"
         )
         assert "dinowm_chunk" in cfg.training.out_dir
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
-    from dreamer_vla.train import _parse_hydra_like_args
+    from dreamervla.train import _parse_hydra_like_args
 
     config_name, overrides = _parse_hydra_like_args([])
     assert config_name == "train"
@@ -383,7 +383,7 @@ def test_cli_default_uses_current_public_runner_target() -> None:
 
 
 def test_implementation_runner_classes_are_not_public_aliases() -> None:
-    import dreamer_vla.runners as runners
+    import dreamervla.runners as runners
 
     implementation_names = {
         "ChameleonLatentActionWMRunner",
@@ -401,7 +401,7 @@ def test_implementation_runner_classes_are_not_public_aliases() -> None:
 
 
 def test_removed_runner_routes_are_not_importable() -> None:
-    import dreamer_vla.runners as runners
+    import dreamervla.runners as runners
 
     removed_public_names = {
         "PooledHiddenWMRunner",
@@ -417,8 +417,8 @@ def test_removed_runner_routes_are_not_importable() -> None:
 
 
 def test_world_model_package_exposes_only_retained_architectures() -> None:
-    import dreamer_vla.models as models
-    import dreamer_vla.models.world_model as world_model
+    import dreamervla.models as models
+    import dreamervla.models.world_model as world_model
 
     removed_world_models = {
         "CausalTransformerCell",
@@ -437,7 +437,7 @@ def test_world_model_package_exposes_only_retained_architectures() -> None:
 
 
 def test_models_package_exports_fail_fast_symbols() -> None:
-    import dreamer_vla.models as models
+    import dreamervla.models as models
 
     for name in ("Critic", "VLAPolicy", "OFTDinoWMWorldModel", "RynnDinoWMWorldModel"):
         assert name in models.__all__
@@ -445,7 +445,7 @@ def test_models_package_exports_fail_fast_symbols() -> None:
 
 
 def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None:
-    import dreamer_vla.runners as runners
+    import dreamervla.runners as runners
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     config_names = sorted(
@@ -460,7 +460,7 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
             target = cfg.get("_target_")
             if target is not None:
                 cls = get_class(str(target))
-                assert cls.__module__ == "dreamer_vla.runners"
+                assert cls.__module__ == "dreamervla.runners"
                 assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
                 assert "workspace" not in cfg
         for experiment_name in EXPERIMENT_MODULES:
@@ -468,6 +468,6 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
             target = cfg.get("_target_")
             assert target is not None
             cls = get_class(str(target))
-            assert cls.__module__ == "dreamer_vla.runners"
+            assert cls.__module__ == "dreamervla.runners"
             assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
             assert "workspace" not in cfg

@@ -17,7 +17,7 @@ task:
     token_dim: 4096
     chunk_size: 8
     time_horizon: 8
-    actor_target: dreamer_vla.models.actor.OpenVLADiscreteTokenActor
+    actor_target: dreamervla.models.actor.OpenVLADiscreteTokenActor
     actor_head_type: oft_discrete_token
     actor_adapter_type: residual_mlp
     actor_adapter_hidden_dim: 1024

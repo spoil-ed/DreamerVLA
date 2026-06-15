@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dreamer-vla-train = "dreamer_vla.train:main"
+dreamer-vla-train = "dreamervla.train:main"
 
 [dependency-groups]
 dev = [
@@ -24,7 +24,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["dreamer_vla*"]
+include = ["dreamervla*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests"]

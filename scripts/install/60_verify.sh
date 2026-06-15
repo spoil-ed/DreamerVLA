@@ -16,4 +16,4 @@ conda activate "${CONDA_ENV_NAME}"
 
 echo "[install:60_verify] checking imports in conda env=${CONDA_ENV_NAME}"
 echo "[install:60_verify] verifying imports and CUDA visibility"
-python -m dreamer_vla.diagnostics.verify_install
+python -m dreamervla.diagnostics.verify_install

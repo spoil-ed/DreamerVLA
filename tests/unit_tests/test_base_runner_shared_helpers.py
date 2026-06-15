@@ -9,8 +9,8 @@ from omegaconf import OmegaConf
 from torch import nn
 from torch.utils.data import Dataset, Sampler
 
-from dreamer_vla.runners.base_runner import BaseRunner
-from dreamer_vla.utils.hf_checkpoint import (
+from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_hf_prefixed_tensors,
     resolve_hf_checkpoint_dir,
@@ -250,12 +250,12 @@ def test_base_runner_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
 
 
 def test_vla_family_runners_inherit_shared_base_helpers() -> None:
-    from dreamer_vla.runners.chameleon_latent_action_wm_runner import (
+    from dreamervla.runners.chameleon_latent_action_wm_runner import (
         ChameleonLatentActionWMRunner,
     )
-    from dreamer_vla.runners.dreamer_vla_runner import DreamerVLARunner
-    from dreamer_vla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
-    from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runners.dreamervla_runner import DreamerVLARunner
+    from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 
     for cls in (
         PretokenizeVLARunner,
@@ -280,7 +280,7 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
 
 
 def test_vla_hf_sidecar_strips_encoder_backbone_prefix() -> None:
-    from dreamer_vla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 
     state = PretokenizeVLARunner._extract_backbone_state_for_hf(
         {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamer_vla.utils.policy_chunk_queue import PolicyChunkActionQueue
+from dreamervla.utils.policy_chunk_queue import PolicyChunkActionQueue
 
 
 def test_policy_chunk_queue_reuses_chunk_actions_before_resampling() -> None:

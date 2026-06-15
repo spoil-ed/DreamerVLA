@@ -3,14 +3,14 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from dreamer_vla.models.world_model.dreamerv3_torch import _act
-from dreamer_vla.models.world_model.tssm_rynn_backbone_world_model import (
+from dreamervla.models.world_model.dreamerv3_torch import _act
+from dreamervla.models.world_model.tssm_rynn_backbone_world_model import (
     TSSMRynnBackboneWorldModel,
 )
-from dreamer_vla.models.world_model.tssm_token_rynn_backbone_world_model import (
+from dreamervla.models.world_model.tssm_token_rynn_backbone_world_model import (
     TSSMTokenRynnBackboneWorldModel,
 )
-from dreamer_vla.models.world_model.tssm_torch import (
+from dreamervla.models.world_model.tssm_torch import (
     TSSMDynamic,
     TSSMTokenDynamic,
 )

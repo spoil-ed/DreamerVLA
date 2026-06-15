@@ -47,7 +47,7 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${INPUT_TOKEN_HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
-    --module dreamer_vla.preprocess.preprocess_rynn_pixel_hidden \
+    --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-dir "${INPUT_TOKEN_HIDDEN_DIR}" \
     --model-path "${VLA_CKPT}" \

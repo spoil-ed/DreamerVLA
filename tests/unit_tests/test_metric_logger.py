@@ -6,8 +6,8 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
-from dreamer_vla.runners.base_runner import BaseRunner
-from dreamer_vla.utils.metric_logger import MetricLogger
+from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.utils.metric_logger import MetricLogger
 
 
 class _ConcreteRunner(BaseRunner):
@@ -41,7 +41,7 @@ def test_metric_logger_writes_tensorboard_run_and_config(tmp_path: Path) -> None
             "runner": {
                 "logger": {
                     "log_path": str(log_root),
-                    "project_name": "dreamer_vla",
+                    "project_name": "dreamervla",
                     "experiment_name": "unit",
                     "logger_backends": ["tensorboard"],
                 }
@@ -106,7 +106,7 @@ def test_metric_logger_passes_online_mode_to_wandb_init(
             "runner": {
                 "logger": {
                     "log_path": str(log_root),
-                    "project_name": "dreamer_vla",
+                    "project_name": "dreamervla",
                     "experiment_name": "unit-online",
                     "logger_backends": ["wandb"],
                     "wandb_mode": "online",
@@ -124,7 +124,7 @@ def test_metric_logger_passes_online_mode_to_wandb_init(
     assert settings_calls == [{"https_proxy": "http://proxy.local:8080"}]
     assert calls == [
         {
-            "project": "dreamer_vla",
+            "project": "dreamervla",
             "name": "unit-online",
             "config": OmegaConf.to_container(cfg, resolve=True),
             "settings": {"settings": {"https_proxy": "http://proxy.local:8080"}},

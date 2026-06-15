@@ -10,4 +10,4 @@ TOKENS_DIR="${TOKENS_DIR:-${DVLA_DATA_ROOT}/processed_data/${TASK}/tokens}"
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
-python -m dreamer_vla.preprocess.concat_record_libero --base-dir "${TOKENS_DIR}"
+python -m dreamervla.preprocess.concat_record_libero --base-dir "${TOKENS_DIR}"

@@ -52,7 +52,7 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
 fi
 
 if [[ "${OVERWRITE}" != "1" && -d "${HIDDEN_DIR}" ]]; then
-  if python -m dreamer_vla.preprocess.check_artifacts hdf5-dir \
+  if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
     --dir "${HIDDEN_DIR}" \
     --reference-dir "${REWARD_DIR}" \
     --require-complete-attr \
@@ -67,7 +67,7 @@ else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
-    --module dreamer_vla.preprocess.preprocess_rynn_pixel_hidden \
+    --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
     --hdf5-dir "${REWARD_DIR}" \
     --out-dir "${HIDDEN_DIR}" \
     --model-path "${VLA_MODEL_PATH}" \

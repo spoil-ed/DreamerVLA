@@ -1,7 +1,7 @@
 # Script Registry
 
 `scripts/` contains resumable shell launchers only. Python implementation code
-lives under the `dreamer_vla` package and is launched with `python -m`.
+lives under the `dreamervla` package and is launched with `python -m`.
 
 ## Main Path
 
@@ -62,12 +62,12 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.launchers.workflow` | Hydra workflow runner for install/download/preprocess shell steps |
-| `dreamer_vla.preprocess.filter_marked_libero_hdf5` | Filter no-op marked HDF5 files |
-| `dreamer_vla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
-| `dreamer_vla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
-| `dreamer_vla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
-| `dreamer_vla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
+| `dreamervla.launchers.workflow` | Hydra workflow runner for install/download/preprocess shell steps |
+| `dreamervla.preprocess.filter_marked_libero_hdf5` | Filter no-op marked HDF5 files |
+| `dreamervla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
+| `dreamervla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
+| `dreamervla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
+| `dreamervla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
 
 Common launcher flags stay intentionally small:
 
@@ -138,9 +138,9 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.diagnostics.eval_openvla_oft_libero` | OpenVLA-OFT eval implementation |
-| `dreamer_vla.diagnostics.openvla_oft_obs_action_policy` | OpenVLA-OFT policy adapter |
-| `dreamer_vla.diagnostics.eval_frozen_wm_actor` | Frozen-WM actor evaluation |
+| `dreamervla.diagnostics.eval_openvla_oft_libero` | OpenVLA-OFT eval implementation |
+| `dreamervla.diagnostics.openvla_oft_obs_action_policy` | OpenVLA-OFT policy adapter |
+| `dreamervla.diagnostics.eval_frozen_wm_actor` | Frozen-WM actor evaluation |
 
 ## Advanced Training
 
@@ -148,10 +148,10 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.runners.online_dreamervla` | Online WMPO experiment loop |
-| `dreamer_vla.runners.online_dreamervla_multiproc` | Multi-process online collector variant |
-| `dreamer_vla.runners.frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
-| `dreamer_vla.runners.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
+| `dreamervla.runners.online_dreamervla` | Online WMPO experiment loop |
+| `dreamervla.runners.online_dreamervla_multiproc` | Multi-process online collector variant |
+| `dreamervla.runners.frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
+| `dreamervla.runners.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
 
 ## Diagnostics And Smoke Tests
 
@@ -159,28 +159,28 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.diagnostics.monitor_dreamer_vla_metrics` | Summarize training logs |
-| `dreamer_vla.diagnostics.analyze_rynn_hidden_action_metrics` | Hidden/action mismatch analysis |
-| `dreamer_vla.diagnostics.analyze_compact_token_z_reconstruction` | Compact-token reconstruction analysis |
-| `dreamer_vla.diagnostics.compare_action_chunks` | Policy action comparison |
-| `dreamer_vla.diagnostics.compare_policy_trace_runs` | Compare policy trace runs |
-| `dreamer_vla.diagnostics.diagnose_dreamervla_latent_distribution` | DreamerVLA latent distribution diagnostics |
-| `dreamer_vla.diagnostics.diagnose_hidden_token_structure` | Hidden token structure diagnostics |
-| `dreamer_vla.diagnostics.diagnose_ppo_imagine_vs_real` | PPO imagined-vs-real diagnostics |
-| `dreamer_vla.diagnostics.diagnose_residual_cosine` | Residual cosine diagnostics |
-| `dreamer_vla.diagnostics.eval_chunkwm_closeloop` | Chunk-WM closed-loop eval |
-| `dreamer_vla.diagnostics.finetune_reward_head_sparse` | Sparse reward-head finetuning |
-| `dreamer_vla.diagnostics.measure_real_vs_imagine` | Real-vs-imagined rollout comparison |
-| `dreamer_vla.diagnostics.measure_recon_and_action_delta` | Reconstruction and action-delta metrics |
-| `dreamer_vla.diagnostics.measure_reward_and_drift` | Reward and action drift analysis |
-| `dreamer_vla.diagnostics.measure_wm_closed_loop` | WM closed-loop fidelity |
-| `dreamer_vla.diagnostics.measure_wm_imagine_actor` | WM imagined actor diagnostics |
-| `dreamer_vla.diagnostics.measure_wm_imagine_fidelity` | WM imagined-vs-demo fidelity |
-| `dreamer_vla.diagnostics.reward_landscape_sweep` | Reward landscape sweep |
-| `dreamer_vla.diagnostics.validate_oft_rynn_style_sidecar` | Sidecar schema validation |
-| `dreamer_vla.diagnostics.validate_real_rollout_relabel` | Real-rollout relabel validation |
-| `dreamer_vla.diagnostics.visualize_dreamervla_reward` | Reward visualization |
-| `dreamer_vla.diagnostics.smoke_libero_online_env` | LIBERO online env smoke test |
+| `dreamervla.diagnostics.monitor_dreamervla_metrics` | Summarize training logs |
+| `dreamervla.diagnostics.analyze_rynn_hidden_action_metrics` | Hidden/action mismatch analysis |
+| `dreamervla.diagnostics.analyze_compact_token_z_reconstruction` | Compact-token reconstruction analysis |
+| `dreamervla.diagnostics.compare_action_chunks` | Policy action comparison |
+| `dreamervla.diagnostics.compare_policy_trace_runs` | Compare policy trace runs |
+| `dreamervla.diagnostics.diagnose_dreamervla_latent_distribution` | DreamerVLA latent distribution diagnostics |
+| `dreamervla.diagnostics.diagnose_hidden_token_structure` | Hidden token structure diagnostics |
+| `dreamervla.diagnostics.diagnose_ppo_imagine_vs_real` | PPO imagined-vs-real diagnostics |
+| `dreamervla.diagnostics.diagnose_residual_cosine` | Residual cosine diagnostics |
+| `dreamervla.diagnostics.eval_chunkwm_closeloop` | Chunk-WM closed-loop eval |
+| `dreamervla.diagnostics.finetune_reward_head_sparse` | Sparse reward-head finetuning |
+| `dreamervla.diagnostics.measure_real_vs_imagine` | Real-vs-imagined rollout comparison |
+| `dreamervla.diagnostics.measure_recon_and_action_delta` | Reconstruction and action-delta metrics |
+| `dreamervla.diagnostics.measure_reward_and_drift` | Reward and action drift analysis |
+| `dreamervla.diagnostics.measure_wm_closed_loop` | WM closed-loop fidelity |
+| `dreamervla.diagnostics.measure_wm_imagine_actor` | WM imagined actor diagnostics |
+| `dreamervla.diagnostics.measure_wm_imagine_fidelity` | WM imagined-vs-demo fidelity |
+| `dreamervla.diagnostics.reward_landscape_sweep` | Reward landscape sweep |
+| `dreamervla.diagnostics.validate_oft_rynn_style_sidecar` | Sidecar schema validation |
+| `dreamervla.diagnostics.validate_real_rollout_relabel` | Real-rollout relabel validation |
+| `dreamervla.diagnostics.visualize_dreamervla_reward` | Reward visualization |
+| `dreamervla.diagnostics.smoke_libero_online_env` | LIBERO online env smoke test |
 
 ## Legacy Utilities
 
@@ -189,8 +189,8 @@ experiments and are not part of the main release pipeline.
 
 | Module | Purpose |
 | --- | --- |
-| `dreamer_vla.legacy.build_classifier_shards_from_demos` | Build old WebDataset classifier shards from demo sidecars |
-| `dreamer_vla.legacy.libero_sim_rollout_shards` | Read old WebDataset classifier shards |
+| `dreamervla.legacy.build_classifier_shards_from_demos` | Build old WebDataset classifier shards from demo sidecars |
+| `dreamervla.legacy.libero_sim_rollout_shards` | Read old WebDataset classifier shards |
 
 ## Conventions
 

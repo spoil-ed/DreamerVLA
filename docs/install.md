@@ -101,7 +101,7 @@ Verify the environment:
 ```bash
 bash scripts/install/60_verify.sh
 python -m pytest tests/unit_tests -q
-ruff check dreamer_vla tests
+ruff check dreamervla tests
 ```
 
 `30_python_deps.sh` installs the `pyproject.toml` `dev` dependency group by

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dreamer_vla.diagnostics.eval_openvla_oft_libero import (
+from dreamervla.diagnostics.eval_openvla_oft_libero import (
     parse_suite_name,
     resolve_num_images_for_camera_inputs,
 )

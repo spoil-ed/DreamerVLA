@@ -3,7 +3,7 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
-from dreamer_vla.preprocess.preprocess_remaining_steps_reward import (
+from dreamervla.preprocess.preprocess_remaining_steps_reward import (
     SCHEME_NAME,
     _copy_file_with_remaining_rewards,
     remaining_steps_reward,

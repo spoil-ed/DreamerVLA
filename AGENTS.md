@@ -9,7 +9,7 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Code structure
 
-- **`dreamer_vla/`** – Main package (installed as `dreamer_vla`):
+- **`dreamervla/`** – Main package (installed as `dreamervla`):
   - `algorithms/` – PPO, GRPO, DINO-WMPO, TD-MPC; actor, critic, reward.
   - `dataset/` – Offline datasets (LIBERO, OpenVLA-OFT) and online rollout dumpers.
   - `diagnostics/` – Importable diagnostics, evaluation CLIs, smoke checks, and analysis helpers.
@@ -28,7 +28,7 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
   `logger=tensorboard|wandb|tensorboard_wandb`; do not revive one-off
   top-level route YAMLs for new work.
 
-- **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamer_vla/` and is launched with `python -m`.
+- **`scripts/`** – Resumable shell launchers only. Python implementation code lives under `dreamervla/` and is launched with `python -m`.
 
 - **`tests/`** – `unit_tests/`, `e2e_tests/` (VLA, WM, DreamerVLA, OFT, classifier); e2e configs under `e2e_tests/<route>/*.yaml`.
 
@@ -46,15 +46,15 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How Dreamer-VLA runs
 
-You launch the grouped Hydra entry (e.g. `python -m dreamer_vla.train
+You launch the grouped Hydra entry (e.g. `python -m dreamervla.train
 experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`).
-`dreamer_vla/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces
+`dreamervla/train.py` reads `RANK`/`WORLD_SIZE` from the env and forces
 `training.distributed_strategy=ddp` under `torchrun`, then resolves
 `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`.
 The runner owns dataset, encoder, world model, actor / critic / reward,
 optimizer, logger, and checkpoints; there is no separate worker / scheduler
 layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the
-multi-proc variant in `dreamer_vla.runners.online_dreamervla_multiproc`).
+multi-proc variant in `dreamervla.runners.online_dreamervla_multiproc`).
 Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing,
 EMA, and LR schedule are config knobs under `training:`, not code branches.
 
@@ -70,7 +70,7 @@ and documentation habits while preserving the single-machine Runner design.
   WorkerGroup, placement strategies, or multi-node scheduler layers into
   Dreamer-VLA. Use torchrun / DDP / FSDP plus `BaseRunner`.
 - **Copy the validation mindset:** prefer an early config validation pass before
-  runner setup. `dreamer_vla.config.validate_cfg` checks logger backend names,
+  runner setup. `dreamervla.config.validate_cfg` checks logger backend names,
   actor-update route names, task / experiment compatibility, sidecar path
   existence and naming, resume checkpoint shape, batch-size / world-size
   divisibility, horizon / chunk-size consistency, and token / action-hidden
@@ -138,11 +138,11 @@ and documentation habits while preserving the single-machine Runner design.
   TensorBoard or W&B scalar metrics, plus JSONL logs where a runner still
   persists step records. Online RL emits chunk-credit, KL (k1 estimator),
   advantage, value, action-clipping; see
-  `dreamer_vla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
+  `dreamervla/algorithms/ppo/dense_chunk.py` and `outcome.py` for semantics.
   Prefer RLinf-style metric namespaces: `train/`, `eval/`, `env/`,
   `rollout/`, and `time/`.
 - **Checkpoints:** saved under `${training.out_dir}/checkpoints/` at `training.checkpoint_every` cadence; EMA copies under `ema/` when `training.use_ema=true`. Use `BaseRunner.get_global_step_checkpoint_dir(step)` / `get_component_checkpoint_dir(component, step=...)` for RLinf-style component checkpoints instead of hand-building paths.
-- **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `python -m dreamer_vla.diagnostics.<module>`.
+- **Evaluation:** LIBERO rollout via `bash scripts/eval_libero_vla.sh` with `eval_libero_vla.yaml` (Dreamer ckpts: set `eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source=ckpt|init`, `eval.dreamer_actor_input_source=rssm|encoder|encoder_sequence`); OpenVLA-OFT eval via `scripts/eval/launch_openvla_oft_*.sh`; closed-loop / fidelity via `python -m dreamervla.diagnostics.<module>`.
 
 ---
 
@@ -150,10 +150,10 @@ and documentation habits while preserving the single-machine Runner design.
 
 Install (LIBERO editable install, flash-attn wheel, ColossalAI / TensorNVMe /
 APEX, egl_probe): see [docs/install.md](docs/install.md). Rendering: set
-`MUJOCO_GL=egl`; smoke-test via `python -m dreamer_vla.diagnostics.smoke_libero_online_env`.
+`MUJOCO_GL=egl`; smoke-test via `python -m dreamervla.diagnostics.smoke_libero_online_env`.
 NCCL / CUDA timeouts under DDP are usually one rank diverging (NaN, mismatched
 batch) — read the rank-0 log before assuming network; the DDP synchronization
-guards in `dreamer_vla/algorithms/ppo/outcome.py` exist for a reason, don't
+guards in `dreamervla/algorithms/ppo/outcome.py` exist for a reason, don't
 remove them.
 
 ---
@@ -167,18 +167,18 @@ Hydra overrides. Experiments are composed from a small number of meaningful
 module groups: `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
 `evaluation/`, and `task/`. Do not split every knob into tiny groups; keep each
 module YAML readable and cohesive. Compatibility top-level YAMLs may remain,
-but new script and docs examples should use `python -m dreamer_vla.train
+but new script and docs examples should use `python -m dreamervla.train
 experiment=<name>`. New config-facing behavior should be validated early in a
 Dreamer-VLA equivalent of RLinf's config validation layer, not discovered deep
 inside a training loop.
 
-**Runner** (`dreamer_vla/runners/`): the training unit. Subclass BaseRunner and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per runner.
+**Runner** (`dreamervla/runners/`): the training unit. Subclass BaseRunner and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per runner.
 
-**Algorithms** (`dreamer_vla/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so runners compose them without conditional branching. Register non-Dreamer actor-update routes in `dreamer_vla/algorithms/registry.py` and reference them from config via `algorithm.update_type`.
+**Algorithms** (`dreamervla/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so runners compose them without conditional branching. Register non-Dreamer actor-update routes in `dreamervla/algorithms/registry.py` and reference them from config via `algorithm.update_type`.
 
-**Models** (`dreamer_vla/models/`): three trainable building blocks — encoder, world model, VLA backbone — each behind a protocol so a runner can swap implementations without changing the algorithm.
+**Models** (`dreamervla/models/`): three trainable building blocks — encoder, world model, VLA backbone — each behind a protocol so a runner can swap implementations without changing the algorithm.
 
-**Datasets** (`dreamer_vla/dataset/`): must expose a stable public API enforced by a test in `tests/`.
+**Datasets** (`dreamervla/dataset/`): must expose a stable public API enforced by a test in `tests/`.
 
 **Preprocessed sidecars** (`data/processed_data/`): active task configs should
 consume the paths emitted by the Hydra-centered preprocess launchers. For OFT
@@ -187,7 +187,7 @@ Scheme A, `scripts/preprocess/35_oft_action_hidden.sh` writes
 docs aligned with that generated name unless an experiment explicitly
 overrides the path.
 
-**Envs** (`dreamer_vla/envs/`): split between offline (dataset-driven) and online (rollout-driven) wrappers.
+**Envs** (`dreamervla/envs/`): split between offline (dataset-driven) and online (rollout-driven) wrappers.
 
 ---
 
@@ -195,24 +195,24 @@ overrides the path.
 
 ### New training route
 
-Add a runner class under `dreamer_vla/runners/` subclassing BaseRunner; export
+Add a runner class under `dreamervla/runners/` subclassing BaseRunner; export
 it from the package init; add the cohesive module YAML under the matching group
 (`VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`, or `evaluation/`), then add
 an `experiment/<name>.yaml` recipe that overrides the relevant group. Add a
 shell launcher in `scripts/` only if the invocation differs from
-`python -m dreamer_vla.train experiment=<name>`.
+`python -m dreamervla.train experiment=<name>`.
 
 ### New PPO variant
 
-Add a module under `dreamer_vla/algorithms/ppo/` matching the existing kwargs / return signature; register it in `dreamer_vla/algorithms/registry.py` with canonical aliases and route metadata. Do not branch existing variants with `if algorithm == "my_variant"` inside training loops. Add regression tests in `tests/` covering the invariants the variant must hold.
+Add a module under `dreamervla/algorithms/ppo/` matching the existing kwargs / return signature; register it in `dreamervla/algorithms/registry.py` with canonical aliases and route metadata. Do not branch existing variants with `if algorithm == "my_variant"` inside training loops. Add regression tests in `tests/` covering the invariants the variant must hold.
 
 ### New world model
 
-Add a module under `dreamer_vla/models/world_model/` subclassing the base world model; document the forward / imagine contract; reward heads stay in the shared module; wire into a runner + YAML rather than branching existing WM modules.
+Add a module under `dreamervla/models/world_model/` subclassing the base world model; document the forward / imagine contract; reward heads stay in the shared module; wire into a runner + YAML rather than branching existing WM modules.
 
 ### New encoder / actor
 
-Implement the encoder protocol or subclass the base actor in their respective `dreamer_vla/models/` subdirectories; do not create a parallel hierarchy.
+Implement the encoder protocol or subclass the base actor in their respective `dreamervla/models/` subdirectories; do not create a parallel hierarchy.
 
 ### New env (beyond LIBERO)
 
@@ -222,7 +222,7 @@ Not a stable extension surface. The data path and reward labels assume LIBERO HD
 
 ## Style and contributing
 
-Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `dreamer_vla/utils/json_logger.py` or runner loggers. Config YAML: static only, no computed fields; derive in the runner. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `dreamer_vla/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
+Python 3.11; type hints and docstrings on public APIs. No bare `print` in training-loop code — use `dreamervla/utils/json_logger.py` or runner loggers. Config YAML: static only, no computed fields; derive in the runner. New behavior needs at least one test under `tests/`; keep heavy GPU runs behind `dreamervla/smoke/`. Commits: [Conventional Commits](https://www.conventionalcommits.org/), ~72-char imperative subject, `git commit -s` to sign off. PRs: match commit title format, fill the template, link issues; for perf-sensitive changes (PPO / WM / actor) include before/after metrics and the diagnostic script used. Expensive GPU CI is gated by the `run-ci` label. Full details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Script and launcher memory
 
@@ -245,5 +245,5 @@ Python 3.11; type hints and docstrings on public APIs. No bare `print` in traini
 ## Further reading
 
 - [Repository structure](docs/repository_structure.md) · [Install](docs/install.md) · [Script registry](scripts/README.md) · [Config registry](configs/README.md)
-- [Write-up](docs/dreamer_vla_writeup.md) · [Data layout](docs/data_layout.md)
+- [Write-up](docs/dreamervla_writeup.md) · [Data layout](docs/data_layout.md)
 - [README](README.md) · [中文 README](README.zh-CN.md)

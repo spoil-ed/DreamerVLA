@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamer_vla.models.actor.rynnvla_action_hidden_actor import RynnVLAActionHiddenActor
+from dreamervla.models.actor.rynnvla_action_hidden_actor import RynnVLAActionHiddenActor
 
 
 def test_rynnvla_actor_samples_and_evaluates_full_action_chunks() -> None:

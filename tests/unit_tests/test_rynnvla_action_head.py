@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamer_vla.models.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
+from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     RynnVLAActionHead,
 )
 

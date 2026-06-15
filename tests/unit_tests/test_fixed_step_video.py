@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from dreamer_vla.utils.fixed_step_video import FixedStepVideoRecorder
+from dreamervla.utils.fixed_step_video import FixedStepVideoRecorder
 
 
 def test_fixed_step_video_recorder_saves_and_resets_buffer(tmp_path, monkeypatch):

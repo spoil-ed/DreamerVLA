@@ -7,7 +7,7 @@ from hydra.utils import get_class
 
 
 def test_dataset_public_api_exports_only_retained_routes() -> None:
-    import dreamer_vla.dataset as dataset
+    import dreamervla.dataset as dataset
 
     expected = {
         "BaseDataset",
@@ -46,15 +46,15 @@ def test_dataset_public_api_exports_only_retained_routes() -> None:
 def test_removed_dataset_files_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
     removed_files = {
-        "dreamer_vla/dataset/libero_dataset.py",
-        "dreamer_vla/dataset/transition_dataset.py",
+        "dreamervla/dataset/libero_dataset.py",
+        "dreamervla/dataset/transition_dataset.py",
     }
 
     for relative_path in removed_files:
         assert not (project_root / relative_path).exists()
 
 
-def test_configs_use_importable_dreamer_vla_dataset_targets() -> None:
+def test_configs_use_importable_dreamervla_dataset_targets() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     config_names = sorted(
         str(path.relative_to(config_dir).with_suffix(""))
@@ -79,5 +79,5 @@ def test_configs_use_importable_dreamer_vla_dataset_targets() -> None:
                     else None
                 )
                 if target is not None:
-                    assert str(target).startswith("dreamer_vla.dataset.")
+                    assert str(target).startswith("dreamervla.dataset.")
                     get_class(str(target))

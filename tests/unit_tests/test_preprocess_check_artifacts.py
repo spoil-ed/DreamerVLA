@@ -5,7 +5,7 @@ import json
 import h5py
 import pytest
 
-from dreamer_vla.preprocess.check_artifacts import (
+from dreamervla.preprocess.check_artifacts import (
     validate_hdf5_dir,
     validate_metainfo,
 )

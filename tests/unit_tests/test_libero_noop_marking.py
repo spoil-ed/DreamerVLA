@@ -5,7 +5,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from dreamer_vla.preprocess.libero_utils.noop_marking import (
+from dreamervla.preprocess.libero_utils.noop_marking import (
     compute_noop_mask,
     filter_marked_hdf5_file,
 )

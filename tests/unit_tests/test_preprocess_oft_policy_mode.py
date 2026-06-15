@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dreamer_vla.preprocess.preprocess_oft_action_hidden import (
+from dreamervla.preprocess.preprocess_oft_action_hidden import (
     _action_head_type_for_mode,
     _input_token_sidecar_dims,
     _resolve_num_images_in_input,
