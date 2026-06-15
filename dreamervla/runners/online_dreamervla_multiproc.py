@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.runners.online_dreamervla import (
+    _dist_barrier,
     _init_distributed,
 )
 from dreamervla.runners.online_replay import OnlineReplay
@@ -350,6 +351,7 @@ def main() -> None:
     encoder_batch_sizes: list[int] = []
     policy_latencies: list[float] = []
 
+    clean_exit = False
     try:
         while env_step < int(args.total_env_steps) and active_collectors:
             messages = _drain_messages(
@@ -554,6 +556,7 @@ def main() -> None:
                             actions=np.asarray(chunk[:collect_chunk_steps], dtype=np.float32),
                         )
                     )
+        clean_exit = True
 
     finally:
         stop_event.set()
@@ -569,7 +572,8 @@ def main() -> None:
         episode_log_f.close()
         online_log_f.close()
         if is_dist:
-            torch.distributed.barrier()
+            if clean_exit:
+                _dist_barrier(local_rank=local_rank)
             torch.distributed.destroy_process_group()
 
 

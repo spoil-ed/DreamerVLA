@@ -62,9 +62,9 @@ class NopretokenizeSFTDistributedHelper:
         if dist.is_available() and not dist.is_initialized():
             world_size = int(os.environ.get("WORLD_SIZE", "1"))
             if world_size > 1:
-                dist.init_process_group(backend="nccl")
                 if torch.cuda.is_available():
                     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
+                dist.init_process_group(backend="nccl")
 
         rank = (
             int(dist.get_rank()) if dist.is_available() and dist.is_initialized() else 0

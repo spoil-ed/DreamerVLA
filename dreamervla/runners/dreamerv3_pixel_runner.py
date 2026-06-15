@@ -45,12 +45,12 @@ class DreamerV3PixelRunner(BaseRunner):
         if self.use_ddp:
             if not torch.cuda.is_available():
                 raise ValueError("training.distributed_strategy=ddp requires CUDA")
+            torch.cuda.set_device(self.local_rank)
             if not dist.is_initialized():
                 dist.init_process_group(backend="nccl")
             self.rank = dist.get_rank()
             self.world_size = dist.get_world_size()
             self.local_rank = int(os.environ.get("LOCAL_RANK", str(self.local_rank)))
-            torch.cuda.set_device(self.local_rank)
             self.device = torch.device(f"cuda:{self.local_rank}")
         else:
             self.device = torch.device(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import random
@@ -36,9 +37,13 @@ def _init_distributed() -> tuple[int, int, int, bool]:
     if "LOCAL_RANK" not in os.environ:
         return 0, 1, 0, False
     local_rank = int(os.environ["LOCAL_RANK"])
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+    if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        timeout_s = int(os.environ.get("DVLA_DDP_TIMEOUT_SEC", "600"))
+        dist.init_process_group(
+            backend="nccl", timeout=_dt.timedelta(seconds=timeout_s)
+        )
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     return rank, world_size, local_rank, True
@@ -47,6 +52,55 @@ def _init_distributed() -> tuple[int, int, int, bool]:
 def _unwrap(module: torch.nn.Module) -> torch.nn.Module:
     """Return underlying module from a DDP wrapper, or pass through."""
     return module.module if isinstance(module, DDP) else module
+
+
+def _dist_barrier(*, local_rank: int) -> None:
+    if torch.cuda.is_available():
+        dist.barrier(device_ids=[local_rank])
+    else:
+        dist.barrier()
+
+
+def _dist_all_reduce_flag(
+    value: bool,
+    *,
+    device: torch.device,
+    op: dist.ReduceOp,
+    label: str,
+    rank: int,
+    env_step: int,
+) -> bool:
+    tensor = torch.tensor([int(value)], device=device, dtype=torch.long)
+    try:
+        dist.all_reduce(tensor, op=op)
+    except Exception as exc:
+        raise RuntimeError(
+            f"DDP all_reduce failed at {label} on rank={rank} env_step={env_step}; "
+            f"local_value={int(value)}. Check other rank logs for the first local "
+            "exception or a hung environment step."
+        ) from exc
+    return bool(int(tensor.item()))
+
+
+def _dist_all_reduce_int(
+    value: int,
+    *,
+    device: torch.device,
+    op: dist.ReduceOp,
+    label: str,
+    rank: int,
+    env_step: int,
+) -> int:
+    tensor = torch.tensor([int(value)], device=device, dtype=torch.long)
+    try:
+        dist.all_reduce(tensor, op=op)
+    except Exception as exc:
+        raise RuntimeError(
+            f"DDP all_reduce failed at {label} on rank={rank} env_step={env_step}; "
+            f"local_value={int(value)}. Check other rank logs for the first local "
+            "exception or a hung environment step."
+        ) from exc
+    return int(tensor.item())
 
 
 from dreamervla.dataset.online_rollout_dumper import RolloutDumper
@@ -557,7 +611,7 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "logs").mkdir(parents=True, exist_ok=True)
     if is_dist:
-        dist.barrier()
+        _dist_barrier(local_rank=local_rank)
 
     # ── structured traces ─────────────────────────────────────────────────
     # Per-rank files avoid concurrent appends corrupting JSONL under DDP. Rank 0
@@ -911,6 +965,7 @@ def main() -> None:
         frame_key=str(args.video_frame_key),
     )
 
+    clean_exit = False
     try:
         for env_step in range(int(resume_env_step) + 1, int(args.total_env_steps) + 1):
             if stop_training:
@@ -1047,22 +1102,28 @@ def main() -> None:
                 )
                 all_ranks_basic_ready = bool(local_basic_ready)
                 if is_dist:
-                    ready_t = torch.tensor(
-                        [int(local_basic_ready)], device=device, dtype=torch.long
+                    all_ranks_basic_ready = _dist_all_reduce_flag(
+                        bool(local_basic_ready),
+                        device=device,
+                        op=dist.ReduceOp.MIN,
+                        label="global_coverage_basic_ready",
+                        rank=rank,
+                        env_step=env_step,
                     )
-                    dist.all_reduce(ready_t, op=dist.ReduceOp.MIN)
-                    all_ranks_basic_ready = bool(int(ready_t.item()))
                 all_ranks_train_ready = bool(
                     last_global_coverage_ready and all_ranks_basic_ready
                 )
             else:
                 all_ranks_train_ready = bool(local_train_ready)
                 if is_dist:
-                    ready_t = torch.tensor(
-                        [int(local_train_ready)], device=device, dtype=torch.long
+                    all_ranks_train_ready = _dist_all_reduce_flag(
+                        bool(local_train_ready),
+                        device=device,
+                        op=dist.ReduceOp.MIN,
+                        label="local_train_ready",
+                        rank=rank,
+                        env_step=env_step,
                     )
-                    dist.all_reduce(ready_t, op=dist.ReduceOp.MIN)
-                    all_ranks_train_ready = bool(int(ready_t.item()))
                 last_all_ranks_train_ready = bool(all_ranks_train_ready)
             num_updates = 0
             if all_ranks_train_ready:
@@ -1075,11 +1136,14 @@ def main() -> None:
                     train_accum -= float(num_updates)
             if is_dist and args.train_every is None and all_ranks_train_ready:
                 local_num_updates = int(num_updates)
-                updates_t = torch.tensor(
-                    [local_num_updates], device=device, dtype=torch.long
+                num_updates = _dist_all_reduce_int(
+                    local_num_updates,
+                    device=device,
+                    op=dist.ReduceOp.MIN,
+                    label="num_updates",
+                    rank=rank,
+                    env_step=env_step,
                 )
-                dist.all_reduce(updates_t, op=dist.ReduceOp.MIN)
-                num_updates = int(updates_t.item())
                 if local_num_updates > num_updates:
                     train_accum += float(local_num_updates - num_updates)
 
@@ -1422,11 +1486,14 @@ def main() -> None:
                         )
                         cls_ready = bool(cls_ready_local)
                         if is_dist:
-                            cls_ready_t = torch.tensor(
-                                [int(cls_ready_local)], device=device, dtype=torch.long
+                            cls_ready = _dist_all_reduce_flag(
+                                bool(cls_ready_local),
+                                device=device,
+                                op=dist.ReduceOp.MIN,
+                                label="classifier_ready",
+                                rank=rank,
+                                env_step=env_step,
                             )
-                            dist.all_reduce(cls_ready_t, op=dist.ReduceOp.MIN)
-                            cls_ready = bool(int(cls_ready_t.item()))
                         if cls_ready:
                             cls_metrics_list = []
                             for _cls_update in range(
@@ -1762,6 +1829,7 @@ def main() -> None:
                 classifier=_unwrap(classifier) if classifier is not None else None,
                 classifier_optimizer=classifier_optimizer,
             )
+        clean_exit = True
     finally:
         env.close()
         if rollout_dumper is not None:
@@ -1779,7 +1847,8 @@ def main() -> None:
         if ppo_log_rank0_compat_f is not None:
             ppo_log_rank0_compat_f.close()
         if is_dist:
-            dist.barrier()
+            if clean_exit:
+                _dist_barrier(local_rank=local_rank)
             dist.destroy_process_group()
 
 
