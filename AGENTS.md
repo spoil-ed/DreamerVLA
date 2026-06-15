@@ -107,13 +107,15 @@ and documentation habits while preserving the single-machine Runner design.
   GPU count; don't recombine fields by hand outside Hydra defaults. Registry
   in [configs/README.md](configs/README.md).
 - **Task switch:** `task=libero_goal | libero_object | libero_spatial | libero_10` (or any `configs/task/*.yaml`) via Hydra; task YAMLs hold dataset paths, horizons, sidecar expectations, task-specific dims.
-- **Logging switch:** grouped training defaults to `logger=tensorboard`, which
-  writes local TensorBoard event files under `${training.out_dir}/log`. Use
-  `logger=wandb` for W&B online mode and `logger=tensorboard_wandb` for both
-  backends in parallel. Logger configs live under `configs/logger/` and route
-  main-process metrics through the runner `MetricLogger`. When adding logger
-  configs, follow RLinf's list-backend pattern so TensorBoard, W&B, and any
-  future backend can run in parallel.
+- **Logging switch:** grouped training defaults to `logger=tensorboard_wandb`,
+  which writes local TensorBoard event files under `${training.out_dir}/log`
+  and W&B run files under `${training.out_dir}/log/wandb`. W&B defaults to
+  online mode; use `runner.logger.wandb_mode=offline` for local-only W&B logs,
+  or override to `logger=tensorboard` / `logger=wandb` for a single backend.
+  Logger configs live under `configs/logger/` and route main-process metrics
+  through the runner `MetricLogger`. When adding logger configs, follow RLinf's
+  list-backend pattern so TensorBoard, W&B, and any future backend can run in
+  parallel.
 - **One-trajectory SFT:** `bash scripts/train_vla.sh
   experiment=vla_sft_one_trajectory task=libero_goal`;
   `dataset.trajectory_offset` and `dataset.demo_selection_seed` pick which

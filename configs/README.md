@@ -21,15 +21,16 @@ under `configs/experiment/`; that recipe overrides one cohesive module group
 overrides operational and small: GPUs, batch size, checkpoint paths, output
 tags, and smoke-test limits.
 
-`logger=tensorboard` is the default for grouped training and writes local
-TensorBoard event files under `${training.out_dir}/log/tensorboard`.
-Use `logger=wandb` to send main-process metrics to W&B online mode, or
-`logger=tensorboard_wandb` to run both backends in parallel while keeping W&B
-run files under `${training.out_dir}/log/wandb`:
+`logger=tensorboard_wandb` is the default for grouped training. It writes local
+TensorBoard event files under `${training.out_dir}/log/tensorboard` and W&B run
+files under `${training.out_dir}/log/wandb`. W&B defaults to online mode; set
+`runner.logger.wandb_mode=offline` for local-only W&B logs:
 
 ```bash
+python -m dreamervla.train experiment=world_model_dinowm_chunk
+python -m dreamervla.train experiment=world_model_dinowm_chunk runner.logger.wandb_mode=offline
+python -m dreamervla.train experiment=world_model_dinowm_chunk logger=tensorboard
 python -m dreamervla.train experiment=world_model_dinowm_chunk logger=wandb
-python -m dreamervla.train experiment=world_model_dinowm_chunk logger=tensorboard_wandb
 ```
 
 Before a runner is instantiated, `dreamervla.config.validate_cfg` performs

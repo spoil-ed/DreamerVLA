@@ -197,14 +197,15 @@ bash scripts/train_wm.sh \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
-Add logging overrides to any training command. The project uses TensorBoard
-event files for the local TensorFlow-compatible log viewer:
+Grouped training now defaults to TensorBoard plus online W&B. Add logging
+overrides to any training command when you want a different mode. The project
+uses TensorBoard event files for the local TensorFlow-compatible log viewer:
 
 ```bash
-logger=tensorboard
-logger=wandb
 logger=tensorboard_wandb runner.logger.wandb_mode=online
 logger=tensorboard_wandb runner.logger.wandb_mode=offline
+logger=tensorboard
+logger=wandb runner.logger.wandb_mode=online
 ```
 
 TensorBoard writes `${training.out_dir}/log/tensorboard`; W&B writes

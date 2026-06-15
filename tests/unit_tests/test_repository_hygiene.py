@@ -109,7 +109,7 @@ def test_claude_brief_delegates_to_current_agent_guidance() -> None:
 
     assert "AGENTS.md" in claude_text
     assert "experiment=<name>" in claude_text
-    assert "logger=tensorboard" in claude_text
+    assert "logger=tensorboard_wandb" in claude_text
     assert "logger=wandb" in claude_text
     assert "--config-name" not in claude_text
     assert "one top-level YAML per training route" not in claude_text

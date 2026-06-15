@@ -17,8 +17,9 @@ from AGENTS.md.
   same grouped entry.
 - Config groups are `experiment/`, `VLA/`, `worldmodel/`, `classifier/`,
   `dreamervla/`, `evaluation/`, `task/`, and `logger/`.
-- Mainline training defaults to `logger=tensorboard`; use `logger=wandb` for
-  W&B online scalar metrics or `logger=tensorboard_wandb` for both.
+- Mainline training defaults to `logger=tensorboard_wandb`; add
+  `runner.logger.wandb_mode=offline` for offline W&B, or use
+  `logger=tensorboard` / `logger=wandb` for a single backend.
 - OFT Scheme-A sidecars should match the preprocess launcher output:
   `${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2`.
 

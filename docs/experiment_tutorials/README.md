@@ -32,30 +32,30 @@ actor.
 
 ## Logging
 
-Grouped training defaults to local TensorBoard. If you are looking for
-"TensorFlow logging" in these recipes, the supported switch is the TensorBoard
-event writer, not a separate TensorFlow training backend:
-
-```bash
-logger=tensorboard
-```
-
-Use online W&B only:
-
-```bash
-logger=wandb
-```
-
-Use TensorBoard and online W&B together:
+Grouped training defaults to TensorBoard plus W&B online. If you are looking
+for "TensorFlow logging" in these recipes, the supported switch is the
+TensorBoard event writer, not a separate TensorFlow training backend:
 
 ```bash
 logger=tensorboard_wandb runner.logger.wandb_mode=online
 ```
 
-Use TensorBoard and offline W&B together:
+Use TensorBoard plus offline W&B:
 
 ```bash
 logger=tensorboard_wandb runner.logger.wandb_mode=offline
+```
+
+Use local TensorBoard only:
+
+```bash
+logger=tensorboard
+```
+
+Use W&B online only:
+
+```bash
+logger=wandb runner.logger.wandb_mode=online
 ```
 
 The same `logger=...` overrides work with `scripts/train_vla.sh`,

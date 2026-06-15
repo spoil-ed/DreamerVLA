@@ -6,5 +6,5 @@ defaults:
   - classifier: null
   - dreamervla: null
   - evaluation: null
-  - logger: tensorboard
+  - logger: tensorboard_wandb
   - experiment: world_model_dinowm_chunk

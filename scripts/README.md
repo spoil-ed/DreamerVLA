@@ -116,11 +116,11 @@ Training launchers are Hydra wrappers. `experiment=...` selects a config group u
 `configs/experiment/`; `task=...`, `gpus=...`, `ngpu=...`, `batch_size=...`,
 and `num_workers=...` are script-level overrides; any other `key=value`
 argument is passed to the real training config unchanged.
-Grouped training defaults to `logger=tensorboard` and writes local TensorBoard
-events under `${training.out_dir}/log/tensorboard`; use `logger=wandb` to route
-main-process metrics through W&B online mode. Use `logger=tensorboard_wandb`
-when you want local TensorBoard events and online W&B tracking for the same
-run.
+Grouped training defaults to `logger=tensorboard_wandb`, so each run writes
+local TensorBoard events under `${training.out_dir}/log/tensorboard` and W&B run
+files under `${training.out_dir}/log/wandb`. W&B defaults to online mode; add
+`runner.logger.wandb_mode=offline` for local-only W&B logs. Use
+`logger=tensorboard` or `logger=wandb` only when you want a single backend.
 
 Runner artifacts should stay under `${training.out_dir}`. The canonical
 checkpoint directory is `${training.out_dir}/checkpoints`; older

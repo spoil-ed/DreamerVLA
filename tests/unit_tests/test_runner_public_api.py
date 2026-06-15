@@ -262,8 +262,9 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
         )
 
     assert default_cfg.runner.logger.project_name == "dreamervla"
-    assert default_cfg.runner.logger.logger_backends == ["tensorboard"]
+    assert default_cfg.runner.logger.logger_backends == ["tensorboard", "wandb"]
     assert default_cfg.runner.logger.log_path == f"{default_cfg.training.out_dir}/log"
+    assert default_cfg.runner.logger.wandb_mode == "online"
 
     assert wandb_cfg.runner.logger.project_name == "dreamervla"
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
