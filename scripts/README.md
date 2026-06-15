@@ -76,7 +76,7 @@ Common launcher flags stay intentionally small:
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 
     bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
-      gpus=0,1 ngpu=2 batch_size=16 num_workers=4 training.max_steps=1000
+      gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20
 
 LIBERO preprocessing GPU and worker controls:
 
@@ -121,6 +121,19 @@ local TensorBoard events under `${training.out_dir}/log/tensorboard` and W&B run
 files under `${training.out_dir}/log/wandb`. W&B defaults to online mode; add
 `runner.logger.wandb_mode=offline` for local-only W&B logs. Use
 `logger=tensorboard` or `logger=wandb` only when you want a single backend.
+
+To view TensorBoard metrics, point TensorBoard at the run's log directory:
+
+    tensorboard --logdir "${OUT_DIR}/log/tensorboard" --host 0.0.0.0 --port 6006
+
+On a remote training host, forward the port and open `http://localhost:6006`:
+
+    ssh -L 6006:localhost:6006 user@host
+
+For W&B online runs, use the run URL printed by training. For offline runs,
+upload the local run files after training:
+
+    wandb sync "${OUT_DIR}/log/wandb"
 
 Runner artifacts should stay under `${training.out_dir}`. The canonical
 checkpoint directory is `${training.out_dir}/checkpoints`; older

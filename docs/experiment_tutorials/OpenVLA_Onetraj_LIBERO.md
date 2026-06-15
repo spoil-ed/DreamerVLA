@@ -218,7 +218,7 @@ Smoke run:
 bash scripts/train_wm.sh \
   experiment=oft_discrete_token_world_model_dinowm_chunk \
   task=OpenVLA_Onetraj_LIBERO \
-  gpus=0 ngpu=1 batch_size=1 num_workers=0 max_steps=1 \
+  gpus=0 ngpu=1 batch_size=1 num_workers=0 num_epochs=1 \
   out_dir=/tmp/openvla_onetraj_libero_discrete_wm_smoke
 ```
 

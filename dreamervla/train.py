@@ -58,7 +58,7 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
                 "Usage: python -m dreamervla.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
                 "  python -m dreamervla.train experiment=vla_rynnvla_action_head training.num_epochs=5\n"
-                "  python -m dreamervla.train experiment=world_model_dinowm_chunk training.max_steps=10\n"
+                "  python -m dreamervla.train experiment=world_model_dinowm_chunk training.num_epochs=20\n"
                 "  python -m dreamervla.train experiment=dreamervla_rynn_dino_wm_actor_critic task=libero_object"
             )
             raise SystemExit(0)

@@ -220,7 +220,7 @@ class DreamerV3PixelRunner(BaseRunner):
         # ``resume_reset_step`` = warm-start a NEW training run from the ckpt's
         # model weights only.  global_step / epoch / RNG stay at their
         # initial (fresh-seed) values so the lr warmup, save-every cadence,
-        # and max_steps budget all behave as a fresh run.  Use this when the
+        # and epoch budget all behave as a fresh run.  Use this when the
         # training objective or model topology has changed (e.g. switching
         # per-step teacher forcing -> chunk_loss with a new mask_obs_token).
         reset_step = bool(
@@ -498,14 +498,12 @@ class DreamerV3PixelRunner(BaseRunner):
 
         resumed = self._maybe_resume(model_core, optimizer)
 
-        max_steps_cfg = OmegaConf.select(self.cfg, "training.max_steps", default=10000)
-        num_epochs_cfg = OmegaConf.select(self.cfg, "training.num_epochs", default=None)
-        if max_steps_cfg is None:
-            if num_epochs_cfg is None:
-                raise ValueError("Set either training.max_steps or training.num_epochs")
-            max_steps = int(num_epochs_cfg) * len(loader)
-        else:
-            max_steps = int(max_steps_cfg)
+        num_epochs_cfg = OmegaConf.select(
+            self.cfg, "training.num_epochs", default=20
+        )
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
+        total_steps = max(1, num_epochs * len(loader))
+        remaining_steps = max(0, num_epochs - self.epoch) * len(loader)
         log_every = int(OmegaConf.select(self.cfg, "training.log_every", default=20))
         save_every = int(
             OmegaConf.select(self.cfg, "training.save_every", default=1000)
@@ -518,14 +516,14 @@ class DreamerV3PixelRunner(BaseRunner):
         grad_clip = float(OmegaConf.select(self.cfg, "optim.grad_clip", default=100.0))
 
         self._print(
-            f"[dreamerv3-pixel] training for {max_steps:,} steps "
+            f"[dreamerv3-pixel] training for {num_epochs:,} epochs "
             f"({len(loader):,} local batches/epoch, batch_size={int(OmegaConf.select(self.cfg, 'dataloader.batch_size', default=8))}"
-            f"{', global_batch=' + str(int(OmegaConf.select(self.cfg, 'dataloader.batch_size', default=8)) * self.world_size) if self.use_ddp else ''}) ..."
+            f"{', global_batch=' + str(int(OmegaConf.select(self.cfg, 'dataloader.batch_size', default=8)) * self.world_size) if self.use_ddp else ''}, ~{remaining_steps:,} remaining steps) ..."
         )
         log_mode = "a" if resumed else "w"
         log_handle = open(self.log_path, log_mode) if self.is_main_process else None
         try:
-            while self.global_step < max_steps:
+            while self.epoch < num_epochs:
                 self.epoch += 1
                 if sampler is not None:
                     sampler.set_epoch(self.epoch)
@@ -537,8 +535,6 @@ class DreamerV3PixelRunner(BaseRunner):
                     mininterval=tqdm_interval_sec,
                 ) as tepoch:
                     for batch in tepoch:
-                        if self.global_step >= max_steps:
-                            break
                         if warmup > 0:
                             lr_scale = min(
                                 1.0, float(self.global_step + 1) / float(warmup)
@@ -579,7 +575,7 @@ class DreamerV3PixelRunner(BaseRunner):
                             ),
                         }
                         tepoch.set_postfix(
-                            self._progress_postfix(row, max_steps), refresh=False
+                            self._progress_postfix(row, total_steps), refresh=False
                         )
                         if (
                             self.is_main_process
@@ -602,8 +598,6 @@ class DreamerV3PixelRunner(BaseRunner):
                                 model_core, optimizer, self.ckpt_dir / "latest.ckpt"
                             )
                         self.global_step += 1
-                        if self.global_step >= max_steps:
-                            break
         finally:
             if log_handle is not None:
                 log_handle.close()

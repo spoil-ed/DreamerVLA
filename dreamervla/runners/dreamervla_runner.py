@@ -1617,9 +1617,11 @@ class DreamerVLARunner(BaseRunner):
         lr_warmup_steps = int(
             OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
         )
-        total_training_steps = (
-            len(train_dataloader) * int(cfg.training.num_epochs)
-        ) // int(cfg.training.gradient_accumulate_every)
+        num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
+        total_training_steps = (len(train_dataloader) * num_epochs) // int(
+            cfg.training.gradient_accumulate_every
+        )
         wm_lr_scheduler = get_scheduler(
             lr_scheduler_name,
             optimizer=self.world_model_optimizer,
@@ -1666,7 +1668,8 @@ class DreamerVLARunner(BaseRunner):
         )
 
         if cfg.training.debug:
-            cfg.training.num_epochs = 3
+            num_epochs = 3
+            cfg.training.num_epochs = num_epochs
             cfg.training.max_train_steps = 2
             cfg.training.checkpoint_every = 1
 
@@ -1680,7 +1683,7 @@ class DreamerVLARunner(BaseRunner):
         try:
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
-                while self.epoch < int(cfg.training.num_epochs):
+                while self.epoch < num_epochs:
                     self.set_dataloader_epoch(train_dataloader, self.epoch)
 
                     step_log: dict[str, float | str | int] = {}

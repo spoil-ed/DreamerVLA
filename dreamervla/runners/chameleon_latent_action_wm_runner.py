@@ -391,8 +391,12 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                 )
         self.world_model = hydra.utils.instantiate(world_model_cfg).to(self.device)
 
+        num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
+
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
-            cfg.training.num_epochs = 1
+            num_epochs = 1
+            cfg.training.num_epochs = num_epochs
             cfg.training.max_train_steps = 3
             cfg.training.checkpoint_every = 1
 
@@ -420,7 +424,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
             ),
             num_training_steps=max(
                 1,
-                (len(train_dataloader) * int(cfg.training.num_epochs))
+                (len(train_dataloader) * num_epochs)
                 // int(cfg.training.gradient_accumulate_every),
             ),
             last_epoch=self.global_step - 1,
@@ -440,7 +444,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
         try:
             with self.distributed.logger_context(log_path) as logger:
                 reached_max_steps = False
-                for _ in range(int(cfg.training.num_epochs)):
+                while self.epoch < num_epochs:
                     self.set_dataloader_epoch(train_dataloader, self.epoch)
                     epoch_metrics: dict[str, list[float]] = {}
                     self.world_model.train()

@@ -21,7 +21,8 @@ training:
   distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: false
-  max_train_steps: 1000
+  num_epochs: 20
+  max_train_steps: null
   gradient_accumulate_every: 1
   tqdm_interval_sec: 1.0
   checkpoint_every: 500

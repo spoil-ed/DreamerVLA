@@ -33,6 +33,26 @@ python -m dreamervla.train experiment=world_model_dinowm_chunk logger=tensorboar
 python -m dreamervla.train experiment=world_model_dinowm_chunk logger=wandb
 ```
 
+Visualize TensorBoard logs from a run root with:
+
+```bash
+tensorboard --logdir "${OUT_DIR}/log/tensorboard" --host 0.0.0.0 --port 6006
+```
+
+If the run is on a remote machine, forward the port from your laptop, then open
+`http://localhost:6006`:
+
+```bash
+ssh -L 6006:localhost:6006 user@host
+```
+
+For W&B online runs, open the run URL printed by `wandb` in the training log or
+visit the project in the W&B web UI. For offline W&B runs, sync after training:
+
+```bash
+wandb sync "${OUT_DIR}/log/wandb"
+```
+
 Before a runner is instantiated, `dreamervla.config.validate_cfg` performs
 RLinf-style lightweight checks: logger backend names, explicit resume paths,
 actor-update route names from `dreamervla.algorithms.registry`, sidecar route

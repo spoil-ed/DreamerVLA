@@ -7,7 +7,7 @@ eval.
 Use Hydra overrides for normal changes:
 
 ```bash
-gpus=0,1 ngpu=2 batch_size=16 num_workers=4 max_steps=1000 out_dir=/tmp/run
+gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20 out_dir=/tmp/run
 ```
 
 The shell launchers are intentionally thin. They set project/data roots and
@@ -62,6 +62,26 @@ The same `logger=...` overrides work with `scripts/train_vla.sh`,
 `scripts/train_wm.sh`, and `scripts/train_dreamervla.sh`. TensorBoard event
 files are written under `${training.out_dir}/log/tensorboard`; W&B run files are
 written under `${training.out_dir}/log/wandb`.
+
+Visualize TensorBoard logs:
+
+```bash
+tensorboard --logdir "${OUT_DIR}/log/tensorboard" --host 0.0.0.0 --port 6006
+```
+
+If training runs on a remote host, forward the port and open
+`http://localhost:6006` locally:
+
+```bash
+ssh -L 6006:localhost:6006 user@host
+```
+
+For W&B online mode, open the run URL printed in the training log. For offline
+mode, upload the local W&B run files after training:
+
+```bash
+wandb sync "${OUT_DIR}/log/wandb"
+```
 
 Classifier and WMPO training need both success and failure rollout corpora. The
 standard LIBERO download gives success demos. If you do not have failure demos

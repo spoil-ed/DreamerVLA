@@ -135,9 +135,10 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
         dataloader = bundle.dataloader
         self.dataset_statistics = bundle.dataset_statistics
 
-        max_train_steps = int(
-            OmegaConf.select(cfg, "training.max_train_steps", default=1000)
-        )
+        num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
+        total_train_steps = max(1, num_epochs * len(dataloader))
+        remaining_train_steps = max(0, num_epochs - self.epoch) * len(dataloader)
         grad_accumulation = int(
             OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1)
         )
@@ -147,7 +148,7 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
             num_warmup_steps=int(
                 OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
             ),
-            num_training_steps=max_train_steps,
+            num_training_steps=total_train_steps,
             last_epoch=self.global_step - 1,
         )
 
@@ -171,15 +172,15 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
         )
         with JsonLogger(log_path) as logger:
             progress = tqdm.tqdm(
-                total=max_train_steps,
-                initial=self.global_step,
+                total=remaining_train_steps,
+                initial=0,
                 disable=not self.distributed.is_main_process,
-                desc="OpenVLA-OFT train",
+                desc=f"OpenVLA-OFT train ({num_epochs} epochs)",
                 mininterval=float(
                     OmegaConf.select(cfg, "training.tqdm_interval_sec", default=1.0)
                 ),
             )
-            while self.global_step < max_train_steps:
+            while self.epoch < num_epochs:
                 sampler = getattr(dataloader, "sampler", None)
                 if hasattr(sampler, "set_epoch"):
                     sampler.set_epoch(int(self.epoch))
@@ -246,8 +247,6 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
                         self._save_oft_components(self.global_step)
 
                     self.global_step += 1
-                    if self.global_step >= max_train_steps:
-                        break
                 self.epoch += 1
         self.save_checkpoint()
         if save_components_every > 0:

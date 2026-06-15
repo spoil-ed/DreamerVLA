@@ -15,11 +15,11 @@ Why a dedicated runner, not another standalone script:
     and training loop (this runner) — so head_type ablation is a 1-line config
     override, not a script fork.
 
-The training loop is step-based (matches WMPO's ``MAX_STEPS=200_000`` paradigm):
-  * Infinite resampled train stream → ``cfg.training.max_steps`` total optimizer steps
+The training loop is epoch-based:
+  * Resampled train loader → ``cfg.training.num_epochs`` passes, default 20
   * Eval every ``cfg.training.eval_every`` steps; window F1 + (optional) episode F1
   * Best ckpt saved by val window F1 (sigmoid + threshold sweep, WMPO protocol)
-  * Final ckpt saved at ``max_steps``
+  * Final ckpt saved after the last epoch
 
 Window-level F1 uses sigmoid + threshold sweep to mirror WMPO's
 ``_evaluate_terminal_model`` (note: WMPO sweep is [0.3, 1.0]; we expose the bounds
@@ -58,7 +58,7 @@ from dreamervla.runners.base_runner import BaseRunner
 
 
 class LatentClassifierRunner(BaseRunner):
-    """Single-GPU step-based trainer for LatentSuccessClassifier.
+    """Single-GPU epoch-based trainer for LatentSuccessClassifier.
 
     Lifecycle: setup() → run() → teardown() (via BaseRunner.execute).
     """
@@ -228,10 +228,15 @@ class LatentClassifierRunner(BaseRunner):
         assert self.train_loader is not None and self.val_loader is not None
 
         tr = self.cfg.training
-        max_steps = int(tr.max_steps)
+        num_epochs_cfg = OmegaConf.select(tr, "num_epochs", default=20)
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
         eval_every = int(OmegaConf.select(tr, "eval_every") or 500)
         ckpt_every = int(OmegaConf.select(tr, "ckpt_every") or eval_every)
         log_every = int(OmegaConf.select(tr, "log_every") or 50)
+        steps_per_epoch_cfg = int(OmegaConf.select(tr, "steps_per_epoch") or 0)
+        steps_per_epoch = (
+            steps_per_epoch_cfg if steps_per_epoch_cfg > 0 else max(1, len(self.train_loader))
+        )
         label_smoothing = float(OmegaConf.select(tr, "label_smoothing") or 0.0)
 
         # class-balanced CE (matches WMPO `nn.CrossEntropyLoss()` *unweighted* by
@@ -253,82 +258,84 @@ class LatentClassifierRunner(BaseRunner):
             cw = None
         loss_fn = nn.CrossEntropyLoss(weight=cw, label_smoothing=label_smoothing)
 
-        train_iter = iter(self.train_loader)
         running_loss = 0.0
         running_correct = 0
         running_total = 0
 
         t0 = time.time()
-        while self.global_step < max_steps:
-            try:
-                batch = next(train_iter)
-            except StopIteration:
-                train_iter = iter(self.train_loader)
-                batch = next(train_iter)
-            xs, ys = batch
-            xs = xs.to(self.device, non_blocking=True)
-            ys = ys.to(self.device, non_blocking=True)
+        while self.epoch < num_epochs:
+            for batch_idx, (xs, ys) in enumerate(self.train_loader):
+                if batch_idx >= steps_per_epoch:
+                    break
+                xs = xs.to(self.device, non_blocking=True)
+                ys = ys.to(self.device, non_blocking=True)
 
-            self.model.train()
-            logits = self.model(xs)
-            loss = loss_fn(logits, ys)
-            self.optim.zero_grad(set_to_none=True)
-            loss.backward()
-            grad_norm = float(
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
-            )
-            self.optim.step()
-
-            with torch.no_grad():
-                pred = logits.argmax(dim=-1)
-                running_correct += int((pred == ys).sum().item())
-                running_total += int(ys.numel())
-            running_loss += float(loss.item())
-
-            self.global_step += 1
-
-            if self.global_step % log_every == 0:
-                self._log(
-                    {
-                        "event": "train_step",
-                        "step": self.global_step,
-                        "loss": running_loss / log_every,
-                        "acc": running_correct / max(running_total, 1),
-                        "grad_norm": grad_norm,
-                        "wall_s": time.time() - t0,
-                    }
+                self.model.train()
+                logits = self.model(xs)
+                loss = loss_fn(logits, ys)
+                self.optim.zero_grad(set_to_none=True)
+                loss.backward()
+                grad_norm = float(
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
                 )
-                running_loss = 0.0
-                running_correct = 0
-                running_total = 0
+                self.optim.step()
 
-            # ---- periodic eval ---------------------------------------
-            if self.global_step % eval_every == 0:
-                w_metrics = self._evaluate_window_level()
-                self._log(
-                    {"event": "val_window", "step": self.global_step, **w_metrics}
-                )
-                if w_metrics["best_f1"] > self.best_window_f1:
-                    self.best_window_f1 = float(w_metrics["best_f1"])
-                    self._save_named(
-                        f"best_window_f1{w_metrics['best_f1']:.4f}_th{w_metrics['best_thresh']:.2f}",
-                        extra={"val_window": w_metrics},
-                    )
+                with torch.no_grad():
+                    pred = logits.argmax(dim=-1)
+                    running_correct += int((pred == ys).sum().item())
+                    running_total += int(ys.numel())
+                running_loss += float(loss.item())
 
-                if bool(OmegaConf.select(tr, "episode_eval_enabled") or False):
-                    e_metrics = self._evaluate_episode_level()
+                self.global_step += 1
+
+                if self.global_step % log_every == 0:
                     self._log(
-                        {"event": "val_episode", "step": self.global_step, **e_metrics}
+                        {
+                            "event": "train_step",
+                            "step": self.global_step,
+                            "epoch": self.epoch,
+                            "loss": running_loss / log_every,
+                            "acc": running_correct / max(running_total, 1),
+                            "grad_norm": grad_norm,
+                            "wall_s": time.time() - t0,
+                        }
                     )
-                    if e_metrics["best_f1"] > self.best_episode_f1:
-                        self.best_episode_f1 = float(e_metrics["best_f1"])
+                    running_loss = 0.0
+                    running_correct = 0
+                    running_total = 0
+
+                # ---- periodic eval ---------------------------------------
+                if self.global_step % eval_every == 0:
+                    w_metrics = self._evaluate_window_level()
+                    self._log(
+                        {"event": "val_window", "step": self.global_step, **w_metrics}
+                    )
+                    if w_metrics["best_f1"] > self.best_window_f1:
+                        self.best_window_f1 = float(w_metrics["best_f1"])
                         self._save_named(
-                            f"best_episode_f1{e_metrics['best_f1']:.4f}_th{e_metrics['best_thresh']:.2f}",
-                            extra={"val_episode": e_metrics},
+                            f"best_window_f1{w_metrics['best_f1']:.4f}_th{w_metrics['best_thresh']:.2f}",
+                            extra={"val_window": w_metrics},
                         )
 
-            if self.global_step % ckpt_every == 0:
-                self.save_checkpoint(tag="latest")
+                    if bool(OmegaConf.select(tr, "episode_eval_enabled") or False):
+                        e_metrics = self._evaluate_episode_level()
+                        self._log(
+                            {
+                                "event": "val_episode",
+                                "step": self.global_step,
+                                **e_metrics,
+                            }
+                        )
+                        if e_metrics["best_f1"] > self.best_episode_f1:
+                            self.best_episode_f1 = float(e_metrics["best_f1"])
+                            self._save_named(
+                                f"best_episode_f1{e_metrics['best_f1']:.4f}_th{e_metrics['best_thresh']:.2f}",
+                                extra={"val_episode": e_metrics},
+                            )
+
+                if self.global_step % ckpt_every == 0:
+                    self.save_checkpoint(tag="latest")
+            self.epoch += 1
 
         # ---- final ckpt + summary ------------------------------------
         self.save_checkpoint(tag="final")
@@ -336,6 +343,7 @@ class LatentClassifierRunner(BaseRunner):
             "best_window_f1": self.best_window_f1,
             "best_episode_f1": self.best_episode_f1,
             "total_steps": int(self.global_step),
+            "total_epochs": int(self.epoch),
             "wall_s": time.time() - t0,
         }
         self._log({"event": "done", **summary})

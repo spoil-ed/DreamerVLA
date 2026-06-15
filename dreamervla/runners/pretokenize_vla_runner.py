@@ -745,6 +745,9 @@ class PretokenizeVLARunner(BaseRunner):
         for pg in self.vla_optimizer.param_groups:
             pg.setdefault("initial_lr", pg["lr"])
 
+        num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
+        num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
+
         # configure lr scheduler
         lr_scheduler = get_scheduler(
             str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant")),
@@ -752,7 +755,7 @@ class PretokenizeVLARunner(BaseRunner):
             num_warmup_steps=int(
                 OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
             ),
-            num_training_steps=(len(train_dataloader) * int(cfg.training.num_epochs))
+            num_training_steps=(len(train_dataloader) * num_epochs)
             // int(cfg.training.gradient_accumulate_every),
             last_epoch=self.global_step - 1,
         )
@@ -763,7 +766,8 @@ class PretokenizeVLARunner(BaseRunner):
         )
 
         if cfg.training.debug:
-            cfg.training.num_epochs = 3
+            num_epochs = 3
+            cfg.training.num_epochs = num_epochs
             cfg.training.max_train_steps = 2
             cfg.training.checkpoint_every = 1
 
@@ -779,7 +783,7 @@ class PretokenizeVLARunner(BaseRunner):
         try:
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
-                for _local_epoch_idx in range(cfg.training.num_epochs - self.epoch):
+                while self.epoch < num_epochs:
                     self.set_dataloader_epoch(train_dataloader, self.epoch)
 
                     step_log: dict[str, float | str | int] = {}

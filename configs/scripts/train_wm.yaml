@@ -13,7 +13,7 @@ master_port: 29500
 batch_size: null
 num_workers: null
 max_steps: null
-num_epochs: null
+num_epochs: 20
 out_dir: null
 run_tag: null
 env: {}

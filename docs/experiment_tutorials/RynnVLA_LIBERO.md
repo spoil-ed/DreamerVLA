@@ -137,7 +137,7 @@ Smoke run:
 
 ```bash
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=RynnVLA_LIBERO \
-  gpus=0 ngpu=1 batch_size=2 num_workers=0 max_steps=1 out_dir=/tmp/rynnvla_libero_wm_smoke
+  gpus=0 ngpu=1 batch_size=2 num_workers=0 num_epochs=1 out_dir=/tmp/rynnvla_libero_wm_smoke
 ```
 
 ## 5. Classifier

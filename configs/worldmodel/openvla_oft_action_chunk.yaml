@@ -16,8 +16,8 @@ training:
   distributed_strategy: single
   data_parallel: false
   seed: 7
-  max_steps: 20000
-  num_epochs: null
+  max_steps: null
+  num_epochs: 20
   log_every: 20
   save_every: 1000
   tqdm_interval_sec: 1.0

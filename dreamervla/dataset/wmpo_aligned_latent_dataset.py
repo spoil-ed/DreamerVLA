@@ -116,8 +116,8 @@ def _load_all(
 class WMPOAlignedLatentTrainDataset(IterableDataset):
     """Train-mode latent dataset. Each demo yields 1 end + 1 random earlier window.
 
-    Stream is **infinite** (resampled, like WMPO's ``ResampledShards``) so the
-    workspace controls duration purely via ``max_steps``.
+    Stream is **infinite** (resampled, like WMPO's ``ResampledShards``). The
+    runner defines an epoch as one pass over the expected per-demo windows.
     """
 
     def __init__(
@@ -180,6 +180,7 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
         n_fail = len(self._demos) - n_succ
         n_pos_windows = n_succ
         n_neg_windows = n_succ + 2 * n_fail
+        self._epoch_windows = n_pos_windows + n_neg_windows
         if verbose:
             print(
                 f"[wmpo-latent:train] per-epoch windows: "
@@ -187,6 +188,9 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
                 f"ratio={n_pos_windows}:{n_neg_windows}",
                 flush=True,
             )
+
+    def __len__(self) -> int:
+        return int(self._epoch_windows)
 
     # ---- WebDataset-style infinite stream with per-worker shard ---------
 

@@ -370,7 +370,7 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
             "num_workers=0",
             "out_dir="
             + str(tmp_path / "out"),
-            "training.max_steps=1",
+            "num_epochs=1",
         ],
         cwd=root,
         env=env,
@@ -389,7 +389,7 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     assert "dataloader.batch_size=7" in log_text
     assert "dataloader.num_workers=0" in log_text
     assert f"training.out_dir={tmp_path / 'out'}" in log_text
-    assert "training.max_steps=1" in log_text
+    assert "training.num_epochs=1" in log_text
 
 
 def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:

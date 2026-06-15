@@ -32,8 +32,8 @@ training:
   distributed_strategy: single
   data_parallel: false
   seed: 7
-  max_steps: 20000
-  num_epochs: null
+  max_steps: null
+  num_epochs: 20
   log_every: 20
   save_every: 1000
   tqdm_interval_sec: 1.0
@@ -43,7 +43,7 @@ training:
   resume_skip_optimizer: true
   # When warm-starting from a per-step ckpt to launch a NEW chunk-loss run,
   # set this to true: global_step / epoch / RNG stay at fresh-seed values
-  # so the lr warmup, save_every cadence and max_steps budget all behave as
+  # so the lr warmup, save_every cadence and epoch budget all behave as
   # a fresh run.  Leave at false for ordinary mid-training resume.
   resume_reset_step: false
   save_final: true

@@ -38,7 +38,8 @@ training:
   device: cuda
   seed: 0
   resume: false
-  max_steps: 8000
+  num_epochs: 20
+  max_steps: null
   batch_size: 8
   val_batch_size: 64
   num_workers: 2
