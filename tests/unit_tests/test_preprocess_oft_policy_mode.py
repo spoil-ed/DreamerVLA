@@ -92,7 +92,7 @@ def test_oft_preprocess_uses_wmpo_prismatic_constants() -> None:
     assert "prismatic.vla.constants" in source
 
 
-def test_oft_preprocess_script_checks_env_and_resumes_partial_sidecars() -> None:
+def test_oft_preprocess_script_checks_env_and_repairs_partial_sidecars() -> None:
     source = _project_path("scripts/preprocess/35_oft_action_hidden.sh").read_text(
         encoding="utf-8"
     )
@@ -103,8 +103,8 @@ def test_oft_preprocess_script_checks_env_and_resumes_partial_sidecars() -> None
     assert "OVERWRITE_ARGS=(--overwrite)" in source
     assert 'OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"' in source
     assert '--chunk-size "${OFT_CHUNK_SIZE}"' in source
-    assert "resume incomplete action-hidden sidecar" in source
-    assert "resume incomplete input-token sidecar" in source
+    assert "repair incomplete action-hidden sidecar" in source
+    assert "repair incomplete input-token sidecar" in source
     assert "existing action-hidden sidecar is incomplete; rerun" not in source
     assert "existing input-token sidecar is incomplete; rerun" not in source
 

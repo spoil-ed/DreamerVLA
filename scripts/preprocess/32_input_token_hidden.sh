@@ -43,6 +43,20 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
   exit 5
 fi
 
+if [[ "${OVERWRITE}" != "1" && -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
+  if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+    --dir "${INPUT_TOKEN_HIDDEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset obs_embedding; then
+    echo "[32_input_token_hidden] skip input-token sidecar: ${INPUT_TOKEN_HIDDEN_DIR}"
+    exit 0
+  fi
+  echo "[32_input_token_hidden] repair incomplete input-token sidecar: ${INPUT_TOKEN_HIDDEN_DIR}" >&2
+fi
 if [[ "${OVERWRITE}" == "1" || ! -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${INPUT_TOKEN_HIDDEN_DIR}"
   python -m torch.distributed.run \
@@ -63,6 +77,31 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
     --action-dim 7 \
     --time-horizon "${TIME_HORIZON}" \
     --overwrite
-else
-  echo "[32_input_token_hidden] skip input-token sidecar: ${INPUT_TOKEN_HIDDEN_DIR}"
+elif [[ "${OVERWRITE}" != "1" ]]; then
+  python -m torch.distributed.run \
+    --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
+    --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
+    --hdf5-dir "${REWARD_DIR}" \
+    --out-dir "${INPUT_TOKEN_HIDDEN_DIR}" \
+    --model-path "${VLA_CKPT}" \
+    --tokenizer-path "${TOKENIZER_PATH}" \
+    --text-tokenizer-path "${TEXT_TOKENIZER_PATH}" \
+    --chameleon-vqgan-config "${CHAMELEON_VQGAN_CONFIG}" \
+    --chameleon-vqgan-ckpt "${CHAMELEON_VQGAN_CKPT}" \
+    --action-head-type legacy \
+    --obs-hidden-source input_token_embedding \
+    --history 2 \
+    --include-state \
+    --rotate-images-180 \
+    --action-dim 7 \
+    --time-horizon "${TIME_HORIZON}"
 fi
+
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${INPUT_TOKEN_HIDDEN_DIR}" \
+  --reference-dir "${REWARD_DIR}" \
+  --match-reference-demos \
+  --match-reference-lengths \
+  --require-complete-attr \
+  --require-config \
+  --required-demo-dataset obs_embedding

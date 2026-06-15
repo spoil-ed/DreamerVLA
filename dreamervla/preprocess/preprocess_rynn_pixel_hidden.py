@@ -19,6 +19,7 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.models.encoder.rynnvla_encoder import RynnVLAEncoder
+from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamervla.utils.paths import checkpoints_path, processed_data_path
 
@@ -67,35 +68,6 @@ def _init_distributed() -> tuple[int, int, int, torch.device]:
     else:
         device = torch.device("cpu")
     return rank, world_size, local_rank, device
-
-
-def _is_complete_hdf5(path: Path, *, require_actor_sequence: bool = False) -> bool:
-    if not path.is_file():
-        return False
-    try:
-        with h5py.File(path, "r") as handle:
-            if not bool(handle.attrs.get("complete", False)):
-                return False
-            if not require_actor_sequence:
-                return True
-            if not bool(handle.attrs.get("save_actor_sequence", False)):
-                return False
-            data_group = handle.get("data")
-            if data_group is None:
-                return False
-            for demo_key in data_group.keys():
-                demo = data_group[demo_key]
-                for key in (
-                    "actor_hidden_states",
-                    "actor_input_ids",
-                    "actor_attention_mask",
-                    "actor_seq_lens",
-                ):
-                    if key not in demo:
-                        return False
-            return True
-    except OSError:
-        return False
 
 
 def _hidden_dtype(name: str) -> np.dtype:
@@ -1029,9 +1001,35 @@ def main() -> None:
         files = files[: int(args.max_files)]
     if not files:
         raise RuntimeError(f"No HDF5 files found under {hdf5_dir}")
-    assigned = files[rank::world_size]
+    required_datasets = [args.hidden_key]
+    if bool(args.save_action_hidden):
+        required_datasets.append("action_hidden_states")
+    if bool(args.save_actor_sequence):
+        required_datasets.extend(
+            [
+                "actor_hidden_states",
+                "actor_input_ids",
+                "actor_attention_mask",
+                "actor_seq_lens",
+            ]
+        )
+    required_by_output = {out_dir / path.name: required_datasets for path in files}
+    task_plan = plan_hdf5_preprocess_tasks(
+        files,
+        rank=rank,
+        world_size=world_size,
+        output_paths=lambda source_path: [out_dir / source_path.name],
+        required_demo_datasets=required_by_output,
+        overwrite=bool(args.overwrite),
+    )
+    assigned = [task.source_path for task in task_plan.assigned]
     assigned_stats = {
-        stat["file"]: stat for stat in (_source_stats(path, args) for path in assigned)
+        task.source_path.name: {
+            "file": task.source_path.name,
+            "demos": task.demos,
+            "frames": task.frames,
+        }
+        for task in task_plan.assigned
     }
     progress_dir = out_dir / ".progress"
     total_demos = 0
@@ -1069,7 +1067,9 @@ def main() -> None:
         progress_dir.mkdir(parents=True, exist_ok=True)
         print(
             f"[rynn-hidden] source={hdf5_dir} out={out_dir} "
-            f"files={len(files)} demos={total_demos} frames={total_frames} "
+            f"files={len(files)} pending={len(task_plan.pending)} skipped={len(task_plan.skipped)} "
+            f"repaired={len(task_plan.repaired)} demos={total_demos} frames={total_frames} "
+            f"loads_by_rank={task_plan.loads_by_rank} "
             f"world_size={world_size} run_id={run_id}"
         )
 
@@ -1102,33 +1102,39 @@ def main() -> None:
         )
         monitor_thread.start()
 
-    encoder = _make_encoder(args, device=device)
     rank_records: list[dict[str, Any]] = []
     completed_demos = 0
     completed_frames = 0
+    if not assigned:
+        _write_rank_progress(
+            progress_dir,
+            rank,
+            run_id=run_id,
+            completed_demos=0,
+            completed_frames=0,
+            done=True,
+        )
+        (out_dir / f"manifest_rank{rank:03d}.json").write_text(
+            json.dumps(rank_records, indent=2, sort_keys=True) + "\n"
+        )
+        if rank == 0:
+            if monitor_thread is not None:
+                while not _all_ranks_done(progress_dir, run_id, world_size):
+                    time.sleep(2.0)
+            if stop_event is not None:
+                stop_event.set()
+            if monitor_thread is not None:
+                monitor_thread.join(timeout=5.0)
+            print("[rynn-hidden] done")
+        return
+
+    encoder = _make_encoder(args, device=device)
     for source_path in assigned:
         output_path = out_dir / source_path.name
         source_stat = assigned_stats[source_path.name]
         if output_path.exists():
             if args.overwrite:
                 output_path.unlink()
-            elif _is_complete_hdf5(
-                output_path,
-                require_actor_sequence=bool(args.save_actor_sequence),
-            ):
-                print(f"[rank{rank}] skip complete {output_path}")
-                completed_demos += int(source_stat["demos"])
-                completed_frames += int(source_stat["frames"])
-                _write_rank_progress(
-                    progress_dir,
-                    rank,
-                    run_id=run_id,
-                    completed_demos=completed_demos,
-                    completed_frames=completed_frames,
-                    current_file=source_path.name,
-                    done=False,
-                )
-                continue
             else:
                 raise RuntimeError(
                     f"Refusing to use incomplete sidecar without --overwrite: {output_path}"

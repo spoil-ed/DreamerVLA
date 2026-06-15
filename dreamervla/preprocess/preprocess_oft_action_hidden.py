@@ -14,10 +14,10 @@ from typing import Any
 import h5py
 import numpy as np
 import torch
-import torch.distributed as dist
 from PIL import Image
 from tqdm import tqdm
 
+from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.utils.paths import checkpoints_path, processed_data_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -72,19 +72,7 @@ def _init_distributed() -> tuple[int, int, torch.device]:
         device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cpu")
-    if world_size > 1 and dist.is_available() and not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
     return rank, world_size, device
-
-
-def _is_complete_hdf5(path: Path) -> bool:
-    if not path.is_file():
-        return False
-    try:
-        with h5py.File(path, "r") as handle:
-            return bool(handle.attrs.get("complete", False))
-    except OSError:
-        return False
 
 
 def _state_from_obs_group(obs_group: h5py.Group, index: int) -> np.ndarray:
@@ -945,7 +933,41 @@ def main() -> None:
         files = files[: int(args.max_files)]
     if not files:
         raise RuntimeError(f"No HDF5 files found under {hdf5_dir}")
-    assigned = files[rank::world_size]
+    def _output_paths(source_path: Path) -> list[Path]:
+        return [
+            path
+            for path in (
+                None if out_c_dir is None else out_c_dir / source_path.name,
+                None if out_d_dir is None else out_d_dir / source_path.name,
+                None if out_action_dir is None else out_action_dir / source_path.name,
+                None if out_input_dir is None else out_input_dir / source_path.name,
+            )
+            if path is not None
+        ]
+
+    required_by_output: dict[Path, list[str]] = {}
+    for source_path in files:
+        if out_c_dir is not None:
+            required_by_output[out_c_dir / source_path.name] = [args.hidden_key]
+        if out_d_dir is not None:
+            required_by_output[out_d_dir / source_path.name] = [args.hidden_key]
+        if out_action_dir is not None:
+            required_by_output[out_action_dir / source_path.name] = [
+                args.hidden_key,
+                "action_hidden_states",
+            ]
+        if out_input_dir is not None:
+            required_by_output[out_input_dir / source_path.name] = [args.hidden_key]
+
+    task_plan = plan_hdf5_preprocess_tasks(
+        files,
+        rank=rank,
+        world_size=world_size,
+        output_paths=_output_paths,
+        required_demo_datasets=required_by_output,
+        overwrite=bool(args.overwrite),
+    )
+    assigned = [task.source_path for task in task_plan.assigned]
     if rank == 0:
         base_config = vars(args).copy()
         base_config["hdf5_dir"] = str(hdf5_dir)
@@ -987,18 +1009,20 @@ def main() -> None:
                 json.dumps(config_input, indent=2, sort_keys=True) + "\n"
             )
         print(
-            f"[oft-hidden] source={hdf5_dir} files={len(files)} assigned/rank={len(assigned)} "
-            f"world_size={world_size} policy_mode={args.resolved_policy_mode}"
+            f"[oft-hidden] source={hdf5_dir} files={len(files)} pending={len(task_plan.pending)} "
+            f"skipped={len(task_plan.skipped)} repaired={len(task_plan.repaired)} "
+            f"assigned/rank={len(assigned)} "
+            f"loads_by_rank={task_plan.loads_by_rank} world_size={world_size} "
+            f"policy_mode={args.resolved_policy_mode}"
         )
 
-    using_torch_dist = bool(world_size > 1 and dist.is_available() and dist.is_initialized())
-    if using_torch_dist and rank != 0:
-        dist.barrier(device_ids=[device.index] if device.type == "cuda" else None)
-    components = _load_oft_components(args, device)
-    if using_torch_dist:
-        dist.barrier(device_ids=[device.index] if device.type == "cuda" else None)
     total_demos = 0
     total_frames = 0
+    if not assigned:
+        print(f"[rank{rank}] done demos=0 frames=0")
+        return
+
+    components = _load_oft_components(args, device)
     for source_path in assigned:
         out_c_path = None if out_c_dir is None else out_c_dir / source_path.name
         out_d_path = None if out_d_dir is None else out_d_dir / source_path.name
@@ -1009,18 +1033,10 @@ def main() -> None:
             for path in (out_c_path, out_d_path, out_action_path, out_input_path)
             if path is not None
         ]
-        if any(path.exists() for path in existing_paths):
-            if args.overwrite:
-                for path in existing_paths:
-                    if path.exists():
-                        path.unlink()
-            elif all(_is_complete_hdf5(path) for path in existing_paths):
-                print(f"[rank{rank}] skip complete {source_path.name}")
-                continue
-            else:
-                raise RuntimeError(
-                    f"Refusing to use incomplete sidecar without --overwrite: {existing_paths}"
-                )
+        if args.overwrite:
+            for path in existing_paths:
+                if path.exists():
+                    path.unlink()
         stats = _write_source_sidecars(
             source_path=source_path,
             out_c_path=out_c_path,

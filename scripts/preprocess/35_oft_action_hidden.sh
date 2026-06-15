@@ -87,13 +87,16 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_HIDDEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
+      --match-reference-demos \
+      --match-reference-lengths \
       --require-complete-attr \
       --require-config \
+      --required-demo-dataset obs_embedding \
       --required-demo-dataset action_hidden_states; then
       echo "[35_oft_action_hidden] skip action-hidden: ${OFT_HIDDEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] resume incomplete action-hidden sidecar: ${OFT_HIDDEN_DIR}" >&2
+    echo "[35_oft_action_hidden] repair incomplete action-hidden sidecar: ${OFT_HIDDEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}"
   [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
@@ -112,18 +115,29 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --image-keys ${OFT_IMAGE_KEYS} \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
+  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+    --dir "${OFT_HIDDEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset obs_embedding \
+    --required-demo-dataset action_hidden_states
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_INPUT_TOKEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
+      --match-reference-demos \
+      --match-reference-lengths \
       --require-complete-attr \
       --require-config \
       --required-demo-dataset obs_embedding; then
       echo "[35_oft_action_hidden] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] resume incomplete input-token sidecar: ${OFT_INPUT_TOKEN_DIR}" >&2
+    echo "[35_oft_action_hidden] repair incomplete input-token sidecar: ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_INPUT_TOKEN_DIR}"
   [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
@@ -142,24 +156,37 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --image-keys ${OFT_IMAGE_KEYS} \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
+  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+    --dir "${OFT_INPUT_TOKEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset obs_embedding
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_HIDDEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
+      --match-reference-demos \
+      --match-reference-lengths \
       --require-complete-attr \
       --require-config \
+      --required-demo-dataset obs_embedding \
       --required-demo-dataset action_hidden_states && \
        python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_INPUT_TOKEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
+      --match-reference-demos \
+      --match-reference-lengths \
       --require-complete-attr \
       --require-config \
       --required-demo-dataset obs_embedding; then
       echo "[35_oft_action_hidden] skip OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] resume incomplete OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}" >&2
+    echo "[35_oft_action_hidden] repair incomplete OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}" "${OFT_INPUT_TOKEN_DIR}"
   [[ "${OFT_FAKE_COMPONENTS}" == "1" ]] || _check_openvla_oft_env
@@ -179,6 +206,23 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
     --image-keys ${OFT_IMAGE_KEYS} \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
+  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+    --dir "${OFT_HIDDEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset obs_embedding \
+    --required-demo-dataset action_hidden_states
+  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+    --dir "${OFT_INPUT_TOKEN_DIR}" \
+    --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
+    --require-complete-attr \
+    --require-config \
+    --required-demo-dataset obs_embedding
 else
   echo "Unsupported OFT_LATENT_SCHEME=${OFT_LATENT_SCHEME}; use action_hidden, input_tokens, or both." >&2
   exit 2

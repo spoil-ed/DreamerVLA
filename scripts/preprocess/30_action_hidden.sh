@@ -55,15 +55,18 @@ if [[ "${OVERWRITE}" != "1" && -d "${HIDDEN_DIR}" ]]; then
   if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
     --dir "${HIDDEN_DIR}" \
     --reference-dir "${REWARD_DIR}" \
+    --match-reference-demos \
+    --match-reference-lengths \
     --require-complete-attr \
     --require-config \
+    --required-demo-dataset obs_embedding \
     --required-demo-dataset action_hidden_states; then
     echo "[30_action_hidden] skip action-hidden: ${HIDDEN_DIR}"
     exit 0
   fi
-  echo "[30_action_hidden] existing action-hidden sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${HIDDEN_DIR}" >&2
-  exit 6
-else
+  echo "[30_action_hidden] repair incomplete action-hidden sidecar: ${HIDDEN_DIR}" >&2
+fi
+if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HIDDEN_DIR}"
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
@@ -85,4 +88,34 @@ else
     --action-dim 7 \
     --time-horizon "${TIME_HORIZON}" \
     --overwrite
+elif [[ "${OVERWRITE}" != "1" ]]; then
+  python -m torch.distributed.run \
+    --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
+    --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
+    --hdf5-dir "${REWARD_DIR}" \
+    --out-dir "${HIDDEN_DIR}" \
+    --model-path "${VLA_MODEL_PATH}" \
+    --encoder-state-ckpt "${ENCODER_STATE_CKPT}" \
+    --tokenizer-path "${TOKENIZER_PATH}" \
+    --text-tokenizer-path "${TEXT_TOKENIZER_PATH}" \
+    --chameleon-vqgan-config "${CHAMELEON_VQGAN_CONFIG}" \
+    --chameleon-vqgan-ckpt "${CHAMELEON_VQGAN_CKPT}" \
+    --action-head-type legacy \
+    --obs-hidden-source action_query \
+    --history 2 \
+    --include-state \
+    --rotate-images-180 \
+    --save-action-hidden \
+    --action-dim 7 \
+    --time-horizon "${TIME_HORIZON}"
 fi
+
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${HIDDEN_DIR}" \
+  --reference-dir "${REWARD_DIR}" \
+  --match-reference-demos \
+  --match-reference-lengths \
+  --require-complete-attr \
+  --require-config \
+  --required-demo-dataset obs_embedding \
+  --required-demo-dataset action_hidden_states

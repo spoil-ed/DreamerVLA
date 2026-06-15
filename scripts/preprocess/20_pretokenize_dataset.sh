@@ -50,6 +50,7 @@ if [[ -z "$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2
   echo "Run: bash scripts/preprocess/prepare_libero_data.sh task=${TASK} only=[10_hdf5_reward]" >&2
   exit 5
 fi
+python -m dreamervla.preprocess.check_artifacts hdf5-dir --dir "${HDF5_DIR}"
 
 if [[ "${OVERWRITE}" == "1" || ! -d "${IMG_STATE_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${IMG_STATE_DIR}"

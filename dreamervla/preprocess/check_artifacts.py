@@ -27,6 +27,31 @@ def _hdf5_files(path: Path) -> list[Path]:
     return files
 
 
+def _demo_frame_lengths(handle: h5py.File, path: Path) -> dict[str, int]:
+    data_group = handle.get("data")
+    if data_group is None or not data_group.keys():
+        raise RuntimeError(f"missing non-empty data group: {path}")
+    lengths: dict[str, int] = {}
+    for demo_key, demo in data_group.items():
+        if "actions" in demo:
+            lengths[str(demo_key)] = int(demo["actions"].shape[0])
+            continue
+        obs_group = demo.get("obs")
+        if obs_group is not None and obs_group.keys():
+            first_key = next(iter(obs_group.keys()))
+            lengths[str(demo_key)] = int(obs_group[first_key].shape[0])
+            continue
+        first_dataset = next(
+            (value for value in demo.values() if isinstance(value, h5py.Dataset)),
+            None,
+        )
+        if first_dataset is not None and first_dataset.shape:
+            lengths[str(demo_key)] = int(first_dataset.shape[0])
+            continue
+        raise RuntimeError(f"cannot infer demo length for {path}:{demo_key}")
+    return lengths
+
+
 def validate_metainfo(path: str | Path) -> None:
     path = _project_path(path)
     if not path.is_file():
@@ -46,6 +71,8 @@ def validate_hdf5_dir(
     require_complete_attr: bool = False,
     required_demo_datasets: list[str] | None = None,
     require_config: bool = False,
+    match_reference_demos: bool = False,
+    match_reference_lengths: bool = False,
 ) -> None:
     path = _project_path(path)
     files = _hdf5_files(path)
@@ -54,7 +81,9 @@ def validate_hdf5_dir(
 
     if reference_dir is not None:
         reference = _project_path(reference_dir)
-        reference_names = {item.name for item in _hdf5_files(reference)}
+        reference_files = _hdf5_files(reference)
+        reference_by_name = {item.name: item for item in reference_files}
+        reference_names = set(reference_by_name)
         names = {item.name for item in files}
         missing = sorted(reference_names - names)
         extra = sorted(names - reference_names)
@@ -68,6 +97,10 @@ def validate_hdf5_dir(
                 f"HDF5 file set mismatch for {path} vs {reference}: "
                 + ", ".join(detail)
             )
+    elif match_reference_demos or match_reference_lengths:
+        raise RuntimeError(
+            "--match-reference-demos/--match-reference-lengths require --reference-dir"
+        )
 
     required_demo_datasets = required_demo_datasets or []
     for file_path in files:
@@ -78,6 +111,34 @@ def validate_hdf5_dir(
                 data_group = handle.get("data")
                 if data_group is None or not data_group.keys():
                     raise RuntimeError(f"missing non-empty data group: {file_path}")
+                reference_lengths: dict[str, int] | None = None
+                if reference_dir is not None and (match_reference_demos or match_reference_lengths):
+                    reference_path = reference_by_name[file_path.name]
+                    with h5py.File(reference_path, "r") as reference_handle:
+                        reference_data = reference_handle.get("data")
+                        if reference_data is None or not reference_data.keys():
+                            raise RuntimeError(
+                                f"missing non-empty reference data group: {reference_path}"
+                            )
+                        reference_demo_keys = {str(key) for key in reference_data.keys()}
+                    demo_keys = {str(key) for key in data_group.keys()}
+                    if match_reference_demos and demo_keys != reference_demo_keys:
+                        missing_demos = sorted(reference_demo_keys - demo_keys)
+                        extra_demos = sorted(demo_keys - reference_demo_keys)
+                        detail = []
+                        if missing_demos:
+                            detail.append(f"missing_demos={missing_demos[:5]}")
+                        if extra_demos:
+                            detail.append(f"extra_demos={extra_demos[:5]}")
+                        raise RuntimeError(
+                            f"HDF5 demo set mismatch for {file_path}: "
+                            + ", ".join(detail)
+                        )
+                    if match_reference_lengths:
+                        with h5py.File(reference_path, "r") as reference_handle:
+                            reference_lengths = _demo_frame_lengths(
+                                reference_handle, reference_path
+                            )
                 if required_demo_datasets:
                     for demo_key in data_group.keys():
                         demo = data_group[demo_key]
@@ -88,6 +149,22 @@ def validate_hdf5_dir(
                             raise RuntimeError(
                                 f"missing datasets {missing} in {file_path}:{demo_key}"
                             )
+                        if reference_lengths is not None:
+                            for dataset in required_demo_datasets:
+                                value = demo[dataset]
+                                if not isinstance(value, h5py.Dataset) or not value.shape:
+                                    raise RuntimeError(
+                                        f"dataset has no frame dimension in "
+                                        f"{file_path}:{demo_key}/{dataset}"
+                                    )
+                                expected = int(reference_lengths[str(demo_key)])
+                                actual = int(value.shape[0])
+                                if actual != expected:
+                                    raise RuntimeError(
+                                        f"dataset length mismatch in "
+                                        f"{file_path}:{demo_key}/{dataset}: "
+                                        f"actual={actual} expected={expected}"
+                                    )
         except OSError as exc:
             raise RuntimeError(f"cannot open HDF5 file {file_path}: {exc}") from exc
 
@@ -104,6 +181,8 @@ def _parse_args() -> argparse.Namespace:
     hdf5_dir.add_argument("--reference-dir", default=None)
     hdf5_dir.add_argument("--require-complete-attr", action="store_true")
     hdf5_dir.add_argument("--require-config", action="store_true")
+    hdf5_dir.add_argument("--match-reference-demos", action="store_true")
+    hdf5_dir.add_argument("--match-reference-lengths", action="store_true")
     hdf5_dir.add_argument("--required-demo-dataset", action="append", default=[])
     return parser.parse_args()
 
@@ -120,6 +199,8 @@ def main() -> None:
             require_complete_attr=bool(args.require_complete_attr),
             required_demo_datasets=list(args.required_demo_dataset),
             require_config=bool(args.require_config),
+            match_reference_demos=bool(args.match_reference_demos),
+            match_reference_lengths=bool(args.match_reference_lengths),
         )
         return
     raise AssertionError(args.command)

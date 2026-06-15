@@ -72,6 +72,10 @@ else
 fi
 
 python -m dreamervla.preprocess.check_artifacts metainfo --path "${META_JSON}"
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${MARKED_DIR}" \
+  --reference-dir "${RAW_LIBERO_DIR}" \
+  --match-reference-demos
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${marked_hdf5}" ]]; then
@@ -96,6 +100,11 @@ else
     --overwrite
 fi
 
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${HDF5_DIR}" \
+  --reference-dir "${MARKED_DIR}" \
+  --match-reference-demos
+
 filtered_hdf5="$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${filtered_hdf5}" ]]; then
   echo "No filtered HDF5 files found under: ${HDF5_DIR}" >&2
@@ -118,3 +127,10 @@ else
     --metainfo-json "${META_JSON}" \
     --overwrite
 fi
+
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${REWARD_DIR}" \
+  --reference-dir "${HDF5_DIR}" \
+  --match-reference-demos \
+  --match-reference-lengths \
+  --required-demo-dataset rewards
