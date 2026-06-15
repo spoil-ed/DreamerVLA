@@ -32,7 +32,9 @@ actor.
 
 ## Logging
 
-Grouped training defaults to local TensorBoard:
+Grouped training defaults to local TensorBoard. If you are looking for
+"TensorFlow logging" in these recipes, the supported switch is the TensorBoard
+event writer, not a separate TensorFlow training backend:
 
 ```bash
 logger=tensorboard
@@ -47,7 +49,7 @@ logger=wandb
 Use TensorBoard and online W&B together:
 
 ```bash
-logger=tensorboard_wandb
+logger=tensorboard_wandb runner.logger.wandb_mode=online
 ```
 
 Use TensorBoard and offline W&B together:

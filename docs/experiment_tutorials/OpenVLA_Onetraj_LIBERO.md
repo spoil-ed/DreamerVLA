@@ -162,8 +162,7 @@ python -m dreamervla.preprocess.check_artifacts hdf5-dir \
   --dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
   --reference-dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256" \
   --match-reference-demos \
-  --match-reference-lengths \
-  --require-complete-attr
+  --match-reference-lengths
 
 python -m dreamervla.preprocess.check_artifacts hdf5-dir \
   --dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1" \
@@ -198,12 +197,13 @@ bash scripts/train_wm.sh \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
-Add logging overrides to any training command:
+Add logging overrides to any training command. The project uses TensorBoard
+event files for the local TensorFlow-compatible log viewer:
 
 ```bash
 logger=tensorboard
 logger=wandb
-logger=tensorboard_wandb
+logger=tensorboard_wandb runner.logger.wandb_mode=online
 logger=tensorboard_wandb runner.logger.wandb_mode=offline
 ```
 
