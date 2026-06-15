@@ -65,6 +65,40 @@ ${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remai
 ${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
 ```
 
+Manual integrity check:
+
+```bash
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
+  --reference-dir "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256" \
+  --match-reference-demos \
+  --match-reference-lengths \
+  --require-complete-attr
+
+python -m dreamervla.preprocess.check_artifacts hdf5-dir \
+  --dir "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2" \
+  --reference-dir "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
+  --match-reference-demos \
+  --match-reference-lengths \
+  --require-complete-attr \
+  --require-config
+```
+
+This checks that the reward HDF5 files match the no-noops source files and that
+the action-hidden sidecar has the same file set, demo keys, per-demo lengths,
+`complete=true` markers, and `preprocess_config.json` schema metadata.
+
+If `.tmp` or `.rank*.tmp` files remain under the artifact directories, the usual
+reason is that preprocessing was interrupted before the atomic rename to the
+final `.hdf5` completed. Re-running the same preprocessing step removes the old
+rank-local tmp for that output before writing it again. Only delete tmp files by
+hand after confirming no preprocessing process is still running:
+
+```bash
+find "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal" \
+  -type f \( -name "*.tmp" -o -name "*.rank*.tmp" \) -print
+```
+
 ## 3. Optional VLA SFT
 
 Use the downloaded RynnVLA checkpoint by default. To train a one-trajectory VLA
@@ -74,6 +108,19 @@ checkpoint:
 bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=RynnVLA_LIBERO \
   gpus=0 ngpu=1 batch_size=4 num_workers=4
 ```
+
+Add logging overrides to any training command:
+
+```bash
+logger=tensorboard
+logger=wandb
+logger=tensorboard_wandb
+logger=tensorboard_wandb runner.logger.wandb_mode=offline
+```
+
+TensorBoard writes `${training.out_dir}/log/tensorboard`; W&B writes
+`${training.out_dir}/log/wandb`. `wandb_mode=offline` keeps the W&B run local for
+later sync.
 
 If you use a new VLA checkpoint, rerun `30_action_hidden` with `VLA_CKPT` or
 `ENCODER_STATE_CKPT` pointing to that checkpoint.
