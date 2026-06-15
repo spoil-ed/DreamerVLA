@@ -8,6 +8,8 @@ from pathlib import Path
 
 import h5py
 
+from dreamervla.preprocess.sidecar_schema import required_demo_datasets_from_config
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -64,6 +66,23 @@ def validate_metainfo(path: str | Path) -> None:
         raise RuntimeError(f"metainfo JSON must be a non-empty object: {path}")
 
 
+def _required_demo_datasets_from_config(path: Path) -> list[str]:
+    config_path = path / "preprocess_config.json"
+    if not config_path.is_file():
+        return []
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid preprocess_config.json {config_path}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise RuntimeError(f"preprocess_config.json must be an object: {config_path}")
+
+    try:
+        return required_demo_datasets_from_config(config)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid preprocess_config.json {config_path}: {exc}") from exc
+
+
 def validate_hdf5_dir(
     path: str | Path,
     *,
@@ -103,6 +122,8 @@ def validate_hdf5_dir(
         )
 
     required_demo_datasets = required_demo_datasets or []
+    if not required_demo_datasets and require_config:
+        required_demo_datasets = _required_demo_datasets_from_config(path)
     for file_path in files:
         try:
             with h5py.File(file_path, "r") as handle:

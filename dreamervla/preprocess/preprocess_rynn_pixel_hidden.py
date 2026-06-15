@@ -20,6 +20,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.models.encoder.rynnvla_encoder import RynnVLAEncoder
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
+from dreamervla.preprocess.sidecar_schema import (
+    ACTION_HIDDEN_KEY,
+    ACTOR_SEQUENCE_KEYS,
+    DEFAULT_HIDDEN_KEY,
+    annotate_preprocess_config,
+    required_demo_datasets,
+)
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamervla.utils.paths import checkpoints_path, processed_data_path
 
@@ -137,10 +144,10 @@ def _prepare_actor_sequence_arrays(
         seq_lens[idx] = valid_len
 
     return {
-        "actor_hidden_states": hidden_states.detach().cpu().numpy(),
-        "actor_input_ids": input_rows,
-        "actor_attention_mask": mask_rows,
-        "actor_seq_lens": seq_lens,
+        ACTOR_SEQUENCE_KEYS["hidden"]: hidden_states.detach().cpu().numpy(),
+        ACTOR_SEQUENCE_KEYS["input_ids"]: input_rows,
+        ACTOR_SEQUENCE_KEYS["attention_mask"]: mask_rows,
+        ACTOR_SEQUENCE_KEYS["seq_lens"]: seq_lens,
     }
 
 
@@ -583,10 +590,12 @@ def _encode_chunk(
             raise RuntimeError("internal error: action hidden requested without actor input arrays")
         device = encoded.hidden_states.device
         input_ids = torch.as_tensor(
-            actor_arrays["actor_input_ids"], device=device, dtype=torch.long
+            actor_arrays[ACTOR_SEQUENCE_KEYS["input_ids"]], device=device, dtype=torch.long
         )
         attention_mask = torch.as_tensor(
-            actor_arrays["actor_attention_mask"], device=device, dtype=torch.bool
+            actor_arrays[ACTOR_SEQUENCE_KEYS["attention_mask"]],
+            device=device,
+            dtype=torch.bool,
         )
         with torch.no_grad():
             action_hidden = encoder.extract_action_hidden(
@@ -606,7 +615,7 @@ def _encode_chunk(
     if bool(save_actor_sequence) and actor_arrays is not None:
         result.update(actor_arrays)
     if bool(save_action_hidden) and action_hidden is not None:
-        result["action_hidden_states"] = action_hidden.detach().cpu().numpy()
+        result[ACTION_HIDDEN_KEY] = action_hidden.detach().cpu().numpy()
     return result
 
 
@@ -720,16 +729,16 @@ def _write_source_sidecar(
                         dset.attrs["token_dim"] = int(args.token_dim)
                 dset[start:end] = hidden.astype(hidden_dtype, copy=False)
                 if bool(args.save_actor_sequence):
-                    actor_hidden = encoded["actor_hidden_states"]
-                    actor_input_ids = encoded["actor_input_ids"]
-                    actor_attention_mask = encoded["actor_attention_mask"]
-                    actor_seq_lens = encoded["actor_seq_lens"]
+                    actor_hidden = encoded[ACTOR_SEQUENCE_KEYS["hidden"]]
+                    actor_input_ids = encoded[ACTOR_SEQUENCE_KEYS["input_ids"]]
+                    actor_attention_mask = encoded[ACTOR_SEQUENCE_KEYS["attention_mask"]]
+                    actor_seq_lens = encoded[ACTOR_SEQUENCE_KEYS["seq_lens"]]
                     chunk_seq_len = int(actor_hidden.shape[1])
                     if actor_hidden_dset is None:
                         actor_seq_len = chunk_seq_len
                         actor_hidden_dim = int(actor_hidden.shape[-1])
                         actor_hidden_dset = demo_out.create_dataset(
-                            "actor_hidden_states",
+                            ACTOR_SEQUENCE_KEYS["hidden"],
                             shape=(length, actor_seq_len, actor_hidden_dim),
                             maxshape=(length, None, actor_hidden_dim),
                             dtype=hidden_dtype,
@@ -737,7 +746,7 @@ def _write_source_sidecar(
                             compression=compression,
                         )
                         actor_input_ids_dset = demo_out.create_dataset(
-                            "actor_input_ids",
+                            ACTOR_SEQUENCE_KEYS["input_ids"],
                             shape=(length, actor_seq_len + 1),
                             maxshape=(length, None),
                             dtype=np.int32,
@@ -748,7 +757,7 @@ def _write_source_sidecar(
                             compression=compression,
                         )
                         actor_attention_mask_dset = demo_out.create_dataset(
-                            "actor_attention_mask",
+                            ACTOR_SEQUENCE_KEYS["attention_mask"],
                             shape=(length, actor_seq_len + 1),
                             maxshape=(length, None),
                             dtype=np.bool_,
@@ -759,7 +768,7 @@ def _write_source_sidecar(
                             compression=compression,
                         )
                         actor_seq_lens_dset = demo_out.create_dataset(
-                            "actor_seq_lens",
+                            ACTOR_SEQUENCE_KEYS["seq_lens"],
                             shape=(length,),
                             dtype=np.int32,
                             chunks=(min(max(1, int(args.chunk_size)), length),),
@@ -798,13 +807,13 @@ def _write_source_sidecar(
                     )
                     actor_seq_lens_dset[start:end] = actor_seq_lens.astype(np.int32, copy=False)
                 if bool(args.save_action_hidden):
-                    action_hidden = encoded["action_hidden_states"]
+                    action_hidden = encoded[ACTION_HIDDEN_KEY]
                     chunk_action_horizon = int(action_hidden.shape[1])
                     if action_hidden_dset is None:
                         action_hidden_seq_len = chunk_action_horizon
                         action_hidden_dim = int(action_hidden.shape[-1])
                         action_hidden_dset = demo_out.create_dataset(
-                            "action_hidden_states",
+                            ACTION_HIDDEN_KEY,
                             shape=(length, action_hidden_seq_len, action_hidden_dim),
                             dtype=hidden_dtype,
                             chunks=(1, action_hidden_seq_len, action_hidden_dim),
@@ -916,7 +925,7 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Rotate HDF5 images by 180 degrees before tokenization, matching get_libero_image().",
     )
-    parser.add_argument("--hidden-key", default="obs_embedding")
+    parser.add_argument("--hidden-key", default=DEFAULT_HIDDEN_KEY)
     parser.add_argument(
         "--obs-hidden-source",
         default="action_query",
@@ -1001,18 +1010,11 @@ def main() -> None:
         files = files[: int(args.max_files)]
     if not files:
         raise RuntimeError(f"No HDF5 files found under {hdf5_dir}")
-    required_datasets = [args.hidden_key]
-    if bool(args.save_action_hidden):
-        required_datasets.append("action_hidden_states")
-    if bool(args.save_actor_sequence):
-        required_datasets.extend(
-            [
-                "actor_hidden_states",
-                "actor_input_ids",
-                "actor_attention_mask",
-                "actor_seq_lens",
-            ]
-        )
+    required_datasets = required_demo_datasets(
+        hidden_key=args.hidden_key,
+        save_action_hidden=bool(args.save_action_hidden),
+        save_actor_sequence=bool(args.save_actor_sequence),
+    )
     required_by_output = {out_dir / path.name: required_datasets for path in files}
     task_plan = plan_hdf5_preprocess_tasks(
         files,
@@ -1050,6 +1052,7 @@ def main() -> None:
         config["run_id"] = run_id
         config["total_demos"] = total_demos
         config["total_frames"] = total_frames
+        annotate_preprocess_config(config, required=required_datasets)
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         (out_dir / "preprocess_plan.json").write_text(
             json.dumps(

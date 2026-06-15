@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import h5py
+
+from dreamervla.preprocess.sidecar_schema import required_demo_datasets_from_config
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,24 @@ def is_complete_hdf5_artifact(
         return False
 
 
+def _required_demo_datasets_for_output(
+    path: Path,
+    explicit: Sequence[str] | None,
+) -> Sequence[str]:
+    if explicit is not None:
+        return explicit
+    config_path = path.parent / "preprocess_config.json"
+    if not config_path.is_file():
+        return ()
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            return ("__invalid_preprocess_config__",)
+        return required_demo_datasets_from_config(config)
+    except (OSError, ValueError):
+        return ("__invalid_preprocess_config__",)
+
+
 def assign_tasks_by_frames(
     tasks: Sequence[Hdf5PreprocessTask],
     *,
@@ -195,7 +216,10 @@ def plan_hdf5_preprocess_tasks(
             is_complete_hdf5_artifact(
                 path,
                 reference_path=source_path,
-                required_demo_datasets=required_demo_datasets.get(path, ()),
+                required_demo_datasets=_required_demo_datasets_for_output(
+                    path,
+                    required_demo_datasets.get(path),
+                ),
                 require_complete_attr=True,
             )
             for path in paths

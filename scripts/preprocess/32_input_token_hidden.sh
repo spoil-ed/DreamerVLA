@@ -50,8 +50,7 @@ if [[ "${OVERWRITE}" != "1" && -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding; then
+    --require-config; then
     echo "[32_input_token_hidden] skip input-token sidecar: ${INPUT_TOKEN_HIDDEN_DIR}"
     exit 0
   fi
@@ -103,5 +102,4 @@ python -m dreamervla.preprocess.check_artifacts hdf5-dir \
   --match-reference-demos \
   --match-reference-lengths \
   --require-complete-attr \
-  --require-config \
-  --required-demo-dataset obs_embedding
+  --require-config

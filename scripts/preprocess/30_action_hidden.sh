@@ -58,9 +58,7 @@ if [[ "${OVERWRITE}" != "1" && -d "${HIDDEN_DIR}" ]]; then
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding \
-    --required-demo-dataset action_hidden_states; then
+    --require-config; then
     echo "[30_action_hidden] skip action-hidden: ${HIDDEN_DIR}"
     exit 0
   fi
@@ -116,6 +114,4 @@ python -m dreamervla.preprocess.check_artifacts hdf5-dir \
   --match-reference-demos \
   --match-reference-lengths \
   --require-complete-attr \
-  --require-config \
-  --required-demo-dataset obs_embedding \
-  --required-demo-dataset action_hidden_states
+  --require-config

@@ -18,6 +18,12 @@ from PIL import Image
 from tqdm import tqdm
 
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
+from dreamervla.preprocess.sidecar_schema import (
+    ACTION_HIDDEN_KEY,
+    DEFAULT_HIDDEN_KEY,
+    annotate_preprocess_config,
+    required_demo_datasets,
+)
 from dreamervla.utils.paths import checkpoints_path, processed_data_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -735,7 +741,7 @@ def _write_source_sidecars(
                     compression=None,
                 )
                 action_hidden_dset = demo_action.create_dataset(
-                    "action_hidden_states",
+                    ACTION_HIDDEN_KEY,
                     shape=(length, action_hidden_seq_len, action_hidden_dim),
                     dtype=dtype,
                     chunks=(1, action_hidden_seq_len, action_hidden_dim),
@@ -866,7 +872,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-rank", type=int, default=32)
     parser.add_argument("--load-in-8bit", action="store_true")
     parser.add_argument("--load-in-4bit", action="store_true")
-    parser.add_argument("--hidden-key", default="obs_embedding")
+    parser.add_argument("--hidden-key", default=DEFAULT_HIDDEN_KEY)
     parser.add_argument("--time-horizon", type=int, default=8)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--token-dim", type=int, default=4096)
@@ -948,16 +954,22 @@ def main() -> None:
     required_by_output: dict[Path, list[str]] = {}
     for source_path in files:
         if out_c_dir is not None:
-            required_by_output[out_c_dir / source_path.name] = [args.hidden_key]
+            required_by_output[out_c_dir / source_path.name] = required_demo_datasets(
+                hidden_key=args.hidden_key
+            )
         if out_d_dir is not None:
-            required_by_output[out_d_dir / source_path.name] = [args.hidden_key]
+            required_by_output[out_d_dir / source_path.name] = required_demo_datasets(
+                hidden_key=args.hidden_key
+            )
         if out_action_dir is not None:
-            required_by_output[out_action_dir / source_path.name] = [
-                args.hidden_key,
-                "action_hidden_states",
-            ]
+            required_by_output[out_action_dir / source_path.name] = required_demo_datasets(
+                hidden_key=args.hidden_key,
+                save_action_hidden=True,
+            )
         if out_input_dir is not None:
-            required_by_output[out_input_dir / source_path.name] = [args.hidden_key]
+            required_by_output[out_input_dir / source_path.name] = required_demo_datasets(
+                hidden_key=args.hidden_key
+            )
 
     task_plan = plan_hdf5_preprocess_tasks(
         files,
@@ -987,15 +999,33 @@ def main() -> None:
         config_c = dict(base_config, obs_hidden_source="oft_mlpresnet_fc1_relu")
         config_d = dict(base_config, obs_hidden_source="oft_mlpresnet_post_resblocks")
         if out_c_dir is not None:
+            annotate_preprocess_config(
+                config_c,
+                required=required_demo_datasets(hidden_key=args.hidden_key),
+            )
             (out_c_dir / "preprocess_config.json").write_text(
                 json.dumps(config_c, indent=2, sort_keys=True) + "\n"
             )
         if out_d_dir is not None:
+            annotate_preprocess_config(
+                config_d,
+                required=required_demo_datasets(hidden_key=args.hidden_key),
+            )
             (out_d_dir / "preprocess_config.json").write_text(
                 json.dumps(config_d, indent=2, sort_keys=True) + "\n"
             )
         if out_action_dir is not None:
-            config_action = dict(base_config, obs_hidden_source="action_query")
+            config_action = dict(
+                base_config,
+                obs_hidden_source="action_query",
+            )
+            annotate_preprocess_config(
+                config_action,
+                required=required_demo_datasets(
+                    hidden_key=args.hidden_key,
+                    save_action_hidden=True,
+                ),
+            )
             (out_action_dir / "preprocess_config.json").write_text(
                 json.dumps(config_action, indent=2, sort_keys=True) + "\n"
             )
@@ -1004,6 +1034,10 @@ def main() -> None:
                 base_config,
                 obs_hidden_source="input_token_embedding",
                 save_action_hidden=False,
+            )
+            annotate_preprocess_config(
+                config_input,
+                required=required_demo_datasets(hidden_key=args.hidden_key),
             )
             (out_input_dir / "preprocess_config.json").write_text(
                 json.dumps(config_input, indent=2, sort_keys=True) + "\n"

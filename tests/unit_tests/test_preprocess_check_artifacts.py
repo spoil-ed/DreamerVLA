@@ -143,6 +143,60 @@ def test_validate_hdf5_dir_can_require_preprocess_config(tmp_path) -> None:
     validate_hdf5_dir(sidecar, require_config=True)
 
 
+def test_validate_hdf5_dir_reads_required_datasets_from_preprocess_config(tmp_path) -> None:
+    sidecar = tmp_path / "hidden"
+    _write_hdf5(sidecar / "a.hdf5", complete=True, dataset="obs_embedding")
+    (sidecar / "preprocess_config.json").write_text(
+        json.dumps({"required_demo_datasets": ["obs_embedding", "action_hidden_states"]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="missing datasets"):
+        validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+    with h5py.File(sidecar / "a.hdf5", "a") as handle:
+        handle["data"]["demo_0"].create_dataset("action_hidden_states", data=[1.0])
+    validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+
+def test_validate_hdf5_dir_derives_legacy_required_datasets_from_config(tmp_path) -> None:
+    sidecar = tmp_path / "hidden"
+    _write_hdf5(sidecar / "a.hdf5", complete=True, dataset="obs_embedding")
+    (sidecar / "preprocess_config.json").write_text(
+        json.dumps({"hidden_key": "obs_embedding", "save_action_hidden": True}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="missing datasets"):
+        validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+    with h5py.File(sidecar / "a.hdf5", "a") as handle:
+        handle["data"]["demo_0"].create_dataset("action_hidden_states", data=[1.0])
+    validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+
+def test_validate_hdf5_dir_derives_custom_legacy_schema_keys(tmp_path) -> None:
+    sidecar = tmp_path / "hidden"
+    _write_hdf5(sidecar / "a.hdf5", complete=True, dataset="latent")
+    (sidecar / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "hidden_key": "latent",
+                "save_action_hidden": True,
+                "action_hidden_key": "policy_slots",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="missing datasets"):
+        validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+    with h5py.File(sidecar / "a.hdf5", "a") as handle:
+        handle["data"]["demo_0"].create_dataset("policy_slots", data=[1.0])
+    validate_hdf5_dir(sidecar, require_complete_attr=True, require_config=True)
+
+
 def test_preprocess_task_plan_filters_complete_and_repairs_partial_outputs(tmp_path) -> None:
     source = tmp_path / "source"
     out = tmp_path / "out"
@@ -204,6 +258,27 @@ def test_preprocess_task_plan_filters_complete_and_assigns_missing_outputs(tmp_p
     assert [task.source_path.name for task in plan.skipped] == ["a.hdf5"]
     assert [task.source_path.name for task in plan.pending] == ["b.hdf5"]
     assert plan.loads_by_rank == [7, 0]
+
+
+def test_preprocess_task_plan_infers_required_datasets_from_config(tmp_path) -> None:
+    source = tmp_path / "source"
+    out = tmp_path / "out"
+    _write_source_hdf5(source / "a.hdf5", frames=5)
+    _write_hdf5(out / "a.hdf5", complete=True, dataset="latent", length=5)
+    (out / "preprocess_config.json").write_text(
+        json.dumps({"required_demo_datasets": ["latent", "policy_slots"]}),
+        encoding="utf-8",
+    )
+
+    plan = plan_hdf5_preprocess_tasks(
+        sorted(source.glob("*.hdf5")),
+        rank=0,
+        world_size=1,
+        output_paths=lambda path: [out / path.name],
+    )
+
+    assert [task.source_path.name for task in plan.repaired] == ["a.hdf5"]
+    assert [task.source_path.name for task in plan.pending] == ["a.hdf5"]
 
 
 def test_assign_tasks_by_frames_balances_large_files_first(tmp_path) -> None:

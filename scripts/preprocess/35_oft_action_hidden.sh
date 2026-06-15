@@ -90,9 +90,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
       --match-reference-demos \
       --match-reference-lengths \
       --require-complete-attr \
-      --require-config \
-      --required-demo-dataset obs_embedding \
-      --required-demo-dataset action_hidden_states; then
+      --require-config; then
       echo "[35_oft_action_hidden] skip action-hidden: ${OFT_HIDDEN_DIR}"
       exit 0
     fi
@@ -121,9 +119,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding \
-    --required-demo-dataset action_hidden_states
+    --require-config
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
@@ -132,8 +128,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
       --match-reference-demos \
       --match-reference-lengths \
       --require-complete-attr \
-      --require-config \
-      --required-demo-dataset obs_embedding; then
+      --require-config; then
       echo "[35_oft_action_hidden] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
@@ -162,8 +157,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding
+    --require-config
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
@@ -172,17 +166,14 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
       --match-reference-demos \
       --match-reference-lengths \
       --require-complete-attr \
-      --require-config \
-      --required-demo-dataset obs_embedding \
-      --required-demo-dataset action_hidden_states && \
+      --require-config && \
        python -m dreamervla.preprocess.check_artifacts hdf5-dir \
       --dir "${OFT_INPUT_TOKEN_DIR}" \
       --reference-dir "${REWARD_DIR}" \
       --match-reference-demos \
       --match-reference-lengths \
       --require-complete-attr \
-      --require-config \
-      --required-demo-dataset obs_embedding; then
+      --require-config; then
       echo "[35_oft_action_hidden] skip OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
@@ -212,17 +203,14 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding \
-    --required-demo-dataset action_hidden_states
+    --require-config
   python -m dreamervla.preprocess.check_artifacts hdf5-dir \
     --dir "${OFT_INPUT_TOKEN_DIR}" \
     --reference-dir "${REWARD_DIR}" \
     --match-reference-demos \
     --match-reference-lengths \
     --require-complete-attr \
-    --require-config \
-    --required-demo-dataset obs_embedding
+    --require-config
 else
   echo "Unsupported OFT_LATENT_SCHEME=${OFT_LATENT_SCHEME}; use action_hidden, input_tokens, or both." >&2
   exit 2

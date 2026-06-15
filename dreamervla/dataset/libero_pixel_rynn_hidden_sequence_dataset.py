@@ -12,6 +12,11 @@ import torch
 from dreamervla.dataset.libero_pixel_sequence_dataset import (
     LIBEROPixelSequenceDataset,
 )
+from dreamervla.preprocess.sidecar_schema import (
+    ACTOR_SEQUENCE_KEYS,
+    DEFAULT_HIDDEN_KEY,
+    actor_sequence_keys_from_config,
+)
 
 
 class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
@@ -32,7 +37,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         sequence_length: int = 32,
         image_size: int = 256,
         image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
-        hidden_key: str = "obs_embedding",
+        hidden_key: str = DEFAULT_HIDDEN_KEY,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
         max_windows: int | None = None,
@@ -49,10 +54,10 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         require_preprocess_config: bool = True,
         load_actor_sequence: bool = False,
         actor_sequence_length: int | None = None,
-        actor_hidden_key: str = "actor_hidden_states",
-        actor_input_ids_key: str = "actor_input_ids",
-        actor_attention_mask_key: str = "actor_attention_mask",
-        actor_seq_lens_key: str = "actor_seq_lens",
+        actor_hidden_key: str = ACTOR_SEQUENCE_KEYS["hidden"],
+        actor_input_ids_key: str = ACTOR_SEQUENCE_KEYS["input_ids"],
+        actor_attention_mask_key: str = ACTOR_SEQUENCE_KEYS["attention_mask"],
+        actor_seq_lens_key: str = ACTOR_SEQUENCE_KEYS["seq_lens"],
     ) -> None:
         super().__init__(
             hdf5_dir=hdf5_dir,
@@ -79,7 +84,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         self.actor_attention_mask_key = str(actor_attention_mask_key)
         self.actor_seq_lens_key = str(actor_seq_lens_key)
         self._hidden_file_cache: dict[str, h5py.File] = {}
-        self._validate_hidden_sidecar(
+        sidecar_config = self._validate_hidden_sidecar(
             expected_model_path=expected_model_path,
             expected_encoder_state_ckpt=expected_encoder_state_ckpt,
             expected_time_horizon=expected_time_horizon,
@@ -91,6 +96,20 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             expected_rotate_images_180=expected_rotate_images_180,
             require_preprocess_config=bool(require_preprocess_config),
         )
+        if sidecar_config is not None:
+            if self.hidden_key == DEFAULT_HIDDEN_KEY:
+                configured_hidden_key = sidecar_config.get("hidden_key")
+                if isinstance(configured_hidden_key, str) and configured_hidden_key:
+                    self.hidden_key = configured_hidden_key
+            schema_actor_keys = actor_sequence_keys_from_config(sidecar_config)
+            if self.actor_hidden_key == ACTOR_SEQUENCE_KEYS["hidden"]:
+                self.actor_hidden_key = schema_actor_keys["hidden"]
+            if self.actor_input_ids_key == ACTOR_SEQUENCE_KEYS["input_ids"]:
+                self.actor_input_ids_key = schema_actor_keys["input_ids"]
+            if self.actor_attention_mask_key == ACTOR_SEQUENCE_KEYS["attention_mask"]:
+                self.actor_attention_mask_key = schema_actor_keys["attention_mask"]
+            if self.actor_seq_lens_key == ACTOR_SEQUENCE_KEYS["seq_lens"]:
+                self.actor_seq_lens_key = schema_actor_keys["seq_lens"]
 
     @staticmethod
     def _canonical_path(value: str) -> str:
@@ -136,14 +155,14 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         expected_include_state: bool | None = None,
         expected_rotate_images_180: bool | None = None,
         require_preprocess_config: bool = True,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         config_path = self.hidden_dir / "preprocess_config.json"
         if not config_path.is_file():
             if require_preprocess_config:
                 raise FileNotFoundError(
                     f"Rynn hidden sidecar is missing preprocess_config.json: {config_path}"
                 )
-            return
+            return None
         with config_path.open("r", encoding="utf-8") as handle:
             config = json.load(handle)
         errors: list[str] = []
@@ -218,6 +237,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
             raise ValueError(
                 f"Rynn hidden sidecar was not generated with --save-actor-sequence: {self.hidden_dir}"
             )
+        return config
 
     def _hidden_path_for_source(self, source_path: str | Path) -> Path:
         return self.hidden_dir / Path(source_path).name
