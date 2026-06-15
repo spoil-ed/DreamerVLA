@@ -9,6 +9,7 @@ from dreamervla.preprocess.preprocess_oft_action_hidden import (
     _action_head_type_for_mode,
     _input_token_sidecar_dims,
     _resolve_num_images_in_input,
+    _project_path,
     resolve_oft_policy_mode,
 )
 
@@ -75,3 +76,27 @@ def test_input_token_sidecar_dims_use_current_frame_patch_tokens() -> None:
 
     assert token_count == 512
     assert flat_dim == 512 * 4096
+
+
+def test_oft_preprocess_uses_wmpo_prismatic_constants() -> None:
+    source = _project_path(
+        "dreamervla/preprocess/preprocess_oft_action_hidden.py"
+    ).read_text(encoding="utf-8")
+
+    assert "openvla_oft.constants" not in source
+    assert "prismatic.vla.constants" in source
+
+
+def test_oft_preprocess_script_checks_env_and_resumes_partial_sidecars() -> None:
+    source = _project_path("scripts/preprocess/35_oft_action_hidden.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_check_openvla_oft_env" in source
+    assert "ensure_openvla_oft_on_path" in source
+    assert "prismatic.vla.constants" in source
+    assert "OVERWRITE_ARGS=(--overwrite)" in source
+    assert "resume incomplete action-hidden sidecar" in source
+    assert "resume incomplete input-token sidecar" in source
+    assert "existing action-hidden sidecar is incomplete; rerun" not in source
+    assert "existing input-token sidecar is incomplete; rerun" not in source

@@ -28,6 +28,42 @@ OFT_ACTION_HIDDEN_GPUS="${OFT_ACTION_HIDDEN_GPUS:-1}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 cd "${DVLA_ROOT}"
 
+_check_openvla_oft_env() {
+  python - <<'PY'
+from __future__ import annotations
+
+import sys
+
+try:
+    from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+
+    root = ensure_openvla_oft_on_path()
+    from prismatic.vla.constants import ACTION_DIM, NUM_ACTIONS_CHUNK
+except ModuleNotFoundError as exc:
+    print(
+        "[35_oft_action_hidden] OpenVLA-OFT dependency import failed. "
+        "Run this step in the WMPO/OpenVLA-OFT environment or install the "
+        "WMPO OpenVLA-OFT dependencies into the active Python environment. "
+        f"Missing module: {exc.name}",
+        file=sys.stderr,
+    )
+    raise SystemExit(12) from exc
+except Exception as exc:
+    print(f"[35_oft_action_hidden] OpenVLA-OFT environment check failed: {exc}", file=sys.stderr)
+    raise SystemExit(12) from exc
+
+print(
+    "[35_oft_action_hidden] openvla_oft_root="
+    f"{root} action_dim={ACTION_DIM} num_actions_chunk={NUM_ACTIONS_CHUNK}"
+)
+PY
+}
+
+OVERWRITE_ARGS=()
+if [[ "${OVERWRITE}" == "1" ]]; then
+  OVERWRITE_ARGS=(--overwrite)
+fi
+
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
 OFT_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h${OFT_HISTORY}"
@@ -51,10 +87,10 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
       echo "[35_oft_action_hidden] skip action-hidden: ${OFT_HIDDEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] existing action-hidden sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${OFT_HIDDEN_DIR}" >&2
-    exit 6
+    echo "[35_oft_action_hidden] resume incomplete action-hidden sidecar: ${OFT_HIDDEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}"
+  _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -67,7 +103,7 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
     --image-keys ${OFT_IMAGE_KEYS} \
-    --overwrite
+    "${OVERWRITE_ARGS[@]}"
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
@@ -79,10 +115,10 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
       echo "[35_oft_action_hidden] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] existing input-token sidecar is incomplete; rerun with OVERWRITE=1 to rebuild ${OFT_INPUT_TOKEN_DIR}" >&2
-    exit 6
+    echo "[35_oft_action_hidden] resume incomplete input-token sidecar: ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_INPUT_TOKEN_DIR}"
+  _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -95,7 +131,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
     --image-keys ${OFT_IMAGE_KEYS} \
-    --overwrite
+    "${OVERWRITE_ARGS[@]}"
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
     if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
@@ -113,10 +149,10 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
       echo "[35_oft_action_hidden] skip OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
-    echo "[35_oft_action_hidden] existing OFT sidecars are incomplete; rerun with OVERWRITE=1 to rebuild them" >&2
-    exit 6
+    echo "[35_oft_action_hidden] resume incomplete OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}" >&2
   fi
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${OFT_HIDDEN_DIR}" "${OFT_INPUT_TOKEN_DIR}"
+  _check_openvla_oft_env
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
@@ -130,7 +166,7 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
     --history "${OFT_HISTORY}" \
     --time-horizon 8 \
     --image-keys ${OFT_IMAGE_KEYS} \
-    --overwrite
+    "${OVERWRITE_ARGS[@]}"
 else
   echo "Unsupported OFT_LATENT_SCHEME=${OFT_LATENT_SCHEME}; use action_hidden, input_tokens, or both." >&2
   exit 2

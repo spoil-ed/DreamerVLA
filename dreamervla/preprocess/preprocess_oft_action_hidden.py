@@ -121,7 +121,7 @@ def _image_from_hdf5(
 
 
 def _normalize_proprio(proprio: np.ndarray, norm_stats: dict[str, Any]) -> np.ndarray:
-    from openvla_oft.constants import (
+    from prismatic.vla.constants import (
         ACTION_PROPRIO_NORMALIZATION_TYPE,
         NormalizationType,
     )
@@ -216,10 +216,11 @@ def _load_oft_components(args: argparse.Namespace, device: torch.device) -> dict
             "The lightweight OpenVLA-OFT loader does not support 8-bit or 4-bit loading."
         )
 
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
+    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+
     mode = resolve_oft_policy_mode(
         _project_path(args.oft_ckpt), getattr(args, "policy_mode", "auto")
     )
@@ -332,7 +333,7 @@ def _predict_intermediates_chunk(
         proprio_batch = np.stack(proprio_values, axis=0).astype(np.float32, copy=False)
 
     with torch.inference_mode():
-        from openvla_oft.constants import ACTION_DIM, IGNORE_INDEX, NUM_ACTIONS_CHUNK
+        from prismatic.vla.constants import ACTION_DIM, IGNORE_INDEX, NUM_ACTIONS_CHUNK
 
         input_ids_tensor = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
