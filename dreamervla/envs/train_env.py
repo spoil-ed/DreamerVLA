@@ -280,14 +280,18 @@ class DreamerVLAOnlineTrainEnv:
         Requires cfg.full_record=True (flag checked by the collector).
         Must be called after reset() (or step()).
         """
+        if not self.cfg.full_record:
+            raise RuntimeError("full_record() requires cfg.full_record=True")
         if self._raw_obs is None:
             raise RuntimeError("full_record called before reset")
         raw = self._raw_obs
-        ee_pos = np.asarray(raw["robot0_eef_pos"], dtype=np.float64)
-        eef_quat = np.asarray(raw["robot0_eef_quat"], dtype=np.float64)
+        # np.array (not asarray) so the returned leaves never alias self._raw_obs,
+        # which robosuite may reuse across step() calls (the collector batches records).
+        ee_pos = np.array(raw["robot0_eef_pos"], dtype=np.float64)
+        eef_quat = np.array(raw["robot0_eef_quat"], dtype=np.float64)
         ee_ori = quat2axisangle(eef_quat.copy())
-        gripper_states = np.asarray(raw["robot0_gripper_qpos"], dtype=np.float64)
-        joint_states = np.asarray(raw["robot0_joint_pos"], dtype=np.float64)
+        gripper_states = np.array(raw["robot0_gripper_qpos"], dtype=np.float64)
+        joint_states = np.array(raw["robot0_joint_pos"], dtype=np.float64)
         ee_states = np.concatenate([ee_pos, ee_ori])
         robot_states = np.concatenate([gripper_states, ee_pos, eef_quat])
         agentview_rgb = self._camera_image(
