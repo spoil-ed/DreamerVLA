@@ -229,12 +229,17 @@ def test_states_from_sim_get_state_flatten() -> None:
 
 
 @_LIBERO_ENV_MARK
-def test_robot_states_formula_from_live_env() -> None:
-    """concat(gripper_qpos, eef_pos, eef_quat) from live env matches demo robot_states[0].
+def test_proprio_formulas_from_live_env() -> None:
+    """Proprio formulas derived from live-env raw obs match demo fields at t=0:
+
+        robot_states = concat(gripper_qpos, eef_pos, eef_quat)
+        ee_ori       = quat2axisangle(eef_quat)
+        joint_states = robot0_joint_pos
 
     Uses atol=5e-3 because physics settle after set_init_state introduces
-    small differences (observed max ~2.2e-3) — the formula itself is correct
-    (verified atol=0 against the demo's own stored obs fields).
+    small differences (observed max ~2.2e-3) — the formulas themselves are
+    correct (the structural tests above verify them atol=0 against the demo's
+    own stored obs fields).
     """
     import os
 
@@ -267,4 +272,18 @@ def test_robot_states_formula_from_live_env() -> None:
     assert candidate.shape == (9,)
     assert np.allclose(candidate, demo["robot_states"][0], atol=5e-3), (
         f"robot_states formula mismatch, max_err={np.max(np.abs(candidate - demo['robot_states'][0])):.2e}"
+    )
+
+    # ee_ori = quat2axisangle(eef_quat)
+    ee_ori_candidate = _quat2axisangle(np.asarray(raw["robot0_eef_quat"], dtype=np.float64))
+    assert ee_ori_candidate.shape == (3,)
+    assert np.allclose(ee_ori_candidate, demo["ee_ori"][0], atol=5e-3), (
+        f"ee_ori formula mismatch, max_err={np.max(np.abs(ee_ori_candidate - demo['ee_ori'][0])):.2e}"
+    )
+
+    # joint_states = robot0_joint_pos
+    joint_candidate = np.asarray(raw["robot0_joint_pos"], dtype=np.float64)
+    assert joint_candidate.shape == (7,)
+    assert np.allclose(joint_candidate, demo["joint_states"][0], atol=5e-3), (
+        f"joint_states formula mismatch, max_err={np.max(np.abs(joint_candidate - demo['joint_states'][0])):.2e}"
     )
