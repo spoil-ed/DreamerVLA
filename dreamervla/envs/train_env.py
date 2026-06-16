@@ -80,6 +80,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     obs_hidden_source: Literal["action_query", "input_token_embedding"] = "action_query"
     action_head_type: Literal["legacy"] = "legacy"
     target_token_id: int = 10004
+    full_record: bool = False
 
 
 def _coerce_task_ids(task_ids: Sequence[int] | str | None) -> tuple[int, ...] | None:
@@ -141,6 +142,7 @@ class DreamerVLAOnlineTrainEnv:
         self._episode_counter = 0
         self._frame_history: list[tuple[Image.Image, Image.Image]] = []
         self._raw_obs: dict[str, Any] | None = None
+        self._init_state: np.ndarray | None = None
         self._elapsed_steps = 0
         self._closed = False
 
@@ -186,6 +188,7 @@ class DreamerVLAOnlineTrainEnv:
         self.set_task(selected_task_id)
 
         init_state_index = self._select_init_state_index(episode_id)
+        self._init_state = np.asarray(self.initial_states[init_state_index], dtype=np.float64)
         self.env.reset()
         raw_obs = self.env.set_init_state(self.initial_states[init_state_index])
         for _ in range(self.cfg.warmup_steps):
@@ -270,6 +273,37 @@ class DreamerVLAOnlineTrainEnv:
             self.cfg.vla_rotate_180 if vla_aligned else self.cfg.pixel_rotate_180
         )
         return self._camera_image(self._raw_obs, key, rotate_180=rotate_180)
+
+    def full_record(self) -> dict[str, Any]:
+        """Return a dict of LIBERO HDF5 schema fields for the current step.
+
+        Requires cfg.full_record=True (flag checked by the collector).
+        Must be called after reset() (or step()).
+        """
+        if self._raw_obs is None:
+            raise RuntimeError("full_record called before reset")
+        raw = self._raw_obs
+        ee_pos = np.asarray(raw["robot0_eef_pos"], dtype=np.float64)
+        eef_quat = np.asarray(raw["robot0_eef_quat"], dtype=np.float64)
+        ee_ori = quat2axisangle(eef_quat.copy())
+        gripper_states = np.asarray(raw["robot0_gripper_qpos"], dtype=np.float64)
+        joint_states = np.asarray(raw["robot0_joint_pos"], dtype=np.float64)
+        ee_states = np.concatenate([ee_pos, ee_ori])
+        robot_states = np.concatenate([gripper_states, ee_pos, eef_quat])
+        agentview_rgb = self._camera_image(
+            raw, "agentview_image", rotate_180=self.cfg.pixel_rotate_180
+        )
+        return {
+            "agentview_rgb": agentview_rgb,
+            "ee_pos": ee_pos,
+            "ee_ori": ee_ori,
+            "ee_states": ee_states,
+            "gripper_states": gripper_states,
+            "joint_states": joint_states,
+            "robot_states": robot_states,
+            "states": np.asarray(self.env.sim.get_state().flatten(), dtype=np.float64),
+            "init_state": self._init_state.copy(),
+        }
 
     def policy_action_to_env_action(
         self, action: np.ndarray | Sequence[float]
