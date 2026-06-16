@@ -293,8 +293,12 @@ class DreamerVLAOnlineTrainEnv:
         agentview_rgb = self._camera_image(
             raw, "agentview_image", rotate_180=self.cfg.pixel_rotate_180
         )
+        eye_in_hand_rgb = self._camera_image(
+            raw, "robot0_eye_in_hand_image", rotate_180=self.cfg.pixel_rotate_180
+        )
         return {
             "agentview_rgb": agentview_rgb,
+            "eye_in_hand_rgb": eye_in_hand_rgb,
             "ee_pos": ee_pos,
             "ee_ori": ee_ori,
             "ee_states": ee_states,
