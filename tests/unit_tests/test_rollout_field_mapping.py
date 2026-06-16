@@ -77,9 +77,8 @@ def _load_demo() -> dict:
     h5py = pytest.importorskip("h5py")
     if not DEMO_PATH.exists():
         pytest.skip(f"Demo file not found: {DEMO_PATH}")
-    import h5py as _h5
 
-    with _h5.File(DEMO_PATH, "r") as f:
+    with h5py.File(DEMO_PATH, "r") as f:
         d = f["data"]["demo_0"]
         return {
             "init_state":    d.attrs["init_state"][:],
@@ -197,8 +196,6 @@ def test_states_from_sim_get_state_flatten() -> None:
     The others (ee_pos, ee_ori, gripper, joint) pass with atol~1e-3 due to
     physics settle after set_init_state — that is expected.
     """
-    import os
-
     from libero.libero import benchmark as libero_benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
@@ -241,8 +238,6 @@ def test_proprio_formulas_from_live_env() -> None:
     correct (the structural tests above verify them atol=0 against the demo's
     own stored obs fields).
     """
-    import os
-
     from libero.libero import benchmark as libero_benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
