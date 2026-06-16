@@ -17,8 +17,20 @@ is computed by:
 5. Squeezing the batch dimension to ``[56, 4096]``.
 6. Reshaping to ``(229376,)`` and casting to float16.
 
-This exactly matches what ``dreamervla/preprocess/preprocess_oft_action_hidden.py``
-writes into the ``*_action_hidden_*`` sidecars (``obs_hidden_source="action_query"``).
+Image-preprocessing note:
+    The offline sidecars (``*_action_hidden_*``) were built using
+    ``dreamervla.preprocess.preprocess_oft_action_hidden._prepare_images_for_vla``
+    which resizes via **PIL LANCZOS** and centre-crops via **PIL BICUBIC**.
+    This extractor uses ``experiments.robot.openvla_utils.prepare_images_for_vla``
+    which resizes via **TF lanczos3** (JPEG-encode-decode roundtrip first) and
+    crops via **TF crop_and_resize** (bilinear).  The two pipelines are not
+    numerically identical: empirically, against the gold libero_goal sidecar,
+    TF prep gives max_abs_err ≤ 0.25 and Pearson r ≥ 0.9996 (8 pairs, demos
+    0–1), while PIL prep gives max_abs_err up to 1.93 and r as low as 0.982.
+    TF is kept because it is the real-robot deployment path and is far closer
+    to the offline gold than PIL.  The residual ~0.25 is therefore a
+    **PIL-vs-TF prep difference**, not purely fp16 non-determinism; see the
+    consistency gate tolerance comment in the test file.
 
 Hook target:
     The tensor comes directly from the RETURN VALUE of
@@ -79,8 +91,9 @@ class OFTRolloutHiddenExtractor:
     """Wraps an ``OpenVLAOFTPolicy`` to capture the action-query hidden states.
 
     Maintains a per-view frame history buffer so that each call to ``step``
-    produces an ``obs_embedding`` that matches the offline sidecar protocol
-    (history=2, two camera views, rotate_images_180=True, TF-based centre-crop).
+    produces an ``obs_embedding`` consistent with the offline sidecar protocol
+    (history=2, two camera views, rotate_images_180=True, TF-based centre-crop;
+    see module docstring for the measured residual vs the PIL-built sidecars).
 
     Args:
         policy: An ``OpenVLAOFTPolicy`` instance loaded via

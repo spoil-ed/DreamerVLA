@@ -14,22 +14,23 @@ Test plan:
      obs_embedding.  Asserts numerical equivalence within a justified tolerance.
 
 Tolerance justification for test 6:
-  The sidecar was produced on a different machine from the same checkpoint
-  (same OFT weights, same TF-based image preprocessing).  Both runs use
-  bfloat16 throughout.  Running the identical model, inputs, and dtype on
-  this machine gives max absolute error ≤ 0.25 across all tested (demo, t)
-  pairs, at Pearson r ≥ 0.9996.  The residual ~0.25 is within 1-2 fp16 ULPs
-  for values of magnitude ~4 (fp16 eps at |x|≈4 is 0.25), meaning the
-  discrepancy is consistent with fp16 rounding accumulated differently across
-  GPU/CUDA-version differences rather than a systematic implementation error.
-  We set atol=0.5 (two fp16 ULPs at the extreme of the hidden value range)
-  and additionally require Pearson r > 0.999.
+  The offline sidecars were built with PIL-based image preprocessing
+  (PIL LANCZOS resize + PIL BICUBIC centre-crop, via
+  dreamervla.preprocess.preprocess_oft_action_hidden._prepare_images_for_vla).
+  The extractor uses TF-based preprocessing
+  (experiments.robot.openvla_utils.prepare_images_for_vla: TF lanczos3 resize
+  with JPEG roundtrip + TF crop_and_resize), which is the real-robot deployment
+  path.  Empirically (8 pairs, demo_0 and demo_1, t in {1, T//4, T//2, T-1}):
+    TF prep:  max_abs_err ≤ 0.25,  Pearson r ≥ 0.9996
+    PIL prep: max_abs_err up to 1.93, Pearson r as low as 0.982
+  The residual ~0.25 with TF prep is therefore primarily a PIL-vs-TF
+  preprocessing difference, not purely fp16 non-determinism.  PIL prep was
+  measured and rejected (much worse).  We set atol=0.5 (2× the observed
+  max) and additionally require Pearson r > 0.999.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -150,7 +151,9 @@ def test_history_buffer_padding():
     hist_a2 = extractor._get_history("cam_a", frame_a2)
     assert len(hist_a2) == 3
     assert np.array_equal(hist_a2[2], frame_a2), "newest frame should be last"
-    assert np.array_equal(hist_a2[0], frame_a), "oldest (first pad) should be evicted"
+    # One pad copy of frame_a was evicted; the remaining two are both frame_a,
+    # so the buffer still starts with frame_a (pixel-identical to a pad copy).
+    assert np.array_equal(hist_a2[0], frame_a), "buffer[0] should still be frame_a"
 
 
 # ── real-model consistency gate (skipped when ckpt/GPU/sidecar unavailable) ──
@@ -193,6 +196,8 @@ def test_inline_matches_offline_sidecar():
 
     Tested: demo_0 and demo_1 at t=1, T//4, T//2, T-1 (8 (demo,t) pairs).
     """
+    import json
+
     import h5py
 
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
