@@ -244,3 +244,30 @@ def test_writer_shapes(tmp_path: Path) -> None:
     with h5py.File(hidden_dir / shard_name, "r") as f:
         demo = f["data"]["demo_0"]
         assert demo["obs_embedding"].shape == (T, HIDDEN_DIM)
+
+
+def test_writer_data_attrs(tmp_path: Path) -> None:
+    """data_attrs (env meta) are written once to the reward HDF5 data-group attrs."""
+    import h5py
+
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    shard_name = "shard_000.hdf5"
+    data_attrs = {"bddl_file_name": "x.bddl", "env_name": "Libero_Goal", "tag": "libero-v1"}
+
+    writer = RolloutDumpWriter(reward_dir=reward_dir, hidden_dir=hidden_dir, shard_name=shard_name)
+    writer.write_demo(
+        index=0,
+        steps=_make_episode(success=True),
+        preprocess_config=PREPROCESS_CONFIG,
+        data_attrs=data_attrs,
+    )
+    writer.close()
+
+    with h5py.File(reward_dir / shard_name, "r") as f:
+        attrs = f["data"].attrs
+        assert attrs["bddl_file_name"] == "x.bddl"
+        assert attrs["env_name"] == "Libero_Goal"
+        assert attrs["tag"] == "libero-v1"

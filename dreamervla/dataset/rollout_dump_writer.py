@@ -67,6 +67,7 @@ class RolloutDumpWriter:
 
         self._num_demos: int = 0
         self._preprocess_config_written: bool = False
+        self._data_attrs_written: bool = False
         self._closed: bool = False
 
     def write_demo(
@@ -74,6 +75,7 @@ class RolloutDumpWriter:
         index: int,
         steps: list[dict[str, Any]],
         preprocess_config: dict[str, Any] | None = None,
+        data_attrs: dict[str, Any] | None = None,
     ) -> None:
         """Write one demo (list of per-step dicts) to both HDF5 files.
 
@@ -96,6 +98,9 @@ class RolloutDumpWriter:
 
         ``preprocess_config`` is written to hidden_dir/preprocess_config.json
         on the first call that provides a non-None value.
+
+        ``data_attrs`` (env meta: bddl_file_name, env_name, tag, ...) is written
+        to the reward HDF5 data-group attrs on the first call that provides it.
         """
         if self._closed:
             raise RuntimeError("RolloutDumpWriter has been closed")
@@ -167,6 +172,12 @@ class RolloutDumpWriter:
         hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
 
         self._num_demos += 1
+
+        # Write data-group env-meta attrs on first call (if provided)
+        if data_attrs is not None and not self._data_attrs_written:
+            for attr_key, attr_val in data_attrs.items():
+                self._reward_data.attrs[attr_key] = attr_val
+            self._data_attrs_written = True
 
         # Write preprocess_config.json on first call (if provided)
         if preprocess_config is not None and not self._preprocess_config_written:
