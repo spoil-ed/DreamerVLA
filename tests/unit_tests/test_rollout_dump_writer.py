@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 
 # ── test parameters ────────────────────────────────────────────────────────────
@@ -45,9 +44,9 @@ PREPROCESS_CONFIG = {
 }
 
 
-def _make_step(t: int, is_terminal: bool) -> dict:
+def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
     """Build one fake timestep dict matching RolloutDumpWriter.write_demo input."""
-    rng = np.random.default_rng(t)
+    rng = np.random.default_rng(t + episode_seed)
     return {
         "actions": rng.standard_normal(ACTION_DIM),
         "rewards": np.float32(0.0),
@@ -71,13 +70,13 @@ def _make_step(t: int, is_terminal: bool) -> dict:
 def _make_episode(success: bool) -> list[dict]:
     """Build a list of T steps; last step is terminal for success episodes."""
     steps = []
+    episode_seed = 1000 if success else 2000
     for t in range(T):
         is_terminal = success and (t == T - 1)
-        steps.append(_make_step(t, is_terminal))
+        steps.append(_make_step(t, is_terminal, episode_seed))
     return steps
 
 
-# ── red test (must fail before implementation) ─────────────────────────────────
 def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
     """Writer → BalancedTerminalDataset round-trip."""
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter

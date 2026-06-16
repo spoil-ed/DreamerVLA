@@ -62,8 +62,8 @@ class RolloutDumpWriter:
         self._reward_f: h5py.File = h5py.File(str(self._reward_path), "w")
         self._hidden_f: h5py.File = h5py.File(str(self._hidden_path), "w")
 
-        self._reward_data: h5py.Group = self._reward_f.require_group("data")
-        self._hidden_data: h5py.Group = self._hidden_f.require_group("data")
+        self._reward_data: h5py.Group = self._reward_f.create_group("data")
+        self._hidden_data: h5py.Group = self._hidden_f.create_group("data")
 
         self._num_demos: int = 0
         self._preprocess_config_written: bool = False
@@ -150,7 +150,7 @@ class RolloutDumpWriter:
             )
 
         # Write reward HDF5
-        demo_grp = self._reward_data.require_group(demo_key)
+        demo_grp = self._reward_data.create_group(demo_key)
         demo_grp.create_dataset("actions", data=actions)
         demo_grp.create_dataset("dones", data=dones)
         demo_grp.create_dataset("rewards", data=rewards)
@@ -158,7 +158,7 @@ class RolloutDumpWriter:
         demo_grp.create_dataset("robot_states", data=robot_states)
         demo_grp.create_dataset("states", data=states)
 
-        obs_grp = demo_grp.require_group("obs")
+        obs_grp = demo_grp.create_group("obs")
         for key, arr in obs_arrays.items():
             obs_grp.create_dataset(key, data=arr)
 
@@ -168,7 +168,7 @@ class RolloutDumpWriter:
         demo_grp.attrs["num_samples"] = str(T)
 
         # Write sidecar HDF5
-        hidden_demo_grp = self._hidden_data.require_group(demo_key)
+        hidden_demo_grp = self._hidden_data.create_group(demo_key)
         hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
 
         self._num_demos += 1
@@ -190,11 +190,9 @@ class RolloutDumpWriter:
         if self._closed:
             return
         self._closed = True
-        for handle in (self._reward_f, self._hidden_f):
-            try:
-                handle.close()
-            except Exception:
-                pass
+        self._reward_data.attrs["num_demos"] = str(self._num_demos)
+        self._reward_f.close()
+        self._hidden_f.close()
 
     def __enter__(self) -> RolloutDumpWriter:
         return self
