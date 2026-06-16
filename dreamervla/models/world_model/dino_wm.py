@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from dreamervla.models.world_model.base_world_model import BaseWorldModel
 
 
-class RynnDinoWMWorldModel(BaseWorldModel):
+class DinoWMWorldModel(BaseWorldModel):
     """DINO-WM-style predictor over full RynnVLA action-token hidden states.
 
     The model accepts either legacy flattened sidecars or tokenized RynnVLA
@@ -393,7 +393,7 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         if "visual" in obs:
             return obs["visual"]
         raise KeyError(
-            "RynnDinoWMWorldModel expects obs to contain `obs_embedding` or action-hidden `visual`."
+            "DinoWMWorldModel expects obs to contain `obs_embedding` or action-hidden `visual`."
         )
 
     def _block_causal_mask(
@@ -1201,30 +1201,4 @@ class RynnDinoWMWorldModel(BaseWorldModel):
         return self.loss(batch)
 
 
-class OFTDinoWMWorldModel(RynnDinoWMWorldModel):
-    """DINO-WM predictor over OpenVLA-OFT action-head hidden states.
-
-    OFT C/D sidecars use ``token_count=8`` and full action-token sidecars use
-    ``token_count=56`` (8 action chunks * 7 action dims), both with 4096-d
-    tokens.  The config selects the exact flattened observation shape.
-    """
-
-    def __init__(
-        self,
-        obs_dim: int | None = None,
-        action_dim: int = 7,
-        token_count: int = 8,
-        token_dim: int = 4096,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            token_count=token_count,
-            token_dim=token_dim,
-            latent_source=f"OpenVLA-OFT [{int(token_count)},{int(token_dim)}] action hidden",
-            **kwargs,
-        )
-
-
-__all__ = ["RynnDinoWMWorldModel", "OFTDinoWMWorldModel"]
+__all__ = ["DinoWMWorldModel"]

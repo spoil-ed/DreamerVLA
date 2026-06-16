@@ -77,7 +77,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     vla_rotate_180: bool = True
     prompt_style: Literal["vla_policy"] = "vla_policy"
     include_state: bool = True
-    obs_hidden_source: Literal["action_query"] = "action_query"
+    obs_hidden_source: Literal["action_query", "input_token_embedding"] = "action_query"
     action_head_type: Literal["legacy"] = "legacy"
     target_token_id: int = 10004
 
@@ -396,9 +396,10 @@ class DreamerVLAOnlineTrainEnv:
             errors.append("include_state=False, expected True")
         if not bool(self.cfg.vla_rotate_180):
             errors.append("vla_rotate_180=False, expected True")
-        if str(self.cfg.obs_hidden_source) != "action_query":
+        if str(self.cfg.obs_hidden_source) not in ("action_query", "input_token_embedding"):
             errors.append(
-                f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected 'action_query'"
+                f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected "
+                "'action_query' or 'input_token_embedding'"
             )
         if str(self.cfg.action_head_type) != "legacy":
             errors.append(

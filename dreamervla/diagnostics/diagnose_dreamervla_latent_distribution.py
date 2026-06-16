@@ -24,7 +24,7 @@ from dreamervla.envs import (
     quat2axisangle,
 )
 from dreamervla.models.actor import RynnVLAActionHiddenActor
-from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 
 
 def _load_eval_cfg(overrides: list[str]) -> DictConfig:
@@ -42,7 +42,7 @@ def _hydra_quote(value: str) -> str:
 
 
 def _merge_train_eval_cfg(
-    ws: EvalLiberoVLARunner, eval_cfg: DictConfig, ckpt_path: str
+    ws: EmbodiedEvalRunner, eval_cfg: DictConfig, ckpt_path: str
 ) -> tuple[DictConfig, dict[str, Any]]:
     payload = ws._load_checkpoint_payload(
         str(pathlib.Path(ckpt_path).expanduser().resolve())
@@ -78,8 +78,8 @@ def _merge_train_eval_cfg(
 
 def _init_runner(
     train_cfg: DictConfig, payload: dict[str, Any], output_dir: str
-) -> EvalLiberoVLARunner:
-    ws = EvalLiberoVLARunner(train_cfg, output_dir=output_dir)
+) -> EmbodiedEvalRunner:
+    ws = EmbodiedEvalRunner(train_cfg, output_dir=output_dir)
     ws.cfg = train_cfg
     ws.config = train_cfg
     ws._dreamer_eval = True
@@ -212,7 +212,7 @@ def _add_latent_stats(
 
 
 def _make_original_rynnvla_actor(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
 ) -> RynnVLAActionHiddenActor:
     cfg = ws.cfg
     actor = RynnVLAActionHiddenActor(
@@ -246,7 +246,7 @@ def _actor_action_chunk(actor: torch.nn.Module, hidden: torch.Tensor) -> torch.T
 
 
 def _env_action_chunk(
-    ws: EvalLiberoVLARunner, raw_chunk: torch.Tensor
+    ws: EmbodiedEvalRunner, raw_chunk: torch.Tensor
 ) -> torch.Tensor:
     raw = raw_chunk.detach().float().cpu().numpy().reshape(-1, raw_chunk.shape[-1])
     env = [
@@ -259,7 +259,7 @@ def _env_action_chunk(
 def _add_action_stats(
     prefix: str,
     collector: Collector,
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     raw_chunk: torch.Tensor,
 ) -> None:
     raw = raw_chunk.detach().float().cpu()
@@ -272,7 +272,7 @@ def _add_action_stats(
 
 @torch.no_grad()
 def collect_offline(
-    ws: EvalLiberoVLARunner, train_cfg: DictConfig, batches: int, batch_size: int
+    ws: EmbodiedEvalRunner, train_cfg: DictConfig, batches: int, batch_size: int
 ) -> dict[str, Any]:
     dataset_cfg = copy.deepcopy(train_cfg.dataset)
     dataset = hydra.utils.instantiate(
@@ -341,7 +341,7 @@ def collect_offline(
 
 @torch.no_grad()
 def collect_online(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     task_ids: list[int],
     episodes_per_task: int,
     max_steps: int,
@@ -691,7 +691,7 @@ def main() -> None:
     output_dir = str(
         pathlib.Path(args.out).expanduser().resolve().parent / "_runner"
     )
-    ws0 = EvalLiberoVLARunner(eval_cfg, output_dir=output_dir)
+    ws0 = EmbodiedEvalRunner(eval_cfg, output_dir=output_dir)
     train_cfg, payload = _merge_train_eval_cfg(ws0, eval_cfg, args.ckpt)
     ws = _init_runner(train_cfg, payload, output_dir=output_dir)
     tasks = [int(x) for x in str(args.tasks).split(",") if x.strip()]

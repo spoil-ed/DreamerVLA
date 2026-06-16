@@ -21,7 +21,7 @@ _DEMO_RE = re.compile(r"^demo_(\d+)$")
 
 
 @dataclass(frozen=True)
-class OpenVLAOFTHDF5Spec:
+class VLASFTHDF5Spec:
     hdf5_dir: str
     num_files: int
     num_samples: int
@@ -102,7 +102,7 @@ def _select_demo_keys(
     return ordered
 
 
-class OpenVLAOFTHDF5Dataset(Dataset):
+class VLASFTHDF5Dataset(Dataset):
     """Map-style LIBERO HDF5 dataset that emits OpenVLA-OFT training samples."""
 
     def __init__(
@@ -179,7 +179,7 @@ class OpenVLAOFTHDF5Dataset(Dataset):
             if stop:
                 break
 
-        self._spec = OpenVLAOFTHDF5Spec(
+        self._spec = VLASFTHDF5Spec(
             hdf5_dir=str(self.hdf5_dir),
             num_files=len(files),
             num_samples=len(self.samples),
@@ -194,7 +194,7 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         )
 
     @property
-    def data_spec(self) -> OpenVLAOFTHDF5Spec:
+    def data_spec(self) -> VLASFTHDF5Spec:
         return self._spec
 
     def __len__(self) -> int:
@@ -281,7 +281,7 @@ class OpenVLAOFTHDF5Dataset(Dataset):
         return item
 
 
-class OpenVLAOFTHDF5DatasetFactory:
+class VLASFTHDF5DatasetFactory:
     def __init__(
         self,
         hdf5_dir: str | Path,
@@ -340,11 +340,11 @@ class OpenVLAOFTHDF5DatasetFactory:
         from prismatic.util.data_utils import PaddedCollatorForActionPrediction
         from prismatic.vla.action_tokenizer import ActionTokenizer
 
-        from dreamervla.dataset.openvla_oft_rlds_dataset import OpenVLAOFTRLDSDatasetBundle
+        from dreamervla.dataset.vla_sft_rlds_dataset import VLASFTRLDSDatasetBundle
 
         stats = self._load_statistics(policy)
         action_tokenizer = ActionTokenizer(policy.processor.tokenizer)
-        dataset = OpenVLAOFTHDF5Dataset(
+        dataset = VLASFTHDF5Dataset(
             hdf5_dir=self.hdf5_dir,
             processor=policy.processor,
             action_tokenizer=action_tokenizer,
@@ -384,7 +384,7 @@ class OpenVLAOFTHDF5DatasetFactory:
             collate_fn=collator,
             num_workers=self.num_workers,
         )
-        return OpenVLAOFTRLDSDatasetBundle(
+        return VLASFTRLDSDatasetBundle(
             dataset=dataset,
             dataloader=dataloader,
             dataset_statistics={self.dataset_statistics_key: stats},
@@ -392,7 +392,7 @@ class OpenVLAOFTHDF5DatasetFactory:
 
 
 __all__ = [
-    "OpenVLAOFTHDF5Dataset",
-    "OpenVLAOFTHDF5DatasetFactory",
-    "OpenVLAOFTHDF5Spec",
+    "VLASFTHDF5Dataset",
+    "VLASFTHDF5DatasetFactory",
+    "VLASFTHDF5Spec",
 ]

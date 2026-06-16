@@ -6,10 +6,10 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from dreamervla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
+from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
 
 
-class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
+class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
     """RynnDinoWM variant: a K-step action chunk is consumed in ONE forward pass.
 
     True chunk-as-one-input dynamics (Plan B): given starting hidden h_0 (with
@@ -409,7 +409,7 @@ class ChunkAwareRynnDinoWMWorldModel(RynnDinoWMWorldModel):
         chunk_size: int = 5,
         device: str | torch.device = "cpu",
         strict: bool = False,
-    ) -> ChunkAwareRynnDinoWMWorldModel:
+    ) -> ChunkAwareDinoWMWorldModel:
         """Warm-start a chunk WM from a parent RynnDinoWM (or old chunk) ckpt.
 
         Old checkpoints lack the new ``mask_obs_token`` parameter and were

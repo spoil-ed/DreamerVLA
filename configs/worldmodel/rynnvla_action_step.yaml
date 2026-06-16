@@ -7,7 +7,7 @@ defaults:
   - _self_
   - /task: libero_goal
 
-_target_: dreamervla.runners.RynnDinoWMRunner
+_target_: dreamervla.runners.LatentWMRunner
 
 hydra:
   run:
@@ -36,7 +36,7 @@ dataset:
   # prediction + open-loop rollout + binary reward head.  The reward head
   # requires a `rewards` field, so the balanced terminal dataset is used
   # (per_window_dense puts +1 on every step of a terminal-ending window).
-  _target_: dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
   hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
@@ -73,7 +73,7 @@ dataloader:
   multiprocessing_context: null
 
 world_model:
-  _target_: dreamervla.models.world_model.rynn_dino_wm.RynnDinoWMWorldModel
+  _target_: dreamervla.models.world_model.dino_wm.DinoWMWorldModel
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}

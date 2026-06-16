@@ -25,11 +25,11 @@ from dreamervla.models.world_model.dreamerv3_torch import (
     _module_dtype,
     _reward_loss,
     _reward_pred,
-    _RynnBackboneObsEncoder,
+    _BackboneObsEncoder,
 )
 
 
-class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
+class DreamerV3PixelBackboneWorldModel(DreamerV3ActorAdapterMixin):
     """Pixel DreamerV3 with the observation encoder replaced by frozen RynnVLA.
 
     The workspace supplies:
@@ -105,7 +105,7 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         if self.actor_input_kind not in {"hidden", "feature"}:
             raise ValueError("actor_input_kind must be one of: hidden, feature")
         self.encoder_is_identity = embed_dim is None or int(embed_dim) == self.obs_dim
-        self.encoder = _RynnBackboneObsEncoder(
+        self.encoder = _BackboneObsEncoder(
             obs_dim=obs_dim,
             embed_dim=embed_dim,
             hidden=encoder_hidden,
@@ -480,4 +480,4 @@ class DreamerV3PixelRynnBackboneWorldModel(DreamerV3ActorAdapterMixin):
         return self._compat_forward_dict(out)
 
 
-__all__ = ["DreamerV3PixelRynnBackboneWorldModel"]
+__all__ = ["DreamerV3PixelBackboneWorldModel"]

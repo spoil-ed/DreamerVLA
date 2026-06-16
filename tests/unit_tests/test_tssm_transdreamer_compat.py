@@ -4,11 +4,11 @@ import torch
 from torch import nn
 
 from dreamervla.models.world_model.dreamerv3_torch import _act
-from dreamervla.models.world_model.tssm_rynn_backbone_world_model import (
-    TSSMRynnBackboneWorldModel,
+from dreamervla.models.world_model.tssm_backbone_world_model import (
+    TSSMBackboneWorldModel,
 )
-from dreamervla.models.world_model.tssm_token_rynn_backbone_world_model import (
-    TSSMTokenRynnBackboneWorldModel,
+from dreamervla.models.world_model.tssm_token_backbone_world_model import (
+    TSSMTokenBackboneWorldModel,
 )
 from dreamervla.models.world_model.tssm_torch import (
     TSSMDynamic,
@@ -99,7 +99,7 @@ def _small_batch(obs_dim: int, action_dim: int) -> dict[str, torch.Tensor]:
 
 
 def test_flat_tssm_world_model_loss_trims_targets_to_transdreamer_steps() -> None:
-    model = TSSMRynnBackboneWorldModel(
+    model = TSSMBackboneWorldModel(
         obs_dim=10,
         action_dim=3,
         image_channels=3,
@@ -134,7 +134,7 @@ def test_flat_tssm_world_model_loss_trims_targets_to_transdreamer_steps() -> Non
 
 
 def test_token_tssm_world_model_loss_trims_targets_to_transdreamer_steps() -> None:
-    model = TSSMTokenRynnBackboneWorldModel(
+    model = TSSMTokenBackboneWorldModel(
         obs_dim=10,
         action_dim=3,
         image_channels=3,

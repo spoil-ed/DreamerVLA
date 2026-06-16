@@ -14,7 +14,7 @@ from dreamervla.dataset.base_dataset import BaseDataset
 
 
 @dataclass(frozen=True)
-class LIBEROPixelSequenceSpec:
+class PixelSequenceSpec:
     hdf5_dir: str
     num_files: int
     num_windows: int
@@ -33,7 +33,7 @@ class _WindowEntry:
     episode_length: int
 
 
-class LIBEROPixelSequenceDataset(BaseDataset):
+class PixelSequenceDataset(BaseDataset):
     """Pixel-level LIBERO sequence windows for DreamerV3-style WM training.
 
     Reads Robomimic/LIBERO HDF5 demonstrations directly and returns:
@@ -122,7 +122,7 @@ class LIBEROPixelSequenceDataset(BaseDataset):
             )
         if self.action_dim <= 0:
             raise RuntimeError("Could not infer action dimension")
-        self._spec = LIBEROPixelSequenceSpec(
+        self._spec = PixelSequenceSpec(
             hdf5_dir=str(self.hdf5_dir),
             num_files=len(files),
             num_windows=len(self._entries),
@@ -134,7 +134,7 @@ class LIBEROPixelSequenceDataset(BaseDataset):
         )
 
     @property
-    def data_spec(self) -> LIBEROPixelSequenceSpec:
+    def data_spec(self) -> PixelSequenceSpec:
         return self._spec
 
     def get_normalizer(self) -> dict[str, Any]:
@@ -204,4 +204,4 @@ class LIBEROPixelSequenceDataset(BaseDataset):
         }
 
 
-__all__ = ["LIBEROPixelSequenceDataset", "LIBEROPixelSequenceSpec"]
+__all__ = ["PixelSequenceDataset", "PixelSequenceSpec"]

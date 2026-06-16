@@ -194,7 +194,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-balanced-sampler",
         action="store_true",
-        help="Use LIBEROBalancedTerminalDataset + BalancedTerminalSampler for offline (50/50 pos/neg).",
+        help="Use BalancedTerminalDataset + BalancedTerminalSampler for offline (50/50 pos/neg).",
     )
     parser.add_argument(
         "--freeze-non-reward-head",
@@ -234,11 +234,11 @@ def build_offline_loader(
     # If WMPO-style balanced sampler requested, swap dataset class to the
     # terminal-aware variant that exposes positive_indices / negative_indices.
     if bool(getattr(args, "use_balanced_sampler", False)):
-        cfg.dataset._target_ = "dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+        cfg.dataset._target_ = "dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset"
     dataset = hydra.utils.instantiate(cfg.dataset)
     use_balanced = bool(getattr(args, "use_balanced_sampler", False))
     if use_balanced:
-        from dreamervla.dataset.libero_balanced_terminal_dataset import (
+        from dreamervla.dataset.balanced_terminal_dataset import (
             BalancedTerminalSampler,
         )
 

@@ -13,8 +13,8 @@ from dreamervla.runners.dreamerv3_pixel_runner import (
 from dreamervla.runners.dreamerv3_token_runner import (
     DreamerV3TokenRunner as _DreamerV3TokenRunner,
 )
-from dreamervla.runners.eval_libero_vla_runner import (
-    EvalLiberoVLARunner as _EvalLiberoVLARunner,
+from dreamervla.runners.embodied_eval_runner import (
+    EmbodiedEvalRunner as _EmbodiedEvalRunner,
 )
 from dreamervla.runners.latent_classifier_runner import (
     LatentClassifierRunner as _LatentClassifierRunner,
@@ -22,16 +22,17 @@ from dreamervla.runners.latent_classifier_runner import (
 from dreamervla.runners.openvla_oft_runner import (
     OpenVLAOFTTrainingRunner as _OpenVLAOFTTrainingRunner,
 )
-from dreamervla.runners.rynn_backbone_dreamerv3_wm_runner import (
-    RynnBackboneDreamerV3WMRunner as _RynnBackboneDreamerV3WMRunner,
+from dreamervla.runners.backbone_dreamerv3_wm_runner import (
+    BackboneDreamerV3WMRunner as _BackboneDreamerV3WMRunner,
 )
-from dreamervla.runners.rynn_dino_wm_runner import (
-    RynnDinoWMTrainingRunner as _RynnDinoWMTrainingRunner,
+from dreamervla.runners.latent_wm_runner import (
+    LatentWMTrainingRunner as _LatentWMTrainingRunner,
 )
 from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
+from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 
 
-class ActionHiddenWMRunner(_RynnBackboneDreamerV3WMRunner):
+class ActionHiddenWMRunner(_BackboneDreamerV3WMRunner):
     runner_name = "action_hidden_wm"
     runner_status = "current"
     runner_family = "world_model"
@@ -67,8 +68,8 @@ class JointDreamerVLARunner(_DreamerVLARunner):
     runner_family = "actor"
 
 
-class LiberoEvalRunner(_EvalLiberoVLARunner):
-    runner_name = "libero_eval"
+class EmbodiedEvalRunner(_EmbodiedEvalRunner):
+    runner_name = "embodied_eval"
     runner_status = "current"
     runner_family = "eval"
 
@@ -79,14 +80,8 @@ class ChameleonLatentWMRunner(_ChameleonLatentActionWMRunner):
     runner_family = "world_model"
 
 
-class RynnDinoWMRunner(_RynnDinoWMTrainingRunner):
-    runner_name = "rynn_dino_wm"
-    runner_status = "secondary"
-    runner_family = "world_model"
-
-
-class OFTDinoWMRunner(_RynnDinoWMTrainingRunner):
-    runner_name = "oft_dino_wm"
+class LatentWMRunner(_LatentWMTrainingRunner):
+    runner_name = "latent_wm"
     runner_status = "current"
     runner_family = "world_model"
 
@@ -104,11 +99,11 @@ PUBLIC_RUNNERS = [
     "VLASFTRunner",
     "OpenVLAOFTRunner",
     "JointDreamerVLARunner",
-    "LiberoEvalRunner",
+    "EmbodiedEvalRunner",
     "ChameleonLatentWMRunner",
-    "RynnDinoWMRunner",
-    "OFTDinoWMRunner",
+    "LatentWMRunner",
     "LatentClassifierRunner",
+    "OnlineCotrainRunner",
 ]
 
 
@@ -121,9 +116,9 @@ __all__ = [
     "VLASFTRunner",
     "OpenVLAOFTRunner",
     "JointDreamerVLARunner",
-    "LiberoEvalRunner",
+    "EmbodiedEvalRunner",
     "ChameleonLatentWMRunner",
-    "RynnDinoWMRunner",
-    "OFTDinoWMRunner",
+    "LatentWMRunner",
     "LatentClassifierRunner",
+    "OnlineCotrainRunner",
 ]

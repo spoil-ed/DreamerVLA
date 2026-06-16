@@ -1,0 +1,78 @@
+# @package _global_
+# Online cotrain — Scheme 1: BACKBONE-LATENT world model (WM BEFORE the Action
+# Query; predicts future backbone / DINO-style visual-language latent). The actor
+# maps the predicted future latent back to an action via learned Action Queries +
+# a TransformerDecoder bridge + the action head (LatentToActionHiddenActor).
+# Single Hydra call:
+#   python -m dreamervla.train --config-name online_cotrain_oft_backbone_latent
+#   (or: bash scripts/run_online_cotrain_backbone_latent.sh)
+#
+# ONLINE rollout IS wired: OnlineCotrainRunner sets the env
+# obs_hidden_source="input_token_embedding"; RynnVLAEncoder.extract_input_token_embedding
+# extracts the current-frame VQ image tokens through the backbone input-embedding
+# table (pre-Action-Query) — the online counterpart of the offline input-token
+# sidecar. The online rollout policy is the RynnVLA one-trajectory VLA (the ~40%
+# seed). This is a policy/visual-language-latent WM, NOT the original pixel DINO-WM.
+#
+# OpenVLA-OFT backbone latent (512x4096 projected vision patches) is a separate
+# OFFLINE route (experiment=dreamervla_oft_dino_wm_wmpo_outcome_input_tokens);
+# OFT online rollout needs an OFT env-encoder (not yet wired) — see the doc.
+
+defaults:
+  - online_cotrain_oft_action_hidden
+  - _self_
+
+latent_type: backbone_latent
+
+training:
+  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/online_cotrain_backbone_latent/${now:%Y%m%d_%H%M%S}
+
+# backbone (input-token) latent -> action adapter: Action Queries + decoder bridge
+# + RynnVLA legacy action head. source tokens = current-frame VQ image tokens of
+# the RynnVLA Chameleon backbone (input-embedding table output), token_dim 4096.
+policy:
+  _target_: dreamervla.models.actor.LatentToActionHiddenActor
+  hidden_dim: null
+  source_token_count: 512    # current-frame VQ content tokens x num_views (RynnVLA, 2 views @256)
+  source_token_dim: 4096     # Chameleon backbone embedding dim
+  action_hidden_dim: 1024    # RynnVLA legacy action-hidden dim
+  action_dim: 7
+  time_horizon: 5
+  head_type: legacy          # RynnVLA legacy head (loads from the RynnVLA VLA ckpt)
+  bridge_hidden_dim: 1024
+  num_bridge_layers: 2
+  num_bridge_heads: 8
+  bridge_dropout: 0.1
+  freeze_output_projection: true
+  initial_log_std: -3.0
+  min_log_std: -5.0
+  max_log_std: -2.0
+  freeze_log_std: false
+  init_action_head_ckpt: ${init.vla_ckpt_path}
+
+# WM consumes the backbone (input-token) latent as token_count x token_dim.
+world_model:
+  obs_dim: 2097152           # 512 * 4096 current-frame VQ image tokens (RynnVLA @256, 2 views)
+  token_count: 512
+  token_dim: 4096
+  chunk_size: 5
+
+# Backbone latent is stored flat (512*4096). token_pool=mean + token_count keeps
+# the classifier input projection token_dim-sized (4096) instead of the huge flat
+# N*token_dim, so it pools the 512 tokens.
+classifier:
+  latent_dim: null
+  token_dim: 4096
+  token_count: 512
+  token_pool: mean
+  chunk_size: 5
+
+algorithm:
+  # The backbone latent is 512 tokens x 4096 — the WM transformer attends over
+  # (token_count x time), so the imagined rollout is memory-heavy. Use a short
+  # imagined horizon + a single GRPO rollout to keep it within GPU memory
+  # (scale these up on larger GPUs / with token subsampling).
+  ppo_rollouts_per_start: 1
+  wmpo:
+    chunk_size: 5   # must match world_model.chunk_size (early validate_cfg check)
+    episode_max_steps: 10

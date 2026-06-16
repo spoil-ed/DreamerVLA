@@ -44,7 +44,7 @@ from dreamervla.utils.hf_checkpoint import (
 from dreamervla.utils.torch_utils import freeze_module
 
 
-class EvalLiberoVLARunner(PretokenizeVLARunner):
+class EmbodiedEvalRunner(PretokenizeVLARunner):
     """Load a VLA or Dreamer ckpt -> run LIBERO rollout -> dump JSON metrics."""
 
     runner_name = "libero_eval"
@@ -65,12 +65,12 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
 
         if self.world_size != 1:
             raise RuntimeError(
-                f"EvalLiberoVLARunner must run on a single process (got world_size={self.world_size}). "
+                f"EmbodiedEvalRunner must run on a single process (got world_size={self.world_size}). "
                 "Rollout evaluation does not support multi-process inference."
             )
         if self.distributed.uses_fsdp:
             raise RuntimeError(
-                "EvalLiberoVLARunner requires DDP (not FSDP). "
+                "EmbodiedEvalRunner requires DDP (not FSDP). "
                 "Pass `training.distributed_strategy=ddp`."
             )
 
@@ -2474,4 +2474,4 @@ class EvalLiberoVLARunner(PretokenizeVLARunner):
         return env_actions
 
 
-__all__ = ["EvalLiberoVLARunner"]
+__all__ = ["EmbodiedEvalRunner"]

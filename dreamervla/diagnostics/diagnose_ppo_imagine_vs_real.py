@@ -42,7 +42,7 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_state_reward,
 )
 from dreamervla.envs import get_libero_dummy_action, get_libero_env, get_libero_image
-from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 
 
 def _array_stats(prefix: str, left: np.ndarray, right: np.ndarray) -> dict[str, float]:
@@ -98,7 +98,7 @@ def copy_cfg(cfg: Any) -> DictConfig:
     raise TypeError(f"Unsupported cfg type: {type(cfg).__name__}")
 
 
-def _build_runner(args: argparse.Namespace) -> EvalLiberoVLARunner:
+def _build_runner(args: argparse.Namespace) -> EmbodiedEvalRunner:
     overrides = [
         f"training.out_dir={args.out_dir}",
         f"eval.ckpt_path={args.ckpt}",
@@ -117,10 +117,10 @@ def _build_runner(args: argparse.Namespace) -> EvalLiberoVLARunner:
         eval_cfg = compose(
             config_name="train", overrides=["experiment=eval_libero_vla", *overrides]
         )
-    bootstrap = EvalLiberoVLARunner(eval_cfg)
+    bootstrap = EmbodiedEvalRunner(eval_cfg)
     payload = bootstrap._load_checkpoint_payload(str(args.ckpt))
     cfg = _merge_dreamer_eval_cfg(eval_cfg, payload)
-    ws = EvalLiberoVLARunner(cfg)
+    ws = EmbodiedEvalRunner(cfg)
     ws._dreamer_eval = True
     ws._dreamer_deterministic = True
     ws._dreamer_action_repeat = 1
@@ -158,7 +158,7 @@ def _padded_history(
 
 
 def _observe(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     item_processor: Any,
     obs: dict[str, Any],
     frame_history: list[tuple[Image.Image, Image.Image]],
@@ -185,7 +185,7 @@ def _observe(
 
 
 def _sft_action(
-    ws: EvalLiberoVLARunner, input_ids: list[int]
+    ws: EmbodiedEvalRunner, input_ids: list[int]
 ) -> tuple[np.ndarray, np.ndarray]:
     backbone = ws.encoder.backbone
     generation_config = GenerationConfig(
@@ -213,7 +213,7 @@ def _sft_action(
 
 
 def _dreamer_action_from_latent(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     latent: Any,
     deterministic: bool,
 ) -> tuple[torch.Tensor, np.ndarray, np.ndarray, torch.Tensor]:
@@ -234,7 +234,7 @@ def _dreamer_action_from_latent(
 
 
 def _imagine_candidates(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     latent: Any,
     num_candidates: int,
     horizon: int,
@@ -280,7 +280,7 @@ def _imagine_candidates(
 
 
 def _rollout_with_forced_first_action(
-    ws: EvalLiberoVLARunner,
+    ws: EmbodiedEvalRunner,
     env: Any,
     initial_state: Any,
     task_description: str,

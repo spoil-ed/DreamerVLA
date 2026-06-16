@@ -82,8 +82,8 @@ def _write_demo_file(path: Path, num_demos: int = 3, length: int = 2) -> None:
             obs.create_dataset("gripper_states", data=np.zeros((length, 2), dtype=np.float32))
 
 
-def test_openvla_oft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -> None:
-    from dreamervla.dataset.openvla_oft_hdf5_dataset import OpenVLAOFTHDF5Dataset
+def test_vla_sft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -> None:
+    from dreamervla.dataset.vla_sft_hdf5_dataset import VLASFTHDF5Dataset
 
     _write_demo_file(tmp_path / "task_alpha_demo.hdf5")
     _write_demo_file(tmp_path / "task_beta_demo.hdf5")
@@ -92,7 +92,7 @@ def test_openvla_oft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Pat
         "proprio": {"q01": [-1.0] * 8, "q99": [1.0] * 8, "mask": [True] * 8},
     }
 
-    first = OpenVLAOFTHDF5Dataset(
+    first = VLASFTHDF5Dataset(
         hdf5_dir=tmp_path,
         processor=_TinyProcessor(),
         action_tokenizer=_TinyActionTokenizer(),
@@ -101,7 +101,7 @@ def test_openvla_oft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Pat
         demos_per_task=1,
         demo_selection_seed=5,
     )
-    second = OpenVLAOFTHDF5Dataset(
+    second = VLASFTHDF5Dataset(
         hdf5_dir=tmp_path,
         processor=_TinyProcessor(),
         action_tokenizer=_TinyActionTokenizer(),

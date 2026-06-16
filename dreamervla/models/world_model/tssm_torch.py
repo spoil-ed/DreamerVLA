@@ -11,8 +11,8 @@ image-spatial H/W dims removed (we only have a T-axis sequence). All other behav
 no unimix, no final LN) matches the original 1:1.
 
 This module contains the shared TSSM dynamics and helper layers. Concrete world
-model classes live in ``tssm_rynn_backbone_world_model.py`` and
-``tssm_token_rynn_backbone_world_model.py``.
+model classes live in ``tssm_backbone_world_model.py`` and
+``tssm_token_backbone_world_model.py``.
 """
 
 from __future__ import annotations

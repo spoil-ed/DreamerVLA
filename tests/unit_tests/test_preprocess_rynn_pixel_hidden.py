@@ -4,11 +4,11 @@ import sys
 
 import torch
 
-from dreamervla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
-    LIBEROPixelRynnHiddenSequenceDataset,
+from dreamervla.dataset.pixel_hidden_sequence_dataset import (
+    PixelHiddenSequenceDataset,
 )
-from dreamervla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
-    DreamerV3PixelRynnBackboneWorldModel,
+from dreamervla.models.world_model.dreamer_v3_pixel_backbone_world_model import (
+    DreamerV3PixelBackboneWorldModel,
 )
 from dreamervla.models.world_model.dreamerv3_torch import (
     CompactTokenSequenceAutoencoder,
@@ -148,8 +148,8 @@ def test_preprocess_cli_defaults_to_rynnvla_action_hidden_sidecar(monkeypatch) -
 def test_pad_or_truncate_actor_sequence_arrays() -> None:
     array = torch.arange(2 * 3).numpy().reshape(2, 3)
 
-    padded = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 5, axis=1)
-    truncated = LIBEROPixelRynnHiddenSequenceDataset._pad_or_truncate_array(array, 2, axis=1)
+    padded = PixelHiddenSequenceDataset._pad_or_truncate_array(array, 5, axis=1)
+    truncated = PixelHiddenSequenceDataset._pad_or_truncate_array(array, 2, axis=1)
 
     assert padded.shape == (2, 5)
     assert padded[:, :3].tolist() == array.tolist()
@@ -159,7 +159,7 @@ def test_pad_or_truncate_actor_sequence_arrays() -> None:
 
 
 def test_rynn_world_model_decodes_full_hidden_sequence() -> None:
-    model = DreamerV3PixelRynnBackboneWorldModel(
+    model = DreamerV3PixelBackboneWorldModel(
         obs_dim=8,
         action_dim=2,
         image_channels=2,

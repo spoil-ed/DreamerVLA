@@ -89,11 +89,11 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "VLASFTRunner",
         "OpenVLAOFTRunner",
         "JointDreamerVLARunner",
-        "LiberoEvalRunner",
+        "EmbodiedEvalRunner",
         "ChameleonLatentWMRunner",
-        "RynnDinoWMRunner",
-        "OFTDinoWMRunner",
+        "LatentWMRunner",
         "LatentClassifierRunner",
+        "OnlineCotrainRunner",
     }
 
     assert expected == set(runners.PUBLIC_RUNNERS)
@@ -118,12 +118,12 @@ def test_runner_directory_contains_route_specific_runners() -> None:
         "dreamervla_runner.py",
         "dreamerv3_pixel_runner.py",
         "dreamerv3_token_runner.py",
-        "eval_libero_vla_runner.py",
+        "embodied_eval_runner.py",
         "latent_classifier_runner.py",
         "openvla_oft_runner.py",
         "pretokenize_vla_runner.py",
-        "rynn_backbone_dreamerv3_wm_runner.py",
-        "rynn_dino_wm_runner.py",
+        "backbone_dreamerv3_wm_runner.py",
+        "latent_wm_runner.py",
         "vla_sft_runner.py",
     }.issubset(top_level_python_files)
     assert "pretokenize_sft_runner.py" not in top_level_python_files
@@ -210,19 +210,19 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "vla_rynnvla_action_head": "dreamervla.runners.VLASFTRunner",
         "vla_sft_one_trajectory": "dreamervla.runners.VLASFTRunner",
-        "world_model_dinowm_chunk": "dreamervla.runners.RynnDinoWMRunner",
-        "world_model_dinowm_chunk_input_tokens": "dreamervla.runners.RynnDinoWMRunner",
-        "world_model_dinowm_step": "dreamervla.runners.RynnDinoWMRunner",
-        "oft_world_model_dinowm_chunk": "dreamervla.runners.OFTDinoWMRunner",
-        "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.OFTDinoWMRunner",
-        "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.OFTDinoWMRunner",
+        "world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
+        "world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
+        "world_model_dinowm_step": "dreamervla.runners.LatentWMRunner",
+        "oft_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
+        "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
+        "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "dreamervla_rynn_dino_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
-        "eval_libero_vla": "dreamervla.runners.LiberoEvalRunner",
+        "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
         "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory_l1": "dreamervla.runners.OpenVLAOFTRunner",
@@ -363,14 +363,14 @@ def test_train_config_resolves_public_default_experiment() -> None:
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
-        assert cfg._target_ == "dreamervla.runners.RynnDinoWMRunner"
+        assert cfg._target_ == "dreamervla.runners.LatentWMRunner"
         assert (
             cfg.dataset._target_
-            == "dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+            == "dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset"
         )
         assert (
             cfg.world_model._target_
-            == "dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel"
+            == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
         )
         assert "dinowm_chunk" in cfg.training.out_dir
 
@@ -391,9 +391,8 @@ def test_implementation_runner_classes_are_not_public_aliases() -> None:
         "DreamerVLARunner",
         "DreamerV3PixelRunner",
         "DreamerV3TokenRunner",
-        "EvalLiberoVLARunner",
         "PretokenizeVLARunner",
-        "RynnBackboneDreamerV3WMRunner",
+        "BackboneDreamerV3WMRunner",
     }
 
     for name in implementation_names:
@@ -440,7 +439,7 @@ def test_world_model_package_exposes_only_retained_architectures() -> None:
 def test_models_package_exports_fail_fast_symbols() -> None:
     import dreamervla.models as models
 
-    for name in ("Critic", "VLAPolicy", "OFTDinoWMWorldModel", "RynnDinoWMWorldModel"):
+    for name in ("Critic", "VLAPolicy", "DinoWMWorldModel"):
         assert name in models.__all__
         assert getattr(models, name) is not None
 

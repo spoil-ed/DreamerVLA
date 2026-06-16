@@ -59,7 +59,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
   hdf5_dir: ${task.hdf5_reward_dir}
   hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
@@ -99,10 +99,10 @@ dataloader:
 
 world_model:
   # Chunk-aware variant — adds no parameters relative to the parent class,
-  # so an m1024 ckpt trained with RynnDinoWMWorldModel loads directly.
+  # so an m1024 ckpt trained with DinoWMWorldModel loads directly.
   # predict_next_chunk advances K env-steps per call (K must match
   # policy.time_horizon and algorithm.wmpo.chunk_size).
-  _target_: dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}

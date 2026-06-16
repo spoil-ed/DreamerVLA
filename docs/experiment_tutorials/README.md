@@ -20,6 +20,8 @@ normal Hydra keys.
 | --- | --- | --- | --- |
 | [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `RynnVLA_LIBERO` | `RynnVLA_LIBERO_libero_goal` | `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome` |
 | [OpenVLA_Onetraj_LIBERO](OpenVLA_Onetraj_LIBERO.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome` |
+| [OpenVLA_Onetraj_LIBERO — action-hidden WM (Scheme 2; offline + online cotrain)](OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk`, `oft_latent_classifier_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome`, `online_cotrain_oft_action_hidden` |
+| [OpenVLA_Onetraj_LIBERO — backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk_input_tokens`, `oft_latent_classifier_chunk_input_tokens`, `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, `online_cotrain_oft_backbone_latent` |
 
 The pipeline task name is the Hydra `task=` value. The preprocessing artifact
 name appends the raw dataset suite, so intermediate folders and sidecars stay

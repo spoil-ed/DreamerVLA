@@ -42,9 +42,14 @@ class LatentSuccessClassifierConfig:
     chunk_size: int = 1
     chunk_pool: str = "last"
     # Tokenized frame windows [B,W,N,D] default to the historical flattened
-    # boundary. Scheme-B input-token latents can set "mean" to keep classifier
-    # size tied to token_dim instead of N*token_dim.
+    # boundary. Scheme-B input-token / backbone latents can set "mean" to keep
+    # classifier size tied to token_dim instead of N*token_dim.
     token_pool: str = "flat"
+    # When the latent is stored FLAT ([B,W,N*token_dim], the online/replay form)
+    # and token_pool="mean", token_count lets forward() reshape flat -> tokens
+    # before pooling, so the input projection stays token_dim-sized instead of
+    # the (huge) N*token_dim flat dim. None keeps the historical flat behaviour.
+    token_count: int | None = None
 
 
 class LatentSuccessClassifier(nn.Module):
@@ -130,6 +135,18 @@ class LatentSuccessClassifier(nn.Module):
                     -1,
                     latent_window.shape[-1],
                 ).mean(dim=2)
+        elif (
+            latent_window.ndim == 3
+            and str(getattr(self.cfg, "token_pool", "flat")) == "mean"
+            and getattr(self.cfg, "token_count", None)
+            and int(latent_window.shape[-1]) != int(self.cfg.latent_dim)
+        ):
+            # FLAT-stored tokenized latent ([B,W,N*token_dim], the online/replay
+            # form): reshape to tokens and mean-pool so input_proj stays token_dim.
+            tc = int(self.cfg.token_count)
+            latent_window = latent_window.reshape(
+                latent_window.shape[0], latent_window.shape[1], tc, -1
+            ).mean(dim=2)
         ht = str(getattr(self.cfg, "head_type", "transformer"))
         if ht == "transformer":
             x = self.input_proj(latent_window.to(self.input_proj.weight.dtype))

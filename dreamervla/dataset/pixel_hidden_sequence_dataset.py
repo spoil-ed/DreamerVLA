@@ -9,8 +9,8 @@ import h5py
 import numpy as np
 import torch
 
-from dreamervla.dataset.libero_pixel_sequence_dataset import (
-    LIBEROPixelSequenceDataset,
+from dreamervla.dataset.pixel_sequence_dataset import (
+    PixelSequenceDataset,
 )
 from dreamervla.preprocess.sidecar_schema import (
     ACTOR_SEQUENCE_KEYS,
@@ -19,15 +19,17 @@ from dreamervla.preprocess.sidecar_schema import (
 )
 
 
-class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
-    """LIBERO pixel windows plus precomputed RynnVLA hidden observations.
+class PixelHiddenSequenceDataset(PixelSequenceDataset):
+    """LIBERO pixel windows plus precomputed VLA hidden observations.
 
-    The original pixel HDF5 files remain the image/reconstruction source.  This
+    Model-agnostic: the hidden sidecar may come from any VLA (RynnVLA,
+    OpenVLA-OFT, pi0, ...); only the hidden vector dimension differs. The
+    original pixel HDF5 files remain the image/reconstruction source.  This
     dataset reads a sidecar HDF5 directory with matching filenames and per-demo
     ``data/<demo_key>/obs_embedding`` arrays, then returns both:
 
       images:        [T, C, H, W], uint8-range float tensor from the source HDF5
-      obs_embedding: [T, D], precomputed frozen RynnVLA hidden vector
+      obs_embedding: [T, D], precomputed frozen VLA hidden vector
     """
 
     def __init__(
@@ -72,7 +74,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         self.hidden_dir = self.resolve_project_path(hidden_dir)
         if not self.hidden_dir.exists():
             raise FileNotFoundError(
-                f"Rynn hidden sidecar directory does not exist: {self.hidden_dir}"
+                f"Hidden sidecar directory does not exist: {self.hidden_dir}"
             )
         self.hidden_key = str(hidden_key)
         self.load_actor_sequence = bool(load_actor_sequence)
@@ -160,7 +162,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         if not config_path.is_file():
             if require_preprocess_config:
                 raise FileNotFoundError(
-                    f"Rynn hidden sidecar is missing preprocess_config.json: {config_path}"
+                    f"Hidden sidecar is missing preprocess_config.json: {config_path}"
                 )
             return None
         with config_path.open("r", encoding="utf-8") as handle:
@@ -228,14 +230,14 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         if errors:
             joined = "\n  - ".join(errors)
             raise ValueError(
-                f"Rynn hidden sidecar metadata does not match this run: {self.hidden_dir}\n"
+                f"Hidden sidecar metadata does not match this run: {self.hidden_dir}\n"
                 f"  - {joined}"
             )
         if self.load_actor_sequence and not bool(
             config.get("save_actor_sequence", False)
         ):
             raise ValueError(
-                f"Rynn hidden sidecar was not generated with --save-actor-sequence: {self.hidden_dir}"
+                f"Hidden sidecar was not generated with --save-actor-sequence: {self.hidden_dir}"
             )
         return config
 
@@ -249,7 +251,7 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         if handle is None:
             if not hidden_path.is_file():
                 raise FileNotFoundError(
-                    f"Missing Rynn hidden sidecar for {source_path}: {hidden_path}"
+                    f"Missing hidden sidecar for {source_path}: {hidden_path}"
                 )
             handle = h5py.File(hidden_path, mode="r", swmr=True, libver="latest")
             self._hidden_file_cache[key] = handle
@@ -343,4 +345,4 @@ class LIBEROPixelRynnHiddenSequenceDataset(LIBEROPixelSequenceDataset):
         return item
 
 
-__all__ = ["LIBEROPixelRynnHiddenSequenceDataset"]
+__all__ = ["PixelHiddenSequenceDataset"]

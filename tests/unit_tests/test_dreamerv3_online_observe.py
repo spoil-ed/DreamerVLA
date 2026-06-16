@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from dreamervla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
-    DreamerV3PixelRynnBackboneWorldModel,
+from dreamervla.models.world_model.dreamer_v3_pixel_backbone_world_model import (
+    DreamerV3PixelBackboneWorldModel,
 )
 from dreamervla.models.world_model.dreamerv3_torch import (
     DreamerV3LatentState,
@@ -45,7 +45,7 @@ def test_rssm_observe_next_matches_sequence_observe() -> None:
 
 
 def test_rynn_world_model_can_expose_rssm_feature_for_dreamer_actor() -> None:
-    model = DreamerV3PixelRynnBackboneWorldModel(
+    model = DreamerV3PixelBackboneWorldModel(
         obs_dim=12,
         action_dim=2,
         image_channels=3,
@@ -72,7 +72,7 @@ def test_rynn_world_model_can_expose_rssm_feature_for_dreamer_actor() -> None:
 
 
 def test_rynn_world_model_default_encoder_uses_obs_embedding_directly() -> None:
-    model = DreamerV3PixelRynnBackboneWorldModel(
+    model = DreamerV3PixelBackboneWorldModel(
         obs_dim=12,
         action_dim=2,
         image_channels=3,

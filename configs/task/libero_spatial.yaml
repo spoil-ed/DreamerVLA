@@ -99,8 +99,8 @@ openvla_oft:
     action_hidden_dim: 4096
     latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
-  sft_dataset_target: dreamervla.dataset.OpenVLAOFTHDF5DatasetFactory
-  wm_target: dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   classifier_target: dreamervla.models.reward.LatentSuccessClassifier
   actor_target: dreamervla.models.actor.RynnVLAActionHiddenActor
   actor_head_type: legacy

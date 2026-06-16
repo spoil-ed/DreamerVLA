@@ -6,11 +6,10 @@ Prefer canonical subpackage imports for new code, for example
 
 from dreamervla.models.actor import VLAPolicy
 from dreamervla.models.critic.critic import Critic
-from dreamervla.models.world_model import OFTDinoWMWorldModel, RynnDinoWMWorldModel
+from dreamervla.models.world_model import DinoWMWorldModel
 
 __all__ = [
     "Critic",
-    "OFTDinoWMWorldModel",
-    "RynnDinoWMWorldModel",
+    "DinoWMWorldModel",
     "VLAPolicy",
 ]

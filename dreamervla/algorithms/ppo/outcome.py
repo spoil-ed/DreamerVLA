@@ -8,7 +8,7 @@ imagined latent video and emits ``(complete, finish_step)``. We place
 signal per successful rollout, none otherwise.
 
 This is the DreamerVLA-side reproduction of the WMPO/verl PPO loop. The
-rollout drives the WM in chunk mode (``ChunkAwareRynnDinoWMWorldModel.
+rollout drives the WM in chunk mode (``ChunkAwareDinoWMWorldModel.
 predict_next_chunk``) so one WM call advances ``action_chunks_len`` env
 steps in lockstep with the RynnVLA actor's K-step action chunk.
 
@@ -282,6 +282,13 @@ def dino_wmpo_outcome_step(
 
     # [B_eff, num_chunks * K, latent_dim]
     video = torch.cat(video_latents, dim=1)
+    # Tokenized world models (e.g. OpenVLA-OFT action-hidden, [.,.,N_tokens,token_dim])
+    # emit a 4-D hidden_seq; flatten the trailing token axes to the flat
+    # [B, T, latent_dim] contract that predict_success / the classifier expect
+    # (matches how the classifier is trained on flat obs_embedding). RynnVLA
+    # latents are already flat, so this is a no-op there.
+    if video.ndim > 3:
+        video = video.reshape(video.shape[0], video.shape[1], -1)
     B_eff = video.shape[0]
     with torch.no_grad():
         success_info = classifier_module.predict_success(

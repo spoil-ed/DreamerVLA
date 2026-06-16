@@ -16,12 +16,12 @@ from typing import Any
 import numpy as np
 import torch
 
-from dreamervla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
-    LIBEROPixelRynnHiddenSequenceDataset,
+from dreamervla.dataset.pixel_hidden_sequence_dataset import (
+    PixelHiddenSequenceDataset,
 )
 
 
-class LIBEROBalancedTerminalDataset(LIBEROPixelRynnHiddenSequenceDataset):
+class BalancedTerminalDataset(PixelHiddenSequenceDataset):
     """Balanced terminal-aware sequence dataset.
 
     reward_mode controls how ``rewards`` is rewritten:
@@ -141,7 +141,7 @@ class BalancedTerminalSampler(torch.utils.data.Sampler):
 
     def __init__(
         self,
-        dataset: LIBEROBalancedTerminalDataset,
+        dataset: BalancedTerminalDataset,
         num_samples: int = 100000,
         positive_ratio: float = 0.5,
         seed: int = 0,
@@ -163,4 +163,4 @@ class BalancedTerminalSampler(torch.utils.data.Sampler):
         return self.num_samples
 
 
-__all__ = ["LIBEROBalancedTerminalDataset", "BalancedTerminalSampler"]
+__all__ = ["BalancedTerminalDataset", "BalancedTerminalSampler"]

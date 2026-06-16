@@ -13,7 +13,7 @@ from dreamervla.models.encoder.protocol import EncoderInputBatch
 from dreamervla.runners.dreamerv3_pixel_runner import DreamerV3PixelRunner
 
 
-class RynnBackboneDreamerV3WMRunner(DreamerV3PixelRunner):
+class BackboneDreamerV3WMRunner(DreamerV3PixelRunner):
     """Pixel DreamerV3 trainer with only the observation encoder replaced.
 
     The training loop, optimizer, checkpoint format, visualizer cadence, and
@@ -278,4 +278,4 @@ class RynnBackboneDreamerV3WMRunner(DreamerV3PixelRunner):
             )
 
 
-__all__ = ["RynnBackboneDreamerV3WMRunner"]
+__all__ = ["BackboneDreamerV3WMRunner"]

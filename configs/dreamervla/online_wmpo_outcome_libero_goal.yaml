@@ -57,7 +57,7 @@ init:
 encoder: null
 
 dataset:
-  _target_: dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset
+  _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
   hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
   hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
   # Sidecar metadata stores the model_path used during preprocessing. Keep this
@@ -96,7 +96,7 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  _target_: dreamervla.models.world_model.rynn_dino_wm_chunk.ChunkAwareRynnDinoWMWorldModel
+  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   chunk_size: 5
   obs_dim: null
   action_dim: 7

@@ -17,7 +17,7 @@ _IMG_TOKEN_NAME_RE = re.compile(r"^IMGIMG(.+)$")
 
 
 @dataclass(frozen=True)
-class LIBEROTokenSequenceSpec:
+class TokenSequenceSpec:
     config_path: str
     vocab_config_path: str
     num_windows: int
@@ -65,7 +65,7 @@ def _load_bpe2img(vocab_config_path: str | Path) -> dict[int, int]:
     return mapping
 
 
-class LIBEROTokenSequenceDataset(BaseDataset):
+class TokenSequenceDataset(BaseDataset):
     """DreamerV3-style token observation windows for LIBERO.
 
     This wraps the existing pretokenized sequence dataset and extracts the
@@ -145,7 +145,7 @@ class LIBEROTokenSequenceDataset(BaseDataset):
         if self.max_windows is not None and self.max_windows <= 0:
             raise ValueError("max_windows must be positive when provided")
         self.action_dim = int(getattr(self.source, "action_dim", 0) or 0)
-        self._spec = LIBEROTokenSequenceSpec(
+        self._spec = TokenSequenceSpec(
             config_path=str(self.config_path),
             vocab_config_path=str(self.vocab_config_path),
             num_windows=len(self),
@@ -160,7 +160,7 @@ class LIBEROTokenSequenceDataset(BaseDataset):
         )
 
     @property
-    def data_spec(self) -> LIBEROTokenSequenceSpec:
+    def data_spec(self) -> TokenSequenceSpec:
         return self._spec
 
     def get_normalizer(self) -> dict[str, Any]:
@@ -241,4 +241,4 @@ class LIBEROTokenSequenceDataset(BaseDataset):
         }
 
 
-__all__ = ["LIBEROTokenSequenceDataset", "LIBEROTokenSequenceSpec"]
+__all__ = ["TokenSequenceDataset", "TokenSequenceSpec"]

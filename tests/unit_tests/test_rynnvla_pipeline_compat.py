@@ -7,8 +7,8 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
-from dreamervla.dataset.libero_pixel_rynn_hidden_sequence_dataset import (
-    LIBEROPixelRynnHiddenSequenceDataset,
+from dreamervla.dataset.pixel_hidden_sequence_dataset import (
+    PixelHiddenSequenceDataset,
 )
 from dreamervla.models.actor import (
     LatentToActionHiddenActor,
@@ -17,9 +17,9 @@ from dreamervla.models.actor import (
     VLAActionHeadActor,
 )
 from dreamervla.models.reward import LatentSuccessClassifier
-from dreamervla.models.world_model.rynn_dino_wm import RynnDinoWMWorldModel
+from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
-from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 
 
 def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
@@ -35,7 +35,7 @@ def test_rynn_hidden_sidecar_validates_action_head_type(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -59,7 +59,7 @@ def test_rynn_hidden_sidecar_requires_expected_path_metadata(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -93,7 +93,7 @@ def test_rynn_hidden_sidecar_accepts_legacy_ckpts_checkpoint_alias(tmp_path) -> 
         ),
         encoding="utf-8",
     )
-    dataset = LIBEROPixelRynnHiddenSequenceDataset.__new__(LIBEROPixelRynnHiddenSequenceDataset)
+    dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
     dataset.load_actor_sequence = False
 
@@ -182,7 +182,7 @@ def test_vla_action_head_actor_loads_hf_action_head(tmp_path) -> None:
 
 
 def test_dreamer_eval_keeps_rynnvla_action_hidden_tokens_for_wm() -> None:
-    workspace = EvalLiberoVLARunner.__new__(EvalLiberoVLARunner)
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
     workspace.cfg = OmegaConf.create(
         {
             "eval": {"obs_hidden_source": "action_query", "target_token_id": 10004},
@@ -218,7 +218,7 @@ def test_dreamer_eval_keeps_rynnvla_action_hidden_tokens_for_wm() -> None:
 
 
 def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
-    cfg = EvalLiberoVLARunner._checkpoint_cfg_from_payload(
+    cfg = EmbodiedEvalRunner._checkpoint_cfg_from_payload(
         {
             "cfg": {
                 "training": {"out_dir": "/tmp/eval"},
@@ -350,7 +350,7 @@ def test_openvla_discrete_token_actor_uses_token_categorical_log_probs() -> None
 
 
 def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
-    model = RynnDinoWMWorldModel(
+    model = DinoWMWorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,
@@ -368,7 +368,7 @@ def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
 
 
 def test_rynn_dino_wm_accepts_tokenized_action_hidden_without_flattening() -> None:
-    model = RynnDinoWMWorldModel(
+    model = DinoWMWorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,
@@ -389,7 +389,7 @@ def test_rynn_dino_wm_accepts_tokenized_action_hidden_without_flattening() -> No
 
 
 def test_rynn_dino_wm_encode_latent_preserves_action_hidden_tokens() -> None:
-    model = RynnDinoWMWorldModel(
+    model = DinoWMWorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,

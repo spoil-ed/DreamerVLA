@@ -30,6 +30,35 @@ def _default_ckpt_path(*parts: str) -> str:
     return str(checkpoints_path(*parts).resolve())
 
 
+def _image_content_token_spans(
+    tokens: list[int], *, start_id: int, end_id: int, new_line_id: int
+) -> list[list[int]]:
+    """Per-image VQ content token ids; grid-size, newline, and marker tokens
+    stripped. Mirrors ``preprocess._image_content_token_spans`` so the online
+    backbone-latent extractor matches the offline input-token sidecar layout."""
+    spans: list[list[int]] = []
+    inside = False
+    current: list[int] = []
+    skip = 0
+    for tok in tokens:
+        if tok == start_id:
+            inside, current, skip = True, [], 2
+            continue
+        if not inside:
+            continue
+        if tok == end_id:
+            spans.append(current)
+            inside = False
+            continue
+        if skip > 0:
+            skip -= 1
+            continue
+        if tok == new_line_id:
+            continue
+        current.append(tok)
+    return spans
+
+
 def _resolve_pretrained_model_dir(path: str | Path) -> Path:
     candidate = _resolve_path(path)
     if candidate.is_file():
@@ -433,6 +462,57 @@ class RynnVLAEncoder(BaseEncoder):
         if not ok:
             raise ValueError("RynnVLA action head did not find a usable action context")
         return action_hidden.float()
+
+    def extract_input_token_embedding(
+        self,
+        *,
+        input_ids_list: list[list[int]],
+        processor: Any,
+        num_views: int,
+    ) -> torch.Tensor:
+        """Scheme-1 backbone latent: current-frame VQ image content tokens through
+        the backbone input-embedding table (no transformer forward). Mirrors
+        ``preprocess._input_token_embedding_obs``. Returns ``[T, N*token_dim]``.
+
+        This is the *pre-Action-Query* visual-language latent (DINO-style), the
+        online counterpart of the offline input-token sidecar.
+        """
+        start_id = int(processor.token2id(processor.image_start_token))
+        end_id = int(processor.token2id(processor.image_end_token))
+        new_line_id = int(processor.token2id(processor.new_line_token))
+        backbone = self.backbone
+        embed = (
+            backbone.get_input_embeddings()
+            if hasattr(backbone, "get_input_embeddings")
+            else backbone.model.embed_tokens
+        )
+        frames: list[torch.Tensor] = []
+        expected: int | None = None
+        for tokens in input_ids_list:
+            spans = _image_content_token_spans(
+                [int(t) for t in tokens],
+                start_id=start_id,
+                end_id=end_id,
+                new_line_id=new_line_id,
+            )
+            if len(spans) < num_views:
+                raise RuntimeError(
+                    "extract_input_token_embedding expected >= "
+                    f"{num_views} image spans per frame, got {len(spans)}"
+                )
+            # Record layout is [history ... current] x views; current frame is last.
+            current = [tok for span in spans[-num_views:] for tok in span]
+            if expected is None:
+                expected = len(current)
+            elif len(current) != expected:
+                raise RuntimeError(
+                    f"inconsistent image token count across frames: {len(current)} != {expected}"
+                )
+            ids = torch.as_tensor(current, dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                emb = embed(ids)
+            frames.append(emb.reshape(-1).float())
+        return torch.stack(frames, dim=0)
 
     def encode(self, obs: dict[str, Any]) -> torch.Tensor:
         meta = obs.get("meta") if isinstance(obs.get("meta"), list) else None

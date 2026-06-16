@@ -1139,7 +1139,7 @@ class CompactTokenSequenceAutoencoder(nn.Module):
         }
 
 
-class _RynnBackboneObsEncoder(nn.Module):
+class _BackboneObsEncoder(nn.Module):
     """Identity/projection shim for frozen RynnVLA backbone outputs."""
 
     def __init__(

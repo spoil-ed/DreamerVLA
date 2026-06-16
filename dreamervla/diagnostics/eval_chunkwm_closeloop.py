@@ -33,14 +33,14 @@ import torch
 import torch.nn.functional as F
 
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
-from dreamervla.models.world_model.rynn_dino_wm_chunk import ChunkAwareRynnDinoWMWorldModel
+from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_chunk_wm(
     ckpt_path: str, device: torch.device
-) -> ChunkAwareRynnDinoWMWorldModel:
+) -> ChunkAwareDinoWMWorldModel:
     sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     wm_cfg_blob = sd.get("cfg", {}).get("world_model", {})
     chunk_size = int(wm_cfg_blob.get("chunk_size", 5))
@@ -72,7 +72,7 @@ def load_chunk_wm(
     ):
         if k in wm_cfg_blob:
             kwargs[k] = wm_cfg_blob[k]
-    wm = ChunkAwareRynnDinoWMWorldModel(chunk_size=chunk_size, **kwargs)
+    wm = ChunkAwareDinoWMWorldModel(chunk_size=chunk_size, **kwargs)
     missing, unexpected = wm.load_state_dict(sd["model"], strict=False)
     print(
         f"[load] global_step={sd.get('global_step')} epoch={sd.get('epoch')}"
@@ -100,7 +100,7 @@ def load_demo(
 
 @torch.no_grad()
 def rollout(
-    wm: ChunkAwareRynnDinoWMWorldModel,
+    wm: ChunkAwareDinoWMWorldModel,
     obs: torch.Tensor,  # [T, obs_dim] or [T,N,token_dim]
     actions: torch.Tensor,  # [T, action_dim]
     num_chunks: int,

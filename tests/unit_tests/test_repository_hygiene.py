@@ -418,7 +418,7 @@ def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
     config_text = "\n".join(
         path.read_text(encoding="utf-8") for path in (project_root / "configs").rglob("*.yaml")
     )
-    assert "dreamervla.models.world_model.dreamerv3_torch.RynnDinoWMWorldModel" not in config_text
+    assert "dreamervla.models.world_model.dreamerv3_torch.DinoWMWorldModel" not in config_text
 
 
 def test_active_configs_do_not_describe_ignored_targets() -> None:

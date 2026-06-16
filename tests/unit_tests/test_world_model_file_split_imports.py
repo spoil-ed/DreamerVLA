@@ -12,19 +12,19 @@ from dreamervla.models.world_model.base_world_model import (
     DreamerV3LatentState,
     DreamerV3Loss,
 )
-from dreamervla.models.world_model.dreamer_v3_pixel_rynn_backbone_world_model import (
-    DreamerV3PixelRynnBackboneWorldModel,
+from dreamervla.models.world_model.dreamer_v3_pixel_backbone_world_model import (
+    DreamerV3PixelBackboneWorldModel,
 )
 from dreamervla.models.world_model.dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
 from dreamervla.models.world_model.dreamer_v3_token_from_pixel_world_model import (
     DreamerV3TokenFromPixelWorldModel,
 )
 from dreamervla.models.world_model.dreamer_v3_token_world_model import DreamerV3TokenWorldModel
-from dreamervla.models.world_model.tssm_rynn_backbone_world_model import (
-    TSSMRynnBackboneWorldModel,
+from dreamervla.models.world_model.tssm_backbone_world_model import (
+    TSSMBackboneWorldModel,
 )
-from dreamervla.models.world_model.tssm_token_rynn_backbone_world_model import (
-    TSSMTokenRynnBackboneWorldModel,
+from dreamervla.models.world_model.tssm_token_backbone_world_model import (
+    TSSMTokenBackboneWorldModel,
 )
 
 
@@ -32,9 +32,9 @@ def test_split_world_model_modules_export_classes() -> None:
     assert issubclass(DreamerV3PixelWorldModel, BaseWorldModel)
     assert issubclass(DreamerV3TokenWorldModel, BaseWorldModel)
     assert issubclass(DreamerV3TokenFromPixelWorldModel, BaseWorldModel)
-    assert issubclass(DreamerV3PixelRynnBackboneWorldModel, BaseWorldModel)
-    assert issubclass(TSSMRynnBackboneWorldModel, BaseWorldModel)
-    assert issubclass(TSSMTokenRynnBackboneWorldModel, BaseWorldModel)
+    assert issubclass(DreamerV3PixelBackboneWorldModel, BaseWorldModel)
+    assert issubclass(TSSMBackboneWorldModel, BaseWorldModel)
+    assert issubclass(TSSMTokenBackboneWorldModel, BaseWorldModel)
     assert DreamerV3LatentState.__name__ == "DreamerV3LatentState"
     assert DreamerV3Loss.__name__ == "DreamerV3Loss"
 
@@ -53,17 +53,17 @@ def test_world_model_package_exports_split_world_model_classes() -> None:
     assert world_model.DreamerV3TokenWorldModel is DreamerV3TokenWorldModel
     assert world_model.DreamerV3TokenFromPixelWorldModel is DreamerV3TokenFromPixelWorldModel
     assert (
-        world_model.DreamerV3PixelRynnBackboneWorldModel
-        is DreamerV3PixelRynnBackboneWorldModel
+        world_model.DreamerV3PixelBackboneWorldModel
+        is DreamerV3PixelBackboneWorldModel
     )
-    assert world_model.TSSMRynnBackboneWorldModel is TSSMRynnBackboneWorldModel
-    assert world_model.TSSMTokenRynnBackboneWorldModel is TSSMTokenRynnBackboneWorldModel
+    assert world_model.TSSMBackboneWorldModel is TSSMBackboneWorldModel
+    assert world_model.TSSMTokenBackboneWorldModel is TSSMTokenBackboneWorldModel
 
 
 def test_foundation_modules_do_not_reexport_route_classes() -> None:
     assert not hasattr(dreamerv3_torch, "DreamerV3PixelWorldModel")
     assert not hasattr(dreamerv3_torch, "DreamerV3TokenWorldModel")
     assert not hasattr(dreamerv3_torch, "DreamerV3TokenFromPixelWorldModel")
-    assert not hasattr(dreamerv3_torch, "DreamerV3PixelRynnBackboneWorldModel")
-    assert not hasattr(tssm_torch, "TSSMRynnBackboneWorldModel")
-    assert not hasattr(tssm_torch, "TSSMTokenRynnBackboneWorldModel")
+    assert not hasattr(dreamerv3_torch, "DreamerV3PixelBackboneWorldModel")
+    assert not hasattr(tssm_torch, "TSSMBackboneWorldModel")
+    assert not hasattr(tssm_torch, "TSSMTokenBackboneWorldModel")

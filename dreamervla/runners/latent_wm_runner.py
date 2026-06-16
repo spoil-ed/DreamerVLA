@@ -8,16 +8,16 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.runners.dreamerv3_pixel_runner import DreamerV3PixelRunner
 
 
-class RynnDinoWMTrainingRunner(DreamerV3PixelRunner):
+class LatentWMTrainingRunner(DreamerV3PixelRunner):
     """DINO-WM-style trainer for full RynnVLA action-token hidden sidecars."""
 
-    runner_name = "rynn_dino_wm"
+    runner_name = "dino_wm"
     runner_status = "secondary"
     runner_family = "world_model"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
-        self.log_path = self.out_dir / "rynn_dino_wm_logs.json.txt"
+        self.log_path = self.out_dir / "latent_wm_logs.json.txt"
 
     @torch.no_grad()
     def _maybe_save_viz(
@@ -48,4 +48,4 @@ class RynnDinoWMTrainingRunner(DreamerV3PixelRunner):
         return postfix
 
 
-__all__ = ["RynnDinoWMTrainingRunner"]
+__all__ = ["LatentWMTrainingRunner"]

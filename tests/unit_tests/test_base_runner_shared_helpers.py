@@ -254,14 +254,14 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
         ChameleonLatentActionWMRunner,
     )
     from dreamervla.runners.dreamervla_runner import DreamerVLARunner
-    from dreamervla.runners.eval_libero_vla_runner import EvalLiberoVLARunner
+    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
     from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 
     for cls in (
         PretokenizeVLARunner,
         DreamerVLARunner,
         ChameleonLatentActionWMRunner,
-        EvalLiberoVLARunner,
+        EmbodiedEvalRunner,
     ):
         assert "_resolve_vla_init_path" not in cls.__dict__
         assert "_build_frozen_encoder_cfg" not in cls.__dict__
@@ -273,7 +273,7 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
         PretokenizeVLARunner,
         DreamerVLARunner,
         ChameleonLatentActionWMRunner,
-        EvalLiberoVLARunner,
+        EmbodiedEvalRunner,
     ):
         assert cls.save_checkpoint is BaseRunner.save_checkpoint
         assert cls.load_payload is BaseRunner.load_payload

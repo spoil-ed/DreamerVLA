@@ -31,9 +31,9 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from dreamervla.dataset.libero_balanced_terminal_dataset import (
+from dreamervla.dataset.balanced_terminal_dataset import (
     BalancedTerminalSampler,
-    LIBEROBalancedTerminalDataset,
+    BalancedTerminalDataset,
 )
 from dreamervla.models.world_model.dreamerv3_torch import BinaryRewardHead
 from dreamervla.runners.online_utils import (
@@ -158,7 +158,7 @@ def main() -> None:
     cfg.init.world_model_state_ckpt = args.world_model_ckpt
     # Force dataset → balanced-terminal variant; reuse existing dataset target's args.
     cfg.dataset._target_ = (
-        "dreamervla.dataset.libero_balanced_terminal_dataset.LIBEROBalancedTerminalDataset"
+        "dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset"
     )
     cfg.dataset.sequence_length = int(args.sequence_length)
 
@@ -167,7 +167,7 @@ def main() -> None:
     OmegaConf.save(cfg, out_dir / "finetune_config.yaml", resolve=True)
 
     # Build dataset
-    dataset: LIBEROBalancedTerminalDataset = hydra.utils.instantiate(cfg.dataset)
+    dataset: BalancedTerminalDataset = hydra.utils.instantiate(cfg.dataset)
     sampler = BalancedTerminalSampler(
         dataset,
         num_samples=int(args.max_steps) * int(args.batch_size),
@@ -264,7 +264,7 @@ def main() -> None:
 
         if loss_mode == "per_window":
             # Bypass WM.loss: compute encoder + RSSM in no_grad, only run reward_head with grad.
-            # NOTE: This WM is DreamerV3PixelRynnBackboneWorldModel — its encoder consumes
+            # NOTE: This WM is DreamerV3PixelBackboneWorldModel — its encoder consumes
             # the precomputed `obs_embedding`, NOT raw `images`.
             obs_emb = flat["obs_embedding"]
             actions = flat["actions"]

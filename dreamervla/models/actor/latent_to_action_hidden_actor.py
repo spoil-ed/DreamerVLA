@@ -129,6 +129,19 @@ class LatentToActionHiddenActor(BaseActor):
 
         if init_action_head_ckpt:
             self._load_output_projection(str(init_action_head_ckpt))
+        elif self.head_type == "oft_l1_regression" and bool(freeze_output_projection):
+            # Freezing a randomly-initialised OFT L1 head produces garbage actions
+            # silently. The discrete OpenVLA-OFT one-trajectory checkpoint has no
+            # `action_head--*.pt`, so fail loudly with guidance instead.
+            raise ValueError(
+                "LatentToActionHiddenActor(head_type='oft_l1_regression', "
+                "freeze_output_projection=True) needs an L1 action head: set "
+                "`policy.init_action_head_ckpt` to a checkpoint that contains "
+                "`action_head--*.pt` tensors. The discrete OFT one-trajectory "
+                "checkpoint has no L1 head — either supply an L1-finetuned OFT "
+                "checkpoint, or set freeze_output_projection=false to train the "
+                "head from scratch."
+            )
         if bool(freeze_output_projection):
             for param in self.output_projection.parameters():
                 param.requires_grad = False

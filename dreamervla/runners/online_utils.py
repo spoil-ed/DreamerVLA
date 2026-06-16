@@ -159,6 +159,28 @@ def obs_to_action_hidden(
     return action_hidden.float()
 
 
+def obs_to_input_token_embedding(
+    encoder: RynnVLAEncoder,
+    processor: Any,
+    obs: dict[str, Any],
+    device: torch.device,
+    num_views: int,
+) -> torch.Tensor:
+    """Scheme-1 backbone latent for one online obs: current-frame VQ image tokens
+    through the backbone input-embedding table (pre-Action-Query). Returns
+    ``[1, N*token_dim]`` (online counterpart of the offline input-token sidecar)."""
+    record = obs["vla_record"]
+    tokens = processor.process_item(record, training_mode=False)
+    if isinstance(tokens, tuple):
+        tokens = tokens[0]
+    emb = encoder.extract_input_token_embedding(
+        input_ids_list=[[int(tok) for tok in tokens]],
+        processor=processor,
+        num_views=int(num_views),
+    )
+    return emb.to(device)
+
+
 @torch.no_grad()
 def obs_batch_to_action_hidden(
     encoder: RynnVLAEncoder,

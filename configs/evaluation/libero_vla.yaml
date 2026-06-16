@@ -1,5 +1,5 @@
 # @package _global_
-_target_: dreamervla.runners.LiberoEvalRunner
+_target_: dreamervla.runners.EmbodiedEvalRunner
 seed: 7
 
 hydra:

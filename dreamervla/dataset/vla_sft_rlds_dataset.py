@@ -10,13 +10,13 @@ from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
 
 @dataclass
-class OpenVLAOFTRLDSDatasetBundle:
+class VLASFTRLDSDatasetBundle:
     dataset: Any
     dataloader: DataLoader
     dataset_statistics: dict[str, Any]
 
 
-class OpenVLAOFTRLDSDatasetFactory:
+class VLASFTRLDSDatasetFactory:
     """Factory for OpenVLA-OFT RLDS datasets.
 
     The factory is intentionally separate from Hydra instantiation because the
@@ -43,7 +43,7 @@ class OpenVLAOFTRLDSDatasetFactory:
         self.batch_size = int(batch_size)
         self.num_workers = int(num_workers)
 
-    def build(self, policy: Any, *, train: bool = True) -> OpenVLAOFTRLDSDatasetBundle:
+    def build(self, policy: Any, *, train: bool = True) -> VLASFTRLDSDatasetBundle:
         ensure_openvla_oft_on_path()
         from prismatic.models.backbones.llm.prompting import PurePromptBuilder
         from prismatic.util.data_utils import PaddedCollatorForActionPrediction
@@ -53,7 +53,7 @@ class OpenVLAOFTRLDSDatasetFactory:
         processor = policy.processor
         if processor is None:
             raise ValueError(
-                "OpenVLAOFTRLDSDatasetFactory requires a policy loaded from a real processor."
+                "VLASFTRLDSDatasetFactory requires a policy loaded from a real processor."
             )
         action_tokenizer = ActionTokenizer(processor.tokenizer)
         batch_transform = RLDSBatchTransform(
@@ -84,11 +84,11 @@ class OpenVLAOFTRLDSDatasetFactory:
             collate_fn=collator,
             num_workers=self.num_workers,
         )
-        return OpenVLAOFTRLDSDatasetBundle(
+        return VLASFTRLDSDatasetBundle(
             dataset=dataset,
             dataloader=dataloader,
             dataset_statistics=dict(dataset.dataset_statistics),
         )
 
 
-__all__ = ["OpenVLAOFTRLDSDatasetBundle", "OpenVLAOFTRLDSDatasetFactory"]
+__all__ = ["VLASFTRLDSDatasetBundle", "VLASFTRLDSDatasetFactory"]
