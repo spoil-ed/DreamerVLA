@@ -50,7 +50,7 @@ def _parse_args() -> dict[str, Any]:
         "task_ids": "0",           # comma-separated ints or "all"
         "episodes_per_task": 2,
         "episode_horizon": 80,
-        "deterministic": True,
+        "deterministic": True,     # no-op: OFT L1-regression heads are always deterministic
         "out_dir": "/tmp/dvla_rollouts",
         "gpu_id": 0,
         "unnorm_key": "libero_goal_no_noops",
@@ -369,60 +369,64 @@ def main() -> None:
     preprocess_config = _make_preprocess_config(cfg)
 
     # Build env (single-task env; we call set_task per task_id)
+    # action_input="raw": predict_action already returns env-scale actions; "raw" passes
+    # them through as-is.  "normalized" would unnormalize again, double-scaling actions.
     env_cfg = DreamerVLAOnlineTrainEnvConfig(
         task_suite_name=task_suite_name,
         task_id=0,       # initial; overridden per-task via reset(task_id=...)
         resolution=256,
         full_record=True,
         init_state_sampling="sequential",
-        pixel_rotate_180=False,   # CRITICAL: raw images in dump; extractor rotates internally
+        action_input="raw",           # OFT predict_action already returns env-scale
+        pixel_rotate_180=False,       # CRITICAL: raw images in dump; extractor rotates internally
         vla_rotate_180=True,
     )
-    env = DreamerVLAOnlineTrainEnv(env_cfg)
-    num_tasks = env.num_tasks
+    with DreamerVLAOnlineTrainEnv(env_cfg) as env:
+        num_tasks = env.num_tasks
 
-    task_ids = _resolve_task_ids(cfg["task_ids"], num_tasks)
-    print(f"[collector] task_suite={task_suite_name} task_ids={task_ids} "
-          f"episodes_per_task={episodes_per_task} horizon={episode_horizon}", flush=True)
+        task_ids = _resolve_task_ids(cfg["task_ids"], num_tasks)
+        print(f"[collector] task_suite={task_suite_name} task_ids={task_ids} "
+              f"episodes_per_task={episodes_per_task} horizon={episode_horizon}", flush=True)
 
-    shard_name = "shard_000.hdf5"
-    demo_index = 0
+        shard_name = "shard_000.hdf5"
+        demo_index = 0
 
-    data_attrs: dict[str, Any] = {
-        "task_suite_name": task_suite_name,
-        "env_name": env.task_description,
-    }
+        with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
+            for task_id in task_ids:
+                env.set_task(task_id)
+                task_description = env.task_description
 
-    with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
-        for task_id in task_ids:
-            env.set_task(task_id)
-            task_description = env.task_description
-            print(
-                f"[collector] task_id={task_id} description={task_description!r}",
-                flush=True,
-            )
-            for ep in range(episodes_per_task):
-                steps = _run_episode(
-                    env=env,
-                    extractor=extractor,
-                    task_description=task_description,
-                    episode_id=ep,
-                    episode_horizon=episode_horizon,
-                    task_id=task_id,
+                # data_attrs: constructed after set_task so env_name reflects the actual task.
+                if demo_index == 0:
+                    data_attrs: dict[str, Any] = {
+                        "task_suite_name": task_suite_name,
+                        "env_name": env.task_description,
+                    }
+
+                print(
+                    f"[collector] task_id={task_id} description={task_description!r}",
+                    flush=True,
                 )
-                writer.write_demo(
-                    index=demo_index,
-                    steps=steps,
-                    preprocess_config=preprocess_config if demo_index == 0 else None,
-                    data_attrs=data_attrs if demo_index == 0 else None,
-                )
-                demo_index += 1
+                for ep in range(episodes_per_task):
+                    steps = _run_episode(
+                        env=env,
+                        extractor=extractor,
+                        task_description=task_description,
+                        episode_id=ep,
+                        episode_horizon=episode_horizon,
+                        task_id=task_id,
+                    )
+                    writer.write_demo(
+                        index=demo_index,
+                        steps=steps,
+                        preprocess_config=preprocess_config if demo_index == 0 else None,
+                        data_attrs=data_attrs if demo_index == 0 else None,
+                    )
+                    demo_index += 1
 
-    env.close()
-
-    print(f"\n[collector] Done. {demo_index} demos written to {out_dir}", flush=True)
-    print(f"  reward dir : {reward_dir}", flush=True)
-    print(f"  hidden dir : {hidden_dir}", flush=True)
+        print(f"\n[collector] Done. {demo_index} demos written to {out_dir}", flush=True)
+        print(f"  reward dir : {reward_dir}", flush=True)
+        print(f"  hidden dir : {hidden_dir}", flush=True)
 
 
 if __name__ == "__main__":
