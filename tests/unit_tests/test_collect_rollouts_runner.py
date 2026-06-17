@@ -79,7 +79,9 @@ def test_build_collect_cfg_maps_task_and_collect():
     assert cc["reward_dir"].endswith("no_noops_t_256_remaining_reward")
     assert cc["hidden_dir"].endswith("_oft_legacy_action_hidden_vla_policy_h1")
     assert cc["expected_history"] == 1
-    assert cc["num_images_in_input"] == 2  # history(1) x views(2)
+    # OFT single-view default from the central collect config (NOT len(image_keys)=2):
+    # the checkpoint does not persist num_images_in_input and the discrete VLA wants 1.
+    assert cc["num_images_in_input"] == 1
     assert cc["expected_action_head_type"] == "oft_discrete_token"
     assert cc["expected_include_state"] is False
     assert cc["time_horizon"] == 8

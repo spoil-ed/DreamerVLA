@@ -12,6 +12,18 @@ from dreamervla.runners.collect_parallel_rollouts import (
 )
 
 
+def resolve_num_images_in_input(collect_cfg: Any) -> int:
+    """OFT ``num_images_in_input`` is a deployment param the checkpoint does not
+    persist, so it is read from the central ``collect.*`` config (default = the
+    OFT single-view default ``1``).  Deliberately NOT derived from
+    ``len(task.image_keys)`` (which counts the stored camera views, 2 for
+    libero): the discrete one-traj VLA expects a single agentview image, and
+    feeding 2 collapses rollout success to ~0%.
+    """
+    val = OmegaConf.select(collect_cfg, "num_images_in_input", default=None)
+    return int(val) if val is not None else 1
+
+
 class CollectRolloutsRunner(BaseRunner):
     """Pure-Hydra cold-start rollout collector.
 
@@ -35,7 +47,6 @@ class CollectRolloutsRunner(BaseRunner):
         cfg = self.cfg
         oft = cfg.task.openvla_oft
         image_keys = list(cfg.task.image_keys)
-        views = len(image_keys)
         expected_history = int(oft.expected_history)
         task_ids = cfg.collect.task_ids
         if OmegaConf.is_config(task_ids):
@@ -53,7 +64,7 @@ class CollectRolloutsRunner(BaseRunner):
             "hidden_dir": str(oft.action_hidden_dir),
             "image_keys": image_keys,
             "expected_history": expected_history,
-            "num_images_in_input": expected_history * views,
+            "num_images_in_input": resolve_num_images_in_input(cfg.collect),
             "expected_action_head_type": str(oft.expected_action_head_type),
             "expected_include_state": bool(oft.expected_include_state),
             "expected_obs_hidden_source": str(oft.expected_obs_hidden_source),

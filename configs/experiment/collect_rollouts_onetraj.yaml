@@ -22,6 +22,9 @@ training:
 
 collect:
   policy_mode: auto        # auto-detect l1 vs discrete from the checkpoint
+  num_images_in_input: 1   # OFT deployment param the ckpt does NOT persist; 1 = single
+                           # agentview (matches the discrete one-traj ckpt / ~50% eval).
+                           # NOT derived from len(task.image_keys); set here centrally.
   gpu_id: 0                # single-process device; ignored under torchrun
   task_ids: all            # "all", csv ("0,2"), int, or list
   episodes_per_task: 2

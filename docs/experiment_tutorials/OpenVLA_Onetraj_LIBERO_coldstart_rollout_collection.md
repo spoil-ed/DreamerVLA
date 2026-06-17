@@ -50,7 +50,12 @@ matches what `BalancedTerminalDataset` validates on read (`model_path`,
 `time_horizon`, `action_head_type`, `obs_hidden_source`, `prompt_style`,
 `history`, `include_state`, `rotate_images_180`).
 
-> `num_images_in_input = expected_history × len(task.image_keys) = 1 × 2 = 2`.
+> `num_images_in_input` is an OFT **deployment** param the checkpoint does not
+> persist, so it is set centrally via `collect.num_images_in_input` (default `1`,
+> single agentview — what the discrete one-traj ckpt was trained/evaluated with at
+> ~50% success). It is **not** derived from `len(task.image_keys)` (the stored
+> camera views, 2): feeding the discrete VLA 2 images collapses rollout success to
+> ~0%. Both camera views are still **stored** in the HDF5 regardless.
 > Env render resolution is `task.image_resolution` (256), **not** `task.image_size`
 > (64, the WM latent grid).
 
@@ -127,7 +132,7 @@ sidecar. For the cold-start discrete task it records:
 
 ```json
 {"action_head_type": "oft_discrete_token", "history": 1, "include_state": false,
- "num_images_in_input": 2, "time_horizon": 8, "obs_hidden_source": "action_query",
+ "num_images_in_input": 1, "time_horizon": 8, "obs_hidden_source": "action_query",
  "prompt_style": "vla_policy", "rotate_images_180": true, "hidden_key": "obs_embedding"}
 ```
 
@@ -190,7 +195,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa $PY -m dreamervla.train \
 
 # 2) Verify the sidecar
 $PY -c "import json,glob; c=json.load(open(glob.glob('$H1/preprocess_config.json')[0])); print(c['action_head_type'],c['history'],c['include_state'],c['num_images_in_input'],c['time_horizon'])"
-# → oft_discrete_token 1 False 2 8
+# → oft_discrete_token 1 False 1 8
 
 # 3) Discrete-WM consumption (zero collector change) — point dataset at the /tmp products
 MP=$($PY -c "import json,glob; print(json.load(open(glob.glob('$H1/preprocess_config.json')[0]))['model_path'])")
