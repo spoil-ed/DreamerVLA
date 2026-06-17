@@ -1,8 +1,10 @@
+from omegaconf import OmegaConf
+
+
 def test_collect_rollouts_experiment_composes_and_validates():
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
-    from omegaconf import OmegaConf
 
     from dreamervla.config import validate_cfg
 
@@ -28,9 +30,6 @@ def test_collect_rollouts_experiment_composes_and_validates():
     assert str(oft.action_hidden_dir).endswith("_oft_legacy_action_hidden_vla_policy_h1")
     assert "OpenVLA_Onetraj_LIBERO_libero_goal" in str(oft.hdf5_reward_dir)
     assert cfg.collect.envs_per_gpu == 1
-
-
-from omegaconf import OmegaConf
 
 
 def _fake_cfg():

@@ -45,10 +45,10 @@ from typing import Any
 import numpy as np
 import torch
 
-
 # ---------------------------------------------------------------------------
 # Torchrun rank helpers
 # ---------------------------------------------------------------------------
+
 
 def _get_dist_info() -> tuple[int, int, int]:
     """Return (rank, world_size, local_rank) from env; defaults to (0, 1, 0)."""
@@ -147,7 +147,7 @@ def _load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
     if policy.proprio_projector is not None:
         policy.proprio_projector.to(dtype=torch.bfloat16)
 
-    print(f"[collector rank={cfg['_rank']}] Policy loaded in {time.time()-t0:.1f}s", flush=True)
+    print(f"[collector rank={cfg['_rank']}] Policy loaded in {time.time() - t0:.1f}s", flush=True)
     return policy
 
 
@@ -506,11 +506,11 @@ def collect_rollouts(
     torch.cuda.set_device(gpu_id)
     torch.cuda.set_per_process_memory_fraction(0.8, device=gpu_id)
 
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.envs.train_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
     )
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.runners.rollout_hidden_extractor import OFTRolloutHiddenExtractor
 
     task_suite_name = cfg["task_suite_name"]
@@ -633,7 +633,7 @@ def collect_rollouts(
     t_collect = time.time() - t_collect_start
     print(
         f"\n[collector rank={rank}] Done. {demo_index} demos written "
-        f"in {t_collect:.1f}s ({t_collect/max(demo_index,1):.1f}s/demo)",
+        f"in {t_collect:.1f}s ({t_collect / max(demo_index, 1):.1f}s/demo)",
         flush=True,
     )
     print(f"  shard      : {shard_name}", flush=True)
