@@ -60,6 +60,7 @@ def test_make_preprocess_config_l1_h2_variant():
     )
     pc = _make_preprocess_config(cfg)
     assert pc["history"] == 2
+    assert pc["num_images_in_input"] == 4
     assert pc["action_head_type"] == "oft_l1_regression"
     assert pc["include_state"] is True
 
