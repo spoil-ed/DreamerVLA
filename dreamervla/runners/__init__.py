@@ -30,6 +30,9 @@ from dreamervla.runners.latent_wm_runner import (
 )
 from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+from dreamervla.runners.collect_rollouts_runner import (
+    CollectRolloutsRunner as _CollectRolloutsRunner,
+)
 
 
 class ActionHiddenWMRunner(_BackboneDreamerV3WMRunner):
@@ -92,6 +95,12 @@ class LatentClassifierRunner(_LatentClassifierRunner):
     runner_family = "reward"
 
 
+class CollectRolloutsRunner(_CollectRolloutsRunner):
+    runner_name = "collect_rollouts"
+    runner_status = "current"
+    runner_family = "rollout"
+
+
 PUBLIC_RUNNERS = [
     "ActionHiddenWMRunner",
     "PixelWMRunner",
@@ -104,6 +113,7 @@ PUBLIC_RUNNERS = [
     "LatentWMRunner",
     "LatentClassifierRunner",
     "OnlineCotrainRunner",
+    "CollectRolloutsRunner",
 ]
 
 
@@ -121,4 +131,5 @@ __all__ = [
     "LatentWMRunner",
     "LatentClassifierRunner",
     "OnlineCotrainRunner",
+    "CollectRolloutsRunner",
 ]

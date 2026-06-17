@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from omegaconf import OmegaConf
+
+from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runners.collect_parallel_rollouts import (
+    _get_dist_info,
+    collect_rollouts,
+)
+
+
+class CollectRolloutsRunner(BaseRunner):
+    """Pure-Hydra cold-start rollout collector.
+
+    Reads the single source of truth from ``task.openvla_oft.*`` (ckpt, dirs,
+    expected_*) plus ``collect.*`` knobs and drives collect_rollouts.  Uses
+    torchrun RANK/WORLD_SIZE/LOCAL_RANK for Layer-1 work sharding only — it does
+    NOT initialize a torch process group (no DDP).
+    """
+
+    runner_name = "collect_rollouts"
+    runner_status = "current"
+    runner_family = "rollout"
+
+    def setup(self) -> None:
+        # Only rank 0 writes resolved_config.yaml / run_manifest.json (no DDP =>
+        # is_main_process is True on every rank, so guard on RANK explicitly).
+        if int(os.environ.get("RANK", 0)) == 0:
+            self.write_run_artifacts()
+
+    def _build_collect_cfg(self) -> dict[str, Any]:
+        cfg = self.cfg
+        oft = cfg.task.openvla_oft
+        image_keys = list(cfg.task.image_keys)
+        views = len(image_keys)
+        expected_history = int(oft.expected_history)
+        task_ids = cfg.collect.task_ids
+        if OmegaConf.is_config(task_ids):
+            task_ids = OmegaConf.to_container(task_ids, resolve=True)
+        return {
+            "model_path": str(oft.ckpt_path),
+            "policy_mode": str(OmegaConf.select(cfg, "collect.policy_mode", default="auto")),
+            "unnorm_key": str(oft.dataset_statistics_key),
+            "task_suite_name": str(cfg.task.suite),
+            "task_ids": task_ids,
+            "episodes_per_task": int(cfg.collect.episodes_per_task),
+            "episode_horizon": int(cfg.collect.episode_horizon),
+            "envs_per_gpu": int(cfg.collect.envs_per_gpu),
+            "reward_dir": str(oft.hdf5_reward_dir),
+            "hidden_dir": str(oft.action_hidden_dir),
+            "image_keys": image_keys,
+            "expected_history": expected_history,
+            "num_images_in_input": expected_history * views,
+            "expected_action_head_type": str(oft.expected_action_head_type),
+            "expected_include_state": bool(oft.expected_include_state),
+            "expected_obs_hidden_source": str(oft.expected_obs_hidden_source),
+            "expected_prompt_style": str(oft.expected_prompt_style),
+            "expected_rotate_images_180": bool(oft.expected_rotate_images_180),
+            "time_horizon": int(oft.time_horizon),
+            "token_dim": int(oft.token_dim),
+            "action_dim": int(cfg.task.action_dim),
+            "chunk_size": int(oft.chunk_size),
+            "resolution": int(cfg.task.image_resolution),
+            "gpu_id": int(OmegaConf.select(cfg, "collect.gpu_id", default=0)),
+        }
+
+    def run(self) -> object:
+        rank, world_size, local_rank = _get_dist_info()
+        return collect_rollouts(self._build_collect_cfg(), rank, world_size, local_rank)
