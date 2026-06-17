@@ -1,8 +1,236 @@
 from __future__ import annotations
 
+import numpy as np
+import torch
+
 
 def test_online_cotrain_runner_has_extracted_methods():
     from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 
     assert hasattr(OnlineCotrainRunner, "_build_components")
     assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
+
+
+# --------------------------------------------------------------------------
+# Local fixture helpers (kept local on purpose: do NOT import from
+# tests.runners.test_offline_seed — that path is fragile / wrong). The shape
+# below mirrors what the collector / RolloutDumpWriter writes.
+# --------------------------------------------------------------------------
+def _demo_steps(T, success, emb_dim=16):
+    steps = []
+    for t in range(T):
+        steps.append({
+            "actions": np.full(7, t, np.float64),
+            "rewards": np.float32(0.0),
+            "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
+            "dones": np.uint8(1 if t == T - 1 else 0),
+            "robot_states": np.zeros(9, np.float64),
+            "states": np.zeros(5, np.float64),
+            "obs": {
+                "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
+                "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
+                "ee_pos": np.zeros(3, np.float64), "ee_ori": np.zeros(3, np.float64),
+                "ee_states": np.zeros(6, np.float64), "gripper_states": np.zeros(2, np.float64),
+                "joint_states": np.zeros(7, np.float64),
+            },
+            "obs_embedding": np.full(emb_dim, t, np.float16),
+        })
+    return steps
+
+
+def _seeded_replay(tmp_path, emb_dim=16, seq_len=4):
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.runners.offline_seed import seed_replay_from_offline
+    from dreamervla.runners.online_replay import OnlineReplay
+
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
+        for i in range(4):
+            w.write_demo(index=i, steps=_demo_steps(8, success=(i % 2 == 0), emb_dim=emb_dim),
+                         task_id=0, episode_id=i)
+    replay = OnlineReplay(capacity=10_000, sequence_length=seq_len, task_ids=(0,), rank=0)
+    seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir, default_task_id=0)
+    return replay
+
+
+def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
+    # Use a fake WM/classifier + recording step fns to assert the warmup loops
+    # call the existing step functions N times against the seeded buffer.
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    replay = _seeded_replay(tmp_path)
+    calls = {"wm": 0, "cls": 0}
+
+    def fake_wm_step(**kw):
+        assert kw["batch"] is not None
+        calls["wm"] += 1
+        return {"loss": 0.1}
+
+    def fake_cls_step(**kw):
+        assert kw["replay"] is replay
+        calls["cls"] += 1
+        return {"loss": 0.2, "acc": 0.5, "f1": 0.0}
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+    monkeypatch.setattr(mod, "online_classifier_update_step", fake_cls_step)
+
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.device = torch.device("cpu")
+    runner.global_step = 0
+    runner._build_wm_pretrain_batch = lambda b: {
+        "images": torch.zeros(1), "obs_embedding": torch.zeros(1), "actions": torch.zeros(1)
+    }
+    # world_model needs .train() (warmup puts it in train mode, like the online
+    # loop does); the step fns themselves are faked so these are otherwise inert.
+    runner.world_model = torch.nn.Module()
+    runner.world_model_optimizer = object()
+    runner.policy = object()
+    runner.classifier = torch.nn.Module()
+    runner.classifier_optimizer = object()
+    runner._cls_window = 4
+
+    runner._offline_warmup_wm(replay, steps=3, batch_size=2, optim_cfg=None)
+    runner._offline_warmup_classifier(replay, steps=5, batch_size=2, early_neg_stride=8, grad_clip=1.0)
+    assert calls == {"wm": 3, "cls": 5}
+
+
+# --------------------------------------------------------------------------
+# run() orchestration tests — no models / no LIBERO. We monkeypatch the heavy
+# pieces (component build, seeding, warmup loops, online loop) and assert run()
+# wires them together in the right order and writes the split warmup ckpts.
+# --------------------------------------------------------------------------
+def _orchestration_cfg(tmp_path, *, resume=False):
+    from omegaconf import OmegaConf
+
+    return OmegaConf.create({
+        "training": {
+            "out_dir": str(tmp_path),
+            "debug": True,
+            "resume": resume,
+        },
+        "offline_warmup": {
+            "data_dir": str(tmp_path / "offline_data"),
+            "hidden_dir": str(tmp_path / "offline_hidden"),
+            "debug_wm_warmup_steps": 2,
+            "debug_classifier_warmup_steps": 2,
+        },
+        # run() reads optim.grad_clip_norm; the real config always supplies optim.
+        "optim": {"grad_clip_norm": 1.0},
+    })
+
+
+class _FakeDistributed:
+    rank = 0
+    world_size = 1
+    is_main_process = True
+
+
+def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False):
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.cfg = _orchestration_cfg(tmp_path, resume=resume)
+    runner.config = runner.cfg
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.distributed = _FakeDistributed()
+    runner.device = torch.device("cpu")
+
+    def fake_build_components(self, cfg):
+        calls.append("build")
+        self.world_model = torch.nn.Linear(2, 2)
+        self.classifier = torch.nn.Linear(2, 2)
+        self.classifier_threshold = 0.5
+
+    def fake_seed(replay, *, data_dir, hidden_dir, default_task_id=None):
+        calls.append("seed")
+        # add a tiny real episode so num_transitions > 0 (run() guards on it)
+        episode = [
+            {"image": np.zeros((4, 4, 3), np.uint8), "obs_embedding": np.zeros(8, np.float32),
+             "reward": 0.0, "done": 0.0, "is_last": 0.0, "is_terminal": 0.0,
+             "wm_action": np.zeros(7, np.float32), "task_id": 0, "success": True}
+            for _ in range(replay.sequence_length + 1)
+        ]
+        replay.add_episode(episode)
+        return 1
+
+    def fake_wm_warmup(self, replay, *, steps, batch_size, optim_cfg):
+        calls.append("wm_warmup")
+
+    def fake_cls_warmup(self, replay, *, steps, batch_size, early_neg_stride, grad_clip):
+        calls.append("cls_warmup")
+
+    def fake_online_loop(self, cfg):
+        calls.append("online")
+        return []
+
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_build_components", fake_build_components)
+    monkeypatch.setattr(mod, "seed_replay_from_offline", fake_seed)
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_offline_warmup_wm", fake_wm_warmup)
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_offline_warmup_classifier", fake_cls_warmup)
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_online_cotrain_loop", fake_online_loop)
+    # wrap _save_* so we can record their order while still writing the files
+    real_save_wm = mod.OnlineCotrainPipelineRunner._save_wm_warmup
+    real_save_cls = mod.OnlineCotrainPipelineRunner._save_cls_warmup
+
+    def save_wm(self):
+        calls.append("save_wm")
+        real_save_wm(self)
+
+    def save_cls(self):
+        calls.append("save_cls")
+        real_save_cls(self)
+
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_save_wm_warmup", save_wm)
+    monkeypatch.setattr(mod.OnlineCotrainPipelineRunner, "_save_cls_warmup", save_cls)
+    return runner
+
+
+def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch):
+    import os
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls)
+
+    history = runner.run()
+
+    assert history == []
+    # order: build -> seed -> wm_warmup -> save_wm -> cls_warmup -> save_cls -> online
+    assert calls == [
+        "build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls", "online"
+    ]
+    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatch):
+    import os
+
+    # Pre-create both warmup ckpts with minimal valid payloads.
+    ckpt_dir = os.path.join(str(tmp_path), "ckpt")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    torch.save(
+        {"global_step": 7, "world_model": torch.nn.Linear(2, 2).state_dict()},
+        os.path.join(ckpt_dir, "wm_warmup.ckpt"),
+    )
+    torch.save(
+        {"global_step": 9, "classifier": torch.nn.Linear(2, 2).state_dict(),
+         "classifier_threshold": 0.42},
+        os.path.join(ckpt_dir, "classifier_warmup.ckpt"),
+    )
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, resume=True)
+
+    history = runner.run()
+
+    assert history == []
+    # build always runs; seeding + both warmups + both saves are skipped (ckpts loaded).
+    assert "seed" not in calls
+    assert "wm_warmup" not in calls
+    assert "cls_warmup" not in calls
+    assert "save_wm" not in calls
+    assert "save_cls" not in calls
+    assert calls == ["build", "online"]
+    # threshold restored from the cls warmup ckpt
+    assert runner.classifier_threshold == 0.42

@@ -30,6 +30,9 @@ from dreamervla.runners.latent_wm_runner import (
 )
 from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+from dreamervla.runners.online_cotrain_pipeline_runner import (
+    OnlineCotrainPipelineRunner as _OnlineCotrainPipelineRunner,
+)
 from dreamervla.runners.collect_rollouts_runner import (
     CollectRolloutsRunner as _CollectRolloutsRunner,
 )
@@ -101,6 +104,12 @@ class CollectRolloutsRunner(_CollectRolloutsRunner):
     runner_family = "rollout"
 
 
+class OnlineCotrainPipelineRunner(_OnlineCotrainPipelineRunner):
+    runner_name = "online_cotrain_pipeline"
+    runner_status = "current"
+    runner_family = "actor"
+
+
 PUBLIC_RUNNERS = [
     "ActionHiddenWMRunner",
     "PixelWMRunner",
@@ -113,11 +122,13 @@ PUBLIC_RUNNERS = [
     "LatentWMRunner",
     "LatentClassifierRunner",
     "OnlineCotrainRunner",
+    "OnlineCotrainPipelineRunner",
     "CollectRolloutsRunner",
 ]
 
 
 __all__ = [
+    "OnlineCotrainPipelineRunner",
     "BaseRunner",
     "PUBLIC_RUNNERS",
     "ActionHiddenWMRunner",
