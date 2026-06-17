@@ -76,7 +76,11 @@ def _load_demo(raw_p: Path, hid_p: Path, demo_key: str) -> _DemoRecord | None:
     with h5py.File(str(raw_p), "r") as fr:
         grp = fr[demo_key]
         dones = np.asarray(grp["dones"][...]) if "dones" in grp else None
-        rewards = np.asarray(grp["rewards"][...]) if "rewards" in grp else None
+        # Prefer sparse_rewards (collector convention; rewards is all-zeros there),
+        # fall back to rewards for canonical data — matches BalancedTerminalDataset /
+        # CollectedRolloutClassifierDataset.
+        _rk = "sparse_rewards" if "sparse_rewards" in grp else "rewards"
+        rewards = np.asarray(grp[_rk][...]) if _rk in grp else None
 
     if dones is not None and bool(dones[:T].any()):
         finish_step = int(np.argmax(dones[:T])) + 1
