@@ -107,7 +107,7 @@ def _load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
     # (no action_head -> actions decoded from LM logits), and discrete implies no proprio.
     from dreamervla.preprocess.preprocess_oft_action_hidden import resolve_oft_policy_mode
 
-    mode = resolve_oft_policy_mode(model_path, str(cfg.get("policy_mode", "auto")))
+    mode = resolve_oft_policy_mode(model_path, str(cfg["policy_mode"]))
     use_l1 = mode == "l1"
     use_proprio = use_l1
     cfg["_policy_mode"] = mode
