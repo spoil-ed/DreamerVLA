@@ -65,12 +65,16 @@ conda activate dreamervla
 export MUJOCO_GL=osmesa
 ```
 
-Required assets (already present on this host):
+Required assets:
 
 ```text
 data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1   # OFT one-traj ckpt (discrete)
 data/datasets/libero/libero_goal/*.hdf5                                    # raw LIBERO-Goal demos (init states + task defs)
 ```
+
+To download them from scratch (same checkpoint + LIBERO-Goal suite), follow
+[OpenVLA_Onetraj_LIBERO.md](OpenVLA_Onetraj_LIBERO.md) §0–§1 (install + download:
+`download.openvla_one_traj=true`, `env.LIBERO_SUITES=[libero_goal]`).
 
 ## 1. Collect rollouts
 
