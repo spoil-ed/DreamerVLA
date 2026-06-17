@@ -1,0 +1,78 @@
+"""Load previously-collected cold-start trajectory HDF5 (RolloutDumpWriter
+schema) into an OnlineReplay buffer, so WM/classifier warmup and the online
+cotrain loop share one buffer + one set of step functions (no semantic drift).
+
+Each demo (data/demo_<i>) in every reward shard is paired with its
+obs_embedding sidecar and converted to the per-step transition dicts that
+``OnlineReplay.add_episode`` consumes.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import h5py
+import numpy as np
+
+from dreamervla.runners.online_replay import OnlineReplay
+
+
+def _demo_to_transitions(
+    demo: h5py.Group, emb: np.ndarray, task_id: int
+) -> list[dict[str, Any]]:
+    actions = np.asarray(demo["actions"][...], dtype=np.float32)        # (T, 7)
+    sparse = np.asarray(demo["sparse_rewards"][...], dtype=np.float32)  # (T,)
+    dones = np.asarray(demo["dones"][...], dtype=np.float32)            # (T,)
+    images = np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8)
+    success = bool(demo.attrs.get("episode_success", bool((sparse > 0.5).any())))
+    T = int(actions.shape[0])
+    transitions: list[dict[str, Any]] = []
+    for t in range(T):
+        transitions.append({
+            "image": images[t],
+            "obs_embedding": np.asarray(emb[t], dtype=np.float32),
+            "reward": float(sparse[t]),            # sparse reward = collector signal
+            "done": float(dones[t]),
+            "is_last": float(dones[t]),
+            "is_terminal": float(sparse[t]),       # terminal-success marker
+            "wm_action": actions[t],               # collector stores env-scale wm_action
+            "task_id": int(task_id),
+            "success": success,
+        })
+    return transitions
+
+
+def seed_replay_from_offline(
+    replay: OnlineReplay,
+    *,
+    data_dir: str | Path,
+    hidden_dir: str | Path,
+    default_task_id: int | None = None,
+) -> int:
+    """Add every demo in data_dir's reward shards to ``replay``. Returns the
+    number of episodes actually added (demos shorter than sequence_length are
+    skipped by add_episode)."""
+    data_dir = Path(data_dir).expanduser().resolve()
+    hidden_dir = Path(hidden_dir).expanduser().resolve()
+    shards = sorted(p.name for p in data_dir.glob("*.hdf5"))
+    if not shards:
+        raise FileNotFoundError(f"no reward HDF5 shards under {data_dir}")
+    n_added = 0
+    for shard in shards:
+        with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
+            for demo_key in rf["data"]:
+                demo = rf["data"][demo_key]
+                if "task_id" in demo.attrs:
+                    task_id = int(demo.attrs["task_id"])
+                elif default_task_id is not None:
+                    task_id = int(default_task_id)
+                else:
+                    raise ValueError(
+                        f"{shard}/{demo_key} has no task_id attr and no default_task_id "
+                        "was provided; re-collect with the identity-aware collector or "
+                        "set offline_warmup.task_id for single-task data."
+                    )
+                emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
+                if replay.add_episode(_demo_to_transitions(demo, emb, task_id)) is not None:
+                    n_added += 1
+    return n_added
