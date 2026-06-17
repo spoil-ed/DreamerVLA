@@ -117,7 +117,7 @@ class FakeWriter:
         self.config_writes = 0
         self.attr_writes = 0
 
-    def write_demo(self, index, steps, preprocess_config=None, data_attrs=None):
+    def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kwargs):
         if preprocess_config is not None:
             self.config_writes += 1
         if data_attrs is not None:
@@ -243,9 +243,9 @@ def test_records_pair_pre_step_state_with_its_embedding():
     captured = {}
 
     class CaptureWriter(FakeWriter):
-        def write_demo(self, index, steps, preprocess_config=None, data_attrs=None):
+        def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kwargs):
             captured["steps"] = steps
-            super().write_demo(index, steps, preprocess_config, data_attrs)
+            super().write_demo(index, steps, preprocess_config, data_attrs, **kwargs)
 
     collect_vectorized(vec, exts, fake_infer, CaptureWriter(), [(0, 0)], episode_horizon=10)
     steps = captured["steps"]

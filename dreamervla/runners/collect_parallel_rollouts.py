@@ -627,6 +627,10 @@ def collect_rollouts(
                         steps=steps,
                         preprocess_config=preprocess_config if (demo_index == 0 and rank == 0) else None,
                         data_attrs=data_attrs if demo_index == 0 else None,
+                        task_id=task_id,
+                        episode_id=ep,
+                        task_description=task_description,
+                        episode_horizon=episode_horizon,
                     )
                     demo_index += 1
 

@@ -180,6 +180,11 @@ def collect_vectorized(
                     steps=steps,
                     preprocess_config=pending_config,
                     data_attrs=pending_attrs,
+                    task_id=slot_task[k],
+                    episode_id=slot_ep[k],
+                    task_description=slot_desc[k],
+                    episode_success=success,
+                    episode_horizon=episode_horizon,
                 )
                 pending_config = None
                 pending_attrs = None

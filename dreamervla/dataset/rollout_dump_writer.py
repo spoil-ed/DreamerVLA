@@ -76,6 +76,11 @@ class RolloutDumpWriter:
         steps: list[dict[str, Any]],
         preprocess_config: dict[str, Any] | None = None,
         data_attrs: dict[str, Any] | None = None,
+        task_id: int | None = None,
+        episode_id: int | None = None,
+        task_description: str | None = None,
+        episode_success: bool | None = None,
+        episode_horizon: int | None = None,
     ) -> None:
         """Write one demo (list of per-step dicts) to both HDF5 files.
 
@@ -166,6 +171,20 @@ class RolloutDumpWriter:
         init_state = np.asarray(steps[0]["states"], dtype=np.float64)
         demo_grp.attrs["init_state"] = init_state
         demo_grp.attrs["num_samples"] = str(T)
+
+        # Per-demo identity metadata (aligns collector output with canonical
+        # LIBERO data, which encodes task identity via one-file-per-task; the
+        # rank-sharded collector interleaves tasks so identity must be per-demo).
+        if task_id is not None:
+            demo_grp.attrs["task_id"] = int(task_id)
+        if episode_id is not None:
+            demo_grp.attrs["episode_id"] = int(episode_id)
+        if task_description is not None:
+            demo_grp.attrs["task_description"] = str(task_description)
+        if episode_success is not None:
+            demo_grp.attrs["episode_success"] = bool(episode_success)
+        if episode_horizon is not None:
+            demo_grp.attrs["episode_horizon"] = int(episode_horizon)
 
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)
