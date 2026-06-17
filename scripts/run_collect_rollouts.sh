@@ -31,5 +31,10 @@ export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 NUM_GPUS="${NUM_GPUS:-2}"
 # experiment= default can be overridden by passing your own experiment=... in "$@".
-torchrun --standalone --nproc_per_node="${NUM_GPUS}" \
+# Invoke torchrun as `python -m torch.distributed.run` (identical to the torchrun
+# console script) so the rank workers run under the SAME interpreter as ${PYTHON}
+# instead of whatever a bare `torchrun` on PATH resolves to.  ${PYTHON} defaults to
+# `python` (the activated conda env); set PYTHON=/path/to/env/bin/python if you have
+# not `conda activate dreamervla`-d.
+"${PYTHON:-python}" -m torch.distributed.run --standalone --nproc_per_node="${NUM_GPUS}" \
   -m dreamervla.train experiment=collect_rollouts_onetraj "$@"
