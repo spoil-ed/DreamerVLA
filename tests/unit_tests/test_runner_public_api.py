@@ -94,6 +94,8 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "LatentWMRunner",
         "LatentClassifierRunner",
         "OnlineCotrainRunner",
+        "CollectRolloutsRunner",
+        "OnlineCotrainPipelineRunner",
     }
 
     assert expected == set(runners.PUBLIC_RUNNERS)
