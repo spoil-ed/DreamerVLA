@@ -238,11 +238,15 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if latent_type == "backbone_latent":
             OmegaConf.update(cfg, "env.obs_hidden_source", "input_token_embedding", force_add=True)
 
+        self._build_components(cfg)
+        return self._online_cotrain_loop(cfg)
+
+    def _build_components(self, cfg: DictConfig) -> None:
         # ---- components (reuse hydra targets + inherited helpers; no offline run() touch)
         encoder_cfg = self._build_frozen_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
         freeze_module(self.encoder)
-        processor = self.encoder._build_processor(self.device)
+        self.processor = self.encoder._build_processor(self.device)
 
         self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
             device=self.device, dtype=torch.bfloat16
@@ -279,6 +283,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
         self._build_trainable_classifier(cfg)
         self._assert_optimizers_disjoint()
 
+    def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
+        processor = self.processor
+        algo = OmegaConf.select(cfg, "algorithm")
         # ---- run-control knobs
         oc = OmegaConf.select(cfg, "online_rollout", default={}) or {}
         warmup_steps = int(OmegaConf.select(cfg, "training.warmup_steps", default=5000))
