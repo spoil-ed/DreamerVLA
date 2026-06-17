@@ -150,6 +150,8 @@ class OFTRolloutHiddenExtractor:
         self._buffers: dict[str, deque] = {
             key: deque(maxlen=self._history) for key in self._image_keys
         }
+        # Lazily built on first step(); reused so the model handles / head mode are resolved once.
+        self._decoder: "OFTBatchedDecoder | None" = None
 
     def reset(self) -> None:
         """Clear the history buffer.  Call at the start of every episode."""
@@ -176,25 +178,29 @@ class OFTRolloutHiddenExtractor:
             frames = [frames[0]] + frames
         return frames  # length == self._history, oldest first
 
-    def step(
+    def prepare(
         self,
         obs: dict[str, Any],
         task_description: str,
-    ) -> tuple[list[Any], torch.Tensor]:
-        """Run one forward pass and return (action_chunk, flat_hidden).
+    ) -> dict[str, Any]:
+        """Build VLA model inputs for one observation (updates the history buffer).
+
+        Returns a dict ``{input_ids, attention_mask, pixel_values, proprio}`` ready to
+        be stacked across envs and consumed by :func:`batched_forward`.  This is the
+        per-env half of ``step``: ``step`` is exactly
+        ``batched_forward(policy, [prepare(obs, task)], unnorm_key)[0]``, so single-env
+        and batched (step_batch) collection share one inference code path.
 
         Args:
-            obs: Observation dict.  Must contain uint8 ``np.ndarray`` images
-                under each key in ``self._image_keys`` (shape ``(H, W, 3)``).
-                Optionally contains ``"state"`` (8-dim float32 array) when
-                ``policy.use_proprio`` is True.
+            obs: Observation dict.  Must contain uint8 ``np.ndarray`` images under each
+                key in ``self._image_keys`` (shape ``(H, W, 3)``).  Optionally contains
+                ``"state"`` (8-dim float32 array) when ``policy.use_proprio`` is True.
             task_description: Natural-language task string.
 
         Returns:
-            Tuple of:
-                - action_chunk: list of actions (length = NUM_ACTIONS_CHUNK)
-                - flat_hidden: shape ``(229376,)`` float16 tensor on CPU,
-                  matching the offline sidecar ``obs_embedding[t]``.
+            Dict with ``input_ids`` ``(1, L)``, ``attention_mask`` ``(1, L)``,
+            ``pixel_values`` ``(1, num_views*C, H, W)`` (all on the model device,
+            bfloat16 where applicable), and ``proprio`` (np.ndarray or None).
         """
         from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
@@ -204,8 +210,6 @@ class OFTRolloutHiddenExtractor:
 
         model = self._policy.vla
         processor = self._policy.processor
-        action_head = self._policy.action_head
-        proprio_projector = self._policy.proprio_projector
         use_proprio = bool(getattr(self._policy, "use_proprio", False))
 
         prompt = (
@@ -255,25 +259,38 @@ class OFTRolloutHiddenExtractor:
             proprio_norm_stats = model.norm_stats[self._unnorm_key]["proprio"]
             proprio = normalize_proprio(obs["state"], proprio_norm_stats)
 
-        # ── 5. Forward pass via predict_action ────────────────────────────────
-        with torch.inference_mode():
-            actions, actions_hidden_states = model.predict_action(
-                input_ids=input_ids,
-                pixel_values=pixel_values,
-                attention_mask=attention_mask,
-                unnorm_key=self._unnorm_key,
-                do_sample=False,
-                proprio=proprio,
-                proprio_projector=proprio_projector,
-                action_head=action_head,
-                use_film=False,
-            )
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "proprio": proprio,
+        }
 
-        # actions_hidden_states: (1, 56, 4096) → (229376,) float16
-        flat_hidden = flatten_action_hidden(actions_hidden_states.cpu())
+    def step(
+        self,
+        obs: dict[str, Any],
+        task_description: str,
+    ) -> tuple[list[Any], torch.Tensor]:
+        """Run one forward pass and return (action_chunk, flat_hidden).
 
-        action_chunk = [actions[i] for i in range(len(actions))]
-        return action_chunk, flat_hidden
+        Thin wrapper over :func:`batched_forward` with a single observation, so
+        single-env and batched (step_batch) collection share exactly one inference
+        code path.
+
+        Args:
+            obs: Observation dict (see :meth:`prepare`).
+            task_description: Natural-language task string.
+
+        Returns:
+            Tuple of:
+                - action_chunk: list of actions (length = NUM_ACTIONS_CHUNK)
+                - flat_hidden: shape ``(229376,)`` float16 tensor on CPU,
+                  matching the offline sidecar ``obs_embedding[t]``.
+        """
+        if self._decoder is None:
+            self._decoder = OFTBatchedDecoder(self._policy, self._unnorm_key)
+        prep = self.prepare(obs, task_description)
+        return self._decoder.predict_batch([prep])[0]
 
     # ── Backward-compat shim: old callers used __call__(obs, task) ───────────
     def __call__(
@@ -283,3 +300,263 @@ class OFTRolloutHiddenExtractor:
     ) -> tuple[list[Any], torch.Tensor]:
         """Alias for ``step``; initialises history on first call if not reset."""
         return self.step(obs, task_description)
+
+
+# ── batched (step_batch) inference ──────────────────────────────────────────
+# Feeds K prepared observations through ONE VLA forward.  The upstream OFT
+# ``predict_action`` wrapper has two batch==1 assumptions that break for B>1:
+#   - modeling_prismatic.py:972  appends a [1,1] token via cat(dim=1)
+#   - modeling_prismatic.py:924  reshape(NUM_ACTIONS_CHUNK, ACTION_DIM) drops the batch
+# Everything else in the L1-regression path is batch-safe, so we bypass the wrapper
+# and call the internals directly with a batched token-append and a (B, chunk, dim)
+# reshape.  Verified bit-exact vs ``OFTRolloutHiddenExtractor.step`` at B=1 and
+# action-partner-invariant (no cross-batch leakage) by
+# scripts/smoke_oft_batched_forward.py.
+
+
+def _left_pad_batch(
+    input_ids_list: list[torch.Tensor],
+    attention_mask_list: list[torch.Tensor],
+    pad_token_id: int,
+    bos_token_id: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Left-pad a list of ``[1, L_i]`` input_ids/masks to ``[B, max L]``, BOS at index 0.
+
+    Real content is right-aligned so the action tokens appended downstream share an
+    absolute index across the batch; BOS is forced to absolute index 0 so the
+    vision-insert-after-BOS path stays uniform (RLinf's ``PrismaticProcessor`` trick).
+    The pad token's value is irrelevant numerically — it is masked out of attention.
+    An equal-length batch is returned unchanged.
+    """
+    batch = len(input_ids_list)
+    lengths = [int(x.shape[-1]) for x in input_ids_list]
+    max_len = max(lengths)
+    ref = input_ids_list[0]
+    out_ids = torch.full((batch, max_len), int(pad_token_id), dtype=ref.dtype, device=ref.device)
+    out_mask = torch.zeros(
+        (batch, max_len), dtype=attention_mask_list[0].dtype, device=ref.device
+    )
+    for i, (ids, msk, length) in enumerate(zip(input_ids_list, attention_mask_list, lengths)):
+        offset = max_len - length
+        out_ids[i, offset:] = ids.reshape(-1)
+        out_mask[i, offset:] = msk.reshape(-1)
+        # Move the (right-aligned) BOS to absolute index 0; mask its old slot as pad.
+        out_ids[i, offset] = int(pad_token_id)
+        out_mask[i, offset] = 0
+        out_ids[i, 0] = int(bos_token_id)
+        out_mask[i, 0] = 1
+    return out_ids, out_mask
+
+
+class OFTBatchedDecoder:
+    """First-class batched OFT inference (RLinf ``predict_action_batch`` posture, non-invasive).
+
+    Constructed ONCE per policy; caches the model handles, special-token ids, action
+    constants, and the head mode.  ``predict_batch(preps)`` runs ONE VLA forward over K
+    prepared observations and returns per-env ``(action_chunk, flat_hidden)``.
+
+    It bypasses the upstream ``predict_action`` wrapper — which assumes batch==1 at
+    modeling_prismatic.py:972 (token-cat) and :924 (action reshape) — by calling the model's
+    batch-safe internals directly, with: a batched trailing-29871 append, left-pad +
+    ``position_ids`` for mixed-task (different prompt length) batches, and a
+    ``(B, chunk, dim)`` decode reshape.  Verified bit-exact vs
+    ``OFTRolloutHiddenExtractor.step`` at B=1.
+
+    Head mode is auto-detected: ``action_head`` present -> L1-regression decode;
+    ``action_head is None`` -> discrete (headless / one-trajectory) decode from LM logits.
+    The ``obs_embedding`` (action-query hidden) is identical either way; only the action
+    decode differs.
+    """
+
+    def __init__(self, policy: Any, unnorm_key: str) -> None:
+        from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+
+        ensure_openvla_oft_on_path()
+        from prismatic.vla.constants import ACTION_DIM, IGNORE_INDEX, NUM_ACTIONS_CHUNK
+
+        self._model = policy.vla
+        self._action_head = policy.action_head  # None => discrete (headless) decode
+        self._proprio_projector = policy.proprio_projector
+        self._unnorm_key = unnorm_key
+        self._action_dim = int(ACTION_DIM)
+        self._num_chunks = int(NUM_ACTIONS_CHUNK)
+        self._span = int(ACTION_DIM * NUM_ACTIONS_CHUNK)
+        self._ignore_index = IGNORE_INDEX
+        tok = policy.processor.tokenizer
+        self._bos_id = tok.bos_token_id if tok.bos_token_id is not None else 1
+        self._pad_id = (
+            tok.pad_token_id
+            if tok.pad_token_id is not None
+            else (tok.eos_token_id if tok.eos_token_id is not None else 0)
+        )
+
+    @property
+    def is_discrete(self) -> bool:
+        """True when headless (no L1 action head; actions decoded from the LM logits)."""
+        return self._action_head is None
+
+    def predict_batch(
+        self, preps: list[dict[str, Any]]
+    ) -> list[tuple[list[Any], torch.Tensor]]:
+        """One VLA forward over K preps -> per-env ``(action_chunk, flat_hidden)``.
+
+        Preps MAY have different prompt (``input_ids``) lengths — different tasks: they are
+        left-padded to the batch max with ``attention_mask`` + ``position_ids`` so each
+        padded sample is numerically equal to computing it alone (block-diagonal attention
+        => no cross-sample interaction).  Equal-length batches pad to a no-op.
+
+        Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions and a
+        ``(229376,)`` float16 CPU ``obs_embedding`` tensor.  Raises if ``preps`` is empty.
+        """
+        if not preps:
+            raise ValueError("predict_batch requires at least one prep")
+        input_ids, attention_mask = _left_pad_batch(
+            [p["input_ids"] for p in preps],
+            [p["attention_mask"] for p in preps],
+            self._pad_id,
+            self._bos_id,
+        )
+        pixel_values = torch.cat([p["pixel_values"] for p in preps], dim=0)
+        use_proprio = preps[0]["proprio"] is not None
+        proprio = (
+            np.stack([np.asarray(p["proprio"]).reshape(-1) for p in preps], axis=0)
+            if use_proprio
+            else None
+        )
+        actions, hidden = self._forward(input_ids, attention_mask, pixel_values, proprio)
+        out: list[tuple[list[Any], torch.Tensor]] = []
+        for i in range(len(preps)):
+            action_chunk = [actions[i, j] for j in range(actions.shape[1])]
+            flat_hidden = flatten_action_hidden(hidden[i : i + 1].cpu())
+            out.append((action_chunk, flat_hidden))
+        return out
+
+    def _forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        pixel_values: torch.Tensor,
+        proprio: np.ndarray | None,
+    ) -> tuple[np.ndarray, torch.Tensor]:
+        """Batched replica of ``predict_action`` + ``_regression_or_discrete_prediction``."""
+        model = self._model
+        use_proprio = proprio is not None
+
+        # FIX1: batched trailing-29871 ('') append (upstream cats a [1,1] token -> B==1 only)
+        if not torch.all(input_ids[:, -1] == 29871):
+            pad = torch.full(
+                (input_ids.shape[0], 1), 29871, dtype=input_ids.dtype, device=input_ids.device
+            )
+            input_ids = torch.cat([input_ids, pad], dim=1)
+            attention_mask = torch.cat(
+                [attention_mask, torch.ones_like(pad, dtype=attention_mask.dtype)], dim=1
+            )
+
+        labels = input_ids.clone()
+        labels[:] = self._ignore_index
+        num_prompt_tokens = input_ids.shape[-1] - 1
+        input_ids, attention_mask = model._prepare_input_for_action_prediction(
+            input_ids, attention_mask
+        )
+        labels = model._prepare_labels_for_action_prediction(labels, input_ids)
+
+        # Wrap the whole forward (incl. the action head) in inference_mode, matching how the
+        # single-obs path wrapped predict_action; otherwise the head's layer_norm tries to
+        # save inference tensors for backward.
+        with torch.inference_mode():
+            input_embeddings = model.get_input_embeddings()(input_ids)
+            all_actions_mask = model._process_action_masks(labels)
+            language_embeddings = input_embeddings[~all_actions_mask].reshape(
+                input_embeddings.shape[0], -1, input_embeddings.shape[2]
+            )
+            projected = model._process_vision_features(
+                pixel_values, language_embeddings, use_film=False
+            )
+            if use_proprio:
+                proprio_t = torch.Tensor(proprio).to(projected.device, dtype=projected.dtype)
+                projected = model._process_proprio_features(
+                    projected, proprio_t, self._proprio_projector
+                )
+
+            num_patches = (
+                model.vision_backbone.get_num_patches()
+                * model.vision_backbone.get_num_images_in_input()
+            )
+            if use_proprio:
+                num_patches += 1
+
+            input_embeddings = input_embeddings * ~all_actions_mask.unsqueeze(-1)
+            multimodal_embeddings, multimodal_attention_mask = model._build_multimodal_attention(
+                input_embeddings, projected, attention_mask
+            )
+            # Left-padded (mixed-task) batches: position_ids must skip pad tokens so real
+            # tokens get their standalone positions.  No padding (same-task) -> None keeps
+            # the forward byte-identical to the un-padded path.
+            position_ids = None
+            if multimodal_attention_mask is not None and bool(
+                (multimodal_attention_mask == 0).any()
+            ):
+                position_ids = (multimodal_attention_mask.long().cumsum(-1) - 1).clamp_(min=0)
+            lm_out = model.language_model(
+                input_ids=None,
+                attention_mask=multimodal_attention_mask,
+                position_ids=position_ids,
+                past_key_values=None,
+                inputs_embeds=multimodal_embeddings,
+                labels=None,
+                use_cache=None,
+                output_attentions=False,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            last_hidden = lm_out.hidden_states[-1]
+            start = num_patches + num_prompt_tokens
+            actions_hidden_states = last_hidden[:, start : start + self._span, :]  # (B,56,D)
+            normalized = self._decode(lm_out, actions_hidden_states, start, input_ids.shape[0])
+        actions = model._unnormalize_actions(normalized, self._unnorm_key)
+        return actions, actions_hidden_states
+
+    def _decode(
+        self,
+        lm_out: Any,
+        actions_hidden_states: torch.Tensor,
+        action_start: int,
+        batch_size: int,
+    ) -> np.ndarray:
+        """Decode normalized actions ``(B, chunk, dim)`` — L1 head, or discrete logits->bins."""
+        if self._action_head is not None:
+            # L1-regression head: MLP over the action-query hidden states.
+            normalized = self._action_head.predict_action(actions_hidden_states)
+            return (
+                normalized.reshape(batch_size, self._num_chunks, self._action_dim)
+                .float()
+                .cpu()
+                .numpy()
+            )  # FIX2: keep the batch dim
+        # Discrete (headless / one-trajectory) LM-head: argmax the logits at the action
+        # positions -> bin centers.  Mirrors the upstream discrete branch but keeps batch.
+        model = self._model
+        action_logits = lm_out.logits[:, action_start : action_start + self._span, :]
+        predicted_ids = action_logits.argmax(dim=2).cpu().numpy()  # (B, span)
+        discretized = model.vocab_size - predicted_ids
+        discretized = np.clip(discretized - 1, a_min=0, a_max=model.bin_centers.shape[0] - 1)
+        normalized = model.bin_centers[discretized]  # (B, span)
+        return normalized.reshape(batch_size, self._num_chunks, self._action_dim)  # FIX2
+
+
+def batched_forward(
+    policy: Any,
+    preps: list[dict[str, Any]],
+    unnorm_key: str,
+) -> list[tuple[list[Any], torch.Tensor]]:
+    """Convenience wrapper: build a one-shot :class:`OFTBatchedDecoder` and run it.
+
+    For repeated inference (collection), construct ``OFTBatchedDecoder`` ONCE and call
+    ``predict_batch`` — that resolves the model handles / token ids / head mode a single
+    time instead of per forward.  Kept for tests and single-shot callers.
+
+    Raises ``ValueError`` if ``preps`` is empty.
+    """
+    if not preps:
+        raise ValueError("batched_forward requires at least one prep")
+    return OFTBatchedDecoder(policy, unnorm_key).predict_batch(preps)
