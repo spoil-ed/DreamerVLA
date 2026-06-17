@@ -8,9 +8,16 @@ name: OpenVLA_Onetraj_ColdStart_LIBERO
 # DISCRETE one-trajectory OFT, single-frame history (h1), no proprio state.
 # Used by experiment=collect_rollouts_onetraj (write) and
 # experiment=oft_discrete_token_world_model_dinowm_chunk (read) via task=...
-# ckpt_path / hdf5_reward_dir / dataset_statistics_key and the remaining
-# expected_* (obs_hidden_source=action_query, prompt_style=vla_policy,
-# rotate_images_180=true) are inherited from OpenVLA_Onetraj_LIBERO -> libero_goal.
+# ckpt_path / dataset_statistics_key and the remaining expected_*
+# (obs_hidden_source=action_query, prompt_style=vla_policy, rotate_images_180=true)
+# are inherited from OpenVLA_Onetraj_LIBERO -> libero_goal.
+#
+# Collected (model-generated) rollouts are re-rooted under data/collected_rollouts/
+# (NOT processed_data/, which holds offline-preprocessed demos) so the generated
+# data is marked at the folder level and never collides with the offline namespace.
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
+hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
+
 openvla_oft:
   action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
   expected_action_head_type: oft_discrete_token

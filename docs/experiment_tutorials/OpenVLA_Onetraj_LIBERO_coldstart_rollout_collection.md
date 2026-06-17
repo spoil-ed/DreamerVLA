@@ -83,7 +83,7 @@ NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
   task=OpenVLA_Onetraj_ColdStart_LIBERO_10 \
   collect.task_ids=all collect.episodes_per_task=300 \
   collect.episode_horizon=300 collect.envs_per_gpu=8
-# → outputs under data/processed_data/OpenVLA_Onetraj_LIBERO_libero_10/...
+# → outputs under data/collected_rollouts/OpenVLA_Onetraj_LIBERO_libero_10/...
 ```
 
 ## 0. System
@@ -149,9 +149,13 @@ throwaway location (e.g. for a smoke), override the task dirs:
 
 ## 2. Outputs
 
+Collected (model-generated) rollouts go under **`data/collected_rollouts/`** — a
+folder-level marker that keeps them separate from `data/processed_data/` (offline
+preprocessed demos); the per-suite artifact name is the same, only the root differs:
+
 ```text
-data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
-data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1
+data/collected_rollouts/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
+data/collected_rollouts/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1
 ```
 
 The hidden dir holds the per-frame `obs_embedding` and a `preprocess_config.json`

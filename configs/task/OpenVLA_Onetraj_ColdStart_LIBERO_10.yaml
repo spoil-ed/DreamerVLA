@@ -11,7 +11,9 @@ defaults:
 name: OpenVLA_Onetraj_ColdStart_LIBERO_10
 artifact_name: OpenVLA_Onetraj_LIBERO_libero_10
 
-hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/${task.artifact_name}/no_noops_t_256
+# collected (model-generated) rollouts -> marked root data/collected_rollouts/
+# (not processed_data/, which holds offline-preprocessed demos).
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
 
 openvla_oft:
