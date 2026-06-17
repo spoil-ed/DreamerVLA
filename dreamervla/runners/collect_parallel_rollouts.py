@@ -117,10 +117,14 @@ def _parse_args() -> dict[str, Any]:
     return args
 
 
-def _resolve_task_ids(task_ids_str: str, num_tasks: int) -> list[int]:
-    if str(task_ids_str).strip().lower() == "all":
+def _resolve_task_ids(task_ids: Any, num_tasks: int) -> list[int]:
+    if isinstance(task_ids, (list, tuple)):
+        return [int(x) for x in task_ids]
+    if isinstance(task_ids, int):
+        return [task_ids]
+    if str(task_ids).strip().lower() == "all":
         return list(range(num_tasks))
-    return [int(x.strip()) for x in str(task_ids_str).split(",") if x.strip()]
+    return [int(x.strip()) for x in str(task_ids).split(",") if x.strip()]
 
 
 def _shard_work(
@@ -209,34 +213,76 @@ def _load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
 # Preprocess config
 # ---------------------------------------------------------------------------
 
+def _resolve_model_path(model_path: str) -> str:
+    """Absolute path for a checkpoint dir; relative paths resolve against cwd."""
+    p = Path(model_path)
+    return str(p.expanduser().resolve() if p.is_absolute() else Path.cwd() / model_path)
+
+
 def _make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Build the preprocess_config.json matching BalancedTerminalDataset._validate_hidden_sidecar."""
-    model_path = str(
-        Path(cfg["model_path"]).expanduser().resolve()
-        if Path(cfg["model_path"]).is_absolute()
-        else Path.cwd() / cfg["model_path"]
-    )
-    mode = str(cfg.get("_policy_mode", "l1"))
-    use_proprio = bool(cfg.get("_use_proprio", mode == "l1"))
+    """Build preprocess_config.json from cfg (no hardcoded extraction defaults).
+
+    Matches BalancedTerminalDataset._validate_hidden_sidecar.  action_head_type
+    and include_state reflect the DETECTED policy mode (cfg["_policy_mode"] /
+    cfg["_use_proprio"], set by _load_policy and asserted == task expectation by
+    _assert_policy_mode_matches); the remaining fields come straight from cfg.
+    """
+    mode = cfg["_policy_mode"]
+    use_proprio = cfg["_use_proprio"]
     return {
         "action_head_type": "oft_l1_regression" if mode == "l1" else "oft_discrete_token",
-        "obs_hidden_source": "action_query",
-        "prompt_style": "vla_policy",
-        "history": 2,
-        "include_state": use_proprio,
-        "rotate_images_180": True,
-        "time_horizon": 8,
-        "token_dim": 4096,
-        "action_dim": 7,
-        "num_images_in_input": 4,
-        "chunk_size": 4,
+        "obs_hidden_source": cfg["expected_obs_hidden_source"],
+        "prompt_style": cfg["expected_prompt_style"],
+        "history": int(cfg["expected_history"]),
+        "include_state": bool(use_proprio),
+        "rotate_images_180": bool(cfg["expected_rotate_images_180"]),
+        "time_horizon": int(cfg["time_horizon"]),
+        "token_dim": int(cfg["token_dim"]),
+        "action_dim": int(cfg["action_dim"]),
+        "num_images_in_input": int(cfg["num_images_in_input"]),
+        "chunk_size": int(cfg["chunk_size"]),
         "hidden_key": "obs_embedding",
-        "resolution": 256,
-        "model_path": model_path,
+        "resolution": int(cfg["resolution"]),
+        "model_path": _resolve_model_path(cfg["model_path"]),
         "unnorm_key": cfg["unnorm_key"],
         "center_crop": True,
         "task_suite_name": cfg["task_suite_name"],
     }
+
+
+def _assert_policy_mode_matches(cfg: dict[str, Any]) -> None:
+    """Early validation: ckpt-detected mode == task expected_* (RLinf-style)."""
+    detected_head = (
+        "oft_l1_regression" if cfg["_policy_mode"] == "l1" else "oft_discrete_token"
+    )
+    if detected_head != cfg["expected_action_head_type"]:
+        raise ValueError(
+            f"Detected OFT head {detected_head!r} from ckpt {cfg['model_path']!r} "
+            f"!= task expected_action_head_type {cfg['expected_action_head_type']!r}. "
+            "Point the cold-start task at a checkpoint matching the WM's expected head."
+        )
+    if bool(cfg["_use_proprio"]) != bool(cfg["expected_include_state"]):
+        raise ValueError(
+            f"Detected proprio={cfg['_use_proprio']!r} != task expected_include_state "
+            f"{cfg['expected_include_state']!r} for ckpt {cfg['model_path']!r}."
+        )
+
+
+_REQUIRED_COLLECT_KEYS: tuple[str, ...] = (
+    "model_path", "policy_mode", "unnorm_key", "task_suite_name", "task_ids",
+    "episodes_per_task", "episode_horizon", "envs_per_gpu", "reward_dir", "hidden_dir",
+    "image_keys", "expected_history", "num_images_in_input", "expected_action_head_type",
+    "expected_include_state", "expected_obs_hidden_source", "expected_prompt_style",
+    "expected_rotate_images_180", "time_horizon", "token_dim", "action_dim",
+    "chunk_size", "resolution", "gpu_id",
+)
+
+
+def _require_keys(cfg: dict[str, Any]) -> None:
+    """Fail fast (before any GPU/model work) if a required extraction key is absent."""
+    missing = [k for k in _REQUIRED_COLLECT_KEYS if k not in cfg]
+    if missing:
+        raise KeyError(f"collect_rollouts cfg missing required keys: {missing}")
 
 
 # ---------------------------------------------------------------------------
