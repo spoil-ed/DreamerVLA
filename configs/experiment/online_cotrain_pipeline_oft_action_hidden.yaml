@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: online_cotrain_pipeline_libero_goal
+  - _self_

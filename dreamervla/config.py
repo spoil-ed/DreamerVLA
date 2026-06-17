@@ -24,6 +24,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_resume_paths(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
+    _validate_online_cotrain_pipeline(cfg)
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
     return cfg
@@ -157,6 +158,22 @@ def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:
             "task.time_horizon",
             message="RynnVLA dataset horizon must match task.time_horizon.",
         )
+
+
+def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("OnlineCotrainPipelineRunner"):
+        return
+    data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
+    hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
+    if not data_dir or not os.path.isdir(str(data_dir)):
+        raise ValueError(f"offline_warmup.data_dir does not exist: {data_dir!r}")
+    if not hidden_dir or not os.path.isdir(str(hidden_dir)):
+        raise ValueError(f"offline_warmup.hidden_dir does not exist: {hidden_dir!r}")
+    for key in ("wm_warmup_steps", "classifier_warmup_steps"):
+        val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
+        if val < 0:
+            raise ValueError(f"training.{key} must be >= 0, got {val}")
 
 
 def _validate_existing_paths(cfg: DictConfig) -> None:
