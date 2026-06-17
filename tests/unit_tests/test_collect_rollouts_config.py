@@ -110,3 +110,11 @@ def test_require_keys_passes_when_complete():
 )
 def test_resolve_task_ids(task_ids, expected):
     assert _resolve_task_ids(task_ids, num_tasks=3) == expected
+
+
+def test_collect_rollouts_missing_keys_raises_before_gpu():
+    from dreamervla.runners.collect_parallel_rollouts import collect_rollouts
+
+    # Empty cfg must fail at _require_keys, before any CUDA/model work.
+    with pytest.raises(KeyError):
+        collect_rollouts({}, rank=0, world_size=1, local_rank=0)

@@ -27,31 +27,17 @@ Image rotation contract (explicit):
     it reads obs_group[key][t] (raw/un-rotated reward-dir frames) into
     extractor.step() with rotate_images_180=True inside the extractor.
 
-Entry point (single-process):
-  python -m dreamervla.runners.collect_parallel_rollouts \\
-    task_suite_name=libero_goal \\
-    task_ids=0 \\
-    episodes_per_task=2 \\
-    episode_horizon=80 \\
-    out_dir=/tmp/rollout_smoke \\
-    gpu_id=2
-
-Entry point (multi-rank, 2 GPUs):
-  torchrun --nproc_per_node=2 \\
-    -m dreamervla.runners.collect_parallel_rollouts \\
-    task_suite_name=libero_goal \\
-    task_ids=0,1 \\
-    episodes_per_task=2 \\
-    episode_horizon=80 \\
-    out_dir=/tmp/dvla_par_smoke \\
-    num_gpus=2
+Entry point (pure Hydra; torchrun M-rank):
+  torchrun --standalone --nproc_per_node=2 -m dreamervla.train \\
+    experiment=collect_rollouts_onetraj task=OpenVLA_Onetraj_ColdStart_LIBERO \\
+    collect.task_ids=all collect.episodes_per_task=2 collect.episode_horizon=64
+  (or: bash scripts/run_collect_rollouts.sh ...)
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -75,46 +61,6 @@ def _get_dist_info() -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-
-def _parse_args() -> dict[str, Any]:
-    """Minimal key=value argparser.  Returns a dict of typed values."""
-    defaults: dict[str, Any] = {
-        "task_suite_name": "libero_goal",
-        "task_ids": "0",           # comma-separated ints or "all"
-        "episodes_per_task": 2,
-        "episode_horizon": 80,
-        "deterministic": True,     # no-op: OFT L1-regression heads are always deterministic
-        "out_dir": "/tmp/dvla_rollouts",
-        "gpu_id": 0,               # used in single-process path; ignored under torchrun
-        "unnorm_key": "libero_goal_no_noops",
-        # Cold-start base = one-trajectory OFT VLA (DISCRETE / headless: no L1 action head).
-        "model_path": "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1",
-        "policy_mode": "auto",     # auto-detect l1 vs discrete from the checkpoint
-        # Layer-1 informational knob (actual parallelism comes from torchrun)
-        "num_gpus": 1,
-        # Layer-2 knob: K env subprocesses per rank (1 = disabled)
-        "envs_per_gpu": 1,
-    }
-    args = dict(defaults)
-    for token in sys.argv[1:]:
-        if "=" not in token:
-            continue
-        k, v = token.split("=", 1)
-        k = k.lstrip("-")
-        # type coerce: if default exists and is int/float/bool, cast
-        if k in defaults:
-            d = defaults[k]
-            if isinstance(d, bool):
-                args[k] = v.lower() in {"1", "true", "yes", "y"}
-            elif isinstance(d, int):
-                args[k] = int(v)
-            elif isinstance(d, float):
-                args[k] = float(v)
-            else:
-                args[k] = v
-        else:
-            args[k] = v
-    return args
 
 
 def _resolve_task_ids(task_ids: Any, num_tasks: int) -> list[int]:
@@ -152,11 +98,7 @@ def _load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
 
     from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
 
-    model_path = str(
-        Path(cfg["model_path"]).expanduser().resolve()
-        if Path(cfg["model_path"]).is_absolute()
-        else Path.cwd() / cfg["model_path"]
-    )
+    model_path = _resolve_model_path(cfg["model_path"])
 
     device = torch.device(f"cuda:{gpu_id}")
 
@@ -180,7 +122,7 @@ def _load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
         model_path=model_path,
         component_ckpt_dir=model_path,
         torch_dtype="bf16",
-        num_images_in_input=4,      # history(2) × views(2)
+        num_images_in_input=int(cfg["num_images_in_input"]),
         use_lora=False,
         use_l1_regression=use_l1,
         use_diffusion=False,
@@ -449,6 +391,9 @@ def _collect_vectorized_path(
     preprocess_config: dict[str, Any],
     task_suite_name: str,
     rank: int,
+    history: int,
+    rotate_images_180: bool,
+    image_keys: list[str],
 ) -> int:
     """Drive K env subprocesses with batched VLA inference; returns demos written.
 
@@ -481,9 +426,9 @@ def _collect_vectorized_path(
         extractors = [extractor] + [
             OFTRolloutHiddenExtractor(
                 policy,
-                image_keys=["agentview_rgb", "eye_in_hand_rgb"],
-                history=2,
-                rotate_images_180=True,
+                image_keys=list(image_keys),
+                history=int(history),
+                rotate_images_180=bool(rotate_images_180),
                 center_crop=True,
                 unnorm_key=unnorm_key,
             )
@@ -520,42 +465,44 @@ def _collect_vectorized_path(
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Runner entry point
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    cfg = _parse_args()
+def collect_rollouts(
+    cfg: dict[str, Any],
+    rank: int,
+    world_size: int,
+    local_rank: int,
+) -> int:
+    """Collect rollouts for this rank's work-slice; returns demos written.
 
-    # ── Detect torchrun / distributed context ────────────────────────────────
-    rank, world_size, local_rank = _get_dist_info()
+    All extraction parameters come from ``cfg`` (no hardcoded defaults); see
+    _REQUIRED_COLLECT_KEYS.  Layer-1 sharding uses (rank, world_size); Layer-2
+    within-rank K-env batching is enabled by cfg["envs_per_gpu"] > 1.
+    """
+    _require_keys(cfg)
     cfg["_rank"] = rank
     cfg["_world_size"] = world_size
     cfg["_local_rank"] = local_rank
     is_distributed = world_size > 1
 
-    # gpu_id: under torchrun use LOCAL_RANK; single-process respects gpu_id arg
     if is_distributed:
         gpu_id = local_rank
     else:
         gpu_id = int(cfg["gpu_id"])
-        # Single-process path: set CUDA_VISIBLE_DEVICES as before
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        gpu_id = 0  # after masking, always cuda:0
+        gpu_id = 0
 
     if rank == 0:
         print("[collector] config:", cfg, flush=True)
     print(f"[collector] rank={rank}/{world_size} local_rank={local_rank} gpu_id={gpu_id}", flush=True)
 
-    # Set up LIBERO environment variables before any imports.
     os.environ.setdefault("MUJOCO_GL", "osmesa")
     os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
     project_root = Path(__file__).resolve().parents[2]
     os.environ.setdefault("DVLA_DATA_ROOT", str(project_root / "data"))
-    os.environ.setdefault(
-        "LIBERO_CONFIG_PATH", str(project_root / "data" / ".libero")
-    )
+    os.environ.setdefault("LIBERO_CONFIG_PATH", str(project_root / "data" / ".libero"))
 
-    # ── Set per-process GPU memory fraction (80%) ─────────────────────────────
     torch.cuda.set_device(gpu_id)
     torch.cuda.set_per_process_memory_fraction(0.8, device=gpu_id)
 
@@ -569,44 +516,37 @@ def main() -> None:
     task_suite_name = cfg["task_suite_name"]
     episodes_per_task = int(cfg["episodes_per_task"])
     episode_horizon = int(cfg["episode_horizon"])
-    out_dir = Path(cfg["out_dir"]).expanduser().resolve()
     unnorm_key = cfg["unnorm_key"]
-    envs_per_gpu = int(cfg["envs_per_gpu"])  # K env subprocesses per rank (1 = single in-process env)
+    envs_per_gpu = int(cfg["envs_per_gpu"])
+    resolution = int(cfg["resolution"])
+    image_keys = list(cfg["image_keys"])
+    history = int(cfg["expected_history"])
+    rotate_images_180 = bool(cfg["expected_rotate_images_180"])
 
-    reward_dir = out_dir / "reward"
-    hidden_dir = out_dir / "hidden"
-    # All ranks create dirs (exist_ok avoids races)
+    reward_dir = Path(cfg["reward_dir"]).expanduser().resolve()
+    hidden_dir = Path(cfg["hidden_dir"]).expanduser().resolve()
     reward_dir.mkdir(parents=True, exist_ok=True)
     hidden_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Shard file naming ─────────────────────────────────────────────────────
-    # Multi-rank: prefix r{rank}_ so globs pick up all shards.
-    # Single-process: no prefix, backward-compatible "shard_000.hdf5".
-    if is_distributed:
-        shard_name = f"r{rank}_shard_000.hdf5"
-    else:
-        shard_name = "shard_000.hdf5"
+    shard_name = f"r{rank}_shard_000.hdf5" if is_distributed else "shard_000.hdf5"
 
-    # ── Load policy + build extractor ────────────────────────────────────────
     policy = _load_policy(cfg, gpu_id)
+    _assert_policy_mode_matches(cfg)
     extractor = OFTRolloutHiddenExtractor(
         policy,
-        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
-        history=2,
-        rotate_images_180=True,
+        image_keys=image_keys,
+        history=history,
+        rotate_images_180=rotate_images_180,
         center_crop=True,
         unnorm_key=unnorm_key,
     )
 
     preprocess_config = _make_preprocess_config(cfg)
 
-    # ── Build the full work-list, then shard by rank ──────────────────────────
-    # We need num_tasks to resolve "all"; use a temporary env just for that.
-    # Kept as kwargs so VecRolloutEnv children rebuild the identical config.
     env_cfg_kwargs: dict[str, Any] = dict(
         task_suite_name=task_suite_name,
         task_id=0,
-        resolution=256,
+        resolution=resolution,
         full_record=True,
         init_state_sampling="sequential",
         action_input="raw",
@@ -618,34 +558,21 @@ def main() -> None:
         num_tasks = _tmp_env.num_tasks
 
     task_ids = _resolve_task_ids(cfg["task_ids"], num_tasks)
-
-    # Full work-list: (task_id, episode_id) pairs, task-major order
     full_work: list[tuple[int, int]] = [
-        (tid, ep)
-        for tid in task_ids
-        for ep in range(episodes_per_task)
+        (tid, ep) for tid in task_ids for ep in range(episodes_per_task)
     ]
-
-    # Each rank takes its slice (round-robin for roughly equal load)
     my_work = _shard_work(full_work, rank, world_size)
 
     print(
         f"[collector rank={rank}] task_suite={task_suite_name} "
-        f"total_work={len(full_work)} my_work={len(my_work)} "
-        f"shard={shard_name}",
+        f"total_work={len(full_work)} my_work={len(my_work)} shard={shard_name}",
         flush=True,
     )
-
     if not my_work:
         print(f"[collector rank={rank}] No work assigned. Exiting.", flush=True)
-        return
+        return 0
 
-    # ── Collect rollouts ──────────────────────────────────────────────────────
-    # envs_per_gpu>1: K env subprocesses + batched VLA inference (Layer-2, RLinf-style
-    #   vectorized collection — docs/.../2026-06-16-rlinf-vectorized-rollout-migration.md).
-    # envs_per_gpu==1: one in-process env per rank (Layer-1 only).
     t_collect_start = time.time()
-
     if envs_per_gpu > 1:
         demo_index = _collect_vectorized_path(
             policy=policy,
@@ -661,19 +588,21 @@ def main() -> None:
             preprocess_config=preprocess_config,
             task_suite_name=task_suite_name,
             rank=rank,
+            history=history,
+            rotate_images_180=rotate_images_180,
+            image_keys=image_keys,
         )
     else:
         demo_index = 0
         with DreamerVLAOnlineTrainEnv(env_cfg) as env:
-            env.set_task(my_work[0][0])  # initial task set
-
+            env.set_task(my_work[0][0])
             data_attrs: dict[str, Any] = {
                 "task_suite_name": task_suite_name,
                 "env_name": env.task_description,
             }
-
             with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
                 current_task_id = -1
+                task_description = env.task_description
                 for task_id, ep in my_work:
                     if task_id != current_task_id:
                         env.set_task(task_id)
@@ -684,7 +613,6 @@ def main() -> None:
                             f"description={task_description!r}",
                             flush=True,
                         )
-
                     steps = _run_episode(
                         env=env,
                         extractor=extractor,
@@ -697,7 +625,6 @@ def main() -> None:
                     writer.write_demo(
                         index=demo_index,
                         steps=steps,
-                        # preprocess_config: rank 0 writes it (content is identical across ranks)
                         preprocess_config=preprocess_config if (demo_index == 0 and rank == 0) else None,
                         data_attrs=data_attrs if demo_index == 0 else None,
                     )
@@ -705,22 +632,14 @@ def main() -> None:
 
     t_collect = time.time() - t_collect_start
     print(
-        f"\n[collector rank={rank}] Done. {demo_index} demos written to {out_dir} "
+        f"\n[collector rank={rank}] Done. {demo_index} demos written "
         f"in {t_collect:.1f}s ({t_collect/max(demo_index,1):.1f}s/demo)",
         flush=True,
     )
     print(f"  shard      : {shard_name}", flush=True)
     print(f"  reward dir : {reward_dir}", flush=True)
     print(f"  hidden dir : {hidden_dir}", flush=True)
-
-    # Report per-GPU memory usage
     mem_alloc = torch.cuda.memory_allocated(gpu_id) / 1024**3
     mem_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
-    print(
-        f"  GPU {gpu_id} mem: allocated={mem_alloc:.2f}GB reserved={mem_reserved:.2f}GB",
-        flush=True,
-    )
-
-
-if __name__ == "__main__":
-    main()
+    print(f"  GPU {gpu_id} mem: allocated={mem_alloc:.2f}GB reserved={mem_reserved:.2f}GB", flush=True)
+    return demo_index
