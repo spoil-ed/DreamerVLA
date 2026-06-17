@@ -59,6 +59,34 @@ matches what `BalancedTerminalDataset` validates on read (`model_path`,
 > Env render resolution is `task.image_resolution` (256), **not** `task.image_size`
 > (64, the WM latent grid).
 
+## Pick the VLA + suite explicitly (one ckpt per suite)
+
+Each LIBERO suite has its **own** one-trajectory discrete ckpt, bound in its own
+cold-start `task=` config — the VLA and the suite are tied together so you cannot
+accidentally roll a goal VLA in spatial tasks. Select the suite **explicitly**:
+
+| `task=` | suite | VLA ckpt (`data/checkpoints/Openvla-oft-SFT-traj1/…`) | unnorm key |
+| --- | --- | --- | --- |
+| `OpenVLA_Onetraj_ColdStart_LIBERO`         | libero_goal    | `Openvla-oft-SFT-libero-goal-traj1`    | `libero_goal_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_10`      | libero_10      | `Openvla-oft-SFT-libero10-traj1`       | `libero_10_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_Object`  | libero_object  | `Openvla-oft-SFT-libero-object-traj1`  | `libero_object_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_Spatial` | libero_spatial | `Openvla-oft-SFT-libero-spatial-traj1` | `libero_spatial_no_noops` |
+
+`experiment=collect_rollouts_onetraj` defaults to `task=OpenVLA_Onetraj_ColdStart_LIBERO`
+(goal); append `task=…` to switch suite. The collector asserts the ckpt-detected
+head mode (discrete / no-proprio) against the task's `expected_*` before any rollout,
+so a ckpt↔task mismatch fails fast. All four share the discrete h1 / single-view
+(`collect.num_images_in_input=1`) settings; only the ckpt, suite, unnorm key, and
+output namespace differ. Example (libero_10):
+
+```bash
+NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
+  task=OpenVLA_Onetraj_ColdStart_LIBERO_10 \
+  collect.task_ids=all collect.episodes_per_task=300 \
+  collect.episode_horizon=300 collect.envs_per_gpu=8
+# → outputs under data/processed_data/OpenVLA_Onetraj_LIBERO_libero_10/...
+```
+
 ## 0. System
 
 ```bash
