@@ -1,0 +1,29 @@
+# @package _global_
+# Pure-Hydra cold-start rollout collection.  Single source of truth = the task.
+#   torchrun --standalone --nproc_per_node=M -m dreamervla.train \
+#     experiment=collect_rollouts_onetraj task=OpenVLA_Onetraj_ColdStart_LIBERO
+defaults:
+  - _self_
+  - /task: OpenVLA_Onetraj_ColdStart_LIBERO
+
+_target_: dreamervla.runners.CollectRolloutsRunner
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/collect_rollouts/${task.name}/${now:%Y%m%d_%H%M%S}}
+  distributed_strategy: single
+  data_parallel: false
+  seed: 7
+  resume: false
+
+collect:
+  policy_mode: auto        # auto-detect l1 vs discrete from the checkpoint
+  gpu_id: 0                # single-process device; ignored under torchrun
+  task_ids: all            # "all", csv ("0,2"), int, or list
+  episodes_per_task: 2
+  episode_horizon: 64      # must be >= WM sequence_length (36 for discrete chunk WM)
+  envs_per_gpu: 1          # K within-rank envs; >1 enables batched vectorized path
