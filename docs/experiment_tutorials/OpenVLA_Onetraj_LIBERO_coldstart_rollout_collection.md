@@ -24,9 +24,30 @@ collect_rollouts   (experiment=collect_rollouts_onetraj,  task=OpenVLA_Onetraj_C
 
 ## Single source of truth: one `task=` for write and read
 
-The collector and the discrete WM read **the same task config**,
-`OpenVLA_Onetraj_ColdStart_LIBERO`. It holds the discrete-extraction truth in one
-place (`configs/task/OpenVLA_Onetraj_ColdStart_LIBERO.yaml`):
+The collector and the discrete WM read **the same task config**, so the sidecar the
+collector writes always matches what `BalancedTerminalDataset` validates on read
+(`model_path`, `time_horizon`, `action_head_type`, `obs_hidden_source`,
+`prompt_style`, `history`, `include_state`, `rotate_images_180`).
+
+Each LIBERO suite has its **own** one-trajectory discrete ckpt, bound in its own
+cold-start `task=` config — VLA and suite are tied together, so you cannot
+accidentally roll a goal VLA in spatial tasks. Pick the suite **explicitly**
+(default = goal; append `task=…` to switch):
+
+| `task=` | suite | VLA ckpt (`data/checkpoints/Openvla-oft-SFT-traj1/…`) | unnorm key |
+| --- | --- | --- | --- |
+| `OpenVLA_Onetraj_ColdStart_LIBERO`         | libero_goal    | `Openvla-oft-SFT-libero-goal-traj1`    | `libero_goal_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_10`      | libero_10      | `Openvla-oft-SFT-libero10-traj1`       | `libero_10_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_Object`  | libero_object  | `Openvla-oft-SFT-libero-object-traj1`  | `libero_object_no_noops` |
+| `OpenVLA_Onetraj_ColdStart_LIBERO_Spatial` | libero_spatial | `Openvla-oft-SFT-libero-spatial-traj1` | `libero_spatial_no_noops` |
+
+Before any rollout the collector asserts the ckpt-detected head mode (discrete /
+no-proprio) against the task's `expected_*`, so a ckpt↔task mismatch fails fast.
+
+Each config holds the discrete-extraction truth in one place — e.g.
+`configs/task/OpenVLA_Onetraj_ColdStart_LIBERO.yaml` (the `_10` / `_Object` /
+`_Spatial` variants inherit `libero_<suite>` and only swap ckpt, unnorm key, and
+output namespace):
 
 ```yaml
 defaults:
@@ -44,11 +65,7 @@ openvla_oft:
 ```
 
 `expected_obs_hidden_source: action_query`, `expected_prompt_style: vla_policy`
-and `expected_rotate_images_180: true` are inherited from `libero_goal`. Because
-both sides resolve these from `task=...`, the sidecar the collector writes always
-matches what `BalancedTerminalDataset` validates on read (`model_path`,
-`time_horizon`, `action_head_type`, `obs_hidden_source`, `prompt_style`,
-`history`, `include_state`, `rotate_images_180`).
+and `expected_rotate_images_180: true` are inherited from the suite config.
 
 > `num_images_in_input` is an OFT **deployment** param the checkpoint does not
 > persist, so it is set centrally via `collect.num_images_in_input` (default `1`,
@@ -59,25 +76,7 @@ matches what `BalancedTerminalDataset` validates on read (`model_path`,
 > Env render resolution is `task.image_resolution` (256), **not** `task.image_size`
 > (64, the WM latent grid).
 
-## Pick the VLA + suite explicitly (one ckpt per suite)
-
-Each LIBERO suite has its **own** one-trajectory discrete ckpt, bound in its own
-cold-start `task=` config — the VLA and the suite are tied together so you cannot
-accidentally roll a goal VLA in spatial tasks. Select the suite **explicitly**:
-
-| `task=` | suite | VLA ckpt (`data/checkpoints/Openvla-oft-SFT-traj1/…`) | unnorm key |
-| --- | --- | --- | --- |
-| `OpenVLA_Onetraj_ColdStart_LIBERO`         | libero_goal    | `Openvla-oft-SFT-libero-goal-traj1`    | `libero_goal_no_noops` |
-| `OpenVLA_Onetraj_ColdStart_LIBERO_10`      | libero_10      | `Openvla-oft-SFT-libero10-traj1`       | `libero_10_no_noops` |
-| `OpenVLA_Onetraj_ColdStart_LIBERO_Object`  | libero_object  | `Openvla-oft-SFT-libero-object-traj1`  | `libero_object_no_noops` |
-| `OpenVLA_Onetraj_ColdStart_LIBERO_Spatial` | libero_spatial | `Openvla-oft-SFT-libero-spatial-traj1` | `libero_spatial_no_noops` |
-
-`experiment=collect_rollouts_onetraj` defaults to `task=OpenVLA_Onetraj_ColdStart_LIBERO`
-(goal); append `task=…` to switch suite. The collector asserts the ckpt-detected
-head mode (discrete / no-proprio) against the task's `expected_*` before any rollout,
-so a ckpt↔task mismatch fails fast. All four share the discrete h1 / single-view
-(`collect.num_images_in_input=1`) settings; only the ckpt, suite, unnorm key, and
-output namespace differ. Example (libero_10):
+Switch suite by appending `task=…` (example: libero_10):
 
 ```bash
 NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
