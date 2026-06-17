@@ -152,7 +152,10 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             _unwrap(self.classifier).load_state_dict(payload["classifier"])
             self.classifier_threshold = float(payload.get("classifier_threshold", self.classifier_threshold))
 
-        # online cotrain with RL from the start (already warm): force warmup_steps=0
+        # online cotrain with RL from the start (already warm): force warmup_steps=0.
+        # Debug runs would otherwise re-read online_rollout.debug_warmup_steps in the online
+        # loop, re-defeating the 0 — zero it too so the "already warm" intent holds in every mode.
         OmegaConf.update(cfg, "training.warmup_steps", 0, force_add=True)
+        OmegaConf.update(cfg, "online_rollout.debug_warmup_steps", 0, force_add=True)
         self.cfg = cfg
         return self._online_cotrain_loop(cfg)

@@ -622,6 +622,11 @@ def collect_rollouts(
                         task_id=task_id,
                         rank=rank,
                     )
+                    # episode_success is intentionally omitted here: the single-env
+                    # _run_episode does not surface a success flag. Downstream
+                    # (offline_seed / WMPOAlignedLatentDataset) derives success from
+                    # sparse_rewards, so it stays recoverable. The vectorized path,
+                    # which has `success` in scope, passes episode_success explicitly.
                     writer.write_demo(
                         index=demo_index,
                         steps=steps,
