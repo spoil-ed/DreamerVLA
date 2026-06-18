@@ -15,11 +15,47 @@ from pathlib import Path
 from typing import Literal
 
 PipelineMode = Literal["ray", "noray"]
+PipelineTask = Literal["goal", "object", "spatial"]
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    name: PipelineTask
+    hydra_task: str
+    suite: str
+    ckpt_name: str
+    stats_key: str
+
+
+_TASK_SPECS: dict[str, TaskSpec] = {
+    "goal": TaskSpec(
+        name="goal",
+        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO",
+        suite="libero_goal",
+        ckpt_name="Openvla-oft-SFT-libero-goal-traj1",
+        stats_key="libero_goal_no_noops",
+    ),
+    "object": TaskSpec(
+        name="object",
+        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO_Object",
+        suite="libero_object",
+        ckpt_name="Openvla-oft-SFT-libero-object-traj1",
+        stats_key="libero_object_no_noops",
+    ),
+    "spatial": TaskSpec(
+        name="spatial",
+        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO_Spatial",
+        suite="libero_spatial",
+        ckpt_name="Openvla-oft-SFT-libero-spatial-traj1",
+        stats_key="libero_spatial_no_noops",
+    ),
+}
 
 
 @dataclass(frozen=True)
 class PipelinePlan:
     mode: PipelineMode
+    task: PipelineTask
     run_root: Path
     reward_dir: Path
     hidden_dir: Path
@@ -36,9 +72,20 @@ def _normalize_mode(mode: str) -> PipelineMode:
     raise ValueError("mode must be one of: ray, noray")
 
 
+def _resolve_task(task: str) -> TaskSpec:
+    normalized = task.strip().lower().replace("-", "_")
+    if normalized.startswith("libero_"):
+        normalized = normalized.removeprefix("libero_")
+    try:
+        return _TASK_SPECS[normalized]
+    except KeyError as exc:
+        raise ValueError("task must be one of: goal, object, spatial") from exc
+
+
 def build_pipeline_plan(
     *,
     mode: str = "ray",
+    task: str = "goal",
     run_root: str | Path,
     python: str = sys.executable,
     collect_overrides: Sequence[str] = (),
@@ -46,6 +93,7 @@ def build_pipeline_plan(
     common_overrides: Sequence[str] = (),
 ) -> PipelinePlan:
     selected_mode = _normalize_mode(mode)
+    task_spec = _resolve_task(task)
     root = Path(run_root).expanduser()
     reward_dir = root / "coldstart" / "reward"
     hidden_dir = root / "coldstart" / "hidden"
@@ -57,6 +105,7 @@ def build_pipeline_plan(
         collect_cmd.extend(
             [
                 "experiment=collect_rollouts_ray",
+                f"task={task_spec.hydra_task}",
                 "logger=tensorboard",
                 "collect.task_ids=[0]",
                 "collect.episodes_per_task=4",
@@ -70,6 +119,7 @@ def build_pipeline_plan(
         collect_cmd.extend(
             [
                 "experiment=collect_rollouts_onetraj",
+                f"task={task_spec.hydra_task}",
                 "logger=tensorboard",
                 "collect.task_ids=[0]",
                 "collect.episodes_per_task=4",
@@ -92,17 +142,20 @@ def build_pipeline_plan(
         "-m",
         "dreamervla.train",
         "experiment=online_cotrain_pipeline_oft_action_hidden",
+        f"task={task_spec.hydra_task}",
         "logger=tensorboard",
         "training.debug=true",
         f"offline_warmup.data_dir={reward_dir}",
         f"offline_warmup.hidden_dir={hidden_dir}",
         "offline_warmup.task_id=0",
+        f"env.task_suite_name={task_spec.suite}",
         f"training.out_dir={cotrain_out}",
         *common_overrides,
         *cotrain_overrides,
     ]
     return PipelinePlan(
         mode=selected_mode,
+        task=task_spec.name,
         run_root=root,
         reward_dir=reward_dir,
         hidden_dir=hidden_dir,
@@ -111,12 +164,13 @@ def build_pipeline_plan(
     )
 
 
-def validate_input_assets(*, data_root: str | Path) -> list[str]:
+def validate_input_assets(*, data_root: str | Path, task: str = "goal") -> list[str]:
     """Return missing or malformed input assets for the default one-traj OFT route."""
+    task_spec = _resolve_task(task)
     root = Path(data_root).expanduser()
-    ckpt = root / "checkpoints" / "Openvla-oft-SFT-traj1" / "Openvla-oft-SFT-libero-goal-traj1"
+    ckpt = root / "checkpoints" / "Openvla-oft-SFT-traj1" / task_spec.ckpt_name
     stats = ckpt / "dataset_statistics.json"
-    libero = root / "datasets" / "libero" / "libero_goal"
+    libero = root / "datasets" / "libero" / task_spec.suite
     errors: list[str] = []
 
     if not ckpt.is_dir():
@@ -129,10 +183,10 @@ def validate_input_assets(*, data_root: str | Path) -> list[str]:
         except json.JSONDecodeError as exc:
             errors.append(f"OpenVLA-OFT dataset statistics is not valid JSON: {stats} ({exc})")
         else:
-            if "libero_goal_no_noops" not in stats_data:
+            if task_spec.stats_key not in stats_data:
                 errors.append(
                     "OpenVLA-OFT dataset statistics missing key "
-                    f"'libero_goal_no_noops': {stats}"
+                    f"'{task_spec.stats_key}': {stats}"
                 )
     if not libero.is_dir():
         errors.append(f"LIBERO dataset directory not found: {libero}")
@@ -171,6 +225,7 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--mode", default="ray", choices=["ray", "noray", "no-ray", "non-ray"])
+    parser.add_argument("--task", default="goal", choices=["goal", "object", "spatial"])
     parser.add_argument("--run-root", default=str(_default_run_root()))
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--dry-run", action="store_true")
@@ -205,6 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     plan = build_pipeline_plan(
         mode=args.mode,
+        task=args.task,
         run_root=args.run_root,
         python=args.python,
         collect_overrides=args.collect_override,
@@ -212,6 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         common_overrides=args.common_override,
     )
     print(f"mode: {plan.mode}")
+    print(f"task: {plan.task}")
     print(f"run_root: {plan.run_root}")
     print(f"reward_dir: {plan.reward_dir}")
     print(f"hidden_dir: {plan.hidden_dir}")
@@ -227,7 +284,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 hidden_dir=plan.hidden_dir,
             )
         else:
-            errors = validate_input_assets(data_root=os.environ.get("DVLA_DATA_ROOT", "data"))
+            errors = validate_input_assets(
+                data_root=os.environ.get("DVLA_DATA_ROOT", "data"),
+                task=plan.task,
+            )
         if errors:
             print("asset check failed:", file=sys.stderr)
             for error in errors:

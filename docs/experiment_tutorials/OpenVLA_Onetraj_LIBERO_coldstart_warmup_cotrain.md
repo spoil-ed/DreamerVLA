@@ -1,7 +1,8 @@
 # OpenVLA-OFT Cold-Start -> Offline Warmup -> Online Cotrain
 
 This guide covers the end-to-end cold-start-to-cotrain handoff for the
-one-trajectory OpenVLA-OFT LIBERO route. It provides two runnable launchers:
+one-trajectory OpenVLA-OFT LIBERO route. The launcher accepts one task selector:
+`--task goal|object|spatial`. It provides two runnable launchers:
 
 - Ray: `scripts/e2e_coldstart_warmup_cotrain_ray.sh`
 - No Ray: `scripts/e2e_coldstart_warmup_cotrain_noray.sh`
@@ -27,14 +28,14 @@ Ray e2e:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --task goal
 ```
 
 No-Ray e2e:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
-  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --task goal
 ```
 
 The Ray script uses:
@@ -62,6 +63,14 @@ logger:                logger=tensorboard
 run root:              ${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<timestamp>
 ```
 
+Supported task values:
+
+| `--task` | Hydra task | LIBERO suite | One-traj OFT ckpt |
+| --- | --- | --- | --- |
+| `goal` | `OpenVLA_Onetraj_ColdStart_LIBERO` | `libero_goal` | `Openvla-oft-SFT-libero-goal-traj1` |
+| `object` | `OpenVLA_Onetraj_ColdStart_LIBERO_Object` | `libero_object` | `Openvla-oft-SFT-libero-object-traj1` |
+| `spatial` | `OpenVLA_Onetraj_ColdStart_LIBERO_Spatial` | `libero_spatial` | `Openvla-oft-SFT-libero-spatial-traj1` |
+
 Before launching, the scripts validate that the default checkpoint and LIBERO
 dataset assets are already present. They do not install packages, download
 checkpoints, or modify the environment.
@@ -69,16 +78,16 @@ checkpoints, or modify the environment.
 Default assets checked:
 
 ```text
-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1/dataset_statistics.json
-${DVLA_DATA_ROOT}/datasets/libero/libero_goal/*.hdf5
+${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/<task-specific-ckpt>
+${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/<task-specific-ckpt>/dataset_statistics.json
+${DVLA_DATA_ROOT}/datasets/libero/<task-specific-suite>/*.hdf5
 ```
 
 Use `--dry-run` to print commands without checking assets or launching jobs:
 
 ```bash
 bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --dry-run
-bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --dry-run
+bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --task object --dry-run
 ```
 
 ## Output Layout
@@ -116,6 +125,7 @@ Ray example:
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+    --task goal \
     --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/ray_goal_full" \
     --collect-override collect.task_ids=all \
     --collect-override collect.episodes_per_task=300 \
@@ -134,7 +144,8 @@ No-Ray example:
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
   bash scripts/e2e_coldstart_warmup_cotrain_noray.sh \
-    --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/noray_goal_full" \
+    --task spatial \
+    --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/noray_spatial_full" \
     --collect-override collect.task_ids=all \
     --collect-override collect.episodes_per_task=300 \
     --collect-override collect.episode_horizon=300 \
@@ -169,6 +180,7 @@ HID="${RUN_ROOT}/coldstart/hidden"
 
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
   experiment=collect_rollouts_ray logger=tensorboard \
+  task=OpenVLA_Onetraj_ColdStart_LIBERO \
   collect.task_ids=[0] collect.episodes_per_task=4 collect.episode_horizon=64 \
   env.num_workers=2 rollout.target_episodes=4 rollout.max_steps=256 \
   task.openvla_oft.hdf5_reward_dir="${RW}" \
@@ -185,6 +197,7 @@ HID="${RUN_ROOT}/coldstart/hidden"
 
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
   experiment=collect_rollouts_onetraj logger=tensorboard \
+  task=OpenVLA_Onetraj_ColdStart_LIBERO \
   collect.task_ids=[0] collect.episodes_per_task=4 collect.episode_horizon=64 \
   collect.envs_per_gpu=1 collect.gpu_id=0 \
   task.openvla_oft.hdf5_reward_dir="${RW}" \
@@ -197,10 +210,12 @@ Shared warmup + cotrain:
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
   experiment=online_cotrain_pipeline_oft_action_hidden logger=tensorboard \
+  task=OpenVLA_Onetraj_ColdStart_LIBERO \
   training.debug=true \
   offline_warmup.data_dir="${RW}" \
   offline_warmup.hidden_dir="${HID}" \
   offline_warmup.task_id=0 \
+  env.task_suite_name=libero_goal \
   training.out_dir="${RUN_ROOT}/cotrain"
 ```
 
