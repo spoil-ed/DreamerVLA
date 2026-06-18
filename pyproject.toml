@@ -13,6 +13,11 @@ dependencies = [
     "omegaconf",
 ]
 
+[project.optional-dependencies]
+ray = [
+    "ray[default]>=2.47.0",
+]
+
 [project.scripts]
 dreamer-vla-train = "dreamervla.train:main"
 

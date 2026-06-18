@@ -36,6 +36,10 @@ class PackedPlacementStrategy(PlacementStrategy):
     """Pack contiguous GPUs in ``[start_gpu, end_gpu]`` into workers."""
 
     def __init__(self, start_gpu: int, end_gpu: int, num_gpus_per_worker: int = 1) -> None:
+        if num_gpus_per_worker < 1:
+            raise ValueError(
+                f"num_gpus_per_worker must be >= 1, got {num_gpus_per_worker}"
+            )
         if start_gpu < 0 or end_gpu < start_gpu:
             raise ValueError(f"invalid GPU range [{start_gpu}, {end_gpu}]")
         span = end_gpu - start_gpu + 1

@@ -1,0 +1,50 @@
+# @package _global_
+_target_: dreamervla.runners.cold_start_ray_collect_runner.ColdStartRayCollectRunner
+
+env:
+  num_workers: 2
+  cfg:
+    target: dreamervla.workers.env._test_envs:DumpCounterEnv
+    kwargs:
+      horizon: 3
+      image_shape: [4, 4, 3]
+      embedding_dim: 4
+
+rollout:
+  target_episodes: 4
+  max_steps: 12
+
+dump:
+  reward_dir: data/collected_rollouts/ray_synthetic/reward
+  hidden_dir: data/collected_rollouts/ray_synthetic/hidden
+  shard_name: ray_shard_000.hdf5
+  preprocess_config:
+    action_head_type: oft_discrete_token
+    history: 1
+    include_state: false
+    hidden_key: obs_embedding
+  data_attrs:
+    task_suite_name: synthetic_libero
+    env_name: dump_counter
+
+policy:
+  cfg:
+    target: dreamervla.workers.actor._test_models:TinySharedPolicy
+    kwargs:
+      hidden_dim: 4
+      action_dim: 7
+
+inference:
+  cfg:
+    encoder:
+      target: dreamervla.workers.inference._test_models:TinyEncoder
+    world_model:
+      target: dreamervla.workers.inference._test_models:TinyWorldModel
+      kwargs:
+        hidden_dim: 4
+        action_dim: 7
+    device: cpu
+
+training:
+  out_dir: data/outputs/ray_coldstart_synthetic
+  gradient_accumulate_every: 1

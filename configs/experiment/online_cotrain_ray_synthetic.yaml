@@ -1,0 +1,56 @@
+# @package _global_
+_target_: dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner
+
+env:
+  num_workers: 2
+  cfg:
+    target: dreamervla.workers.env._test_envs:CounterEnv
+    kwargs:
+      horizon: 3
+      image_shape: [4, 4, 3]
+      embedding_dim: 4
+
+rollout:
+  steps: 9
+  min_replay_episodes: 1
+
+replay:
+  cfg:
+    capacity: 100
+    sequence_length: 3
+    task_ids: [0]
+    rank: 0
+
+policy:
+  cfg:
+    target: dreamervla.workers.actor._test_models:TinySharedPolicy
+    kwargs:
+      hidden_dim: 4
+      action_dim: 7
+
+inference:
+  cfg:
+    encoder:
+      target: dreamervla.workers.inference._test_models:TinyEncoder
+    world_model:
+      target: dreamervla.workers.inference._test_models:TinyWorldModel
+      kwargs:
+        hidden_dim: 4
+        action_dim: 7
+    device: cpu
+
+learner:
+  train_cfg:
+    mode: synthetic_ppo
+    batch_size: 2
+    lr: 0.05
+    device: cpu
+    syncer:
+      store_name: ray_cotrain_runner_weight_store
+
+sync:
+  weight_sync_every: 1
+
+training:
+  out_dir: data/outputs/ray_cotrain_synthetic
+  gradient_accumulate_every: 1
