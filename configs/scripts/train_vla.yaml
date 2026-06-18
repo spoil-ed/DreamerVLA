@@ -1,6 +1,6 @@
 name: train_vla
 experiment: vla_rynnvla_action_head
-data_root: ${oc.env:DVLA_DATA_ROOT,data}
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false
 print_config: false

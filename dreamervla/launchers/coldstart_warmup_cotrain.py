@@ -84,7 +84,7 @@ def _resolve_task(task: str) -> TaskSpec:
 
 def _oft_discrete_token_cotrain_smoke_overrides(task_spec: TaskSpec) -> list[str]:
     ckpt = (
-        "${oc.env:DVLA_DATA_ROOT,data}/checkpoints/"
+        "${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/"
         f"Openvla-oft-SFT-traj1/{task_spec.ckpt_name}"
     )
     return [
@@ -321,7 +321,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     # Make DVLA_DATA_ROOT absolute for the collect/cotrain subprocesses; the cotrain
-    # command's ${oc.env:DVLA_DATA_ROOT,data} resolver inherits this env.
+    # command's DVLA_DATA_ROOT-or-DVLA_ROOT/data resolver inherits this env.
     os.environ.setdefault("DVLA_DATA_ROOT", str(_data_root()))
     args = _parser().parse_args(list(argv) if argv is not None else None)
     plan = build_pipeline_plan(

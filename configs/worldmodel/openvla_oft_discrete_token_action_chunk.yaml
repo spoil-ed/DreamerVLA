@@ -4,7 +4,7 @@ defaults:
   - _self_
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/oft_discrete_token_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/oft_discrete_token_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
 
 task:
   openvla_oft:

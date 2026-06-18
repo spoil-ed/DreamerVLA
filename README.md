@@ -76,7 +76,7 @@ bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 run_tag=my_run
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
-  training.out_dir="${DVLA_DATA_ROOT:-data}/outputs/<stage>/<run>"
+  training.out_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/<stage>/<run>"
 ```
 
 `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared

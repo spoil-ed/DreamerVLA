@@ -12,20 +12,20 @@ action_horizon: 5
 time_horizon: 5
 
 vla_init_tag: libero_goal
-vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
 
-tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
-text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
-chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.yaml
-chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
+tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
+text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
+chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
+chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
 
-pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
 
-hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256
-hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
 rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
 
 legacy_action_hidden:
@@ -55,13 +55,13 @@ legacy_input_tokens:
   latent_source: RynnVLA current-frame Chameleon VQ input tokens [2048,4096]
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
+  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
   resume_step: 6650
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/dataset_statistics.json
+  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/dataset_statistics.json
   dataset_statistics_key: libero_goal_no_noops
-  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/action_head--6650_checkpoint.pt
-  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/proprio_projector--6650_checkpoint.pt
+  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/action_head--6650_checkpoint.pt
+  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/proprio_projector--6650_checkpoint.pt
   action_horizon: 8
   time_horizon: 8
   image_resolution: 224
@@ -71,7 +71,7 @@ openvla_oft:
   hdf5_reward_dir: ${task.hdf5_reward_dir}
   action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
   input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
-  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_failures
+  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_failures
   failure_action_hidden_dir: null
   failure_input_token_hidden_dir: null
   expected_action_head_type: oft_l1_regression

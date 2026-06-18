@@ -1,6 +1,6 @@
 name: eval_libero_vla
 experiment: eval_libero_vla
-data_root: ${oc.env:DVLA_DATA_ROOT,data}
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false
 print_config: false

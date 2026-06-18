@@ -22,7 +22,7 @@ Single GPU. Usage example::
         python -m dreamervla.runners.collect_online_rollouts_for_classifier \\
             --config configs/dreamervla/online_wmpo_outcome_libero_goal.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
-            --vla-ckpt-path ${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal \\
+            --vla-ckpt-path ${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/VLA_model_256/libero_goal \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
             --num-episodes 200 --episodes-per-shard 25 \\
             --out-raw-dir data/processed_data/libero_goal/libero_goal_online_rollouts_vla_sft \\

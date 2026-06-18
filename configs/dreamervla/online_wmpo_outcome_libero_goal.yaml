@@ -5,7 +5,7 @@
 #   python -m dreamervla.train experiment=online_wmpo_outcome_libero_goal
 #
 # Differences vs configs/dreamervla/rynnvla_wmpo_outcome.yaml:
-#   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,data}
+#   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 #   * world_model_state_ckpt points at a pinned ChunkAware checkpoint
 #   * classifier_state_ckpt points at the WMPO outcome classifier
 
@@ -22,7 +22,7 @@ trainer:
   debug: false
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/online_wmpo_outcome/default/run
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_wmpo_outcome/default/run
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -40,11 +40,11 @@ training:
   run_actor_critic_phase: true
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
-  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
-  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
+  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
   load_dreamervla_critic: false
@@ -58,12 +58,12 @@ encoder: null
 
 dataset:
   _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
-  hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
-  hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
+  hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_remaining_reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
   # Sidecar metadata stores the model_path used during preprocessing. Keep this
   # aligned with the path used to generate hidden_dir; override on the CLI if
   # reusing old sidecars whose stored model_path differs.
-  expected_model_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+  expected_model_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
   expected_encoder_state_ckpt: null
   expected_time_horizon: 5
   expected_action_head_type: legacy

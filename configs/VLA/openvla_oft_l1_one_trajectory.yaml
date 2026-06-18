@@ -4,7 +4,7 @@ defaults:
   - _self_
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/vla/openvla_oft_l1_one_trajectory/${task.name}/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/vla/openvla_oft_l1_one_trajectory/${task.name}/${now:%Y%m%d_%H%M%S}}
 
 dataset:
   max_demos_per_file: null

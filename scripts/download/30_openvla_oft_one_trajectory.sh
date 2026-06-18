@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 OPENVLA_ONE_TRAJ_ROOT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1"
 OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD="${OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD:-hf}"
 OPENVLA_ONE_TRAJ_REPO="${OPENVLA_ONE_TRAJ_REPO:-Haozhan72/Openvla-oft-SFT-libero-goal-traj1:Openvla-oft-SFT-libero-goal-traj1}"

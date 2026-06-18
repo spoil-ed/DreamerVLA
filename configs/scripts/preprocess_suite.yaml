@@ -1,5 +1,5 @@
 name: preprocess_suite
-data_root: ${oc.env:DVLA_DATA_ROOT,data}
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false
 only: [10_hdf5_reward, 20_pretokenize_dataset]

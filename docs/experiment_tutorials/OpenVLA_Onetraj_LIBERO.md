@@ -42,7 +42,7 @@ regular RynnVLA pipeline.
 ```bash
 cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
-export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 
 bash scripts/install_env.sh
 conda activate dreamervla

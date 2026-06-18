@@ -147,13 +147,14 @@ Cold-start warmup cotrain e2e launchers run a two-stage flow: first collect
 generated rollouts, then point `offline_warmup.data_dir` and
 `offline_warmup.hidden_dir` at the collected output for cotrain warmup. The Ray
 variant uses `experiment=collect_rollouts_ray`; the no-Ray variant uses
-`experiment=collect_rollouts_onetraj`. Both accept
-`--task goal|object|spatial`. By default they run a small real-data OFT
-action-hidden warmup smoke (`online_rollout.total_env_steps=0`); pass
-`--cotrain-override` values to extend into longer training.
+`experiment=collect_rollouts_onetraj`. Both accept Hydra overrides such as
+`task=goal|object|spatial` and `run_root=...`. By default they run a small
+real-data OFT action-hidden warmup smoke (`online_rollout.total_env_steps=0`);
+override `collect_overrides=[...]` or `cotrain_overrides=[...]` to extend into
+longer training.
 
-    bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --dry-run
-    bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --task spatial --dry-run
+    bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
+    bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true
 
 ## Evaluation
 
@@ -222,8 +223,8 @@ experiments and are not part of the main release pipeline.
 ## Conventions
 
 - Use `DVLA_DATA_ROOT` for data location.
-- `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; if unset, scripts use relative `data`.
+- `DVLA_DATA_ROOT` overrides the data root; if unset, scripts use `${DVLA_ROOT}/data`.
 - Use `experiment=<name>` for experiment selection.
 - Pass Hydra overrides after launcher arguments.
-- Keep runtime outputs under `${DVLA_DATA_ROOT:-data}/outputs/`.
+- Keep runtime outputs under `${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/`.
 - See `docs/data_layout.md` for the full runtime data layout.

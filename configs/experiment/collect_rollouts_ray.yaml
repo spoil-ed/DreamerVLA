@@ -25,7 +25,7 @@ rollout:
   max_steps: 256
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/ray_coldstart_oft}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_coldstart_oft}
   distributed_strategy: single
   data_parallel: false
   seed: 7

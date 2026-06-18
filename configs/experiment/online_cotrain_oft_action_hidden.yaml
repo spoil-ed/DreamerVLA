@@ -24,7 +24,7 @@ trainer:
   debug: false
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/online_cotrain_action_hidden/${now:%Y%m%d_%H%M%S}
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_action_hidden/${now:%Y%m%d_%H%M%S}
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -44,7 +44,7 @@ training:
   classifier_batch_size: 16
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   world_model_state_ckpt: null   # train WM online from replay (or warm-start a ckpt)
@@ -61,10 +61,10 @@ init:
 encoder:
   _target_: dreamervla.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 5

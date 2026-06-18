@@ -204,7 +204,7 @@ Launch scripts write `${DVLA_DATA_ROOT}/.libero/config.yaml` with raw demos at
 
 ```bash
 rsync -a old:dvla_data/ new:dvla_data/
-export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 ```
 
 Create assets with `bash scripts/download_assets.sh`.

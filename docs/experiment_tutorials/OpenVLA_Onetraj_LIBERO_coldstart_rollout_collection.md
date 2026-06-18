@@ -92,7 +92,7 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run --standalone --nproc_pe
 ```bash
 cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
-export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 conda activate dreamervla
 # LIBERO rendering on this host: EGL crashes in robosuite read_pixels; use osmesa.
 export MUJOCO_GL=osmesa

@@ -13,7 +13,7 @@ trainer:
 
 training:
   device: cuda:0
-  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/eval/eval_libero_vla
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/eval/eval_libero_vla
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -29,16 +29,16 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
   encoder_state_ckpt: null
 
 encoder:
   _target_: dreamervla.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
+  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
+  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
+  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
+  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
   resolution: 256
   action_dim: 7
   time_horizon: 5

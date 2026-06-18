@@ -7,24 +7,24 @@ suite: libero_goal
 task_name: goal
 
 vla_init_tag: libero_goal
-vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/VLA_model_256/libero_goal
+vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
 
 artifact_name: OpenVLA_Onetraj_LIBERO_libero_goal
 
-pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
 
-hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/${task.artifact_name}/no_noops_t_256
-hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/${task.artifact_name}/no_noops_t_256_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
 rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
   resume_step: null
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1/dataset_statistics.json
+  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1/dataset_statistics.json
   dataset_statistics_key: libero_goal_no_noops
   action_head_ckpt: null
   proprio_projector_ckpt: null
@@ -32,6 +32,6 @@ openvla_oft:
   hdf5_reward_dir: ${task.hdf5_reward_dir}
   action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
   input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
-  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/processed_data/${task.artifact_name}/no_noops_t_256_failures
+  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_failures
   failure_action_hidden_dir: null
   failure_input_token_hidden_dir: null

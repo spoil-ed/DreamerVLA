@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"
 RYNNVLA_CHAMELEON_REPO="${RYNNVLA_CHAMELEON_REPO:-Alibaba-DAMO-Academy/WorldVLA}"
 LUMINA_REPO="${LUMINA_REPO:-Alpha-VLLM/Lumina-mGPT-7B-768}"

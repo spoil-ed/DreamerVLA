@@ -58,7 +58,7 @@ data:
   chunk_pool: last
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/outcome_classifier/${task.name}/wmpo_aligned_small_tf_chunk}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/${task.name}/wmpo_aligned_small_tf_chunk}
   device: cuda
   seed: 0
   resume: false

@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"
-DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 CALVIN_DIR="${DVLA_DATA_ROOT}/datasets/calvin"
 CALVIN_DOWNLOAD_METHOD="${CALVIN_DOWNLOAD_METHOD:-official}"
 CALVIN_BASE_URL="${CALVIN_BASE_URL:-http://calvin.cs.uni-freiburg.de/dataset}"

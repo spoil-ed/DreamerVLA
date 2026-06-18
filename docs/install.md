@@ -5,7 +5,7 @@ assets and may be anywhere with enough disk space:
 
 ```bash
 export DVLA_ROOT="$(pwd -P)"
-export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 cd "${DVLA_ROOT}"
 ```
 
@@ -17,7 +17,7 @@ conda activate dreamervla
 ```
 
 The installer runs `scripts/install/*.sh` in order and records completed steps
-under `${DVLA_DATA_ROOT:-data}/install_state/`. Re-run a failed install with
+under `${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/install_state/`. Re-run a failed install with
 the same command; completed steps are skipped. To force a step, use:
 
 ```bash

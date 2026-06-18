@@ -15,8 +15,8 @@ rollout:
   max_steps: 12
 
 dump:
-  reward_dir: data/collected_rollouts/ray_synthetic/reward
-  hidden_dir: data/collected_rollouts/ray_synthetic/hidden
+  reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/ray_synthetic/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/ray_synthetic/hidden
   shard_name: ray_shard_000.hdf5
   preprocess_config:
     action_head_type: oft_discrete_token
@@ -46,5 +46,5 @@ inference:
     device: cpu
 
 training:
-  out_dir: data/outputs/ray_coldstart_synthetic
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_coldstart_synthetic
   gradient_accumulate_every: 1

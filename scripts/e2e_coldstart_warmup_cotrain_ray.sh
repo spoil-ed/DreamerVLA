@@ -14,4 +14,4 @@ if command -v conda >/dev/null 2>&1; then
   conda activate "${CONDA_ENV_NAME}"
 fi
 
-python -m dreamervla.launchers.coldstart_warmup_cotrain --mode ray "$@"
+python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray "$@"

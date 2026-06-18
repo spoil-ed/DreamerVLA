@@ -24,7 +24,7 @@ defaults:
 latent_type: backbone_latent
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,data}/outputs/dreamervla/online_cotrain_backbone_latent/${now:%Y%m%d_%H%M%S}
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_backbone_latent/${now:%Y%m%d_%H%M%S}
 
 # backbone (input-token) latent -> action adapter: Action Queries + decoder bridge
 # + RynnVLA legacy action head. source tokens = current-frame VQ image tokens of

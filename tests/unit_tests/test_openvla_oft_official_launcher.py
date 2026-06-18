@@ -11,7 +11,7 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     text = launcher.read_text(encoding="utf-8")
 
     assert re.search(r"^\s*source\s+.*common_env\.sh", text, re.MULTILINE) is None
-    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text
+    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
     assert 'CKPT="${CKPT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1}"' in text
     assert 'OUTPUT_DIR="${OUTPUT_DIR:-${DVLA_DATA_ROOT}/outputs/eval/openvla_oft_official_libero}"' in text
     assert 'GPU_ID="${GPU_ID:-0}"' in text

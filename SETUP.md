@@ -12,7 +12,7 @@ datasets/checkpoints, then generate `processed_data/<task>/*`.
 ```bash
 cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
-export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
+export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 ```
 
 Quick experiment tutorials:
@@ -30,7 +30,7 @@ conda activate dreamervla
 ```
 
 The installer runs these resumable steps and writes
-`${DVLA_DATA_ROOT:-data}/install_state/*.done`:
+`${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/install_state/*.done`:
 
 ```text
 scripts/install/00_apt_tools.sh
@@ -239,10 +239,10 @@ stage 2: filter marked no-ops
 Base outputs:
 
 ```text
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/marked_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/no_noops_t_256
-${DVLA_DATA_ROOT:-data}/processed_data/${TASK}/no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT:-data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
+${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/${TASK}/marked_t_256
+${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/${TASK}/no_noops_t_256
+${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/${TASK}/no_noops_t_256_remaining_reward
+${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/configs/${TASK}/his_1_third_view_wrist_w_state_1_256_pretokenize*.yaml
 ```
 
 Useful variants:
@@ -251,7 +251,7 @@ Useful variants:
 bash scripts/preprocess/prepare_libero_data.sh task=libero_10 gpus=0,1,2,3 ngpu=4
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[10_hdf5_reward]
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[20_pretokenize_dataset] gpus=0 num_procs=8
-VLA_CKPT="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
+VLA_CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[30_action_hidden]
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal only=[40_validate]
 ```
@@ -283,7 +283,7 @@ To resume from a HF directory as weights-only initialization:
 
 ```bash
 bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal \
-  training.resume=true training.resume_dir="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf"
+  training.resume=true training.resume_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
 ```
 
 One-trajectory VLA:
@@ -304,13 +304,13 @@ After VLA SFT, generate RynnVLA action-hidden from the trained HF checkpoint:
 
 ```bash
 TASK=libero_goal \
-VLA_CKPT="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
+VLA_CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
 GPUS=0 ACTION_HIDDEN_GPUS=1 \
 bash scripts/preprocess/30_action_hidden.sh
 ```
 
 `scripts/preprocess/30_action_hidden.sh` also accepts a legacy runner
-checkpoint file via `VLA_CKPT=${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest.ckpt`; in that case it uses
+checkpoint file via `VLA_CKPT=${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest.ckpt`; in that case it uses
 the base VLA under `BASE_VLA_CKPT` for assets and loads the trained encoder
 state from the `.ckpt` file. Prefer the HF sidecar when it exists because the
 same path can be passed directly to eval.
@@ -321,14 +321,14 @@ routes; both checkpoint formats extract the same backbone layer):
 ```bash
 # Component-wise L1 checkpoint (auto-detected):
 TASK=libero_goal \
-OFT_CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650" \
+OFT_CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650" \
 OFT_POLICY_MODE=auto \
 OFT_LATENT_SCHEME=action_hidden \
 bash scripts/preprocess/35_oft_action_hidden.sh
 
 # Downloaded discrete one-trajectory weights (single view, no history/proprio):
 TASK=libero_goal \
-OFT_CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+OFT_CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
 OFT_POLICY_MODE=discrete \
 OFT_HISTORY=1 \
 OFT_IMAGE_KEYS=agentview_rgb \
@@ -342,7 +342,7 @@ projected vision patch tokens:
 ```bash
 # RynnVLA Scheme B from a trained HF checkpoint:
 TASK=libero_goal \
-VLA_CKPT="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
+VLA_CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
 GPUS=0 ACTION_HIDDEN_GPUS=1 \
 bash scripts/preprocess/32_input_token_hidden.sh
 
@@ -371,8 +371,8 @@ attrs, e.g.:
 
 ```bash
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal \
-  task.openvla_oft.ckpt_path="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
-  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT:-data}/processed_data/<task>/<sidecar_dir>" \
+  task.openvla_oft.ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/<task>/<sidecar_dir>" \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
   task.openvla_oft.expected_history=1 \
   task.openvla_oft.expected_include_state=false
@@ -383,11 +383,11 @@ World model:
 ```bash
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 \
-  task.vla_ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf"
+  task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
 
 # Scheme B frame-token WM:
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal \
-  task.vla_ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf"
+  task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk_input_tokens task=libero_goal
 ```
 
@@ -406,23 +406,23 @@ bash scripts/train_dreamervla.sh \
   experiment=dreamervla_rynn_dino_wm_wmpo_outcome \
   task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=4 \
-  task.vla_ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
-  init.world_model_state_ckpt="${DVLA_DATA_ROOT:-data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
-  init.classifier_state_ckpt="${DVLA_DATA_ROOT:-data}/outputs/classifier/<run>/checkpoints/latest.ckpt"
+  task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
+  init.world_model_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
+  init.classifier_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 
 # Scheme B uses a bridge actor from frame tokens to action slots:
 bash scripts/train_dreamervla.sh \
   experiment=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
   task=libero_goal \
-  task.vla_ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
-  init.world_model_state_ckpt="${DVLA_DATA_ROOT:-data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
-  init.classifier_state_ckpt="${DVLA_DATA_ROOT:-data}/outputs/classifier/<run>/checkpoints/latest.ckpt"
+  task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
+  init.world_model_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
+  init.classifier_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
 Training launchers are Hydra wrappers: `experiment=...` selects a script-level
 config group under `configs/experiment/`, while overrides such as
 `training.max_steps=1`, `dataset.trajectory_offset=3`, or
-`task.hdf5_dir=${DVLA_DATA_ROOT:-data}/processed_data/<task>/no_noops_t_256` are passed through to the real training route.
+`task.hdf5_dir=${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/<task>/no_noops_t_256` are passed through to the real training route.
 
 ## 5. Evaluate
 
@@ -431,7 +431,7 @@ VLA checkpoint:
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=auto \
-  eval.ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/vla/<run>/checkpoints/latest_hf" \
+  eval.ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
   eval.task_suite_name=libero_goal \
   eval.num_episodes_per_task=10 \
   training.device=cuda:0
@@ -439,14 +439,14 @@ bash scripts/eval_libero_vla.sh gpus=0 \
 
 `eval.ckpt_path` accepts both trained RynnVLA HF directories and legacy
 DreamerVLA `.ckpt` payloads. For a downloaded base VLA with no SFT checkpoint,
-omit `eval.ckpt_path` and set `init.vla_ckpt_path=${DVLA_DATA_ROOT:-data}/checkpoints/<hf_dir>`.
+omit `eval.ckpt_path` and set `init.vla_ckpt_path=${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/<hf_dir>`.
 
 Dreamer checkpoint:
 
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
-  eval.ckpt_path="${DVLA_DATA_ROOT:-data}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
+  eval.ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
   eval.dreamer_policy_source=ckpt \
   eval.dreamer_actor_input_source=rssm \
   eval.task_suite_name=libero_goal \
@@ -457,7 +457,7 @@ bash scripts/eval_libero_vla.sh gpus=0 \
 OpenVLA-OFT one-trajectory checkpoint:
 
 ```bash
-CKPT="${DVLA_DATA_ROOT:-data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
 SUITE=libero_goal \
 GPU_ID=0 \
 bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
@@ -472,9 +472,9 @@ python -m pytest tests/unit_tests -q
 Path checks:
 
 ```bash
-test -d "${DVLA_DATA_ROOT:-data}/checkpoints/VLA_model_256/libero_goal"
-test -d "${DVLA_DATA_ROOT:-data}/datasets/libero/libero_goal"
-test -d "${DVLA_DATA_ROOT:-data}/processed_data/libero_goal/no_noops_t_256"
+test -d "${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/VLA_model_256/libero_goal"
+test -d "${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/datasets/libero/libero_goal"
+test -d "${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/libero_goal/no_noops_t_256"
 ```
 
 Smoke train:

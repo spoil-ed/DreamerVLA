@@ -15,7 +15,7 @@ name: OpenVLA_Onetraj_ColdStart_LIBERO
 # Collected (model-generated) rollouts are re-rooted under data/collected_rollouts/
 # (NOT processed_data/, which holds offline-preprocessed demos) so the generated
 # data is marked at the folder level and never collides with the offline namespace.
-hdf5_dir: ${oc.env:DVLA_DATA_ROOT,data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
 
 openvla_oft:

@@ -94,7 +94,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
 
     step_text = "\n".join(step.read_text(encoding="utf-8") for step in install_steps)
     assert 'source "${SCRIPT_DIR}/_env.sh"' not in step_text
-    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in step_text
+    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in step_text
     assert "target conda env=" in step_text
     assert "cuda_index=" in step_text
     assert "wheel_cache=" in step_text
@@ -138,7 +138,7 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
         encoding="utf-8"
     )
     assert 'source "${SCRIPT_DIR}/_env.sh"' not in download_step_text
-    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in download_step_text
+    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in download_step_text
     assert "hf download" in download_step_text
     assert "Alibaba-DAMO-Academy/WorldVLA" in download_step_text
     assert "RYNNVLA_CHAMELEON_REPO" in download_step_text
@@ -307,7 +307,7 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         text = script.read_text(encoding="utf-8")
         assert script.is_file(), step
         assert 'source "${SCRIPT_DIR}/_env.sh"' not in text, step
-        assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text, step
+        assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text, step
         if step not in hidden_main_docs:
             assert f"`preprocess/{step}`" in registry, step
         if step in {"10_hdf5_reward.sh", "20_pretokenize_dataset.sh", "30_action_hidden.sh", "40_validate.sh"}:
@@ -392,6 +392,26 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     assert "training.num_epochs=1" in log_text
 
 
+def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
+    root = _project_root()
+    text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")
+
+    assert "def _parse_args" not in text
+    for legacy_flag in (
+        "--config",
+        "--task",
+        "--gpus",
+        "--ngpu",
+        "--batch-size",
+        "--num-workers",
+        "--out-dir",
+        "--max-steps",
+        "--epochs",
+        "--num-epochs",
+    ):
+        assert re.search(rf"(?<![\w-]){re.escape(legacy_flag)}(?![\w-])", text) is None
+
+
 def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
@@ -425,6 +445,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
         {
             "PYTHON_STUB_LOG": str(log_path),
             "REAL_PYTHON": sys.executable,
+            "DVLA_DATA_ROOT": str(data_root),
             "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{env.get('PATH', '')}",
         }
     )
@@ -689,7 +710,7 @@ def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> N
     )
 
     assert 'export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd -P)}"' in text
-    assert 'export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-data}"' in text
+    assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
     assert "--config-name preprocess_libero" in text
     assert "libero_goal libero_object libero_spatial libero_10" in cfg_text
     assert "scripts/preprocess/prepare_libero_data.sh" in cfg_text
@@ -823,28 +844,29 @@ def test_portable_data_layout_manifest_exists_and_is_linked() -> None:
     assert "docs/data_layout.md" in scripts_readme
 
 
-def test_release_docs_and_scripts_do_not_couple_data_root_to_repo_root() -> None:
+def test_release_scripts_fall_back_to_dvla_root_data() -> None:
     root = _project_root()
+    old_relative_default = "${DVLA_DATA_ROOT:-" + "data}"
     active_paths = [
-        root / "README.md",
-        root / "README.zh-CN.md",
-        root / "SETUP.md",
-        root / "docs" / "install.md",
-        root / "docs" / "data_layout.md",
-        root / "scripts" / "README.md",
         *(
             path
             for path in (root / "scripts").rglob("*.sh")
             if "archive" not in path.relative_to(root / "scripts").parts
         ),
     ]
-    coupled_defaults = [
+    relative_defaults = [
+        str(path.relative_to(root))
+        for path in active_paths
+        if old_relative_default in path.read_text(encoding="utf-8")
+    ]
+    dvla_root_fallbacks = [
         str(path.relative_to(root))
         for path in active_paths
         if '${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}' in path.read_text(encoding="utf-8")
     ]
 
-    assert coupled_defaults == []
+    assert relative_defaults == []
+    assert dvla_root_fallbacks
 
 
 def test_release_text_does_not_reference_removed_setup_steps() -> None:
