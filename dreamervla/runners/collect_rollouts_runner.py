@@ -10,18 +10,7 @@ from dreamervla.runners.collect_parallel_rollouts import (
     _get_dist_info,
     collect_rollouts,
 )
-
-
-def resolve_num_images_in_input(collect_cfg: Any) -> int:
-    """OFT ``num_images_in_input`` is a deployment param the checkpoint does not
-    persist, so it is read from the central ``collect.*`` config (default = the
-    OFT single-view default ``1``).  Deliberately NOT derived from
-    ``len(task.image_keys)`` (which counts the stored camera views, 2 for
-    libero): the discrete one-traj VLA expects a single agentview image, and
-    feeding 2 collapses rollout success to ~0%.
-    """
-    val = OmegaConf.select(collect_cfg, "num_images_in_input", default=None)
-    return int(val) if val is not None else 1
+from dreamervla.runners.oft_collect_common import resolve_num_images_in_input
 
 
 class CollectRolloutsRunner(BaseRunner):
