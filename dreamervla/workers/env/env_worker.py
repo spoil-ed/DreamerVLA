@@ -51,11 +51,15 @@ class EnvWorker(Worker):
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         env = self._env()
         obs = self.current_obs()
+        record_obs = obs
+        if self._record_builder is not None and hasattr(env, "full_record"):
+            record_obs = dict(obs)
+            record_obs["_full_record"] = env.full_record()
         next_obs, reward, terminated, truncated, info = env.step(action)
         if self._record_builder is not None:
             transition = self._record_builder(
                 env,
-                obs,
+                record_obs,
                 action,
                 reward,
                 terminated,

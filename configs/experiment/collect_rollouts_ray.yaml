@@ -1,0 +1,32 @@
+# @package _global_
+defaults:
+  - _self_
+  - /task: OpenVLA_Onetraj_ColdStart_LIBERO
+
+_target_: dreamervla.runners.cold_start_ray_collect_runner.ColdStartRayCollectRunner
+mode: oft
+
+collect:
+  policy_mode: auto
+  num_images_in_input: 1
+  episodes_per_task: 2
+  episode_horizon: 64
+  envs_per_gpu: 2
+  task_ids: all
+
+env:
+  num_workers: 2
+  cfg:
+    target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
+    use_from_config: true
+
+rollout:
+  target_episodes: 4
+  max_steps: 256
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,data}/outputs/ray_coldstart_oft}
+  distributed_strategy: single
+  data_parallel: false
+  seed: 7
+  resume: false
