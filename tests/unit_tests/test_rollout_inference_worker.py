@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import numpy as np
+
+from dreamervla.workers.inference._test_rollout_stub import HIDDEN_DIM
+from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
+
+
+def _cfg() -> dict:
+    return {
+        "device": "cpu",
+        "action_dim": 7,
+        "decoder": {
+            "target": "dreamervla.workers.inference._test_rollout_stub:StubRolloutBundle"
+        },
+    }
+
+
+def test_forward_batch_returns_action_and_hidden() -> None:
+    w = RolloutInferenceWorker(_cfg(), {}, num_envs=3)
+    w.init()
+    out = w.forward_batch([{"seed": 10}, {"seed": 20}, {"seed": 30}], [0, 1, 2])
+    assert set(out) == {"actions", "obs_embedding"}
+    assert out["actions"][0].shape == (7,) and out["actions"][0].dtype == np.float32
+    assert out["obs_embedding"][1].shape == (HIDDEN_DIM,)
+    assert float(out["actions"][1][0]) == 20.0
+    assert float(out["obs_embedding"][2][0]) == 30.0
+
+
+def test_reset_states_clears_only_named_envs() -> None:
+    w = RolloutInferenceWorker(_cfg(), {}, num_envs=2)
+    w.init()
+    w.forward_batch([{"seed": 1}, {"seed": 2}], [0, 1])
+    w.reset_states([1])
+    assert w._extractors[0].n == 1
+    assert w._extractors[1].n == 0
