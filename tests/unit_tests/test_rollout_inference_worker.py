@@ -34,3 +34,18 @@ def test_reset_states_clears_only_named_envs() -> None:
     w.reset_states([1])
     assert w._extractors[0].n == 1
     assert w._extractors[1].n == 0
+
+
+def test_batched_equals_sequential_for_independent_envs() -> None:
+    cfg = _cfg()
+    w = RolloutInferenceWorker(cfg, {}, num_envs=2)
+    w.init()
+    batched = w.forward_batch([{"seed": 5}, {"seed": 9}], [0, 1])
+
+    w2 = RolloutInferenceWorker(cfg, {}, num_envs=2)
+    w2.init()
+    a = w2.forward_batch([{"seed": 5}], [0])
+    b = w2.forward_batch([{"seed": 9}], [1])
+
+    assert float(batched["actions"][0][0]) == float(a["actions"][0][0])
+    assert float(batched["obs_embedding"][1][0]) == float(b["obs_embedding"][0][0])
