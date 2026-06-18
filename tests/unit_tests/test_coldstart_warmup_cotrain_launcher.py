@@ -17,6 +17,7 @@ def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path)
     assert "rollout.target_episodes=4" in plan.collect_cmd
     assert f"task.openvla_oft.hdf5_reward_dir={reward_dir}" in plan.collect_cmd
     assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in plan.collect_cmd
+    assert "task.openvla_oft.expected_obs_hidden_source=action_query" in plan.collect_cmd
     assert "experiment=online_cotrain_pipeline_oft_action_hidden" in plan.cotrain_cmd
     assert f"offline_warmup.data_dir={reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={hidden_dir}" in plan.cotrain_cmd
@@ -96,6 +97,7 @@ def test_noray_launcher_plan_uses_pure_hydra_collector(tmp_path) -> None:
     assert "collect.envs_per_gpu=1" in plan.collect_cmd
     assert f"task.openvla_oft.hdf5_reward_dir={reward_dir}" in plan.collect_cmd
     assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in plan.collect_cmd
+    assert "task.openvla_oft.expected_obs_hidden_source=action_query" in plan.collect_cmd
     assert f"offline_warmup.data_dir={reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={hidden_dir}" in plan.cotrain_cmd
 

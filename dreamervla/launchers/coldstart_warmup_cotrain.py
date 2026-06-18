@@ -180,6 +180,7 @@ def build_pipeline_plan(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
             f"task.openvla_oft.action_hidden_dir={hidden_dir}",
+            "task.openvla_oft.expected_obs_hidden_source=action_query",
             f"training.out_dir={collect_out}",
             *common_overrides,
             *collect_overrides,
@@ -259,10 +260,24 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
     return errors
 
 
+def _data_root() -> Path:
+    """Absolute data root: ``DVLA_DATA_ROOT`` if set, else ``${DVLA_ROOT}/data``.
+
+    Basing the default on ``DVLA_ROOT`` (not a bare relative ``data``) keeps the
+    asset check and run-root correct regardless of the current working directory
+    / machine.
+    """
+    env = os.environ.get("DVLA_DATA_ROOT")
+    if env:
+        return Path(env).expanduser()
+    root = os.environ.get("DVLA_ROOT")
+    base = Path(root).expanduser() if root else Path.cwd()
+    return base / "data"
+
+
 def _default_run_root() -> Path:
-    data_root = Path(os.environ.get("DVLA_DATA_ROOT", "data")).expanduser()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return data_root / "outputs" / "coldstart_warmup_cotrain" / stamp
+    return _data_root() / "outputs" / "coldstart_warmup_cotrain" / stamp
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -305,6 +320,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Make DVLA_DATA_ROOT absolute for the collect/cotrain subprocesses; the cotrain
+    # command's ${oc.env:DVLA_DATA_ROOT,data} resolver inherits this env.
+    os.environ.setdefault("DVLA_DATA_ROOT", str(_data_root()))
     args = _parser().parse_args(list(argv) if argv is not None else None)
     plan = build_pipeline_plan(
         mode=args.mode,
@@ -333,7 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             errors = validate_input_assets(
-                data_root=os.environ.get("DVLA_DATA_ROOT", "data"),
+                data_root=_data_root(),
                 task=plan.task,
             )
         if errors:
