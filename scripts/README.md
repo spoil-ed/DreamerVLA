@@ -14,6 +14,8 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `train_vla.sh` | VLA SFT via Hydra experiment configs |
 | `train_wm.sh` | World-model and classifier training via Hydra experiment configs |
 | `train_dreamervla.sh` | DreamerVLA training via Hydra experiment configs |
+| `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline-warmup online cotrain |
+| `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline-warmup online cotrain |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
 
 ## Install Steps
@@ -140,6 +142,15 @@ checkpoint directory is `${training.out_dir}/checkpoints`; older
 `${training.out_dir}/ckpt/latest.ckpt` files are still recognized for resume.
 Grouped training writes `${training.out_dir}/resolved_config.yaml` and
 `${training.out_dir}/run_manifest.json` during runner setup.
+
+Cold-start warmup cotrain e2e launchers run a two-stage flow: first collect
+generated rollouts, then point `offline_warmup.data_dir` and
+`offline_warmup.hidden_dir` at the collected output for cotrain warmup. The Ray
+variant uses `experiment=collect_rollouts_ray`; the no-Ray variant uses
+`experiment=collect_rollouts_onetraj`.
+
+    bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --dry-run
+    bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --dry-run
 
 ## Evaluation
 

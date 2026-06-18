@@ -1,0 +1,298 @@
+# OpenVLA-OFT Cold-Start -> Offline Warmup -> Online Cotrain
+
+This guide covers the end-to-end cold-start-to-cotrain handoff for the
+one-trajectory OpenVLA-OFT LIBERO route. It provides two runnable launchers:
+
+- Ray: `scripts/e2e_coldstart_warmup_cotrain_ray.sh`
+- No Ray: `scripts/e2e_coldstart_warmup_cotrain_noray.sh`
+
+Both launchers use the same data contract:
+
+```text
+cold-start collector
+  -> reward HDF5 + obs_embedding sidecar
+  -> OnlineReplay seed via offline_warmup.data_dir / hidden_dir
+  -> OnlineCotrainPipelineRunner WM + classifier warmup
+  -> online cotrain loop
+```
+
+The important contract is directory wiring. The collector writes reward-schema
+HDF5 files and matching hidden sidecars. The cotrain pipeline reads those same
+directories through `offline_warmup.*`, seeds `OnlineReplay`, warms the world
+model and classifier, then enters the online cotrain loop.
+
+## What The Two Scripts Do
+
+Ray e2e:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh
+```
+
+No-Ray e2e:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh
+```
+
+The Ray script uses:
+
+```text
+collect:  experiment=collect_rollouts_ray
+cotrain:  experiment=online_cotrain_pipeline_oft_action_hidden
+```
+
+The no-Ray script uses:
+
+```text
+collect:  experiment=collect_rollouts_onetraj
+cotrain:  experiment=online_cotrain_pipeline_oft_action_hidden
+```
+
+Both scripts default to a small debug-sized run:
+
+```text
+task id:               0
+episodes:              4
+collect horizon:       64
+cotrain debug mode:    training.debug=true
+logger:                logger=tensorboard
+run root:              ${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<timestamp>
+```
+
+Before launching, the scripts validate that the default checkpoint and LIBERO
+dataset assets are already present. They do not install packages, download
+checkpoints, or modify the environment.
+
+Default assets checked:
+
+```text
+${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1/dataset_statistics.json
+${DVLA_DATA_ROOT}/datasets/libero/libero_goal/*.hdf5
+```
+
+Use `--dry-run` to print commands without checking assets or launching jobs:
+
+```bash
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --dry-run
+bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --dry-run
+```
+
+## Output Layout
+
+Both launchers write one run root:
+
+```text
+<run_root>/
+  collect/
+  coldstart/
+    reward/
+      *.hdf5
+    hidden/
+      *.hdf5
+      preprocess_config.json
+  cotrain/
+```
+
+The handoff into cotrain is explicit:
+
+```text
+offline_warmup.data_dir   = <run_root>/coldstart/reward
+offline_warmup.hidden_dir = <run_root>/coldstart/hidden
+offline_warmup.task_id    = 0
+```
+
+## Full-Run Shape
+
+Use `--run-root` to make output deterministic. Pass Hydra overrides through the
+launcher with `--collect-override`, `--cotrain-override`, or
+`--common-override`.
+
+Ray example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+    --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/ray_goal_full" \
+    --collect-override collect.task_ids=all \
+    --collect-override collect.episodes_per_task=300 \
+    --collect-override collect.episode_horizon=300 \
+    --collect-override env.num_workers=4 \
+    --collect-override rollout.target_episodes=3000 \
+    --collect-override rollout.max_steps=900000 \
+    --cotrain-override training.debug=false \
+    --cotrain-override training.wm_warmup_steps=2000 \
+    --cotrain-override training.classifier_warmup_steps=2000 \
+    --cotrain-override online_rollout.total_env_steps=200000
+```
+
+No-Ray example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh \
+    --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/noray_goal_full" \
+    --collect-override collect.task_ids=all \
+    --collect-override collect.episodes_per_task=300 \
+    --collect-override collect.episode_horizon=300 \
+    --collect-override collect.envs_per_gpu=1 \
+    --cotrain-override training.debug=false \
+    --cotrain-override training.wm_warmup_steps=2000 \
+    --cotrain-override training.classifier_warmup_steps=2000 \
+    --cotrain-override online_rollout.total_env_steps=200000
+```
+
+If you already have cold-start output under the same `run_root`, skip collection
+and run only warmup/cotrain:
+
+```bash
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  --run-root "${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/ray_goal_full" \
+  --skip-collect
+```
+
+With `--skip-collect`, the launcher validates that
+`<run_root>/coldstart/reward` and `<run_root>/coldstart/hidden` contain HDF5
+shards before starting cotrain.
+
+## Manual Equivalent
+
+Ray collect:
+
+```bash
+RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/manual_ray"
+RW="${RUN_ROOT}/coldstart/reward"
+HID="${RUN_ROOT}/coldstart/hidden"
+
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
+  experiment=collect_rollouts_ray logger=tensorboard \
+  collect.task_ids=[0] collect.episodes_per_task=4 collect.episode_horizon=64 \
+  env.num_workers=2 rollout.target_episodes=4 rollout.max_steps=256 \
+  task.openvla_oft.hdf5_reward_dir="${RW}" \
+  task.openvla_oft.action_hidden_dir="${HID}" \
+  training.out_dir="${RUN_ROOT}/collect"
+```
+
+No-Ray collect:
+
+```bash
+RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/manual_noray"
+RW="${RUN_ROOT}/coldstart/reward"
+HID="${RUN_ROOT}/coldstart/hidden"
+
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
+  experiment=collect_rollouts_onetraj logger=tensorboard \
+  collect.task_ids=[0] collect.episodes_per_task=4 collect.episode_horizon=64 \
+  collect.envs_per_gpu=1 collect.gpu_id=0 \
+  task.openvla_oft.hdf5_reward_dir="${RW}" \
+  task.openvla_oft.action_hidden_dir="${HID}" \
+  training.out_dir="${RUN_ROOT}/collect"
+```
+
+Shared warmup + cotrain:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
+  experiment=online_cotrain_pipeline_oft_action_hidden logger=tensorboard \
+  training.debug=true \
+  offline_warmup.data_dir="${RW}" \
+  offline_warmup.hidden_dir="${HID}" \
+  offline_warmup.task_id=0 \
+  training.out_dir="${RUN_ROOT}/cotrain"
+```
+
+## Fake Data-Flow Proof
+
+The fast fake proof is:
+
+```bash
+python -m pytest \
+  tests/e2e_tests/test_s6_ray_coldstart_collect.py::test_fake_coldstart_50pct_success_seeds_cotrain_warmup -v
+```
+
+What it proves:
+
+1. Cold-start collection runs with a fake alternating-success env.
+2. The collector writes four demos.
+3. The written sparse success labels are exactly `2/4 = 50%`.
+4. `seed_replay_from_offline` loads the reward/hidden shards into `OnlineReplay`.
+5. The replay reports two successes and two failures.
+6. `OnlineCotrainPipelineRunner._offline_warmup_wm` and
+   `_offline_warmup_classifier` consume batches from that replay.
+
+This is the regression test for the plumbing contract:
+
+```text
+collector output dirs == cotrain offline_warmup input dirs
+```
+
+## Real OFT Collector Check
+
+The real-policy collector e2e is gated because it needs GPU, LIBERO, and the
+OpenVLA-OFT checkpoint:
+
+```bash
+DVLA_GPU_E2E=1 python -m pytest tests/e2e_tests/test_s6_real_oft_coldstart.py -v -s
+```
+
+Without `DVLA_GPU_E2E=1`, this test skips.
+
+## Inspect Output
+
+Check success rate from a reward shard:
+
+```bash
+python - <<'PY'
+import h5py
+from pathlib import Path
+
+reward = next(Path("data/outputs/coldstart_warmup_cotrain/<run>/coldstart/reward").glob("*.hdf5"))
+with h5py.File(reward, "r") as f:
+    demos = [f["data"][key] for key in sorted(f["data"])]
+    successes = [bool(demo["sparse_rewards"][-1]) for demo in demos]
+print(sum(successes), "/", len(successes), "=", sum(successes) / max(len(successes), 1))
+PY
+```
+
+Check sidecar shape:
+
+```bash
+python - <<'PY'
+import h5py
+from pathlib import Path
+
+hidden = next(Path("data/outputs/coldstart_warmup_cotrain/<run>/coldstart/hidden").glob("*.hdf5"))
+with h5py.File(hidden, "r") as f:
+    ds = f["data"]["demo_0"]["obs_embedding"]
+    print(ds.shape, ds.dtype)
+PY
+```
+
+For real OFT action-query hidden, the sidecar shape is `(T, 229376)` with
+`float16`.
+
+## Current Boundary
+
+The fake proof validates the data flow, not full real-OFT numeric cotrain. For
+full real OFT cotrain, the cotrain config must use a world model, policy,
+classifier, and encoder route whose latent dimensions match the collected OFT
+sidecar. The e2e scripts wire the directories correctly; model-shape
+compatibility remains the operator's config responsibility.
+
+## Troubleshooting
+
+- If the launcher fails before training, read the asset check output. Set
+  `DVLA_DATA_ROOT` to the data root containing the checkpoint and LIBERO HDF5s.
+- If you pass custom checkpoint or dataset Hydra overrides, use
+  `--skip-asset-check` after verifying those custom paths yourself.
+- If warmup says the replay is empty, increase `collect.episode_horizon` so
+  collected episodes are at least `online_rollout.sequence_length`.
+- If `offline_warmup.data_dir` has no HDF5 shards, the collect stage did not
+  write into the run root you are passing to cotrain.
+- If model warmup fails with tensor shape errors, the cotrain model config does
+  not match the sidecar latent shape. Align `world_model.obs_dim`,
+  `token_count`, `token_dim`, classifier config, and policy hidden dimensions
+  with the collected sidecar.
