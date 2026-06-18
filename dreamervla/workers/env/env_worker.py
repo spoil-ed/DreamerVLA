@@ -14,11 +14,18 @@ from dreamervla.scheduler.worker import Worker
 class EnvWorker(Worker):
     """Hold one env instance, collect episodes, and push completed episodes."""
 
-    def __init__(self, env_cfg: dict[str, Any], task_id: int, replay: Any) -> None:
+    def __init__(
+        self,
+        env_cfg: dict[str, Any],
+        task_id: int,
+        replay: Any,
+        record_builder: Any | None = None,
+    ) -> None:
         super().__init__()
         self.env_cfg = dict(env_cfg)
         self.task_id = int(task_id)
         self.replay = replay
+        self._record_builder = record_builder
         self.env: Any | None = None
         self.obs: dict[str, Any] | None = None
         self.episode: list[dict[str, Any]] = []
@@ -45,8 +52,20 @@ class EnvWorker(Worker):
         env = self._env()
         obs = self.current_obs()
         next_obs, reward, terminated, truncated, info = env.step(action)
-        transition = env.make_transition(obs, action, reward, terminated, truncated, info)
-        transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+        if self._record_builder is not None:
+            transition = self._record_builder(
+                env,
+                obs,
+                action,
+                reward,
+                terminated,
+                truncated,
+                info,
+                obs_embedding,
+            )
+        else:
+            transition = env.make_transition(obs, action, reward, terminated, truncated, info)
+            transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
         self.episode.append(transition)
 
         done = bool(terminated or truncated)
