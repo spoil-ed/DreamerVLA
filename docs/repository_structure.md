@@ -44,13 +44,17 @@ dreamervla/
 │   ├── reward/           # Latent success classifier
 │   └── world_model/      # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Dataset preprocessing, xllmx helpers, hidden extraction
+├── scheduler/            # Optional Ray backend scheduling primitives
+├── workers/              # Optional Ray backend workers
+├── hybrid_engines/       # Optional Ray backend object-store / weight-sync helpers
 ├── legacy/               # Isolated non-mainline utilities for old artifacts
 ├── utils/                # Checkpoints, logging, optim, EMA, visualization
 └── runners/              # Public route runners, distributed and online-training helpers
 ```
 
-There is no active `src/`, `workspace/`, or Ray-style worker tree. The training
-unit is a runner.
+There is no active `src/` or `workspace/` tree. The training unit is a runner.
+Ray-specific scheduler / worker modules are optional backend internals and
+should not define a separate model, dataset, checkpoint, or logging contract.
 
 ## Execution Path
 

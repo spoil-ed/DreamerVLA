@@ -25,8 +25,9 @@ from AGENTS.md.
 
 ## RLinf Alignment Snapshot
 
-- Learn RLinf's engineering discipline, not its Ray topology: keep Dreamer-VLA
-  on single-machine Runner + torchrun/DDP/FSDP.
+- Learn RLinf's engineering discipline, not its process sprawl: keep the default
+  path on single-machine Runner + torchrun/DDP/FSDP, and keep Ray as an optional
+  backend behind explicit Hydra experiments.
 - Prefer early config validation for logger backends, actor-update routes,
   sidecar paths, resume checkpoints, batch/world-size divisibility,
   horizon/chunk consistency, and token/action-hidden dimensions.

@@ -78,6 +78,16 @@ dataset assets are already present. They activate `${DVLA_CONDA_ENV:-dreamervla}
 when `conda` is available, but they do not install packages or download
 checkpoints.
 
+> **The conda env must have the OpenVLA-OFT transformers fork.** OpenVLA-OFT needs
+> moojink's `transformers-openvla-oft` fork (bidirectional Llama attention); with
+> vanilla `transformers` the collector silently produces **0% / garbage actions**
+> (both report version `4.40.1`, so nothing errors). `scripts/install/60_verify.sh`
+> asserts the fork; verify manually per [SETUP.md](../../SETUP.md) §1. The default
+> `--task goal` smoke uses `episode_horizon=64`, so collected episodes time out
+> (`0/4` success) regardless — that only proves the plumbing. For real collection
+> (the Full-Run Shape below), the fork is what makes the collected rollouts and
+> their action-hidden sidecars actually solve tasks.
+
 Default assets checked:
 
 ```text

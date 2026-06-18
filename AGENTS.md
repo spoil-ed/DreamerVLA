@@ -3,7 +3,7 @@
 Brief for AI coding agents working on Dreamer-VLA. For full contribution flow,
 code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon action head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Runner** pattern as the training unit. Distributed runs use **torchrun** (DDP) or **FSDP**; there is no Ray, no multi-node cluster. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
+**Quick orientation:** Dreamer-VLA is a single-machine multi-GPU research framework combining a VLA encoder (RynnVLA / OpenVLA-OFT / Chameleon action head) with a Dreamer-style world model (DreamerV3 RSSM, DINO-WM, TSSM) on the LIBERO benchmark. It uses **Hydra** for config and a **Runner** pattern as the training unit. Mainline distributed runs use **torchrun** (DDP) or **FSDP**; Ray exists as an optional single-machine backend for rollout / cotrain experiments, not as a second default training topology or multi-node cluster layer. Mainline pipeline: VLA SFT → precompute action-hidden sidecar → action-hidden WM → DreamerVLA actor-critic / WMPO outcome. Python 3.11; type hints and docstrings on public APIs. If something is unclear, add a `TODO(agent)` and note the limitation.
 
 ---
 
@@ -17,7 +17,8 @@ code style, and PR process see [CONTRIBUTING.md](CONTRIBUTING.md).
   - `legacy/` – Isolated non-mainline utilities for old artifacts; do not import from active configs or runners.
   - `models/` – Encoder, world model, VLA backbones.
   - `preprocess/` – Dataset preprocessing and hidden extraction pipelines.
-  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval, DDP/FSDP helpers, and standalone online/frozen training tools.
+  - `runners/` – `BaseRunner` + VLA SFT, world model, classifier, DreamerVLA, eval, DDP/FSDP helpers, standalone online/frozen training tools, and optional Ray-backed rollout / cotrain runners.
+  - `scheduler/`, `workers/`, `hybrid_engines/` – Optional Ray backend primitives; keep them behind Hydra-selected runners and out of the default training path.
   - `utils/` – Checkpoint, logger, optim, EMA, visualization, shared helpers.
 
 - **`configs/`** – Hydra configs. `train.yaml` is the stable grouped
@@ -52,9 +53,12 @@ experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`).
 `training.distributed_strategy=ddp` under `torchrun`, then resolves
 `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`.
 The runner owns dataset, encoder, world model, actor / critic / reward,
-optimizer, logger, and checkpoints; there is no separate worker / scheduler
-layer. Online RL uses an in-process `DreamerVLAOnlineTrainEnv` (or the
-multi-proc variant in `dreamervla.runners.online_dreamervla_multiproc`).
+optimizer, logger, and checkpoints. Online RL uses an in-process
+`DreamerVLAOnlineTrainEnv` (or the multi-proc variant in
+`dreamervla.runners.online_dreamervla_multiproc`). Optional Ray runners may use
+worker / scheduler helpers internally, but they remain explicit
+`experiment=<name>` routes and must not fork the model, data, checkpoint, or
+metric contracts.
 Training backbones (DDP vs FSDP), mixed precision, gradient checkpointing,
 EMA, and LR schedule are config knobs under `training:`, not code branches.
 
@@ -62,13 +66,16 @@ EMA, and LR schedule are config knobs under `training:`, not code branches.
 
 ## RLinf alignment lessons
 
-RLinf is the reference for engineering discipline, not for process topology.
+RLinf is the reference for engineering discipline, not for process sprawl.
 Dreamer-VLA should learn RLinf's configuration, logging, checkpointing, testing,
-and documentation habits while preserving the single-machine Runner design.
+and documentation habits while preserving the single-machine Runner design and
+keeping Ray as an optional backend rather than a parallel product.
 
-- **Do not copy RLinf's Ray stack:** do not introduce Ray, Cluster,
-  WorkerGroup, placement strategies, or multi-node scheduler layers into
-  Dreamer-VLA. Use torchrun / DDP / FSDP plus `BaseRunner`.
+- **Converge Ray behind the Runner contract:** Ray-specific `Cluster`,
+  `WorkerGroup`, placement, worker, and object-store pieces may exist for the
+  optional backend, but they must be selected by explicit Hydra experiments,
+  share the same rollout / action / data contracts as the non-Ray path, and
+  stay out of the default VLA / WM / DreamerVLA training recipes.
 - **Copy the validation mindset:** prefer an early config validation pass before
   runner setup. `dreamervla.config.validate_cfg` checks logger backend names,
   actor-update route names, task / experiment compatibility, sidecar path
