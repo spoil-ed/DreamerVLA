@@ -201,6 +201,9 @@ class ColdStartRayCollectRunner(BaseRunner):
         }
 
     def _run_loop(self, groups: dict[str, Any]) -> dict[str, float | int]:
+        if bool(self._select_first(("rollout.overlap", "overlap"), False)):
+            return self._run_loop_overlap(groups)
+
         envs = groups["envs"]
         infer = groups["infer"]
         dump = groups["dump"]
@@ -234,6 +237,75 @@ class ColdStartRayCollectRunner(BaseRunner):
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
             "env/num_env_workers": int(num_envs),
+        }
+
+    def _run_loop_overlap(self, groups: dict[str, Any]) -> dict[str, float | int]:
+        import ray
+
+        envs = groups["envs"]
+        infer = groups["infer"]
+        dump = groups["dump"]
+        num_envs = int(groups["num_envs"])
+        env_ids = list(range(num_envs))
+        target_episodes = self._int_from(("rollout.target_episodes", "target_episodes"), num_envs)
+        max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
+
+        pending_steps: dict[int, Any] = {}
+        steps = 0
+        overlap_events = 0
+        stop_launching = False
+
+        def launch_inference_and_steps(obs_batch: list[dict[str, Any]], batch_env_ids: list[int]) -> None:
+            nonlocal steps, overlap_events
+            if any(not result.done() for result in pending_steps.values()) or pending_steps:
+                overlap_events += 1
+            infer_out = infer.forward_batch(obs_batch, batch_env_ids).wait()[0]
+            for env_id, action, hidden in zip(
+                batch_env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
+            ):
+                pending_steps[int(env_id)] = envs.execute_on(int(env_id)).step(action, hidden)
+            steps += 1
+
+        obs_batch = envs.current_obs().wait()
+        launch_inference_and_steps(obs_batch, env_ids)
+
+        while pending_steps and steps < max_steps:
+            ref_to_env = {
+                result.refs[0]: env_id
+                for env_id, result in pending_steps.items()
+            }
+            ready_refs, _pending_refs = ray.wait(list(ref_to_env), num_returns=1)
+            ready_env_ids = [ref_to_env[ready_refs[0]]]
+            step_results = [pending_steps.pop(ready_env_ids[0]).wait()[0]]
+
+            done_envs = [
+                env_id
+                for env_id, (_obs, done, _info) in zip(ready_env_ids, step_results, strict=True)
+                if done
+            ]
+            if done_envs:
+                infer.reset_states(done_envs).wait()
+
+            if int(dump.size().wait()[0]) >= target_episodes:
+                stop_launching = True
+
+            if not stop_launching and steps < max_steps:
+                next_obs = [result[0] for result in step_results]
+                launch_inference_and_steps(next_obs, ready_env_ids)
+
+        if pending_steps:
+            for result in list(pending_steps.values()):
+                result.wait()
+            pending_steps.clear()
+
+        episodes = int(dump.size().wait()[0])
+        dump.close().wait()
+        envs.close().wait()
+        return {
+            "rollout/episodes": episodes,
+            "rollout/steps": int(steps),
+            "env/num_env_workers": int(num_envs),
+            "time/overlap_events": int(overlap_events),
         }
 
     def _select_first(self, paths: tuple[str, ...], default: Any) -> Any:

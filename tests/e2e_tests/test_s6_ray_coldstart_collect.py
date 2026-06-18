@@ -112,3 +112,53 @@ def test_ray_coldstart_synthetic_experiment_runs_through_train_entry(tmp_path) -
     assert (tmp_path / "reward" / "ray_shard_000.hdf5").is_file()
     assert (tmp_path / "hidden" / "ray_shard_000.hdf5").is_file()
     assert not ray.is_initialized()
+
+
+def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+
+    if ray.is_initialized():
+        ray.shutdown()
+
+    cfg = {
+        "env": {
+            "num_workers": 2,
+            "cfg": {
+                "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+                "kwargs": {"horizon": 3, "image_shape": (4, 4, 3), "embedding_dim": 4},
+            },
+        },
+        "rollout": {"target_episodes": 4, "max_steps": 12, "overlap": True},
+        "dump": {
+            "reward_dir": str(tmp_path / "r"),
+            "hidden_dir": str(tmp_path / "h"),
+            "shard_name": "s.hdf5",
+            "preprocess_config": {
+                "action_head_type": "oft_discrete_token",
+                "history": 1,
+                "include_state": False,
+                "hidden_key": "obs_embedding",
+            },
+            "data_attrs": {"task_suite_name": "synthetic", "env_name": "dc"},
+        },
+        "policy": {
+            "cfg": {
+                "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+                "kwargs": {"hidden_dim": 4, "action_dim": 7},
+            }
+        },
+        "inference": {
+            "cfg": {
+                "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+                "world_model": {
+                    "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+                    "kwargs": {"hidden_dim": 4, "action_dim": 7},
+                },
+                "device": "cpu",
+            }
+        },
+    }
+    history = ColdStartRayCollectRunner(cfg).run()
+    assert history["rollout/episodes"] == 4
+    assert history["time/overlap_events"] >= 1
+    assert not ray.is_initialized()
