@@ -140,3 +140,18 @@ class DumpCounterEnv(CounterEnv):
             "task_description": str(obs["task_description"]),
             "success": success,
         }
+
+
+class AlternatingSuccessDumpEnv(DumpCounterEnv):
+    """DumpCounterEnv with deterministic 50% success by local episode id."""
+
+    def step(self, action: Any) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+        obs, reward, terminated, truncated, info = super().step(action)
+        if bool(terminated or truncated):
+            success = (int(self.episode_id) % 2) == 0
+            info = dict(info)
+            info["success"] = success
+            reward = 1.0 if success else 0.0
+            terminated = bool(success)
+            truncated = not success
+        return obs, reward, terminated, truncated, info

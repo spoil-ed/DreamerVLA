@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import h5py
+import numpy as np
 import ray
 
 
@@ -162,3 +163,125 @@ def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
     assert history["rollout/episodes"] == 4
     assert history["time/overlap_events"] >= 1
     assert not ray.is_initialized()
+
+
+def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch) -> None:
+    import h5py
+    import torch
+
+    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners.offline_seed import seed_replay_from_offline
+    from dreamervla.runners.online_replay import OnlineReplay
+
+    if ray.is_initialized():
+        ray.shutdown()
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    cfg = {
+        "env": {
+            "num_workers": 2,
+            "cfg": {
+                "target": "dreamervla.workers.env._test_envs:AlternatingSuccessDumpEnv",
+                "kwargs": {"horizon": 4, "image_shape": (4, 4, 3), "embedding_dim": 4},
+            },
+        },
+        "rollout": {"target_episodes": 4, "max_steps": 16},
+        "dump": {
+            "reward_dir": str(reward_dir),
+            "hidden_dir": str(hidden_dir),
+            "shard_name": "fake_flow.hdf5",
+            "preprocess_config": {
+                "action_head_type": "oft_discrete_token",
+                "history": 1,
+                "include_state": False,
+                "hidden_key": "obs_embedding",
+            },
+            "data_attrs": {"task_suite_name": "fake", "env_name": "alternating_success"},
+        },
+        "policy": {
+            "cfg": {
+                "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+                "kwargs": {"hidden_dim": 4, "action_dim": 7},
+            }
+        },
+        "inference": {
+            "cfg": {
+                "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+                "world_model": {
+                    "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+                    "kwargs": {"hidden_dim": 4, "action_dim": 7},
+                },
+                "device": "cpu",
+            }
+        },
+    }
+    history = ColdStartRayCollectRunner(cfg).run()
+    assert history["rollout/episodes"] == 4
+    assert not ray.is_initialized()
+
+    reward_path = reward_dir / "fake_flow.hdf5"
+    with h5py.File(reward_path, "r") as handle:
+        demos = [handle["data"][key] for key in sorted(handle["data"])]
+        successes = [bool(np.asarray(demo["sparse_rewards"])[-1]) for demo in demos]
+    assert successes.count(True) == 2
+    assert successes.count(False) == 2
+    assert sum(successes) / len(successes) == 0.5
+
+    replay = OnlineReplay(capacity=10_000, sequence_length=3, task_ids=(0,), rank=0)
+    added = seed_replay_from_offline(
+        replay,
+        data_dir=reward_dir,
+        hidden_dir=hidden_dir,
+        default_task_id=0,
+    )
+    stats = replay.task_stats((0,))["0"]
+    assert added == 4
+    assert stats["episodes"] == 4
+    assert stats["successes"] == 2
+    assert stats["failures"] == 2
+    batch = replay.sample(4)
+    assert batch["obs_embedding"].shape == (4, 3, 4)
+    assert batch["current_actions"].shape[-1] == 7
+
+    import dreamervla.runners.online_cotrain_pipeline_runner as pipeline
+
+    calls = {"wm": 0, "cls": 0}
+
+    def fake_wm_step(**kwargs):
+        assert kwargs["batch"]["obs_embedding"].shape[-1] == 4
+        calls["wm"] += 1
+        return {"loss": 0.1}
+
+    def fake_cls_step(**kwargs):
+        assert kwargs["replay"] is replay
+        calls["cls"] += 1
+        return {"loss": 0.2, "acc": 0.5}
+
+    monkeypatch.setattr(pipeline, "world_model_pretrain_step", fake_wm_step)
+    monkeypatch.setattr(pipeline, "online_classifier_update_step", fake_cls_step)
+
+    runner = pipeline.OnlineCotrainPipelineRunner.__new__(pipeline.OnlineCotrainPipelineRunner)
+    runner.device = torch.device("cpu")
+    runner.global_step = 0
+    runner._build_wm_pretrain_batch = lambda sampled: {
+        "images": sampled["images"],
+        "obs_embedding": sampled["obs_embedding"],
+        "actions": sampled["actions"],
+    }
+    runner.world_model = torch.nn.Module()
+    runner.world_model_optimizer = object()
+    runner.policy = object()
+    runner.classifier = torch.nn.Module()
+    runner.classifier_optimizer = object()
+    runner._cls_window = 1
+
+    runner._offline_warmup_wm(replay, steps=1, batch_size=2, optim_cfg=None)
+    runner._offline_warmup_classifier(
+        replay,
+        steps=1,
+        batch_size=2,
+        early_neg_stride=1,
+        grad_clip=1.0,
+    )
+    assert calls == {"wm": 1, "cls": 1}
