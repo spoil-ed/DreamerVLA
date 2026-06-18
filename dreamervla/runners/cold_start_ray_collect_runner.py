@@ -8,7 +8,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.scheduler.cluster import Cluster
-from dreamervla.scheduler.placement import NodePlacementStrategy
+from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.workers.env.env_worker import EnvWorker
 from dreamervla.workers.inference.inference_worker import InferenceWorker
@@ -114,8 +114,32 @@ class ColdStartRayCollectRunner(BaseRunner):
             "num_images_in_input": collect_cfg["num_images_in_input"],
             "unnorm_key": collect_cfg["unnorm_key"],
         }
+        env_cfg = self._cfg_from(
+            "env.cfg",
+            {
+                "target": "dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv",
+                "use_from_config": True,
+            },
+        )
+        env_kwargs = dict(env_cfg.get("kwargs", {}))
+        env_kwargs.setdefault("task_suite_name", collect_cfg["task_suite_name"])
+        env_kwargs.setdefault("task_id", _first_task_id(collect_cfg.get("task_ids", 0)))
+        env_kwargs.setdefault("resolution", collect_cfg["resolution"])
+        env_kwargs.setdefault("full_record", True)
+        env_kwargs.setdefault("init_state_sampling", "sequential")
+        env_kwargs.setdefault("action_input", "raw")
+        env_kwargs.setdefault("pixel_rotate_180", False)
+        env_kwargs.setdefault("vla_rotate_180", True)
+        env_kwargs.setdefault("history_length", collect_cfg["expected_history"])
+        env_kwargs.setdefault("include_state", collect_cfg["expected_include_state"])
+        env_kwargs.setdefault("obs_hidden_source", collect_cfg["expected_obs_hidden_source"])
+        env_kwargs.setdefault("action_head_type", collect_cfg["expected_action_head_type"])
+        env_kwargs.setdefault("validate_canonical", False)
+        env_kwargs.setdefault("max_steps", collect_cfg["episode_horizon"])
+        env_cfg["kwargs"] = env_kwargs
         return {
             "collect": collect_cfg,
+            "env": env_cfg,
             "inference": {
                 "action_dim": collect_cfg["action_dim"],
                 "device": "cuda",
@@ -160,28 +184,8 @@ class ColdStartRayCollectRunner(BaseRunner):
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 
-        env_cfg = self._cfg_from(
-            "env.cfg",
-            {
-                "target": "dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv",
-                "use_from_config": True,
-            },
-        )
+        env_cfg = plan["env"]
         env_kwargs = dict(env_cfg.get("kwargs", {}))
-        env_kwargs.setdefault("task_suite_name", collect_cfg["task_suite_name"])
-        env_kwargs.setdefault("task_id", _first_task_id(collect_cfg.get("task_ids", 0)))
-        env_kwargs.setdefault("resolution", collect_cfg["resolution"])
-        env_kwargs.setdefault("full_record", True)
-        env_kwargs.setdefault("init_state_sampling", "sequential")
-        env_kwargs.setdefault("action_input", "raw")
-        env_kwargs.setdefault("pixel_rotate_180", False)
-        env_kwargs.setdefault("vla_rotate_180", True)
-        env_kwargs.setdefault("history_length", collect_cfg["expected_history"])
-        env_kwargs.setdefault("include_state", collect_cfg["expected_include_state"])
-        env_kwargs.setdefault("obs_hidden_source", collect_cfg["expected_obs_hidden_source"])
-        env_kwargs.setdefault("action_head_type", collect_cfg["expected_action_head_type"])
-        env_kwargs.setdefault("max_steps", collect_cfg["episode_horizon"])
-        env_cfg["kwargs"] = env_kwargs
         env_group = WorkerGroup(
             EnvWorker,
             env_cfg,
@@ -190,8 +194,9 @@ class ColdStartRayCollectRunner(BaseRunner):
             record_builder=_build_oft_dump_step,
         ).launch(cluster, NodePlacementStrategy(num_envs))
 
+        gpu_id = int(collect_cfg.get("gpu_id", 0))
         infer_group = WorkerGroup(RolloutInferenceWorker, plan["inference"], {}, num_envs=num_envs).launch(
-            cluster, NodePlacementStrategy(1)
+            cluster, PackedPlacementStrategy(gpu_id, gpu_id)
         )
         return {
             "dump": dump_group,

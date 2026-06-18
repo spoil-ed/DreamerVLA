@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import ray
@@ -79,8 +80,29 @@ class WorkerGroup:
             "RANK": str(placement.rank),
             "LOCAL_RANK": str(placement.local_rank),
             "WORLD_SIZE": str(placement.local_world_size),
-            "CUDA_VISIBLE_DEVICES": ",".join(placement.visible_accelerators),
+            "CUDA_VISIBLE_DEVICES": WorkerGroup._visible_accelerator_env(
+                placement.visible_accelerators
+            ),
         }
+
+    @staticmethod
+    def _visible_accelerator_env(visible_accelerators: list[str]) -> str:
+        if not visible_accelerators:
+            return ""
+        parent = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        parent_devices = [part.strip() for part in parent.split(",") if part.strip()]
+        if not parent_devices:
+            return ",".join(visible_accelerators)
+
+        mapped: list[str] = []
+        for accelerator in visible_accelerators:
+            if accelerator.isdigit():
+                idx = int(accelerator)
+                if idx < len(parent_devices):
+                    mapped.append(parent_devices[idx])
+                    continue
+            mapped.append(accelerator)
+        return ",".join(mapped)
 
 
 class WorkerGroupFunc:

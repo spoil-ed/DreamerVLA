@@ -82,6 +82,54 @@ def _resolve_task(task: str) -> TaskSpec:
         raise ValueError("task must be one of: goal, object, spatial") from exc
 
 
+def _oft_discrete_token_cotrain_smoke_overrides(task_spec: TaskSpec) -> list[str]:
+    ckpt = (
+        "${oc.env:DVLA_DATA_ROOT,data}/checkpoints/"
+        f"Openvla-oft-SFT-traj1/{task_spec.ckpt_name}"
+    )
+    return [
+        "training.debug=false",
+        "training.wm_warmup_steps=1",
+        "training.classifier_warmup_steps=1",
+        "training.classifier_batch_size=1",
+        "dataloader.batch_size=1",
+        "online_rollout.sequence_length=9",
+        "online_rollout.buffer_size=100",
+        "online_rollout.total_env_steps=0",
+        "world_model.obs_dim=229376",
+        "world_model.token_count=56",
+        "world_model.token_dim=4096",
+        "world_model.chunk_size=8",
+        "+world_model.time_horizon=8",
+        "world_model.model_dim=128",
+        "world_model.depth=1",
+        "world_model.heads=4",
+        "world_model.mlp_dim=256",
+        "world_model.num_hist=1",
+        "world_model.num_pred=1",
+        "world_model.chunk_rollout_chunks=1",
+        "policy._target_=dreamervla.models.actor.OpenVLADiscreteTokenActor",
+        "policy.action_hidden_dim=4096",
+        "policy.time_horizon=8",
+        "policy.head_type=oft_discrete_token",
+        "policy.adapter_hidden_dim=128",
+        f"+policy.init_lm_head_ckpt={ckpt}",
+        "classifier.latent_dim=4096",
+        "classifier.window=2",
+        "+classifier.head_type=linear",
+        "classifier.hidden_dim=128",
+        "classifier.num_layers=1",
+        "classifier.num_heads=4",
+        "classifier.chunk_size=8",
+        "+classifier.token_dim=4096",
+        "+classifier.token_pool=mean",
+        "+classifier.token_count=56",
+        "critic.hidden_dim=128",
+        "critic.critic_hidden_dim=128",
+        "algorithm.wmpo.chunk_size=8",
+    ]
+
+
 def build_pipeline_plan(
     *,
     mode: str = "ray",
@@ -142,14 +190,14 @@ def build_pipeline_plan(
         "-m",
         "dreamervla.train",
         "experiment=online_cotrain_pipeline_oft_action_hidden",
-        f"task={task_spec.hydra_task}",
+        f"+task={task_spec.hydra_task}",
         "logger=tensorboard",
-        "training.debug=true",
         f"offline_warmup.data_dir={reward_dir}",
         f"offline_warmup.hidden_dir={hidden_dir}",
         "offline_warmup.task_id=0",
         f"env.task_suite_name={task_spec.suite}",
         f"training.out_dir={cotrain_out}",
+        *_oft_discrete_token_cotrain_smoke_overrides(task_spec),
         *common_overrides,
         *cotrain_overrides,
     ]

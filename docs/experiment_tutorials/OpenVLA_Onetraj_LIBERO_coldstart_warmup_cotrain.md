@@ -52,13 +52,15 @@ collect:  experiment=collect_rollouts_onetraj
 cotrain:  experiment=online_cotrain_pipeline_oft_action_hidden
 ```
 
-Both scripts default to a small debug-sized run:
+Both scripts default to a small real-data warmup smoke:
 
 ```text
 task id:               0
 episodes:              4
 collect horizon:       64
-cotrain debug mode:    training.debug=true
+cotrain warmup:        1 WM step + 1 classifier step
+online env steps:      0
+sidecar shape:         OpenVLA-OFT action hidden, 56 * 4096 = 229376
 logger:                logger=tensorboard
 run root:              ${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<timestamp>
 ```
@@ -72,8 +74,9 @@ Supported task values:
 | `spatial` | `OpenVLA_Onetraj_ColdStart_LIBERO_Spatial` | `libero_spatial` | `Openvla-oft-SFT-libero-spatial-traj1` |
 
 Before launching, the scripts validate that the default checkpoint and LIBERO
-dataset assets are already present. They do not install packages, download
-checkpoints, or modify the environment.
+dataset assets are already present. They activate `${DVLA_CONDA_ENV:-dreamervla}`
+when `conda` is available, but they do not install packages or download
+checkpoints.
 
 Default assets checked:
 
@@ -133,7 +136,6 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
     --collect-override env.num_workers=4 \
     --collect-override rollout.target_episodes=3000 \
     --collect-override rollout.max_steps=900000 \
-    --cotrain-override training.debug=false \
     --cotrain-override training.wm_warmup_steps=2000 \
     --cotrain-override training.classifier_warmup_steps=2000 \
     --cotrain-override online_rollout.total_env_steps=200000
@@ -150,11 +152,17 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
     --collect-override collect.episodes_per_task=300 \
     --collect-override collect.episode_horizon=300 \
     --collect-override collect.envs_per_gpu=1 \
-    --cotrain-override training.debug=false \
     --cotrain-override training.wm_warmup_steps=2000 \
     --cotrain-override training.classifier_warmup_steps=2000 \
     --cotrain-override online_rollout.total_env_steps=200000
 ```
+
+The default launcher cotrain config is intentionally smoke-sized. It proves the
+handoff by warming the WM and classifier from the collected OFT sidecar, then
+entering the cotrain loop and saving `cotrain/ckpt/latest.ckpt`. Full online
+OFT cotrain still needs the online rollout encoder path to emit matching
+OpenVLA-OFT action-hidden latents; the current online loop is still RynnVLA
+encoder based.
 
 If you already have cold-start output under the same `run_root`, skip collection
 and run only warmup/cotrain:
@@ -210,13 +218,51 @@ Shared warmup + cotrain:
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
   experiment=online_cotrain_pipeline_oft_action_hidden logger=tensorboard \
-  task=OpenVLA_Onetraj_ColdStart_LIBERO \
-  training.debug=true \
+  +task=OpenVLA_Onetraj_ColdStart_LIBERO \
   offline_warmup.data_dir="${RW}" \
   offline_warmup.hidden_dir="${HID}" \
   offline_warmup.task_id=0 \
   env.task_suite_name=libero_goal \
-  training.out_dir="${RUN_ROOT}/cotrain"
+  training.out_dir="${RUN_ROOT}/cotrain" \
+  training.debug=false \
+  training.wm_warmup_steps=1 \
+  training.classifier_warmup_steps=1 \
+  training.classifier_batch_size=1 \
+  dataloader.batch_size=1 \
+  online_rollout.sequence_length=9 \
+  online_rollout.buffer_size=100 \
+  online_rollout.total_env_steps=0 \
+  world_model.obs_dim=229376 \
+  world_model.token_count=56 \
+  world_model.token_dim=4096 \
+  world_model.chunk_size=8 \
+  +world_model.time_horizon=8 \
+  world_model.model_dim=128 \
+  world_model.depth=1 \
+  world_model.heads=4 \
+  world_model.mlp_dim=256 \
+  world_model.num_hist=1 \
+  world_model.num_pred=1 \
+  world_model.chunk_rollout_chunks=1 \
+  policy._target_=dreamervla.models.actor.OpenVLADiscreteTokenActor \
+  policy.action_hidden_dim=4096 \
+  policy.time_horizon=8 \
+  policy.head_type=oft_discrete_token \
+  policy.adapter_hidden_dim=128 \
+  +policy.init_lm_head_ckpt="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+  classifier.latent_dim=4096 \
+  classifier.window=2 \
+  +classifier.head_type=linear \
+  classifier.hidden_dim=128 \
+  classifier.num_layers=1 \
+  classifier.num_heads=4 \
+  classifier.chunk_size=8 \
+  +classifier.token_dim=4096 \
+  +classifier.token_pool=mean \
+  +classifier.token_count=56 \
+  critic.hidden_dim=128 \
+  critic.critic_hidden_dim=128 \
+  algorithm.wmpo.chunk_size=8
 ```
 
 ## Fake Data-Flow Proof
@@ -291,11 +337,12 @@ For real OFT action-query hidden, the sidecar shape is `(T, 229376)` with
 
 ## Current Boundary
 
-The fake proof validates the data flow, not full real-OFT numeric cotrain. For
-full real OFT cotrain, the cotrain config must use a world model, policy,
-classifier, and encoder route whose latent dimensions match the collected OFT
-sidecar. The e2e scripts wire the directories correctly; model-shape
-compatibility remains the operator's config responsibility.
+The e2e launchers prove the real cold-start-to-warmup handoff with OFT
+action-hidden sidecars. They do not yet prove long-horizon online OFT cotrain,
+because the online rollout path still uses the RynnVLA encoder to create live
+latents. Keep `online_rollout.total_env_steps=0` for the default OFT smoke
+unless the online encoder path has been updated to emit the same OpenVLA-OFT
+latent shape as the cold-start sidecars.
 
 ## Troubleshooting
 

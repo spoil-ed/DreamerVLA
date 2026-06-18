@@ -78,9 +78,10 @@ class DreamerVLAOnlineTrainEnvConfig:
     prompt_style: Literal["vla_policy"] = "vla_policy"
     include_state: bool = True
     obs_hidden_source: Literal["action_query", "input_token_embedding"] = "action_query"
-    action_head_type: Literal["legacy"] = "legacy"
+    action_head_type: Literal["legacy", "oft_discrete_token", "oft_l1_regression"] = "legacy"
     target_token_id: int = 10004
     full_record: bool = False
+    validate_canonical: bool = True
 
 
 def _coerce_task_ids(task_ids: Sequence[int] | str | None) -> tuple[int, ...] | None:
@@ -122,7 +123,8 @@ class DreamerVLAOnlineTrainEnv:
         if cfg.task_ids is not None and not isinstance(cfg.task_ids, tuple):
             cfg = replace(cfg, task_ids=_coerce_task_ids(cfg.task_ids))
         self.cfg = cfg
-        self._validate_canonical_config()
+        if bool(self.cfg.validate_canonical):
+            self._validate_canonical_config()
 
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         if self.cfg.task_suite_name not in benchmark_dict:

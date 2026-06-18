@@ -9,9 +9,11 @@ one-traj VLA 2 images when it expects 1 -> ~0% rollouts.
 
 from __future__ import annotations
 
+import pytest
 from omegaconf import OmegaConf
 
 from dreamervla.runners.collect_rollouts_runner import CollectRolloutsRunner
+from dreamervla.runners.oft_collect_common import select_vla_image_keys
 
 
 def _make_cfg(num_images=None):
@@ -75,3 +77,25 @@ def test_num_images_reads_central_value_verbatim():
     # proves the value is READ from the central config (not hardcoded to 1):
     # a 2-view+wrist VLA can set 2, independent of len(image_keys).
     assert _build(_make_cfg(num_images=2))["num_images_in_input"] == 2
+
+
+def test_single_image_policy_uses_single_rollout_camera():
+    cc = _build(_make_cfg(num_images=1))
+
+    assert cc["image_keys"] == ["agentview_rgb"]
+
+
+def test_two_image_policy_uses_two_rollout_cameras():
+    cc = _build(_make_cfg(num_images=2))
+
+    assert cc["image_keys"] == ["agentview_rgb", "eye_in_hand_rgb"]
+
+
+def test_image_selection_rejects_non_divisible_history():
+    with pytest.raises(ValueError, match="num_images_in_input"):
+        select_vla_image_keys(["agentview_rgb", "eye_in_hand_rgb"], history=2, num_images_in_input=1)
+
+
+def test_image_selection_rejects_unavailable_views():
+    with pytest.raises(ValueError, match="task.image_keys"):
+        select_vla_image_keys(["agentview_rgb"], history=1, num_images_in_input=2)

@@ -135,3 +135,38 @@ def resolve_num_images_in_input(collect_cfg: Any) -> int:
     """Resolve OFT deployment image count from the central collect config."""
     val = OmegaConf.select(collect_cfg, "num_images_in_input", default=None)
     return int(val) if val is not None else 1
+
+
+def select_vla_image_keys(
+    image_keys: list[str],
+    *,
+    history: int,
+    num_images_in_input: int,
+) -> list[str]:
+    """Select camera keys that produce the requested OFT image count.
+
+    ``task.image_keys`` names the camera views stored in rollout dumps. The OFT
+    policy input count is a separate deployment knob: the one-trajectory
+    discrete checkpoints use one current-frame camera even though dumps still
+    store both LIBERO views. The extractor stacks ``history * len(image_keys)``
+    images, so select the prefix of camera keys that matches the policy input
+    count when possible.
+    """
+    keys = list(image_keys)
+    if not keys:
+        raise ValueError("task.image_keys must contain at least one camera key")
+    hist = max(1, int(history))
+    n_images = max(1, int(num_images_in_input))
+    if n_images % hist != 0:
+        raise ValueError(
+            "num_images_in_input must be divisible by expected_history: "
+            f"{n_images} % {hist} != 0"
+        )
+    n_views = max(1, n_images // hist)
+    if n_views > len(keys):
+        raise ValueError(
+            "task.image_keys does not contain enough camera views for "
+            f"num_images_in_input={n_images} and expected_history={hist}: "
+            f"need {n_views}, got {len(keys)}"
+        )
+    return keys[: min(len(keys), n_views)]

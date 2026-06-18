@@ -56,6 +56,12 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
     assert plan["inference"]["decoder"]["target"].endswith("oft_rollout:OFTRolloutBundle")
     assert plan["inference"]["decoder"]["kwargs"]["history"] == 1
+    assert plan["inference"]["decoder"]["kwargs"]["image_keys"] == ["agentview_rgb"]
+    env_kwargs = plan["env"]["kwargs"]
+    assert env_kwargs["history_length"] == 1
+    assert env_kwargs["include_state"] is False
+    assert env_kwargs["action_head_type"] == "oft_discrete_token"
+    assert env_kwargs["validate_canonical"] is False
     assert plan["dump"]["preprocess_config"]["hidden_key"] == "obs_embedding"
     assert plan["dump"]["preprocess_config"]["action_head_type"] == "oft_discrete_token"
     assert plan["dump"]["preprocess_config"]["num_images_in_input"] == 1

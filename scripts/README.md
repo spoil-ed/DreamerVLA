@@ -148,7 +148,9 @@ generated rollouts, then point `offline_warmup.data_dir` and
 `offline_warmup.hidden_dir` at the collected output for cotrain warmup. The Ray
 variant uses `experiment=collect_rollouts_ray`; the no-Ray variant uses
 `experiment=collect_rollouts_onetraj`. Both accept
-`--task goal|object|spatial`.
+`--task goal|object|spatial`. By default they run a small real-data OFT
+action-hidden warmup smoke (`online_rollout.total_env_steps=0`); pass
+`--cotrain-override` values to extend into longer training.
 
     bash scripts/e2e_coldstart_warmup_cotrain_ray.sh --dry-run
     bash scripts/e2e_coldstart_warmup_cotrain_noray.sh --task spatial --dry-run

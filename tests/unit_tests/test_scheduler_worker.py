@@ -55,3 +55,32 @@ def test_worker_create_group_returns_unlaunched_group() -> None:
     assert group.worker_cls is Worker
     assert group.args == ("arg",)
     assert group.kwargs == {"named": True}
+
+
+def test_worker_group_maps_local_gpu_index_through_parent_visible_devices(monkeypatch) -> None:
+    from dreamervla.scheduler.placement import Placement
+    from dreamervla.scheduler.worker_group import WorkerGroup
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,4")
+
+    gpu_env = WorkerGroup._env_vars(
+        Placement(
+            rank=0,
+            local_rank=0,
+            local_world_size=1,
+            visible_accelerators=["0"],
+            device="cuda:0",
+        )
+    )
+    cpu_env = WorkerGroup._env_vars(
+        Placement(
+            rank=0,
+            local_rank=0,
+            local_world_size=1,
+            visible_accelerators=[],
+            device="cpu",
+        )
+    )
+
+    assert gpu_env["CUDA_VISIBLE_DEVICES"] == "2"
+    assert cpu_env["CUDA_VISIBLE_DEVICES"] == ""

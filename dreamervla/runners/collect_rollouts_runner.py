@@ -10,7 +10,10 @@ from dreamervla.runners.collect_parallel_rollouts import (
     _get_dist_info,
     collect_rollouts,
 )
-from dreamervla.runners.oft_collect_common import resolve_num_images_in_input
+from dreamervla.runners.oft_collect_common import (
+    resolve_num_images_in_input,
+    select_vla_image_keys,
+)
 
 
 class CollectRolloutsRunner(BaseRunner):
@@ -35,8 +38,13 @@ class CollectRolloutsRunner(BaseRunner):
     def _build_collect_cfg(self) -> dict[str, Any]:
         cfg = self.cfg
         oft = cfg.task.openvla_oft
-        image_keys = list(cfg.task.image_keys)
         expected_history = int(oft.expected_history)
+        num_images_in_input = resolve_num_images_in_input(cfg.collect)
+        image_keys = select_vla_image_keys(
+            list(cfg.task.image_keys),
+            history=expected_history,
+            num_images_in_input=num_images_in_input,
+        )
         task_ids = cfg.collect.task_ids
         if OmegaConf.is_config(task_ids):
             task_ids = OmegaConf.to_container(task_ids, resolve=True)
@@ -53,7 +61,7 @@ class CollectRolloutsRunner(BaseRunner):
             "hidden_dir": str(oft.action_hidden_dir),
             "image_keys": image_keys,
             "expected_history": expected_history,
-            "num_images_in_input": resolve_num_images_in_input(cfg.collect),
+            "num_images_in_input": num_images_in_input,
             "expected_action_head_type": str(oft.expected_action_head_type),
             "expected_include_state": bool(oft.expected_include_state),
             "expected_obs_hidden_source": str(oft.expected_obs_hidden_source),
