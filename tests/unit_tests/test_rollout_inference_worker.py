@@ -49,3 +49,15 @@ def test_batched_equals_sequential_for_independent_envs() -> None:
 
     assert float(batched["actions"][0][0]) == float(a["actions"][0][0])
     assert float(batched["obs_embedding"][1][0]) == float(b["obs_embedding"][0][0])
+
+
+def test_forward_batch_applies_gripper_postprocess() -> None:
+    # StubRolloutBundle returns action_chunk[0] = [seed]*7, so the gripper dim is `seed`.
+    # The ray path must apply process_action (g -> sign(2g-1)*-1) here, or LIBERO grasping
+    # (hence success) fails — the exact bug this guards. Non-gripper dims stay raw.
+    w = RolloutInferenceWorker(_cfg(), {}, num_envs=2)
+    w.init()
+    out = w.forward_batch([{"seed": 20}, {"seed": 0}], [0, 1])
+    assert float(out["actions"][0][-1]) == -1.0  # g=20 -> sign(39)*-1 = -1
+    assert float(out["actions"][1][-1]) == 1.0   # g=0  -> sign(-1)*-1 = +1
+    assert float(out["actions"][0][0]) == 20.0   # non-gripper dim untouched
