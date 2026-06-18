@@ -7,8 +7,24 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
+
+
+def process_action(action: Any) -> np.ndarray:
+    """Gripper post-process for OpenVLA-OFT LIBERO actions (shared by eval + collectors).
+
+    The OFT model gripper output is in ``[0, 1]``; map to ``[-1, 1]`` (``2g-1``),
+    binarize with ``sign``, then invert (``*-1``) for LIBERO (-1=open, +1=close).
+    This MUST be applied to every action before ``env.step`` — without it the
+    gripper is wrong and grasping (hence task success) fails. Matches the canonical
+    OpenVLA-OFT / RLinf eval (``normalize_gripper_action(binarize=True)`` +
+    ``invert_gripper_action``).
+    """
+    a = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+    a[-1] = np.sign(2.0 * a[-1] - 1.0) * -1.0
+    return a
 
 
 def resolve_model_path(model_path: str) -> str:

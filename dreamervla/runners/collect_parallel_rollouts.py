@@ -47,6 +47,7 @@ from dreamervla.runners.oft_collect_common import (
     assert_policy_mode_matches,
     load_policy,
     make_preprocess_config,
+    process_action,
     resolve_model_path,
 )
 
@@ -176,8 +177,11 @@ def _run_episode(
     success = False
     done = False
 
-    # Execute first action (from the t=0 inference)
-    action = action_chunk0[0]
+    # Execute first action (from the t=0 inference). Gripper post-process
+    # (process_action) is REQUIRED before env.step or grasping/success fails; the
+    # post-processed action is also what gets recorded for the WM (env returns no
+    # wm_action), matching the LIBERO-scale convention of the offline demos.
+    action = process_action(action_chunk0[0])
     obs, reward, terminated, truncated, info = env.step(action)
     done = bool(terminated or truncated)
     success = bool(info.get("success", terminated))
@@ -214,7 +218,8 @@ def _run_episode(
             "state": _proprio_from_rec(rec),
         }
         action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
-        action = action_chunk[0]  # receding-horizon closed-loop: execute ONE action
+        # receding-horizon closed-loop: execute ONE action, with gripper post-process
+        action = process_action(action_chunk[0])
 
         obs, reward, terminated, truncated, info = env.step(action)
         done = bool(terminated or truncated)

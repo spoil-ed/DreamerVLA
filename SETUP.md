@@ -59,7 +59,50 @@ Install step map:
 | `30_python_deps.sh` | DreamerVLA editable install and curated pip requirements |
 | `40_third_party.sh` | LIBERO, robosuite-family packages, OpenSora, OpenVLA-OFT helpers |
 | `50_special_packages.sh` | flash-attn, egl_probe, optional apex / TensorNVMe |
-| `60_verify.sh` | import and CUDA visibility checks |
+| `60_verify.sh` | import and CUDA visibility checks + OpenVLA-OFT transformers-fork assertion |
+
+### OpenVLA-OFT requires the custom transformers fork
+
+OpenVLA-OFT runs on **moojink's transformers fork**
+(`git+https://github.com/moojink/transformers-openvla-oft.git`), which patches the
+Llama attention to be **bidirectional** (`is_causal=False`) for OFT's parallel
+action-chunk decoding. **Vanilla** `transformers` produces **0% / garbage OFT
+actions** — and it is silent, because the fork and vanilla **both report
+`transformers.__version__ == "4.40.1"`**, so every version check passes.
+
+`30_python_deps.sh` deliberately does **not** pin a `transformers` version;
+`40_third_party.sh` installs the fork as the single authoritative `transformers`
+with `--force-reinstall` (overriding anything `peft`/`diffusers` pulled in
+transitively), and `60_verify.sh` **fails the install** if the active
+`transformers` is not the fork. Verify manually with:
+
+```bash
+python -c "import transformers,os; p=os.path.dirname(transformers.__file__)+'/models/llama/modeling_llama.py'; \
+print(transformers.__version__, sum(1 for _ in open(p)), 'lines', '-> FORK' if 'is_causal=False' in open(p).read() else '-> VANILLA(0% OFT)')"
+# fork: 4.40.1 / 1620 lines / FORK   ;  vanilla: 4.40.1 / 1566 lines / VANILLA(0% OFT)
+```
+
+**Offline / air-gapped machines** (the GitHub fetch above needs internet) — use
+either:
+
+```bash
+# (a) stage the fork source/wheel locally, then point the installer at it:
+TRANSFORMERS_OFT_FORK_SRC=/path/to/transformers-openvla-oft \
+  bash scripts/install_env.sh only=[40_third_party]
+
+# (b) the fork is pure Python (no compiled ext) — copy its package dir + dist-info
+#     straight into the env's site-packages (e.g. extracted from the rlinf docker
+#     image at /opt/venv/openvla-oft/lib/python3.11/site-packages):
+DST=$(python -c "import site; print(site.getsitepackages()[0])")
+mv "$DST/transformers" "$DST/transformers.vanilla.bak"
+cp -r /path/to/fork/transformers           "$DST/transformers"
+cp -r /path/to/fork/transformers-4.40.1.dist-info "$DST/transformers-4.40.1.dist-info"
+```
+
+> Note: the fork makes **all** Llama attention bidirectional, which is correct for
+> OFT but wrong for any standard causal-LM use in the same env. This project is
+> OFT/world-model centric (the WM is not a Llama), so the fork is the intended
+> env-wide transformers.
 
 ## 2. Download Assets
 

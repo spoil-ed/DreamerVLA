@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from dreamervla.runners.oft_collect_common import process_action
 from dreamervla.scheduler.worker import Worker
 
 
@@ -61,7 +62,9 @@ class RolloutInferenceWorker(Worker):
         actions: list[np.ndarray] = []
         hidden: list[np.ndarray] = []
         for action_chunk, flat_hidden in results:
-            action = np.asarray(action_chunk[0], dtype=np.float32).reshape(-1)[: self._action_dim]
+            # Gripper post-process here (single point for the ray path); the EnvWorker
+            # must NOT re-apply it. Without it grasping/success fails.
+            action = process_action(action_chunk[0])[: self._action_dim]
             obs_embedding = (
                 flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
             )

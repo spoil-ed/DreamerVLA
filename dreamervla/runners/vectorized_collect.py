@@ -26,6 +26,8 @@ from typing import Any
 
 import numpy as np
 
+from dreamervla.runners.oft_collect_common import process_action
+
 # Per-step proprio fed to the extractor: ee_pos(3) + ee_ori/axisangle(3) + gripper(2) = 8.
 _PROPRIO_KEYS = ("ee_pos", "ee_ori", "gripper_states")
 # obs sub-group written to the reward-dir HDF5.
@@ -159,7 +161,9 @@ def collect_vectorized(
             for k in active_ids
         ]
         outs = infer_fn(preps)  # aligned with active_ids
-        actions = [outs[i][0][0] for i in range(len(active_ids))]
+        # receding-horizon: execute chunk[0] per slot, with gripper post-process
+        # (required before env.step; also what gets recorded as wm_action below).
+        actions = [process_action(outs[i][0][0]) for i in range(len(active_ids))]
         step_results = vec_env.step(actions, env_ids=active_ids)
 
         finished: list[int] = []

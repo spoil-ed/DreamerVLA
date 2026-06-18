@@ -19,8 +19,11 @@ echo "[install:30_python_deps] target conda env=${CONDA_ENV_NAME}"
 echo "[install:30_python_deps] requirements=${DVLA_ROOT}/requirements.txt"
 uv pip install -r "${DVLA_ROOT}/requirements.txt"
 
-echo "[install:30_python_deps] transformers=4.43.0"
-uv pip install transformers==4.43.0
+# transformers is intentionally NOT pinned here. OpenVLA-OFT needs moojink's
+# transformers fork (bidirectional Llama attention; vanilla -> 0% garbage OFT
+# actions), which 40_third_party.sh installs with --force-reinstall as the single
+# authoritative transformers. Any transformers pulled transitively by the
+# requirements above (peft/diffusers/tokenizers==0.19.1) is overridden there.
 
 if [[ "${INSTALL_DEV_TOOLS}" == "1" ]]; then
   echo "[install:30_python_deps] dev_dependency_group=dev"
