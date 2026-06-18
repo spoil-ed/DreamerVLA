@@ -4,8 +4,8 @@
 assets and may be anywhere with enough disk space:
 
 ```bash
-export DVLA_ROOT=/path/to/DreamerVLA
-export DVLA_DATA_ROOT=/path/to/dvla_data
+export DVLA_ROOT="$(pwd -P)"
+export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
 cd "${DVLA_ROOT}"
 ```
 

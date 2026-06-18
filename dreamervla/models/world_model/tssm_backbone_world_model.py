@@ -12,11 +12,11 @@ from dreamervla.models.world_model.dreamerv3_torch import (
     DreamerV3PixelDecoder,
     FullHiddenSequenceDecoder,
     MLPHead,
+    _BackboneObsEncoder,
     _make_reward_head,
     _module_device,
     _reward_loss,
     _reward_pred,
-    _BackboneObsEncoder,
 )
 from dreamervla.models.world_model.tssm_torch import (
     TSSMDynamic,

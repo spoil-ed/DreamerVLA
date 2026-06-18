@@ -151,7 +151,7 @@ class OFTRolloutHiddenExtractor:
             key: deque(maxlen=self._history) for key in self._image_keys
         }
         # Lazily built on first step(); reused so the model handles / head mode are resolved once.
-        self._decoder: "OFTBatchedDecoder | None" = None
+        self._decoder: OFTBatchedDecoder | None = None
 
     def reset(self) -> None:
         """Clear the history buffer.  Call at the start of every episode."""
@@ -311,7 +311,7 @@ class OFTRolloutHiddenExtractor:
 # and call the internals directly with a batched token-append and a (B, chunk, dim)
 # reshape.  Verified bit-exact vs ``OFTRolloutHiddenExtractor.step`` at B=1 and
 # action-partner-invariant (no cross-batch leakage) by
-# scripts/smoke_oft_batched_forward.py.
+# the rollout-hidden extractor tests.
 
 
 def _left_pad_batch(
@@ -336,7 +336,9 @@ def _left_pad_batch(
     out_mask = torch.zeros(
         (batch, max_len), dtype=attention_mask_list[0].dtype, device=ref.device
     )
-    for i, (ids, msk, length) in enumerate(zip(input_ids_list, attention_mask_list, lengths)):
+    for i, (ids, msk, length) in enumerate(
+        zip(input_ids_list, attention_mask_list, lengths, strict=True)
+    ):
         offset = max_len - length
         out_ids[i, offset:] = ids.reshape(-1)
         out_mask[i, offset:] = msk.reshape(-1)

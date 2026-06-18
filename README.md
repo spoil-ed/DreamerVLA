@@ -16,7 +16,7 @@ LIBERO HDF5
 
 ```bash
 git clone <repo> && cd DreamerVLA
-export DVLA_DATA_ROOT=/path/to/dvla_data
+export DVLA_DATA_ROOT=data
 bash scripts/install_env.sh
 conda activate dreamervla
 bash scripts/download_assets.sh
@@ -71,7 +71,7 @@ docs/               setup and data-layout reference
 Common overrides:
 
 ```bash
-DVLA_DATA_ROOT=/path/to/dvla_data
+DVLA_DATA_ROOT=data
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 run_tag=my_run
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8

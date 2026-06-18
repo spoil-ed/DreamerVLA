@@ -9,7 +9,7 @@ import pickle
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pprint import pprint
 from typing import Any
 
@@ -163,7 +163,7 @@ class BaseRunner(ABC):
         distributed = getattr(self, "distributed", None)
         return {
             "schema_version": 1,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "created_at_utc": datetime.now(UTC).isoformat(),
             "runner": {
                 "class": type(self).__name__,
                 "name": str(self.runner_name),

@@ -196,7 +196,8 @@ def test_states_from_sim_get_state_flatten() -> None:
     The others (ee_pos, ee_ori, gripper, joint) pass with atol~1e-3 due to
     physics settle after set_init_state — that is expected.
     """
-    from libero.libero import benchmark as libero_benchmark, get_libero_path
+    from libero.libero import benchmark as libero_benchmark
+    from libero.libero import get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
     demo = _load_demo()
@@ -238,7 +239,8 @@ def test_proprio_formulas_from_live_env() -> None:
     correct (the structural tests above verify them atol=0 against the demo's
     own stored obs fields).
     """
-    from libero.libero import benchmark as libero_benchmark, get_libero_path
+    from libero.libero import benchmark as libero_benchmark
+    from libero.libero import get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
     demo = _load_demo()

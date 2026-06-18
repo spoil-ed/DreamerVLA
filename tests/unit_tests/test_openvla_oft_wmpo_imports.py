@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WMPO_OPENVLA_OFT = PROJECT_ROOT.parent / "WMPO" / "dependencies" / "openvla-oft"
+VENDORED_OPENVLA_OFT = PROJECT_ROOT / "third_party" / "openvla-oft"
 
 
 class _TinyTokenizer:
@@ -22,22 +22,22 @@ class _TinyTokenizer:
         return [self.decode(row) for row in token_ids]
 
 
-def test_openvla_oft_path_prefers_wmpo_tree() -> None:
+def test_openvla_oft_path_stays_inside_dreamervla_tree() -> None:
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     selected = ensure_openvla_oft_on_path()
 
-    assert selected == WMPO_OPENVLA_OFT
+    assert selected == VENDORED_OPENVLA_OFT
     assert (selected / "prismatic").is_dir()
 
 
-def test_official_openvla_oft_default_root_lives_under_wmpo() -> None:
+def test_official_openvla_oft_default_root_lives_under_dreamervla() -> None:
     from dreamervla.diagnostics.openvla_oft_obs_action_policy import default_openvla_oft_root
 
-    assert default_openvla_oft_root() == WMPO_OPENVLA_OFT
+    assert default_openvla_oft_root() == VENDORED_OPENVLA_OFT
 
 
-def test_prismatic_imports_resolve_to_wmpo_tree() -> None:
+def test_prismatic_imports_resolve_to_dreamervla_tree() -> None:
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
@@ -57,7 +57,7 @@ def test_prismatic_imports_resolve_to_wmpo_tree() -> None:
 
     for module_name in modules:
         module = importlib.import_module(module_name)
-        assert Path(module.__file__).resolve().is_relative_to(WMPO_OPENVLA_OFT)
+        assert Path(module.__file__).resolve().is_relative_to(VENDORED_OPENVLA_OFT)
 
 
 def test_action_tokenizer_action_head_and_collator_interfaces() -> None:

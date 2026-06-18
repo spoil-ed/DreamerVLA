@@ -40,7 +40,7 @@ regular RynnVLA pipeline.
 ## 0. System
 
 ```bash
-cd /path/to/DreamerVLA
+cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
 
@@ -96,7 +96,7 @@ and filters each split to one selected `task/trj_*` trajectory.
 Use the produced HF directory for RynnVLA hidden extraction and eval:
 
 ```bash
-VLA_CKPT=/abs/path/to/rynnvla_run/checkpoints/latest_hf \
+VLA_CKPT="${DVLA_DATA_ROOT}/outputs/vla/<run>/checkpoints/latest_hf" \
 bash scripts/preprocess/prepare_libero_data.sh \
   task=RynnVLA_LIBERO \
   libero_suite=libero_goal \
@@ -236,8 +236,8 @@ bash scripts/train_wm.sh \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
   task.openvla_oft.expected_include_state=false \
   task.openvla_oft.expected_history=1 \
-  task.openvla_oft.failure_hdf5_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures \
-  task.openvla_oft.failure_action_hidden_dir=/abs/path/to/OpenVLA_Onetraj_LIBERO_libero_goal_failures_oft_discrete_action_hidden
+  task.openvla_oft.failure_hdf5_dir="${DVLA_DATA_ROOT}/collected_rollouts/OpenVLA_Onetraj_LIBERO_libero_goal_failures/reward" \
+  task.openvla_oft.failure_action_hidden_dir="${DVLA_DATA_ROOT}/collected_rollouts/OpenVLA_Onetraj_LIBERO_libero_goal_failures/hidden"
 ```
 
 ## 5. DreamerVLA
@@ -248,8 +248,8 @@ bash scripts/train_dreamervla.sh \
   task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 \
   -- \
-  init.world_model_state_ckpt=/abs/path/to/oft_discrete_token_world_model.ckpt \
-  init.classifier_state_ckpt=/abs/path/to/openvla_action_hidden_classifier.ckpt
+  init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
+  init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
 ## 6. Eval
@@ -257,7 +257,7 @@ bash scripts/train_dreamervla.sh \
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
-  eval.ckpt_path=/abs/path/to/openvla_onetraj_dreamervla.ckpt \
+  eval.ckpt_path="${DVLA_DATA_ROOT}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
   eval.dreamer_policy_source=ckpt \
   eval.dreamer_actor_input_source=rssm \
   eval.task_suite_name=libero_goal \

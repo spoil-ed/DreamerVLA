@@ -87,7 +87,7 @@ def main(args):
     )
     if resume and os.path.isfile(metainfo_json_out_path):
         try:
-            with open(metainfo_json_out_path, "r") as f:
+            with open(metainfo_json_out_path) as f:
                 metainfo_json_dict = json.load(f)
             if not isinstance(metainfo_json_dict, dict):
                 raise ValueError(

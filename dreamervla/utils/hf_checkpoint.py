@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 
-
 HF_WEIGHT_NAMES = (
     "model.safetensors",
     "pytorch_model.bin",

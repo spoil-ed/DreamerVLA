@@ -185,7 +185,7 @@ def load_dataset_stats(cfg: DictConfig) -> None:
     norm_stats = cfg.get("norm_stats", {})
     dataset_statistics_path = os.path.join(cfg.model_path, "dataset_statistics.json")
     if os.path.isfile(dataset_statistics_path):
-        with open(dataset_statistics_path, "r") as f:
+        with open(dataset_statistics_path) as f:
             new_norm_stats = json.load(f)
             norm_stats.update(new_norm_stats)
     if norm_stats == {}:

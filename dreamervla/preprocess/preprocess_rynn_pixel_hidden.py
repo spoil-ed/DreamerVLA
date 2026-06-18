@@ -1025,14 +1025,6 @@ def main() -> None:
         overwrite=bool(args.overwrite),
     )
     assigned = [task.source_path for task in task_plan.assigned]
-    assigned_stats = {
-        task.source_path.name: {
-            "file": task.source_path.name,
-            "demos": task.demos,
-            "frames": task.frames,
-        }
-        for task in task_plan.assigned
-    }
     progress_dir = out_dir / ".progress"
     total_demos = 0
     total_frames = 0
@@ -1134,7 +1126,6 @@ def main() -> None:
     encoder = _make_encoder(args, device=device)
     for source_path in assigned:
         output_path = out_dir / source_path.name
-        source_stat = assigned_stats[source_path.name]
         if output_path.exists():
             if args.overwrite:
                 output_path.unlink()

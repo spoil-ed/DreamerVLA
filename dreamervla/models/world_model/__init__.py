@@ -4,6 +4,8 @@ from .chameleon_latent_action import (
     ChameleonLatentActionWorldModel,
     ChameleonLatentFlowWorldModel,
 )
+from .dino_wm import DinoWMWorldModel
+from .dino_wm_chunk import ChunkAwareDinoWMWorldModel
 from .dreamer_v3_pixel_backbone_world_model import (
     DreamerV3PixelBackboneWorldModel,
 )
@@ -11,8 +13,6 @@ from .dreamer_v3_pixel_world_model import DreamerV3PixelWorldModel
 from .dreamer_v3_token_from_pixel_world_model import DreamerV3TokenFromPixelWorldModel
 from .dreamer_v3_token_world_model import DreamerV3TokenWorldModel
 from .reward_heads import BinaryRewardHead, SymexpTwoHotHead
-from .dino_wm import DinoWMWorldModel
-from .dino_wm_chunk import ChunkAwareDinoWMWorldModel
 from .tssm_backbone_world_model import TSSMBackboneWorldModel
 from .tssm_token_backbone_world_model import TSSMTokenBackboneWorldModel
 

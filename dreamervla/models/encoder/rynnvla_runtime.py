@@ -11,7 +11,9 @@ import torch
 from PIL import Image
 from transformers import AutoTokenizer
 
-from dreamervla.models.embodiment.chameleon_model.chameleon_vae_ori.image_tokenizer import ImageTokenizer
+from dreamervla.models.embodiment.chameleon_model.chameleon_vae_ori.image_tokenizer import (
+    ImageTokenizer,
+)
 from dreamervla.models.embodiment.chameleon_model.chameleon_vae_ori.vocab import (
     VocabInfo,
     VocabTranslation,

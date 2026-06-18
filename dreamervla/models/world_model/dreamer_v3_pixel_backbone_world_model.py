@@ -20,12 +20,12 @@ from dreamervla.models.world_model.dreamerv3_torch import (
     Pi0StyleHiddenDecoder,
     Pi0TimeBroadcastDecoder,
     ResMLPHead,
+    _BackboneObsEncoder,
     _make_reward_head,
     _module_device,
     _module_dtype,
     _reward_loss,
     _reward_pred,
-    _BackboneObsEncoder,
 )
 
 

@@ -5,7 +5,6 @@ from pathlib import Path
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 
-
 EXPERIMENT_MODULES = {
     "vla_rynnvla_action_head": ("VLA", "rynnvla_action_head"),
     "vla_sft_one_trajectory": ("VLA", "rynnvla_one_trajectory"),
@@ -96,6 +95,8 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "OnlineCotrainRunner",
         "CollectRolloutsRunner",
         "OnlineCotrainPipelineRunner",
+        "OnlineCotrainRayRunner",
+        "ColdStartRayCollectRunner",
     }
 
     assert expected == set(runners.PUBLIC_RUNNERS)

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -585,11 +585,11 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         pixel_values: torch.FloatTensor = None,
         proprio: torch.FloatTensor = None,
         output_hidden_states: bool = False,
-        forward_inputs: Optional[dict[str, torch.Tensor]] = None,
+        forward_inputs: dict[str, torch.Tensor] | None = None,
         compute_logprobs: bool = False,
         compute_entropy: bool = False,
         compute_values: bool = False,
-        use_cache: Optional[bool] = None,
+        use_cache: bool | None = None,
         **kwargs,
     ):
         if forward_inputs is not None:

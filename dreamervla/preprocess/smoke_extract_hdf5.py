@@ -9,8 +9,8 @@ resolution via PIL.  No robosuite / MuJoCo dependency required.
 
 Usage:
     python -m dreamervla.preprocess.smoke_extract_hdf5 \
-        --hdf5 /path/to/task_demo.hdf5 \
-        --save_dir /path/to/output \
+        --hdf5 data/datasets/libero/libero_goal/<task_demo>.hdf5 \
+        --save_dir data/diagnostics/hdf5_smoke \
         --max_demos 2 \
         --resolution 256
 """

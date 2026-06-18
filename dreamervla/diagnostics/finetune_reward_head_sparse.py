@@ -32,8 +32,8 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
 from dreamervla.dataset.balanced_terminal_dataset import (
-    BalancedTerminalSampler,
     BalancedTerminalDataset,
+    BalancedTerminalSampler,
 )
 from dreamervla.models.world_model.dreamerv3_torch import BinaryRewardHead
 from dreamervla.runners.online_utils import (

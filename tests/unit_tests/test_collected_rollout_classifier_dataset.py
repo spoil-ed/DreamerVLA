@@ -8,12 +8,10 @@ from the terminal (sparse_rewards==1) frame.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pytest
-
 
 # ── test parameters ─────────────────────────────────────────────────────────
 T = 10        # episode length; must satisfy T >= SEQ_LEN + 1 so there are negatives

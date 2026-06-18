@@ -17,7 +17,7 @@
 #
 # Expected `transformers==4.40.1` and `tokenizers==0.19.1`
 
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar
 
 import numpy as np
 import torch
@@ -60,18 +60,18 @@ class OpenVLAForBatchActionPrediction(OpenVLAForActionPrediction):
     # === Core Prismatic VLM `forward()` Logic ===
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        pixel_values: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[list[torch.FloatTensor]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_projector_features: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[tuple, PrismaticCausalLMOutputWithPast]:
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        pixel_values: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_projector_features: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> tuple | PrismaticCausalLMOutputWithPast:
         """Run a forward pass through the VLM, returning a PrismaticCausalLMOutputWithPast instance."""
         output_attentions = (
             output_attentions
@@ -297,11 +297,11 @@ class OpenVLAForBatchActionPrediction(OpenVLAForActionPrediction):
 
     def prepare_inputs_for_generation(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        past_key_values: Optional[list[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        pixel_values: Optional[torch.FloatTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        input_ids: torch.Tensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        pixel_values: torch.FloatTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         **kwargs: str,
     ) -> dict[str, torch.Tensor]:
         """Borrowed from `LlamaForCausalLM` and simplified for batch size = 1; mirrors original PrismaticVLM logic."""
@@ -356,7 +356,7 @@ class PrismaticImageProcessor(PrismaticImageProcessorOrginal):
     def preprocess(
         self,
         images: torch.Tensor,
-        return_tensors: Optional[Union[str, TensorType]] = None,
+        return_tensors: str | TensorType | None = None,
         **_: str,
     ) -> BatchFeature:
         """
@@ -386,15 +386,13 @@ class PrismaticProcessor(PrismaticProcessorOriginal):
 
     def __call__(
         self,
-        text: Union[
-            TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]
-        ],
+        text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput],
         images: torch.Tensor,
         proprio_states: torch.Tensor,
-        padding: Union[bool, str, PaddingStrategy] = False,
-        truncation: Optional[Union[bool, str, TruncationStrategy]] = None,
-        max_length: Optional[int] = None,
-        return_tensors: Optional[Union[str, TensorType]] = TensorType.PYTORCH,
+        padding: bool | str | PaddingStrategy = False,
+        truncation: bool | str | TruncationStrategy | None = None,
+        max_length: int | None = None,
+        return_tensors: str | TensorType | None = TensorType.PYTORCH,
     ) -> BatchFeature:
         """
         Preprocess a given (batch) of text/images for a Prismatic VLM; forwards text to the underlying LLM's tokenizer,
@@ -516,18 +514,18 @@ class OpenVLAForRLActionPrediction(OpenVLAForBatchActionPrediction, BasePolicy):
 
     def default_forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        pixel_values: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[list[torch.FloatTensor]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_projector_features: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        forward_inputs: Optional[dict[str, torch.Tensor]] = None,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        pixel_values: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_projector_features: bool | None = None,
+        return_dict: bool | None = None,
+        forward_inputs: dict[str, torch.Tensor] | None = None,
         compute_logprobs: bool = False,
         compute_entropy: bool = False,
         compute_values: bool = False,
@@ -756,7 +754,7 @@ class OpenVLAForRLActionPrediction(OpenVLAForBatchActionPrediction, BasePolicy):
         return chunk_actions, result
 
     def _check_unnorm_key(
-        self, norm_stats: dict[str, dict[str, Any]], unnorm_key: Optional[str]
+        self, norm_stats: dict[str, dict[str, Any]], unnorm_key: str | None
     ) -> str:
         if unnorm_key is None:
             assert len(norm_stats) == 1, (

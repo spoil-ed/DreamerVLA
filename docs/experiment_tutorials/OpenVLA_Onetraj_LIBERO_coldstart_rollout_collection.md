@@ -79,7 +79,8 @@ and `expected_rotate_images_180: true` are inherited from the suite config.
 Switch suite by appending `task=…` (example: libero_10):
 
 ```bash
-NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  -m dreamervla.train experiment=collect_rollouts_onetraj \
   task=OpenVLA_Onetraj_ColdStart_LIBERO_10 \
   collect.task_ids=all collect.episodes_per_task=300 \
   collect.episode_horizon=300 collect.envs_per_gpu=8
@@ -89,7 +90,7 @@ NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
 ## 0. System
 
 ```bash
-cd /path/to/DreamerVLA
+cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
 conda activate dreamervla
@@ -110,26 +111,28 @@ To download them from scratch (same checkpoint + LIBERO-Goal suite), follow
 
 ## 1. Collect rollouts
 
-The launcher is a thin `torchrun` wrapper around the pure-Hydra entry. It shards
-work across `M` ranks (one GPU each); the collector reads
+The entry is the standard Hydra train module. Launch it with
+`python -m torch.distributed.run` when sharding work across `M` ranks (one GPU
+each); the collector reads
 `RANK`/`WORLD_SIZE`/`LOCAL_RANK` for **work sharding only** and does **not**
 initialize a torch process group (no DDP). Each rank writes its own shard
 (`r{rank}_shard_000.hdf5`).
 
 ```bash
 # 2 GPUs, all libero_goal tasks, 300 episodes each, K=8 within-rank envs:
-NUM_GPUS=2 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_collect_rollouts.sh \
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  -m dreamervla.train experiment=collect_rollouts_onetraj \
   collect.task_ids=all collect.episodes_per_task=300 \
   collect.episode_horizon=300 collect.envs_per_gpu=8
 
 # 1-GPU smoke (single in-process env per rank):
-NUM_GPUS=1 CUDA_VISIBLE_DEVICES=0 bash scripts/run_collect_rollouts.sh \
+CUDA_VISIBLE_DEVICES=0 python -m dreamervla.train \
+  experiment=collect_rollouts_onetraj \
   collect.task_ids=0 collect.episodes_per_task=2 \
   collect.episode_horizon=64 collect.envs_per_gpu=1
 ```
 
-All overrides are normal Hydra `key=value`; the launcher forwards `"$@"`
-verbatim and adds no key=value translation of its own.
+All overrides are normal Hydra `key=value`.
 
 ### `collect.*` knobs
 
@@ -203,8 +206,7 @@ steps 3–5.
   the single-env path; states/images/actions are byte-exact.
 - **Pure-Hydra entry.** The legacy `argparse` entry
   (`python -m dreamervla.runners.collect_parallel_rollouts key=value`) is removed.
-  The only entry is `python -m dreamervla.train experiment=collect_rollouts_onetraj`
-  (the launcher wraps it).
+  The only entry is `python -m dreamervla.train experiment=collect_rollouts_onetraj`.
 
 ## Verified smoke (1-GPU, /tmp outputs)
 
@@ -214,10 +216,9 @@ consumption end-to-end. Outputs go to `/tmp` so the canonical namespace stays cl
 
 ```bash
 RW=/tmp/coldstart_smoke/reward; H1=/tmp/coldstart_smoke/hidden
-PY=/path/to/conda/envs/dreamervla/bin/python   # or: conda activate dreamervla && PY=python
+PY=python   # after conda activate dreamervla
 
-# 1) Collect (1 GPU, task 0, 2 episodes).  After `conda activate dreamervla` you can
-#    use the launcher instead:  NUM_GPUS=1 bash scripts/run_collect_rollouts.sh <same overrides>
+# 1) Collect (1 GPU, task 0, 2 episodes).
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa $PY -m dreamervla.train \
   experiment=collect_rollouts_onetraj \
   collect.task_ids=0 collect.episodes_per_task=2 collect.episode_horizon=64 collect.envs_per_gpu=1 \
@@ -246,7 +247,7 @@ Notes (general facts, not hacks):
 1. **Use the same interpreter for the workers.** A bare `torchrun` on PATH may be a
    different Python than the conda env; the launcher therefore calls
    `${PYTHON:-python} -m torch.distributed.run`. `conda activate dreamervla` first, or
-   set `PYTHON=/path/to/env/bin/python`. The 1-GPU smoke above uses the direct entry,
+   set `PYTHON=python` after activating the environment. The 1-GPU smoke above uses the direct entry,
    which has no torchrun dependency.
 2. **Smoke episodes are short.** A 2-episode/64-step smoke yields unsuccessful (timed-out)
    episodes — fine for verifying the pipeline; the discrete WM trains on the

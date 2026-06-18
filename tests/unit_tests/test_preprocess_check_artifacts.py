@@ -5,14 +5,14 @@ import json
 import h5py
 import pytest
 
+from dreamervla.preprocess.artifact_utils import (
+    Hdf5PreprocessTask,
+    assign_tasks_by_frames,
+    plan_hdf5_preprocess_tasks,
+)
 from dreamervla.preprocess.check_artifacts import (
     validate_hdf5_dir,
     validate_metainfo,
-)
-from dreamervla.preprocess.artifact_utils import (
-    assign_tasks_by_frames,
-    Hdf5PreprocessTask,
-    plan_hdf5_preprocess_tasks,
 )
 
 

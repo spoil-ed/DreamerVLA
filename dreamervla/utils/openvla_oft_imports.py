@@ -9,8 +9,6 @@ EMBODIMENT_OPENVLA_OFT_ROOT = (
     PROJECT_ROOT / "dreamervla" / "models" / "embodiment" / "openvla_oft"
 )
 VENDORED_OPENVLA_OFT_ROOT = PROJECT_ROOT / "third_party" / "openvla-oft"
-WORKSPACE_OPENVLA_OFT_ROOT = PROJECT_ROOT.parent / "openvla-oft"
-WMPO_OPENVLA_OFT_ROOT = PROJECT_ROOT.parent / "WMPO" / "dependencies" / "openvla-oft"
 
 
 def _candidate_roots() -> list[Path]:
@@ -21,9 +19,7 @@ def _candidate_roots() -> list[Path]:
     roots.extend(
         [
             EMBODIMENT_OPENVLA_OFT_ROOT,
-            WMPO_OPENVLA_OFT_ROOT,
             VENDORED_OPENVLA_OFT_ROOT,
-            WORKSPACE_OPENVLA_OFT_ROOT,
         ]
     )
     return roots

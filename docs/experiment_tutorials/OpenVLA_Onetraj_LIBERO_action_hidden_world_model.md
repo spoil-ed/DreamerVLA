@@ -38,9 +38,11 @@ during WM/classifier updates and the actor only updates in the RL phase
 
 ```bash
 # full (N GPUs = N parallel rollouts + DDP cotrain)
-NUM_GPUS=4 CUDA_VISIBLE_DEVICES=0,1,2,3 bash scripts/run_online_cotrain_action_hidden.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --standalone --nproc_per_node=4 \
+  -m dreamervla.train experiment=online_cotrain_oft_action_hidden
 # one-command dry-run (rollout -> replay -> WM/cls warmup -> RL cotrain)
-NUM_GPUS=1 WANDB_MODE=disabled bash scripts/run_online_cotrain_action_hidden.sh training.debug=true
+WANDB_MODE=disabled python -m dreamervla.train \
+  experiment=online_cotrain_oft_action_hidden training.debug=true
 ```
 
 Config: `configs/experiment/online_cotrain_oft_action_hidden.yaml` (`latent_type=action_hidden`,
@@ -55,7 +57,7 @@ backbone-latent tutorial.)
 ## 0. System
 
 ```bash
-cd /path/to/DreamerVLA
+cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
 conda activate dreamervla
@@ -134,8 +136,8 @@ bash scripts/train_dreamervla.sh \
   experiment=dreamervla_oft_dino_wm_wmpo_outcome task=OpenVLA_Onetraj_LIBERO \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 \
   -- \
-  init.world_model_state_ckpt=/abs/path/to/oft_world_model.ckpt \
-  init.classifier_state_ckpt=/abs/path/to/oft_classifier_best.ckpt
+  init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
+  init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
 WM + classifier are frozen; the actor is updated by `dino_wmpo_outcome_step`
@@ -152,7 +154,7 @@ WM + classifier are frozen; the actor is updated by `dino_wmpo_outcome_step`
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
-  eval.ckpt_path=/abs/path/to/openvla_onetraj_dreamervla.ckpt \
+  eval.ckpt_path="${DVLA_DATA_ROOT}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
   eval.dreamer_policy_source=ckpt eval.dreamer_actor_input_source=rssm \
   eval.task_suite_name=libero_goal eval.num_episodes_per_task=10 \
   training.device=cuda:0
@@ -169,10 +171,10 @@ existing LIBERO-Goal OFT action-hidden sidecar. They point the
 (only `expected_model_path` differs, so it is overridden to match the sidecar).
 
 ```bash
-cd /path/to/DreamerVLA
+cd DreamerVLA
 SC=data/processed_data/libero_goal_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
 RW=data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-MP=/path/to/DreamerVLA/data/ckpts/OpenVLA-OFT/libero_goal   # sidecar's stored model_path
+MP="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT/libero_goal"   # sidecar's stored model_path
 PY="PYTHONPATH=. python"
 
 # --- WM smoke (8 steps, 1 file, tiny balanced set) → ckpt

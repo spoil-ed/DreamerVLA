@@ -10,9 +10,9 @@ Three diagnostics on a trained DreamerVLA ckpt:
 
 Usage:
     python -m dreamervla.diagnostics.measure_reward_and_drift \
-        --ckpt /path/to/cotrain_perwindow_gpu4_.../checkpoints/latest.ckpt \
-        --hidden-hdf5 /path/to/hidden/put_the_bowl_on_the_plate_demo.hdf5 \
-        --reward-hdf5 /path/to/rewards/put_the_bowl_on_the_plate_demo.hdf5 \
+        --ckpt data/outputs/dreamervla/<run>/checkpoints/latest.ckpt \
+        --hidden-hdf5 data/processed_data/<task>/<hidden>/put_the_bowl_on_the_plate_demo.hdf5 \
+        --reward-hdf5 data/processed_data/<task>/<reward>/put_the_bowl_on_the_plate_demo.hdf5 \
         --demo-key demo_0
 """
 

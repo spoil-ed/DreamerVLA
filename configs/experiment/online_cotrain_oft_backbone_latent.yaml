@@ -5,7 +5,6 @@
 # a TransformerDecoder bridge + the action head (LatentToActionHiddenActor).
 # Single Hydra call:
 #   python -m dreamervla.train --config-name online_cotrain_oft_backbone_latent
-#   (or: bash scripts/run_online_cotrain_backbone_latent.sh)
 #
 # ONLINE rollout IS wired: OnlineCotrainRunner sets the env
 # obs_hidden_source="input_token_embedding"; RynnVLAEncoder.extract_input_token_embedding

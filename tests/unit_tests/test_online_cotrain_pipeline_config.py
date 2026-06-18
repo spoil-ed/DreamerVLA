@@ -4,6 +4,7 @@ from __future__ import annotations
 def test_validate_cfg_warmup(tmp_path):
     import pytest
     from omegaconf import OmegaConf
+
     from dreamervla.config import validate_cfg
     base = OmegaConf.create({
         "_target_": "dreamervla.runners.OnlineCotrainPipelineRunner",

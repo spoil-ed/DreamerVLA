@@ -9,11 +9,11 @@ def test_actor_classes_are_importable_from_split_modules() -> None:
         VLAActionHeadActor,
         VLAPolicy,
     )
-    from dreamervla.models.actor.openvla_discrete_token_actor import (
-        OpenVLADiscreteTokenActor as SplitOpenVLADiscreteTokenActor,
-    )
     from dreamervla.models.actor.latent_to_action_hidden_actor import (
         LatentToActionHiddenActor as SplitLatentToActionHiddenActor,
+    )
+    from dreamervla.models.actor.openvla_discrete_token_actor import (
+        OpenVLADiscreteTokenActor as SplitOpenVLADiscreteTokenActor,
     )
     from dreamervla.models.actor.rynnvla_action_hidden_actor import (
         RynnVLAActionHiddenActor as SplitRynnVLAActionHiddenActor,

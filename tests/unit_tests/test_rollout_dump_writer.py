@@ -13,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 # ── test parameters ────────────────────────────────────────────────────────────
 T = 10          # episode length; must satisfy T >= sequence_length + 1 for negatives
 SEQ_LEN = 4    # sequence_length; positive window at start=(T-SEQ_LEN), negative at 0..(T-SEQ_LEN-1)

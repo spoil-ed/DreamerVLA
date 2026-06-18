@@ -38,7 +38,7 @@ preprocess input-token sidecar  (obs_embedding = [T, 512*4096] current-frame vis
 `${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/`.
 
 ```bash
-cd /path/to/DreamerVLA
+cd DreamerVLA
 export DVLA_DATA_ROOT="$(pwd -P)/data"; export MUJOCO_GL=osmesa; conda activate dreamervla
 
 # 1. reward HDF5 + OFT input-token (backbone) sidecar
@@ -61,7 +61,8 @@ bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk_input_tokens \
 # 4. DreamerVLA actor (LatentToActionHiddenActor over backbone latent)
 bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_wmpo_outcome_input_tokens \
   task=OpenVLA_Onetraj_LIBERO gpus=0 ngpu=1 batch_size=2 -- \
-  init.world_model_state_ckpt=/abs/wm.ckpt init.classifier_state_ckpt=/abs/cls_best.ckpt
+  init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
+  init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
 ## Unified online cotrain (warmup → cotrain) and the current gap
@@ -71,8 +72,9 @@ one-traj VLA → parallel rollout (1 env/rank) → replay → **warmup (WM+class
 only, `training.warmup_steps`)** → **cotrain (WM+classifier + slow-policy RL)**.
 
 ```bash
-bash scripts/run_online_cotrain_backbone_latent.sh           # full
-NUM_GPUS=1 WANDB_MODE=disabled bash scripts/run_online_cotrain_backbone_latent.sh training.debug=true
+python -m dreamervla.train experiment=online_cotrain_oft_backbone_latent
+WANDB_MODE=disabled python -m dreamervla.train \
+  experiment=online_cotrain_oft_backbone_latent training.debug=true
 ```
 
 **KNOWN GAP (clear error, no silent fail):** online env rollout for

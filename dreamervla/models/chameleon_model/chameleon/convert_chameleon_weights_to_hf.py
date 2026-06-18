@@ -41,7 +41,7 @@ Sample usage:
 
 ```
 python src/transformers/models/chameleon/convert_chameleon_weights_to_hf.py \
-    --input_dir /path/to/downloaded/chameleon/weights --model_size 7B --output_dir /output/path
+    --input_dir data/checkpoints/chameleon/weights --model_size 7B --output_dir data/checkpoints/chameleon_hf
 ```
 
 Thereafter, models can be loaded via:

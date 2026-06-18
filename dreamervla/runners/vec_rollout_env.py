@@ -30,7 +30,8 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 
 def default_env_factory(cfg_kwargs: dict[str, Any]) -> Any:
@@ -156,7 +157,7 @@ class VecRolloutEnv:
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
         if len(payloads) != len(ids):
             raise ValueError(f"{cmd}: got {len(payloads)} payloads for {len(ids)} envs")
-        for eid, payload in zip(ids, payloads):
+        for eid, payload in zip(ids, payloads, strict=True):
             self._conns[eid].send((cmd, payload))
         results: list[Any] = []
         for eid in ids:
@@ -174,7 +175,7 @@ class VecRolloutEnv:
         env_ids: Iterable[int] | None = None,
     ) -> list[dict[str, Any]]:
         """Reset the addressed envs; returns their post-reset ``full_record`` dicts."""
-        payloads = list(zip(task_ids, episode_ids))
+        payloads = list(zip(task_ids, episode_ids, strict=True))
         return self._broadcast("reset", payloads, env_ids)
 
     def step(
@@ -209,7 +210,7 @@ class VecRolloutEnv:
             if proc.is_alive():
                 proc.terminate()
 
-    def __enter__(self) -> "VecRolloutEnv":
+    def __enter__(self) -> VecRolloutEnv:
         return self
 
     def __exit__(self, *exc: Any) -> bool:

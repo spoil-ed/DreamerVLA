@@ -1,8 +1,8 @@
-import h5py
 import numpy as np
+
 from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-from dreamervla.runners.online_replay import OnlineReplay
 from dreamervla.runners.offline_seed import seed_replay_from_offline
+from dreamervla.runners.online_replay import OnlineReplay
 
 
 def _demo_steps(T, success, emb_dim=16):

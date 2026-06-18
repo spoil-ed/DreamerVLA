@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import copy
 import os
-from collections import deque
 from typing import Any
 
 import hydra
@@ -31,6 +30,11 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
+from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
+from dreamervla.models.reward import (
+    LatentSuccessClassifier,
+    LatentSuccessClassifierConfig,
+)
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_dreamervla import (
     _unwrap,
@@ -43,11 +47,6 @@ from dreamervla.runners.online_replay import (
 from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
-)
-from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
-from dreamervla.models.reward import (
-    LatentSuccessClassifier,
-    LatentSuccessClassifierConfig,
 )
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
@@ -346,7 +345,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
         episode: list[dict[str, Any]] = []
         n_episodes = 0
         n_success = 0
-        train_accum = 0.0
         stop = False
         printed_shapes = False
 

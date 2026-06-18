@@ -19,7 +19,6 @@ import torch
 
 from dreamervla.runners.vectorized_collect import collect_vectorized
 
-
 # ── fakes ─────────────────────────────────────────────────────────────────────
 
 
@@ -49,7 +48,7 @@ class FakeVecEnv:
     def set_task(self, task_ids, env_ids=None):
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
         out = []
-        for eid, tid in zip(ids, task_ids):
+        for eid, tid in zip(ids, task_ids, strict=True):
             self._slots[eid]["task_id"] = int(tid)
             out.append(f"task{int(tid)}")
         return out
@@ -57,7 +56,7 @@ class FakeVecEnv:
     def reset(self, task_ids, episode_ids, env_ids=None):
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
         out = []
-        for eid, tid, ep in zip(ids, task_ids, episode_ids):
+        for eid, tid, ep in zip(ids, task_ids, episode_ids, strict=True):
             self._slots[eid].update(
                 task_id=int(tid), episode_id=int(ep), t=0, term_at=self._term_at(int(tid), int(ep))
             )
@@ -68,7 +67,7 @@ class FakeVecEnv:
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
         self.step_calls += 1
         out = []
-        for eid, a in zip(ids, actions):
+        for eid, a in zip(ids, actions, strict=True):
             s = self._slots[eid]
             s["t"] += 1
             terminated = s["t"] >= s["term_at"]

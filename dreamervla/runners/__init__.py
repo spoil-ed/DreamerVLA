@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dreamervla.runners.backbone_dreamerv3_wm_runner import (
+    BackboneDreamerV3WMRunner as _BackboneDreamerV3WMRunner,
+)
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.chameleon_latent_action_wm_runner import (
     ChameleonLatentActionWMRunner as _ChameleonLatentActionWMRunner,
 )
-from dreamervla.runners.dreamervla_runner import (
-    DreamerVLARunner as _DreamerVLARunner,
+from dreamervla.runners.collect_rollouts_runner import (
+    CollectRolloutsRunner as _CollectRolloutsRunner,
 )
 from dreamervla.runners.dreamerv3_pixel_runner import (
     DreamerV3PixelRunner as _DreamerV3PixelRunner,
@@ -13,29 +16,26 @@ from dreamervla.runners.dreamerv3_pixel_runner import (
 from dreamervla.runners.dreamerv3_token_runner import (
     DreamerV3TokenRunner as _DreamerV3TokenRunner,
 )
+from dreamervla.runners.dreamervla_runner import (
+    DreamerVLARunner as _DreamerVLARunner,
+)
 from dreamervla.runners.embodied_eval_runner import (
     EmbodiedEvalRunner as _EmbodiedEvalRunner,
 )
 from dreamervla.runners.latent_classifier_runner import (
     LatentClassifierRunner as _LatentClassifierRunner,
 )
-from dreamervla.runners.openvla_oft_runner import (
-    OpenVLAOFTTrainingRunner as _OpenVLAOFTTrainingRunner,
-)
-from dreamervla.runners.backbone_dreamerv3_wm_runner import (
-    BackboneDreamerV3WMRunner as _BackboneDreamerV3WMRunner,
-)
 from dreamervla.runners.latent_wm_runner import (
     LatentWMTrainingRunner as _LatentWMTrainingRunner,
 )
-from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
-from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_cotrain_pipeline_runner import (
     OnlineCotrainPipelineRunner as _OnlineCotrainPipelineRunner,
 )
-from dreamervla.runners.collect_rollouts_runner import (
-    CollectRolloutsRunner as _CollectRolloutsRunner,
+from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+from dreamervla.runners.openvla_oft_runner import (
+    OpenVLAOFTTrainingRunner as _OpenVLAOFTTrainingRunner,
 )
+from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
 
 
 class ActionHiddenWMRunner(_BackboneDreamerV3WMRunner):
@@ -123,6 +123,8 @@ PUBLIC_RUNNERS = [
     "LatentClassifierRunner",
     "OnlineCotrainRunner",
     "OnlineCotrainPipelineRunner",
+    "OnlineCotrainRayRunner",
+    "ColdStartRayCollectRunner",
     "CollectRolloutsRunner",
 ]
 
@@ -142,5 +144,21 @@ __all__ = [
     "LatentWMRunner",
     "LatentClassifierRunner",
     "OnlineCotrainRunner",
+    "OnlineCotrainRayRunner",
+    "ColdStartRayCollectRunner",
     "CollectRolloutsRunner",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "OnlineCotrainRayRunner":
+        from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+        return OnlineCotrainRayRunner
+    if name == "ColdStartRayCollectRunner":
+        from dreamervla.runners.cold_start_ray_collect_runner import (
+            ColdStartRayCollectRunner,
+        )
+
+        return ColdStartRayCollectRunner
+    raise AttributeError(name)

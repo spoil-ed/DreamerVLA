@@ -12,8 +12,8 @@ from dreamervla.preprocess.preprocess_oft_action_hidden import (
     _action_head_type_for_mode,
     _input_token_sidecar_dims,
     _load_oft_components,
-    _resolve_num_images_in_input,
     _project_path,
+    _resolve_num_images_in_input,
     _write_source_sidecars,
     resolve_oft_policy_mode,
 )

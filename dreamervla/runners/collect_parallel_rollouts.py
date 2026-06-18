@@ -31,7 +31,6 @@ Entry point (pure Hydra; torchrun M-rank):
   torchrun --standalone --nproc_per_node=2 -m dreamervla.train \\
     experiment=collect_rollouts_onetraj task=OpenVLA_Onetraj_ColdStart_LIBERO \\
     collect.task_ids=all collect.episodes_per_task=2 collect.episode_horizon=64
-  (or: bash scripts/run_collect_rollouts.sh ...)
 """
 
 from __future__ import annotations

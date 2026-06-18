@@ -7,7 +7,7 @@ code path for LIBERO success-rate measurement.
 Typical use:
 
   bash scripts/eval_libero_vla.sh \\
-    eval.ckpt_path=/path/to/pretokenize_vla/checkpoints/epoch=013-train_vla_loss=1.984.ckpt \\
+    eval.ckpt_path=data/outputs/vla/<run>/checkpoints/latest.ckpt \\
     eval.task_suite_name=libero_goal \\
     eval.num_episodes_per_task=10
 

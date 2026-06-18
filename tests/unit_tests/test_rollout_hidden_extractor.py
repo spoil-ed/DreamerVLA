@@ -246,7 +246,6 @@ def test_inline_matches_offline_sidecar():
     )
 
     image_keys = ["agentview_rgb", "eye_in_hand_rgb"]
-    unnorm_key = "libero_goal_no_noops"
     task_description = "open the middle drawer of the cabinet"
 
     failures: list[str] = []
@@ -323,7 +322,7 @@ def test_inline_matches_offline_sidecar():
 # VLA forward.  The upstream OFT predict_action wrapper has two batch==1 bugs
 # (modeling_prismatic.py:972 token-cat, :924 reshape), so batched_forward bypasses
 # it and runs the batch-safe internals.  The gating smoke
-# (scripts/smoke_oft_batched_forward.py) established:
+# The batched-forward regression tests establish:
 #   - B=1 batched == extractor.step (bit-exact),
 #   - decoded actions are partner-invariant (no cross-batch leakage),
 #   - obs_embedding has bf16 batched-kernel nondeterminism ~0.25 (same order as the
@@ -562,8 +561,10 @@ def test_batched_forward_mixed_task_matches_single(oft_policy):
     act_err_b = float(np.abs(np.asarray(ab[1][0][0]) - np.asarray(chunk_b[0])).max())
     emb_a, gt_a = ab[0][1].numpy().astype(np.float32), hid_a.numpy().astype(np.float32)
     emb_b, gt_b = ab[1][1].numpy().astype(np.float32), hid_b.numpy().astype(np.float32)
-    emb_err_a = float(np.abs(emb_a - gt_a).max()); corr_a = float(np.corrcoef(emb_a, gt_a)[0, 1])
-    emb_err_b = float(np.abs(emb_b - gt_b).max()); corr_b = float(np.corrcoef(emb_b, gt_b)[0, 1])
+    emb_err_a = float(np.abs(emb_a - gt_a).max())
+    corr_a = float(np.corrcoef(emb_a, gt_a)[0, 1])
+    emb_err_b = float(np.abs(emb_b - gt_b).max())
+    corr_b = float(np.corrcoef(emb_b, gt_b)[0, 1])
 
     # partner invariance: short-prompt A with long-prompt B vs with long-prompt C
     ac = batched_forward(oft_policy, [prep(obs_a, task_short), prep(obs_c, task_long)], "libero_goal_no_noops")

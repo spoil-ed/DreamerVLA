@@ -3,7 +3,6 @@
 # before the Action Head). Predicts future action-hidden; classifier scores
 # imagined latent windows; actor trained by wmpo_outcome.  Single Hydra call:
 #   python -m dreamervla.train --config-name online_cotrain_oft_action_hidden
-# (or: bash scripts/run_online_cotrain_action_hidden.sh)
 #
 # NOTE the online env-rollout policy is the RynnVLA one-trajectory VLA (the ~40%
 # success seed) because DreamerVLAOnlineTrainEnv emits the action_query latent

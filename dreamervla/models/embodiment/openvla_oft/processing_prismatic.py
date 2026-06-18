@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 
-from typing import ClassVar, Optional, Union
+from typing import ClassVar
 
 import torch
 import torchvision.transforms.functional as TVF
@@ -48,7 +48,7 @@ class PrismaticImageProcessor(PrismaticImageProcessorOriginal):
     def preprocess(
         self,
         images: torch.Tensor,
-        return_tensors: Optional[Union[str, TensorType]] = None,
+        return_tensors: str | TensorType | None = None,
         **_: str,
     ) -> BatchFeature:
         return BatchFeature(
@@ -67,14 +67,12 @@ class PrismaticProcessor(PrismaticProcessorOriginal):
 
     def __call__(
         self,
-        text: Union[
-            TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]
-        ],
+        text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput],
         images: torch.Tensor,
-        padding: Union[bool, str, PaddingStrategy] = False,
-        truncation: Optional[Union[bool, str, TruncationStrategy]] = None,
-        max_length: Optional[int] = None,
-        return_tensors: Optional[Union[str, TensorType]] = TensorType.PYTORCH,
+        padding: bool | str | PaddingStrategy = False,
+        truncation: bool | str | TruncationStrategy | None = None,
+        max_length: int | None = None,
+        return_tensors: str | TensorType | None = TensorType.PYTORCH,
     ) -> BatchFeature:
         assert self.tokenizer.padding_side == "left", (
             "Required: Init tokenizer with padding_side='left'"
@@ -113,15 +111,13 @@ class PrismaticProcessor(PrismaticProcessorOriginal):
 class MultiInputPrismaticProcessor(PrismaticProcessor):
     def __call__(
         self,
-        text: Union[
-            TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]
-        ],
+        text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput],
         images: dict[str, torch.Tensor],
         proprio_states: torch.Tensor,
-        padding: Union[bool, str, PaddingStrategy] = False,
-        truncation: Optional[Union[bool, str, TruncationStrategy]] = None,
-        max_length: Optional[int] = None,
-        return_tensors: Optional[Union[str, TensorType]] = TensorType.PYTORCH,
+        padding: bool | str | PaddingStrategy = False,
+        truncation: bool | str | TruncationStrategy | None = None,
+        max_length: int | None = None,
+        return_tensors: str | TensorType | None = TensorType.PYTORCH,
     ) -> BatchFeature:
         all_pixel_values = [
             self.image_processor(image, return_tensors=return_tensors)["pixel_values"]

@@ -15,7 +15,7 @@ LIBERO HDF5
 
 ```bash
 git clone <repo> && cd DreamerVLA
-export DVLA_DATA_ROOT=/path/to/dvla_data
+export DVLA_DATA_ROOT=data
 bash scripts/install_env.sh
 conda activate dreamervla
 bash scripts/download_assets.sh

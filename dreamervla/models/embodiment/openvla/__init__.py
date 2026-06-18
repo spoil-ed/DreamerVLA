@@ -41,11 +41,11 @@ def get_model_config_and_input_processor(cfg: DictConfig):
 
     dataset_statistics_path = os.path.join(cfg.model_path, "dataset_statistics.json")
     if os.path.isfile(dataset_statistics_path):
-        with open(dataset_statistics_path, "r") as f:
+        with open(dataset_statistics_path) as f:
             new_norm_stats = json.load(f)
             norm_stats = getattr(model_config, "norm_stats", {})
             norm_stats.update(new_norm_stats)
-            setattr(model_config, "norm_stats", norm_stats)
+            model_config.norm_stats = norm_stats
     image_processor = PrismaticImageProcessor.from_pretrained(
         cfg.model_path, trust_remote_code=True
     )
@@ -71,11 +71,11 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
 
     dataset_statistics_path = os.path.join(cfg.model_path, "dataset_statistics.json")
     if os.path.isfile(dataset_statistics_path):
-        with open(dataset_statistics_path, "r") as f:
+        with open(dataset_statistics_path) as f:
             new_norm_stats = json.load(f)
             norm_stats = getattr(actor_model_config, "norm_stats", {})
             norm_stats.update(new_norm_stats)
-            setattr(actor_model_config, "norm_stats", norm_stats)
+            actor_model_config.norm_stats = norm_stats
 
     from dreamervla.models.embodiment.openvla.openvla_action_model import (
         OpenVLAForRLActionPrediction,
