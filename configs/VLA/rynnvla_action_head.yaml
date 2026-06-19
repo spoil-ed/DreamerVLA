@@ -53,7 +53,7 @@ encoder:
   chameleon_vqgan_ckpt: ${task.chameleon_vqgan_ckpt}
   resolution: ${task.image_resolution}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.time_horizon}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
   action_head_type: legacy
   pool: mean
 

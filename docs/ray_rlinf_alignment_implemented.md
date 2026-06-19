@@ -84,6 +84,36 @@
 - **P1 FSDP2 + strategy 子树**:`hybrid_engines/fsdp/strategy/{base,fsdp,fsdp2,checkpoint}.py`(可插拔 `FSDPStrategyBase.create`,FSDP1/FSDP2/no-shard + `Checkpoint(Stateful)`);`FSDPModelManager.make_strategy()` 委派,新增 `fsdp2`。单机 `WORLD_SIZE=1` passthrough 可验证(`tests/unit_tests/test_fsdp_strategy.py`);真分片需多卡。
 - **P1 config 早校验**:`config.py::_validate_fsdp_config` 对 `learner.train_cfg.fsdp` 的 strategy/precision 在 spawn 前 fail-fast(`tests/unit_tests/test_config_fsdp_validation.py`)。
 
+### 1.9 本轮补齐(2026-06-19,TDD;Ray 真实组件 / overlap / instrumentation)
+- **真实组件接入 Ray cotrain config**:`configs/experiment/online_cotrain_ray_oft.yaml` 路由到
+  `configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml`。模型组件集中在 `ray_components.*`,
+  task/dataset/rollout 仍由 `task`/`env`/`replay` 持有,runner 只消费通用 `learner.model_cfg` 与
+  `inference.cfg` 契约,不按具体 model/dataset 分支。
+- **component-name warmup checkpoint**:`OnlineCotrainRayRunner._load_init_ckpt` 支持 runner-format
+  `state_dicts[policy|world_model|classifier]` 抽取,并传给 `LearnerWorker` / `InferenceWorker`;不把 ckpt 布局耦合到模型类。
+- **真实 encoder 契约补齐**:`InferenceWorker` 除 `encode_obs_batch` 外支持真实 `RynnVLAEncoder.encode(obs)`
+  单条 fallback,并把 `[1,D]` 单样本输出规整为 batched `[B,D]`。
+- **Ray cotrain metrics 透传**:`OnlineCotrainRayRunner` 保留 learner 返回的 `wm/loss`、`cls/loss`、
+  `rl/actor_loss` 等 normalized metrics,同时保留兼容字段 `train/rl_loss`。
+- **cold-start 深度 overlap**:`ColdStartRayCollectRunner._run_loop_overlap` 改为 Ray ObjectRef 事件循环:
+  async inference refs 与 env-step refs 同时在飞,批量 drain ready refs,done env reset / scheduled task 切换保持 per-env 串行;
+  只在 target episodes / max steps / 收尾时阻塞。
+- **online cotrain rollout 深度 overlap**:`OnlineCotrainRayRunner._run_loop_overlap` 复用同一 ObjectRef 模式:
+  推理批次与上一批 env-step refs 双缓冲在飞,同一 env 严格串行;learner update / weight sync 保持异步路径。
+  新增 `time/rollout_overlap_events`、`time/rollout_strict_overlap_events`、
+  `time/rollout_{infer,env}_ready_batches`。
+- **stage timing instrumentation**:`InferenceWorker.forward_batch` 返回 `timing.{encode_s,world_model_s,policy_s}`;
+  `OnlineCotrainRayRunner` 汇总到 `time/infer_*_s`,并记录 `time/{infer,env_step,learner,weight_sync}_wait_s`;
+  cold-start overlap 记录 `time/{infer,env_step,dump,ray}_wait_s` 与 ready batch 计数。
+- **resource instrumentation**:`dreamervla.utils.resource_metrics` best-effort 采集 `nvidia-smi`
+  GPU utilization / memory used / memory total 聚合指标,以及 torch CUDA allocator 当前/峰值显存;
+  online cotrain 与 cold-start runner 合并到 `time/` 命名空间,无 CUDA / 无 `nvidia-smi` 时返回空指标不阻塞训练。
+- **gated 真实 e2e**:
+  `tests/e2e_tests/test_s5_ray_real_cotrain.py`(需 `DVLA_REAL_RAY_COTRAIN_SMOKE=1` + ckpt/env)断言真实
+  Ray cotrain loss keys 有限;
+  `tests/e2e_tests/test_s6_ray_real_oft_collect.py`(需 `DVLA_REAL_OFT_COLLECT_SMOKE=1` + OFT ckpt/env)
+  断言 reward HDF5、hidden sidecar、`preprocess_config.json` 落盘且 hidden dim 声明一致。
+
 ---
 
 ## 2. 已建命名映射(RLinf → DreamerVLA)

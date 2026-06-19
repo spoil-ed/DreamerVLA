@@ -3,7 +3,7 @@ defaults:
   - _self_
   - /task: OpenVLA_Onetraj_ColdStart_LIBERO
 
-_target_: dreamervla.runners.cold_start_ray_collect_runner.ColdStartRayCollectRunner
+_target_: dreamervla.runners.ColdStartRayCollectRunner
 mode: oft
 
 collect:

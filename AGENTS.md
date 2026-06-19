@@ -181,6 +181,53 @@ experiment=<name>`. New config-facing behavior should be validated early in a
 Dreamer-VLA equivalent of RLinf's config validation layer, not discovered deep
 inside a training loop.
 
+**Model / dataset / config decoupling guardrails**:
+- Name classes and modules by role or contract, not by a concrete model,
+  benchmark, checkpoint, dataset, or sidecar. A runner, worker, dataset, model
+  wrapper, or helper must not bake in names such as RynnVLA, OpenVLA, LIBERO, or
+  a specific sidecar layout unless that class truly implements that one external
+  artifact boundary. Bind concrete choices through Hydra targets, registries,
+  protocols, constructor kwargs, and task configs.
+- Hydra is the source of truth for production parameters. Code may provide
+  defaults only for synthetic smoke tests, backwards compatibility, or safe
+  local fallbacks. Do not decide real training dimensions, model widths,
+  horizons, batch sizes, sidecar names, checkpoint paths, or task-specific
+  behavior inside runner / worker logic.
+- Treat VLA and dataset/task specs as upstream of downstream components.
+  World-model, classifier, actor, replay, and sidecar dimensions should be
+  derived from the selected VLA head plus dataset/task metadata through Hydra
+  interpolation or explicit config fields, not copied into code or duplicated
+  as unrelated constants in a recipe. If a dimension must be repeated for a
+  target constructor, reference the same task/VLA config field.
+- Keep the two world-model "hidden" concepts separate. `wm_obs_dim`,
+  `token_count`, and `token_dim` describe the external VLA/sidecar latent
+  observation that the world model consumes and predicts. `model_dim`,
+  `mlp_dim`, `reward_hidden_dim`, RSSM `deter/stoch/classes`, and TSSM
+  `d_model/hidden` describe internal world-model network state or head width.
+  External latent dimensions must match existing sidecar data; internal widths
+  are architecture/config choices and must not be inferred from the dataset.
+- Do not change latent dimensions from semantics alone. Before changing
+  `wm_obs_dim`, `token_count`, `token_dim`, `chunk_size`, or horizon fields,
+  inspect the existing sidecar `preprocess_config.json`, HDF5 attrs, and sample
+  dataset shapes when artifacts are present. Only treat a dimension as
+  derivable when the current data or extractor code proves the value is
+  unchanged. If artifacts are absent, keep the config explicit, add validation,
+  and document the unverified assumption with `TODO(agent)`.
+- Optional components are opt-in. Do not add code that blocks because a reward
+  worker, critic worker, sidecar field, hardware backend, logger backend, or
+  model subcomponent is absent. Build and validate the components that are
+  defined by config; if a route does not define a component, it should simply
+  not participate in that route.
+- Avoid defensive "not supported because X is missing" branches for features
+  that are not part of the selected config. Prefer registry lookup, protocol
+  capability checks on already-constructed objects, and narrow validation of
+  fields that the active route explicitly declares. Missing optional config is
+  not an error by itself.
+- When adding Ray or no-Ray routes, keep them behind the same model, action,
+  replay, checkpoint, metric, and dataset contracts. Do not fork separate
+  contracts for Ray unless the difference is strictly a backend scheduling
+  concern.
+
 **Runner** (`dreamervla/runners/`): the training unit. Subclass BaseRunner and implement `setup` / `execute` / `teardown`; reuse its distributed-init and checkpoint plumbing instead of redoing them per runner.
 
 **Algorithms** (`dreamervla/algorithms/`): PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic. Each variant exposes a stable kwargs / return signature so runners compose them without conditional branching. Register non-Dreamer actor-update routes in `dreamervla/algorithms/registry.py` and reference them from config via `algorithm.update_type`.

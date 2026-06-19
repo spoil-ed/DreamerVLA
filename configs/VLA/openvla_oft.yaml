@@ -37,7 +37,7 @@ policy:
   resume_step: ${task.openvla_oft.resume_step}
   torch_dtype: bf16
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
-  use_lora: true
+  use_lora: false
   lora_rank: 32
   lora_dropout: 0.0
   use_l1_regression: ${task.openvla_oft.use_l1_regression}
@@ -55,8 +55,8 @@ dataset:
   image_keys: ${task.image_keys}
   use_wrist_image: ${task.openvla_oft.use_wrist_image}
   use_proprio: ${task.openvla_oft.use_proprio}
-  batch_size: 1
-  num_workers: 0
+  batch_size: 8
+  num_workers: 8
   shuffle: true
   drop_last: false
   max_files: null
@@ -68,7 +68,7 @@ optim:
   zero_grad_set_to_none: true
   policy:
     name: adamw
-    lr: 5.0e-4
+    lr: 2.0e-5
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.0

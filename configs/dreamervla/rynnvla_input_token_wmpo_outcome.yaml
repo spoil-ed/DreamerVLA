@@ -25,8 +25,16 @@ world_model:
   obs_dim: ${task.legacy_input_tokens.wm_obs_dim}
   token_count: ${task.legacy_input_tokens.token_count}
   token_dim: ${task.legacy_input_tokens.token_dim}
-  time_horizon: ${task.time_horizon}
+  time_horizon: ${task.legacy_input_tokens.chunk_size}
+  latent_stage: ${task.legacy_input_tokens.latent_stage}
   latent_source: ${task.legacy_input_tokens.latent_source}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 4106
+  depth: 4
+  heads: 8
+  dim_head: 32
+  mlp_dim: 1024
 
 policy:
   _target_: dreamervla.models.actor.LatentToActionHiddenActor

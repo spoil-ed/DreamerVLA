@@ -26,7 +26,15 @@ world_model:
   token_count: ${task.openvla_oft.input_tokens.token_count}
   token_dim: ${task.openvla_oft.input_tokens.token_dim}
   time_horizon: ${task.openvla_oft.time_horizon}
+  latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 4106
+  depth: 4
+  heads: 8
+  dim_head: 32
+  mlp_dim: 1024
 
 policy:
   _target_: dreamervla.models.actor.LatentToActionHiddenActor

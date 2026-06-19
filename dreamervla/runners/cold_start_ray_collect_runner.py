@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
@@ -11,6 +12,7 @@ from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.paths import data_path
+from dreamervla.utils.resource_metrics import collect_resource_metrics
 from dreamervla.workers.env.env_worker import EnvWorker
 from dreamervla.workers.inference.inference_worker import InferenceWorker
 from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
@@ -262,10 +264,14 @@ class ColdStartRayCollectRunner(BaseRunner):
         target_episodes = int(
             groups.get(
                 "target_episodes",
-                self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
+                self._int_from(
+                    ("rollout.target_episodes", "target_episodes"), num_envs
+                ),
             )
         )
-        max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
+        max_steps = self._int_from(
+            ("rollout.max_steps", "rollout_steps"), target_episodes * 8
+        )
 
         steps = 0
         driver_roundtrips = 0
@@ -336,6 +342,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             "time/driver_roundtrips": int(driver_roundtrips),
             "time/driver_step_calls": int(driver_step_calls),
             "time/driver_step_waits": int(driver_step_waits),
+            **collect_resource_metrics(prefix="time"),
         }
 
     def _run_loop_overlap(self, groups: dict[str, Any]) -> dict[str, float | int]:
@@ -345,66 +352,170 @@ class ColdStartRayCollectRunner(BaseRunner):
         infer = groups["infer"]
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
-        env_ids = list(range(num_envs))
-        target_episodes = self._int_from(("rollout.target_episodes", "target_episodes"), num_envs)
+        scheduled = "env_task_ids" in groups
+        env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
+        task_counts = dict(groups.get("task_counts", {}))
+        task_ids = list(groups.get("task_ids", []))
+        episodes_per_task = int(groups.get("episodes_per_task", 1))
+        env_ids = (
+            [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
+            if scheduled
+            else list(range(num_envs))
+        )
+        target_episodes = int(
+            groups.get(
+                "target_episodes",
+                self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
+            )
+        )
         max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
 
-        pending_steps: dict[int, Any] = {}
+        pending_steps: dict[Any, tuple[int, Any, float]] = {}
+        pending_infers: dict[Any, tuple[list[int], Any, float]] = {}
+        ready_obs: list[tuple[int, dict[str, Any]]] = []
         steps = 0
         overlap_events = 0
         stop_launching = False
+        infer_wait_s = 0.0
+        env_step_wait_s = 0.0
+        dump_wait_s = 0.0
+        ray_wait_s = 0.0
+        env_ready_batches = 0
+        infer_ready_batches = 0
 
-        def launch_inference_and_steps(obs_batch: list[dict[str, Any]], batch_env_ids: list[int]) -> None:
+        def refresh_stop() -> None:
+            nonlocal stop_launching, dump_wait_s
+            if stop_launching:
+                return
+            start = time.perf_counter()
+            episodes_so_far = int(dump.size().wait()[0])
+            dump_wait_s += time.perf_counter() - start
+            if episodes_so_far >= target_episodes:
+                stop_launching = True
+                ready_obs.clear()
+
+        def launch_infer() -> None:
             nonlocal steps, overlap_events
-            if any(not result.done() for result in pending_steps.values()) or pending_steps:
+            if stop_launching or pending_infers or not ready_obs or steps >= max_steps:
+                return
+            batch = list(ready_obs)
+            ready_obs.clear()
+            batch_env_ids = [env_id for env_id, _obs in batch]
+            obs_batch = [obs for _env_id, obs in batch]
+            if pending_steps or steps > 0:
                 overlap_events += 1
-            infer_out = infer.forward_batch(obs_batch, batch_env_ids).wait()[0]
-            for env_id, action, hidden in zip(
-                batch_env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
-            ):
-                pending_steps[int(env_id)] = envs.execute_on(int(env_id)).step(action, hidden)
+            result = infer.forward_batch(obs_batch, batch_env_ids)
+            pending_infers[result.refs[0]] = (batch_env_ids, result, time.perf_counter())
             steps += 1
 
-        obs_batch = envs.current_obs().wait()
-        launch_inference_and_steps(obs_batch, env_ids)
+        def launch_steps(batch_env_ids: list[int], infer_out: dict[str, Any]) -> None:
+            for env_id, action, hidden in zip(
+                batch_env_ids,
+                infer_out["actions"],
+                infer_out["obs_embedding"],
+                strict=True,
+            ):
+                result = envs.execute_on(int(env_id)).step(action, hidden)
+                pending_steps[result.refs[0]] = (int(env_id), result, time.perf_counter())
 
-        while pending_steps and steps < max_steps:
-            ref_to_env = {
-                result.refs[0]: env_id
-                for env_id, result in pending_steps.items()
-            }
-            ready_refs, _pending_refs = ray.wait(list(ref_to_env), num_returns=1)
-            ready_env_ids = [ref_to_env[ready_refs[0]]]
-            step_results = [pending_steps.pop(ready_env_ids[0]).wait()[0]]
+        def handle_step_result(
+            env_id: int,
+            step_result: tuple[dict[str, Any], bool, dict[str, Any]],
+        ) -> None:
+            next_obs, done, _info = step_result
+            if done:
+                infer.reset_states([int(env_id)]).wait()
+                if scheduled:
+                    next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    env_task_ids[int(env_id)] = next_task
+                    if next_task is None:
+                        return
+                    next_obs = (
+                        envs.execute_on(int(env_id)).set_task(int(next_task)).wait()[0]
+                    )
+            if not stop_launching:
+                ready_obs.append((int(env_id), next_obs))
 
-            done_envs = [
-                env_id
-                for env_id, (_obs, done, _info) in zip(ready_env_ids, step_results, strict=True)
-                if done
-            ]
-            if done_envs:
-                infer.reset_states(done_envs).wait()
+        if scheduled:
+            initial_obs = _wait_worker_results(
+                [envs.execute_on(env_id).current_obs() for env_id in env_ids]
+            )
+        else:
+            initial_obs = envs.current_obs().wait()
+        ready_obs.extend(
+            (int(env_id), obs)
+            for env_id, obs in zip(env_ids, initial_obs, strict=True)
+        )
+        launch_infer()
 
-            if int(dump.size().wait()[0]) >= target_episodes:
+        while pending_steps or pending_infers or ready_obs:
+            refresh_stop()
+            launch_infer()
+            refs = list(pending_infers) + list(pending_steps)
+            if not refs:
+                if stop_launching or steps >= max_steps:
+                    break
+                launch_infer()
+                refs = list(pending_infers) + list(pending_steps)
+                if not refs:
+                    break
+
+            wait_start = time.perf_counter()
+            ready_refs, remaining_refs = ray.wait(refs, num_returns=1)
+            if remaining_refs:
+                extra_ready, _ = ray.wait(
+                    remaining_refs,
+                    num_returns=len(remaining_refs),
+                    timeout=0.0,
+                )
+                ready_refs.extend(extra_ready)
+            ray_wait_s += time.perf_counter() - wait_start
+
+            for ref in ready_refs:
+                if ref in pending_infers:
+                    batch_env_ids, result, start_time = pending_infers.pop(ref)
+                    infer_out = result.wait()[0]
+                    infer_wait_s += time.perf_counter() - start_time
+                    infer_ready_batches += 1
+                    if not stop_launching:
+                        launch_steps(batch_env_ids, infer_out)
+                elif ref in pending_steps:
+                    env_id, result, start_time = pending_steps.pop(ref)
+                    step_result = result.wait()[0]
+                    env_step_wait_s += time.perf_counter() - start_time
+                    env_ready_batches += 1
+                    handle_step_result(env_id, step_result)
+
+            if steps >= max_steps:
                 stop_launching = True
+                ready_obs.clear()
 
-            if not stop_launching and steps < max_steps:
-                next_obs = [result[0] for result in step_results]
-                launch_inference_and_steps(next_obs, ready_env_ids)
+        for _env_id, result, start_time in list(pending_steps.values()):
+            result.wait()
+            env_step_wait_s += time.perf_counter() - start_time
+        pending_steps.clear()
+        for _env_ids, result, start_time in list(pending_infers.values()):
+            result.wait()
+            infer_wait_s += time.perf_counter() - start_time
+        pending_infers.clear()
 
-        if pending_steps:
-            for result in list(pending_steps.values()):
-                result.wait()
-            pending_steps.clear()
-
+        start = time.perf_counter()
         episodes = int(dump.size().wait()[0])
         dump.close().wait()
         envs.close().wait()
+        dump_wait_s += time.perf_counter() - start
         return {
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
             "env/num_env_workers": int(num_envs),
             "time/overlap_events": int(overlap_events),
+            "time/infer_wait_s": float(infer_wait_s),
+            "time/env_step_wait_s": float(env_step_wait_s),
+            "time/dump_wait_s": float(dump_wait_s),
+            "time/ray_wait_s": float(ray_wait_s),
+            "time/env_ready_batches": int(env_ready_batches),
+            "time/infer_ready_batches": int(infer_ready_batches),
+            **collect_resource_metrics(prefix="time"),
         }
 
     def _select_first(self, paths: tuple[str, ...], default: Any) -> Any:

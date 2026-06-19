@@ -50,6 +50,7 @@ openvla_oft:
   token_dim: 4096
   chunk_size: 8
   wm_sequence_length: 36
+  latent_stage: query_after
   latent_source: OpenVLA-OFT discrete action-query hidden [56,4096]
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory

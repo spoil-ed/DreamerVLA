@@ -49,6 +49,78 @@ bash scripts/install/60_verify.sh
 All model, world-model, actor, classifier, token, and action dimensions are
 derived from `task.openvla_oft`.
 
+## World Model (DINO-WM chunk predictor)
+
+The world model is the DINO-WM paradigm migrated onto **discrete** OpenVLA-OFT
+latents — no L1 action head anywhere on this route. The VLA backbone token
+dimension drives the predictor's residual width.
+
+### Latent and conditioning
+
+- Latent stage `query_after`: the OFT **action-query hidden** sidecar, shape
+  `(time_horizon, 229376)` → `token_count=56`, `token_dim=4096`.
+- DINO-WM concat conditioning: the action is encoded to `action_emb_dim=10`,
+  tiled to every observation token, and concatenated on the channel axis. The
+  residual width is therefore pinned, not free:
+  `model_dim = token_dim + action_emb_dim * num_action_repeat = 4096 + 10*1 = 4106`.
+
+### Autoregressive training recursion
+
+`F_ω` consumes a fixed window of `num_hist = 3` latents plus one action and
+predicts the next latent. Predicted latents slide back into the window, so the
+rollout is free-running (no teacher forcing inside the chunk):
+
+```text
+ê_{t+1} = F_w(e_{t-2}, e_{t-1}, e_t,      a_t)
+ê_{t+2} = F_w(e_{t-1}, e_t,     ê_{t+1},  a_{t+1})
+ê_{t+3} = F_w(e_t,     ê_{t+1}, ê_{t+2},  a_{t+2})
+ê_{t+4} = F_w(ê_{t+1}, ê_{t+2}, ê_{t+3},  a_{t+3})
+```
+
+By step 4 all three inputs are model predictions; actions are always the real
+demo actions. Implemented in `predict_next` / `predict_next_chunk`
+(`dreamervla/models/world_model/dino_wm_chunk.py`).
+
+### The rollout length is a hyperparameter
+
+The window depth and the rollout horizon are explicit Hydra knobs, not constants:
+
+| Knob | Symbol | Value | Meaning |
+| --- | --- | --- | --- |
+| `world_model.num_hist` | H | 3 | history window depth (the 3 inputs to F_w) |
+| `world_model.chunk_size` | K | 8 | autoregressive steps per chunk (chunk 0) |
+| `world_model.chunk_rollout_chunks` | N | 4 | extra closed-loop chunks (anti-drift) |
+| derived horizon | N*K | 32 | total supervised autoregressive steps |
+| `dataset.sequence_length` | H + N*K + 1 | 36 | window the dataloader must serve |
+
+`num_hist=3` is required by the recursion above (exactly three history terms).
+Changing the horizon (K, N) means matching `dataset.sequence_length = H + N*K + 1`.
+
+### Predictor sizing — efficiency vs capacity
+
+`model_dim=4106` is fixed by the concat rule; the predictor's internal width is
+chosen to balance accuracy against compute. The action-hidden sequence is short
+(`num_hist * token_count = 3 * 56 = 168` tokens), so full-width attention is
+nearly free on this route — capacity is spent where it is cheap.
+
+| profile | inner = heads*dim_head | mlp_dim | depth | total params |
+| --- | --- | --- | --- | --- |
+| compact (old) | 256 (0.06x) | 1024 | 4 | 55M |
+| dino-wm default | 1024 (0.25x) | 2048 | 6 | 207M |
+| **balanced (this route)** | **4096 (1.00x)** | **4096** | 6 | **610M** |
+| full-width | 4096 (1.00x) | 8192 | 6 | 812M |
+
+This route uses **full-width attention** (`heads=16, dim_head=256` → inner=4096 =
+`model_dim`, no compression of the dense 4096-d VLA tokens) with a **lean FFN**
+(`mlp_dim=4096`). ~610M params, under the 1B ceiling. All values live in
+`configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`.
+
+> Memory: ~610M is ~11x the old 55M compact WM. The default warmup-only path
+> (`online_rollout.total_env_steps=0`) does not load the VLA, so it fits easily.
+> For full online cotrain (VLA + WM co-resident), lower `dataloader.batch_size`
+> if you hit OOM. The new architecture is incompatible with old `model_dim=1024`
+> warmup checkpoints — start fresh.
+
 ## Run
 
 No-Ray collector:

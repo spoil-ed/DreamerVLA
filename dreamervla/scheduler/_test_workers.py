@@ -22,6 +22,7 @@ class EchoWorker(Worker):
             "local_rank": self.local_rank,
             "world_size": self.world_size,
             "device": self.device,
+            "visible_accelerators": ",".join(self.visible_accelerators),
             "initialized": self.initialized,
         }
 

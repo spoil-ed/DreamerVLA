@@ -31,6 +31,7 @@ import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
+from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
@@ -38,11 +39,61 @@ from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldMod
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _cfg_get(mapping: object, key: str, default: object = None) -> object:
+    if isinstance(mapping, DictConfig):
+        return mapping.get(key, default)
+    if isinstance(mapping, dict):
+        return mapping.get(key, default)
+    return default
+
+
+def _infer_resolved_config_path(ckpt_path: Path) -> Path | None:
+    for parent in (ckpt_path.parent, ckpt_path.parent.parent):
+        candidate = parent / "resolved_config.yaml"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_world_model_config(sd: dict, ckpt_path: Path, config_path: str | None) -> object:
+    cfg_blob = sd.get("cfg", {}) if isinstance(sd, dict) else {}
+    wm_cfg = _cfg_get(cfg_blob, "world_model", None)
+    if wm_cfg:
+        return wm_cfg
+
+    resolved_config = Path(config_path) if config_path else _infer_resolved_config_path(ckpt_path)
+    if resolved_config is not None and resolved_config.is_file():
+        cfg = OmegaConf.load(resolved_config)
+        wm_cfg = OmegaConf.select(cfg, "world_model")
+        if wm_cfg:
+            return wm_cfg
+
+    raise ValueError(
+        f"ckpt {ckpt_path} does not carry cfg.world_model and no resolved_config.yaml "
+        "was found next to it; pass --config explicitly"
+    )
+
+
+def _load_world_model_state(sd: dict, ckpt_path: Path) -> dict:
+    if "model" in sd:
+        return sd["model"]
+    state_dicts = sd.get("state_dicts")
+    if isinstance(state_dicts, dict) and "world_model" in state_dicts:
+        return state_dicts["world_model"]
+    if "world_model" in sd:
+        return sd["world_model"]
+    raise ValueError(
+        f"ckpt {ckpt_path} has no world-model state; expected one of "
+        "'model', 'state_dicts.world_model', or 'world_model'"
+    )
+
+
 def load_chunk_wm(
-    ckpt_path: str, device: torch.device
+    ckpt_path: str, device: torch.device, config_path: str | None = None
 ) -> ChunkAwareDinoWMWorldModel:
-    sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    wm_cfg_blob = sd.get("cfg", {}).get("world_model", {})
+    ckpt_file = Path(ckpt_path)
+    sd = torch.load(ckpt_file, map_location="cpu", weights_only=False)
+    wm_cfg_blob = _load_world_model_config(sd, ckpt_file, config_path)
     chunk_size = int(wm_cfg_blob.get("chunk_size", 5))
     kwargs = {}
     for k in (
@@ -51,10 +102,15 @@ def load_chunk_wm(
         "token_count",
         "token_dim",
         "model_dim",
+        "latent_stage",
+        "latent_source",
         "depth",
         "heads",
+        "dim_head",
         "mlp_dim",
         "dropout",
+        "action_emb_dim",
+        "num_action_repeat",
         "num_hist",
         "num_pred",
         "max_seq_len",
@@ -73,7 +129,8 @@ def load_chunk_wm(
         if k in wm_cfg_blob:
             kwargs[k] = wm_cfg_blob[k]
     wm = ChunkAwareDinoWMWorldModel(chunk_size=chunk_size, **kwargs)
-    missing, unexpected = wm.load_state_dict(sd["model"], strict=False)
+    model_state = _load_world_model_state(sd, ckpt_file)
+    missing, unexpected = wm.load_state_dict(model_state, strict=False)
     print(
         f"[load] global_step={sd.get('global_step')} epoch={sd.get('epoch')}"
         f" missing={missing} unexpected={unexpected}"
@@ -96,6 +153,16 @@ def load_demo(
         actions = np.asarray(grp["actions"][...], dtype=np.float32)
     T = min(obs.shape[0], actions.shape[0])
     return obs[:T].reshape(T, -1), actions[:T]
+
+
+def truncate_demo_to_wm_context(
+    wm: ChunkAwareDinoWMWorldModel,
+    obs: np.ndarray,
+    actions: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    max_T = int(getattr(wm, "max_seq_len", int(obs.shape[0])))
+    T = min(int(obs.shape[0]), int(actions.shape[0]), max_T)
+    return obs[:T], actions[:T]
 
 
 @torch.no_grad()
@@ -194,6 +261,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional resolved_config.yaml for split warmup checkpoints.",
+    )
+    parser.add_argument(
         "--success-dir-raw",
         default=str(
             PROJECT_ROOT
@@ -218,7 +290,7 @@ def main() -> None:
     args = parser.parse_args()
 
     device = torch.device(args.device)
-    wm = load_chunk_wm(args.ckpt, device)
+    wm = load_chunk_wm(args.ckpt, device, config_path=args.config)
     H, K = wm.num_hist, wm.chunk_size
     print(
         f"[wm] num_hist={H} chunk_size={K} action_dim={wm.action_dim} obs_dim={wm.obs_dim}"
@@ -236,6 +308,7 @@ def main() -> None:
         if rec is None:
             continue
         obs_np, act_np = rec
+        obs_np, act_np = truncate_demo_to_wm_context(wm, obs_np, act_np)
         T = int(obs_np.shape[0])
         if T < H + K:
             continue

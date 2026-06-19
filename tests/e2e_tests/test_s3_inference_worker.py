@@ -123,3 +123,41 @@ def test_inference_worker_handles_dict_latent_state() -> None:
         assert np.allclose(first["actions"][0], reset["actions"][0])
     finally:
         cluster.shutdown()
+
+
+def test_encode_batch_uses_single_obs_encoder_fallback() -> None:
+    from dreamervla.workers.inference.inference_worker import _encode_batch
+
+    class _SingleObsEncoder:
+        def encode(self, obs: dict) -> np.ndarray:
+            return np.asarray(
+                [
+                    float(obs["step"]),
+                    float(obs["env_id"]),
+                    float(bool(obs.get("is_first", False))),
+                    1.0,
+                ],
+                dtype=np.float32,
+            )
+
+    encoded = _encode_batch(
+        _SingleObsEncoder(),
+        [_obs(0, 3, is_first=True), _obs(1, 4, is_first=False)],
+    )
+
+    assert encoded.shape == (2, 4)
+    assert np.allclose(encoded.numpy(), [[3.0, 0.0, 1.0, 1.0], [4.0, 1.0, 0.0, 1.0]])
+
+
+def test_inference_worker_reports_stage_timing() -> None:
+    from dreamervla.workers.inference.inference_worker import InferenceWorker
+
+    worker = InferenceWorker(_cfg(), {}, num_envs=1)
+    worker.init()
+
+    out = worker.forward_batch([_obs(0, 0, is_first=True)], [0])
+
+    assert "timing" in out
+    for key in ("encode_s", "world_model_s", "policy_s"):
+        assert key in out["timing"]
+        assert out["timing"][key] >= 0.0

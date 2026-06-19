@@ -51,6 +51,7 @@ class DinoWMWorldModel(BaseWorldModel):
         return_predictions: bool = False,
         freeze_backbone: bool = False,
         freeze_input_embeddings: bool = False,
+        latent_stage: str | None = None,
         latent_source: str = "RynnVLA legacy [5,7,1024] action hidden",
     ) -> None:
         super().__init__()
@@ -111,6 +112,7 @@ class DinoWMWorldModel(BaseWorldModel):
         self.return_predictions = bool(return_predictions)
         self.freeze_backbone_requested = bool(freeze_backbone)
         self.freeze_input_embeddings_requested = bool(freeze_input_embeddings)
+        self.latent_stage = None if latent_stage is None else str(latent_stage)
         self.latent_source = str(latent_source)
         self.slots_per_step = self.token_count + 1
         self.decoder = None

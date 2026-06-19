@@ -25,6 +25,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_resume_paths(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
+    _validate_latent_dimension_contracts(cfg)
     _validate_model_registry_refs(cfg)
     _validate_online_cotrain_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
@@ -106,25 +107,39 @@ def _validate_sidecar_routes(cfg: DictConfig) -> None:
         return
 
     rynn_hidden = _select_str(cfg, "task.rynnvla_action_hidden_dir")
+    rynn_input_hidden = _select_str(cfg, "task.rynnvla_input_token_hidden_dir")
     oft_hidden = _select_str(cfg, "task.openvla_oft.action_hidden_dir")
+    oft_input_hidden = _select_str(cfg, "task.openvla_oft.input_token_hidden_dir")
 
-    if rynn_hidden is not None and dataset_hidden == rynn_hidden:
-        return
-    if oft_hidden is not None and dataset_hidden == oft_hidden:
-        return
+    for candidate in (rynn_hidden, rynn_input_hidden, oft_hidden, oft_input_hidden):
+        if candidate is not None and dataset_hidden == candidate:
+            return
 
     if rynn_hidden is not None and _looks_rynn_sidecar_cfg(cfg):
         raise ValueError(
             "dataset.hidden_dir must match task.rynnvla_action_hidden_dir for "
             f"RynnVLA action-hidden routes: {dataset_hidden!r} != {rynn_hidden!r}"
         )
+    if rynn_input_hidden is not None and _looks_rynn_input_token_cfg(cfg):
+        raise ValueError(
+            "dataset.hidden_dir must match task.rynnvla_input_token_hidden_dir "
+            f"for RynnVLA input-token routes: {dataset_hidden!r} != "
+            f"{rynn_input_hidden!r}"
+        )
     if oft_hidden is not None and (
-        rynn_hidden is None or _looks_oft_sidecar_cfg(cfg)
+        (rynn_hidden is None and rynn_input_hidden is None)
+        or _looks_oft_action_hidden_cfg(cfg)
     ):
         raise ValueError(
             "dataset.hidden_dir must match task.openvla_oft.action_hidden_dir "
             f"for OpenVLA-OFT action-hidden routes: {dataset_hidden!r} != "
             f"{oft_hidden!r}"
+        )
+    if oft_input_hidden is not None and _looks_oft_input_token_cfg(cfg):
+        raise ValueError(
+            "dataset.hidden_dir must match task.openvla_oft.input_token_hidden_dir "
+            f"for OpenVLA-OFT input-token routes: {dataset_hidden!r} != "
+            f"{oft_input_hidden!r}"
         )
 
 
@@ -148,19 +163,244 @@ def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:
         message="Dataset expected horizon must match the world-model horizon.",
     )
 
-    if _looks_oft_sidecar_cfg(cfg):
+    selected_horizon = _selected_sidecar_action_horizon_key(cfg)
+    if selected_horizon is not None:
         _require_equal_if_present(
             cfg,
             "dataset.expected_time_horizon",
-            "task.openvla_oft.time_horizon",
-            message="OFT dataset horizon must match task.openvla_oft.time_horizon.",
+            selected_horizon,
+            message="Dataset expected horizon must match the selected sidecar action horizon.",
         )
-    else:
-        _require_equal_if_present(
+    _validate_chunk_wm_sequence_lengths(cfg)
+
+
+def _validate_chunk_wm_sequence_lengths(cfg: DictConfig) -> None:
+    for key in (
+        "world_model",
+        "ray_components.world_model.kwargs",
+        "learner.model_cfg.world_model.kwargs",
+        "inference.cfg.world_model.kwargs",
+    ):
+        _validate_chunk_wm_sequence_length_for_component(cfg, key)
+
+
+def _validate_chunk_wm_sequence_length_for_component(
+    cfg: DictConfig,
+    key: str,
+) -> None:
+    target = _component_target(cfg, key)
+    if target is None or not target.endswith("ChunkAwareDinoWMWorldModel"):
+        return
+
+    num_hist = _select_int(cfg, f"{key}.num_hist")
+    chunk_size = _select_int(cfg, f"{key}.chunk_size")
+    rollout_chunks = _select_int(cfg, f"{key}.chunk_rollout_chunks")
+    if num_hist is None or chunk_size is None or rollout_chunks is None:
+        return
+
+    expected = num_hist + rollout_chunks * chunk_size + 1
+    for sequence_key in (
+        "dataset.sequence_length",
+        "online_rollout.sequence_length",
+        "replay.cfg.sequence_length",
+        "ray_data.sequence_length",
+    ):
+        value = _select_int(cfg, sequence_key)
+        if value is None:
+            continue
+        if value != expected:
+            raise ValueError(
+                f"{sequence_key} must equal {key}.num_hist + "
+                f"{key}.chunk_rollout_chunks * {key}.chunk_size + 1 "
+                f"({value} != {num_hist} + {rollout_chunks} * {chunk_size} + 1 = "
+                f"{expected})"
+            )
+
+
+def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
+    for key in (
+        "task.legacy_action_hidden",
+        "task.openvla_oft",
+    ):
+        _validate_latent_spec(
             cfg,
-            "dataset.expected_time_horizon",
-            "task.time_horizon",
-            message="RynnVLA dataset horizon must match task.time_horizon.",
+            key,
+            obs_dim_field="wm_obs_dim",
+            action_dim_key="task.action_dim",
+            check_action_token_count=True,
+        )
+    for key in (
+        "task.legacy_input_tokens",
+        "task.openvla_oft.input_tokens",
+    ):
+        _validate_latent_spec(cfg, key, obs_dim_field="wm_obs_dim")
+    for key in (
+        "task.legacy_action_hidden",
+        "task.legacy_input_tokens",
+        "task.openvla_oft",
+        "task.openvla_oft.input_tokens",
+    ):
+        _validate_latent_stage_value(cfg, key)
+
+    for key in (
+        "world_model",
+        "ray_components.world_model.kwargs",
+        "learner.model_cfg.world_model.kwargs",
+        "inference.cfg.world_model.kwargs",
+    ):
+        _validate_latent_spec(cfg, key, obs_dim_field="obs_dim")
+        _validate_latent_stage_contract(cfg, key)
+        _validate_chunk_wm_token_space(cfg, key)
+
+
+def _validate_latent_stage_value(cfg: DictConfig, key: str) -> None:
+    stage = _select_str(cfg, f"{key}.latent_stage")
+    if stage is not None and stage not in {"query_before", "query_after"}:
+        raise ValueError(
+            f"{key}.latent_stage must be 'query_before' or 'query_after', got {stage!r}"
+        )
+
+
+def _validate_latent_stage_contract(cfg: DictConfig, key: str) -> None:
+    stage = _select_str(cfg, f"{key}.latent_stage")
+    _validate_latent_stage_value(cfg, key)
+    expected_stage = _matching_task_latent_stage(cfg, key)
+    if expected_stage is None:
+        return
+    if stage is None:
+        raise ValueError(
+            f"{key}.latent_stage must be set and match the selected task sidecar "
+            f"stage {expected_stage!r}"
+        )
+    if stage != expected_stage:
+        raise ValueError(
+            f"{key}.latent_stage must match selected task sidecar stage "
+            f"({stage!r} != {expected_stage!r})"
+        )
+
+
+def _matching_task_latent_stage(cfg: DictConfig, key: str) -> str | None:
+    obs_dim = _select_int(cfg, f"{key}.obs_dim")
+    token_count = _select_int(cfg, f"{key}.token_count")
+    token_dim = _select_int(cfg, f"{key}.token_dim")
+    if obs_dim is None or token_count is None or token_dim is None:
+        return None
+
+    for spec_key in (
+        "task.legacy_action_hidden",
+        "task.legacy_input_tokens",
+        "task.openvla_oft",
+        "task.openvla_oft.input_tokens",
+    ):
+        spec_obs_dim = _select_int(cfg, f"{spec_key}.wm_obs_dim")
+        spec_token_count = _select_int(cfg, f"{spec_key}.token_count")
+        spec_token_dim = _select_int(cfg, f"{spec_key}.token_dim")
+        if (
+            spec_obs_dim == obs_dim
+            and spec_token_count == token_count
+            and spec_token_dim == token_dim
+        ):
+            return _select_str(cfg, f"{spec_key}.latent_stage")
+    return None
+
+
+def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
+    target = _component_target(cfg, key)
+    if target is None or not target.endswith("ChunkAwareDinoWMWorldModel"):
+        return
+
+    for required_key in ("depth", "heads", "dim_head", "mlp_dim"):
+        if _select_int(cfg, f"{key}.{required_key}") is None:
+            raise ValueError(
+                f"{key}.{required_key} must be set in Hydra config for "
+                "ChunkAwareDinoWMWorldModel transformer sizing"
+            )
+
+    model_dim = _select_int(cfg, f"{key}.model_dim")
+    token_dim = _select_int(cfg, f"{key}.token_dim")
+    action_emb_dim = _select_int(cfg, f"{key}.action_emb_dim")
+    num_action_repeat = _select_int(cfg, f"{key}.num_action_repeat")
+    if model_dim is None or token_dim is None:
+        return
+    if action_emb_dim is None:
+        raise ValueError(
+            f"{key}.action_emb_dim must be set for "
+            "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning"
+        )
+    if action_emb_dim < 1:
+        raise ValueError(f"{key}.action_emb_dim must be > 0, got {action_emb_dim}")
+    if num_action_repeat is None:
+        num_action_repeat = 1
+    if num_action_repeat < 1:
+        raise ValueError(
+            f"{key}.num_action_repeat must be > 0, got {num_action_repeat}"
+        )
+    expected_model_dim = token_dim + action_emb_dim * num_action_repeat
+    if model_dim == expected_model_dim:
+        return
+    raise ValueError(
+        f"{key}.model_dim must equal {key}.token_dim + "
+        f"{key}.action_emb_dim * {key}.num_action_repeat for "
+        "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning "
+        f"({model_dim} != {token_dim} + {action_emb_dim} * {num_action_repeat})"
+    )
+
+
+def _component_target(cfg: DictConfig, key: str) -> str | None:
+    target = _select_str(cfg, f"{key}._target_")
+    if target is None and key.endswith(".kwargs"):
+        parent_key = key.removesuffix(".kwargs")
+        target = _select_str(cfg, f"{parent_key}.target")
+    return target
+
+
+def _validate_latent_spec(
+    cfg: DictConfig,
+    key: str,
+    *,
+    obs_dim_field: str,
+    action_dim_key: str | None = None,
+    check_action_token_count: bool = False,
+) -> None:
+    section = OmegaConf.select(cfg, key, default=None)
+    if section is None:
+        return
+
+    obs_dim = _select_int(cfg, f"{key}.{obs_dim_field}")
+    token_count = _select_int(cfg, f"{key}.token_count")
+    token_dim = _select_int(cfg, f"{key}.token_dim")
+    if obs_dim is not None and token_count is not None and token_dim is not None:
+        expected = token_count * token_dim
+        if obs_dim != expected:
+            raise ValueError(
+                f"{key}.{obs_dim_field} must equal token_count * token_dim "
+                f"({obs_dim} != {token_count} * {token_dim} = {expected})"
+            )
+
+    chunk_size = _select_int(cfg, f"{key}.chunk_size")
+    time_horizon = _select_int(cfg, f"{key}.time_horizon")
+    if (
+        chunk_size is not None
+        and time_horizon is not None
+        and chunk_size != time_horizon
+    ):
+        raise ValueError(
+            f"{key}.chunk_size must match {key}.time_horizon "
+            f"({chunk_size} != {time_horizon})"
+        )
+
+    if not check_action_token_count:
+        return
+    if action_dim_key is None:
+        return
+    action_dim = _select_int(cfg, action_dim_key)
+    if token_count is None or chunk_size is None or action_dim is None:
+        return
+    expected_tokens = chunk_size * action_dim
+    if token_count != expected_tokens:
+        raise ValueError(
+            f"{key}.token_count must equal chunk_size * {action_dim_key} "
+            f"({token_count} != {chunk_size} * {action_dim} = {expected_tokens})"
         )
 
 
@@ -424,6 +664,23 @@ def _looks_rynn_sidecar_cfg(cfg: DictConfig) -> bool:
     )
 
 
+def _looks_rynn_input_token_cfg(cfg: DictConfig) -> bool:
+    expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
+    task_action_head = _select_str(
+        cfg, "task.legacy_input_tokens.expected_action_head_type"
+    )
+    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
+    task_source = _select_str(
+        cfg, "task.legacy_input_tokens.expected_obs_hidden_source"
+    )
+    return (
+        expected_action_head is not None
+        and expected_action_head == task_action_head
+        and expected_source is not None
+        and expected_source == task_source
+    )
+
+
 def _looks_oft_sidecar_cfg(cfg: DictConfig) -> bool:
     expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
     task_action_head = _select_str(cfg, "task.openvla_oft.expected_action_head_type")
@@ -441,6 +698,36 @@ def _looks_oft_sidecar_cfg(cfg: DictConfig) -> bool:
             and expected_model_path == oft_ckpt_path
         )
     )
+
+
+def _looks_oft_action_hidden_cfg(cfg: DictConfig) -> bool:
+    if not _looks_oft_sidecar_cfg(cfg):
+        return False
+    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
+    task_source = _select_str(cfg, "task.openvla_oft.expected_obs_hidden_source")
+    return expected_source is None or expected_source == task_source
+
+
+def _looks_oft_input_token_cfg(cfg: DictConfig) -> bool:
+    if not _looks_oft_sidecar_cfg(cfg):
+        return False
+    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
+    task_source = _select_str(
+        cfg, "task.openvla_oft.input_tokens.expected_obs_hidden_source"
+    )
+    return expected_source is not None and expected_source == task_source
+
+
+def _selected_sidecar_action_horizon_key(cfg: DictConfig) -> str | None:
+    if _looks_oft_input_token_cfg(cfg):
+        return "task.openvla_oft.input_tokens.chunk_size"
+    if _looks_oft_action_hidden_cfg(cfg):
+        return "task.openvla_oft.chunk_size"
+    if _looks_rynn_input_token_cfg(cfg):
+        return "task.legacy_input_tokens.chunk_size"
+    if _looks_rynn_sidecar_cfg(cfg):
+        return "task.legacy_action_hidden.chunk_size"
+    return None
 
 
 def _require_equal_if_present(
@@ -492,6 +779,13 @@ def _select_str(cfg: DictConfig, key: str) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _select_int(cfg: DictConfig, key: str) -> int | None:
+    value = OmegaConf.select(cfg, key, default=None)
+    if value is None:
+        return None
+    return int(value)
 
 
 def _resolve_world_size(world_size: int | None) -> int:

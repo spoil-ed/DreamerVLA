@@ -27,17 +27,17 @@ training:
   out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_backbone_latent/${now:%Y%m%d_%H%M%S}
 
 # backbone (input-token) latent -> action adapter: Action Queries + decoder bridge
-# + RynnVLA legacy action head. source tokens = current-frame VQ image tokens of
-# the RynnVLA Chameleon backbone (input-embedding table output), token_dim 4096.
+# + RynnVLA legacy action head. Source-token shape comes from
+# task.legacy_input_tokens so offline sidecars and online routes share one spec.
 policy:
   _target_: dreamervla.models.actor.LatentToActionHiddenActor
   hidden_dim: null
-  source_token_count: 512    # current-frame VQ content tokens x num_views (RynnVLA, 2 views @256)
-  source_token_dim: 4096     # Chameleon backbone embedding dim
-  action_hidden_dim: 1024    # RynnVLA legacy action-hidden dim
-  action_dim: 7
-  time_horizon: 5
-  head_type: legacy          # RynnVLA legacy head (loads from the RynnVLA VLA ckpt)
+  source_token_count: ${task.legacy_input_tokens.token_count}
+  source_token_dim: ${task.legacy_input_tokens.token_dim}
+  action_hidden_dim: ${task.legacy_input_tokens.action_hidden_dim}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.legacy_input_tokens.chunk_size}
+  head_type: ${task.legacy_input_tokens.expected_action_head_type}
   bridge_hidden_dim: 1024
   num_bridge_layers: 2
   num_bridge_heads: 8
@@ -51,27 +51,36 @@ policy:
 
 # WM consumes the backbone (input-token) latent as token_count x token_dim.
 world_model:
-  obs_dim: 2097152           # 512 * 4096 current-frame VQ image tokens (RynnVLA @256, 2 views)
-  token_count: 512
-  token_dim: 4096
-  chunk_size: 5
+  obs_dim: ${task.legacy_input_tokens.wm_obs_dim}
+  token_count: ${task.legacy_input_tokens.token_count}
+  token_dim: ${task.legacy_input_tokens.token_dim}
+  chunk_size: ${task.legacy_input_tokens.chunk_size}
+  latent_stage: ${task.legacy_input_tokens.latent_stage}
+  latent_source: ${task.legacy_input_tokens.latent_source}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 4106
+  depth: 4
+  heads: 8
+  dim_head: 32
+  mlp_dim: 1024
 
-# Backbone latent is stored flat (512*4096). token_pool=mean + token_count keeps
-# the classifier input projection token_dim-sized (4096) instead of the huge flat
-# N*token_dim, so it pools the 512 tokens.
+# Backbone latent is stored flat as token_count x token_dim. token_pool=mean keeps
+# the classifier input projection token_dim-sized instead of the huge flat
+# N*token_dim, so it pools the configured source tokens.
 classifier:
-  latent_dim: null
-  token_dim: 4096
-  token_count: 512
+  latent_dim: ${task.legacy_input_tokens.token_dim}
+  token_dim: ${task.legacy_input_tokens.token_dim}
+  token_count: ${task.legacy_input_tokens.token_count}
   token_pool: mean
-  chunk_size: 5
+  chunk_size: ${task.legacy_input_tokens.chunk_size}
 
 algorithm:
-  # The backbone latent is 512 tokens x 4096 — the WM transformer attends over
+  # The backbone latent is token_count x token_dim — the WM transformer attends over
   # (token_count x time), so the imagined rollout is memory-heavy. Use a short
   # imagined horizon + a single GRPO rollout to keep it within GPU memory
   # (scale these up on larger GPUs / with token subsampling).
   ppo_rollouts_per_start: 1
   wmpo:
-    chunk_size: 5   # must match world_model.chunk_size (early validate_cfg check)
+    chunk_size: ${task.legacy_input_tokens.chunk_size}
     episode_max_steps: 10

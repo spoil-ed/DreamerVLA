@@ -24,6 +24,7 @@ normal Hydra keys.
 | [OpenVLA_Onetraj_LIBERO — backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk_input_tokens`, `oft_latent_classifier_chunk_input_tokens`, `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, `online_cotrain_oft_backbone_latent` |
 | [OpenVLA_Onetraj_LIBERO — cold-start rollout collection (pure Hydra)](OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md) | `OpenVLA_Onetraj_ColdStart_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `collect_rollouts_onetraj`, `oft_discrete_token_world_model_dinowm_chunk` |
 | [OpenVLA_Onetraj_LIBERO — cold-start collection and warmup](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md) | `OpenVLA_Onetraj_ColdStart_LIBERO` | generated cold-start rollouts | `collect_rollouts_ray`, `collect_rollouts_onetraj`, `online_cotrain_pipeline_oft_action_hidden` |
+| [Ray online cotrain backend](../ray_online_cotrain_backend.md) | synthetic smoke / `libero_goal` gated real smoke | generated online replay / cold-start rollouts | `online_cotrain_ray_synthetic`, `online_cotrain_ray_dreamervla_tiny`, `online_cotrain_ray_oft`, `collect_rollouts_ray_synthetic`, `collect_rollouts_ray` |
 
 The pipeline task name is the Hydra `task=` value. The preprocessing artifact
 name appends the raw dataset suite, so intermediate folders and sidecars stay
@@ -39,6 +40,7 @@ actor.
 | Note | Purpose |
 | --- | --- |
 | [RLinf-aligned LIBERO rollout implementation notes](RLinf_aligned_LIBERO_rollout_execution_plan.md) | Records the OpenVLA-OFT / RLinf action contract and the shared standalone, no-Ray, and Ray collection rollout core. |
+| [Ray online cotrain backend](../ray_online_cotrain_backend.md) | Shows the single-node Ray proof commands, overlap metrics, gated real OFT/LIBERO smoke routes, and model/data decoupling boundary. |
 
 ## Logging
 

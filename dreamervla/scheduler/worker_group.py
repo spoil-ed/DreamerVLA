@@ -41,7 +41,10 @@ class WorkerGroup:
         for item in self.placements:
             remote_cls = ray.remote(self.worker_cls)
             options: dict[str, Any] = {
-                "num_gpus": len(item.visible_accelerators),
+                # Placement owns exact GPU visibility through CUDA_VISIBLE_DEVICES.
+                # Asking Ray to also assign num_gpus can conflict with runtime_env
+                # CUDA_VISIBLE_DEVICES for non-zero local GPU ids on Ray 2.47.
+                "num_gpus": 0,
                 "runtime_env": {
                     "env_vars": self._env_vars(
                         item,

@@ -279,6 +279,11 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
         errors.append(f"cold-start hidden directory not found: {hidden}")
     elif not any(hidden.glob("*.hdf5")):
         errors.append(f"cold-start hidden directory has no HDF5 shards: {hidden}")
+    elif not (hidden / "preprocess_config.json").is_file():
+        errors.append(
+            "cold-start hidden directory is missing preprocess_config.json: "
+            f"{hidden / 'preprocess_config.json'}"
+        )
     return errors
 
 

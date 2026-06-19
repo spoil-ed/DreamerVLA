@@ -1,6 +1,6 @@
 # @package _global_
 # Dreamer actor-critic on the DINO-WM-style full RynnVLA action-hidden world model.
-# WM target/action hidden shape is derived from time_horizon * action_dim * token_dim.
+# WM external VLA latent-observation shape is derived from time_horizon * action_dim * token_dim.
 defaults:
   - _self_
   - /task: libero_goal
@@ -64,7 +64,7 @@ dataset:
   hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
   expected_encoder_state_ckpt: null
-  expected_time_horizon: ${task.time_horizon}
+  expected_time_horizon: ${task.legacy_action_hidden.chunk_size}
   expected_action_head_type: ${task.legacy_action_hidden.expected_action_head_type}
   expected_obs_hidden_source: ${task.legacy_action_hidden.expected_obs_hidden_source}
   expected_prompt_style: ${task.legacy_action_hidden.expected_prompt_style}
@@ -98,20 +98,22 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  # Chunk-aware variant — adds no parameters relative to the parent class,
-  # so an m1024 ckpt trained with DinoWMWorldModel loads directly.
-  # predict_next_chunk advances K env-steps per call (K must match
-  # policy.time_horizon and algorithm.wmpo.chunk_size).
+  # DINO-WM-style chunk variant: action is encoded and concatenated to every
+  # obs token channel; predict_next_chunk rolls K env-steps autoregressively.
   _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
   token_dim: ${task.legacy_action_hidden.token_dim}
-  time_horizon: ${task.time_horizon}
-  model_dim: 1024
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  latent_stage: ${task.legacy_action_hidden.latent_stage}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 1034
   depth: 6
-  heads: 8
+  heads: 16
+  dim_head: 64
   mlp_dim: 2048
   dropout: 0.1
   num_hist: 3
@@ -136,7 +138,7 @@ policy:
   hidden_dim: null
   action_hidden_dim: ${task.legacy_action_hidden.token_dim}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.time_horizon}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
   head_type: legacy
   adapter_type: residual_mlp
   adapter_hidden_dim: 1024
@@ -215,7 +217,7 @@ algorithm:
   tdmpc_ac:
     enabled: false
     value_mode: state
-    action_dim: 7
+    action_dim: ${task.action_dim}
     terminal_value_scale: 1.0
     critic_loss_scale: 1.0
     imagined_critic_loss_scale: 0.1

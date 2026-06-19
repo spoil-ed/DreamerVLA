@@ -9,6 +9,9 @@
 # via RynnVLAEncoder. The OFT one-trajectory checkpoint is handled by the OFFLINE
 # OFT action-hidden path (experiment=dreamervla_oft_dino_wm_wmpo_outcome); see the
 # tutorial doc. This is a policy/action-latent WM, NOT the original pixel DINO-WM.
+defaults:
+  - /task: libero_goal
+  - _self_
 
 _target_: dreamervla.runners.OnlineCotrainRunner
 latent_type: action_hidden
@@ -44,7 +47,7 @@ training:
   classifier_batch_size: 16
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
+  vla_ckpt_path: ${task.vla_ckpt_path}
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   world_model_state_ckpt: null   # train WM online from replay (or warm-start a ckpt)
@@ -61,14 +64,14 @@ init:
 encoder:
   _target_: dreamervla.models.encoder.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
-  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
-  resolution: 256
-  action_dim: 7
-  time_horizon: 5
-  action_head_type: legacy
+  tokenizer_path: ${task.tokenizer_path}
+  text_tokenizer_path: ${task.text_tokenizer_path}
+  chameleon_vqgan_config: ${task.chameleon_vqgan_config}
+  chameleon_vqgan_ckpt: ${task.chameleon_vqgan_ckpt}
+  resolution: ${task.image_resolution}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  action_head_type: ${task.legacy_action_hidden.expected_action_head_type}
   pool: mean
   freeze_backbone: true
 
@@ -91,24 +94,30 @@ online_rollout:
   debug_episode_horizon: 50
 
 env:
-  task_suite_name: libero_goal
+  task_suite_name: ${task.suite}
   task_ids: [0]
   episode_horizon: 200
-  history_length: 2
-  include_state: true
-  vla_rotate_180: true
+  history_length: ${task.legacy_action_hidden.expected_history}
+  include_state: ${task.legacy_action_hidden.expected_include_state}
+  vla_rotate_180: ${task.legacy_action_hidden.expected_rotate_images_180}
   target_token_id: 10004
 
 world_model:
   _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
-  chunk_size: 5
-  obs_dim: 35840
-  action_dim: 7
-  token_count: 35
-  token_dim: 1024
-  model_dim: 1024
+  chunk_size: ${task.legacy_action_hidden.chunk_size}
+  obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
+  action_dim: ${task.action_dim}
+  token_count: ${task.legacy_action_hidden.token_count}
+  token_dim: ${task.legacy_action_hidden.token_dim}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  latent_stage: ${task.legacy_action_hidden.latent_stage}
+  latent_source: ${task.legacy_action_hidden.latent_source}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 1034
   depth: 6
-  heads: 8
+  heads: 16
+  dim_head: 64
   mlp_dim: 2048
   dropout: 0.1
   num_hist: 3
@@ -129,10 +138,10 @@ world_model:
 policy:
   _target_: dreamervla.models.actor.RynnVLAActionHiddenActor
   hidden_dim: null
-  action_hidden_dim: 1024
-  action_dim: 7
-  time_horizon: 5
-  head_type: legacy
+  action_hidden_dim: ${task.legacy_action_hidden.token_dim}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  head_type: ${task.legacy_action_hidden.expected_action_head_type}
   adapter_type: residual_mlp
   adapter_hidden_dim: 1024
   freeze_output_projection: false
@@ -155,7 +164,10 @@ critic:
   bin_max: 20.0
 
 classifier:
-  latent_dim: null          # auto = world_model.obs_dim (35840)
+  latent_dim: ${task.legacy_action_hidden.wm_obs_dim}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  token_dim: ${task.legacy_action_hidden.token_dim}
   window: 8
   hidden_dim: 1024
   num_layers: 4
@@ -163,13 +175,13 @@ classifier:
   mlp_ratio: 4.0
   dropout: 0.1
   granularity: chunk
-  chunk_size: 5
+  chunk_size: ${task.legacy_action_hidden.chunk_size}
   chunk_pool: last
 
 algorithm:
   update_type: wmpo_outcome
   wmpo:
-    chunk_size: 5
+    chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
     classifier_min_steps: 4
     filter_zero_variance_groups: true

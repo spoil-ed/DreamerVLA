@@ -1,5 +1,16 @@
 # Progress Log
 
+## Session 2026-06-19 — DinoWM query-stage worldmodel plan
+
+### Done
+- Created `docs/superpowers/plans/2026-06-19-dinowm-query-stage-worldmodel.md` as the active implementation plan for the current world-model work.
+- Captured the required constraints: no multi-node default path, model/dataset decoupling, Hydra as the source of truth, query-before/query-after world-model taxonomy, DINO-WM concat conditioning, and VLA/dataset-derived dimensional contracts.
+- Recorded the current architecture decisions, transformer sizing policy, parameter-count checkpoints, exact file touch points, implementation tasks, and verification matrix.
+
+### Next
+- Re-run the full focused unit/e2e/static verification matrix after the latest transformer-budget and plan updates.
+- Update the OpenVLA one-trajectory tutorial once the current config and smoke-run path are re-verified.
+
 ## Session 2026-06-18
 
 ### Done

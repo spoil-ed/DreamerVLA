@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: ray_online_cotrain_rynn_action_hidden
+  - _self_

@@ -1,5 +1,5 @@
 # @package _global_
-_target_: dreamervla.runners.cold_start_ray_collect_runner.ColdStartRayCollectRunner
+_target_: dreamervla.runners.ColdStartRayCollectRunner
 
 env:
   num_workers: 2

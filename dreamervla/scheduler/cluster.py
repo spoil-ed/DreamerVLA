@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from typing import Any
 
@@ -23,6 +24,7 @@ class Cluster:
                 f"DreamerVLA Ray backend requires ray>={self.min_ray_version}, got {version}"
             )
 
+        os.environ.setdefault("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
         if not ray.is_initialized():
             init_kwargs = self._init_kwargs(cfg)
             ray.init(**init_kwargs)

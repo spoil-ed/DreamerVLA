@@ -33,7 +33,21 @@ world_model:
   token_count: ${task.openvla_oft.token_count}
   token_dim: ${task.openvla_oft.token_dim}
   time_horizon: ${task.openvla_oft.time_horizon}
+  latent_stage: ${task.openvla_oft.latent_stage}
   latent_source: ${task.openvla_oft.latent_source}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 4106
+  # DINO-WM balanced predictor (query_after / action-hidden, seq = num_hist*token_count = 168):
+  # FULL-WIDTH attention inner = heads*dim_head = 4096 = model_dim — no compression of the
+  # dense 4096-d VLA tokens (accuracy); LEAN FFN mlp_dim = model_dim (efficiency). The short
+  # 168-token sequence makes full-width attention nearly free here, so capacity is spent where
+  # it is cheap. ~610M total (<1B). See the tutorial md for the per-profile table.
+  num_hist: 3      # 3-frame sliding window; the autoregressive recursion needs exactly 3.
+  depth: 6
+  heads: 16
+  dim_head: 256
+  mlp_dim: 4096
 
 policy:
   _target_: ${task.openvla_oft.actor_target}

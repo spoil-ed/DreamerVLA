@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /VLA: rynnvla_full_finetune
+  - _self_

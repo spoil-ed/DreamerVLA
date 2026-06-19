@@ -1,19 +1,16 @@
 # @package _global_
 # Chunk-aware DINO-WM predictor (true Plan B) over RynnVLA legacy action hidden.
-# Target hidden shape is derived from time_horizon * action_dim * token_dim.
+# External VLA latent-observation shape is derived from time_horizon * action_dim * token_dim.
 #
-# Objective: K-step chunk-as-one-input prediction.
-#   Given h_history (H frames) + chunk actions [a_0..a_{K-1}], predict
-#   [h_1..h_K] in ONE transformer forward.  Future obs token slots are filled
-#   by the learned ``mask_obs_token``; loss is hidden MSE + cosine over the K
-#   predicted frames plus the binary reward head (trained on TARGET hiddens,
-#   matching parent's convention).
+# Objective: autoregressive K-step prediction.
+#   Each step concatenates the encoded action to every obs token channel,
+#   predicts h_{t+1}, then slides that predicted hidden into the next history.
+#   Loss is hidden MSE + cosine over the K predicted frames plus the binary
+#   reward head (trained on TARGET hiddens, matching parent's convention).
 #
-# Warm-start option (uses parent's per-step ckpt; mask_obs_token starts fresh):
-#   training.resume=true
-#   training.resume_path=<old chunkaware or per-step ckpt>
-#   training.resume_strict=false   # tolerate missing mask_obs_token
-#   training.resume_skip_optimizer=true
+# Checkpoint compatibility:
+#   This DINO-WM-style concat architecture is not shape-compatible with older
+#   model_dim=1024 projection/mask-token chunk checkpoints.
 
 defaults:
   - _self_
@@ -58,7 +55,7 @@ dataset:
   hidden_dir: ${task.rynnvla_action_hidden_dir}
   expected_model_path: ${task.vla_ckpt_path}
   expected_encoder_state_ckpt: null
-  expected_time_horizon: ${task.time_horizon}
+  expected_time_horizon: ${task.legacy_action_hidden.chunk_size}
   expected_action_head_type: ${task.legacy_action_hidden.expected_action_head_type}
   expected_obs_hidden_source: ${task.legacy_action_hidden.expected_obs_hidden_source}
   expected_prompt_style: ${task.legacy_action_hidden.expected_prompt_style}
@@ -88,7 +85,8 @@ dataloader:
   multiprocessing_context: null
 
 world_model:
-  # True Plan B: chunk-as-one-input transition with learned mask_obs_token.
+  # DINO-WM-style chunk transition: action is encoded and concatenated to every
+  # obs token channel; chunk rollout is autoregressive over predicted hiddens.
   _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   # Close-loop multi-chunk rollout loss to cure WM-internal autoregressive drift.
@@ -100,12 +98,14 @@ world_model:
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}
   token_dim: ${task.legacy_action_hidden.token_dim}
-  time_horizon: ${task.time_horizon}
-  # Matches the existing chunkaware_pinned ckpt (model_dim=1024) so warm-start
-  # from that ckpt is shape-compatible (only mask_obs_token is missing → fresh).
-  model_dim: 1024
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
+  latent_stage: ${task.legacy_action_hidden.latent_stage}
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 1034
   depth: 6
-  heads: 8
+  heads: 16
+  dim_head: 64
   mlp_dim: 2048
   dropout: 0.1
   num_hist: 3

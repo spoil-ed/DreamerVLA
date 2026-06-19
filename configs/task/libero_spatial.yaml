@@ -35,10 +35,12 @@ legacy_action_hidden:
   expected_history: 2
   expected_include_state: true
   expected_rotate_images_180: true
-  wm_obs_dim: null
-  token_count: null
+  wm_obs_dim: 71680
+  token_count: 70
   token_dim: 1024
   chunk_size: 10
+  latent_stage: query_after
+  latent_source: RynnVLA legacy [10,7,1024] action hidden
 
 legacy_input_tokens:
   expected_action_head_type: legacy
@@ -47,11 +49,12 @@ legacy_input_tokens:
   expected_history: 2
   expected_include_state: true
   expected_rotate_images_180: true
-  wm_obs_dim: null
+  wm_obs_dim: 8388608
   token_count: 2048
   token_dim: 4096
-  chunk_size: ${task.time_horizon}
+  chunk_size: ${task.legacy_action_hidden.chunk_size}
   action_hidden_dim: 1024
+  latent_stage: query_before
   latent_source: RynnVLA current-frame Chameleon VQ input tokens [2048,4096]
 
 openvla_oft:
@@ -82,10 +85,11 @@ openvla_oft:
   expected_history: 2
   expected_include_state: true
   expected_rotate_images_180: true
-  wm_obs_dim: null
-  token_count: null
+  wm_obs_dim: 229376
+  token_count: 56
   token_dim: 4096
-  chunk_size: 8
+  chunk_size: ${task.openvla_oft.time_horizon}
+  latent_stage: query_after
   latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
   input_tokens:
     expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
@@ -94,11 +98,12 @@ openvla_oft:
     expected_history: ${task.openvla_oft.expected_history}
     expected_include_state: ${task.openvla_oft.expected_include_state}
     expected_rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
-    wm_obs_dim: null
+    wm_obs_dim: 2097152
     token_count: 512
     token_dim: 4096
     chunk_size: ${task.openvla_oft.chunk_size}
     action_hidden_dim: 4096
+    latent_stage: query_before
     latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory

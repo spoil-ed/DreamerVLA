@@ -5,15 +5,16 @@ defaults:
   - _self_
 
 classifier:
-  latent_dim: 4096
-  token_dim: 4096
+  latent_dim: ${task.legacy_input_tokens.token_dim}
+  token_dim: ${task.legacy_input_tokens.token_dim}
+  token_count: ${task.legacy_input_tokens.token_count}
   token_pool: mean
-  chunk_size: 5
+  chunk_size: ${task.legacy_input_tokens.chunk_size}
 
 data:
   success_dir_hidden: ${task.rynnvla_input_token_hidden_dir}
   failure_dir_hidden: ${task.hdf5_dir}_failures_input_token_embedding_vla_policy_h2
-  chunk_subsample: 5
+  chunk_subsample: ${task.legacy_input_tokens.chunk_size}
 
 training:
   out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/${task.name}/input_tokens_chunk}

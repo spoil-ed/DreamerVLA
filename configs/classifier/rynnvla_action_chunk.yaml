@@ -28,9 +28,9 @@ defaults:
 _target_: dreamervla.runners.LatentClassifierRunner
 
 classifier:
-  latent_dim: null
+  latent_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.time_horizon}
+  time_horizon: ${task.legacy_action_hidden.chunk_size}
   token_dim: ${task.legacy_action_hidden.token_dim}
   window: 8
   head_type: transformer
@@ -40,7 +40,7 @@ classifier:
   mlp_ratio: 2.0
   dropout: 0.5
   granularity: chunk
-  chunk_size: 5
+  chunk_size: ${task.legacy_action_hidden.chunk_size}
   chunk_pool: last
 
 data:
@@ -54,7 +54,7 @@ data:
   # (non-overlapping negatives), stride_val = 1 unit (dense sweep).
   stride_train: 40
   stride_val: 5
-  chunk_subsample: 5
+  chunk_subsample: ${task.legacy_action_hidden.chunk_size}
   chunk_pool: last
 
 training:

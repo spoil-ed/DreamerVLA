@@ -5,25 +5,125 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
 
 
+class _DinoStyleFeedForward(nn.Module):
+    def __init__(self, dim: int, hidden_dim: int, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class _DinoStyleAttention(nn.Module):
+    """DINO-WM-style attention with residual dim independent of QKV inner dim."""
+
+    def __init__(
+        self,
+        dim: int,
+        *,
+        heads: int,
+        dim_head: int,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if heads < 1:
+            raise ValueError(f"heads must be >= 1, got {heads}")
+        if dim_head < 1:
+            raise ValueError(f"dim_head must be >= 1, got {dim_head}")
+        self.heads = int(heads)
+        self.dim_head = int(dim_head)
+        self.scale = float(dim_head) ** -0.5
+        inner_dim = self.heads * self.dim_head
+        self.norm = nn.LayerNorm(dim)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.dropout = nn.Dropout(dropout)
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        bsz, seq_len, _dim = x.shape
+        x = self.norm(x)
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = (
+            t.reshape(bsz, seq_len, self.heads, self.dim_head).transpose(1, 2)
+            for t in qkv
+        )
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        if mask is not None:
+            dots = dots + mask.to(device=dots.device, dtype=dots.dtype)[None, None]
+        attn = F.softmax(dots, dim=-1)
+        attn = self.dropout(attn)
+        out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, seq_len, -1)
+        return self.to_out(out)
+
+
+class _DinoStyleTransformer(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim: int,
+        depth: int,
+        heads: int,
+        dim_head: int,
+        mlp_dim: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [
+                nn.ModuleList(
+                    [
+                        _DinoStyleAttention(
+                            dim,
+                            heads=int(heads),
+                            dim_head=int(dim_head),
+                            dropout=float(dropout),
+                        ),
+                        _DinoStyleFeedForward(
+                            dim, int(mlp_dim), dropout=float(dropout)
+                        ),
+                    ]
+                )
+                for _ in range(int(depth))
+            ]
+        )
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        for attn, ff in self.layers:
+            x = attn(x, mask=mask) + x
+            x = ff(x) + x
+        return self.norm(x)
+
+
 class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
-    """RynnDinoWM variant: a K-step action chunk is consumed in ONE forward pass.
+    """Chunk WM over original VLA hidden tokens with DINO-WM-style conditioning.
 
-    True chunk-as-one-input dynamics (Plan B): given starting hidden h_0 (with
-    optional H-step history) and a K-step action chunk [a_0..a_{K-1}], predict
-    [h_1..h_K] in a SINGLE predictor call.  Future obs slots inside the chunk
-    are filled by a learned ``mask_obs_token`` that lives in model-space, so
-    the model is trained to treat them as queries rather than as real frames.
-
-    This matches the chunk-level latent dynamics used by diffusion-policy
-    control horizons and VLA chunk action generation; it is NOT K stacked
-    autoregressive ``predict_next`` calls (the previous loop-based variant).
-
-    The K dimension is locked to the host RynnVLA actor's ``time_horizon`` and is
-    validated at construction and at every call.
+    The transition model keeps each observation token in source token space and
+    concatenates an encoded action to every observation token channel, matching
+    the default DINO-WM ``concat_dim=1`` pattern.  A chunk is rolled out
+    autoregressively: every step predicts ``e_{t+1}`` from the latest
+    ``num_hist`` latent frames conditioned on the current action, then slides
+    the predicted observation tokens into the next history.
     """
 
     def __init__(
@@ -33,9 +133,49 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         mask_init_scale: float = 0.02,
         chunk_rollout_chunks: int = 1,
         chunk_rollout_loss_scale: float = 0.0,
+        action_emb_dim: int = 10,
+        num_action_repeat: int = 1,
+        dim_head: int = 64,
         **kwargs: Any,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        args_list = list(args)
+        requested_model_dim = (
+            args_list[5] if len(args_list) > 5 else kwargs.get("model_dim")
+        )
+        token_dim_hint = int(args_list[3] if len(args_list) > 3 else kwargs.get("token_dim", 1024))
+        heads_hint = int(args_list[7] if len(args_list) > 7 else kwargs.get("heads", 8))
+        safe_parent_model_dim = max(token_dim_hint, heads_hint)
+        if safe_parent_model_dim % heads_hint != 0:
+            safe_parent_model_dim += heads_hint - (safe_parent_model_dim % heads_hint)
+        if len(args_list) > 5:
+            args_list[5] = safe_parent_model_dim
+        else:
+            kwargs = dict(kwargs)
+            kwargs["model_dim"] = safe_parent_model_dim
+
+        super().__init__(*args_list, **kwargs)
+        del mask_init_scale  # Kept only for old config/checkpoint compatibility.
+        self.action_emb_dim = int(action_emb_dim)
+        self.num_action_repeat = int(num_action_repeat)
+        self.action_condition_dim = self.action_emb_dim * self.num_action_repeat
+        if self.action_emb_dim < 1:
+            raise ValueError(f"action_emb_dim must be >= 1, got {action_emb_dim}")
+        if self.num_action_repeat < 1:
+            raise ValueError(
+                f"num_action_repeat must be >= 1, got {num_action_repeat}"
+            )
+        expected_model_dim = self.token_dim + self.action_condition_dim
+        if requested_model_dim is None:
+            requested_model_dim = expected_model_dim
+        self.model_dim = int(requested_model_dim)
+        if self.model_dim != expected_model_dim:
+            raise ValueError(
+                "ChunkAwareDinoWMWorldModel uses DINO-WM concat conditioning; "
+                "set model_dim == token_dim + action_emb_dim * num_action_repeat, "
+                f"got model_dim={self.model_dim}, token_dim={self.token_dim}, "
+                f"action_emb_dim={self.action_emb_dim}, "
+                f"num_action_repeat={self.num_action_repeat}"
+            )
         if int(chunk_size) < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if int(chunk_rollout_chunks) < 1:
@@ -54,69 +194,138 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         # ``chunk_rollout_loss_scale`` > 0 to enable.
         self.chunk_rollout_chunks = int(chunk_rollout_chunks)
         self.chunk_rollout_loss_scale = float(chunk_rollout_loss_scale)
-        # Lives in model-space → bypasses obs_norm / obs_proj so it stays a clean query token.
-        self.mask_obs_token = nn.Parameter(
-            torch.randn(self.token_count, self.model_dim) * float(mask_init_scale)
+        self.dim_head = int(dim_head)
+        self.slots_per_step = self.token_count
+        self.pos_context_len = self.num_hist
+        self.obs_norm = nn.Identity()
+        self.obs_proj = nn.Identity()
+        self.action_proj = nn.Sequential(
+            nn.LayerNorm(self.action_dim),
+            nn.Linear(self.action_dim, self.action_emb_dim),
         )
+        self.pos_embedding = nn.Parameter(
+            torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim)
+            * 0.02
+        )
+        self.predictor = _DinoStyleTransformer(
+            dim=self.model_dim,
+            depth=int(kwargs.get("depth", 6) if len(args_list) <= 6 else args_list[6]),
+            heads=int(kwargs.get("heads", 8) if len(args_list) <= 7 else args_list[7]),
+            dim_head=self.dim_head,
+            mlp_dim=int(kwargs.get("mlp_dim", 2048) if len(args_list) <= 8 else args_list[8]),
+            dropout=float(kwargs.get("dropout", 0.1) if len(args_list) <= 9 else args_list[9]),
+        )
+        self.out_norm = nn.Identity()
+        self.out_proj = nn.Identity()
+        if self.freeze_input_embeddings_requested:
+            self.freeze_input_embeddings()
 
     # ------------------------------------------------------------------ #
-    # Chunk-as-one-input forward                                         #
+    # DINO-WM-style action concat transition                             #
     # ------------------------------------------------------------------ #
-    def _chunk_forward_z(
+    def _module_dtype(self) -> torch.dtype:
+        return self.action_proj[-1].weight.dtype
+
+    def _module_device(self) -> torch.device:
+        return self.action_proj[-1].weight.device
+
+    def _condition_tokens(
         self,
-        history: torch.Tensor,
-        action_history: torch.Tensor,
-        future_chunk_actions: torch.Tensor,
+        obs_tokens: torch.Tensor,
+        actions: torch.Tensor,
     ) -> torch.Tensor:
-        """Build the ``H+K-1``-step input tensor and run the predictor exactly once.
+        obs_tokens = self.obs_to_tokens(obs_tokens)
+        actions = self._validate_actions(actions, int(obs_tokens.shape[1]))
+        action_emb = self.action_proj(actions)
+        if self.num_action_repeat > 1:
+            action_emb = action_emb.repeat(1, 1, self.num_action_repeat)
+        action_tokens = action_emb[:, :, None, :].expand(
+            -1, -1, self.token_count, -1
+        )
+        return torch.cat([obs_tokens, action_tokens], dim=-1)
 
-        Layout (per step = ``token_count`` obs tokens + 1 action token):
-          step 0  ..  H-1 : real history obs tokens + (a_{-H+1}..a_{-1}, a_0)
-          step H  ..  H+K-2: ``mask_obs_token`` placeholders + (a_1..a_{K-1})
-
-        With block-causal mask, prediction at step ``t`` reads h_t and all earlier
-        slots, so step ``H-1`` predicts h_1, step ``H+K-2`` predicts h_K.
-
-        Returns ``pred_z`` of shape ``[B, H+K-1, slots_per_step, model_dim]``.
-        """
-        bsz = int(history.shape[0])
-        H = self.num_hist
-        K = self.chunk_size
-        total_steps = H + K - 1
-        device = self._module_device()
-        dtype = self._module_dtype()
-
-        history = history.to(device=device, dtype=dtype)
-        action_history = action_history.to(device=device, dtype=dtype)
-
-        history_tokens = self.obs_to_tokens(history)
-        obs_emb_real = self.obs_proj(self.obs_norm(history_tokens))
-
-        if K > 1:
-            future_chunk_actions = future_chunk_actions.to(device=device, dtype=dtype)
-            mask = self.mask_obs_token.to(device=device, dtype=dtype)
-            mask = mask.view(1, 1, self.token_count, self.model_dim).expand(
-                bsz, K - 1, -1, -1
+    def encode(
+        self,
+        obs: dict[str, torch.Tensor] | torch.Tensor,
+        act: torch.Tensor,
+    ) -> torch.Tensor:
+        obs_tokens = self.obs_to_tokens(self._obs_embedding_from_obs(obs))
+        z = self._condition_tokens(obs_tokens, act)
+        bsz, steps, slots, dim = z.shape
+        flat = z.reshape(bsz, steps * slots, dim)
+        if flat.shape[1] > self.pos_embedding.shape[1]:
+            raise ValueError(
+                "ChunkAwareDinoWMWorldModel DINO-WM predictor is configured for "
+                f"num_hist={self.pos_context_len} frames; got {steps} frames"
             )
-            obs_emb = torch.cat([obs_emb_real, mask], dim=1)
-            all_actions = torch.cat([action_history, future_chunk_actions], dim=1)
-        else:
-            obs_emb = obs_emb_real
-            all_actions = action_history
+        flat = flat + self.pos_embedding[:, : flat.shape[1]].to(
+            device=flat.device, dtype=flat.dtype
+        )
+        return flat.reshape(bsz, steps, slots, dim)
 
-        act_emb = self.action_proj(all_actions)
-        z = torch.cat([obs_emb, act_emb.unsqueeze(2)], dim=2)
-        z_flat = z.reshape(bsz, total_steps * self.slots_per_step, self.model_dim)
-        z_flat = z_flat + self.pos_embedding[:, : z_flat.shape[1]]
-        z = z_flat.reshape(bsz, total_steps, self.slots_per_step, self.model_dim)
-        return self.predict(z)
+    def separate_emb(
+        self,
+        z: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        visual = z[..., : self.token_dim]
+        act_emb = z[..., self.token_dim :].mean(dim=2)
+        proprio = visual.new_zeros(visual.shape[0], visual.shape[1], 0)
+        return {"visual": visual, "proprio": proprio}, act_emb
+
+    def replace_actions_from_z(
+        self,
+        z: torch.Tensor,
+        act: torch.Tensor,
+    ) -> torch.Tensor:
+        obs_tokens = z[..., : self.token_dim]
+        return self._condition_tokens(obs_tokens, act)
+
+    def predict_next(
+        self,
+        latent: dict[str, torch.Tensor] | torch.Tensor,
+        actions: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        history = self._latent_history(latent)
+        bsz = int(history.shape[0])
+        action = actions[:, 0] if actions.ndim == 3 else actions
+        if action.ndim != 2 or action.shape[-1] != self.action_dim:
+            raise ValueError(
+                f"Dreamer action must be [B,{self.action_dim}], got {tuple(actions.shape)}"
+            )
+
+        action_history = self._latent_actions(latent, bsz).clone()
+        action_history[:, -1] = action.to(
+            device=action_history.device, dtype=action_history.dtype
+        )
+        z = self.encode(history, action_history)
+        pred_z = self.predict(z)
+        pred_obs, _ = self.separate_emb(pred_z[:, -1:])
+        next_hidden = pred_obs["visual"][:, -1]
+
+        if self.num_hist > 1:
+            next_history = torch.cat([history[:, 1:], next_hidden[:, None]], dim=1)
+            next_action_history = torch.cat(
+                [
+                    action_history[:, 1:],
+                    action_history.new_zeros(bsz, 1, self.action_dim),
+                ],
+                dim=1,
+            )
+        else:
+            next_history = next_hidden[:, None]
+            next_action_history = action_history.new_zeros(bsz, 1, self.action_dim)
+        return {
+            "hidden": next_hidden,
+            "history": next_history,
+            "actions": next_action_history,
+        }
 
     def predict_next_chunk(
         self,
         latent: dict[str, torch.Tensor] | torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Advance the WM by ``chunk_size`` env-steps in ONE transformer call.
+        """Advance the WM by ``chunk_size`` env-steps autoregressively.
 
         Args:
             latent: dict with ``history`` [B,H,N,token_dim], ``actions`` [B,H,A],
@@ -138,7 +347,6 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             raise ValueError(
                 f"action_chunk time dim {action_chunk.shape[1]} != chunk_size {self.chunk_size}"
             )
-        H = self.num_hist
         K = self.chunk_size
         bsz = int(action_chunk.shape[0])
 
@@ -148,40 +356,22 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         device = self._module_device()
         dtype = self._module_dtype()
         action_chunk_v = action_chunk.to(device=device, dtype=dtype)
-        action_history[:, -1] = action_chunk_v[:, 0]
-
-        if K > 1:
-            future_chunk_actions = action_chunk_v[:, 1:]
-        else:
-            future_chunk_actions = action_chunk_v.new_zeros(bsz, 0, self.action_dim)
-
-        pred_z = self._chunk_forward_z(history, action_history, future_chunk_actions)
-        target_z = pred_z[:, H - 1 : H - 1 + K]
-        pred_obs, _ = self.separate_emb(target_z)
-        hidden_seq = pred_obs["visual"]
-        next_hidden = hidden_seq[:, -1]
-
-        all_hidden = torch.cat([history, hidden_seq], dim=1)
-        new_history = (
-            all_hidden[:, -H:].contiguous() if H >= 1 else next_hidden[:, None]
-        )
-
-        if K > 1:
-            combined_actions = torch.cat([action_history, future_chunk_actions], dim=1)
-        else:
-            combined_actions = action_history
-        if H > 1:
-            actions_kept = combined_actions[:, -(H - 1) :]
-            zero_slot = combined_actions.new_zeros(bsz, 1, self.action_dim)
-            new_action_history = torch.cat([actions_kept, zero_slot], dim=1)
-        else:
-            new_action_history = combined_actions.new_zeros(bsz, 1, self.action_dim)
+        cur: dict[str, torch.Tensor] = {
+            "hidden": history[:, -1],
+            "history": history,
+            "actions": action_history,
+        }
+        preds: list[torch.Tensor] = []
+        for step in range(K):
+            cur = self.predict_next(cur, action_chunk_v[:, step])
+            preds.append(cur["hidden"])
+        hidden_seq = torch.stack(preds, dim=1)
 
         return {
-            "hidden": next_hidden,
+            "hidden": cur["hidden"],
             "hidden_seq": hidden_seq,
-            "history": new_history,
-            "actions": new_action_history,
+            "history": cur["history"],
+            "actions": cur["actions"],
         }
 
     # ------------------------------------------------------------------ #
@@ -410,13 +600,11 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         device: str | torch.device = "cpu",
         strict: bool = False,
     ) -> ChunkAwareDinoWMWorldModel:
-        """Warm-start a chunk WM from a parent RynnDinoWM (or old chunk) ckpt.
+        """Load a chunk WM checkpoint using config stored in the checkpoint.
 
-        Old checkpoints lack the new ``mask_obs_token`` parameter and were
-        trained with per-step teacher forcing rather than chunk objective.
-        The predictor / projection weights are still a sensible initialization,
-        but to get correct Plan-B inference you MUST fine-tune with
-        ``chunk_loss`` so the mask token learns its role.
+        This helper expects a checkpoint whose config matches the current
+        DINO-WM-style concat-action architecture.  Older projection or
+        mask-token chunk checkpoints are not shape-compatible.
         """
         sd = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         if not isinstance(sd, dict) or "model" not in sd:
@@ -442,6 +630,11 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "token_count",
             "token_dim",
             "model_dim",
+            "latent_stage",
+            "latent_source",
+            "action_emb_dim",
+            "num_action_repeat",
+            "dim_head",
             "depth",
             "heads",
             "mlp_dim",
@@ -465,10 +658,8 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
                 kwargs[key] = wm_cfg[key]
         wm = cls(chunk_size=chunk_size, **kwargs)
         missing, unexpected = wm.load_state_dict(sd["model"], strict=False)
-        allowed_missing = {"mask_obs_token"}
-        missing_real = [k for k in missing if k not in allowed_missing]
-        if strict and (missing_real or unexpected):
+        if strict and (missing or unexpected):
             raise RuntimeError(
-                f"strict load_state_dict failed: missing={missing_real[:5]} unexpected={unexpected[:5]}"
+                f"strict load_state_dict failed: missing={missing[:5]} unexpected={unexpected[:5]}"
             )
         return wm.to(device)

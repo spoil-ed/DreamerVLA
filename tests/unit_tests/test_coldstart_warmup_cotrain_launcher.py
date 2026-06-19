@@ -374,6 +374,28 @@ def test_asset_validation_accepts_minimal_expected_layout(
     assert validate_input_assets(task=task, data_root=tmp_path) == []
 
 
+def test_reused_coldstart_output_validation_requires_sidecar_metadata(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import validate_collected_outputs
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    reward_dir.mkdir()
+    hidden_dir.mkdir()
+    (reward_dir / "shard_000.hdf5").touch()
+    (hidden_dir / "shard_000.hdf5").touch()
+
+    errors = validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir)
+
+    assert any("preprocess_config.json" in error for error in errors)
+
+    (hidden_dir / "preprocess_config.json").write_text(
+        '{"hidden_key": "obs_embedding"}',
+        encoding="utf-8",
+    )
+
+    assert validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir) == []
+
+
 def test_e2e_shell_scripts_select_expected_modes() -> None:
     root = Path(__file__).resolve().parents[2]
     ray = root / "scripts" / "e2e_coldstart_warmup_cotrain_ray.sh"

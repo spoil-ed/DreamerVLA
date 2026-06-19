@@ -196,6 +196,269 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
         validate_cfg(cfg, world_size=1)
 
 
+def test_query_before_world_model_routes_use_compact_transformer_budget() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    routes = [
+        [
+            "experiment=world_model_dinowm_chunk",
+            "task=libero_goal",
+            "worldmodel=rynnvla_input_token_chunk",
+        ],
+        [
+            "experiment=oft_world_model_dinowm_chunk",
+            "task=OpenVLA_Onetraj_LIBERO",
+            "worldmodel=openvla_oft_input_token_chunk",
+        ],
+    ]
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfgs = [compose(config_name="train", overrides=overrides) for overrides in routes]
+
+    for cfg in cfgs:
+        validate_cfg(cfg, world_size=1)
+        assert cfg.world_model.latent_stage == "query_before"
+        assert cfg.world_model.token_dim == 4096
+        assert cfg.world_model.action_emb_dim == 10
+        assert cfg.world_model.model_dim == 4106
+        assert cfg.world_model.depth == 4
+        assert cfg.world_model.heads == 8
+        assert cfg.world_model.dim_head == 32
+        assert cfg.world_model.mlp_dim == 1024
+
+
+def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
+    tmp_path: Path,
+) -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    reward_dir.mkdir()
+    hidden_dir.mkdir()
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_pipeline_oft_action_hidden",
+                "task=OpenVLA_Onetraj_ColdStart_LIBERO",
+                f"offline_warmup.data_dir={reward_dir}",
+                f"offline_warmup.hidden_dir={hidden_dir}",
+            ],
+        )
+
+    validate_cfg(cfg, world_size=1)
+    assert cfg.world_model.latent_stage == "query_after"
+    assert cfg.world_model.token_count == 56
+    assert cfg.world_model.token_dim == 4096
+    assert cfg.world_model.action_emb_dim == 10
+    assert cfg.world_model.num_action_repeat == 1
+    assert cfg.world_model.model_dim == 4106
+    assert cfg.world_model.num_hist == 3
+    assert cfg.world_model.chunk_size == 8
+    assert cfg.world_model.chunk_rollout_chunks == 4
+    assert cfg.online_rollout.sequence_length == 36
+    assert cfg.world_model.depth == 6
+    assert cfg.world_model.heads == 16
+    assert cfg.world_model.dim_head == 256
+    assert cfg.world_model.mlp_dim == 4096
+
+
+@pytest.mark.parametrize(
+    ("task_name", "suite_time_horizon", "legacy_chunk_size", "legacy_tokens", "legacy_obs_dim"),
+    [
+        ("libero_goal", 5, 5, 35, 35840),
+        ("libero_object", 5, 5, 35, 35840),
+        ("libero_spatial", 10, 10, 70, 71680),
+        ("libero_10", 10, 10, 70, 71680),
+    ],
+)
+def test_task_latent_specs_are_explicit_model_derived_values(
+    task_name: str,
+    suite_time_horizon: int,
+    legacy_chunk_size: int,
+    legacy_tokens: int,
+    legacy_obs_dim: int,
+) -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(config_name="train", overrides=[f"task={task_name}"])
+
+    assert cfg.task.action_dim == 7
+    assert cfg.task.time_horizon == suite_time_horizon
+
+    legacy = cfg.task.legacy_action_hidden
+    assert legacy.latent_stage == "query_after"
+    assert legacy.token_dim == 1024
+    assert legacy.chunk_size == legacy_chunk_size
+    assert legacy.token_count == legacy_tokens
+    assert legacy.wm_obs_dim == legacy_obs_dim
+    assert legacy.token_count == legacy.chunk_size * cfg.task.action_dim
+    assert legacy.wm_obs_dim == legacy.token_count * legacy.token_dim
+
+    input_tokens = cfg.task.legacy_input_tokens
+    assert input_tokens.latent_stage == "query_before"
+    assert input_tokens.chunk_size == legacy.chunk_size
+    assert input_tokens.token_count == 2048
+    assert input_tokens.token_dim == 4096
+    assert input_tokens.wm_obs_dim == 2048 * 4096
+
+    oft = cfg.task.openvla_oft
+    assert oft.latent_stage == "query_after"
+    assert oft.chunk_size == oft.time_horizon == 8
+    assert oft.token_count == oft.chunk_size * cfg.task.action_dim
+    assert oft.wm_obs_dim == oft.token_count * oft.token_dim
+
+    oft_input = cfg.task.openvla_oft.input_tokens
+    assert oft_input.latent_stage == "query_before"
+    assert oft_input.token_count == 512
+    assert oft_input.token_dim == 4096
+    assert oft_input.wm_obs_dim == 512 * 4096
+
+
+def test_validate_cfg_rejects_inconsistent_task_latent_spec() -> None:
+    cfg = OmegaConf.create(
+        {
+            "task": {
+                "action_dim": 7,
+                "legacy_action_hidden": {
+                    "wm_obs_dim": 35840,
+                    "token_count": 70,
+                    "token_dim": 1024,
+                    "chunk_size": 10,
+                },
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="task.legacy_action_hidden"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_inconsistent_component_latent_tuple() -> None:
+    cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "obs_dim": 35840,
+                "token_count": 70,
+                "token_dim": 1024,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="world_model"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_world_model_latent_stage_mismatch() -> None:
+    cfg = OmegaConf.create(
+        {
+            "task": {
+                "legacy_action_hidden": {
+                    "wm_obs_dim": 35840,
+                    "token_count": 35,
+                    "token_dim": 1024,
+                    "chunk_size": 5,
+                    "latent_stage": "query_after",
+                },
+            },
+            "world_model": {
+                "obs_dim": 35840,
+                "token_count": 35,
+                "token_dim": 1024,
+                "chunk_size": 5,
+                "latent_stage": "query_before",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="latent_stage"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
+    cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "_target_": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                "obs_dim": 229376,
+                "token_count": 56,
+                "token_dim": 4096,
+                "action_emb_dim": 10,
+                "num_action_repeat": 1,
+                "model_dim": 4096,
+                "depth": 4,
+                "heads": 8,
+                "dim_head": 32,
+                "mlp_dim": 1024,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="model_dim.*action_emb_dim"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> None:
+    cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "_target_": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                "obs_dim": 229376,
+                "token_count": 56,
+                "token_dim": 4096,
+                "action_emb_dim": 10,
+                "num_action_repeat": 1,
+                "model_dim": 4106,
+                "depth": 6,
+                "heads": 16,
+                "dim_head": 256,
+                "mlp_dim": 4096,
+                "num_hist": 3,
+                "chunk_size": 8,
+                "chunk_rollout_chunks": 4,
+            },
+            "dataset": {"sequence_length": 35},
+            "online_rollout": {"sequence_length": 36},
+        }
+    )
+
+    with pytest.raises(ValueError, match="sequence_length.*num_hist.*chunk_rollout_chunks"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_nested_chunk_world_model_sequence_length_mismatch() -> None:
+    cfg = OmegaConf.create(
+        {
+            "ray_components": {
+                "world_model": {
+                    "target": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                    "kwargs": {
+                        "obs_dim": 35840,
+                        "token_count": 35,
+                        "token_dim": 1024,
+                        "action_emb_dim": 10,
+                        "num_action_repeat": 1,
+                        "model_dim": 1034,
+                        "depth": 6,
+                        "heads": 16,
+                        "dim_head": 64,
+                        "mlp_dim": 2048,
+                        "num_hist": 3,
+                        "chunk_size": 5,
+                        "chunk_rollout_chunks": 4,
+                    },
+                }
+            },
+            "ray_data": {"sequence_length": 23},
+            "replay": {"cfg": {"sequence_length": 24}},
+        }
+    )
+
+    with pytest.raises(ValueError, match="ray_data.sequence_length.*num_hist"):
+        validate_cfg(cfg)
+
+
 def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 

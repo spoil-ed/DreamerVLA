@@ -1,5 +1,5 @@
 # @package _global_
-_target_: dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner
+_target_: dreamervla.runners.OnlineCotrainRayRunner
 
 env:
   num_workers: 2

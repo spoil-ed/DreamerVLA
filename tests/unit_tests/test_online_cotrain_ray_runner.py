@@ -56,6 +56,11 @@ class _Infer:
                 {
                     "actions": [[0.0] * 7],
                     "obs_embedding": [[1.0, 1.0, 1.0, 1.0]],
+                    "timing": {
+                        "encode_s": 0.1,
+                        "world_model_s": 0.2,
+                        "policy_s": 0.3,
+                    },
                 }
             ]
         )
@@ -116,6 +121,11 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     assert history["train/learner_updates"] == 1
     assert history["train/ppo_updates"] == 1
     assert history["train/rl_loss"] == 0.25
+    assert history["rl/actor_loss"] == 0.25
+    assert history["wm/loss"] == 0.5
+    assert history["time/infer_encode_s"] == 0.1
+    assert history["time/infer_world_model_s"] == 0.2
+    assert history["time/infer_policy_s"] == 0.3
 
 
 def test_ray_runner_builds_packed_multigpu_learner_placement() -> None:
@@ -180,3 +190,91 @@ def test_ray_runner_rejects_multinode_cluster_before_launch(monkeypatch) -> None
     with pytest.raises(RuntimeError, match="single-node"):
         runner.run()
     assert cluster.shutdown_called is True
+
+
+def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name="train", overrides=["experiment=online_cotrain_ray_oft"])
+
+    assert cfg._target_.endswith("OnlineCotrainRayRunner")
+    assert cfg.learner.train_cfg.mode == "dreamervla_cotrain"
+    assert cfg.ray_components.policy.target == cfg.learner.model_cfg.policy.target
+    assert cfg.ray_components.world_model.target == cfg.learner.model_cfg.world_model.target
+    assert cfg.ray_components.classifier.target == cfg.learner.model_cfg.classifier.target
+    assert cfg.ray_data.sequence_length == cfg.replay.cfg.sequence_length
+    assert cfg.learner.model_cfg.policy.target == "dreamervla.models.actor.RynnVLAActionHiddenActor"
+    assert (
+        cfg.learner.model_cfg.world_model.target
+        == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
+    )
+    assert (
+        cfg.learner.model_cfg.classifier.target
+        == "dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier"
+    )
+    assert cfg.inference.cfg.encoder.target == "dreamervla.models.encoder.RynnVLAEncoder"
+    assert cfg.inference.cfg.policy.kwargs.time_horizon == cfg.learner.model_cfg.policy.kwargs.time_horizon
+    assert cfg.replay.cfg.sequence_length >= cfg.learner.model_cfg.classifier.kwargs.window
+
+    task_spec = cfg.task.legacy_action_hidden
+    assert task_spec.token_count == task_spec.chunk_size * cfg.task.action_dim
+    assert task_spec.wm_obs_dim == task_spec.token_count * task_spec.token_dim
+    assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
+    assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
+    assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
+    assert cfg.ray_components.world_model.kwargs.chunk_size == task_spec.chunk_size
+    assert cfg.ray_components.policy.kwargs.action_hidden_dim == task_spec.token_dim
+    assert cfg.ray_components.policy.kwargs.time_horizon == task_spec.chunk_size
+    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.wm_obs_dim
+    assert cfg.learner.model_cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
+    assert cfg.inference.cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
+
+    unresolved_wm = OmegaConf.to_yaml(cfg.ray_components.world_model.kwargs, resolve=False)
+    unresolved_policy = OmegaConf.to_yaml(cfg.ray_components.policy.kwargs, resolve=False)
+    unresolved_classifier = OmegaConf.to_yaml(cfg.ray_components.classifier.kwargs, resolve=False)
+    assert "${task.legacy_action_hidden.wm_obs_dim}" in unresolved_wm
+    assert "${task.legacy_action_hidden.token_count}" in unresolved_wm
+    assert "${task.legacy_action_hidden.token_dim}" in unresolved_wm
+    assert "${task.legacy_action_hidden.token_dim}" in unresolved_policy
+    assert "${task.legacy_action_hidden.wm_obs_dim}" in unresolved_classifier
+
+
+def test_ray_runner_loads_init_ckpt_by_component_name(tmp_path) -> None:
+    import torch
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    ckpt = tmp_path / "warmup.ckpt"
+    torch.save(
+        {
+            "state_dicts": {
+                "policy": {"weight": torch.ones(1)},
+                "world_model": {"bias": torch.zeros(1)},
+                "classifier": {"head": torch.full((1,), 2.0)},
+            }
+        },
+        ckpt,
+    )
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "learner": {
+                "init_ckpt": {
+                    "path": str(ckpt),
+                    "components": ["policy", "classifier"],
+                }
+            }
+        }
+    )
+
+    state = runner._load_init_ckpt("learner.init_ckpt")
+
+    assert set(state) == {"policy", "classifier"}
+    assert torch.equal(state["policy"]["weight"], torch.ones(1))
+    assert torch.equal(state["classifier"]["head"], torch.full((1,), 2.0))

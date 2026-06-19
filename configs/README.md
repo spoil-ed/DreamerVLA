@@ -41,14 +41,27 @@ Optional Ray backend resource knobs live in explicit config groups:
 | `parallelism` | `none`, `fsdp` | Manual learner FSDP / CPU-offload / checkpointing knobs |
 | `scheduler` | `local`, `ray_auto` | Single-node Ray cluster and component-placement metadata |
 
-Example single-node multi-GPU learner override:
+Example single-node multi-GPU Ray placement without FSDP:
 
 ```bash
-python -m dreamervla.train experiment=online_cotrain_ray_dreamervla_tiny \
-  +parallelism=fsdp learner.num_workers=2 learner.placement.end_gpu=1
+CUDA_VISIBLE_DEVICES=2,3 RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0 \
+python -m dreamervla.train \
+  experiment=online_cotrain_ray_dreamervla_tiny \
+  +inference.placement.strategy=packed \
+  +inference.placement.gpu_id=0 \
+  inference.cfg.device=auto \
+  +learner.placement.strategy=packed \
+  +learner.placement.start_gpu=1 \
+  +learner.placement.end_gpu=1 \
+  +learner.placement.num_gpus_per_worker=1 \
+  learner.train_cfg.device=auto
 ```
 
-`+parallelism=fsdp` exposes manual learner-side sharding knobs under
+This places inference on physical GPU 2 and learner on physical GPU 3. Inside
+each actor the selected card is local `cuda:0`.
+
+`+parallelism=fsdp` is separate from placement. It exposes manual learner-side
+sharding knobs under
 `learner.train_cfg.fsdp`, including `strategy=fsdp|fsdp2|no_shard`, AMP
 precision, CPU offload, activation checkpointing, and process-group backend.
 These knobs are single-node only; multi-node Ray placement is not a DreamerVLA
@@ -137,6 +150,7 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `dreamervla_oft_dino_wm_wmpo_outcome` | `dreamervla/openvla_oft_wmpo_outcome` |
 | `dreamervla_oft_discrete_token_dino_wm_wmpo_outcome` | `dreamervla/openvla_oft_discrete_token_wmpo_outcome` |
 | `online_wmpo_outcome_libero_goal` | `dreamervla/online_wmpo_outcome_libero_goal` |
+| `online_cotrain_ray_oft` | `dreamervla/ray_online_cotrain_rynn_action_hidden` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 
 Module configs use Hydra defaults to include the task config:

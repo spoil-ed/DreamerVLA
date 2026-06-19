@@ -164,7 +164,13 @@ def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
     }
     history = ColdStartRayCollectRunner(cfg).run()
     assert history["rollout/episodes"] == 4
-    assert history["time/overlap_events"] >= 1
+    assert history["time/overlap_events"] >= (
+        history["rollout/steps"] - history["env/num_env_workers"]
+    )
+    assert history["time/infer_wait_s"] >= 0.0
+    assert history["time/env_step_wait_s"] >= 0.0
+    assert history["time/dump_wait_s"] >= 0.0
+    assert history["time/env_ready_batches"] >= 1
     assert not ray.is_initialized()
 
 
