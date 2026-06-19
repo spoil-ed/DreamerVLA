@@ -7,8 +7,8 @@
 
 > **一句话**:单机 Ray 对齐的**核心已完成**——RLinf 风格 scheduler 骨架、env/infer/replay/learner workers、
 > 真实 DreamerVLA learner 训练闭环、手动显存栈(FSDP/AMP/offload/激活重计算)、collective 权重同步、
-> 模型注册表与手动 config groups 均已在仓。剩下的是横向扩展(多节点/manager/dynamic scheduler)
-> 与少数扩展/条件项,见 todo 文档。
+> 模型注册表与手动 config groups 均已在仓。多节点横向扩展不是目标;剩下只有少数重型/条件项,
+> 见 todo 文档。
 
 ---
 
@@ -118,14 +118,14 @@
 ### 3.2 依赖定位:Ray 保持 opt-in(有意保留的差异)
 - RLinf:`ray[default]>=2.47.0` 为**核心必装**(ray-first 框架)。
 - DreamerVLA:`[project.optional-dependencies] ray`,基础依赖仅 `hydra-core`/`omegaconf`;`scheduler/__init__.py` **禁止单机 torchrun 路径 import 本包**。
-- 立场:工程组织按 RLinf 补齐,但 ray 是**可选后端、不是默认拓扑**;纯单机用户零 ray 开销。仅当多节点成为主线时再考虑升核心。
+- 立场:工程组织按 RLinf 补齐,但 ray 是**可选后端、不是默认拓扑**;纯单机用户零 ray 开销。多节点不作为目标。
 - 单机 parity 基线:`OnlineCotrainPipelineRunner`(单机 torchrun)是 ray backend 的功能基线与训练等价对照(parity 测试见 todo P0)。
 
 ---
 
 ## 4. Ray 通信模型与端口(单机一定要"通信"吗?)
 
-**结论**:Ray 并行模型 = 多 OS 进程(actor 各独立进程),**进程间通信内生绕不开**;但**单机全走 loopback(127.0.0.1)+ 共享内存,不碰外网/防火墙端口**。真正需要网络/跨机端口的只有**多节点**(见 todo P2)。
+**结论**:Ray 并行模型 = 多 OS 进程(actor 各独立进程),**进程间通信内生绕不开**;但**单机全走 loopback(127.0.0.1)+ 共享内存,不碰外网/防火墙端口**。跨机网络/端口不纳入目标。
 
 | 组件 | 作用 | 通信 |
 |---|---|---|
@@ -137,7 +137,7 @@
 
 要点:大数据走共享内存不走 TCP;TCP 端口仅控制面/RPC 且 Ray 自动选空闲端口;本仓 `Cluster` 绑 loopback、关 dashboard、`find_free_port` 不写死端口;**单机 torchrun 默认路径不调 `ray.init()` → 零 ray 进程/端口**。
 想再少开端口:`local_mode=True`(本仓 cfg 可透传)在 driver 进程内串行跑、几乎无端口,但**没有真并行**(仅调试,新版 Ray 弃用);GCS/raylet/object-store 端口正常模式去不掉。
-**实务**:单机跑 ray backend 不用配网络/开防火墙;端口/网络只在多节点才是真问题。
+**实务**:单机跑 ray backend 不用配跨机网络/开防火墙。
 
 ---
 
@@ -145,10 +145,10 @@
 
 1. **object-store-first + 有界队列解耦**:大 payload 按引用进共享内存,`Channel`(actor FIFO)给 env/infer/learn 做速率解耦 + 背压,队列即同步点,不靠手写锁/线程。
 2. **命名 detached actor 做服务发现**(本仓 Channel/WeightStore 已用):给单例服务起名字,别层层传 handle。
-3. **共置资源显式仲裁(DeviceLock/PortLock)**:多 actor 共卡/抢端口时用 lock manager 仲裁(本仓 P2 manager 层)。
+3. **共置资源显式仲裁(DeviceLock/PortLock)**:多 actor 共卡/抢端口时用 lock manager 仲裁。
 4. **spawn 前 fail-fast 全图校验**:`validate_cfg` 在起 worker 前校验整张配置图——两小时的任务不该在第 3 个 worker 里因拼写错误才崩。
 5. **手动杠杆 + 可观测,拒绝 auto-magic**:暴露每个旋钮并记 `train/ env/ rollout/ time/` 指标,而不是把性能藏进自动调参。
 6. **幂等启动 + 确定性退出**:`ray.is_initialized()` 守护、namespace 防撞、信号 → `ray.kill` 清理。
-7. **`runtime_env`/`py_modules` 同步代码到远端 worker**:多节点可复现性靠把代码当成要分发的状态(本仓多节点阶段再用)。
+7. **runtime 状态显式化**:Ray actor 要依赖明确的环境变量、config 和版本记录,不要隐式依赖交互式 shell 状态。
 8. **控制面 / 数据面分离**:编排走 `WorkerGroup` 广播,大数据走 `Channel`/object store。
 9. **(本仓已做对、要守住)opt-in 不侵入**:ray import 隔离 + 单机 torchrun 默认——这是 RLinf(ray-first、无单机回退)做不到的优势,别为了对齐丢掉。

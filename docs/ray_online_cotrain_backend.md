@@ -53,9 +53,8 @@ python -m dreamervla.train \
 Inside each Ray learner actor, `CUDA_VISIBLE_DEVICES` is isolated by placement,
 so `learner.train_cfg.device=auto` resolves to local `cuda:0`. For CPU-only
 debugging use `+parallelism=none`, or set `learner.placement.strategy=node`.
-`validate_cfg` rejects multi-node cluster requests and invalid learner
-placement shapes before runner setup; the runners also fail early if they
-connect to a Ray cluster with more than one live node.
+`validate_cfg` checks learner placement shapes before runner setup; the runners
+also keep the backend scoped to one live Ray node.
 
 ## Cold-Start Rollout Smoke Route
 
@@ -98,4 +97,5 @@ remaining production integrations are intentionally separate steps:
 - real LIBERO/VLA component adapters for the Ray runner config
 - bucketed/patch/collective weight sync for large GPU-resident weights
 - production LIBERO/OFT cold-start config binding for the Ray collector
-- multi-node manager / node-affinity scheduling
+
+Multi-node Ray is not a target for this backend.

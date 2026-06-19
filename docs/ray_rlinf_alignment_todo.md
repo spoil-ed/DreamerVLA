@@ -6,9 +6,9 @@
 
 > **现状**:单机核心对齐已完成(scheduler 骨架、workers、真实 learner 闭环、FSDP/AMP/offload/FSDP2 显存栈、
 > collective/bucket/patch/压缩权重同步、模型注册表、手动 config groups)。**剩余收敛为**:
-> ① 多节点横向扩展(P2);② 少数重型/条件项(P3)。
+> 少数重型/条件项(P3)。**多节点横向扩展不是 DreamerVLA 目标,不再作为待实现项推进。**
 >
-> 优先级:**P0 = 阻塞训练正确性** · **P1 = 单机扩展(已有基础)** · **P2 = 多节点** · **P3 = 重型/条件**。
+> 优先级:**P0 = 阻塞训练正确性** · **P1 = 单机扩展** · **P3 = 重型/条件**。
 
 ---
 
@@ -29,30 +29,6 @@
   全量 dataclass 化 ROI 低且 `config.py` 在活跃演进,留待需要时再做。)
 
 > 回归覆盖:对应 unit/e2e 已补到仓;最终全量验证以本次提交后的命令输出为准。
-
----
-
-## P2 —— 多节点横向扩展(端口/网络从这里才真正相关)
-
-### [ ] Cluster 多节点 init + 跨节点 NodeProbe
-- **动作**:`Cluster` 加 `address="auto"` 连接已起集群;`num_nodes` 从 cluster metadata 取;`node.py` 扩成跨机 NodeProbe(远程发现每节点硬件/env/解释器)。
-- **验收**:两节点起一个 Ray 集群,`discover_ray_nodes` 报 2 节点。
-
-### [ ] Placement / Worker 跨节点
-- **动作**:`placement.py` 跨节点 bundle;`worker.py`/`WorkerManager` 补跨节点点对点 `send/recv`;`worker_group.launch` 支持 `NodeAffinitySchedulingStrategy` 硬绑节点。
-- **验收**:worker 按节点组放置;跨节点 send/recv 正确。
-
-### [ ] `scheduler/manager/` 多节点化(全局协调 + 锁)
-- **动作**:把当前 ray-free manager 层扩成 named actor(Worker/Collective/Node manager + **DeviceLock/PortLock**),做全局元数据/路由/资源仲裁。
-- **验收**:多 worker 共卡/抢端口时由 lock manager 仲裁,无冲突。
-
-### [ ] cluster 配置 + 多节点启动模式
-- **动作**:扩展现有 `configs/scheduler/` 组(对齐 RLinf `ClusterConfig`/`NodeGroupConfig`:`num_nodes`/`component_placement`/`node_groups`)+ `validate_cfg` 校验节点组/placement/GPU 数;把现有 `scripts/start_ray.sh` 从本地 head 调试扩成 head/worker bootstrap,`check_ray.sh` 扩成轮询 GPU/节点健康。
-- **验收**:一条命令拉起多节点集群并通过早校验。
-
-### [ ] replay 作共享 / 分片服务
-- **动作**:`ReplayWorker` 升级为跨节点共享或分片的 replay 服务。
-- **验收**:多节点 worker 共享同一 replay,采样/插入一致。
 
 ---
 
@@ -82,6 +58,6 @@
 
 ## 备注
 
-- 端口/网络只在 **P2 多节点**才相关;单机所有 P0/P1/P3 项都只用 loopback + 共享内存(见 implemented 文档 §4)。
+- 多节点不是目标;单机所有 P0/P1/P3 项都只用 loopback + 共享内存(见 implemented 文档 §4)。
 - 所有显存/资源项均为**手动杠杆 + 早校验 + 可观测**,**不做 VRAM 自适应**(见 implemented 文档 §3.1)。
 - 每补一项加配套测试;真实更新步相关回归优先(P0)。
