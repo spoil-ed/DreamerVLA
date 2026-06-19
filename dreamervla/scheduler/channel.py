@@ -95,3 +95,30 @@ class Channel:
 
     def empty(self, *, key: str | None = None) -> bool:
         return bool(ray.get(self._actor.empty.remote(key)))
+
+    def put_no_wait(self, item: Any, *, key: str = "default") -> AsyncWork:
+        return AsyncWork(self._actor.put.remote(item, str(key)))
+
+    def get_no_wait(self, *, key: str = "default") -> AsyncWork:
+        return AsyncWork(self._actor.get.remote(str(key)))
+
+    def get_batch_no_wait(self, n: int, *, key: str = "default") -> AsyncWork:
+        return AsyncWork(self._actor.get_batch.remote(int(n), str(key)))
+
+    def get_weighted_batch_no_wait(self, weights: dict[str, int]) -> AsyncWork:
+        normalized = {str(key): int(value) for key, value in weights.items()}
+        return AsyncWork(self._actor.get_weighted_batch.remote(normalized))
+
+
+class AsyncWork:
+    """Minimal Ray ObjectRef wait/done handle for Channel async calls."""
+
+    def __init__(self, ref: Any) -> None:
+        self.ref = ref
+
+    def wait(self) -> Any:
+        return ray.get(self.ref)
+
+    def done(self) -> bool:
+        ready, _ = ray.wait([self.ref], num_returns=1, timeout=0)
+        return bool(ready)

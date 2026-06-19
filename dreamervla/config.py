@@ -244,7 +244,7 @@ def _validate_fsdp_config(cfg: DictConfig) -> None:
     The learner builds ``FSDPModelManager(**learner.train_cfg.fsdp)`` inside the
     Ray actor, so a bad ``strategy``/``precision`` would otherwise only surface
     after the cluster is up. The accepted strategy set mirrors
-    ``FSDPModelManager`` (none/ddp/fsdp/fsdp1).
+    ``FSDPModelManager`` (none/ddp/fsdp/fsdp1/fsdp2).
     """
 
     fsdp = OmegaConf.select(cfg, "learner.train_cfg.fsdp", default=None)
@@ -254,10 +254,10 @@ def _validate_fsdp_config(cfg: DictConfig) -> None:
     strategy = OmegaConf.select(fsdp, "strategy", default=None)
     if strategy is not None:
         normalized = str(strategy).strip().lower()
-        if normalized not in {"", "none", "ddp", "fsdp", "fsdp1"}:
+        if normalized not in {"", "none", "ddp", "fsdp", "fsdp1", "fsdp2"}:
             raise ValueError(
                 "learner.train_cfg.fsdp.strategy must be one of "
-                f"none, ddp, fsdp, fsdp1; got {strategy!r}"
+                f"none, ddp, fsdp, fsdp1, fsdp2; got {strategy!r}"
             )
 
     precision = OmegaConf.select(fsdp, "precision", default=None)

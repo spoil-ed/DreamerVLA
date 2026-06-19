@@ -6,7 +6,7 @@ single-machine torchrun path must not import it (see S1 design spec).
 
 from __future__ import annotations
 
-from dreamervla.scheduler.channel import Channel
+from dreamervla.scheduler.channel import AsyncWork, Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.collective import AsyncResult, TorchCollectiveGroup
 from dreamervla.scheduler.dynamic_scheduler import ComponentScheduler, ScheduledWork
@@ -37,6 +37,7 @@ __all__ = [
     "Cluster",
     "AcceleratorInfo",
     "AsyncResult",
+    "AsyncWork",
     "ComponentScheduler",
     "DeviceLockManager",
     "FlexiblePlacementStrategy",

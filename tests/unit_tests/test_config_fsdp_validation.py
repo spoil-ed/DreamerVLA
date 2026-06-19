@@ -23,7 +23,7 @@ def test_validate_cfg_rejects_invalid_fsdp_precision() -> None:
 
 
 def test_validate_cfg_accepts_supported_fsdp_strategies() -> None:
-    for strategy in ("none", "ddp", "fsdp", "fsdp1"):
+    for strategy in ("none", "ddp", "fsdp", "fsdp1", "fsdp2"):
         validate_cfg(_cfg({"strategy": strategy, "precision": "bf16", "cpu_offload": True}))
 
 

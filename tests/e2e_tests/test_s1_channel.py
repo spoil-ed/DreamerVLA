@@ -84,3 +84,25 @@ def test_channel_routes_by_key_and_weighted_batch() -> None:
         assert channel.empty()
     finally:
         cluster.shutdown()
+
+
+def test_channel_no_wait_returns_async_work_handle() -> None:
+    from dreamervla.scheduler.channel import Channel
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+
+    try:
+        name = f"test-channel-async-{uuid.uuid4().hex}"
+        channel = Channel.create(name)
+
+        pending_get = channel.get_no_wait(key="async")
+        assert pending_get.done() is False
+
+        pending_put = channel.put_no_wait({"idx": 7}, key="async")
+        assert pending_put.wait() is None
+        assert pending_get.wait() == {"idx": 7}
+        assert pending_get.done() is True
+    finally:
+        cluster.shutdown()
