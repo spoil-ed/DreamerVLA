@@ -48,6 +48,12 @@ python -m dreamervla.train experiment=online_cotrain_ray_dreamervla_tiny \
   +parallelism=fsdp learner.num_workers=2 learner.placement.end_gpu=1
 ```
 
+`+parallelism=fsdp` exposes manual learner-side sharding knobs under
+`learner.train_cfg.fsdp`, including `strategy=fsdp|fsdp2|no_shard`, AMP
+precision, CPU offload, activation checkpointing, and process-group backend.
+These knobs are single-node only; multi-node Ray placement is not a DreamerVLA
+target.
+
 Visualize TensorBoard logs from a run root with:
 
 ```bash

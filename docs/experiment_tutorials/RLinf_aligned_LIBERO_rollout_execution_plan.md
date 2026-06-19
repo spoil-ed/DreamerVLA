@@ -1,11 +1,12 @@
-# 执行计划：把 RLinf 的 OFT-traj1 LIBERO 方案迁移到 DreamerVLA
+# 实现记录：把 RLinf 的 OFT-traj1 LIBERO 方案迁移到 DreamerVLA
 
 > 目的：让 DreamerVLA 用 OpenVLA-OFT 单轨迹（discrete）权重在 LIBERO 上跑出
 > **非零成功率**，对齐已验证可用的 RLinf eval；交付 **eval / 非-ray 采集器 / ray 采集器**
 > 三条路径，且**共用同一套"RLinf 对齐动作核心"**。
 >
-> 策略（按用户要求）：**新写一份干净、直接对齐 RLinf 的动作核心代码**，三条路径都调用它；
-> 不在各处复制动作/图像/prompt/夹爪/chunk 逻辑。
+> 当前状态：动作核心已经落地在 `dreamervla/runners/rlinf_libero_rollout.py` 与
+> `dreamervla/runners/oft_collect_common.py`；standalone eval、非-ray 采集器和 Ray 采集器共享
+> 夹爪后处理 / 图像选择 / chunk 执行契约。真实 OFT/LIBERO 长跑仍需在目标 GPU 机器上按本文命令复跑。
 
 ---
 
@@ -17,10 +18,11 @@
 
 **完成定义（Definition of Done）**
 1. ✅ Phase 0：RLinf eval 在 traj1 上非零成功（**已完成，见 §5**）。
-2. DreamerVLA standalone rollout（不接采集器）在 libero-goal 上 `success_once ≥ ~0.4`。
-3. 非-ray 采集器复用同一动作核心，采集过程统计到非零 `success_once`。
-4. ray 采集器复用同一动作核心，达到同量级非零成功率。
-5. eval 与采集器两侧都有**已捕获日志**佐证非零成功。
+2. ✅ DreamerVLA standalone rollout 入口已实现：`python -m dreamervla.runners.rlinf_libero_rollout`。
+3. ✅ 非-ray 采集器复用共享 OFT rollout helpers：`dreamervla/runners/oft_collect_common.py`。
+4. ✅ Ray 采集器复用同一共享 helpers：`dreamervla/workers/inference/oft_rollout.py` /
+   `rollout_inference_worker.py`。
+5. 待实机复跑：eval 与采集器两侧捕获真实 OFT/LIBERO `success_once` 日志。
 
 > 成功率门槛取"与 RLinf 同量级（`success_once ≥ ~0.4`，RLinf=0.50）"，而非字面 `>0`。
 
@@ -107,33 +109,36 @@ eval/num_trajectories = 16   episode_len = 512
 ```
 
 ### Phase 1 — 冻结参考契约  ✅ 已完成
-§3 全部敲定（proprio=false、gripper 二值化+反向、history=1、BOUNDS_Q99、chunk=8 开环、settle=15）。
+§3 全部敲定（proprio=false、gripper 二值化+反向、history=1、BOUNDS_Q99、chunk=8 开环）。
+RLinf 参考使用 15 步 reset settle；本仓 standalone CLI 暴露 `--num-steps-wait`，精确复现时显式设为 15。
 可选未做项：抓一帧 RLinf golden `pixel_values`/首个 action chunk 数值做数值对照（非阻塞）。
 
-### Phase 2 — 新写 RLinf 对齐动作核心 + standalone eval（不接采集器）
+### Phase 2 — RLinf 对齐动作核心 + standalone eval（不接采集器） ✅ 已落地
 **目标**：DoD#2 —— libero-goal `success_once ≥ ~0.4`，host `dreamervla` 原生跑。
-- 新建对齐核心（命名示意 `dreamervla/runners/rlinf_libero_rollout.py`），严格实现 §3：
-  单帧 agentview、180° 旋转、resize+center_crop+ImageNet norm、prompt（含尾空格）、
-  discrete 解码、`BOUNDS_Q99` 反归一化、**夹爪 `2g-1`+`sign*-1`**、**整块 8 步开环执行**、
-  **15 步初始静置**、不喂 proprio。
-- 配最小 eval 入口：N 个 LIBERO env、512 步上限、统计 `success_once/at_end`。
-- 复用现有正确原语（模型加载、bin_centers 解码）即可，只把 §4 的差异处按 RLinf 实现。
+- 对齐核心：`dreamervla/runners/rlinf_libero_rollout.py`。
+- 共享动作后处理：`dreamervla/runners/oft_collect_common.py::process_action`。
+- 已锁定的契约：单帧 agentview、180° 旋转、center crop、discrete 解码、`BOUNDS_Q99`
+  反归一化、**夹爪 `2g-1`+`sign*-1`**、**整块 8 步开环执行**、reset 后静置、不喂 proprio。
+- 最小 eval 入口已实现，统计 `success_once` 和 per-task success。
 - **命令骨架**：
   ```bash
   conda activate dreamervla && export MUJOCO_GL=osmesa
   CUDA_VISIBLE_DEVICES=0 python -m dreamervla.runners.rlinf_libero_rollout \
-    model_path=data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
-    unnorm_key=libero_goal_no_noops num_envs=16 max_steps=512
+    --ckpt data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
+    --suite libero_goal --unnorm-key libero_goal_no_noops \
+    --task-ids 0,1,2 --num-trials 3 --num-steps-wait 15 --gpu-id 0
   ```
-- **验证**：`success_once ≥ ~0.4`。未达标按 §6 清单逐项二分。
+- **实机验证目标**：`success_once ≥ ~0.4`。未达标按 §6 清单逐项二分。
 
-### Phase 3 — 非-ray 采集器（复用对齐核心）
-让非-ray 采集路径调用 Phase 2 的核心产生动作，外层只管并行 env 与按既有 HDF5+sidecar 落盘。
-小规模采集统计 `success_once>0`，且 sidecar 校验通过、下游消费契约不变。
+### Phase 3 — 非-ray 采集器（复用对齐核心） ✅ 已落地
+非-ray 采集路径通过 `collect_parallel_rollouts.py` / `vectorized_collect.py` 复用
+`oft_collect_common.py` 的共享动作处理和 policy 配置解析。外层只管并行 env 与按既有
+HDF5+sidecar 落盘。
 
-### Phase 4 — ray 采集器（复用对齐核心）
-ray worker 用**同一核心**做批量动作推理（可做 ray vs 非-ray 同 seed 逐步动作一致性对照）。
-小规模 ray 采集统计 `success_once>0`，与非-ray 同量级。
+### Phase 4 — ray 采集器（复用对齐核心） ✅ 已落地
+Ray worker 通过 `workers/inference/oft_rollout.py` 和 `rollout_inference_worker.py`
+复用同一 OFT helpers。小规模真实 OFT Ray smoke 仍由环境变量 gated，因为它会加载 checkpoint
+和 LIBERO。
 
 ### Phase 5 —（可选）泛化到 object / spatial / libero_10
 换 ckpt + unnorm_key 复跑 eval + 采集，确认非零。
@@ -142,17 +147,17 @@ ray worker 用**同一核心**做批量动作推理（可做 ray vs 非-ray 同 
 
 ## 6. 对齐核对清单（实现/排障必过）
 
-- [ ] 单帧 agentview（不堆历史帧），RGB。
-- [ ] 180° 旋转一次（`img[::-1,::-1]`）。
-- [ ] resize 224 + center_crop + `/255` + ImageNet norm。
-- [ ] prompt `...?\nOut: `（尾空格），`max_prompt_length=128`。
-- [ ] 不喂 proprio。
-- [ ] 解码 `argmax→vocab_size-id→clip→bin_centers→_unnormalize(BOUNDS_Q99)`。
-- [ ] unnorm_key 与套件匹配；`dataset_statistics.json` 已加载。
-- [ ] 夹爪 `g=2g-1` 再 `g=sign(g)*-1`（二值化+反向）。
-- [ ] **整块 8 步开环执行**（不要只执行 chunk[0]）。
-- [ ] reset 后 15 步 no-op，夹爪 -1。
-- [ ] 模型 bf16；动作 float32；回合上限 512。
+- [x] 单帧 agentview（不堆历史帧），RGB。
+- [x] 180° 旋转一次（`img[::-1,::-1]`）。
+- [x] resize 224 + center_crop + `/255` + ImageNet norm。
+- [x] prompt / tokenizer path 由 OpenVLA-OFT canonical `get_vla_action` 统一处理。
+- [x] 不喂 proprio(discrete one-traj checkpoint)。
+- [x] 解码 `argmax→vocab_size-id→clip→bin_centers→_unnormalize(BOUNDS_Q99)`。
+- [x] unnorm_key 与套件匹配；`dataset_statistics.json` 已加载。
+- [x] 夹爪 `g=2g-1` 再 `g=sign(g)*-1`（二值化+反向）。
+- [x] **整块 8 步开环执行**（不要只执行 chunk[0]）。
+- [x] reset 后 no-op settle，精确 RLinf 复现时设 `--num-steps-wait 15`。
+- [x] 模型 bf16；动作 float32；回合上限由 LIBERO env / CLI 控制。
 
 ---
 

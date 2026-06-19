@@ -25,7 +25,9 @@ The low-cost cotrain route launches real Ray actors for:
 - replay: `ReplayWorker` around `OnlineReplay`
 - learner: `LearnerWorker` running either the synthetic PPO-style smoke update
   or real DreamerVLA cotrain phases
-- weight sync: Ray object-store state-dict handoff
+- weight sync: Ray object-store state-dict handoff, bucketed transfer,
+  patch/delta transfer, optional dtype compression, and tagged collective
+  send/recv for single-node learner groups
 
 Run it through the normal Hydra entry:
 
@@ -91,11 +93,14 @@ unless explicitly placed in e2e.
 
 ## Current Boundaries
 
-This backend validates the online worker boundaries and overlap loop. The
-remaining production integrations are intentionally separate steps:
+This backend is scoped to single-node Ray. It validates the online worker
+boundaries, overlap loop, Ray learner boundary, FSDP/FSDP2 strategy entry
+points, and weight-sync contracts. The remaining production work is intentionally
+separate from the backend architecture:
 
 - real LIBERO/VLA component adapters for the Ray runner config
-- bucketed/patch/collective weight sync for large GPU-resident weights
 - production LIBERO/OFT cold-start config binding for the Ray collector
+- real multi-GPU CUDA smoke / long-run convergence validation on the target
+  machine
 
 Multi-node Ray is not a target for this backend.
