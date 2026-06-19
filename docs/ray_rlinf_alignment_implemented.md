@@ -21,13 +21,14 @@
   `send/recv` 单 rank helper、`WorkerGroupFuncResult.wait()/done()`);多 rank 组会注入同一个本机
   `MASTER_ADDR`/`MASTER_PORT`,供单节点 FSDP/Gloo/NCCL rendezvous。
 - `placement.py` —— `PackedPlacementStrategy`/`NodePlacementStrategy`/**`FlexiblePlacementStrategy`** + **范围语法 `parse_accelerator_range`**(`"0-3,5,7-9"`),ray-free 可单测。
-- `channel.py` —— actor 背书 FIFO(`create/connect/put/get/get_batch(n)`),支持 key 路由和 weighted batch,
-  detached named actor。
+- `channel.py` —— actor 背书 FIFO(`create/connect/put/get/get_batch(n)`),支持 key 路由、weighted batch,
+  `AsyncWork` + `put_no_wait/get_no_wait` no-wait API,detached named actor。
 - `node.py` —— `NodeInfo` + `discover_ray_nodes`(节点元数据发现,单机=1)。
 - `manager/` —— ray-free `WorkerManager` route table + `DeviceLockManager` 最小单机协调原语。
 - `dynamic_scheduler.py` —— executor-backed `ComponentScheduler` 最小组件重叠调度原语。
 - `hardware.py` —— **CUDA 设备发现 / 校验**(服务 placement / 早校验,**不**自动改 batch/env)。
-- `collective/` —— torch broadcast helper(未初始化 dist 时本地 no-op),为 NCCL 权重同步打底。
+- `collective/` —— torch broadcast helper(未初始化 dist 时本地 no-op),并支持多通道(tag)点对点
+  `send/recv/flush_sends`,为 NCCL 权重同步打底。
 
 ### 1.2 Workers(`dreamervla/workers/`)
 - `env/env_worker.py` —— 每 env 一 actor,done 自动 reset,step 内灌 `replay.add_episode`。
@@ -44,9 +45,11 @@
   `learner.train_cfg.device=auto` 在 GPU actor 内解析为 local `cuda:0`。
 
 ### 1.4 手动显存优化栈(`dreamervla/hybrid_engines/fsdp/`)
-- `fsdp_model_manager.py::FSDPModelManager` —— learner 接 **FSDP 分片 + `cpu_offload` + 激活重计算
+- `fsdp_model_manager.py::FSDPModelManager` —— learner 接 **FSDP 分片 + FSDP2 + `cpu_offload` + 激活重计算
   (`gradient_checkpointing_enable`)**,全部由 config 显式开启。
-- 单节点多卡:当 `WORLD_SIZE>1` 且 `strategy=fsdp` 时,FSDP manager 会按 Ray actor env 初始化
+- `strategy/{base,fsdp,fsdp2,checkpoint}.py` —— RLinf-style 可插拔 strategy 子树;`FSDPModelManager.make_strategy()`
+  委派到 `fsdp`/`fsdp2`/`none`。
+- 单节点多卡:当 `WORLD_SIZE>1` 且 `strategy=fsdp|fsdp2` 时,FSDP manager 会按 Ray actor env 初始化
   `torch.distributed` process group;`WORLD_SIZE=1` 保持 no-op。
 - **混合精度**:learner update 包 `torch.autocast` + `GradScaler`,FSDP `MixedPrecision`;`learner.train_cfg.precision`(bf16/fp16/fp32)。
 - 边界:这些都是**手动杠杆**,batch/micro-batch/env 数仍由 recipe 手填;系统只校验组合自洽 + 记指标(见 §3.2)。
@@ -54,6 +57,9 @@
 ### 1.5 权重同步(`dreamervla/hybrid_engines/weight_syncer/`)
 - object-store 默认实现(`_WeightStore` actor,单调版本,CPU `state_dict`,payload=`world_model`+`policy`)。
 - **`collective.py::CollectiveWeightSyncer.broadcast_model`** —— NCCL/collective 第二实现(依赖 `scheduler/collective/`)。
+- **`bucket.py::BucketWeightSyncer`** —— 分桶传输,限制单次 object-store payload 大小。
+- **`patch.py::PatchWeightSyncer`** —— 单步增量 patch,落后多版本时回退 full snapshot。
+- **`compression.py::DTypeTensorCompressor` / `CompressedWeightSyncer`** —— 显式 fp16/bf16/fp32 transport dtype 压缩。
 
 ### 1.6 配置 / 模型解耦
 - **模型注册表** `dreamervla/models/registry.py`(+ `models/__init__.py`):`register_model`/`get_model` 按 `model_type` 派发,
@@ -68,6 +74,16 @@
 - 单测契约(ray-free):`tests/unit_tests/test_scheduler_*`、`test_ray_*`(placement/worker 公共 API、依赖声明、coldstart config/adapter)。
 - e2e(真 ray smoke/parity):`tests/e2e_tests/test_s{1..6}_*`(WorkerGroup、ReplayWorker、InferenceWorker、LearnerWorker+sync、cotrain runner、coldstart collect)。
 
+### 1.8 本轮补齐(2026-06-19,TDD;原 todo P0+P1)
+- **P0 训练等价 parity**:`tests/e2e_tests/test_s5_learner_parity.py` —— ray-actor `LearnerWorker` 与
+  in-process learner 在同一 fixed batch 上的 `rl/actor_loss`/`rl/returns_mean`/`rl/policy_grad_norm` 逐位一致
+  (零初始化 tiny model + `workers/replay/_test_replays.py:FixedBatchReplay` 去除采样 RNG)。守住"learner 更新数学跨 actor 边界一致"
+  ——而非两个结构不同的 runner 的全循环聚合 `allclose`(不可行/无意义)。
+- **P1 collective `send`/`recv` + 多通道**:`scheduler/collective/torch_group.py`(`isend`+`flush_sends`,`channel`=tag;未初始化 dist 时硬报错——点对点需要 peer)。真 2-rank gloo loopback e2e `tests/e2e_tests/test_s1b_collective_send_recv.py` + 单测 `tests/unit_tests/test_collective_send_recv.py`。
+- **P1 权重同步 bucket / patch / 压缩**:`weight_syncer/bucket.py`(`bucket_state_dict` 纯函数 + `BucketWeightSyncer`)、`weight_syncer/{patch,compression}.py`;object-store 背书,单机可验证(`tests/{unit,e2e}_tests/...bucket...`)。
+- **P1 FSDP2 + strategy 子树**:`hybrid_engines/fsdp/strategy/{base,fsdp,fsdp2,checkpoint}.py`(可插拔 `FSDPStrategyBase.create`,FSDP1/FSDP2/no-shard + `Checkpoint(Stateful)`);`FSDPModelManager.make_strategy()` 委派,新增 `fsdp2`。单机 `WORLD_SIZE=1` passthrough 可验证(`tests/unit_tests/test_fsdp_strategy.py`);真分片需多卡。
+- **P1 config 早校验**:`config.py::_validate_fsdp_config` 对 `learner.train_cfg.fsdp` 的 strategy/precision 在 spawn 前 fail-fast(`tests/unit_tests/test_config_fsdp_validation.py`)。
+
 ---
 
 ## 2. 已建命名映射(RLinf → DreamerVLA)
@@ -77,14 +93,14 @@
 | `scheduler/cluster/cluster.py` | `scheduler/cluster.py` | 单机 bootstrap |
 | `scheduler/worker/{worker,worker_group}.py` | `scheduler/{worker,worker_group}.py` | 基类 + 组广播 + execute_on |
 | `PlacementStrategy` | `scheduler/placement.py` | Packed/Node/**Flexible** + 范围语法 |
-| `scheduler/channel/channel.py` | `scheduler/channel.py` | actor FIFO + get_batch |
+| `scheduler/channel/channel.py` | `scheduler/channel.py` | actor FIFO + get_batch + AsyncWork |
 | `scheduler/cluster/node.py` | `scheduler/node.py` | NodeInfo + discover(单机) |
 | `scheduler/hardware/` | `scheduler/hardware.py` | CUDA 发现/校验 |
-| `scheduler/collective/` | `scheduler/collective/` | broadcast helper |
+| `scheduler/collective/` | `scheduler/collective/` | broadcast + send/recv(tag) |
 | `workers/{env,rollout,data}` | `workers/{env,inference,replay}` | 已齐 |
 | `workers/actor/` | `workers/actor/learner_worker.py` | 真实 phase + FSDP |
-| `hybrid_engines/fsdp/` | `hybrid_engines/fsdp/fsdp_model_manager.py` | FSDPModelManager |
-| `hybrid_engines/weight_syncer/` | `hybrid_engines/weight_syncer/{__init__,collective}.py` | object-store + collective |
+| `hybrid_engines/fsdp/` | `hybrid_engines/fsdp/{fsdp_model_manager,strategy/}` | FSDPModelManager + FSDP2 strategy |
+| `hybrid_engines/weight_syncer/` | `hybrid_engines/weight_syncer/` | object-store + collective + bucket/patch/compression |
 | `runners/embodied_runner.py` | `runners/online_cotrain_ray_runner.py` | infer→step→learn |
 | `rlinf/models/__init__.py`(registry) | `dreamervla/models/registry.py` | model registry |
 
