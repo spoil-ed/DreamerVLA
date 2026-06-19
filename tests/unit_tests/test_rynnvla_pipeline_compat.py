@@ -14,6 +14,7 @@ from dreamervla.dataset.pixel_hidden_sequence_dataset import (
 )
 from dreamervla.models.actor import (
     LatentToActionHiddenActor,
+    LatentToOpenVLADiscreteTokenActor,
     OpenVLADiscreteTokenActor,
     RynnVLAActionHiddenActor,
     VLAActionHeadActor,
@@ -382,6 +383,53 @@ def test_openvla_discrete_token_actor_uses_token_categorical_log_probs() -> None
 
     assert torch.allclose(eval_log_prob, log_prob)
     assert torch.allclose(entropy, torch.full((3,), 4 * torch.log(torch.tensor(4.0))))
+
+
+def test_latent_to_openvla_discrete_actor_bridges_input_tokens_without_l1_head() -> None:
+    actor = LatentToOpenVLADiscreteTokenActor(
+        hidden_dim=5 * 4,
+        source_token_count=5,
+        source_token_dim=4,
+        action_hidden_dim=8,
+        action_dim=2,
+        time_horizon=3,
+        vocab_size=16,
+        action_token_bins=4,
+        bridge_hidden_dim=8,
+        num_bridge_layers=1,
+        num_bridge_heads=2,
+        bridge_dropout=0.0,
+        adapter_type="identity",
+        freeze_lm_head=False,
+    )
+    with torch.no_grad():
+        actor.lm_head.weight.zero_()
+
+    action_chunk, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": torch.randn(2, 5, 4),
+            "deterministic": True,
+            "return_chunk": True,
+        }
+    )
+
+    assert action_chunk.shape == (2, 3, 2)
+    assert extra["action_hidden"].shape == (2, 6, 8)
+    assert extra["action_token_ids"].shape == (2, 3, 2)
+    assert torch.all(extra["action_token_ids"] == 12)
+    assert torch.allclose(log_prob, torch.full((2,), -6 * torch.log(torch.tensor(4.0))))
+
+    eval_log_prob, entropy, _ = actor(
+        {
+            "mode": "evaluate",
+            "hidden": torch.randn(2, 5 * 4),
+            "action": action_chunk,
+            "action_token_ids": extra["action_token_ids"],
+        }
+    )
+    assert torch.allclose(eval_log_prob, log_prob)
+    assert torch.allclose(entropy, torch.full((2,), 6 * torch.log(torch.tensor(4.0))))
 
 
 def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:

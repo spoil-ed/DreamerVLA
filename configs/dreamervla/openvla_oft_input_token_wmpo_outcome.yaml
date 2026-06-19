@@ -31,30 +31,35 @@ world_model:
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  depth: 4
-  heads: 8
-  dim_head: 32
-  mlp_dim: 1024
+  # DINO-WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
+  # half-width attention inner = 2048 = 0.5*model_dim, lean FFN mlp_dim = 2048. ~313M.
+  # Matches the offline query_before WM so all OpenVLA query_before routes share it.
+  depth: 6
+  heads: 16
+  dim_head: 128
+  mlp_dim: 2048
 
 policy:
-  _target_: dreamervla.models.actor.LatentToActionHiddenActor
+  _target_: dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor
   hidden_dim: null
   source_token_count: ${task.openvla_oft.input_tokens.token_count}
   source_token_dim: ${task.openvla_oft.input_tokens.token_dim}
   action_hidden_dim: ${task.openvla_oft.input_tokens.action_hidden_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
-  head_type: oft_l1_regression
+  head_type: oft_discrete_token
+  vocab_size: 32000
+  action_token_bins: 256
+  min_action: ${task.openvla_oft.min_action}
+  max_action: ${task.openvla_oft.max_action}
+  adapter_type: residual_mlp
+  adapter_hidden_dim: 1024
+  freeze_lm_head: true
+  init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
   bridge_hidden_dim: 1024
   num_bridge_layers: 2
   num_bridge_heads: 8
   bridge_dropout: 0.1
-  freeze_output_projection: true
-  initial_log_std: -3.0
-  min_log_std: -5.0
-  max_log_std: -2.0
-  freeze_log_std: false
-  init_action_head_ckpt: ${task.openvla_oft.action_head_ckpt}
 
 critic:
   hidden_dim: ${task.openvla_oft.input_tokens.token_dim}

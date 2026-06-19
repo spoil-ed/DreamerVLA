@@ -198,32 +198,39 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
 
 def test_query_before_world_model_routes_use_compact_transformer_budget() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
-    routes = [
-        [
-            "experiment=world_model_dinowm_chunk",
-            "task=libero_goal",
-            "worldmodel=rynnvla_input_token_chunk",
-        ],
-        [
-            "experiment=oft_world_model_dinowm_chunk",
-            "task=OpenVLA_Onetraj_LIBERO",
-            "worldmodel=openvla_oft_input_token_chunk",
-        ],
+    rynn = [
+        "experiment=world_model_dinowm_chunk",
+        "task=libero_goal",
+        "worldmodel=rynnvla_input_token_chunk",
+    ]
+    oft = [
+        "experiment=oft_world_model_dinowm_chunk",
+        "task=OpenVLA_Onetraj_LIBERO",
+        "worldmodel=openvla_oft_input_token_chunk",
     ]
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfgs = [compose(config_name="train", overrides=overrides) for overrides in routes]
+        rynn_cfg = compose(config_name="train", overrides=rynn)
+        oft_cfg = compose(config_name="train", overrides=oft)
 
-    for cfg in cfgs:
-        validate_cfg(cfg, world_size=1)
-        assert cfg.world_model.latent_stage == "query_before"
-        assert cfg.world_model.token_dim == 4096
-        assert cfg.world_model.action_emb_dim == 10
-        assert cfg.world_model.model_dim == 4106
-        assert cfg.world_model.depth == 4
-        assert cfg.world_model.heads == 8
-        assert cfg.world_model.dim_head == 32
-        assert cfg.world_model.mlp_dim == 1024
+    # Rynn query-before stays on the compact budget.
+    validate_cfg(rynn_cfg, world_size=1)
+    assert rynn_cfg.world_model.latent_stage == "query_before"
+    assert rynn_cfg.world_model.depth == 4
+    assert rynn_cfg.world_model.heads == 8
+    assert rynn_cfg.world_model.dim_head == 32
+    assert rynn_cfg.world_model.mlp_dim == 1024
+
+    # OpenVLA query-before: lean-debottlenecked half-width profile (~313M).
+    validate_cfg(oft_cfg, world_size=1)
+    assert oft_cfg.world_model.latent_stage == "query_before"
+    assert oft_cfg.world_model.token_dim == 4096
+    assert oft_cfg.world_model.action_emb_dim == 10
+    assert oft_cfg.world_model.model_dim == 4106
+    assert oft_cfg.world_model.depth == 6
+    assert oft_cfg.world_model.heads == 16
+    assert oft_cfg.world_model.dim_head == 128
+    assert oft_cfg.world_model.mlp_dim == 2048
 
 
 def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
@@ -261,6 +268,33 @@ def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
     assert cfg.world_model.heads == 16
     assert cfg.world_model.dim_head == 256
     assert cfg.world_model.mlp_dim == 4096
+
+
+def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_oft_backbone_latent",
+                "task=OpenVLA_Onetraj_LIBERO",
+            ],
+        )
+
+    validate_cfg(cfg, world_size=1)
+    assert cfg.latent_type == "backbone_latent"
+    assert cfg.encoder._target_ == "dreamervla.models.encoder.OpenVLAOFTPolicy"
+    assert cfg.env.obs_hidden_source == "input_token_embedding"
+    assert cfg.env.action_head_type == "oft_discrete_token"
+    assert (
+        cfg.policy._target_
+        == "dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor"
+    )
+    assert cfg.policy.head_type == "oft_discrete_token"
+    assert cfg.world_model.latent_stage == "query_before"
+    assert cfg.world_model.token_count == 512
+    assert cfg.world_model.token_dim == 4096
 
 
 @pytest.mark.parametrize(

@@ -1,24 +1,16 @@
 # @package _global_
-# Online cotrain — Scheme 1: BACKBONE-LATENT world model (WM BEFORE the Action
-# Query; predicts future backbone / DINO-style visual-language latent). The actor
-# maps the predicted future latent back to an action via learned Action Queries +
-# a TransformerDecoder bridge + the action head (LatentToActionHiddenActor).
+# Online cotrain — OpenVLA-OFT query_before / BACKBONE-LATENT world model
+# (WM BEFORE the Action Query; predicts future projected vision-token latent).
+# The actor maps the predicted future latent to OpenVLA discrete action tokens via
+# learned Action Queries + a TransformerDecoder bridge + the frozen LM head.
 # Single Hydra call:
-#   python -m dreamervla.train --config-name online_cotrain_oft_backbone_latent
+#   python -m dreamervla.train experiment=online_cotrain_oft_backbone_latent
 #
-# ONLINE rollout IS wired: OnlineCotrainRunner sets the env
-# obs_hidden_source="input_token_embedding"; RynnVLAEncoder.extract_input_token_embedding
-# extracts the current-frame VQ image tokens through the backbone input-embedding
-# table (pre-Action-Query) — the online counterpart of the offline input-token
-# sidecar. The online rollout policy is the RynnVLA one-trajectory VLA (the ~40%
-# seed). This is a policy/visual-language-latent WM, NOT the original pixel DINO-WM.
-#
-# OpenVLA-OFT backbone latent (512x4096 projected vision patches) is a separate
-# OFFLINE route (experiment=dreamervla_oft_dino_wm_wmpo_outcome_input_tokens);
-# OFT online rollout needs an OFT env-encoder (not yet wired) — see the doc.
+# This is a policy/visual-language-latent WM, not the original pixel DINO-WM.
 
 defaults:
   - online_cotrain_oft_action_hidden
+  - override /task: OpenVLA_Onetraj_LIBERO
   - _self_
 
 latent_type: backbone_latent
@@ -26,54 +18,88 @@ latent_type: backbone_latent
 training:
   out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_backbone_latent/${now:%Y%m%d_%H%M%S}
 
-# backbone (input-token) latent -> action adapter: Action Queries + decoder bridge
-# + RynnVLA legacy action head. Source-token shape comes from
-# task.legacy_input_tokens so offline sidecars and online routes share one spec.
+init:
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
+
+encoder:
+  _target_: dreamervla.models.encoder.OpenVLAOFTPolicy
+  model_path: ${task.openvla_oft.ckpt_path}
+  component_ckpt_dir: ${task.openvla_oft.component_ckpt_dir}
+  resume_step: ${task.openvla_oft.resume_step}
+  torch_dtype: bf16
+  num_images_in_input: ${task.openvla_oft.num_images_in_input}
+  use_lora: false
+  use_l1_regression: ${task.openvla_oft.use_l1_regression}
+  use_diffusion: false
+  use_proprio: ${task.openvla_oft.use_proprio}
+  use_film: false
+  freeze_vla_backbone: true
+
+env:
+  task_suite_name: ${task.suite}
+  history_length: ${task.openvla_oft.input_tokens.expected_history}
+  include_state: ${task.openvla_oft.input_tokens.expected_include_state}
+  vla_rotate_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
+  obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
+  action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
+  image_keys: [agentview_rgb]
+
+online_rollout:
+  sequence_length: ${task.openvla_oft.wm_sequence_length}
+
+# backbone (input-token) latent -> discrete OpenVLA action-token adapter.
 policy:
-  _target_: dreamervla.models.actor.LatentToActionHiddenActor
+  _target_: dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor
   hidden_dim: null
-  source_token_count: ${task.legacy_input_tokens.token_count}
-  source_token_dim: ${task.legacy_input_tokens.token_dim}
-  action_hidden_dim: ${task.legacy_input_tokens.action_hidden_dim}
+  source_token_count: ${task.openvla_oft.input_tokens.token_count}
+  source_token_dim: ${task.openvla_oft.input_tokens.token_dim}
+  action_hidden_dim: ${task.openvla_oft.input_tokens.action_hidden_dim}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.legacy_input_tokens.chunk_size}
-  head_type: ${task.legacy_input_tokens.expected_action_head_type}
+  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
+  head_type: oft_discrete_token
+  vocab_size: ${task.openvla_oft.vocab_size}
+  action_token_bins: ${task.openvla_oft.action_token_bins}
+  min_action: ${task.openvla_oft.min_action}
+  max_action: ${task.openvla_oft.max_action}
+  adapter_type: ${task.openvla_oft.actor_adapter_type}
+  adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
+  freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
+  init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
   bridge_hidden_dim: 1024
   num_bridge_layers: 2
   num_bridge_heads: 8
   bridge_dropout: 0.1
-  freeze_output_projection: true
-  initial_log_std: -3.0
-  min_log_std: -5.0
-  max_log_std: -2.0
-  freeze_log_std: false
-  init_action_head_ckpt: ${init.vla_ckpt_path}
 
 # WM consumes the backbone (input-token) latent as token_count x token_dim.
 world_model:
-  obs_dim: ${task.legacy_input_tokens.wm_obs_dim}
-  token_count: ${task.legacy_input_tokens.token_count}
-  token_dim: ${task.legacy_input_tokens.token_dim}
-  chunk_size: ${task.legacy_input_tokens.chunk_size}
-  latent_stage: ${task.legacy_input_tokens.latent_stage}
-  latent_source: ${task.legacy_input_tokens.latent_source}
+  _target_: ${task.openvla_oft.wm_target}
+  obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+  token_count: ${task.openvla_oft.input_tokens.token_count}
+  token_dim: ${task.openvla_oft.input_tokens.token_dim}
+  chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
+  latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
+  latent_source: ${task.openvla_oft.input_tokens.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  depth: 4
-  heads: 8
-  dim_head: 32
-  mlp_dim: 1024
+  depth: 6
+  heads: 16
+  dim_head: 128
+  mlp_dim: 2048
 
 # Backbone latent is stored flat as token_count x token_dim. token_pool=mean keeps
 # the classifier input projection token_dim-sized instead of the huge flat
 # N*token_dim, so it pools the configured source tokens.
 classifier:
-  latent_dim: ${task.legacy_input_tokens.token_dim}
-  token_dim: ${task.legacy_input_tokens.token_dim}
-  token_count: ${task.legacy_input_tokens.token_count}
+  latent_dim: ${task.openvla_oft.input_tokens.token_dim}
+  token_dim: ${task.openvla_oft.input_tokens.token_dim}
+  token_count: ${task.openvla_oft.input_tokens.token_count}
   token_pool: mean
-  chunk_size: ${task.legacy_input_tokens.chunk_size}
+  chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+
+critic:
+  hidden_dim: ${task.openvla_oft.input_tokens.token_dim}
 
 algorithm:
   # The backbone latent is token_count x token_dim — the WM transformer attends over
@@ -82,5 +108,5 @@ algorithm:
   # (scale these up on larger GPUs / with token subsampling).
   ppo_rollouts_per_start: 1
   wmpo:
-    chunk_size: ${task.legacy_input_tokens.chunk_size}
+    chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
     episode_max_steps: 10

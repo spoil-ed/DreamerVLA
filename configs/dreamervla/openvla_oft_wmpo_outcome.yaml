@@ -99,10 +99,14 @@ world_model:
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  depth: 4
-  heads: 8
-  dim_head: 32
-  mlp_dim: 1024
+  # DINO-WM balanced predictor (query_after / action-hidden, seq=168): full-width
+  # attention inner = heads*dim_head = 4096 = model_dim (no compression of the dense
+  # 4096-d VLA tokens), lean FFN mlp_dim = model_dim. ~610M (<1B). Matches the offline
+  # cotrain/standalone WM so all OpenVLA query_after routes share one latest profile.
+  depth: 6
+  heads: 16
+  dim_head: 256
+  mlp_dim: 4096
   dropout: 0.1
   num_hist: 3
   num_pred: 1

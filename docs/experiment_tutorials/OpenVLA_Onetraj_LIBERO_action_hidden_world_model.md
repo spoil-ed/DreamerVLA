@@ -24,6 +24,37 @@ preprocess (reward HDF5 + OFT action-hidden sidecar)
 > runner (`OFTDinoWMRunner` / `LatentClassifierRunner` / `JointDreamerVLARunner`
 > with the `wmpo_outcome` route). This recipe only wires data/config/ckpt paths.
 
+## World Model architecture (latest, 2026-06-19)
+
+DINO-WM paradigm on **discrete** OpenVLA-OFT latents (no L1 action head). The
+action-hidden sidecar gives `token_count=56`, `token_dim=4096`.
+
+- **Concat conditioning** (DINO-WM `concat_dim=1`): the action is encoded to
+  `action_emb_dim=10`, tiled to every obs token, and concatenated on the channel
+  axis, pinning `model_dim = token_dim + action_emb_dim*num_action_repeat = 4106`.
+- **Autoregressive recursion** (`num_hist=3` sliding window; predictions feed back):
+
+```text
+ê_{t+1} = F_w(e_{t-2}, e_{t-1}, e_t,      a_t)
+ê_{t+2} = F_w(e_{t-1}, e_t,     ê_{t+1},  a_{t+1})
+ê_{t+3} = F_w(e_t,     ê_{t+1}, ê_{t+2},  a_{t+2})
+ê_{t+4} = F_w(ê_{t+1}, ê_{t+2}, ê_{t+3},  a_{t+3})
+```
+
+- **Predictor sizing (balanced, ~610M):** `depth=6, heads=16, dim_head=256`
+  (inner = 4096 = `model_dim`, full-width attention — no compression of the dense
+  4096-d tokens), lean `mlp_dim=4096`. The 168-token sequence
+  (`num_hist*token_count`) makes full-width attention nearly free, so capacity is
+  spent here. Under the 1B cap.
+- **Rollout length is a hyperparameter:** `num_hist=3`, `chunk_size=8`,
+  `chunk_rollout_chunks=4` → supervised horizon `N*K=32`, dataset
+  `sequence_length = H + N*K + 1 = 36`.
+
+All OpenVLA query_after routes share this profile:
+`configs/worldmodel/openvla_oft_action_chunk.yaml`,
+`configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`,
+`configs/dreamervla/openvla_oft_wmpo_outcome.yaml`.
+
 ## Unified online cotrain (single Hydra call)
 
 `dreamervla.runners.OnlineCotrainRunner` implements the unified pipeline in **one
@@ -48,11 +79,10 @@ WANDB_MODE=disabled python -m dreamervla.train \
 Config: `configs/experiment/online_cotrain_oft_action_hidden.yaml` (`latent_type=action_hidden`,
 `warmup_steps`, `train_actor_after_warmup`, `train_classifier_inline`,
 `online_rollout.*`, `optim.policy.lr=5e-7` slow policy). The **online env-rollout
-policy is the RynnVLA one-trajectory VLA** (the ~40% seed) since the online env
-emits the `action_query` latent via `RynnVLAEncoder`; the **OpenVLA-OFT**
-one-trajectory checkpoint uses the OFFLINE staged path below. (Scheme 1 /
-backbone-latent online rollout is a separate, not-yet-wired path — see the
-backbone-latent tutorial.)
+policy is the RynnVLA one-trajectory VLA** (the ~40% seed) since this route's
+online action-hidden extractor is RynnVLA-based; the **OpenVLA-OFT**
+one-trajectory checkpoint uses the OFFLINE staged path below. The Scheme 1 /
+backbone-latent OpenVLA-OFT online route is opt-in and documented separately.
 
 ## 0. System
 
@@ -238,17 +268,16 @@ hacks):
 
 ## Known gaps / not covered
 
-- **Online env rollout for OpenVLA-OFT is not wired.** The online trainer
-  (`dreamervla/runners/online_dreamervla.py`) builds a `RynnVLAEncoder` only
-  (`--action-head-type` is `["legacy"]`). This recipe is the **offline staged**
-  pipeline; live OFT rollout-into-replay would need an OFT env-encoder.
+- **OpenVLA-OFT online query_before is separate.** This action-hidden recipe is
+  the offline staged path for OpenVLA-OFT action-query hidden. The opt-in
+  backbone-latent online route uses an OFT input-token extractor and is covered
+  in the backbone-latent tutorial.
 - **Backbone-latent (Scheme B) variant.** The analogous input-token route
   (`experiment=oft_world_model_dinowm_chunk_input_tokens`,
   `oft_latent_classifier_chunk_input_tokens`,
   `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, policy
-  `LatentToActionHiddenActor`) composes but is not smoked here; the OFT
-  one-traj checkpoint is discrete (`action_head_ckpt=null`), so its
-  `oft_l1_regression` actor head needs an L1 action-head checkpoint.
+  `LatentToOpenVLADiscreteTokenActor`) composes as a discrete bridge. It is not
+  smoked in this action-hidden recipe.
 - The smoke uses tiny budgets and a random-init WM/classifier, so RL advantages
   are zero-variance (groups filtered, `G=0`); it verifies the pipeline runs,
   not convergence.

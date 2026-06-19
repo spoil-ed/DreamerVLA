@@ -27,7 +27,11 @@ world_model:
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  depth: 4
-  heads: 8
-  dim_head: 32
-  mlp_dim: 1024
+  # DINO-WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
+  # half-width attention inner = heads*dim_head = 2048 = 0.5*model_dim (8x the old
+  # compact inner=256), lean FFN mlp_dim = 2048. ~313M total. The 1536-token sequence
+  # is ~9x query_after's, so capacity is kept lean here on purpose (efficiency).
+  depth: 6
+  heads: 16
+  dim_head: 128
+  mlp_dim: 2048

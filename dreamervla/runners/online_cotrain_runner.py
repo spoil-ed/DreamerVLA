@@ -20,7 +20,9 @@ inherited helpers).
 from __future__ import annotations
 
 import copy
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -175,7 +177,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 "obs_hidden_source": str(
                     OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
                 ),
-                "action_head_type": "legacy",
+                "action_head_type": str(
+                    OmegaConf.select(env_cfg, "action_head_type", default="legacy")
+                ),
             }
         )
 
@@ -187,15 +191,25 @@ class OnlineCotrainRunner(DreamerVLARunner):
         ``obs_embedding`` is the latent the WM consumes: the post-Action-Query
         action-hidden (``action_hidden``) or the pre-Action-Query backbone
         input-token latent (``backbone_latent``)."""
+        is_first = bool(obs.get("is_first", False)) or latent is None
         if getattr(self, "_latent_type", "action_hidden") == "backbone_latent":
-            obs_embedding = obs_to_input_token_embedding(
-                self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
-            )
+            oft_extractor = getattr(self, "_oft_input_token_extractor", None)
+            if oft_extractor is not None:
+                if is_first and hasattr(oft_extractor, "reset"):
+                    oft_extractor.reset()
+                _action_chunk, flat_hidden = oft_extractor.step(
+                    obs,
+                    str(obs.get("task_description", "")),
+                )
+                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
+            else:
+                obs_embedding = obs_to_input_token_embedding(
+                    self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
+                )
         else:
             obs_embedding = obs_to_action_hidden(
                 self.encoder, processor, obs, self.device, target_token_id
             )
-        is_first = bool(obs.get("is_first", False)) or latent is None
         if is_first:
             latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
         else:
@@ -246,11 +260,17 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if total_env_steps <= 0:
             self.encoder = None
             self.processor = None
+            self._oft_input_token_extractor = None
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
             self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
             freeze_module(self.encoder)
-            self.processor = self.encoder._build_processor(self.device)
+            self.processor = (
+                self.encoder._build_processor(self.device)
+                if hasattr(self.encoder, "_build_processor")
+                else None
+            )
+            self._oft_input_token_extractor = self._build_oft_input_token_extractor(cfg)
 
         self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
             device=self.device, dtype=torch.bfloat16
@@ -286,6 +306,46 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
         self._build_trainable_classifier(cfg)
         self._assert_optimizers_disjoint()
+
+    def _build_oft_input_token_extractor(self, cfg: DictConfig) -> Any | None:
+        if getattr(self, "_latent_type", "action_hidden") != "backbone_latent":
+            return None
+        encoder = getattr(self, "encoder", None)
+        if encoder is None or not hasattr(encoder, "vla") or not hasattr(encoder, "processor"):
+            return None
+
+        stats_path = OmegaConf.select(
+            cfg,
+            "task.openvla_oft.dataset_statistics_path",
+            default=None,
+        )
+        if stats_path is not None and hasattr(encoder, "vla"):
+            path = Path(str(stats_path)).expanduser()
+            if path.is_file():
+                with path.open("r", encoding="utf-8") as handle:
+                    encoder.vla.norm_stats = json.load(handle)
+
+        from dreamervla.runners.rollout_hidden_extractor import OFTRolloutHiddenExtractor
+
+        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
+        image_keys = OmegaConf.select(env_cfg, "image_keys", default=["agentview_rgb"])
+        return OFTRolloutHiddenExtractor(
+            encoder,
+            image_keys=list(image_keys),
+            history=int(OmegaConf.select(env_cfg, "history_length", default=1)),
+            rotate_images_180=bool(
+                OmegaConf.select(env_cfg, "vla_rotate_180", default=True)
+            ),
+            center_crop=True,
+            unnorm_key=str(
+                OmegaConf.select(
+                    cfg,
+                    "task.openvla_oft.dataset_statistics_key",
+                    default="libero_goal_no_noops",
+                )
+            ),
+            obs_hidden_source="input_token_embedding",
+        )
 
     def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
         processor = self.processor

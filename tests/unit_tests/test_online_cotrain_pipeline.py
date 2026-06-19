@@ -273,6 +273,121 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     assert calls == ["world_model", "policy", "critic"]
 
 
+def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.distributed = _FakeDistributed()
+    captured: dict[str, object] = {}
+
+    class FakeEnv:
+        def __init__(self, cfg):
+            captured.update(dict(cfg))
+
+    monkeypatch.setattr(mod, "DreamerVLAOnlineTrainEnv", FakeEnv)
+
+    cfg = OmegaConf.create(
+        {
+            "seed": 7,
+            "env": {
+                "task_suite_name": "libero_goal",
+                "task_ids": [0],
+                "episode_horizon": 64,
+                "history_length": 1,
+                "include_state": False,
+                "vla_rotate_180": True,
+                "obs_hidden_source": "input_token_embedding",
+                "action_head_type": "oft_discrete_token",
+            },
+        }
+    )
+
+    runner._build_env(cfg)
+
+    assert captured["obs_hidden_source"] == "input_token_embedding"
+    assert captured["action_head_type"] == "oft_discrete_token"
+    assert captured["history_length"] == 1
+    assert captured["include_state"] is False
+
+
+def test_online_env_validation_accepts_oft_discrete_input_token_contract():
+    from dreamervla.envs.train_env import (
+        DreamerVLAOnlineTrainEnv,
+        DreamerVLAOnlineTrainEnvConfig,
+    )
+
+    env = DreamerVLAOnlineTrainEnv.__new__(DreamerVLAOnlineTrainEnv)
+    env.cfg = DreamerVLAOnlineTrainEnvConfig(
+        history_length=1,
+        include_state=False,
+        obs_hidden_source="input_token_embedding",
+        action_head_type="oft_discrete_token",
+    )
+
+    env._validate_canonical_config()
+
+
+def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner._latent_type = "backbone_latent"
+    calls: list[str] = []
+
+    class FakeExtractor:
+        def reset(self):
+            calls.append("reset")
+
+        def step(self, obs, task_description):
+            calls.append(f"step:{task_description}")
+            return [], torch.arange(4, dtype=torch.float16)
+
+    class FakeWorldModel:
+        def __call__(self, batch):
+            if batch["mode"] == "encode_latent":
+                calls.append(f"encode:{tuple(batch['hidden'].shape)}")
+                return {"hidden": batch["hidden"]}
+            if batch["mode"] == "actor_input":
+                calls.append("actor_input")
+                return torch.zeros(1, 6)
+            raise AssertionError(batch["mode"])
+
+    class FakePolicy:
+        def __call__(self, batch):
+            calls.append(f"policy:{tuple(batch['hidden'].shape)}")
+            return torch.zeros(1, 2, 7), torch.zeros(1), {}
+
+    def fail_rynn_input_token(*_args, **_kwargs):
+        raise AssertionError("OFT backbone rollout must not call Rynn input-token extraction")
+
+    runner._oft_input_token_extractor = FakeExtractor()
+    monkeypatch.setattr(mod, "obs_to_input_token_embedding", fail_rynn_input_token)
+
+    action, obs_embedding, latent = runner._rollout_action(
+        FakeWorldModel(),
+        FakePolicy(),
+        processor=None,
+        obs={"is_first": True, "task_description": "Pick up the block"},
+        latent=None,
+        prev_action=torch.zeros(1, 7),
+        target_token_id=10004,
+    )
+
+    assert action.shape == (7,)
+    assert obs_embedding.shape == (1, 4)
+    assert latent["hidden"].shape == (1, 4)
+    assert calls == [
+        "reset",
+        "step:Pick up the block",
+        "encode:(1, 4)",
+        "actor_input",
+        "policy:(1, 6)",
+    ]
+
+
 def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatch):
     import os
 

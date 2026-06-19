@@ -4,6 +4,7 @@ from __future__ import annotations
 def test_actor_classes_are_importable_from_split_modules() -> None:
     from dreamervla.models.actor import (
         LatentToActionHiddenActor,
+        LatentToOpenVLADiscreteTokenActor,
         OpenVLADiscreteTokenActor,
         RynnVLAActionHiddenActor,
         VLAActionHeadActor,
@@ -15,6 +16,9 @@ def test_actor_classes_are_importable_from_split_modules() -> None:
     from dreamervla.models.actor.openvla_discrete_token_actor import (
         OpenVLADiscreteTokenActor as SplitOpenVLADiscreteTokenActor,
     )
+    from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
+        LatentToOpenVLADiscreteTokenActor as SplitLatentToOpenVLADiscreteTokenActor,
+    )
     from dreamervla.models.actor.rynnvla_action_hidden_actor import (
         RynnVLAActionHiddenActor as SplitRynnVLAActionHiddenActor,
     )
@@ -24,6 +28,7 @@ def test_actor_classes_are_importable_from_split_modules() -> None:
     from dreamervla.models.actor.vla_policy import VLAPolicy as SplitVLAPolicy
 
     assert LatentToActionHiddenActor is SplitLatentToActionHiddenActor
+    assert LatentToOpenVLADiscreteTokenActor is SplitLatentToOpenVLADiscreteTokenActor
     assert OpenVLADiscreteTokenActor is SplitOpenVLADiscreteTokenActor
     assert RynnVLAActionHiddenActor is SplitRynnVLAActionHiddenActor
     assert VLAActionHeadActor is SplitVLAActionHeadActor

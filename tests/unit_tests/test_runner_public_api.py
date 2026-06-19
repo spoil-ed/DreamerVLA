@@ -355,9 +355,14 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
     assert rynn_dreamer.policy.source_token_count == 2048
     assert rynn_dreamer.policy.action_hidden_dim == 1024
 
-    assert oft_dreamer.policy._target_ == "dreamervla.models.actor.LatentToActionHiddenActor"
+    assert (
+        oft_dreamer.policy._target_
+        == "dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor"
+    )
     assert oft_dreamer.policy.source_token_count == 512
     assert oft_dreamer.policy.action_hidden_dim == 4096
+    assert oft_dreamer.policy.head_type == "oft_discrete_token"
+    assert oft_dreamer.policy.init_lm_head_ckpt == oft_dreamer.task.openvla_oft.ckpt_path
 
 
 def test_train_config_resolves_public_default_experiment() -> None:

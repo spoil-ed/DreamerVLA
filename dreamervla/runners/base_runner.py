@@ -261,7 +261,10 @@ class BaseRunner(ABC):
         encoder_cfg = self.build_encoder_cfg(cfg)
         with open_dict(encoder_cfg):
             encoder_cfg.model_path = self._resolve_vla_init_path()
-            encoder_cfg.freeze_backbone = True
+            if OmegaConf.select(encoder_cfg, "freeze_vla_backbone", default=None) is not None:
+                encoder_cfg.freeze_vla_backbone = True
+            else:
+                encoder_cfg.freeze_backbone = True
         return encoder_cfg
 
     @staticmethod

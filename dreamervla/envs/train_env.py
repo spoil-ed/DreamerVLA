@@ -430,14 +430,12 @@ class DreamerVLAOnlineTrainEnv:
 
     def _validate_canonical_config(self) -> None:
         errors: list[str] = []
-        if int(self.cfg.history_length) != 2:
-            errors.append(f"history_length={self.cfg.history_length}, expected 2")
+        if int(self.cfg.history_length) < 1:
+            errors.append(f"history_length={self.cfg.history_length}, expected >= 1")
         if str(self.cfg.prompt_style) != "vla_policy":
             errors.append(
                 f"prompt_style={self.cfg.prompt_style!r}, expected 'vla_policy'"
             )
-        if not bool(self.cfg.include_state):
-            errors.append("include_state=False, expected True")
         if not bool(self.cfg.vla_rotate_180):
             errors.append("vla_rotate_180=False, expected True")
         if str(self.cfg.obs_hidden_source) not in ("action_query", "input_token_embedding"):
@@ -445,9 +443,14 @@ class DreamerVLAOnlineTrainEnv:
                 f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected "
                 "'action_query' or 'input_token_embedding'"
             )
-        if str(self.cfg.action_head_type) != "legacy":
+        if str(self.cfg.action_head_type) not in (
+            "legacy",
+            "oft_discrete_token",
+            "oft_l1_regression",
+        ):
             errors.append(
-                f"action_head_type={self.cfg.action_head_type!r}, expected 'legacy'"
+                f"action_head_type={self.cfg.action_head_type!r}, expected "
+                "legacy, oft_discrete_token, or oft_l1_regression"
             )
         if self.cfg.action_input not in {"raw", "normalized"}:
             errors.append(
