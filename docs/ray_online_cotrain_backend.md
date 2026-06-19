@@ -23,7 +23,8 @@ The low-cost cotrain route launches real Ray actors for:
 - rollout: one `EnvWorker` per env actor
 - inference: batched encoder + world-model + policy actor
 - replay: `ReplayWorker` around `OnlineReplay`
-- learner: `LearnerWorker` running a synthetic PPO-style update
+- learner: `LearnerWorker` running either the synthetic PPO-style smoke update
+  or real DreamerVLA cotrain phases
 - weight sync: Ray object-store state-dict handoff
 
 Run it through the normal Hydra entry:
@@ -34,6 +35,27 @@ python -m dreamervla.train experiment=online_cotrain_ray_synthetic
 
 The runner writes the standard `BaseRunner` run artifacts under
 `training.out_dir`, including `resolved_config.yaml` and `run_manifest.json`.
+
+## Single-Node Multi-GPU Learner
+
+The Ray backend is intentionally single-machine / single-node. Multi-GPU
+learner placement is manual and config-driven:
+
+```bash
+python -m dreamervla.train \
+  experiment=online_cotrain_ray_dreamervla_tiny \
+  +parallelism=fsdp \
+  learner.num_workers=2 \
+  learner.placement.end_gpu=1 \
+  learner.train_cfg.fsdp.backend=nccl
+```
+
+Inside each Ray learner actor, `CUDA_VISIBLE_DEVICES` is isolated by placement,
+so `learner.train_cfg.device=auto` resolves to local `cuda:0`. For CPU-only
+debugging use `+parallelism=none`, or set `learner.placement.strategy=node`.
+`validate_cfg` rejects multi-node cluster requests and invalid learner
+placement shapes before runner setup; the runners also fail early if they
+connect to a Ray cluster with more than one live node.
 
 ## Cold-Start Rollout Smoke Route
 
@@ -74,6 +96,6 @@ This backend validates the online worker boundaries and overlap loop. The
 remaining production integrations are intentionally separate steps:
 
 - real LIBERO/VLA component adapters for the Ray runner config
-- multi-GPU learner/DDP inside `LearnerWorker`
-- NCCL weight sync for large GPU-resident weights
+- bucketed/patch/collective weight sync for large GPU-resident weights
 - production LIBERO/OFT cold-start config binding for the Ray collector
+- multi-node manager / node-affinity scheduling

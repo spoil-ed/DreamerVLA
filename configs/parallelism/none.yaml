@@ -1,6 +1,10 @@
 # @package _global_
 learner:
+  num_workers: 1
+  placement:
+    strategy: node
   train_cfg:
+    device: cpu
     fsdp:
       strategy: none
       precision: fp32

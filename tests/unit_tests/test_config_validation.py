@@ -95,6 +95,38 @@ def test_validate_cfg_accepts_manual_ray_precision_and_batch_knobs() -> None:
     validate_cfg(cfg)
 
 
+def test_validate_cfg_rejects_ray_multinode_cluster_request() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "cluster": {"num_nodes": 2},
+        }
+    )
+
+    with pytest.raises(ValueError, match="single-node"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_invalid_ray_learner_placement() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "learner": {
+                "num_workers": 2,
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 2,
+                    "end_gpu": 1,
+                    "num_gpus_per_worker": 1,
+                },
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="learner.placement"):
+        validate_cfg(cfg)
+
+
 def test_validate_cfg_rejects_unknown_ray_precision() -> None:
     cfg = OmegaConf.create(
         {

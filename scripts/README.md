@@ -17,6 +17,8 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline WM/classifier warmup |
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline WM/classifier warmup |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
+| `start_ray.sh` | Start a local single-node Ray head for manual backend debugging |
+| `check_ray.sh` | Inspect the active Ray cluster status |
 
 ## Install Steps
 

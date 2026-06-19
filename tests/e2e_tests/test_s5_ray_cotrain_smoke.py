@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import ray
 
 
@@ -78,4 +80,30 @@ def test_ray_cotrain_runner_accepts_nested_component_config() -> None:
     assert history["env/num_env_workers"] == 3
     assert history["rollout/episodes"] >= 3
     assert history["train/ppo_updates"] >= 1
+    assert not ray.is_initialized()
+
+
+def test_ray_cotrain_runner_runs_real_dreamervla_tiny_phases() -> None:
+    from hydra import compose, initialize_config_dir
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    if ray.is_initialized():
+        ray.shutdown()
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name="train", overrides=["experiment=online_cotrain_ray_dreamervla_tiny"])
+
+    runner = OnlineCotrainRayRunner(cfg)
+
+    history = runner.run()
+
+    assert history["rollout/episodes"] >= 2
+    assert history["train/learner_updates"] >= 1
+    assert history["train/ppo_updates"] == history["train/learner_updates"]
+    assert history["sync/policy_version"] >= 1
+    assert history["time/overlap_events"] >= 1
+    assert history["train/rl_loss"] >= 0.0
+    assert history["env/num_env_workers"] == 2
     assert not ray.is_initialized()

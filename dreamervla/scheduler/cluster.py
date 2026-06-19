@@ -8,6 +8,8 @@ from typing import Any
 import ray
 from packaging.version import Version
 
+from dreamervla.scheduler.node import NodeInfo, discover_ray_nodes
+
 
 class Cluster:
     """Idempotent local Ray bootstrap used by the Ray online cotrain backend."""
@@ -47,9 +49,24 @@ class Cluster:
 
     @property
     def num_nodes(self) -> int:
-        """Single-node subset for the first Ray backend implementation."""
+        """Number of live Ray nodes visible to the current process."""
 
-        return 1
+        return sum(1 for node in self.nodes() if node.alive)
+
+    def nodes(self) -> list[NodeInfo]:
+        """Return Ray node metadata."""
+
+        return discover_ray_nodes()
+
+    def require_single_node(self) -> None:
+        """Fail early if the connected Ray cluster spans more than one node."""
+
+        num_nodes = self.num_nodes
+        if num_nodes != 1:
+            raise RuntimeError(
+                "DreamerVLA Ray backend is single-node only; "
+                f"connected Ray cluster has {num_nodes} live node(s)"
+            )
 
     def shutdown(self) -> None:
         """Shut down Ray for this Python process."""
@@ -75,6 +92,7 @@ class Cluster:
             "object_store_memory",
             "local_mode",
             "log_to_driver",
+            "include_dashboard",
             "_temp_dir",
             "_node_ip_address",
         ):

@@ -84,3 +84,110 @@ def test_worker_group_maps_local_gpu_index_through_parent_visible_devices(monkey
 
     assert gpu_env["CUDA_VISIBLE_DEVICES"] == "2"
     assert cpu_env["CUDA_VISIBLE_DEVICES"] == ""
+
+
+def test_worker_group_env_vars_include_single_node_rendezvous() -> None:
+    from dreamervla.scheduler.placement import Placement
+    from dreamervla.scheduler.worker_group import WorkerGroup
+
+    env = WorkerGroup._env_vars(
+        Placement(
+            rank=1,
+            local_rank=1,
+            local_world_size=2,
+            visible_accelerators=["1"],
+            device="cuda:1",
+        ),
+        master_addr="127.0.0.1",
+        master_port=29519,
+    )
+
+    assert env["RANK"] == "1"
+    assert env["LOCAL_RANK"] == "1"
+    assert env["WORLD_SIZE"] == "2"
+    assert env["MASTER_ADDR"] == "127.0.0.1"
+    assert env["MASTER_PORT"] == "29519"
+
+
+def test_worker_group_launch_assigns_shared_single_node_rendezvous(monkeypatch) -> None:
+    import dreamervla.scheduler.worker_group as worker_group_module
+    from dreamervla.scheduler.placement import Placement
+    from dreamervla.scheduler.worker_group import WorkerGroup
+
+    captured: list[dict[str, object]] = []
+
+    class _PlacementStrategy:
+        def get_placement(self, cluster):
+            del cluster
+            return [
+                Placement(
+                    rank=0,
+                    local_rank=0,
+                    local_world_size=2,
+                    visible_accelerators=["0"],
+                    device="cuda:0",
+                ),
+                Placement(
+                    rank=1,
+                    local_rank=1,
+                    local_world_size=2,
+                    visible_accelerators=["1"],
+                    device="cuda:1",
+                ),
+            ]
+
+    class _Cluster:
+        @staticmethod
+        def find_free_port() -> int:
+            return 29601
+
+    class _RemoteMethod:
+        @staticmethod
+        def remote() -> str:
+            return "initialized"
+
+    class _Actor:
+        init = _RemoteMethod()
+
+    class _RemoteClass:
+        @staticmethod
+        def options(**options):
+            captured.append(options)
+            return _RemoteClass
+
+        @staticmethod
+        def remote(*args, **kwargs):
+            del args, kwargs
+            return _Actor()
+
+    monkeypatch.setattr(worker_group_module.ray, "remote", lambda _cls: _RemoteClass)
+    monkeypatch.setattr(worker_group_module.ray, "get", lambda refs: refs)
+
+    WorkerGroup(object).launch(_Cluster(), _PlacementStrategy())
+
+    envs = [item["runtime_env"]["env_vars"] for item in captured]
+    assert [env["RANK"] for env in envs] == ["0", "1"]
+    assert {env["MASTER_ADDR"] for env in envs} == {"127.0.0.1"}
+    assert {env["MASTER_PORT"] for env in envs} == {"29601"}
+
+
+def test_worker_group_send_recv_routes_one_rank() -> None:
+    from dreamervla.scheduler.worker_group import WorkerGroup
+
+    class _RemoteMethod:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def remote(self, delta: int) -> int:
+            return self.value + int(delta)
+
+    class _Actor:
+        def __init__(self, value: int) -> None:
+            self.add = _RemoteMethod(value)
+
+    group = WorkerGroup(object)
+    group.workers = [_Actor(10), _Actor(20)]
+
+    result = group.send(1, "add", 3)
+
+    assert group.recv(result) == 23

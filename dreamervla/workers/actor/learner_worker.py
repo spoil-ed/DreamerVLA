@@ -37,7 +37,10 @@ class LearnerWorker(Worker):
         self.init_ckpt = dict(init_ckpt)
         self.train_cfg = dict(train_cfg)
         self.replay = replay
-        self.torch_device = torch.device(str(self.train_cfg.get("device", self.device)))
+        configured_device = str(self.train_cfg.get("device", self.device))
+        if configured_device == "auto":
+            configured_device = self.device
+        self.torch_device = torch.device(configured_device)
         self.components: dict[str, nn.Module] = {}
         self.optimizers: dict[str, torch.optim.Optimizer] = {}
         self.policy: nn.Module | None = None

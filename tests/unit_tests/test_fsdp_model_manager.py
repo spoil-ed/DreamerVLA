@@ -38,3 +38,49 @@ def test_fsdp_model_manager_rejects_auto_precision() -> None:
         assert "precision" in str(exc)
     else:
         raise AssertionError("precision='auto' must be rejected")
+
+
+def test_fsdp_model_manager_initializes_single_node_process_group(monkeypatch) -> None:
+    import torch.distributed as dist
+
+    from dreamervla.hybrid_engines.fsdp import FSDPModelManager
+
+    calls: list[dict[str, object]] = []
+    state = {"initialized": False}
+
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", "29529")
+    monkeypatch.setattr(dist, "is_available", lambda: True)
+    monkeypatch.setattr(dist, "is_initialized", lambda: state["initialized"])
+
+    def fake_init_process_group(*, backend: str, rank: int, world_size: int) -> None:
+        calls.append({"backend": backend, "rank": rank, "world_size": world_size})
+        state["initialized"] = True
+
+    monkeypatch.setattr(dist, "init_process_group", fake_init_process_group)
+
+    manager = FSDPModelManager(strategy="fsdp", precision="bf16", backend="gloo")
+
+    assert manager.ensure_process_group() is True
+    assert calls == [{"backend": "gloo", "rank": 1, "world_size": 2}]
+
+
+def test_fsdp_model_manager_requires_rendezvous_env_for_multi_worker(monkeypatch) -> None:
+    import pytest
+    import torch.distributed as dist
+
+    from dreamervla.hybrid_engines.fsdp import FSDPModelManager
+
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.delenv("MASTER_ADDR", raising=False)
+    monkeypatch.delenv("MASTER_PORT", raising=False)
+    monkeypatch.setattr(dist, "is_available", lambda: True)
+    monkeypatch.setattr(dist, "is_initialized", lambda: False)
+
+    manager = FSDPModelManager(strategy="fsdp")
+
+    with pytest.raises(RuntimeError, match="MASTER_ADDR"):
+        manager.ensure_process_group()

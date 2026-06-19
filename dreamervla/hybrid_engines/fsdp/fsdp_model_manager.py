@@ -7,6 +7,7 @@ infer or tune them from available VRAM.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -32,6 +33,7 @@ class FSDPModelManager:
     precision: str = "fp32"
     cpu_offload: bool = False
     activation_checkpointing: bool = False
+    backend: str | None = None
 
     def __post_init__(self) -> None:
         _dtype_from_precision(self.precision)
@@ -39,6 +41,42 @@ class FSDPModelManager:
     @property
     def param_dtype(self) -> torch.dtype:
         return _dtype_from_precision(self.precision)
+
+    def ensure_process_group(self) -> bool:
+        """Initialize torch.distributed for explicit multi-worker FSDP runs."""
+
+        normalized = str(self.strategy).strip().lower()
+        if normalized in {"", "none", "ddp"}:
+            return False
+        if normalized not in {"fsdp", "fsdp1"}:
+            raise ValueError(f"unsupported FSDP strategy: {self.strategy!r}")
+        if not dist.is_available():
+            raise RuntimeError("torch.distributed is not available for FSDP")
+        if dist.is_initialized():
+            return True
+
+        world_size = _int_env("WORLD_SIZE", default=1)
+        if world_size <= 1:
+            return False
+
+        missing = [
+            name
+            for name in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE")
+            if not os.environ.get(name)
+        ]
+        if missing:
+            raise RuntimeError(
+                "FSDP multi-worker setup requires rendezvous env vars: "
+                f"{', '.join(missing)}"
+            )
+
+        backend = self.backend or ("nccl" if torch.cuda.is_available() else "gloo")
+        dist.init_process_group(
+            backend=str(backend),
+            rank=_int_env("RANK", default=0),
+            world_size=world_size,
+        )
+        return True
 
     def prepare_model(self, model: torch.nn.Module) -> torch.nn.Module:
         if self.activation_checkpointing and hasattr(
@@ -51,6 +89,7 @@ class FSDPModelManager:
             return model
         if normalized not in {"fsdp", "fsdp1"}:
             raise ValueError(f"unsupported FSDP strategy: {self.strategy!r}")
+        self.ensure_process_group()
         if not (dist.is_available() and dist.is_initialized()):
             return model
 
@@ -72,6 +111,16 @@ class FSDPModelManager:
             cpu_offload=CPUOffload(offload_params=bool(self.cpu_offload)),
             mixed_precision=mixed_precision,
         )
+
+
+def _int_env(key: str, *, default: int) -> int:
+    value = os.environ.get(key)
+    if value is None:
+        return int(default)
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{key} must be an integer, got {value!r}") from exc
 
 
 __all__ = ["FSDPModelManager"]

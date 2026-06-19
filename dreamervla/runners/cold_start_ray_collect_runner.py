@@ -42,6 +42,7 @@ class ColdStartRayCollectRunner(BaseRunner):
     def run(self) -> dict[str, float | int]:
         cluster = Cluster(self.cfg.get("cluster"))
         try:
+            cluster.require_single_node()
             groups = self._build_components(cluster)
             return self._run_loop(groups)
         finally:

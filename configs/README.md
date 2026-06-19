@@ -33,6 +33,21 @@ python -m dreamervla.train experiment=world_model_dinowm_chunk logger=tensorboar
 python -m dreamervla.train experiment=world_model_dinowm_chunk logger=wandb
 ```
 
+Optional Ray backend resource knobs live in explicit config groups:
+
+| Group | Options | Purpose |
+| --- | --- | --- |
+| `precision` | `fp32`, `bf16`, `fp16` | Manual learner AMP precision |
+| `parallelism` | `none`, `fsdp` | Manual learner FSDP / CPU-offload / checkpointing knobs |
+| `scheduler` | `local`, `ray_auto` | Single-node Ray cluster and component-placement metadata |
+
+Example single-node multi-GPU learner override:
+
+```bash
+python -m dreamervla.train experiment=online_cotrain_ray_dreamervla_tiny \
+  +parallelism=fsdp learner.num_workers=2 learner.placement.end_gpu=1
+```
+
 Visualize TensorBoard logs from a run root with:
 
 ```bash

@@ -28,6 +28,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_model_registry_refs(cfg)
     _validate_online_cotrain_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
+    _validate_fsdp_config(cfg)
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
     return cfg
@@ -223,7 +224,9 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "rollout.steps")
     _require_positive_if_present(cfg, "replay.cfg.sequence_length")
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
+    _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
+    _validate_ray_single_node_placement(cfg)
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
@@ -233,6 +236,161 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "learner.train_cfg.precision must be one of "
                 f"fp32, bf16, or fp16; got {precision!r}"
             )
+
+
+def _validate_fsdp_config(cfg: DictConfig) -> None:
+    """Fail fast on an unusable learner FSDP block before any worker spawns.
+
+    The learner builds ``FSDPModelManager(**learner.train_cfg.fsdp)`` inside the
+    Ray actor, so a bad ``strategy``/``precision`` would otherwise only surface
+    after the cluster is up. The accepted strategy set mirrors
+    ``FSDPModelManager`` (none/ddp/fsdp/fsdp1).
+    """
+
+    fsdp = OmegaConf.select(cfg, "learner.train_cfg.fsdp", default=None)
+    if fsdp is None:
+        return
+
+    strategy = OmegaConf.select(fsdp, "strategy", default=None)
+    if strategy is not None:
+        normalized = str(strategy).strip().lower()
+        if normalized not in {"", "none", "ddp", "fsdp", "fsdp1"}:
+            raise ValueError(
+                "learner.train_cfg.fsdp.strategy must be one of "
+                f"none, ddp, fsdp, fsdp1; got {strategy!r}"
+            )
+
+    precision = OmegaConf.select(fsdp, "precision", default=None)
+    if precision is not None:
+        normalized = str(precision).strip().lower()
+        if normalized not in {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}:
+            raise ValueError(
+                "learner.train_cfg.fsdp.precision must be one of "
+                f"fp32, bf16, or fp16; got {precision!r}"
+            )
+
+
+def _validate_ray_single_node_placement(cfg: DictConfig) -> None:
+    num_nodes = OmegaConf.select(
+        cfg,
+        "cluster.num_nodes",
+        default=OmegaConf.select(cfg, "scheduler.cluster.num_nodes", default=None),
+    )
+    if num_nodes is not None and int(num_nodes) != 1:
+        raise ValueError(
+            "DreamerVLA Ray backend is currently single-node; "
+            f"cluster.num_nodes={num_nodes!r} is not supported"
+        )
+
+    placement = OmegaConf.select(cfg, "learner.placement", default=None)
+    if placement is None:
+        return
+
+    raw = OmegaConf.to_container(placement, resolve=True)
+    if not isinstance(raw, dict):
+        raise ValueError("learner.placement must be a mapping")
+    strategy = str(raw.get("strategy", "node")).strip().lower()
+    try:
+        num_workers_raw = OmegaConf.select(cfg, "learner.num_workers", default=None)
+        num_workers = int(num_workers_raw) if num_workers_raw is not None else None
+        if strategy in {"", "node", "cpu"}:
+            count = int(raw.get("count", num_workers or 1))
+            if count <= 0:
+                raise ValueError("count must be >= 1")
+            if num_workers is not None and count != num_workers:
+                raise ValueError(
+                    f"count must match learner.num_workers ({count} != {num_workers})"
+                )
+        elif strategy == "packed":
+            _validate_ray_packed_placement(raw, num_workers=num_workers)
+        elif strategy == "flexible":
+            groups = raw.get("accelerator_groups", raw.get("groups"))
+            actual_workers = len(_normalize_accelerator_groups(groups))
+            if num_workers is not None and actual_workers != num_workers:
+                raise ValueError(
+                    "accelerator_groups must match learner.num_workers "
+                    f"({actual_workers} != {num_workers})"
+                )
+        else:
+            raise ValueError(
+                "strategy must be one of node, packed, or flexible; "
+                f"got {strategy!r}"
+            )
+    except Exception as exc:
+        raise ValueError(f"learner.placement is invalid: {exc}") from exc
+
+
+def _validate_ray_packed_placement(
+    raw: dict[str, Any],
+    *,
+    num_workers: int | None,
+) -> None:
+    start_gpu = int(raw.get("start_gpu", 0))
+    num_gpus_per_worker = int(raw.get("num_gpus_per_worker", 1))
+    if start_gpu < 0:
+        raise ValueError("start_gpu must be >= 0")
+    if num_gpus_per_worker <= 0:
+        raise ValueError("num_gpus_per_worker must be >= 1")
+    if "end_gpu" in raw:
+        end_gpu = int(raw["end_gpu"])
+    else:
+        workers = num_workers or 1
+        end_gpu = start_gpu + workers * num_gpus_per_worker - 1
+    if end_gpu < start_gpu:
+        raise ValueError(f"invalid GPU range [{start_gpu}, {end_gpu}]")
+    span = end_gpu - start_gpu + 1
+    if span % num_gpus_per_worker != 0:
+        raise ValueError(
+            "GPU span must be divisible by learner.placement.num_gpus_per_worker"
+        )
+    actual_workers = span // num_gpus_per_worker
+    if num_workers is not None and actual_workers != num_workers:
+        raise ValueError(
+            "packed GPU span must match learner.num_workers "
+            f"({actual_workers} != {num_workers})"
+        )
+
+
+def _normalize_accelerator_groups(groups: Any) -> list[list[int]]:
+    if not groups:
+        raise ValueError("accelerator_groups must not be empty")
+    normalized = [_parse_accelerator_group(group) for group in list(groups)]
+    seen: set[int] = set()
+    for group in normalized:
+        overlap = seen.intersection(group)
+        if overlap:
+            raise ValueError(f"duplicate accelerator ranks: {sorted(overlap)}")
+        seen.update(group)
+    return normalized
+
+
+def _parse_accelerator_group(value: Any) -> list[int]:
+    if isinstance(value, str):
+        ranks: list[int] = []
+        for raw_part in value.split(","):
+            part = raw_part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start_s, end_s = part.split("-", 1)
+                start = int(start_s)
+                end = int(end_s)
+                if start < 0 or end < start:
+                    raise ValueError(f"invalid accelerator range {part!r}")
+                ranks.extend(range(start, end + 1))
+            else:
+                ranks.append(int(part))
+    elif isinstance(value, (list, tuple, ListConfig)):
+        ranks = [int(rank) for rank in value]
+    else:
+        raise ValueError(f"unsupported accelerator group {value!r}")
+    if not ranks:
+        raise ValueError("accelerator group must not be empty")
+    if any(rank < 0 for rank in ranks):
+        raise ValueError(f"accelerator ranks must be >= 0, got {ranks}")
+    if len(ranks) != len(set(ranks)):
+        raise ValueError(f"accelerator group contains duplicate ranks: {ranks}")
+    return ranks
 
 
 def _validate_existing_paths(cfg: DictConfig) -> None:

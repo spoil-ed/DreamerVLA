@@ -1,6 +1,13 @@
 # @package _global_
 learner:
+  num_workers: 1
+  placement:
+    strategy: packed
+    start_gpu: 0
+    end_gpu: 0
+    num_gpus_per_worker: 1
   train_cfg:
+    device: auto
     fsdp:
       strategy: fsdp
       precision: bf16

@@ -56,3 +56,31 @@ def test_channel_round_trips_tensors() -> None:
         assert torch.equal(actual, expected)
     finally:
         cluster.shutdown()
+
+
+def test_channel_routes_by_key_and_weighted_batch() -> None:
+    from dreamervla.scheduler.channel import Channel
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+
+    try:
+        name = f"test-channel-keyed-{uuid.uuid4().hex}"
+        channel = Channel.create(name)
+
+        channel.put("a0", key="actor")
+        channel.put("r0", key="replay")
+        channel.put("a1", key="actor")
+        channel.put("r1", key="replay")
+
+        assert channel.qsize() == 4
+        assert channel.qsize(key="actor") == 2
+        assert channel.get(key="actor") == "a0"
+        assert channel.get_weighted_batch({"replay": 2, "actor": 1}) == {
+            "replay": ["r0", "r1"],
+            "actor": ["a1"],
+        }
+        assert channel.empty()
+    finally:
+        cluster.shutdown()

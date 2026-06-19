@@ -36,11 +36,19 @@ class WorkerGroup:
 
         self.placements = placement.get_placement(cluster)
         self.workers = []
+        master_addr = "127.0.0.1" if len(self.placements) > 1 else None
+        master_port = cluster.find_free_port() if len(self.placements) > 1 else None
         for item in self.placements:
             remote_cls = ray.remote(self.worker_cls)
             options: dict[str, Any] = {
                 "num_gpus": len(item.visible_accelerators),
-                "runtime_env": {"env_vars": self._env_vars(item)},
+                "runtime_env": {
+                    "env_vars": self._env_vars(
+                        item,
+                        master_addr=master_addr,
+                        master_port=master_port,
+                    )
+                },
             }
             if name is not None:
                 options["name"] = f"{name}_{item.rank}"
@@ -67,6 +75,18 @@ class WorkerGroup:
             raise AttributeError(method)
         return WorkerGroupFunc(self, method)
 
+    def send(self, rank: int, method: str, *args: Any, **kwargs: Any) -> WorkerGroupFuncResult:
+        """Invoke one method on one rank and return an async result wrapper."""
+
+        return getattr(self.execute_on(int(rank)), str(method))(*args, **kwargs)
+
+    @staticmethod
+    def recv(result: WorkerGroupFuncResult) -> Any:
+        """Receive the first result from a point-to-point ``send`` call."""
+
+        values = result.wait()
+        return values[0] if values else None
+
     def _consume_selected_workers(self) -> list[Any]:
         if self._next_ranks is None:
             return list(self.workers)
@@ -75,8 +95,13 @@ class WorkerGroup:
         return [self.workers[rank] for rank in ranks]
 
     @staticmethod
-    def _env_vars(placement: Placement) -> dict[str, str]:
-        return {
+    def _env_vars(
+        placement: Placement,
+        *,
+        master_addr: str | None = None,
+        master_port: int | str | None = None,
+    ) -> dict[str, str]:
+        env = {
             "RANK": str(placement.rank),
             "LOCAL_RANK": str(placement.local_rank),
             "WORLD_SIZE": str(placement.local_world_size),
@@ -84,6 +109,11 @@ class WorkerGroup:
                 placement.visible_accelerators
             ),
         }
+        if master_addr is not None:
+            env["MASTER_ADDR"] = str(master_addr)
+        if master_port is not None:
+            env["MASTER_PORT"] = str(master_port)
+        return env
 
     @staticmethod
     def _visible_accelerator_env(visible_accelerators: list[str]) -> str:
@@ -127,10 +157,17 @@ class WorkerGroupFuncResult:
         self.refs = refs
 
     def wait(self) -> list[Any]:
-        return list(ray.get(self.refs))
+        if all(isinstance(ref, ray.ObjectRef) for ref in self.refs):
+            return list(ray.get(self.refs))
+        return [
+            ray.get(ref) if isinstance(ref, ray.ObjectRef) else ref
+            for ref in self.refs
+        ]
 
     def done(self) -> bool:
         if not self.refs:
+            return True
+        if not all(isinstance(ref, ray.ObjectRef) for ref in self.refs):
             return True
         ready, _ = ray.wait(self.refs, num_returns=len(self.refs), timeout=0)
         return len(ready) == len(self.refs)

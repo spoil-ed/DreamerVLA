@@ -175,16 +175,21 @@ def test_robot_states_slice_5_9_is_unit_quaternion() -> None:
 # Live-env replay (skipped in CI if LIBERO not available)
 # ---------------------------------------------------------------------------
 
+_RUN_LIVE_LIBERO = os.environ.get("DVLA_RUN_LIVE_LIBERO_TESTS") == "1"
 _LIBERO_AVAILABLE = False
-try:
-    import libero  # noqa: F401
-    _LIBERO_AVAILABLE = True
-except ImportError:
-    pass
+if _RUN_LIVE_LIBERO:
+    try:
+        import libero  # noqa: F401
+        _LIBERO_AVAILABLE = True
+    except ImportError:
+        pass
 
 _LIBERO_ENV_MARK = pytest.mark.skipif(
-    not _LIBERO_AVAILABLE or not DEMO_PATH.exists(),
-    reason="LIBERO not installed or demo file missing",
+    not _RUN_LIVE_LIBERO or not _LIBERO_AVAILABLE or not DEMO_PATH.exists(),
+    reason=(
+        "live LIBERO env tests require DVLA_RUN_LIVE_LIBERO_TESTS=1, "
+        "LIBERO, and the demo file"
+    ),
 )
 
 

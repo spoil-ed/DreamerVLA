@@ -1,0 +1,20 @@
+# @package _global_
+scheduler:
+  cluster:
+    address: null
+    num_nodes: 1
+    namespace: DreamerVLA
+    include_dashboard: false
+  node_groups:
+    - name: local
+      node_rank: 0
+      resources:
+        cpu: auto
+        gpu: auto
+  component_placement:
+    learner:
+      strategy: node
+      count: 1
+    env:
+      strategy: node
+      count: ${env.num_workers}

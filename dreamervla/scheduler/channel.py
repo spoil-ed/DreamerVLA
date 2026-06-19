@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from typing import Any
 
 import ray
@@ -13,22 +14,43 @@ class _ChannelActor:
     """Single-actor FIFO queue."""
 
     def __init__(self, maxsize: int = 0) -> None:
-        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=max(0, int(maxsize)))
+        self.maxsize = max(0, int(maxsize))
+        self.queues: dict[str, asyncio.Queue[Any]] = {
+            "default": asyncio.Queue(maxsize=self.maxsize)
+        }
 
-    async def put(self, item: Any) -> None:
-        await self.queue.put(item)
+    async def put(self, item: Any, key: str = "default") -> None:
+        await self._queue(key).put(item)
 
-    async def get(self) -> Any:
-        return await self.queue.get()
+    async def get(self, key: str = "default") -> Any:
+        return await self._queue(key).get()
 
-    async def get_batch(self, n: int) -> list[Any]:
-        return [await self.queue.get() for _ in range(int(n))]
+    async def get_batch(self, n: int, key: str = "default") -> list[Any]:
+        return [await self._queue(key).get() for _ in range(int(n))]
 
-    def qsize(self) -> int:
-        return int(self.queue.qsize())
+    async def get_weighted_batch(self, weights: dict[str, int]) -> dict[str, list[Any]]:
+        out: dict[str, list[Any]] = OrderedDict()
+        for key, count in weights.items():
+            out[str(key)] = [await self._queue(str(key)).get() for _ in range(int(count))]
+        return out
 
-    def empty(self) -> bool:
-        return bool(self.queue.empty())
+    def qsize(self, key: str | None = None) -> int:
+        if key is not None:
+            return int(self._queue(str(key)).qsize())
+        return int(sum(queue.qsize() for queue in self.queues.values()))
+
+    def empty(self, key: str | None = None) -> bool:
+        if key is not None:
+            return bool(self._queue(str(key)).empty())
+        return all(queue.empty() for queue in self.queues.values())
+
+    def _queue(self, key: str) -> asyncio.Queue[Any]:
+        normalized = str(key or "default")
+        queue = self.queues.get(normalized)
+        if queue is None:
+            queue = asyncio.Queue(maxsize=self.maxsize)
+            self.queues[normalized] = queue
+        return queue
 
 
 class Channel:
@@ -55,17 +77,21 @@ class Channel:
     def connect(cls, name: str) -> Channel:
         return cls(ray.get_actor(name, namespace="DreamerVLA"))
 
-    def put(self, item: Any) -> None:
-        ray.get(self._actor.put.remote(item))
+    def put(self, item: Any, *, key: str = "default") -> None:
+        ray.get(self._actor.put.remote(item, str(key)))
 
-    def get(self) -> Any:
-        return ray.get(self._actor.get.remote())
+    def get(self, *, key: str = "default") -> Any:
+        return ray.get(self._actor.get.remote(str(key)))
 
-    def get_batch(self, n: int) -> list[Any]:
-        return list(ray.get(self._actor.get_batch.remote(int(n))))
+    def get_batch(self, n: int, *, key: str = "default") -> list[Any]:
+        return list(ray.get(self._actor.get_batch.remote(int(n), str(key))))
 
-    def qsize(self) -> int:
-        return int(ray.get(self._actor.qsize.remote()))
+    def get_weighted_batch(self, weights: dict[str, int]) -> dict[str, list[Any]]:
+        normalized = {str(key): int(value) for key, value in weights.items()}
+        return dict(ray.get(self._actor.get_weighted_batch.remote(normalized)))
 
-    def empty(self) -> bool:
-        return bool(ray.get(self._actor.empty.remote()))
+    def qsize(self, *, key: str | None = None) -> int:
+        return int(ray.get(self._actor.qsize.remote(key)))
+
+    def empty(self, *, key: str | None = None) -> bool:
+        return bool(ray.get(self._actor.empty.remote(key)))

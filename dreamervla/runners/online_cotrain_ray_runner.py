@@ -16,7 +16,12 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.scheduler.cluster import Cluster
-from dreamervla.scheduler.placement import NodePlacementStrategy
+from dreamervla.scheduler.placement import (
+    FlexiblePlacementStrategy,
+    NodePlacementStrategy,
+    PackedPlacementStrategy,
+    PlacementStrategy,
+)
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.env.env_worker import EnvWorker
@@ -51,8 +56,14 @@ class OnlineCotrainRayRunner(BaseRunner):
         super().teardown()
 
     def run(self) -> dict[str, float | int]:
-        cluster = Cluster(self.cfg.get("cluster"))
+        cluster_cfg = OmegaConf.select(
+            self.cfg,
+            "cluster",
+            default=OmegaConf.select(self.cfg, "scheduler.cluster", default=None),
+        )
+        cluster = Cluster(cluster_cfg)
         try:
+            cluster.require_single_node()
             groups = self._build_components(cluster)
             metrics = self._run_loop(groups)
             metrics["env/num_env_workers"] = int(groups["num_envs"])
@@ -109,22 +120,12 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         learner_model_cfg = self._cfg_from("learner.model_cfg", {"policy": policy_cfg})
         learner_model_cfg.setdefault("policy", policy_cfg)
-        learner_train_cfg = self._cfg_from(
-            "learner.train_cfg",
-            {
-                "mode": "synthetic_ppo",
-                "batch_size": int(self.cfg.get("ppo_batch_size", 2)),
-                "lr": float(self.cfg.get("ppo_lr", 0.05)),
-                "device": "cpu",
-                "syncer": {"store_name": store_name},
-            },
+        learner_placement = self._learner_placement()
+        learner_placements = learner_placement.get_placement(cluster)
+        learner_train_cfg = self._learner_train_cfg(
+            store_name,
+            placement_has_gpu=any(item.visible_accelerators for item in learner_placements),
         )
-        learner_train_cfg.setdefault("mode", "synthetic_ppo")
-        learner_train_cfg.setdefault("batch_size", int(self.cfg.get("ppo_batch_size", 2)))
-        learner_train_cfg.setdefault("lr", float(self.cfg.get("ppo_lr", 0.05)))
-        learner_train_cfg.setdefault("device", "cpu")
-        learner_train_cfg.setdefault("syncer", {})
-        learner_train_cfg["syncer"].setdefault("store_name", store_name)
 
         learner_group = WorkerGroup(
             LearnerWorker,
@@ -132,7 +133,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             {},
             learner_train_cfg,
             replay,
-        ).launch(cluster, NodePlacementStrategy(1))
+        ).launch(cluster, learner_placement)
         return {
             "replay": replay_group,
             "envs": env_group,
@@ -243,6 +244,84 @@ class OnlineCotrainRayRunner(BaseRunner):
         if value is None:
             return _plain(default)
         return _plain(value)
+
+    def _learner_placement(self) -> PlacementStrategy:
+        num_workers_raw = OmegaConf.select(self.cfg, "learner.num_workers", default=None)
+        num_workers = int(num_workers_raw) if num_workers_raw is not None else None
+        placement_cfg = self._cfg_from("learner.placement", {"strategy": "node"})
+        strategy = str(placement_cfg.get("strategy", "node")).strip().lower()
+
+        if strategy in {"", "node", "cpu"}:
+            return NodePlacementStrategy(num_workers or 1)
+        if strategy == "packed":
+            num_gpus_per_worker = int(placement_cfg.get("num_gpus_per_worker", 1))
+            start_gpu = int(placement_cfg.get("start_gpu", 0))
+            if "end_gpu" in placement_cfg:
+                end_gpu = int(placement_cfg["end_gpu"])
+            else:
+                workers = num_workers or 1
+                end_gpu = start_gpu + workers * num_gpus_per_worker - 1
+            packed = PackedPlacementStrategy(
+                start_gpu,
+                end_gpu,
+                num_gpus_per_worker=num_gpus_per_worker,
+            )
+            actual_workers = (end_gpu - start_gpu + 1) // num_gpus_per_worker
+            if num_workers is not None and actual_workers != num_workers:
+                raise ValueError(
+                    "learner.num_workers must match packed learner placement "
+                    f"({num_workers} != {actual_workers})"
+                )
+            return packed
+        if strategy == "flexible":
+            groups = placement_cfg.get("accelerator_groups")
+            if groups is None:
+                groups = placement_cfg.get("groups")
+            if groups is None:
+                raise ValueError(
+                    "learner.placement.accelerator_groups is required for flexible placement"
+                )
+            flexible = FlexiblePlacementStrategy(groups)
+            actual_workers = len(flexible.accelerator_groups)
+            if num_workers is not None and actual_workers != num_workers:
+                raise ValueError(
+                    "learner.num_workers must match flexible learner placement "
+                    f"({num_workers} != {actual_workers})"
+                )
+            return flexible
+        raise ValueError(
+            "learner.placement.strategy must be one of node, packed, or flexible; "
+            f"got {strategy!r}"
+        )
+
+    def _learner_train_cfg(
+        self,
+        store_name: str,
+        *,
+        placement_has_gpu: bool,
+    ) -> dict[str, Any]:
+        learner_train_cfg = self._cfg_from(
+            "learner.train_cfg",
+            {
+                "mode": "synthetic_ppo",
+                "batch_size": int(self.cfg.get("ppo_batch_size", 2)),
+                "lr": float(self.cfg.get("ppo_lr", 0.05)),
+                "syncer": {"store_name": store_name},
+            },
+        )
+        learner_train_cfg.setdefault("mode", "synthetic_ppo")
+        learner_train_cfg.setdefault("batch_size", int(self.cfg.get("ppo_batch_size", 2)))
+        learner_train_cfg.setdefault("lr", float(self.cfg.get("ppo_lr", 0.05)))
+        raw_device = str(
+            learner_train_cfg.get("device", "auto" if placement_has_gpu else "cpu")
+        ).strip()
+        if raw_device.lower() in {"", "auto"}:
+            learner_train_cfg["device"] = "cuda:0" if placement_has_gpu else "cpu"
+        else:
+            learner_train_cfg["device"] = raw_device
+        learner_train_cfg.setdefault("syncer", {})
+        learner_train_cfg["syncer"].setdefault("store_name", store_name)
+        return learner_train_cfg
 
 
 def _default_policy_cfg() -> dict[str, Any]:

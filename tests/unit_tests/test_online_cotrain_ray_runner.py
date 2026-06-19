@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import pytest
+
+
+@dataclass(frozen=True)
+class _Cluster:
+    num_gpus: int
+
 
 class _Ready:
     def __init__(self, result) -> None:
@@ -107,3 +116,67 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     assert history["train/learner_updates"] == 1
     assert history["train/ppo_updates"] == 1
     assert history["train/rl_loss"] == 0.25
+
+
+def test_ray_runner_builds_packed_multigpu_learner_placement() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    cfg = OmegaConf.create(
+        {
+            "learner": {
+                "num_workers": 2,
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 0,
+                    "end_gpu": 1,
+                    "num_gpus_per_worker": 1,
+                },
+                "train_cfg": {
+                    "mode": "dreamervla_cotrain",
+                    "device": "auto",
+                },
+            }
+        }
+    )
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+
+    strategy = runner._learner_placement()
+    placements = strategy.get_placement(_Cluster(num_gpus=2))
+    train_cfg = runner._learner_train_cfg("weight_store", placement_has_gpu=True)
+
+    assert [placement.visible_accelerators for placement in placements] == [["0"], ["1"]]
+    assert [placement.local_world_size for placement in placements] == [2, 2]
+    assert train_cfg["device"] == "cuda:0"
+    assert train_cfg["syncer"]["store_name"] == "weight_store"
+
+
+def test_ray_runner_rejects_multinode_cluster_before_launch(monkeypatch) -> None:
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_ray_runner as runner_module
+
+    class _Cluster:
+        def __init__(self, cfg) -> None:
+            del cfg
+            self.shutdown_called = False
+
+        def require_single_node(self) -> None:
+            raise RuntimeError("DreamerVLA Ray backend is single-node only")
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    cluster = _Cluster(None)
+    monkeypatch.setattr(runner_module, "Cluster", lambda cfg: cluster)
+
+    runner = runner_module.OnlineCotrainRayRunner.__new__(
+        runner_module.OnlineCotrainRayRunner
+    )
+    runner.cfg = OmegaConf.create({})
+
+    with pytest.raises(RuntimeError, match="single-node"):
+        runner.run()
+    assert cluster.shutdown_called is True

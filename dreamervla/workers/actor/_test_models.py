@@ -32,6 +32,45 @@ class TinySharedPolicy(TinyTrainablePolicy):
         return super().forward(batch.float())
 
 
+class TinyWMPOPolicy(nn.Module):
+    """Tiny policy implementing the WMPO sample/evaluate protocol."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.action_dim = int(action_dim)
+        self.chunk_size = int(chunk_size)
+        self.linear = nn.Linear(self.hidden_dim, self.action_dim)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, batch):  # type: ignore[override]
+        if not isinstance(batch, dict):
+            return self.linear(batch.float())
+        hidden = batch["hidden"].float()
+        mean = self.linear(hidden).unsqueeze(1).expand(
+            -1,
+            self.chunk_size,
+            -1,
+        )
+        mode = str(batch.get("mode", "sample"))
+        if mode == "sample":
+            action = mean
+            log_prob = -((action - mean) ** 2).mean(dim=(1, 2))
+            return action, log_prob, {"action_chunk": action}
+        if mode == "evaluate":
+            action = batch["action"].float()
+            log_prob = -((action - mean) ** 2).mean(dim=(1, 2))
+            entropy = torch.ones_like(log_prob) * 0.5
+            return log_prob, entropy, {}
+        raise ValueError(f"unknown TinyWMPOPolicy mode {mode!r}")
+
+
 class TinyCheckpointPolicy(TinyTrainablePolicy):
     """Policy exposing the gradient-checkpointing hook used by FSDP tests."""
 
@@ -60,6 +99,60 @@ class TinyTrainableWorldModel(TinyScalarModel):
     """Small trainable world-model stand-in for learner routing tests."""
 
 
+class TinyWMPOWorldModel(nn.Module):
+    """Tiny world model implementing the production DreamerVLA step protocol."""
+
+    def __init__(self, hidden_dim: int = 4, action_dim: int = 7) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.action_dim = int(action_dim)
+        self.obs_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.action_proj = nn.Linear(self.action_dim, self.hidden_dim)
+        nn.init.eye_(self.obs_proj.weight)
+        nn.init.zeros_(self.obs_proj.bias)
+        nn.init.zeros_(self.action_proj.weight)
+        nn.init.zeros_(self.action_proj.bias)
+
+    def forward(self, batch: dict) -> dict[str, torch.Tensor] | torch.Tensor:  # type: ignore[override]
+        mode = batch.get("mode")
+        if mode is None:
+            obs = batch["obs_embedding"].float()
+            pred = self.obs_proj(obs)
+            target = batch["current_actions"].float().mean(dim=-1, keepdim=True)
+            target = target.expand_as(pred)
+            loss = torch.mean((pred - target) ** 2)
+            return {"loss": loss, "_loss": loss}
+        if mode == "encode_latent":
+            return self.obs_proj(batch["hidden"].float())
+        if mode == "observe_next":
+            hidden = self.obs_proj(batch["hidden"].float())
+            latent = self._latent_hidden(batch["latent"])
+            action_signal = self.action_proj(batch["actions"].float())
+            return hidden + 0.1 * latent + 0.01 * action_signal
+        if mode == "observe_sequence":
+            return {"latent": self.obs_proj(batch["obs_embedding"].float())}
+        if mode == "actor_input":
+            return self._latent_hidden(batch["latent"])
+        if mode == "predict_next_chunk":
+            latent = self._latent_hidden(batch["latent"])
+            actions = batch["actions"].float()
+            action_signal = self.action_proj(actions)
+            hidden_seq = latent.unsqueeze(1) + action_signal
+            return {
+                "hidden_seq": hidden_seq,
+                "history": hidden_seq,
+                "actions": actions,
+                "hidden": hidden_seq[:, -1],
+            }
+        raise ValueError(f"unknown TinyWMPOWorldModel mode {mode!r}")
+
+    @staticmethod
+    def _latent_hidden(latent) -> torch.Tensor:
+        if isinstance(latent, dict):
+            return latent["hidden"].float()
+        return latent.float()
+
+
 class TinyValueCritic(TinyScalarModel):
     """Small trainable critic stand-in for learner routing tests."""
 
@@ -73,6 +166,7 @@ class TinySuccessClassifier(nn.Module):
             window=int(window),
             chunk_size=1,
             chunk_pool="last",
+            granularity="action",
         )
         self.linear = nn.Linear(int(hidden_dim), 2)
         nn.init.zeros_(self.linear.weight)
@@ -81,6 +175,27 @@ class TinySuccessClassifier(nn.Module):
     def forward(self, windows: torch.Tensor) -> torch.Tensor:
         hidden = windows.float().mean(dim=1)
         return self.linear(hidden)
+
+    def predict_success(
+        self,
+        video: torch.Tensor,
+        *,
+        threshold: float,
+        stride: int,
+        min_steps: int,
+    ) -> dict[str, torch.Tensor]:
+        del stride
+        logits = self.linear(video.float())
+        probs = torch.softmax(logits, dim=-1)[..., 1]
+        scan_start = max(0, int(min_steps) - 1)
+        scanned = probs[:, scan_start:]
+        above = scanned >= float(threshold)
+        has_success = above.any(dim=1)
+        first = above.float().argmax(dim=1) + scan_start
+        fallback = torch.full_like(first, int(video.shape[1]) - 1)
+        finish_step = torch.where(has_success, first, fallback)
+        return {"complete": has_success, "finish_step": finish_step}
+
 
 
 class TinyWorldModelPhaseUpdater:
