@@ -41,10 +41,16 @@ class ChameleonLatentActionWMRunner(BaseRunner):
     include_keys = ("global_step", "epoch")
     exclude_keys = ("encoder",)
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = str(checkpoints_path("VLA_model_256", "libero_goal"))
-    default_output_dir = str(
-        data_path("outputs", "worldmodel", "chameleon_latent_action_wm", "debug")
-    )
+
+    @property
+    def default_vla_init_dir(self) -> str:
+        return str(checkpoints_path("VLA_model_256", "libero_goal"))
+
+    @property
+    def default_output_dir(self) -> str:
+        return str(
+            data_path("outputs", "worldmodel", "chameleon_latent_action_wm", "debug")
+        )
 
     @staticmethod
     def _first_finite_metric(metrics: dict[str, Any], *keys: str) -> float | None:

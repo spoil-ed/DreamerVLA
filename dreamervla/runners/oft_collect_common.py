@@ -33,6 +33,45 @@ def resolve_model_path(model_path: str) -> str:
     return str(p.expanduser().resolve() if p.is_absolute() else Path.cwd() / model_path)
 
 
+def _resolve_token_dim(vla: Any) -> int:
+    for path in (
+        ("token_dim",),
+        ("hidden_size",),
+        ("config", "hidden_size"),
+        ("language_model", "config", "hidden_size"),
+        ("llm_backbone", "llm", "config", "hidden_size"),
+    ):
+        cur = vla
+        for attr in path:
+            cur = getattr(cur, attr, None)
+            if cur is None:
+                break
+        if cur is not None:
+            return int(cur)
+    raise ValueError("Could not derive token_dim from loaded VLA")
+
+
+def vla_latent_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
+    """Return input-token sidecar dimensions derived from the loaded VLA."""
+    from dreamervla.preprocess.preprocess_oft_action_hidden import (
+        _input_token_sidecar_dims,
+    )
+
+    token_dim = _resolve_token_dim(vla)
+    token_count, flat_dim = _input_token_sidecar_dims(
+        vla,
+        image_keys=list(image_keys),
+        token_dim=token_dim,
+    )
+    return {
+        "per_image": int(vla.vision_backbone.get_num_patches()),
+        "views": int(vla.vision_backbone.get_num_images_in_input()),
+        "token_dim": int(token_dim),
+        "token_count": int(token_count),
+        "flat_dim": int(flat_dim),
+    }
+
+
 def load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
     """Load OpenVLAOFTPolicy from checkpoint on the specified GPU.
 
@@ -108,7 +147,7 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """
     mode = cfg["_policy_mode"]
     use_proprio = cfg["_use_proprio"]
-    return {
+    config = {
         "action_head_type": "oft_l1_regression" if mode == "l1" else "oft_discrete_token",
         "obs_hidden_source": cfg["expected_obs_hidden_source"],
         "prompt_style": cfg["expected_prompt_style"],
@@ -127,6 +166,14 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "center_crop": True,
         "task_suite_name": cfg["task_suite_name"],
     }
+    if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
+        token_count = cfg.get("token_count")
+        hidden_dim = cfg.get("hidden_dim")
+        if token_count is not None:
+            config["token_count"] = int(token_count)
+        if hidden_dim is not None:
+            config["hidden_dim"] = int(hidden_dim)
+    return config
 
 
 def assert_policy_mode_matches(cfg: dict[str, Any]) -> None:

@@ -31,6 +31,55 @@ def test_env_worker_uses_injected_record_builder() -> None:
     assert captured.get("called") is True
 
 
+def test_env_worker_pushes_completed_episode_to_remote_replay(monkeypatch) -> None:
+    from dreamervla.workers.env import env_worker as env_worker_mod
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    class _RemoteAddEpisode:
+        def __init__(self, sink: _Sink) -> None:
+            self._sink = sink
+
+        def remote(self, episode):
+            self._sink.eps.append(list(episode))
+            return {"ok": True}
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.eps = []
+            self.add_episode = _RemoteAddEpisode(self)
+
+    def fake_get(ref):
+        return ref
+
+    monkeypatch.setattr(env_worker_mod.ray, "get", fake_get)
+
+    cfg = {
+        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
+    }
+    sink = _Sink()
+    worker = EnvWorker(cfg, task_id=0, replay=sink)
+    worker.init()
+
+    _obs, done, _info = worker.step(
+        np.zeros(7, np.float32),
+        np.zeros(4, np.float16),
+    )
+    assert done is False
+    _obs, done, info = worker.step(
+        np.ones(7, np.float32),
+        np.ones(4, np.float16),
+    )
+
+    assert done is True
+    assert "reset_info" in info
+    assert len(sink.eps) == 1
+    assert len(sink.eps[0]) == 2
+    assert np.asarray(sink.eps[0][-1]["obs_embedding"]).dtype == np.float32
+    assert worker.episode == []
+    assert worker.episode_id == 1
+
+
 def test_env_worker_passes_pre_step_full_record_to_record_builder() -> None:
     from dreamervla.workers.env.env_worker import EnvWorker
 

@@ -5,7 +5,7 @@
 # expected_obs_hidden_source=action_query / expected_prompt_style=vla_policy /
 # expected_rotate_images_180=true are inherited from libero_spatial.
 defaults:
-  - libero_spatial
+  - OpenVLA_Onetraj_LIBERO_Spatial
   - _self_
 
 name: OpenVLA_Onetraj_ColdStart_LIBERO_Spatial
@@ -15,21 +15,3 @@ artifact_name: OpenVLA_Onetraj_LIBERO_libero_spatial
 # (not processed_data/, which holds offline-preprocessed demos).
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
-
-openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
-  resume_step: null
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1/dataset_statistics.json
-  dataset_statistics_key: libero_spatial_no_noops
-  action_head_ckpt: null
-  proprio_projector_ckpt: null
-  hdf5_dir: ${task.hdf5_dir}
-  hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
-  expected_action_head_type: oft_discrete_token   # discrete one-traj ckpt (no L1 head)
-  expected_include_state: false                   # discrete ⇒ no proprio
-  expected_history: 1                             # single-frame history (h1)
-  time_horizon: 8
-  token_dim: 4096
-  chunk_size: 8

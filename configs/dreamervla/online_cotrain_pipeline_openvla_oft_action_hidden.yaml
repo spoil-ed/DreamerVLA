@@ -1,0 +1,63 @@
+# @package _global_
+# Offline-warmup cotrain pipeline for OpenVLA-OFT discrete action-hidden sidecars.
+# Structural dimensions come from task.openvla_oft; script profiles may only
+# scale runtime throughput knobs such as batch sizes and warmup steps.
+defaults:
+  - online_cotrain_pipeline_libero_goal
+  - _self_
+
+latent_type: action_hidden
+
+offline_warmup:
+  data_dir: ${task.openvla_oft.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.action_hidden_dir}
+
+init:
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
+
+online_rollout:
+  sequence_length: ${task.openvla_oft.wm_sequence_length}
+
+env:
+  task_suite_name: ${task.suite}
+  episode_horizon: 300
+  history_length: ${task.openvla_oft.expected_history}
+  include_state: ${task.openvla_oft.expected_include_state}
+  vla_rotate_180: ${task.openvla_oft.expected_rotate_images_180}
+
+world_model:
+  _target_: ${task.openvla_oft.wm_target}
+  chunk_size: ${task.openvla_oft.chunk_size}
+  obs_dim: ${task.openvla_oft.wm_obs_dim}
+  action_dim: ${task.action_dim}
+  token_count: ${task.openvla_oft.token_count}
+  token_dim: ${task.openvla_oft.token_dim}
+  time_horizon: ${task.openvla_oft.time_horizon}
+  latent_source: ${task.openvla_oft.latent_source}
+
+policy:
+  _target_: ${task.openvla_oft.actor_target}
+  hidden_dim: null
+  action_hidden_dim: ${task.openvla_oft.token_dim}
+  action_dim: ${task.action_dim}
+  time_horizon: ${task.openvla_oft.chunk_size}
+  head_type: ${task.openvla_oft.actor_head_type}
+  adapter_type: ${task.openvla_oft.actor_adapter_type}
+  adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
+  freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
+  init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
+  vocab_size: ${task.openvla_oft.vocab_size}
+  action_token_bins: ${task.openvla_oft.action_token_bins}
+  min_action: ${task.openvla_oft.min_action}
+  max_action: ${task.openvla_oft.max_action}
+
+classifier:
+  latent_dim: ${task.openvla_oft.token_dim}
+  chunk_size: ${task.openvla_oft.chunk_size}
+  token_dim: ${task.openvla_oft.token_dim}
+  token_pool: mean
+  token_count: ${task.openvla_oft.token_count}
+
+algorithm:
+  wmpo:
+    chunk_size: ${task.openvla_oft.chunk_size}

@@ -11,15 +11,14 @@ Notes:
 
 Usage:
     Example (LIBERO-Spatial):
-        python regenerate_libero_dataset_filter_no_op.py \
-            --libero_task_suite libero_spatial \
-            --libero_raw_data_dir ./third_party/LIBERO/libero/datasets/libero_spatial \
-            --libero_target_dir ./third_party/LIBERO/libero/datasets/libero_spatial_no_noops \
-            --image_resolution 512
+        python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op \
+            libero_task_suite=libero_spatial \
+            libero_raw_data_dir=./third_party/LIBERO/libero/datasets/libero_spatial \
+            libero_target_dir=./third_party/LIBERO/libero/datasets/libero_spatial_no_noops \
+            image_resolution=512
 
 """
 
-import argparse
 import json
 import os
 
@@ -37,6 +36,7 @@ from dreamervla.preprocess.libero_utils.noop_marking import (
     SCHEME_NAME,
     is_noop_action,
 )
+from dreamervla.utils.hydra_config import script_namespace
 
 NOOP_MARKING_SCHEME = SCHEME_NAME
 
@@ -333,59 +333,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--libero_task_suite",
-        type=str,
-        choices=[
-            "libero_spatial",
-            "libero_object",
-            "libero_goal",
-            "libero_10",
-            "libero_90",
-        ],
-        help="LIBERO task suite. Example: libero_spatial",
-        required=True,
-    )
-    parser.add_argument(
-        "--libero_raw_data_dir",
-        type=str,
-        help="Path to directory containing raw HDF5 dataset. Example: ./third_party/LIBERO/libero/datasets/libero_spatial",
-        required=True,
-    )
-    parser.add_argument(
-        "--libero_target_dir",
-        type=str,
-        help="Path to regenerated dataset directory. Example: ./third_party/LIBERO/libero/datasets/slibero_spatial_no_noop",
-        required=True,
-    )
-    parser.add_argument(
-        "--image_resolution",
-        type=int,
-        help="image resolution, 256 or 512",
-        required=True,
-    )
-    parser.add_argument(
-        "--keep-noops",
-        action="store_true",
-        help=(
-            "Keep no-op transitions in the regenerated HDF5 and mark them with "
-            "data/demo_*/noop_mask. Without this flag, no-ops are marked then "
-            "filtered to preserve the historical *_no_noops_t_* output."
-        ),
-    )
-    parser.add_argument(
-        "--metainfo-json-out",
-        default=None,
-        help="Path to the metainfo JSON to write; defaults to <suite>_metainfo.json.",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from an existing target directory and metainfo JSON.",
-    )
-    args = parser.parse_args()
-
-    # Start data regeneration
+    args = script_namespace("regenerate_libero_dataset_filter_no_op")
     main(args)

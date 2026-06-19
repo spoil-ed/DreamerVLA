@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
 import h5py
 
 from dreamervla.preprocess.sidecar_schema import required_demo_datasets_from_config
+from dreamervla.utils.hydra_config import script_namespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -190,22 +190,8 @@ def validate_hdf5_dir(
             raise RuntimeError(f"cannot open HDF5 file {file_path}: {exc}") from exc
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    metainfo = subparsers.add_parser("metainfo")
-    metainfo.add_argument("--path", required=True)
-
-    hdf5_dir = subparsers.add_parser("hdf5-dir")
-    hdf5_dir.add_argument("--dir", required=True)
-    hdf5_dir.add_argument("--reference-dir", default=None)
-    hdf5_dir.add_argument("--require-complete-attr", action="store_true")
-    hdf5_dir.add_argument("--require-config", action="store_true")
-    hdf5_dir.add_argument("--match-reference-demos", action="store_true")
-    hdf5_dir.add_argument("--match-reference-lengths", action="store_true")
-    hdf5_dir.add_argument("--required-demo-dataset", action="append", default=[])
-    return parser.parse_args()
+def _parse_args():
+    return script_namespace("check_artifacts")
 
 
 def main() -> None:

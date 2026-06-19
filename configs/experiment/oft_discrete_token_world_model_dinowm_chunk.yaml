@@ -1,4 +1,5 @@
 # @package _global_
 defaults:
   - override /worldmodel: openvla_oft_discrete_token_action_chunk
+  - override /task: OpenVLA_Onetraj_LIBERO
   - _self_

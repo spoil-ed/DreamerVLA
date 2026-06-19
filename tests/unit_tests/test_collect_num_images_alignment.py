@@ -25,7 +25,7 @@ def _make_cfg(num_images=None):
         "action_hidden_dir": "/tmp/h1",
         "expected_action_head_type": "oft_discrete_token",
         "expected_include_state": False,
-        "expected_obs_hidden_source": "action_query",
+        "expected_obs_hidden_source": "input_token_embedding",
         "expected_prompt_style": "vla_policy",
         "expected_rotate_images_180": True,
         "time_horizon": 8,
@@ -38,6 +38,7 @@ def _make_cfg(num_images=None):
         "episodes_per_task": 2,
         "episode_horizon": 64,
         "envs_per_gpu": 1,
+        "memory_fraction": 0.8,
         "gpu_id": 0,
     }
     if num_images is not None:

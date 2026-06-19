@@ -242,10 +242,15 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
     def _build_components(self, cfg: DictConfig) -> None:
         # ---- components (reuse hydra targets + inherited helpers; no offline run() touch)
-        encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-        self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        freeze_module(self.encoder)
-        self.processor = self.encoder._build_processor(self.device)
+        total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=1))
+        if total_env_steps <= 0:
+            self.encoder = None
+            self.processor = None
+        else:
+            encoder_cfg = self._build_frozen_encoder_cfg(cfg)
+            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
+            freeze_module(self.encoder)
+            self.processor = self.encoder._build_processor(self.device)
 
         self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
             device=self.device, dtype=torch.bfloat16

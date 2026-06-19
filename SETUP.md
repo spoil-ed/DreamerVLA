@@ -228,11 +228,11 @@ input: downloaded raw LIBERO HDF5 files
   ${DVLA_DATA_ROOT}/datasets/libero/${TASK}/*.hdf5
 
 stage 1: replay and mark no-ops
-  python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op --keep-noops
+  python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op keep_noops=true
   writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256 with data/demo_*/noop_mask
 
 stage 2: filter marked no-ops
-  python -m dreamervla.preprocess.filter_marked_libero_hdf5 --filter-noops
+  python -m dreamervla.preprocess.filter_marked_libero_hdf5 filter_noops=true
   writes ${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256
 ```
 
@@ -457,10 +457,10 @@ bash scripts/eval_libero_vla.sh gpus=0 \
 OpenVLA-OFT one-trajectory checkpoint:
 
 ```bash
-CKPT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
-SUITE=libero_goal \
-GPU_ID=0 \
-bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
+bash scripts/eval/launch_openvla_oft_official_libero_eval.sh \
+  ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+  suite=libero_goal \
+  gpu_id=0
 ```
 
 ## 6. Verify

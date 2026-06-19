@@ -8,10 +8,11 @@ mode: oft
 
 collect:
   policy_mode: auto
-  num_images_in_input: 1
+  num_images_in_input: ${task.openvla_oft.num_images_in_input}
   episodes_per_task: 2
   episode_horizon: 64
   envs_per_gpu: 2
+  memory_fraction: 0.8
   task_ids: all
 
 env:

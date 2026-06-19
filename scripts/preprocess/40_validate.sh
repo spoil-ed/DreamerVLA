@@ -22,10 +22,10 @@ cd "${DVLA_ROOT}"
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 
 python -m dreamervla.preprocess.validate_libero_data_prep \
-  --data-root "${DVLA_DATA_ROOT}" \
-  --processed-data-root "${PROCESSED_DATA_ROOT}" \
-  --suites "${ARTIFACT_NAME}" \
-  --his 1 \
-  --action-horizon 1 \
-  --image-resolution 256 \
-  --check-action-hidden
+  data_root="${DVLA_DATA_ROOT}" \
+  processed_data_root="${PROCESSED_DATA_ROOT}" \
+  suites="[${ARTIFACT_NAME}]" \
+  his=1 \
+  action_horizon=1 \
+  image_resolution=256 \
+  check_action_hidden=true

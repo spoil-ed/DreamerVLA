@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import os
-from pathlib import Path
 from typing import Any
 
 import hydra
@@ -16,9 +15,8 @@ from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.json_logger import JsonLogger
 from dreamervla.utils.optim import build_optimizer
+from dreamervla.utils.paths import data_path
 from dreamervla.utils.seed import set_seed
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class OpenVLAOFTTrainingRunner(BaseRunner):
@@ -30,9 +28,10 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
     include_keys = ("global_step", "epoch", "dataset_statistics")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_output_dir = str(
-        PROJECT_ROOT / "data" / "outputs" / "vla" / "openvla_oft_goal"
-    )
+
+    @property
+    def default_output_dir(self) -> str:
+        return str(data_path("outputs", "vla", "openvla_oft_goal"))
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:

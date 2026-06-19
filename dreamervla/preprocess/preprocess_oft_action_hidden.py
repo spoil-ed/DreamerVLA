@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import time
@@ -20,11 +19,10 @@ from tqdm import tqdm
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
     ACTION_HIDDEN_KEY,
-    DEFAULT_HIDDEN_KEY,
     annotate_preprocess_config,
     required_demo_datasets,
 )
-from dreamervla.utils.paths import checkpoints_path, processed_data_path
+from dreamervla.utils.hydra_config import script_namespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -198,7 +196,7 @@ def resolve_oft_policy_mode(checkpoint: str | Path, policy_mode: str = "auto") -
     return mode
 
 
-def _resolve_num_images_in_input(args: argparse.Namespace) -> int:
+def _resolve_num_images_in_input(args: SimpleNamespace) -> int:
     if args.num_images_in_input is not None:
         return int(args.num_images_in_input)
     return int(args.history) * len(args.image_keys)
@@ -216,7 +214,7 @@ class _FakeVisionBackbone:
         return self._num_images_in_input
 
 
-def _load_oft_components(args: argparse.Namespace, device: torch.device) -> dict[str, Any]:
+def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[str, Any]:
     if bool(args.fake_oft_components):
         vla = SimpleNamespace(
             vision_backbone=_FakeVisionBackbone(
@@ -308,7 +306,7 @@ def _load_oft_components(args: argparse.Namespace, device: torch.device) -> dict
 def _predict_intermediates_chunk(
     *,
     components: dict[str, Any],
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     obs_group: h5py.Group,
     image_keys: tuple[str, ...],
     prompt: str,
@@ -531,7 +529,7 @@ def _input_token_sidecar_dims(
 
 def _write_attrs(
     handle: h5py.File,
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     *,
     source_path: Path,
     obs_hidden_source: str,
@@ -578,7 +576,7 @@ def _write_source_sidecars(
     out_action_path: Path | None,
     out_input_path: Path | None = None,
     components: dict[str, Any],
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     rank: int,
 ) -> dict[str, int]:
     tmp_c = (
@@ -817,83 +815,8 @@ def _write_source_sidecars(
     return {"demos": demos_written, "frames": frames_written}
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Precompute OpenVLA-OFT action hidden C/D sidecars for LIBERO HDF5."
-    )
-    parser.add_argument(
-        "--openvla-oft-dir",
-        default=str(
-            PROJECT_ROOT / "dreamervla" / "models" / "embodiment" / "openvla_oft"
-        ),
-    )
-    parser.add_argument(
-        "--hdf5-dir",
-        default=str(processed_data_path("libero_goal/no_noops_t_256")),
-    )
-    parser.add_argument(
-        "--out-c-dir",
-        default=str(processed_data_path("libero_goal/no_noops_t_256_oft_action_hidden_c_h8")),
-    )
-    parser.add_argument(
-        "--out-d-dir",
-        default=str(processed_data_path("libero_goal/no_noops_t_256_oft_action_hidden_d_h8")),
-    )
-    parser.add_argument("--out-action-dir", default=None)
-    parser.add_argument(
-        "--out-input-token-dir",
-        default=None,
-        help="Optional Scheme-B sidecar: current-frame projected vision patch "
-        "tokens (input embeddings) instead of action-slot hidden states.",
-    )
-    parser.add_argument("--skip-cd-sidecars", action="store_true")
-    parser.add_argument("--oft-ckpt", default=str(checkpoints_path("OpenVLA-OFT", "libero_goal")))
-    parser.add_argument("--unnorm-key", default="libero_goal_no_noops")
-    parser.add_argument(
-        "--policy-mode",
-        default="auto",
-        choices=["auto", "l1", "discrete"],
-        help="OFT action-head format: component-wise L1 head or merged discrete "
-        "LM-head; auto probes for action_head--*_checkpoint.pt.",
-    )
-    parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
-    parser.add_argument(
-        "--num-images-in-input",
-        type=int,
-        default=None,
-        help="Defaults to history * len(image_keys).",
-    )
-    parser.add_argument("--include-state", action="store_true", default=True)
-    parser.add_argument("--center-crop", action="store_true", default=True)
-    parser.add_argument("--history", type=int, default=2)
-    parser.add_argument("--rotate-images-180", action="store_true", default=True)
-    parser.add_argument("--resolution", type=int, default=256)
-    parser.add_argument("--prompt-style", default="vla_policy")
-    parser.add_argument("--lora-rank", type=int, default=32)
-    parser.add_argument("--load-in-8bit", action="store_true")
-    parser.add_argument("--load-in-4bit", action="store_true")
-    parser.add_argument("--hidden-key", default=DEFAULT_HIDDEN_KEY)
-    parser.add_argument("--time-horizon", type=int, default=8)
-    parser.add_argument("--action-dim", type=int, default=7)
-    parser.add_argument("--token-dim", type=int, default=4096)
-    parser.add_argument("--chunk-size", type=int, default=16)
-    parser.add_argument("--save-action-hidden", action="store_true", default=True)
-    parser.add_argument("--output-dtype", default="float16", choices=["float16", "float32"])
-    parser.add_argument("--max-files", type=int, default=None)
-    parser.add_argument("--max-demos-per-file", type=int, default=None)
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument(
-        "--fake-oft-components",
-        action="store_true",
-        help="Use deterministic fake OFT tensors for structural HDF5 pipeline tests.",
-    )
-    parser.add_argument(
-        "--fake-num-patches",
-        type=int,
-        default=4,
-        help="Patch count per image for --fake-oft-components input-token sidecars.",
-    )
-    return parser.parse_args()
+def parse_args() -> SimpleNamespace:
+    return script_namespace("preprocess_oft_action_hidden")
 
 
 def main() -> None:

@@ -23,6 +23,7 @@ def test_forward_batch_returns_action_and_hidden() -> None:
     assert set(out) == {"actions", "obs_embedding"}
     assert out["actions"][0].shape == (7,) and out["actions"][0].dtype == np.float32
     assert out["obs_embedding"][1].shape == (HIDDEN_DIM,)
+    assert out["obs_embedding"][1].dtype == np.float16
     assert float(out["actions"][1][0]) == 20.0
     assert float(out["obs_embedding"][2][0]) == 30.0
 
@@ -31,7 +32,11 @@ def test_reset_states_clears_only_named_envs() -> None:
     w = RolloutInferenceWorker(_cfg(), {}, num_envs=2)
     w.init()
     w.forward_batch([{"seed": 1}, {"seed": 2}], [0, 1])
+    first_extractor = w._extractors[0]
+    second_extractor = w._extractors[1]
     w.reset_states([1])
+    assert w._extractors[0] is first_extractor
+    assert w._extractors[1] is second_extractor
     assert w._extractors[0].n == 1
     assert w._extractors[1].n == 0
 
@@ -61,3 +66,16 @@ def test_forward_batch_applies_gripper_postprocess() -> None:
     assert float(out["actions"][0][-1]) == -1.0  # g=20 -> sign(39)*-1 = -1
     assert float(out["actions"][1][-1]) == 1.0   # g=0  -> sign(-1)*-1 = +1
     assert float(out["actions"][0][0]) == 20.0   # non-gripper dim untouched
+
+
+def test_forward_batch_executes_action_chunk_open_loop() -> None:
+    cfg = _cfg()
+    cfg["action_steps"] = 3
+    w = RolloutInferenceWorker(cfg, {}, num_envs=1)
+    w.init()
+
+    first = w.forward_batch([{"seed": 0}], [0])
+    second = w.forward_batch([{"seed": 10}], [0])
+    third = w.forward_batch([{"seed": 20}], [0])
+
+    assert [int(out["actions"][0][0]) for out in (first, second, third)] == [0, 1, 2]

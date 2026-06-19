@@ -31,9 +31,6 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from pathlib import Path
-from typing import Any
-
-import numpy as np
 
 # Single source of truth for the gripper post-process, shared with the collectors.
 from dreamervla.runners.oft_collect_common import process_action

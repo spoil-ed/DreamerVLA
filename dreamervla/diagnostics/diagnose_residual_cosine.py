@@ -19,21 +19,25 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from dreamervla.utils.paths import data_path
 
-DEFAULT_DATA_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "processed_data"
-    / "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
-)
-DEFAULT_OUT_DIR = PROJECT_ROOT / "data" / "diagnostics" / "hidden_token_structure"
+
+def _default_data_dir() -> Path:
+    return data_path(
+        "processed_data",
+        "libero_goal",
+        "no_noops_t_256_legacy_action_hidden_vla_policy_h2",
+    )
+
+
+def _default_out_dir() -> Path:
+    return data_path("diagnostics", "hidden_token_structure")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--stats", type=Path, default=None)
     parser.add_argument("--num-samples", type=int, default=4000)
     parser.add_argument("--seed", type=int, default=42)
@@ -41,7 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--action-dim", type=int, default=7)
     parser.add_argument("--hidden-dim", type=int, default=1024)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.data_dir is None:
+        args.data_dir = _default_data_dir()
+    if args.out_dir is None:
+        args.out_dir = _default_out_dir()
+    return args
 
 
 def main() -> None:

@@ -14,8 +14,8 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `train_vla.sh` | VLA SFT via Hydra experiment configs |
 | `train_wm.sh` | World-model and classifier training via Hydra experiment configs |
 | `train_dreamervla.sh` | DreamerVLA training via Hydra experiment configs |
-| `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline-warmup online cotrain |
-| `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline-warmup online cotrain |
+| `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline WM/classifier warmup |
+| `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline WM/classifier warmup |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
 
 ## Install Steps
@@ -143,15 +143,18 @@ checkpoint directory is `${training.out_dir}/checkpoints`; older
 Grouped training writes `${training.out_dir}/resolved_config.yaml` and
 `${training.out_dir}/run_manifest.json` during runner setup.
 
-Cold-start warmup cotrain e2e launchers run a two-stage flow: first collect
-generated rollouts, then point `offline_warmup.data_dir` and
-`offline_warmup.hidden_dir` at the collected output for cotrain warmup. The Ray
-variant uses `experiment=collect_rollouts_ray`; the no-Ray variant uses
+Cold-start warmup launchers run a two-stage flow: first collect generated
+rollouts, then point `offline_warmup.data_dir` and `offline_warmup.hidden_dir`
+at the collected output for WM/classifier warmup. The Ray variant uses
+`experiment=collect_rollouts_ray`; the no-Ray variant uses
 `experiment=collect_rollouts_onetraj`. Both accept Hydra overrides such as
-`task=goal|object|spatial` and `run_root=...`. By default they run a small
-real-data OFT action-hidden warmup smoke (`online_rollout.total_env_steps=0`);
-override `collect_overrides=[...]` or `cotrain_overrides=[...]` to extend into
-longer training.
+`task=goal|object|spatial|10` and `run_root=...`. Core runtime controls are
+direct Hydra keys on the launcher: `collect.episodes_per_task`,
+`collect.episode_horizon`, no-Ray `collect.envs_per_gpu`, Ray
+`collect.num_workers`, `warmup.wm_steps`, `warmup.classifier_steps`, and
+`warmup.total_env_steps`. The release default keeps
+`warmup.total_env_steps=0`; raise it only when you intentionally opt into online
+cotrain.
 
     bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
     bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true
@@ -160,7 +163,7 @@ longer training.
 
 | Script | Purpose |
 | --- | --- |
-| `eval/launch_openvla_oft_official_libero_eval.sh` | OpenVLA-OFT eval launcher |
+| `eval/launch_openvla_oft_official_libero_eval.sh` | OpenVLA-OFT eval launcher via `configs/scripts/openvla_oft_official_eval.yaml` |
 
 Python modules:
 

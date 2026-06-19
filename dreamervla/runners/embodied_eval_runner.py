@@ -41,6 +41,7 @@ from dreamervla.utils.hf_checkpoint import (
     load_runner_payload,
     resolve_hf_checkpoint_dir,
 )
+from dreamervla.utils.paths import data_path
 from dreamervla.utils.torch_utils import freeze_module
 
 
@@ -50,13 +51,10 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
     runner_name = "libero_eval"
     runner_status = "current"
     runner_family = "eval"
-    default_output_dir = str(
-        pathlib.Path(__file__).resolve().parents[2]
-        / "data"
-        / "outputs"
-        / "eval"
-        / "eval_libero_vla"
-    )
+
+    @property
+    def default_output_dir(self) -> str:
+        return str(data_path("outputs", "eval", "eval_libero_vla"))
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:

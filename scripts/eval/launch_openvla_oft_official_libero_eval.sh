@@ -27,25 +27,19 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 cd "${DVLA_ROOT}"
 
-if [[ "${USE_PROPRIO}" == "1" ]]; then
-  PROPRIO_FLAG="--use-proprio"
-else
-  PROPRIO_FLAG="--no-use-proprio"
-fi
-
-python -m dreamervla.diagnostics.eval_openvla_oft_libero \
-  --ckpt "${CKPT}" \
-  --suite "${SUITE}" \
-  --task-ids "${TASK_IDS}" \
-  --num-trials "${NUM_TRIALS}" \
-  --gpu-id "${GPU_ID}" \
-  --seed "${SEED}" \
-  --policy-mode "${POLICY_MODE}" \
-  --camera-inputs "${CAMERA_INPUTS}" \
-  --num-images "${NUM_IMAGES}" \
-  ${PROPRIO_FLAG} \
-  --num-open-loop-steps "${NUM_OPEN_LOOP_STEPS}" \
-  --env-img-res "${ENV_IMG_RES}" \
-  --output-dir "${OUTPUT_DIR}" \
-  --openvla-oft-root "${OPENVLA_OFT_ROOT}" \
+python -m dreamervla.diagnostics.eval_openvla_oft_libero --config-name openvla_oft_official_eval \
+  ckpt="${CKPT}" \
+  suite="${SUITE}" \
+  task_ids="${TASK_IDS}" \
+  num_trials="${NUM_TRIALS}" \
+  gpu_id="${GPU_ID}" \
+  seed="${SEED}" \
+  policy_mode="${POLICY_MODE}" \
+  camera_inputs="${CAMERA_INPUTS}" \
+  num_images="${NUM_IMAGES}" \
+  use_proprio="${USE_PROPRIO}" \
+  num_open_loop_steps="${NUM_OPEN_LOOP_STEPS}" \
+  env_img_res="${ENV_IMG_RES}" \
+  output_dir="${OUTPUT_DIR}" \
+  openvla_oft_root="${OPENVLA_OFT_ROOT}" \
   "$@"

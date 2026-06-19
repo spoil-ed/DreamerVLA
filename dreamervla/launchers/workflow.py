@@ -103,7 +103,7 @@ def _run_one_step(
 
     env = os.environ.copy()
     env["DVLA_ROOT"] = str(PROJECT_ROOT)
-    env["DVLA_DATA_ROOT"] = str(cfg.get("data_root", "data"))
+    env["DVLA_DATA_ROOT"] = str(cfg["data_root"])
     env["PYTHON"] = str(cfg.get("python", "python"))
     pythonpath = env.get("PYTHONPATH", "")
     if str(PROJECT_ROOT) not in pythonpath.split(":"):

@@ -18,6 +18,31 @@ def test_oft_collect_common_exposes_shared_helpers() -> None:
         assert callable(fn)
 
 
+def test_vla_latent_spec_derives_flat_dim_from_policy() -> None:
+    from dreamervla.runners.oft_collect_common import vla_latent_spec
+
+    class _VisionBackbone:
+        per_image = 5
+        views = 2
+
+        def get_num_patches(self) -> int:
+            return self.per_image
+
+        def get_num_images_in_input(self) -> int:
+            return self.views
+
+    class _VLA:
+        vision_backbone = _VisionBackbone()
+        token_dim = 11
+
+    spec = vla_latent_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
+    assert spec["per_image"] == _VisionBackbone.per_image
+    assert spec["views"] == _VisionBackbone.views
+    assert spec["token_dim"] == _VLA.token_dim
+    assert spec["token_count"] == _VisionBackbone.per_image * _VisionBackbone.views
+    assert spec["flat_dim"] == spec["token_count"] * _VLA.token_dim
+
+
 def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
 
@@ -27,6 +52,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
             "num_images_in_input": 1,
             "episode_horizon": 8,
             "envs_per_gpu": 2,
+            "memory_fraction": 0.8,
             "episodes_per_task": 2,
             "task_ids": [0],
             "policy_mode": "discrete",
@@ -43,7 +69,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
                 "action_hidden_dir": str(tmp_path / "hidden"),
                 "expected_action_head_type": "oft_discrete_token",
                 "expected_include_state": False,
-                "expected_obs_hidden_source": "action_query",
+                "expected_obs_hidden_source": "input_token_embedding",
                 "expected_prompt_style": "vla_policy",
                 "expected_history": 1,
                 "expected_rotate_images_180": True,
@@ -55,7 +81,12 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     }
     plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
     assert plan["inference"]["decoder"]["target"].endswith("oft_rollout:OFTRolloutBundle")
+    assert plan["inference"]["action_steps"] == cfg["task"]["openvla_oft"]["chunk_size"]
     assert plan["inference"]["decoder"]["kwargs"]["history"] == 1
+    assert (
+        plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"]
+        == "input_token_embedding"
+    )
     assert plan["inference"]["decoder"]["kwargs"]["image_keys"] == ["agentview_rgb"]
     env_kwargs = plan["env"]["kwargs"]
     assert env_kwargs["history_length"] == 1
@@ -64,6 +95,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     assert env_kwargs["validate_canonical"] is False
     assert plan["dump"]["preprocess_config"]["hidden_key"] == "obs_embedding"
     assert plan["dump"]["preprocess_config"]["action_head_type"] == "oft_discrete_token"
+    assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "input_token_embedding"
     assert plan["dump"]["preprocess_config"]["num_images_in_input"] == 1
 
 
@@ -79,3 +111,44 @@ def test_collect_rollouts_ray_experiment_composes() -> None:
     assert cfg._target_.endswith("ColdStartRayCollectRunner")
     assert cfg.mode == "oft"
     assert cfg.collect.num_images_in_input == 1
+
+
+def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import (
+        _next_ray_task_id,
+        _resolve_ray_task_ids,
+    )
+
+    task_ids = _resolve_ray_task_ids("all", num_tasks=3, suite="libero_goal")
+    assert task_ids == [0, 1, 2]
+
+    counts = {task_id: 0 for task_id in task_ids}
+    assigned = [
+        _next_ray_task_id(task_ids, counts, episodes_per_task=2)
+        for _ in range(7)
+    ]
+    assert assigned == [0, 1, 2, 0, 1, 2, None]
+    assert counts == {0: 2, 1: 2, 2: 2}
+
+
+def test_wait_worker_results_batches_ray_get(monkeypatch) -> None:
+    import ray
+
+    from dreamervla.runners.cold_start_ray_collect_runner import _wait_worker_results
+
+    calls = []
+
+    class _Result:
+        def __init__(self, *refs) -> None:
+            self.refs = list(refs)
+
+    def fake_get(refs):
+        calls.append(list(refs))
+        return [f"value:{ref}" for ref in refs]
+
+    monkeypatch.setattr(ray, "get", fake_get)
+
+    out = _wait_worker_results([_Result("a"), _Result("b", "c")])
+
+    assert out == ["value:a", "value:b", "value:c"]
+    assert calls == [["a", "b", "c"]]

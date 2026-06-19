@@ -39,7 +39,7 @@ _LAUNCHER_KEYS = {
 }
 
 
-def _parse_args(argv: Sequence[str]) -> tuple[str, list[str], list[str]]:
+def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str], list[str]]:
     config_name = "train_vla"
     launcher_overrides: list[str] = []
     experiment_overrides: list[str] = []
@@ -66,36 +66,25 @@ def _parse_args(argv: Sequence[str]) -> tuple[str, list[str], list[str]]:
             i += 1
             continue
 
-        legacy_pair = {
-            "--config": "experiment",
-            "--task": "task",
-            "--gpus": "gpus",
-            "--ngpu": "ngpu",
-            "--batch-size": "batch_size",
-            "--num-workers": "num_workers",
-            "--out-dir": "out_dir",
-            "--max-steps": "max_steps",
-            "--epochs": "num_epochs",
-            "--num-epochs": "num_epochs",
-        }
-        if item in legacy_pair:
-            if i + 1 >= len(argv):
-                raise SystemExit(f"{item} requires a value")
-            launcher_overrides.append(f"{legacy_pair[item]}={argv[i + 1]}")
-            i += 2
-            continue
+        if item.startswith("--"):
+            raise SystemExit(
+                f"Unsupported launcher flag {item!r}. Use Hydra override syntax like "
+                "experiment=<name>, task=<name>, gpus=0,1, batch_size=16."
+            )
 
         if item == "-m" or item.startswith("-m="):
             experiment_overrides.append(item)
             i += 1
             continue
 
-        key = item.lstrip("+").split("=", 1)[0].split(".", 1)[0]
-        if "=" in item and not item.startswith("+") and key in _LAUNCHER_KEYS:
-            if key == "route":
+        raw_key = item.lstrip("+").split("=", 1)[0]
+        key = raw_key.split(".", 1)[0]
+        is_launcher_override = raw_key in _LAUNCHER_KEYS or key == "env"
+        if "=" in item and not item.startswith("+") and is_launcher_override:
+            if raw_key == "route":
                 launcher_overrides.append(item.replace("route=", "experiment=", 1))
             else:
-                if key == "gpus":
+                if raw_key == "gpus":
                     raw_key, raw_value = item.split("=", 1)
                     if "," in raw_value and not raw_value.startswith(("'", '"', "[")):
                         item = f"{raw_key}='{raw_value}'"
@@ -208,7 +197,7 @@ def _write_libero_config(data_root: str) -> None:
 def _build_env(cfg: Mapping[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
     env["DVLA_ROOT"] = str(PROJECT_ROOT)
-    env["DVLA_DATA_ROOT"] = str(cfg.get("data_root", "data"))
+    env["DVLA_DATA_ROOT"] = str(cfg["data_root"])
     env.setdefault("MUJOCO_GL", "egl")
     env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -252,7 +241,7 @@ def _command(cfg: Mapping[str, Any], experiment_overrides: Sequence[str]) -> lis
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    config_name, launcher_overrides, trailing = _parse_args(
+    config_name, launcher_overrides, trailing = _parse_hydra_like_args(
         list(sys.argv[1:] if argv is None else argv)
     )
     with initialize_config_dir(config_dir=str(CONFIG_DIR), job_name="train_launcher", version_base=None):
@@ -261,7 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if bool(cfg.get("print_config", False)):
         print(OmegaConf.to_yaml(cfg_obj, resolve=True))
 
-    data_root = str(cfg.get("data_root", "data"))
+    data_root = str(cfg["data_root"])
     if bool(cfg.get("write_libero_config", True)):
         _write_libero_config(data_root)
 

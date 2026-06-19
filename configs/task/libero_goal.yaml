@@ -65,8 +65,10 @@ openvla_oft:
   action_horizon: 8
   time_horizon: 8
   image_resolution: 224
+  num_images_in_input: 2
   use_wrist_image: true
   use_proprio: true
+  use_l1_regression: true
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
   action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2

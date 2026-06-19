@@ -84,6 +84,7 @@ def collect_vectorized(
     start_demo_index: int = 0,
     rank: int = 0,
     on_episode: Callable[[int, int, int, bool], None] | None = None,
+    action_steps: int = 1,
 ) -> int:
     """Collect the whole ``work_list`` across ``vec_env.num_envs`` slots in one continuous loop.
 
@@ -132,6 +133,8 @@ def collect_vectorized(
     slot_t = [0] * num_envs
     slot_ep = [-1] * num_envs
     active = [False] * num_envs
+    action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
+    action_steps = max(1, int(action_steps))
 
     def _start_slot(k: int) -> None:
         nonlocal next_idx
@@ -149,6 +152,7 @@ def collect_vectorized(
         slot_steps[k] = []
         slot_t[k] = 0
         slot_ep[k] = ep
+        action_queues[k] = []
         active[k] = True
 
     for k in range(num_envs):
@@ -161,9 +165,19 @@ def collect_vectorized(
             for k in active_ids
         ]
         outs = infer_fn(preps)  # aligned with active_ids
-        # receding-horizon: execute chunk[0] per slot, with gripper post-process
-        # (required before env.step; also what gets recorded as wm_action below).
-        actions = [process_action(outs[i][0][0]) for i in range(len(active_ids))]
+        # OpenVLA-OFT eval executes a full action chunk open-loop before using
+        # a newly predicted chunk. We still run inference every tick so the
+        # sidecar stores the current observation's hidden state.
+        actions = []
+        for i, k in enumerate(active_ids):
+            if not action_queues[k]:
+                chunk = list(outs[i][0])
+                if len(chunk) < action_steps:
+                    raise ValueError(
+                        f"policy returned {len(chunk)} actions, need action_steps={action_steps}"
+                    )
+                action_queues[k] = chunk[:action_steps]
+            actions.append(process_action(action_queues[k].pop(0)))
         step_results = vec_env.step(actions, env_ids=active_ids)
 
         finished: list[int] = []

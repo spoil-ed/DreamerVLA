@@ -99,10 +99,10 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
 # pieces (component build, seeding, warmup loops, online loop) and assert run()
 # wires them together in the right order and writes the split warmup ckpts.
 # --------------------------------------------------------------------------
-def _orchestration_cfg(tmp_path, *, resume=False):
+def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
     from omegaconf import OmegaConf
 
-    return OmegaConf.create({
+    cfg = OmegaConf.create({
         "training": {
             "out_dir": str(tmp_path),
             "debug": True,
@@ -117,6 +117,9 @@ def _orchestration_cfg(tmp_path, *, resume=False):
         # run() reads optim.grad_clip_norm; the real config always supplies optim.
         "optim": {"grad_clip_norm": 1.0},
     })
+    if total_env_steps is not None:
+        OmegaConf.update(cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True)
+    return cfg
 
 
 class _FakeDistributed:
@@ -124,12 +127,15 @@ class _FakeDistributed:
     world_size = 1
     is_main_process = True
 
+    def wrap_trainable_module(self, module):
+        return module
 
-def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False):
+
+def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, total_env_steps=None):
     import dreamervla.runners.online_cotrain_pipeline_runner as mod
 
     runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
-    runner.cfg = _orchestration_cfg(tmp_path, resume=resume)
+    runner.cfg = _orchestration_cfg(tmp_path, resume=resume, total_env_steps=total_env_steps)
     runner.config = runner.cfg
     runner._output_dir = str(tmp_path)
     runner.global_step = 0
@@ -190,7 +196,7 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch):
     import os
 
     calls: list[str] = []
-    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls)
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=1)
 
     history = runner.run()
 
@@ -201,6 +207,70 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch):
     ]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch):
+    import os
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=0)
+
+    history = runner.run()
+
+    assert history == []
+    assert calls == [
+        "build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"
+    ]
+    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = _FakeDistributed()
+    calls: list[str] = []
+
+    def fail_if_encoder_cfg(_cfg):
+        raise AssertionError("warmup-only pipeline must not build the rollout encoder")
+
+    def fake_instantiate(cfg):
+        calls.append(str(OmegaConf.select(cfg, "_target_", default="unknown")))
+        return torch.nn.Linear(2, 2)
+
+    def fake_build_classifier(self, cfg):
+        self.classifier = torch.nn.Linear(2, 2)
+        self.classifier_optimizer = torch.optim.SGD(self.classifier.parameters(), lr=0.1)
+        self.classifier_threshold = 0.5
+        self._cls_window = 4
+
+    monkeypatch.setattr(runner, "_build_frozen_encoder_cfg", fail_if_encoder_cfg)
+    monkeypatch.setattr(mod.hydra.utils, "instantiate", fake_instantiate)
+    monkeypatch.setattr(mod.OnlineCotrainRunner, "_build_trainable_classifier", fake_build_classifier)
+
+    cfg = OmegaConf.create({
+        "online_rollout": {"total_env_steps": 0},
+        "world_model": {"_target_": "world_model"},
+        "policy": {"_target_": "policy"},
+        "critic": {"_target_": "critic"},
+        "algorithm": {},
+        "optim": {
+            "world_model": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
+            "policy": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
+            "critic": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
+        },
+        "init": {"world_model_state_ckpt": None},
+    })
+
+    runner._build_components(cfg)
+
+    assert runner.encoder is None
+    assert runner.processor is None
+    assert calls == ["world_model", "policy", "critic"]
 
 
 def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatch):
@@ -220,7 +290,13 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     )
 
     calls: list[str] = []
-    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, resume=True)
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        resume=True,
+        total_env_steps=1,
+    )
 
     history = runner.run()
 

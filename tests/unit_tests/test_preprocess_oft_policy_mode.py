@@ -100,9 +100,10 @@ def test_oft_preprocess_script_checks_env_and_repairs_partial_sidecars() -> None
     assert "_check_openvla_oft_env" in source
     assert "ensure_openvla_oft_on_path" in source
     assert "prismatic.vla.constants" in source
-    assert "OVERWRITE_ARGS=(--overwrite)" in source
+    assert "OVERWRITE_ARGS=(overwrite=true)" in source
+    assert "FAKE_ARGS=(fake_oft_components=true)" in source
     assert 'OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"' in source
-    assert '--chunk-size "${OFT_CHUNK_SIZE}"' in source
+    assert 'chunk_size="${OFT_CHUNK_SIZE}"' in source
     assert "repair incomplete action-hidden sidecar" in source
     assert "repair incomplete input-token sidecar" in source
     assert "existing action-hidden sidecar is incomplete; rerun" not in source

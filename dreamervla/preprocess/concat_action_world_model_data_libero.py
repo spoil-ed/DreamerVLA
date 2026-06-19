@@ -1,11 +1,8 @@
 # ruff: noqa: E402
-import argparse  # 导入 argparse 模块
 import json
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-from dreamervla.preprocess.paths import DEFAULT_DATA_ROOT
+from dreamervla.utils.hydra_config import script_namespace
 
 
 def read_json_file(file_path: Path):
@@ -102,33 +99,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run parallel data processing scripts with customizable patterns."
-    )
-
-    # parser.add_argument('--task', type=str, required=True,
-    #                     help="dataset name (e.g., 'spatial', 'object', 'goal', '10').")
-    # parser.add_argument('--resolution', type=int, required=True,
-    #                     help="resolution (e.g., 256, 512).")
-    parser.add_argument(
-        "--source_dir_patterns",
-        type=str,
-        nargs="+",
-        required=True,
-        help="List of source directory patterns with {} placeholder for split (e.g., 'libero_spatial_his_1_{}_a2i_256 libero_spatial_his_2_{}_img_only_ck_5_256')",
-    )
-    parser.add_argument(
-        "--all_patterns",
-        type=str,
-        required=True,
-        help="Pattern for all combined data (e.g., 'libero_spatial_his_2_all_img_only_ck_5_a2i_256')",
-    )
-    parser.add_argument(
-        "--processed_data_root",
-        type=str,
-        default=str(DEFAULT_DATA_ROOT),
-        help="root directory containing convs/tokens/concate_tokens",
-    )
-
-    args = parser.parse_args()
+    args = script_namespace("concat_action_world_model_data_libero")
     main(args)

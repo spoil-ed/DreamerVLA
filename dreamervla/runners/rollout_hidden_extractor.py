@@ -87,6 +87,19 @@ def flatten_action_hidden(h: torch.Tensor) -> torch.Tensor:
     return h.reshape(-1).to(torch.float16)
 
 
+def input_token_hidden_from_projected(
+    projected: torch.Tensor,
+    model: Any,
+    *,
+    image_keys: list[str],
+) -> torch.Tensor:
+    """Flatten current-frame projected vision patch tokens for input-token sidecars."""
+    per_image = int(model.vision_backbone.get_num_patches())
+    token_count = per_image * len(list(image_keys))
+    current = projected[:, -token_count:, :]
+    return current.reshape(current.shape[0], -1)
+
+
 class OFTRolloutHiddenExtractor:
     """Wraps an ``OpenVLAOFTPolicy`` to capture the action-query hidden states.
 
@@ -136,6 +149,7 @@ class OFTRolloutHiddenExtractor:
         rotate_images_180: bool = True,
         center_crop: bool = True,
         unnorm_key: str = "libero_goal_no_noops",
+        obs_hidden_source: str = "action_query",
     ) -> None:
         self._policy = policy
         self._image_keys: list[str] = (
@@ -145,6 +159,7 @@ class OFTRolloutHiddenExtractor:
         self._rotate_images_180 = bool(rotate_images_180)
         self._center_crop = bool(center_crop)
         self._unnorm_key = unnorm_key
+        self._obs_hidden_source = str(obs_hidden_source)
         # Per-view deque of (H, W, 3) uint8 numpy arrays (already rotated).
         # Length is always exactly self._history after the first step.
         self._buffers: dict[str, deque] = {
@@ -288,7 +303,12 @@ class OFTRolloutHiddenExtractor:
                   matching the offline sidecar ``obs_embedding[t]``.
         """
         if self._decoder is None:
-            self._decoder = OFTBatchedDecoder(self._policy, self._unnorm_key)
+            self._decoder = OFTBatchedDecoder(
+                self._policy,
+                self._unnorm_key,
+                obs_hidden_source=self._obs_hidden_source,
+                image_keys=self._image_keys,
+            )
         prep = self.prepare(obs, task_description)
         return self._decoder.predict_batch([prep])[0]
 
@@ -370,7 +390,13 @@ class OFTBatchedDecoder:
     decode differs.
     """
 
-    def __init__(self, policy: Any, unnorm_key: str) -> None:
+    def __init__(
+        self,
+        policy: Any,
+        unnorm_key: str,
+        obs_hidden_source: str = "action_query",
+        image_keys: list[str] | None = None,
+    ) -> None:
         from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
         ensure_openvla_oft_on_path()
@@ -380,6 +406,10 @@ class OFTBatchedDecoder:
         self._action_head = policy.action_head  # None => discrete (headless) decode
         self._proprio_projector = policy.proprio_projector
         self._unnorm_key = unnorm_key
+        self._obs_hidden_source = str(obs_hidden_source)
+        self._image_keys = (
+            list(image_keys) if image_keys is not None else ["agentview_rgb", "eye_in_hand_rgb"]
+        )
         self._action_dim = int(ACTION_DIM)
         self._num_chunks = int(NUM_ACTIONS_CHUNK)
         self._span = int(ACTION_DIM * NUM_ACTIONS_CHUNK)
@@ -429,7 +459,10 @@ class OFTBatchedDecoder:
         out: list[tuple[list[Any], torch.Tensor]] = []
         for i in range(len(preps)):
             action_chunk = [actions[i, j] for j in range(actions.shape[1])]
-            flat_hidden = flatten_action_hidden(hidden[i : i + 1].cpu())
+            if self._obs_hidden_source == "input_token_embedding":
+                flat_hidden = hidden[i].detach().cpu().to(torch.float16)
+            else:
+                flat_hidden = flatten_action_hidden(hidden[i : i + 1].cpu())
             out.append((action_chunk, flat_hidden))
         return out
 
@@ -474,6 +507,13 @@ class OFTBatchedDecoder:
             projected = model._process_vision_features(
                 pixel_values, language_embeddings, use_film=False
             )
+            input_token_hidden = None
+            if self._obs_hidden_source == "input_token_embedding":
+                input_token_hidden = input_token_hidden_from_projected(
+                    projected,
+                    model,
+                    image_keys=self._image_keys,
+                )
             if use_proprio:
                 proprio_t = torch.Tensor(proprio).to(projected.device, dtype=projected.dtype)
                 projected = model._process_proprio_features(
@@ -516,7 +556,8 @@ class OFTBatchedDecoder:
             actions_hidden_states = last_hidden[:, start : start + self._span, :]  # (B,56,D)
             normalized = self._decode(lm_out, actions_hidden_states, start, input_ids.shape[0])
         actions = model._unnormalize_actions(normalized, self._unnorm_key)
-        return actions, actions_hidden_states
+        hidden = input_token_hidden if input_token_hidden is not None else actions_hidden_states
+        return actions, hidden
 
     def _decode(
         self,

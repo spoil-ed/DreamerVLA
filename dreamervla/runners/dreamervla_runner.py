@@ -51,6 +51,7 @@ from dreamervla.utils.hf_checkpoint import (
     resolve_hf_checkpoint_dir,
 )
 from dreamervla.utils.optim import build_optimizer
+from dreamervla.utils.paths import checkpoints_path, data_path
 from dreamervla.utils.seed import set_seed
 from dreamervla.utils.torch_utils import freeze_module
 
@@ -65,16 +66,13 @@ class DreamerVLARunner(BaseRunner):
     # encoder is frozen — no need to checkpoint it.
     exclude_keys = ("encoder", "_unwrapped_world_model")
 
-    default_vla_init_dir = str(
-        pathlib.Path(__file__).resolve().parents[2]
-        / "data"
-        / "checkpoints"
-        / "VLA_model_256"
-        / "libero_goal"
-    )
-    default_output_dir = str(
-        pathlib.Path(__file__).resolve().parents[2] / "data" / "outputs" / "dreamervla"
-    )
+    @property
+    def default_vla_init_dir(self) -> str:
+        return str(checkpoints_path("VLA_model_256", "libero_goal"))
+
+    @property
+    def default_output_dir(self) -> str:
+        return str(data_path("outputs", "dreamervla"))
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:

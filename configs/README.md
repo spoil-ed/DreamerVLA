@@ -141,6 +141,10 @@ task/libero_spatial.yaml
 task/libero_10.yaml
 task/RynnVLA_LIBERO.yaml
 task/OpenVLA_Onetraj_LIBERO.yaml
+task/OpenVLA_Onetraj_LIBERO_Object.yaml
+task/OpenVLA_Onetraj_LIBERO_Spatial.yaml
+task/OpenVLA_Onetraj_LIBERO_10.yaml
+task/OpenVLA_Onetraj_ColdStart_LIBERO*.yaml
 ```
 
 Switch tasks with Hydra, for example:
@@ -157,3 +161,6 @@ bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=OpenVLA_On
 the raw `libero_goal` benchmark suite. Their preprocessing artifact names append
 the dataset suite, e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`, and use matching
 processed-data prefixes under `processed_data/<artifact>/<stage>`.
+The OpenVLA one-trajectory matrix also has object, spatial, and libero_10 task
+configs. Cold-start OpenVLA tasks inherit the matching one-trajectory VLA and
+suite config, then reroot outputs under collected rollout directories.

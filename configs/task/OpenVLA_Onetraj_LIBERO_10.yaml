@@ -1,0 +1,67 @@
+defaults:
+  - libero_10
+  - _self_
+
+name: OpenVLA_Onetraj_LIBERO_10
+suite: libero_10
+task_name: "10"
+
+artifact_name: OpenVLA_Onetraj_LIBERO_libero_10
+
+pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
+
+openvla_oft:
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero10-traj1
+  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero10-traj1
+  resume_step: null
+  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero10-traj1/dataset_statistics.json
+  dataset_statistics_key: libero_10_no_noops
+  action_head_ckpt: null
+  proprio_projector_ckpt: null
+  action_horizon: 8
+  time_horizon: 8
+  image_resolution: 224
+  num_images_in_input: 1
+  use_wrist_image: false
+  use_proprio: false
+  use_l1_regression: false
+  hdf5_dir: ${task.hdf5_dir}
+  hdf5_reward_dir: ${task.hdf5_reward_dir}
+  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
+  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
+  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_failures
+  failure_action_hidden_dir: null
+  failure_input_token_hidden_dir: null
+  expected_action_head_type: oft_discrete_token
+  expected_obs_hidden_source: action_query
+  expected_prompt_style: vla_policy
+  expected_history: 1
+  expected_include_state: false
+  expected_rotate_images_180: true
+  wm_obs_dim: 229376
+  token_count: 56
+  token_dim: 4096
+  chunk_size: 8
+  wm_sequence_length: 36
+  latent_source: OpenVLA-OFT discrete action-query hidden [56,4096]
+  sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
+  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  classifier_target: dreamervla.models.reward.LatentSuccessClassifier
+  actor_target: dreamervla.models.actor.OpenVLADiscreteTokenActor
+  actor_head_type: oft_discrete_token
+  actor_adapter_type: residual_mlp
+  actor_adapter_hidden_dim: 1024
+  actor_freeze_lm_head: true
+  critic_target: dreamervla.models.critic.twohot_critic.TwohotCritic
+  vocab_size: 32000
+  action_token_bins: 256
+  min_action: -1.0
+  max_action: 1.0

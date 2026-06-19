@@ -1,16 +1,11 @@
 # ruff: noqa: E402
-import argparse  # 导入 argparse 模块
 import os
 import subprocess
 import sys
 from multiprocessing import Process
 from pathlib import Path
 
-from dreamervla.preprocess.paths import (
-    DEFAULT_CONVS_DIR,
-    DEFAULT_TOKENIZER_PATH,
-    DEFAULT_TOKENS_DIR,
-)
+from dreamervla.utils.hydra_config import script_namespace
 
 
 def run_script(
@@ -62,87 +57,7 @@ def run_script(
 
 
 if __name__ == "__main__":
-    # 1. 创建 ArgumentParser 对象
-    parser = argparse.ArgumentParser(
-        description="Run parallel data processing scripts with a customizable spatial task."
-    )
-
-    # 2. 添加命令行参数
-    parser.add_argument(
-        "--task",
-        type=str,
-        required=True,
-        help="dataset name (e.g., 'spatial', 'object', 'goal', '10').",
-    )
-    parser.add_argument(
-        "--resolution", type=int, required=True, help="resolution (e.g., 256, 512)."
-    )
-    parser.add_argument(
-        "--tokenizer_path",
-        type=str,
-        default=str(DEFAULT_TOKENIZER_PATH),
-        help="tokenizer path inside DreamerVLA/data/checkpoints",
-    )
-    parser.add_argument(
-        "--in_filename_dir",
-        type=str,
-        default=str(DEFAULT_CONVS_DIR),
-        help="directory containing generated conversation json files",
-    )
-    parser.add_argument(
-        "--out_root",
-        type=str,
-        default=str(DEFAULT_TOKENS_DIR),
-        help="directory where tokenized outputs will be written",
-    )
-    parser.add_argument(
-        "--his",
-        "-H",
-        type=int,
-        default=2,
-        help="The number of historical image frames to include in each conversation (for observation history).",
-    )
-    parser.add_argument(
-        "--len_action",
-        "-L",
-        type=int,
-        default=5,
-        help="The number of future action steps to predict.",
-    )
-    parser.add_argument(
-        "--with_state", action="store_true", help="If True, with state."
-    )
-    parser.add_argument(
-        "--img_names",
-        nargs="+",
-        default=["imgs_third_view"],
-        choices=["imgs_wrist", "imgs_third_view"],
-        help="List of image names to include (imgs_wrist and/or imgs_third_view)",
-    )
-    parser.add_argument(
-        "--num_procs",
-        type=int,
-        default=32,
-        help="Number of worker processes for tokenization.",
-    )
-    parser.add_argument(
-        "--gpu_devices",
-        type=str,
-        default=os.environ.get("PREPROCESS_GPU_DEVICES", "0,1,2,3"),
-        help=(
-            "Comma-separated physical GPU indices to pin workers to, round-robin. "
-            "Defaults to env var PREPROCESS_GPU_DEVICES, else '0,1,2,3'. "
-            "Use e.g. '4,5,6,7' when GPUs 0-3 are busy with training."
-        ),
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Forward --overwrite to workers and re-tokenize existing pkl files.",
-    )
-
-    # 3. 解析命令行参数
-    args = parser.parse_args()
+    args = script_namespace("pretoken_state_action_model")
 
     data_type = ["val_ind", "val_ood", "train"]
 

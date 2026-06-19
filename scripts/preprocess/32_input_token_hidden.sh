@@ -44,13 +44,13 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
 fi
 
 if [[ "${OVERWRITE}" != "1" && -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
-  if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-    --dir "${INPUT_TOKEN_HIDDEN_DIR}" \
-    --reference-dir "${REWARD_DIR}" \
-    --match-reference-demos \
-    --match-reference-lengths \
-    --require-complete-attr \
-    --require-config; then
+  if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+    dir="${INPUT_TOKEN_HIDDEN_DIR}" \
+    reference_dir="${REWARD_DIR}" \
+    match_reference_demos=true \
+    match_reference_lengths=true \
+    require_complete_attr=true \
+    require_config=true; then
     echo "[32_input_token_hidden] skip input-token sidecar: ${INPUT_TOKEN_HIDDEN_DIR}"
     exit 0
   fi
@@ -61,45 +61,45 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
-    --hdf5-dir "${REWARD_DIR}" \
-    --out-dir "${INPUT_TOKEN_HIDDEN_DIR}" \
-    --model-path "${VLA_CKPT}" \
-    --tokenizer-path "${TOKENIZER_PATH}" \
-    --text-tokenizer-path "${TEXT_TOKENIZER_PATH}" \
-    --chameleon-vqgan-config "${CHAMELEON_VQGAN_CONFIG}" \
-    --chameleon-vqgan-ckpt "${CHAMELEON_VQGAN_CKPT}" \
-    --action-head-type legacy \
-    --obs-hidden-source input_token_embedding \
-    --history 2 \
-    --include-state \
-    --rotate-images-180 \
-    --action-dim 7 \
-    --time-horizon "${TIME_HORIZON}" \
-    --overwrite
+    hdf5_dir="${REWARD_DIR}" \
+    out_dir="${INPUT_TOKEN_HIDDEN_DIR}" \
+    model_path="${VLA_CKPT}" \
+    tokenizer_path="${TOKENIZER_PATH}" \
+    text_tokenizer_path="${TEXT_TOKENIZER_PATH}" \
+    chameleon_vqgan_config="${CHAMELEON_VQGAN_CONFIG}" \
+    chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
+    action_head_type=legacy \
+    obs_hidden_source=input_token_embedding \
+    history=2 \
+    include_state=true \
+    rotate_images_180=true \
+    action_dim=7 \
+    time_horizon="${TIME_HORIZON}" \
+    overwrite=true
 elif [[ "${OVERWRITE}" != "1" ]]; then
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_rynn_pixel_hidden \
-    --hdf5-dir "${REWARD_DIR}" \
-    --out-dir "${INPUT_TOKEN_HIDDEN_DIR}" \
-    --model-path "${VLA_CKPT}" \
-    --tokenizer-path "${TOKENIZER_PATH}" \
-    --text-tokenizer-path "${TEXT_TOKENIZER_PATH}" \
-    --chameleon-vqgan-config "${CHAMELEON_VQGAN_CONFIG}" \
-    --chameleon-vqgan-ckpt "${CHAMELEON_VQGAN_CKPT}" \
-    --action-head-type legacy \
-    --obs-hidden-source input_token_embedding \
-    --history 2 \
-    --include-state \
-    --rotate-images-180 \
-    --action-dim 7 \
-    --time-horizon "${TIME_HORIZON}"
+    hdf5_dir="${REWARD_DIR}" \
+    out_dir="${INPUT_TOKEN_HIDDEN_DIR}" \
+    model_path="${VLA_CKPT}" \
+    tokenizer_path="${TOKENIZER_PATH}" \
+    text_tokenizer_path="${TEXT_TOKENIZER_PATH}" \
+    chameleon_vqgan_config="${CHAMELEON_VQGAN_CONFIG}" \
+    chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
+    action_head_type=legacy \
+    obs_hidden_source=input_token_embedding \
+    history=2 \
+    include_state=true \
+    rotate_images_180=true \
+    action_dim=7 \
+    time_horizon="${TIME_HORIZON}"
 fi
 
-python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-  --dir "${INPUT_TOKEN_HIDDEN_DIR}" \
-  --reference-dir "${REWARD_DIR}" \
-  --match-reference-demos \
-  --match-reference-lengths \
-  --require-complete-attr \
-  --require-config
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+  dir="${INPUT_TOKEN_HIDDEN_DIR}" \
+  reference_dir="${REWARD_DIR}" \
+  match_reference_demos=true \
+  match_reference_lengths=true \
+  require_complete_attr=true \
+  require_config=true

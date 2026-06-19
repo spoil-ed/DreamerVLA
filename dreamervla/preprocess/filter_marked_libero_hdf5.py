@@ -1,23 +1,16 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from dreamervla.preprocess.libero_utils.noop_marking import filter_marked_hdf5_dir
+from dreamervla.utils.hydra_config import script_namespace
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Create a filtered or unfiltered LIBERO HDF5 view from marked replay HDF5 files."
-    )
-    parser.add_argument("--input-dir", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--filter-noops", action="store_true", default=False)
-    parser.add_argument("--threshold", type=float, default=1e-4)
-    parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
+def parse_args() -> SimpleNamespace:
+    return script_namespace("filter_marked_libero_hdf5")
 
 
 def main() -> None:

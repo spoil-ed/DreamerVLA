@@ -44,6 +44,16 @@ class EnvWorker(Worker):
             raise RuntimeError("EnvWorker.init() has not been called")
         return self.obs
 
+    def set_task(self, task_id: int) -> dict[str, Any]:
+        self.task_id = int(task_id)
+        env = self._env()
+        if hasattr(env, "set_task"):
+            env.set_task(self.task_id)
+        self.episode = []
+        self.episode_id = 0
+        self.obs, _ = self._reset_env()
+        return self.obs
+
     def step(
         self,
         action: Any,

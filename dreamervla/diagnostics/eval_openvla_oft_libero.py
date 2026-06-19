@@ -10,12 +10,17 @@ action-returning function with a policy object whose interface is:
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.diagnostics.openvla_oft_obs_action_policy import (
     OpenVLAOFTObsActionPolicy,
@@ -35,6 +40,9 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+CONFIG_DIR = _project_root() / "configs" / "scripts"
+
+
 def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -45,8 +53,32 @@ def _sanitize(text: str, max_len: int = 72) -> str:
     return text[:max_len] or "run"
 
 
-def _parse_task_ids(value: str | None) -> list[int] | None:
-    if value is None or value.strip() == "":
+@dataclass(frozen=True)
+class EvalOpenVLAOFTConfig:
+    ckpt: Path
+    suite: str
+    task_ids: list[int] | None
+    num_trials: int
+    gpu_id: str | None
+    seed: int
+    output_dir: Path | None
+    openvla_oft_root: Path | None
+    policy_mode: str
+    num_images: int | None
+    camera_inputs: str | None
+    use_proprio: bool | None
+    center_crop: bool
+    num_open_loop_steps: int
+    env_img_res: int
+    initial_states_path: str
+    load_in_8bit: bool
+    load_in_4bit: bool
+    run_note: str | None
+    save_videos: bool
+
+
+def _parse_task_ids(value: str) -> list[int] | None:
+    if value.strip() == "":
         return None
     task_ids: list[int] = []
     for raw_part in value.split(","):
@@ -57,7 +89,7 @@ def _parse_task_ids(value: str | None) -> list[int] | None:
             start_s, end_s = part.split("-", 1)
             start, end = int(start_s), int(end_s)
             if end < start:
-                raise argparse.ArgumentTypeError(f"Bad task range: {part}")
+                raise ValueError(f"Bad task range: {part}")
             task_ids.extend(range(start, end + 1))
         else:
             task_ids.append(int(part))
@@ -67,7 +99,7 @@ def _parse_task_ids(value: str | None) -> list[int] | None:
 def parse_suite_name(value: str) -> str:
     suite = SUITE_ALIASES.get(value, value)
     if suite not in TASK_SUITES:
-        raise argparse.ArgumentTypeError(f"Invalid task suite: {value}; expected one of {TASK_SUITES}")
+        raise ValueError(f"Invalid task suite: {value}; expected one of {TASK_SUITES}")
     return suite
 
 
@@ -79,48 +111,134 @@ def resolve_num_images_for_camera_inputs(camera_inputs: str | None, num_images: 
     expected_num_images = 1 if camera_inputs == "primary" else 2
     if num_images is not None and int(num_images) != expected_num_images:
         raise ValueError(
-            f"--camera-inputs {camera_inputs!r} conflicts with --num-images {num_images}; "
-            f"expected --num-images {expected_num_images}"
+            f"camera_inputs={camera_inputs!r} conflicts with num_images={num_images}; "
+            f"expected num_images={expected_num_images}"
         )
     return expected_num_images
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ckpt", required=True, type=Path)
-    parser.add_argument("--suite", required=True, type=parse_suite_name)
-    parser.add_argument("--task-ids", type=_parse_task_ids, default=None)
-    parser.add_argument("--num-trials", type=int, default=10)
-    parser.add_argument("--gpu-id", default=None)
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--openvla-oft-root", type=Path, default=None)
-    parser.add_argument("--policy-mode", choices=("auto", "discrete", "l1"), default="auto")
-    parser.add_argument("--num-images", type=int, default=None)
-    parser.add_argument(
-        "--camera-inputs",
-        choices=CAMERA_INPUTS,
-        default=None,
-        help="Select visual inputs for LIBERO eval. primary uses only agentview; primary+wrist also includes wrist.",
+def _plain(value: Any) -> Any:
+    return (
+        OmegaConf.to_container(value, resolve=True)
+        if isinstance(value, (DictConfig, ListConfig))
+        else value
     )
-    parser.add_argument("--use-proprio", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--center-crop", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--num-open-loop-steps", type=int, default=8)
-    parser.add_argument("--env-img-res", type=int, default=256)
-    parser.add_argument("--initial-states-path", default="DEFAULT")
-    parser.add_argument("--load-in-8bit", action="store_true")
-    parser.add_argument("--load-in-4bit", action="store_true")
-    parser.add_argument("--run-note", default=None)
-    parser.add_argument(
-        "--save-videos",
-        action="store_true",
-        help="Accepted for launcher compatibility; official OpenVLA-OFT eval controls video saving.",
-    )
-    return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def _empty_to_none(value: Any) -> Any | None:
+    value = _plain(value)
+    return None if value in (None, "") else value
+
+
+def _optional_path(value: Any) -> Path | None:
+    value = _empty_to_none(value)
+    return None if value is None else Path(str(value))
+
+
+def _optional_int(value: Any) -> int | None:
+    value = _empty_to_none(value)
+    return None if value is None else int(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    value = _empty_to_none(value)
+    return None if value is None else str(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    value = _empty_to_none(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Expected boolean-like value, got {value!r}")
+
+
+def _bool(value: Any, *, default: bool = False) -> bool:
+    parsed = _optional_bool(value)
+    return default if parsed is None else parsed
+
+
+def _task_ids_from_config(value: Any) -> list[int] | None:
+    value = _empty_to_none(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _parse_task_ids(value)
+    if isinstance(value, int):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return list(dict.fromkeys(int(item) for item in value))
+    raise TypeError(f"Unsupported task_ids value: {value!r}")
+
+
+def _config_from_mapping(cfg: Mapping[str, Any]) -> EvalOpenVLAOFTConfig:
+    suite = parse_suite_name(str(cfg["suite"]))
+    policy_mode = str(cfg.get("policy_mode", "auto"))
+    if policy_mode not in {"auto", "discrete", "l1"}:
+        raise ValueError("policy_mode must be one of: auto, discrete, l1")
+    camera_inputs = _optional_str(cfg.get("camera_inputs"))
+    if camera_inputs is not None and camera_inputs not in CAMERA_INPUTS:
+        raise ValueError(f"camera_inputs must be one of {CAMERA_INPUTS}, got {camera_inputs!r}")
+    return EvalOpenVLAOFTConfig(
+        ckpt=Path(str(cfg["ckpt"])),
+        suite=suite,
+        task_ids=_task_ids_from_config(cfg.get("task_ids")),
+        num_trials=int(cfg.get("num_trials", 10)),
+        gpu_id=_optional_str(cfg.get("gpu_id")),
+        seed=int(cfg.get("seed", 7)),
+        output_dir=_optional_path(cfg.get("output_dir")),
+        openvla_oft_root=_optional_path(cfg.get("openvla_oft_root")),
+        policy_mode=policy_mode,
+        num_images=_optional_int(cfg.get("num_images")),
+        camera_inputs=camera_inputs,
+        use_proprio=_optional_bool(cfg.get("use_proprio")),
+        center_crop=_bool(cfg.get("center_crop", True), default=True),
+        num_open_loop_steps=int(cfg.get("num_open_loop_steps", 8)),
+        env_img_res=int(cfg.get("env_img_res", 256)),
+        initial_states_path=str(cfg.get("initial_states_path", "DEFAULT")),
+        load_in_8bit=_bool(cfg.get("load_in_8bit", False)),
+        load_in_4bit=_bool(cfg.get("load_in_4bit", False)),
+        run_note=_optional_str(cfg.get("run_note")),
+        save_videos=_bool(cfg.get("save_videos", False)),
+    )
+
+
+def _parse_hydra_like_argv(argv: Sequence[str]) -> tuple[str, list[str]]:
+    config_name = "openvla_oft_official_eval"
+    overrides: list[str] = []
+    i = 0
+    while i < len(argv):
+        item = argv[i]
+        if item == "--config-name":
+            if i + 1 >= len(argv):
+                raise SystemExit("--config-name requires a value")
+            config_name = argv[i + 1]
+            i += 2
+            continue
+        if item.startswith("--config-name="):
+            config_name = item.split("=", 1)[1]
+            i += 1
+            continue
+        if item.startswith("--"):
+            raise SystemExit(
+                f"Unsupported eval flag {item!r}. Use Hydra override syntax like "
+                "ckpt=/path/to/ckpt, suite=libero_goal, task_ids=0-2."
+            )
+        overrides.append(item)
+        i += 1
+    return config_name, overrides
+
+
+def run_eval(cfg: Mapping[str, Any]) -> int:
+    args = _config_from_mapping(cfg)
     set_runtime_env(args.gpu_id)
     openvla_oft_root = ensure_openvla_oft_importable(args.openvla_oft_root)
 
@@ -245,6 +363,18 @@ def main() -> int:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print(f"Wrote summary: {summary_path}", flush=True)
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    config_name, overrides = _parse_hydra_like_argv(list(sys.argv[1:] if argv is None else argv))
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR),
+        job_name="openvla_oft_official_eval",
+        version_base=None,
+    ):
+        cfg_obj = compose(config_name=config_name, overrides=overrides)
+    cfg: dict[str, Any] = OmegaConf.to_container(cfg_obj, resolve=True)  # type: ignore[assignment]
+    return run_eval(cfg)
 
 
 if __name__ == "__main__":

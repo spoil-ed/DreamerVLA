@@ -39,8 +39,14 @@ class PretokenizeVLARunner(BaseRunner):
     include_keys = ("global_step", "epoch")
     exclude_keys = tuple()
     checkpoint_restore_output_dir = True
-    default_vla_init_dir = str(checkpoints_path("VLA_model_256", "libero_goal"))
-    default_output_dir = str(data_path("outputs", "vla", "debug_pretokenize_vla"))
+
+    @property
+    def default_vla_init_dir(self) -> str:
+        return str(checkpoints_path("VLA_model_256", "libero_goal"))
+
+    @property
+    def default_output_dir(self) -> str:
+        return str(data_path("outputs", "vla", "debug_pretokenize_vla"))
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:

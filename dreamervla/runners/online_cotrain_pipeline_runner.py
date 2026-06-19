@@ -158,4 +158,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         OmegaConf.update(cfg, "training.warmup_steps", 0, force_add=True)
         OmegaConf.update(cfg, "online_rollout.debug_warmup_steps", 0, force_add=True)
         self.cfg = cfg
+        total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0))
+        if total_env_steps <= 0:
+            if self.distributed.is_main_process:
+                print("[pipeline] warmup complete; online_rollout.total_env_steps=0", flush=True)
+            return []
         return self._online_cotrain_loop(cfg)

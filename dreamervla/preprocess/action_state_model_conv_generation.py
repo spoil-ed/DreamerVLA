@@ -1,10 +1,11 @@
-import argparse  # Import the argparse module
 import copy
 import json
 import math
 import os
 
 import numpy as np  # Still included, though not directly used for numpy operations on data here
+
+from dreamervla.utils.hydra_config import script_namespace
 
 
 def _collect_indexed_files(directory: str, prefix: str, suffix: str) -> dict[int, str]:
@@ -360,75 +361,7 @@ def process_libero_data(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Process Libero robot trajectory data to create conversational datasets for LLMs.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,  # Shows default values in help message
-    )
-
-    # Required argument
-    parser.add_argument(
-        "--base_dir",
-        "-b",
-        type=str,
-        required=True,
-        help="The base directory where the Libero datasets are located",
-    )
-
-    # Optional arguments with default values
-    parser.add_argument(
-        "--his",
-        "-H",
-        type=int,
-        default=2,
-        help="The number of historical image frames to include in each conversation (for observation history).",
-    )
-    parser.add_argument(
-        "--len_action",
-        "-L",
-        type=int,
-        default=5,
-        help="The number of future action steps to predict.",
-    )
-    parser.add_argument(
-        "--task_name",
-        "-T",
-        type=str,
-        default="goal",
-        help="A string used in the output JSON file names to identify the task type (e.g., 'goal', 'object').",
-    )
-    parser.add_argument(
-        "--resolution",
-        "-R",
-        type=int,
-        default=512,
-        help="The image resolution, used in the output JSON file names (e.g., 256, 512).",
-    )
-    parser.add_argument(
-        "--with_state", action="store_true", help="If True, with state."
-    )
-    parser.add_argument(
-        "--img_names",
-        nargs="+",
-        default=["imgs_third_view"],
-        choices=["imgs_wrist", "imgs_third_view"],
-        help="List of image names to include (imgs_wrist and/or imgs_third_view)",
-    )
-    parser.add_argument(
-        "--output_dir",
-        "-o",
-        type=str,
-        default="./generated_libero_convs/",
-        help="The directory where the generated JSON dataset files and the summary JSON file will be saved. Will be created if it does not exist.",
-    )
-    parser.add_argument(
-        "--with_world_model",
-        action="store_true",
-        help="If set, also generate world-model samples.",
-    )
-
-    args = parser.parse_args()
-
-    # Call the processing function with parsed arguments
+    args = script_namespace("action_state_model_conv_generation")
     process_libero_data(
         base_dir=args.base_dir,
         his=args.his,

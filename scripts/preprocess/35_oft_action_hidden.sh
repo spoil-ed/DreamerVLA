@@ -22,6 +22,7 @@ OFT_POLICY_MODE="${OFT_POLICY_MODE:-auto}"
 OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-action_hidden}"
 OFT_HISTORY="${OFT_HISTORY:-2}"
 OFT_IMAGE_KEYS="${OFT_IMAGE_KEYS:-agentview_rgb eye_in_hand_rgb}"
+OFT_IMAGE_KEYS_LIST="[${OFT_IMAGE_KEYS// /,}]"
 OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"
 OFT_FAKE_COMPONENTS="${OFT_FAKE_COMPONENTS:-0}"
 OFT_ACTION_HIDDEN_GPUS="${OFT_ACTION_HIDDEN_GPUS:-${NGPU:-}}"
@@ -63,11 +64,11 @@ PY
 
 OVERWRITE_ARGS=()
 if [[ "${OVERWRITE}" == "1" ]]; then
-  OVERWRITE_ARGS=(--overwrite)
+  OVERWRITE_ARGS=(overwrite=true)
 fi
 FAKE_ARGS=()
 if [[ "${OFT_FAKE_COMPONENTS}" == "1" ]]; then
-  FAKE_ARGS=(--fake-oft-components)
+  FAKE_ARGS=(fake_oft_components=true)
 fi
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
@@ -84,13 +85,13 @@ fi
 
 if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" ]]; then
-    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-      --dir "${OFT_HIDDEN_DIR}" \
-      --reference-dir "${REWARD_DIR}" \
-      --match-reference-demos \
-      --match-reference-lengths \
-      --require-complete-attr \
-      --require-config; then
+    if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+      dir="${OFT_HIDDEN_DIR}" \
+      reference_dir="${REWARD_DIR}" \
+      match_reference_demos=true \
+      match_reference_lengths=true \
+      require_complete_attr=true \
+      require_config=true; then
       echo "[35_oft_action_hidden] skip action-hidden: ${OFT_HIDDEN_DIR}"
       exit 0
     fi
@@ -101,34 +102,34 @@ if [[ "${OFT_LATENT_SCHEME}" == "action_hidden" ]]; then
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
-    --hdf5-dir "${REWARD_DIR}" \
-    --out-action-dir "${OFT_HIDDEN_DIR}" \
-    --skip-cd-sidecars \
-    --oft-ckpt "${OFT_CKPT}" \
-    --policy-mode "${OFT_POLICY_MODE}" \
-    --unnorm-key "${UNNORM_KEY}" \
-    --history "${OFT_HISTORY}" \
-    --time-horizon 8 \
-    --chunk-size "${OFT_CHUNK_SIZE}" \
-    --image-keys ${OFT_IMAGE_KEYS} \
+    hdf5_dir="${REWARD_DIR}" \
+    out_action_dir="${OFT_HIDDEN_DIR}" \
+    skip_cd_sidecars=true \
+    oft_ckpt="${OFT_CKPT}" \
+    policy_mode="${OFT_POLICY_MODE}" \
+    unnorm_key="${UNNORM_KEY}" \
+    history="${OFT_HISTORY}" \
+    time_horizon=8 \
+    chunk_size="${OFT_CHUNK_SIZE}" \
+    image_keys="${OFT_IMAGE_KEYS_LIST}" \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
-  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-    --dir "${OFT_HIDDEN_DIR}" \
-    --reference-dir "${REWARD_DIR}" \
-    --match-reference-demos \
-    --match-reference-lengths \
-    --require-complete-attr \
-    --require-config
+  python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+    dir="${OFT_HIDDEN_DIR}" \
+    reference_dir="${REWARD_DIR}" \
+    match_reference_demos=true \
+    match_reference_lengths=true \
+    require_complete_attr=true \
+    require_config=true
 elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
-    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-      --dir "${OFT_INPUT_TOKEN_DIR}" \
-      --reference-dir "${REWARD_DIR}" \
-      --match-reference-demos \
-      --match-reference-lengths \
-      --require-complete-attr \
-      --require-config; then
+    if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+      dir="${OFT_INPUT_TOKEN_DIR}" \
+      reference_dir="${REWARD_DIR}" \
+      match_reference_demos=true \
+      match_reference_lengths=true \
+      require_complete_attr=true \
+      require_config=true; then
       echo "[35_oft_action_hidden] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
@@ -139,41 +140,41 @@ elif [[ "${OFT_LATENT_SCHEME}" == "input_tokens" ]]; then
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
-    --hdf5-dir "${REWARD_DIR}" \
-    --out-input-token-dir "${OFT_INPUT_TOKEN_DIR}" \
-    --skip-cd-sidecars \
-    --oft-ckpt "${OFT_CKPT}" \
-    --policy-mode "${OFT_POLICY_MODE}" \
-    --unnorm-key "${UNNORM_KEY}" \
-    --history "${OFT_HISTORY}" \
-    --time-horizon 8 \
-    --chunk-size "${OFT_CHUNK_SIZE}" \
-    --image-keys ${OFT_IMAGE_KEYS} \
+    hdf5_dir="${REWARD_DIR}" \
+    out_input_token_dir="${OFT_INPUT_TOKEN_DIR}" \
+    skip_cd_sidecars=true \
+    oft_ckpt="${OFT_CKPT}" \
+    policy_mode="${OFT_POLICY_MODE}" \
+    unnorm_key="${UNNORM_KEY}" \
+    history="${OFT_HISTORY}" \
+    time_horizon=8 \
+    chunk_size="${OFT_CHUNK_SIZE}" \
+    image_keys="${OFT_IMAGE_KEYS_LIST}" \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
-  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-    --dir "${OFT_INPUT_TOKEN_DIR}" \
-    --reference-dir "${REWARD_DIR}" \
-    --match-reference-demos \
-    --match-reference-lengths \
-    --require-complete-attr \
-    --require-config
+  python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+    dir="${OFT_INPUT_TOKEN_DIR}" \
+    reference_dir="${REWARD_DIR}" \
+    match_reference_demos=true \
+    match_reference_lengths=true \
+    require_complete_attr=true \
+    require_config=true
 elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_DIR}" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
-    if python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-      --dir "${OFT_HIDDEN_DIR}" \
-      --reference-dir "${REWARD_DIR}" \
-      --match-reference-demos \
-      --match-reference-lengths \
-      --require-complete-attr \
-      --require-config && \
-       python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-      --dir "${OFT_INPUT_TOKEN_DIR}" \
-      --reference-dir "${REWARD_DIR}" \
-      --match-reference-demos \
-      --match-reference-lengths \
-      --require-complete-attr \
-      --require-config; then
+    if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+      dir="${OFT_HIDDEN_DIR}" \
+      reference_dir="${REWARD_DIR}" \
+      match_reference_demos=true \
+      match_reference_lengths=true \
+      require_complete_attr=true \
+      require_config=true && \
+       python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+      dir="${OFT_INPUT_TOKEN_DIR}" \
+      reference_dir="${REWARD_DIR}" \
+      match_reference_demos=true \
+      match_reference_lengths=true \
+      require_complete_attr=true \
+      require_config=true; then
       echo "[35_oft_action_hidden] skip OFT sidecars: ${OFT_HIDDEN_DIR} ${OFT_INPUT_TOKEN_DIR}"
       exit 0
     fi
@@ -184,33 +185,33 @@ elif [[ "${OFT_LATENT_SCHEME}" == "both" ]]; then
   python -m torch.distributed.run \
     --standalone --nnodes=1 --nproc-per-node="${OFT_ACTION_HIDDEN_GPUS}" \
     --module dreamervla.preprocess.preprocess_oft_action_hidden \
-    --hdf5-dir "${REWARD_DIR}" \
-    --out-action-dir "${OFT_HIDDEN_DIR}" \
-    --out-input-token-dir "${OFT_INPUT_TOKEN_DIR}" \
-    --skip-cd-sidecars \
-    --oft-ckpt "${OFT_CKPT}" \
-    --policy-mode "${OFT_POLICY_MODE}" \
-    --unnorm-key "${UNNORM_KEY}" \
-    --history "${OFT_HISTORY}" \
-    --time-horizon 8 \
-    --chunk-size "${OFT_CHUNK_SIZE}" \
-    --image-keys ${OFT_IMAGE_KEYS} \
+    hdf5_dir="${REWARD_DIR}" \
+    out_action_dir="${OFT_HIDDEN_DIR}" \
+    out_input_token_dir="${OFT_INPUT_TOKEN_DIR}" \
+    skip_cd_sidecars=true \
+    oft_ckpt="${OFT_CKPT}" \
+    policy_mode="${OFT_POLICY_MODE}" \
+    unnorm_key="${UNNORM_KEY}" \
+    history="${OFT_HISTORY}" \
+    time_horizon=8 \
+    chunk_size="${OFT_CHUNK_SIZE}" \
+    image_keys="${OFT_IMAGE_KEYS_LIST}" \
     "${FAKE_ARGS[@]}" \
     "${OVERWRITE_ARGS[@]}"
-  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-    --dir "${OFT_HIDDEN_DIR}" \
-    --reference-dir "${REWARD_DIR}" \
-    --match-reference-demos \
-    --match-reference-lengths \
-    --require-complete-attr \
-    --require-config
-  python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-    --dir "${OFT_INPUT_TOKEN_DIR}" \
-    --reference-dir "${REWARD_DIR}" \
-    --match-reference-demos \
-    --match-reference-lengths \
-    --require-complete-attr \
-    --require-config
+  python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+    dir="${OFT_HIDDEN_DIR}" \
+    reference_dir="${REWARD_DIR}" \
+    match_reference_demos=true \
+    match_reference_lengths=true \
+    require_complete_attr=true \
+    require_config=true
+  python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+    dir="${OFT_INPUT_TOKEN_DIR}" \
+    reference_dir="${REWARD_DIR}" \
+    match_reference_demos=true \
+    match_reference_lengths=true \
+    require_complete_attr=true \
+    require_config=true
 else
   echo "Unsupported OFT_LATENT_SCHEME=${OFT_LATENT_SCHEME}; use action_hidden, input_tokens, or both." >&2
   exit 2

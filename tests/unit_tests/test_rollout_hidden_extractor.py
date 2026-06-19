@@ -8,7 +8,8 @@ Test plan:
   4. test_flatten_action_hidden_wrong_batch_size_not_squeezed — B>1 passthrough.
   5. test_history_buffer_padding — OFTRolloutHiddenExtractor pads history
      correctly without a model (structural test).
-  6. test_inline_matches_offline_sidecar — CONSISTENCY GATE (GPU + ckpt required):
+  6. test_inline_matches_offline_sidecar — CONSISTENCY GATE (opt-in with
+     DVLA_REAL_MODEL_UNIT=1 plus GPU + ckpt):
      drive OFTRolloutHiddenExtractor with stored reward-HDF5 frames and compare
      the returned flat_hidden against the pre-computed offline sidecar
      obs_embedding.  Asserts numerical equivalence within a justified tolerance.
@@ -31,6 +32,7 @@ Tolerance justification for test 6:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +42,7 @@ import torch
 from dreamervla.runners.rollout_hidden_extractor import (
     OFTRolloutHiddenExtractor,
     flatten_action_hidden,
+    input_token_hidden_from_projected,
 )
 
 # ── dimensions (from sidecar config) ────────────────────────────────────────
@@ -156,10 +159,28 @@ def test_history_buffer_padding():
     assert np.array_equal(hist_a2[0], frame_a), "buffer[0] should still be frame_a"
 
 
-# ── real-model consistency gate (skipped when ckpt/GPU/sidecar unavailable) ──
+def test_input_token_hidden_from_projected_uses_current_frame_views() -> None:
+    class _VisionBackbone:
+        def get_num_patches(self) -> int:
+            return 3
+
+    class _Model:
+        vision_backbone = _VisionBackbone()
+
+    projected = torch.arange(2 * 12 * 4, dtype=torch.float32).reshape(2, 12, 4)
+    hidden = input_token_hidden_from_projected(
+        projected,
+        _Model(),
+        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+    )
+    expected = projected[:, -6:, :].reshape(2, -1)
+    assert torch.equal(hidden, expected)
+
+
+# ── real-model consistency gate (opt-in; skipped unless explicitly enabled) ──
 
 _SKIP_CKPT = f"OFT checkpoint not found at {OFT_CKPT}"
-_SKIP_GPU = "No CUDA GPU available"
+_SKIP_GPU = "needs CUDA GPU and DVLA_REAL_MODEL_UNIT=1"
 _SKIP_SIDECAR = f"Offline sidecar not found at {SIDECAR_DIR}"
 _SKIP_REWARD = f"Reward HDF5 not found at {REWARD_DIR}"
 
@@ -169,7 +190,7 @@ def _ckpt_available() -> bool:
 
 
 def _gpu_available() -> bool:
-    return torch.cuda.is_available()
+    return os.environ.get("DVLA_REAL_MODEL_UNIT") == "1" and torch.cuda.is_available()
 
 
 def _sidecar_available() -> bool:

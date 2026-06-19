@@ -1,0 +1,9 @@
+command: null
+path: null
+dir: null
+reference_dir: null
+require_complete_attr: false
+require_config: false
+match_reference_demos: false
+match_reference_lengths: false
+required_demo_dataset: []

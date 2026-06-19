@@ -227,6 +227,19 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
                     "rotate_images_180 mismatch: "
                     f"sidecar={got!r}, expected={expected!r}"
                 )
+        declared_hidden_dim = config.get("hidden_dim")
+        if declared_hidden_dim is None and config.get("token_count") is not None:
+            token_dim = config.get("token_dim")
+            if token_dim is not None:
+                declared_hidden_dim = int(config["token_count"]) * int(token_dim)
+        if declared_hidden_dim is not None:
+            hidden_key = str(config.get("hidden_key", DEFAULT_HIDDEN_KEY))
+            actual_hidden_dim = self._first_sidecar_hidden_dim(hidden_key)
+            if actual_hidden_dim is not None and int(actual_hidden_dim) != int(declared_hidden_dim):
+                errors.append(
+                    "hidden_dim mismatch: "
+                    f"sidecar data={int(actual_hidden_dim)}, declared={int(declared_hidden_dim)}"
+                )
         if errors:
             joined = "\n  - ".join(errors)
             raise ValueError(
@@ -240,6 +253,18 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
                 f"Hidden sidecar was not generated with --save-actor-sequence: {self.hidden_dir}"
             )
         return config
+
+    def _first_sidecar_hidden_dim(self, hidden_key: str) -> int | None:
+        for path in sorted(self.hidden_dir.glob("*.hdf5")):
+            with h5py.File(path, "r") as handle:
+                data = handle.get("data")
+                if data is None:
+                    continue
+                for demo_key in data:
+                    demo = data[demo_key]
+                    if hidden_key in demo:
+                        return int(demo[hidden_key].shape[-1])
+        return None
 
     def _hidden_path_for_source(self, source_path: str | Path) -> Path:
         return self.hidden_dir / Path(source_path).name

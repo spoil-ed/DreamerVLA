@@ -50,74 +50,74 @@ if [[ -z "$(find "${HDF5_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2
   echo "Run: bash scripts/preprocess/prepare_libero_data.sh task=${TASK} only=[10_hdf5_reward]" >&2
   exit 5
 fi
-python -m dreamervla.preprocess.check_artifacts hdf5-dir --dir "${HDF5_DIR}"
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${HDF5_DIR}"
 
 if [[ "${OVERWRITE}" == "1" || ! -d "${IMG_STATE_DIR}" ]]; then
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${IMG_STATE_DIR}"
   python -m dreamervla.preprocess.libero_utils.regenerate_libero_dataset_save_img_action_state_wrist \
-    --libero_task_suite "${LIBERO_SUITE}" \
-    --image_resolution "${IMAGE_RESOLUTION}" \
-    --raw_data_dir "${HDF5_DIR}" \
-    --save_dir "${IMG_STATE_DIR}"
+    libero_task_suite="${LIBERO_SUITE}" \
+    image_resolution="${IMAGE_RESOLUTION}" \
+    raw_data_dir="${HDF5_DIR}" \
+    save_dir="${IMG_STATE_DIR}"
 else
   echo "[20_pretokenize_dataset] skip image/state/action: ${IMG_STATE_DIR}"
 fi
 
 python -m dreamervla.preprocess.action_state_model_conv_generation \
-  --base_dir "${IMG_STATE_DIR}" \
-  --his "${HIS}" \
-  --len_action "${ACTION_HORIZON}" \
-  --task_name "${TASK_LABEL}" \
-  --resolution "${IMAGE_RESOLUTION}" \
-  --with_state \
-  --img_names imgs_third_view imgs_wrist \
-  --output_dir "${CONVS_DIR}"
+  base_dir="${IMG_STATE_DIR}" \
+  his="${HIS}" \
+  len_action="${ACTION_HORIZON}" \
+  task_name="${TASK_LABEL}" \
+  resolution="${IMAGE_RESOLUTION}" \
+  with_state=true \
+  img_names=[imgs_third_view,imgs_wrist] \
+  output_dir="${CONVS_DIR}"
 
 if [[ "${OVERWRITE}" == "1" ]]; then
   python -m dreamervla.preprocess.pretoken_state_action_model \
-    --task "${TASK_LABEL}" \
-    --resolution "${IMAGE_RESOLUTION}" \
-    --with_state \
-    --img_names imgs_third_view imgs_wrist \
-    --his "${HIS}" \
-    --len_action "${ACTION_HORIZON}" \
-    --num_procs "${PRETOKENIZE_PROCS}" \
-    --tokenizer_path "${TOKENIZER_PATH}" \
-    --in_filename_dir "${CONVS_DIR}" \
-    --out_root "${TOKENS_DIR}" \
-    --gpu_devices "${GPUS}" \
-    --overwrite
+    task="${TASK_LABEL}" \
+    resolution="${IMAGE_RESOLUTION}" \
+    with_state=true \
+    img_names=[imgs_third_view,imgs_wrist] \
+    his="${HIS}" \
+    len_action="${ACTION_HORIZON}" \
+    num_procs="${PRETOKENIZE_PROCS}" \
+    tokenizer_path="${TOKENIZER_PATH}" \
+    in_filename_dir="${CONVS_DIR}" \
+    out_root="${TOKENS_DIR}" \
+    gpu_devices="${GPUS}" \
+    overwrite=true
 else
   python -m dreamervla.preprocess.pretoken_state_action_model \
-    --task "${TASK_LABEL}" \
-    --resolution "${IMAGE_RESOLUTION}" \
-    --with_state \
-    --img_names imgs_third_view imgs_wrist \
-    --his "${HIS}" \
-    --len_action "${ACTION_HORIZON}" \
-    --num_procs "${PRETOKENIZE_PROCS}" \
-    --tokenizer_path "${TOKENIZER_PATH}" \
-    --in_filename_dir "${CONVS_DIR}" \
-    --out_root "${TOKENS_DIR}" \
-    --gpu_devices "${GPUS}"
+    task="${TASK_LABEL}" \
+    resolution="${IMAGE_RESOLUTION}" \
+    with_state=true \
+    img_names=[imgs_third_view,imgs_wrist] \
+    his="${HIS}" \
+    len_action="${ACTION_HORIZON}" \
+    num_procs="${PRETOKENIZE_PROCS}" \
+    tokenizer_path="${TOKENIZER_PATH}" \
+    in_filename_dir="${CONVS_DIR}" \
+    out_root="${TOKENS_DIR}" \
+    gpu_devices="${GPUS}"
 fi
 
 bash "${DVLA_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
 
 python -m dreamervla.preprocess.concat_action_world_model_data_libero \
-  --source_dir_patterns "libero_${TASK_LABEL}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}" \
-  --all_patterns "${ARTIFACT_NAME}_${SUFFIX}" \
-  --processed_data_root "${PROCESSED_DATA_ROOT}"
+  source_dir_patterns="[\"libero_${TASK_LABEL}_his_${HIS}_{}_third_view_wrist_w_state_${ACTION_HORIZON}_${IMAGE_RESOLUTION}\"]" \
+  all_patterns="${ARTIFACT_NAME}_${SUFFIX}" \
+  processed_data_root="${PROCESSED_DATA_ROOT}"
 
 if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
   python -m dreamervla.preprocess.validate_libero_data_prep \
-    --data-root "${DVLA_DATA_ROOT}" \
-    --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${ARTIFACT_NAME}" \
-    --his "${HIS}" \
-    --action-horizon "${ACTION_HORIZON}" \
-    --image-resolution "${IMAGE_RESOLUTION}" \
-    --skip-configs
+    data_root="${DVLA_DATA_ROOT}" \
+    processed_data_root="${PROCESSED_DATA_ROOT}" \
+    suites="[${ARTIFACT_NAME}]" \
+    his="${HIS}" \
+    action_horizon="${ACTION_HORIZON}" \
+    image_resolution="${IMAGE_RESOLUTION}" \
+    skip_configs=true
 fi
 
 cat > "${CONFIG_DIR}/${SUFFIX}_pretokenize.yaml" <<EOF
@@ -138,10 +138,10 @@ EOF
 
 if [[ "${ARTIFACT_NAME}" == "${LIBERO_SUITE}" ]]; then
   python -m dreamervla.preprocess.validate_libero_data_prep \
-    --data-root "${DVLA_DATA_ROOT}" \
-    --processed-data-root "${PROCESSED_DATA_ROOT}" \
-    --suites "${ARTIFACT_NAME}" \
-    --his "${HIS}" \
-    --action-horizon "${ACTION_HORIZON}" \
-    --image-resolution "${IMAGE_RESOLUTION}"
+    data_root="${DVLA_DATA_ROOT}" \
+    processed_data_root="${PROCESSED_DATA_ROOT}" \
+    suites="[${ARTIFACT_NAME}]" \
+    his="${HIS}" \
+    action_horizon="${ACTION_HORIZON}" \
+    image_resolution="${IMAGE_RESOLUTION}"
 fi

@@ -3,119 +3,345 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+
+
+def _launcher_cfg() -> dict:
+    from dreamervla.utils.hydra_config import script_config
+
+    return script_config("coldstart_warmup_cotrain")
+
+
+def _plan_context(plan, cfg: dict) -> dict:
+    task_spec = dict(cfg["tasks"][plan.task])
+    return {
+        **task_spec,
+        "task": plan.task,
+        "mode": plan.mode,
+        "profile": plan.profile,
+        "run_root": str(plan.run_root),
+        "reward_dir": str(plan.reward_dir),
+        "hidden_dir": str(plan.hidden_dir),
+        "collect_out": str(plan.run_root / "collect"),
+        "cotrain_out": str(plan.run_root / "cotrain"),
+    }
+
+
+def _render(items, context: dict) -> list[str]:
+    from dreamervla.launchers.coldstart_warmup_cotrain import _render_overrides
+
+    return _render_overrides(items, context)
+
+
+def _assert_items_in_command(items: list[str], command: list[str]) -> None:
+    for item in items:
+        assert item in command
+
+
+def _override_int(overrides: list[str], key: str) -> int:
+    prefix = f"{key}="
+    matches = [item for item in overrides if item.startswith(prefix)]
+    assert len(matches) == 1
+    return int(matches[0].split("=", 1)[1])
+
+
+def _override_key(override: str) -> str:
+    return override.split("=", 1)[0].removeprefix("+")
 
 
 def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
-    plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python")
+    plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python", profile="smoke")
+    cfg = _launcher_cfg()
+    context = _plan_context(plan, cfg)
 
-    reward_dir = str(tmp_path / "coldstart" / "reward")
-    hidden_dir = str(tmp_path / "coldstart" / "hidden")
     assert plan.mode == "ray"
-    assert "experiment=collect_rollouts_ray" in plan.collect_cmd
-    assert "rollout.target_episodes=4" in plan.collect_cmd
-    assert f"task.openvla_oft.hdf5_reward_dir={reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in plan.collect_cmd
-    assert "task.openvla_oft.expected_obs_hidden_source=action_query" in plan.collect_cmd
-    assert "experiment=online_cotrain_pipeline_oft_action_hidden" in plan.cotrain_cmd
-    assert f"offline_warmup.data_dir={reward_dir}" in plan.cotrain_cmd
-    assert f"offline_warmup.hidden_dir={hidden_dir}" in plan.cotrain_cmd
-    assert "training.debug=false" in plan.cotrain_cmd
-    assert "training.wm_warmup_steps=1" in plan.cotrain_cmd
-    assert "training.classifier_warmup_steps=1" in plan.cotrain_cmd
-    assert "online_rollout.total_env_steps=0" in plan.cotrain_cmd
+    assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.action_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
+    assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
+    _assert_items_in_command(
+        _render(cfg["modes"][plan.mode]["collect"], context),
+        plan.collect_cmd,
+    )
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["collect"][plan.mode], context),
+        plan.collect_cmd,
+    )
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["cotrain"], context),
+        plan.cotrain_cmd,
+    )
 
 
 @pytest.mark.parametrize(
-    ("task", "hydra_task", "suite"),
-    [
-        ("goal", "OpenVLA_Onetraj_ColdStart_LIBERO", "libero_goal"),
-        ("object", "OpenVLA_Onetraj_ColdStart_LIBERO_Object", "libero_object"),
-        ("spatial", "OpenVLA_Onetraj_ColdStart_LIBERO_Spatial", "libero_spatial"),
-    ],
+    "task",
+    list(_launcher_cfg()["tasks"]),
 )
-def test_launcher_plan_accepts_libero_task_input(tmp_path, task, hydra_task, suite) -> None:
+def test_launcher_plan_accepts_libero_task_input(tmp_path, task) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
     plan = build_pipeline_plan(mode="ray", task=task, run_root=tmp_path, python="python")
+    task_spec = _launcher_cfg()["tasks"][task]
 
     assert plan.task == task
-    assert f"task={hydra_task}" in plan.collect_cmd
-    assert f"+task={hydra_task}" in plan.cotrain_cmd
-    assert f"env.task_suite_name={suite}" in plan.cotrain_cmd
+    assert f"task={task_spec['hydra_task']}" in plan.collect_cmd
+    assert f"task={task_spec['hydra_task']}" in plan.cotrain_cmd
+    assert not any(item.startswith("env.task_suite_name=") for item in plan.cotrain_cmd)
 
 
 @pytest.mark.parametrize(
-    ("task", "ckpt_name"),
-    [
-        ("goal", "Openvla-oft-SFT-libero-goal-traj1"),
-        ("object", "Openvla-oft-SFT-libero-object-traj1"),
-        ("spatial", "Openvla-oft-SFT-libero-spatial-traj1"),
-    ],
+    "task",
+    list(_launcher_cfg()["tasks"]),
 )
-def test_launcher_plan_uses_oft_discrete_token_cotrain_smoke_defaults(
+def test_launcher_plan_uses_profile_runtime_cotrain_overrides(
     tmp_path,
     task,
-    ckpt_name,
 ) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
-    plan = build_pipeline_plan(mode="noray", task=task, run_root=tmp_path, python="python")
-
-    assert "world_model.obs_dim=229376" in plan.cotrain_cmd
-    assert "world_model.token_count=56" in plan.cotrain_cmd
-    assert "world_model.token_dim=4096" in plan.cotrain_cmd
-    assert "world_model.chunk_size=8" in plan.cotrain_cmd
-    assert "+world_model.time_horizon=8" in plan.cotrain_cmd
-    assert "world_model.chunk_rollout_chunks=1" in plan.cotrain_cmd
-    assert "policy._target_=dreamervla.models.actor.OpenVLADiscreteTokenActor" in plan.cotrain_cmd
-    assert "policy.action_hidden_dim=4096" in plan.cotrain_cmd
-    assert "policy.time_horizon=8" in plan.cotrain_cmd
-    assert "policy.head_type=oft_discrete_token" in plan.cotrain_cmd
-    assert any(
-        override.startswith("+policy.init_lm_head_ckpt=") and override.endswith(ckpt_name)
-        for override in plan.cotrain_cmd
+    plan = build_pipeline_plan(
+        mode="noray",
+        task=task,
+        run_root=tmp_path,
+        python="python",
+        profile="smoke",
     )
-    assert "classifier.window=2" in plan.cotrain_cmd
-    assert "+classifier.token_dim=4096" in plan.cotrain_cmd
-    assert "+classifier.token_pool=mean" in plan.cotrain_cmd
-    assert "+classifier.token_count=56" in plan.cotrain_cmd
-    assert "algorithm.wmpo.chunk_size=8" in plan.cotrain_cmd
+    cfg = _launcher_cfg()
+    context = _plan_context(plan, cfg)
+
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["cotrain"], context),
+        plan.cotrain_cmd,
+    )
 
 
 def test_noray_launcher_plan_uses_pure_hydra_collector(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
     plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    cfg = _launcher_cfg()
+    context = _plan_context(plan, cfg)
 
-    reward_dir = str(tmp_path / "coldstart" / "reward")
-    hidden_dir = str(tmp_path / "coldstart" / "hidden")
     assert plan.mode == "noray"
-    assert "experiment=collect_rollouts_onetraj" in plan.collect_cmd
     assert "experiment=collect_rollouts_ray" not in plan.collect_cmd
-    assert "collect.envs_per_gpu=1" in plan.collect_cmd
-    assert f"task.openvla_oft.hdf5_reward_dir={reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in plan.collect_cmd
-    assert "task.openvla_oft.expected_obs_hidden_source=action_query" in plan.collect_cmd
-    assert f"offline_warmup.data_dir={reward_dir}" in plan.cotrain_cmd
-    assert f"offline_warmup.hidden_dir={hidden_dir}" in plan.cotrain_cmd
+    assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.action_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
+    assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
+    _assert_items_in_command(
+        _render(cfg["modes"][plan.mode]["collect"], context),
+        plan.collect_cmd,
+    )
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["collect"][plan.mode], context),
+        plan.collect_cmd,
+    )
+
+
+def test_default_launcher_profile_uses_single_gpu_utilization_defaults(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    cfg = _launcher_cfg()
+    context = _plan_context(plan, cfg)
+
+    assert plan.profile == cfg["profile"]
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["collect"][plan.mode], context),
+        plan.collect_cmd,
+    )
+    _assert_items_in_command(
+        _render(cfg["profiles"][plan.profile]["cotrain"], context),
+        plan.cotrain_cmd,
+    )
+
+
+def test_default_launcher_profile_is_release_parallel_collector(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    root = Path(__file__).resolve().parents[2]
+    collect_recipe = OmegaConf.load(root / "configs" / "experiment" / "collect_rollouts_onetraj.yaml")
+    baseline = int(collect_recipe.collect.envs_per_gpu)
+    default_profile = cfg["default_profile"]
+    default_collect = cfg["profiles"][default_profile]["collect"][plan.mode]
+
+    assert cfg["profile"] == default_profile
+    assert plan.profile == default_profile
+    assert _override_int(default_collect, "collect.envs_per_gpu") > baseline
+
+
+def test_launcher_profiles_do_not_override_model_structure() -> None:
+    cfg = _launcher_cfg()
+    runtime_keys = {
+        "training.debug",
+        "training.wm_warmup_steps",
+        "training.classifier_warmup_steps",
+        "training.classifier_batch_size",
+        "dataloader.batch_size",
+        "online_rollout.buffer_size",
+        "online_rollout.total_env_steps",
+    }
+
+    for profile in cfg["profiles"].values():
+        assert {_override_key(item) for item in profile["cotrain"]} <= runtime_keys
+
+
+@pytest.mark.parametrize(
+    "task_name",
+    list(_launcher_cfg()["tasks"]),
+)
+def test_oft_cotrain_recipe_derives_structure_from_task_vla_config(task_name) -> None:
+    hydra_task = _launcher_cfg()["tasks"][task_name]["hydra_task"]
+    root = Path(__file__).resolve().parents[2]
+    with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_pipeline_oft_action_hidden",
+                f"task={hydra_task}",
+            ],
+        )
+    OmegaConf.resolve(cfg)
+    oft = cfg.task.openvla_oft
+
+    assert cfg.env.task_suite_name == cfg.task.suite
+    assert cfg.world_model._target_ == oft.wm_target
+    assert cfg.world_model.obs_dim == oft.wm_obs_dim
+    assert cfg.world_model.token_count == oft.token_count
+    assert cfg.world_model.token_dim == oft.token_dim
+    assert cfg.world_model.chunk_size == oft.chunk_size
+    assert cfg.world_model.time_horizon == oft.time_horizon
+    assert cfg.policy._target_ == oft.actor_target
+    assert cfg.policy.action_hidden_dim == oft.token_dim
+    assert cfg.policy.time_horizon == oft.chunk_size
+    assert cfg.policy.head_type == oft.actor_head_type
+    assert cfg.policy.adapter_type == oft.actor_adapter_type
+    assert cfg.policy.adapter_hidden_dim == oft.actor_adapter_hidden_dim
+    assert cfg.policy.init_lm_head_ckpt == oft.ckpt_path
+    assert cfg.policy.vocab_size == oft.vocab_size
+    assert cfg.policy.action_token_bins == oft.action_token_bins
+    assert cfg.policy.min_action == oft.min_action
+    assert cfg.policy.max_action == oft.max_action
+    assert cfg.classifier.latent_dim == oft.token_dim
+    assert cfg.classifier.chunk_size == oft.chunk_size
+    assert cfg.algorithm.wmpo.chunk_size == oft.chunk_size
 
 
 def test_launcher_dry_run_prints_both_commands(tmp_path, capsys) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import main
 
-    exit_code = main(["--mode", "noray", "--task", "object", "--run-root", str(tmp_path), "--dry-run"])
+    cfg = _launcher_cfg()
+    mode = "noray"
+    task = next(task_name for task_name in cfg["tasks"] if task_name != cfg["task"])
+    exit_code = main(
+        [
+            f"mode={mode}",
+            f"task={task}",
+            f"run_root={tmp_path}",
+            "dry_run=true",
+        ]
+    )
 
     out = capsys.readouterr().out
     assert exit_code == 0
-    assert "mode: noray" in out
-    assert "task: object" in out
+    assert f"mode: {mode}" in out
+    assert f"task: {task}" in out
     assert "collect:" in out
     assert "cotrain:" in out
-    assert "task=OpenVLA_Onetraj_ColdStart_LIBERO_Object" in out
-    assert "+task=OpenVLA_Onetraj_ColdStart_LIBERO_Object" in out
+    assert f"task={cfg['tasks'][task]['hydra_task']}" in out
     assert "offline_warmup.data_dir" in out
+
+
+def test_launcher_accepts_hydra_list_overrides(tmp_path, capsys) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import main
+
+    cfg = _launcher_cfg()
+    collect_override = cfg["modes"]["ray"]["collect"][3].replace("[0]", "all")
+    profile_override = cfg["profiles"][cfg["profile"]]["collect"]["ray"][-1]
+    profile_key = profile_override.split("=", 1)[0]
+    collect_override_2 = f"{profile_key}=9"
+    cotrain_profile = cfg["profiles"][cfg["profile"]]["cotrain"]
+    cotrain_key = next(item.split("=", 1)[0] for item in cotrain_profile if item.startswith("online_rollout.total_env_steps="))
+    cotrain_override = f"{cotrain_key}=10"
+    exit_code = main(
+        [
+            "mode=ray",
+            f"run_root={tmp_path}",
+            "dry_run=true",
+            f'collect_overrides=["{collect_override}","{collect_override_2}"]',
+            f'cotrain_overrides=["{cotrain_override}"]',
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert collect_override in out
+    assert collect_override_2 in out
+    assert cotrain_override in out
+
+
+@pytest.mark.parametrize(
+    ("mode", "concurrency_override", "expected_concurrency_key"),
+    [
+        ("noray", "collect.envs_per_gpu=6", "collect.envs_per_gpu"),
+        ("ray", "collect.num_workers=5", "env.num_workers"),
+    ],
+)
+def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
+    tmp_path,
+    capsys,
+    mode,
+    concurrency_override,
+    expected_concurrency_key,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import main
+
+    episodes_per_task = 7
+    episode_horizon = 123
+    wm_steps = 11
+    classifier_steps = 12
+    batch_size = 13
+    classifier_batch_size = 14
+    concurrency_value = concurrency_override.split("=", 1)[1]
+    exit_code = main(
+        [
+            f"mode={mode}",
+            f"run_root={tmp_path}",
+            "dry_run=true",
+            f"collect.episodes_per_task={episodes_per_task}",
+            f"collect.episode_horizon={episode_horizon}",
+            concurrency_override,
+            f"warmup.wm_steps={wm_steps}",
+            f"warmup.classifier_steps={classifier_steps}",
+            f"warmup.batch_size={batch_size}",
+            f"warmup.classifier_batch_size={classifier_batch_size}",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert f"collect.episodes_per_task={episodes_per_task}" in out
+    assert f"collect.episode_horizon={episode_horizon}" in out
+    assert f"{expected_concurrency_key}={concurrency_value}" in out
+    assert f"training.wm_warmup_steps={wm_steps}" in out
+    assert f"training.classifier_warmup_steps={classifier_steps}" in out
+    assert f"dataloader.batch_size={batch_size}" in out
+    assert f"training.classifier_batch_size={classifier_batch_size}" in out
+
+
+def test_ray_launcher_does_not_freeze_total_episodes_when_episodes_per_task_changes(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python")
+
+    assert not any(item.startswith("rollout.target_episodes=") for item in plan.collect_cmd)
 
 
 def test_asset_validation_reports_missing_inputs(tmp_path) -> None:
@@ -128,27 +354,21 @@ def test_asset_validation_reports_missing_inputs(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("task", "ckpt_name", "suite", "stats_key"),
-    [
-        ("goal", "Openvla-oft-SFT-libero-goal-traj1", "libero_goal", "libero_goal_no_noops"),
-        ("object", "Openvla-oft-SFT-libero-object-traj1", "libero_object", "libero_object_no_noops"),
-        ("spatial", "Openvla-oft-SFT-libero-spatial-traj1", "libero_spatial", "libero_spatial_no_noops"),
-    ],
+    "task",
+    list(_launcher_cfg()["tasks"]),
 )
 def test_asset_validation_accepts_minimal_expected_layout(
     tmp_path,
     task,
-    ckpt_name,
-    suite,
-    stats_key,
 ) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import validate_input_assets
 
-    ckpt = tmp_path / "checkpoints" / "Openvla-oft-SFT-traj1" / ckpt_name
-    libero = tmp_path / "datasets" / "libero" / suite
+    task_spec = _launcher_cfg()["tasks"][task]
+    ckpt = tmp_path / "checkpoints" / "Openvla-oft-SFT-traj1" / task_spec["ckpt_name"]
+    libero = tmp_path / "datasets" / "libero" / task_spec["suite"]
     ckpt.mkdir(parents=True)
     libero.mkdir(parents=True)
-    (ckpt / "dataset_statistics.json").write_text(f'{{"{stats_key}": {{}}}}', encoding="utf-8")
+    (ckpt / "dataset_statistics.json").write_text(f'{{"{task_spec["stats_key"]}": {{}}}}', encoding="utf-8")
     (libero / "demo.hdf5").touch()
 
     assert validate_input_assets(task=task, data_root=tmp_path) == []
@@ -163,9 +383,22 @@ def test_e2e_shell_scripts_select_expected_modes() -> None:
     assert noray.is_file()
     ray_text = ray.read_text(encoding="utf-8")
     noray_text = noray.read_text(encoding="utf-8")
-    assert "--mode ray" in ray_text
-    assert "--mode noray" in noray_text
+    assert "--mode" not in ray_text
+    assert "--mode" not in noray_text
+    assert "mode=ray" in ray_text
+    assert "mode=noray" in noray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in ray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in noray_text
     assert 'conda activate "${CONDA_ENV_NAME}"' in ray_text
     assert 'conda activate "${CONDA_ENV_NAME}"' in noray_text
+
+
+def test_coldstart_launcher_has_no_argparse_cli() -> None:
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "dreamervla" / "launchers" / "coldstart_warmup_cotrain.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "import argparse" not in text
+    assert "ArgumentParser" not in text
+    assert "parse_args" not in text

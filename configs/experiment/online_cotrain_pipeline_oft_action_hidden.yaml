@@ -1,4 +1,5 @@
 # @package _global_
 defaults:
-  - override /dreamervla: online_cotrain_pipeline_libero_goal
+  - /task: OpenVLA_Onetraj_ColdStart_LIBERO
+  - override /dreamervla: online_cotrain_pipeline_openvla_oft_action_hidden
   - _self_

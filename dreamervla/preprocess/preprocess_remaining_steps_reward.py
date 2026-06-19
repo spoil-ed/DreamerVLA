@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import h5py
 import numpy as np
 from tqdm import tqdm
 
-from dreamervla.utils.paths import processed_data_path
+from dreamervla.utils.hydra_config import script_namespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -133,7 +133,7 @@ def _copy_file_with_remaining_rewards(
     output_path: Path,
     *,
     metainfo: dict[str, Any],
-    args: argparse.Namespace,
+    args: SimpleNamespace,
 ) -> dict[str, Any]:
     tmp_path = output_path.with_name(f"{output_path.name}.tmp")
     if tmp_path.exists():
@@ -223,34 +223,8 @@ def _copy_file_with_remaining_rewards(
     }
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Rewrite LIBERO HDF5 rewards from sparse 0/1 terminal rewards to "
-            "normalized episode-level remaining-step success targets."
-        )
-    )
-    parser.add_argument(
-        "--input-dir",
-        default=str(processed_data_path("libero_goal/no_noops_t_256")),
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=str(
-            processed_data_path("libero_goal/no_noops_t_256_remaining_reward")
-        ),
-    )
-    parser.add_argument("--metainfo-json", default=None)
-    parser.add_argument("--success-threshold", type=float, default=0.5)
-    parser.add_argument("--failure-value", type=float, default=0.0)
-    parser.add_argument("--min-value", type=float, default=0.0)
-    parser.add_argument("--max-value", type=float, default=1.0)
-    parser.add_argument(
-        "--compression", default="none", choices=["none", "lzf", "gzip"]
-    )
-    parser.add_argument("--max-files", type=int, default=None)
-    parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
+def parse_args() -> SimpleNamespace:
+    return script_namespace("preprocess_remaining_steps_reward")
 
 
 def main() -> None:
@@ -272,7 +246,7 @@ def main() -> None:
         output_path = output_dir / source_path.name
         if output_path.exists() and not args.overwrite:
             raise FileExistsError(
-                f"output exists, pass --overwrite to replace: {output_path}"
+                f"output exists, pass overwrite=true to replace: {output_path}"
             )
         if output_path.exists():
             output_path.unlink()

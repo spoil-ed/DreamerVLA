@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import h5py
+import numpy as np
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -104,6 +106,39 @@ def test_rynn_hidden_sidecar_accepts_legacy_ckpts_checkpoint_alias(tmp_path) -> 
         expected_action_head_type="legacy",
         require_preprocess_config=True,
     )
+
+
+def test_input_token_sidecar_validates_declared_hidden_dim(tmp_path) -> None:
+    (tmp_path / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "action_head_type": "oft_discrete_token",
+                "obs_hidden_source": "input_token_embedding",
+                "hidden_key": "obs_embedding",
+                "token_count": 3,
+                "token_dim": 4,
+                "hidden_dim": 12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with h5py.File(tmp_path / "shard.hdf5", "w") as handle:
+        demo = handle.create_group("data/demo_0")
+        demo.create_dataset("obs_embedding", data=np.zeros((2, 11), dtype=np.float16))
+
+    dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
+    dataset.hidden_dir = tmp_path
+    dataset.load_actor_sequence = False
+
+    with pytest.raises(ValueError, match="hidden_dim mismatch"):
+        dataset._validate_hidden_sidecar(
+            expected_model_path=None,
+            expected_encoder_state_ckpt=None,
+            expected_time_horizon=None,
+            expected_action_head_type="oft_discrete_token",
+            expected_obs_hidden_source="input_token_embedding",
+            require_preprocess_config=True,
+        )
 
 
 def test_vla_action_head_actor_uses_rynnvla_action_tokens() -> None:

@@ -63,6 +63,9 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
 
     assert history["rollout/episodes"] == 4
     assert history["env/num_env_workers"] == 2
+    assert history["time/driver_roundtrips"] > 0
+    assert history["time/driver_step_waits"] == history["rollout/steps"]
+    assert history["time/driver_step_calls"] > history["time/driver_step_waits"]
     assert not ray.is_initialized()
 
     reward_path = reward_dir / "ray_shard_000.hdf5"

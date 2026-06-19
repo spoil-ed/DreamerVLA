@@ -2,12 +2,12 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import h5py
@@ -23,12 +23,12 @@ from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
     ACTION_HIDDEN_KEY,
     ACTOR_SEQUENCE_KEYS,
-    DEFAULT_HIDDEN_KEY,
     annotate_preprocess_config,
     required_demo_datasets,
 )
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
-from dreamervla.utils.paths import checkpoints_path, processed_data_path
+from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.paths import checkpoints_path
 
 
 def _project_path(path: str | Path) -> Path:
@@ -246,7 +246,7 @@ def _legacy_flat_obs_embedding_from_action_hidden(
     return action_hidden.flatten(start_dim=1)
 
 
-def _source_stats(source_path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def _source_stats(source_path: Path, args: SimpleNamespace) -> dict[str, Any]:
     demos = 0
     frames = 0
     with h5py.File(source_path, "r", swmr=True, libver="latest") as handle:
@@ -438,7 +438,7 @@ def _monitor_global_progress(
         pbar.set_postfix(frames=f"{completed_frames}/{total_frames}", refresh=True)
 
 
-def _make_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEncoder:
+def _make_encoder(args: SimpleNamespace, device: torch.device) -> RynnVLAEncoder:
     model_path = args.model_path
     encoder_state_is_hf = bool(
         args.encoder_state_ckpt and is_hf_checkpoint(args.encoder_state_ckpt)
@@ -623,7 +623,7 @@ def _write_source_sidecar(
     source_path: Path,
     output_path: Path,
     encoder: RynnVLAEncoder,
-    args: argparse.Namespace,
+    args: SimpleNamespace,
     rank: int,
     run_id: str,
     progress_dir: Path,
@@ -880,110 +880,8 @@ def _write_source_sidecar(
     }
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Precompute frozen RynnVLA hidden vectors for LIBERO pixel HDF5 files. "
-            "The original image dataset is not modified; matching sidecar HDF5 "
-            "files are written under --out-dir."
-        )
-    )
-    parser.add_argument(
-        "--hdf5-dir",
-        default=str(processed_data_path("libero_goal/no_noops_t_256")),
-    )
-    parser.add_argument(
-        "--out-dir",
-        default=None,
-        help=(
-            "Sidecar output directory. If omitted, the default is derived from "
-            "the legacy RynnVLA action-hidden sidecar layout."
-        ),
-    )
-    parser.add_argument("--image-keys", nargs="+", default=["agentview_rgb", "eye_in_hand_rgb"])
-    parser.add_argument(
-        "--prompt-style",
-        default="vla_policy",
-        choices=["vla_policy"],
-        help="Construct inputs exactly like the existing RynnVLA action-hidden sidecar.",
-    )
-    parser.add_argument(
-        "--history",
-        type=int,
-        default=2,
-        help="Number of timesteps of two-view image history; the existing sidecar uses 2.",
-    )
-    parser.add_argument(
-        "--include-state",
-        action="store_true",
-        default=True,
-        help="Include ee_pos + ee_ori + gripper_states in the VLA-policy prompt.",
-    )
-    parser.add_argument(
-        "--rotate-images-180",
-        action="store_true",
-        default=True,
-        help="Rotate HDF5 images by 180 degrees before tokenization, matching get_libero_image().",
-    )
-    parser.add_argument("--hidden-key", default=DEFAULT_HIDDEN_KEY)
-    parser.add_argument(
-        "--obs-hidden-source",
-        default="action_query",
-        choices=["pooled", "action_query", "input_token_embedding"],
-        help=(
-            "Which VLA representation is written to --hidden-key. "
-            "'action_query' writes the flattened RynnVLA action hidden "
-            "after the action-head transformer; 'pooled' keeps the old "
-            "4096-d pooled backbone hidden for explicit ablations."
-        ),
-    )
-    parser.add_argument(
-        "--save-actor-sequence",
-        action="store_true",
-        help=(
-            "Also store full token hidden sequences for native VLA action-head "
-            "training/eval: actor_hidden_states, actor_input_ids, "
-            "actor_attention_mask, actor_seq_lens."
-        ),
-    )
-    parser.add_argument(
-        "--save-action-hidden",
-        action="store_true",
-        help="Also store unflattened RynnVLA action hidden states as action_hidden_states.",
-    )
-    parser.add_argument("--action-trigger-token-id", type=int, default=10004)
-    parser.add_argument("--chunk-size", type=int, default=16)
-    parser.add_argument("--output-dtype", default="float16", choices=["float16", "float32"])
-    parser.add_argument("--compression", default="none", choices=["none", "lzf", "gzip"])
-    parser.add_argument("--max-files", type=int, default=None)
-    parser.add_argument("--max-demos-per-file", type=int, default=None)
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--no-global-progress", action="store_true")
-    parser.add_argument("--model-path", default=_default_ckpt_path("VLA_model_256", "libero_goal"))
-    parser.add_argument("--encoder-state-ckpt", default=None)
-    parser.add_argument(
-        "--tokenizer-path",
-        default=_default_ckpt_path("models--Alpha-VLLM--Lumina-mGPT-7B-768"),
-    )
-    parser.add_argument(
-        "--text-tokenizer-path",
-        default=_default_ckpt_path("chameleon", "tokenizer", "text_tokenizer.json"),
-    )
-    parser.add_argument(
-        "--chameleon-vqgan-config",
-        default=_default_ckpt_path("chameleon", "tokenizer", "vqgan.yaml"),
-    )
-    parser.add_argument(
-        "--chameleon-vqgan-ckpt",
-        default=_default_ckpt_path("chameleon", "tokenizer", "vqgan.ckpt"),
-    )
-    parser.add_argument("--resolution", type=int, default=256)
-    parser.add_argument("--action-dim", type=int, default=7)
-    parser.add_argument("--time-horizon", type=int, default=5)
-    parser.add_argument("--token-dim", type=int, default=4096)
-    parser.add_argument("--action-head-type", default="legacy", choices=["legacy"])
-    parser.add_argument("--pool", default="mean", choices=["mean", "last"])
-    return parser.parse_args()
+def parse_args() -> SimpleNamespace:
+    return script_namespace("preprocess_rynn_pixel_hidden")
 
 
 def main() -> None:

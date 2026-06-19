@@ -44,6 +44,7 @@ class FakeVecEnv:
         self._term_at = term_at_fn  # (task_id, episode_id) -> step count at which it terminates
         self._slots = [dict(task_id=-1, episode_id=-1, t=0, term_at=10**9) for _ in range(num_envs)]
         self.step_calls = 0
+        self.received_actions = []
 
     def set_task(self, task_ids, env_ids=None):
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
@@ -68,6 +69,7 @@ class FakeVecEnv:
         self.step_calls += 1
         out = []
         for eid, a in zip(ids, actions, strict=True):
+            self.received_actions.append(np.asarray(a, dtype=np.float64).copy())
             s = self._slots[eid]
             s["t"] += 1
             terminated = s["t"] >= s["term_at"]
@@ -250,3 +252,34 @@ def test_records_pair_pre_step_state_with_its_embedding():
     steps = captured["steps"]
     # term_at=4 -> 4 steps; record t holds ee_pos[2]==t (the pre-step frame)
     assert [int(s["obs"]["ee_pos"][2]) for s in steps] == [0, 1, 2, 3]
+
+
+def test_executes_action_chunk_open_loop_before_using_next_chunk():
+    """OpenVLA-OFT rollout must execute a full chunk before using a new chunk."""
+    vec = FakeVecEnv(num_envs=1, term_at_fn=lambda _t, _e: 5)
+    exts = [FakeExtractor()]
+    writer = FakeWriter()
+    call = {"idx": 0}
+
+    def infer_chunks(preps):
+        base = call["idx"] * 10
+        call["idx"] += 1
+        return [
+            (
+                [np.array([base + j, 0, 0, 0, 0, 0, 0.9], np.float64) for j in range(3)],
+                torch.zeros(229376, dtype=torch.float16),
+            )
+            for _ in preps
+        ]
+
+    collect_vectorized(
+        vec,
+        exts,
+        infer_chunks,
+        writer,
+        [(0, 0)],
+        episode_horizon=5,
+        action_steps=3,
+    )
+
+    assert [int(action[0]) for action in vec.received_actions] == [0, 1, 2, 30, 31]

@@ -179,15 +179,15 @@ absolute prefixes inside generated YAML / JSON manifests.
 Validate the generated tree with:
 
 ```bash
-bash scripts/preprocess/validate_libero_data.sh --suites libero_goal
+bash scripts/preprocess/validate_libero_data.sh 'suites=[libero_goal]'
 bash scripts/preprocess/validate_libero_data.sh \
-  --suites libero_goal libero_object libero_spatial libero_10
+  'suites=[libero_goal,libero_object,libero_spatial,libero_10]'
 ```
 
 The validator checks that HDF5/reward files exist, conv JSONs are non-empty,
 token pkl counts match conv counts, record files match token counts, the
 concatenated manifest matches records, and generated configs point at existing
-JSON files. Add `--check-action-hidden` when validating the legacy action-hidden
+JSON files. Add `check_action_hidden=true` when validating the legacy action-hidden
 sidecar after stage 5.
 
 ## Outputs

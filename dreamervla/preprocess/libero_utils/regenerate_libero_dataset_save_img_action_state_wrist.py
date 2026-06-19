@@ -1,27 +1,13 @@
 from __future__ import annotations
 
-import argparse
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RAW_DATA_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "preprocess"
-    / "processed_data"
-    / "libero_goal/no_noops_t_256"
-)
-DEFAULT_SAVE_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "preprocess"
-    / "processed_data"
-    / "libero_goal/image_state_action_t_256"
-)
+from dreamervla.utils.hydra_config import script_namespace
 
 
 def recreate_directory(path: Path) -> None:
@@ -41,46 +27,11 @@ def save_png(image_array: np.ndarray, output_path: Path) -> None:
     Image.fromarray(image).save(output_path)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Expand LIBERO HDF5 demos into image/action/state/wrist directory structure for pretokenization."
-    )
-    parser.add_argument(
-        "--libero_task_suite",
-        type=str,
-        choices=[
-            "libero_spatial",
-            "libero_object",
-            "libero_goal",
-            "libero_10",
-            "libero_90",
-        ],
-        required=True,
-        help="LIBERO task suite. Example: libero_goal",
-    )
-    parser.add_argument(
-        "--image_resolution",
-        type=int,
-        choices=[256, 512],
-        required=True,
-        help="Image resolution. Kept for CLI compatibility with the original script.",
-    )
-    parser.add_argument(
-        "--raw_data_dir",
-        type=Path,
-        default=DEFAULT_RAW_DATA_DIR,
-        help="Directory containing source HDF5 files like <task>_demo.hdf5.",
-    )
-    parser.add_argument(
-        "--save_dir",
-        type=Path,
-        default=DEFAULT_SAVE_DIR,
-        help="Output directory for the expanded image/action/state/wrist dataset.",
-    )
-    return parser.parse_args()
+def parse_args() -> SimpleNamespace:
+    return script_namespace("regenerate_libero_dataset_save_img_action_state_wrist")
 
 
-def main(args: argparse.Namespace) -> None:
+def main(args: SimpleNamespace) -> None:
     import h5py
     import tqdm
     from libero.libero import benchmark

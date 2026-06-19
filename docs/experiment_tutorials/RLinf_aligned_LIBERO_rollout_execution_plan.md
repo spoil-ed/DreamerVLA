@@ -47,7 +47,7 @@
 - **RLinf 参考侧（docker，仅作 oracle）**：镜像
   `rlinf/rlinf:agentic-rlinf0.2-maniskill_libero`。
   ⚠️ 已运行容器 `rlinf` 的 NVML 损坏；需 `docker run --rm --gpus all` 起新容器。
-  host `/mnt/data/spoil/workspace` → 容器 `/workspace/RLinf`。
+  host `<workspace-root>` → 容器 `/workspace/RLinf`。
   ⚠️ launcher 默认 MODEL_PATH 指向过期 `data/ckpts/...`，必须覆盖为 `data/checkpoints/...`。
   入口 `examples/embodiment/eval_embodied_agent.py`，配置 `wan_libero_goal_grpo_openvlaoft_4567`。
 

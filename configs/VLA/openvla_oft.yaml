@@ -36,11 +36,11 @@ policy:
   component_ckpt_dir: ${task.openvla_oft.component_ckpt_dir}
   resume_step: ${task.openvla_oft.resume_step}
   torch_dtype: bf16
-  num_images_in_input: 2
+  num_images_in_input: ${task.openvla_oft.num_images_in_input}
   use_lora: true
   lora_rank: 32
   lora_dropout: 0.0
-  use_l1_regression: true
+  use_l1_regression: ${task.openvla_oft.use_l1_regression}
   use_diffusion: false
   use_proprio: ${task.openvla_oft.use_proprio}
   use_film: false

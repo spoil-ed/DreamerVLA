@@ -38,16 +38,25 @@ def test_coldstart_launcher_uses_dvla_root_data_fallback(
 
 
 def test_coldstart_plan_uses_dvla_root_data_interpolation(tmp_path: Path) -> None:
+    from hydra import compose, initialize_config_dir
+
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
     plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
 
-    assert any(
-        override.startswith(
-            "+policy.init_lm_head_ckpt=${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/"
+    assert "task=OpenVLA_Onetraj_ColdStart_LIBERO" in plan.cotrain_cmd
+    assert not any(override.startswith("+policy.init_lm_head_ckpt=") for override in plan.cotrain_cmd)
+
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_pipeline_oft_action_hidden",
+                "task=OpenVLA_Onetraj_ColdStart_LIBERO",
+            ],
         )
-        for override in plan.cotrain_cmd
-    )
+    assert cfg.policy.init_lm_head_ckpt == cfg.task.openvla_oft.ckpt_path
 
 
 def test_coldstart_dry_run_defaults_use_dvla_root_data(

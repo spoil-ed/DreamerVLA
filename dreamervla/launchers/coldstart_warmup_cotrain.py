@@ -2,60 +2,33 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shlex
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig, ListConfig, OmegaConf
+
+from dreamervla.utils.hydra_config import script_config
+from dreamervla.utils.paths import data_root
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 
 PipelineMode = Literal["ray", "noray"]
-PipelineTask = Literal["goal", "object", "spatial"]
-
-
-@dataclass(frozen=True)
-class TaskSpec:
-    name: PipelineTask
-    hydra_task: str
-    suite: str
-    ckpt_name: str
-    stats_key: str
-
-
-_TASK_SPECS: dict[str, TaskSpec] = {
-    "goal": TaskSpec(
-        name="goal",
-        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO",
-        suite="libero_goal",
-        ckpt_name="Openvla-oft-SFT-libero-goal-traj1",
-        stats_key="libero_goal_no_noops",
-    ),
-    "object": TaskSpec(
-        name="object",
-        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO_Object",
-        suite="libero_object",
-        ckpt_name="Openvla-oft-SFT-libero-object-traj1",
-        stats_key="libero_object_no_noops",
-    ),
-    "spatial": TaskSpec(
-        name="spatial",
-        hydra_task="OpenVLA_Onetraj_ColdStart_LIBERO_Spatial",
-        suite="libero_spatial",
-        ckpt_name="Openvla-oft-SFT-libero-spatial-traj1",
-        stats_key="libero_spatial_no_noops",
-    ),
-}
 
 
 @dataclass(frozen=True)
 class PipelinePlan:
     mode: PipelineMode
-    task: PipelineTask
+    profile: str
+    task: str
     run_root: Path
     reward_dir: Path
     hidden_dir: Path
@@ -72,139 +45,182 @@ def _normalize_mode(mode: str) -> PipelineMode:
     raise ValueError("mode must be one of: ray, noray")
 
 
-def _resolve_task(task: str) -> TaskSpec:
+def _normalise_key(value: str) -> str:
+    return value.strip().lower().replace("-", "_")
+
+
+def _resolve_task(task: str, task_specs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     normalized = task.strip().lower().replace("-", "_")
     if normalized.startswith("libero_"):
         normalized = normalized.removeprefix("libero_")
     try:
-        return _TASK_SPECS[normalized]
+        raw = task_specs[normalized]
     except KeyError as exc:
-        raise ValueError("task must be one of: goal, object, spatial") from exc
+        allowed = ", ".join(sorted(task_specs))
+        raise ValueError(f"task must be one of: {allowed}") from exc
+    return normalized, dict(raw)
 
 
-def _oft_discrete_token_cotrain_smoke_overrides(task_spec: TaskSpec) -> list[str]:
-    ckpt = (
-        "${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/"
-        f"Openvla-oft-SFT-traj1/{task_spec.ckpt_name}"
-    )
-    return [
-        "training.debug=false",
-        "training.wm_warmup_steps=1",
-        "training.classifier_warmup_steps=1",
-        "training.classifier_batch_size=1",
-        "dataloader.batch_size=1",
-        "online_rollout.sequence_length=9",
-        "online_rollout.buffer_size=100",
-        "online_rollout.total_env_steps=0",
-        "world_model.obs_dim=229376",
-        "world_model.token_count=56",
-        "world_model.token_dim=4096",
-        "world_model.chunk_size=8",
-        "+world_model.time_horizon=8",
-        "world_model.model_dim=128",
-        "world_model.depth=1",
-        "world_model.heads=4",
-        "world_model.mlp_dim=256",
-        "world_model.num_hist=1",
-        "world_model.num_pred=1",
-        "world_model.chunk_rollout_chunks=1",
-        "policy._target_=dreamervla.models.actor.OpenVLADiscreteTokenActor",
-        "policy.action_hidden_dim=4096",
-        "policy.time_horizon=8",
-        "policy.head_type=oft_discrete_token",
-        "policy.adapter_hidden_dim=128",
-        f"+policy.init_lm_head_ckpt={ckpt}",
-        "classifier.latent_dim=4096",
-        "classifier.window=2",
-        "+classifier.head_type=linear",
-        "classifier.hidden_dim=128",
-        "classifier.num_layers=1",
-        "classifier.num_heads=4",
-        "classifier.chunk_size=8",
-        "+classifier.token_dim=4096",
-        "+classifier.token_pool=mean",
-        "+classifier.token_count=56",
-        "critic.hidden_dim=128",
-        "critic.critic_hidden_dim=128",
-        "algorithm.wmpo.chunk_size=8",
-    ]
+def _select_mapping(mapping: dict[str, Any], key: str, *, label: str) -> Any:
+    normalized = _normalise_key(key)
+    try:
+        return mapping[normalized]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(mapping))
+        raise ValueError(f"{label} must be one of: {allowed}") from exc
+
+
+def _render_overrides(items: Sequence[Any], context: dict[str, Any]) -> list[str]:
+    return [str(item).format(**context) for item in items]
+
+
+def _format_hydra_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return "[" + ",".join(_format_hydra_value(item) for item in value) + "]"
+    return str(value)
+
+
+def _control_overrides(
+    values: Any,
+    mapping: Mapping[str, Any],
+    *,
+    label: str,
+) -> list[str]:
+    values = _plain(values)
+    mapping = _plain(mapping)
+    if not isinstance(values, Mapping) or not isinstance(mapping, Mapping):
+        return []
+
+    provided = {str(key) for key, value in values.items() if value is not None}
+    allowed = {str(key) for key in mapping}
+    unsupported = sorted(provided - allowed)
+    if unsupported:
+        allowed_label = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"{label} controls not supported for the selected route: "
+            f"{', '.join(unsupported)} (allowed: {allowed_label})"
+        )
+
+    overrides: list[str] = []
+    for source_key, target_key in mapping.items():
+        value = values.get(source_key)
+        if value is None:
+            continue
+        overrides.append(f"{target_key}={_format_hydra_value(value)}")
+    return overrides
+
+
+def _collect_control_mapping(cfg: dict[str, Any], mode: PipelineMode) -> dict[str, Any]:
+    controls = _plain(cfg.get("control_overrides", {}))
+    if not isinstance(controls, Mapping):
+        return {}
+    collect_controls = _plain(controls.get("collect", {}))
+    if not isinstance(collect_controls, Mapping):
+        return {}
+    common = _plain(collect_controls.get("common", {}))
+    mode_specific = _plain(collect_controls.get(mode, {}))
+    merged: dict[str, Any] = {}
+    if isinstance(common, Mapping):
+        merged.update(common)
+    if isinstance(mode_specific, Mapping):
+        merged.update(mode_specific)
+    return merged
+
+
+def _warmup_control_mapping(cfg: dict[str, Any]) -> dict[str, Any]:
+    controls = _plain(cfg.get("control_overrides", {}))
+    if not isinstance(controls, Mapping):
+        return {}
+    warmup_controls = _plain(controls.get("warmup", {}))
+    return dict(warmup_controls) if isinstance(warmup_controls, Mapping) else {}
 
 
 def build_pipeline_plan(
     *,
-    mode: str = "ray",
-    task: str = "goal",
+    mode: str | None = None,
+    profile: str | None = None,
+    task: str | None = None,
     run_root: str | Path,
-    python: str = sys.executable,
+    python: str | None = None,
+    launcher_cfg: dict[str, Any] | None = None,
     collect_overrides: Sequence[str] = (),
     cotrain_overrides: Sequence[str] = (),
     common_overrides: Sequence[str] = (),
 ) -> PipelinePlan:
-    selected_mode = _normalize_mode(mode)
-    task_spec = _resolve_task(task)
+    cfg = script_config("coldstart_warmup_cotrain") if launcher_cfg is None else launcher_cfg
+    selected_mode = _normalize_mode(str(cfg["mode"] if mode is None else mode))
+    selected_profile = _normalise_key(str(cfg["profile"] if profile is None else profile))
+    _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")
+    task_name, task_spec = _resolve_task(str(cfg["task"] if task is None else task), dict(cfg["tasks"]))
+    python_cmd = str(cfg["python"] if python is None else python)
     root = Path(run_root).expanduser()
     reward_dir = root / "coldstart" / "reward"
     hidden_dir = root / "coldstart" / "hidden"
     collect_out = root / "collect"
     cotrain_out = root / "cotrain"
+    context = {
+        **task_spec,
+        "task": task_name,
+        "mode": selected_mode,
+        "profile": selected_profile,
+        "run_root": str(root),
+        "reward_dir": str(reward_dir),
+        "hidden_dir": str(hidden_dir),
+        "collect_out": str(collect_out),
+        "cotrain_out": str(cotrain_out),
+    }
+    mode_cfg = _select_mapping(dict(cfg["modes"]), selected_mode, label="mode")
+    profile_cfg = _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")
+    collect_profile_cfg = _select_mapping(
+        dict(profile_cfg["collect"]),
+        selected_mode,
+        label=f"profile.{selected_profile}.collect",
+    )
 
-    collect_cmd = [python, "-m", "dreamervla.train"]
-    if selected_mode == "ray":
-        collect_cmd.extend(
-            [
-                "experiment=collect_rollouts_ray",
-                f"task={task_spec.hydra_task}",
-                "logger=tensorboard",
-                "collect.task_ids=[0]",
-                "collect.episodes_per_task=4",
-                "collect.episode_horizon=64",
-                "env.num_workers=2",
-                "rollout.target_episodes=4",
-                "rollout.max_steps=256",
-            ]
-        )
-    else:
-        collect_cmd.extend(
-            [
-                "experiment=collect_rollouts_onetraj",
-                f"task={task_spec.hydra_task}",
-                "logger=tensorboard",
-                "collect.task_ids=[0]",
-                "collect.episodes_per_task=4",
-                "collect.episode_horizon=64",
-                "collect.envs_per_gpu=1",
-                "collect.gpu_id=0",
-            ]
-        )
+    collect_cmd = [
+        python_cmd,
+        "-m",
+        "dreamervla.train",
+        *_render_overrides(mode_cfg["collect"], context),
+        *_render_overrides(collect_profile_cfg, context),
+    ]
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
             f"task.openvla_oft.action_hidden_dir={hidden_dir}",
-            "task.openvla_oft.expected_obs_hidden_source=action_query",
             f"training.out_dir={collect_out}",
+            *_control_overrides(
+                cfg.get("collect"),
+                _collect_control_mapping(cfg, selected_mode),
+                label="collect",
+            ),
             *common_overrides,
             *collect_overrides,
         ]
     )
     cotrain_cmd = [
-        python,
+        python_cmd,
         "-m",
         "dreamervla.train",
-        "experiment=online_cotrain_pipeline_oft_action_hidden",
-        f"+task={task_spec.hydra_task}",
-        "logger=tensorboard",
-        f"offline_warmup.data_dir={reward_dir}",
-        f"offline_warmup.hidden_dir={hidden_dir}",
-        "offline_warmup.task_id=0",
-        f"env.task_suite_name={task_spec.suite}",
+        *_render_overrides(cfg["cotrain"]["base"], context),
         f"training.out_dir={cotrain_out}",
-        *_oft_discrete_token_cotrain_smoke_overrides(task_spec),
+        *_render_overrides(profile_cfg["cotrain"], context),
+        *_control_overrides(
+            cfg.get("warmup"),
+            _warmup_control_mapping(cfg),
+            label="warmup",
+        ),
         *common_overrides,
         *cotrain_overrides,
     ]
     return PipelinePlan(
         mode=selected_mode,
-        task=task_spec.name,
+        profile=selected_profile,
+        task=task_name,
         run_root=root,
         reward_dir=reward_dir,
         hidden_dir=hidden_dir,
@@ -213,13 +229,19 @@ def build_pipeline_plan(
     )
 
 
-def validate_input_assets(*, data_root: str | Path, task: str = "goal") -> list[str]:
+def validate_input_assets(
+    *,
+    data_root: str | Path,
+    task: str | None = None,
+    launcher_cfg: dict[str, Any] | None = None,
+) -> list[str]:
     """Return missing or malformed input assets for the default one-traj OFT route."""
-    task_spec = _resolve_task(task)
+    cfg = script_config("coldstart_warmup_cotrain") if launcher_cfg is None else launcher_cfg
+    _task_name, task_spec = _resolve_task(str(cfg["task"] if task is None else task), dict(cfg["tasks"]))
     root = Path(data_root).expanduser()
-    ckpt = root / "checkpoints" / "Openvla-oft-SFT-traj1" / task_spec.ckpt_name
+    ckpt = root / "checkpoints" / "Openvla-oft-SFT-traj1" / str(task_spec["ckpt_name"])
     stats = ckpt / "dataset_statistics.json"
-    libero = root / "datasets" / "libero" / task_spec.suite
+    libero = root / "datasets" / "libero" / str(task_spec["suite"])
     errors: list[str] = []
 
     if not ckpt.is_dir():
@@ -232,10 +254,10 @@ def validate_input_assets(*, data_root: str | Path, task: str = "goal") -> list[
         except json.JSONDecodeError as exc:
             errors.append(f"OpenVLA-OFT dataset statistics is not valid JSON: {stats} ({exc})")
         else:
-            if task_spec.stats_key not in stats_data:
+            if str(task_spec["stats_key"]) not in stats_data:
                 errors.append(
                     "OpenVLA-OFT dataset statistics missing key "
-                    f"'{task_spec.stats_key}': {stats}"
+                    f"'{task_spec['stats_key']}': {stats}"
                 )
     if not libero.is_dir():
         errors.append(f"LIBERO dataset directory not found: {libero}")
@@ -261,90 +283,87 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
 
 
 def _data_root() -> Path:
-    """Absolute data root: ``DVLA_DATA_ROOT`` if set, else ``${DVLA_ROOT}/data``.
+    """Return ``DVLA_DATA_ROOT`` or the ``DVLA_ROOT/data`` fallback."""
 
-    Basing the default on ``DVLA_ROOT`` (not a bare relative ``data``) keeps the
-    asset check and run-root correct regardless of the current working directory
-    / machine.
-    """
-    env = os.environ.get("DVLA_DATA_ROOT")
-    if env:
-        return Path(env).expanduser()
-    root = os.environ.get("DVLA_ROOT")
-    base = Path(root).expanduser() if root else Path.cwd()
-    return base / "data"
+    return data_root()
 
 
-def _default_run_root() -> Path:
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return _data_root() / "outputs" / "coldstart_warmup_cotrain" / stamp
+def _parse_hydra_like_argv(argv: Sequence[str]) -> tuple[str, list[str]]:
+    config_name = "coldstart_warmup_cotrain"
+    overrides: list[str] = []
+    i = 0
+    while i < len(argv):
+        item = argv[i]
+        if item == "--config-name":
+            if i + 1 >= len(argv):
+                raise SystemExit("--config-name requires a value")
+            config_name = argv[i + 1]
+            i += 2
+            continue
+        if item.startswith("--config-name="):
+            config_name = item.split("=", 1)[1]
+            i += 1
+            continue
+        overrides.append(item)
+        i += 1
+    return config_name, overrides
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run cold-start collection, then run OnlineCotrainPipelineRunner with "
-            "offline_warmup pointing at the collected HDF5/sidecar outputs."
-        )
+def _plain(value: Any) -> Any:
+    return (
+        OmegaConf.to_container(value, resolve=True)
+        if isinstance(value, (DictConfig, ListConfig))
+        else value
     )
-    parser.add_argument("--mode", default="ray", choices=["ray", "noray", "no-ray", "non-ray"])
-    parser.add_argument("--task", default="goal", choices=["goal", "object", "spatial"])
-    parser.add_argument("--run-root", default=str(_default_run_root()))
-    parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-collect", action="store_true")
-    parser.add_argument(
-        "--skip-asset-check",
-        action="store_true",
-        help="Do not validate default ckpt/dataset inputs before launching.",
-    )
-    parser.add_argument(
-        "--common-override",
-        action="append",
-        default=[],
-        help="Hydra override appended to both collect and cotrain commands.",
-    )
-    parser.add_argument(
-        "--collect-override",
-        action="append",
-        default=[],
-        help="Hydra override appended only to the cold-start collect command.",
-    )
-    parser.add_argument(
-        "--cotrain-override",
-        action="append",
-        default=[],
-        help="Hydra override appended only to the cotrain command.",
-    )
-    return parser
+
+
+def _as_str_list(value: Any) -> list[str]:
+    value = _plain(value)
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Sequence):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # Make DVLA_DATA_ROOT absolute for the collect/cotrain subprocesses; the cotrain
-    # command's DVLA_DATA_ROOT-or-DVLA_ROOT/data resolver inherits this env.
-    os.environ.setdefault("DVLA_DATA_ROOT", str(_data_root()))
-    args = _parser().parse_args(list(argv) if argv is not None else None)
+    config_name, overrides = _parse_hydra_like_argv(
+        list(sys.argv[1:] if argv is None else argv)
+    )
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR),
+        job_name="coldstart_warmup_cotrain",
+        version_base=None,
+    ):
+        cfg_obj = compose(config_name=config_name, overrides=overrides)
+    cfg: dict[str, Any] = OmegaConf.to_container(cfg_obj, resolve=True)  # type: ignore[assignment]
+    os.environ["DVLA_DATA_ROOT"] = str(cfg.get("data_root") or _data_root())
     plan = build_pipeline_plan(
-        mode=args.mode,
-        task=args.task,
-        run_root=args.run_root,
-        python=args.python,
-        collect_overrides=args.collect_override,
-        cotrain_overrides=args.cotrain_override,
-        common_overrides=args.common_override,
+        mode=str(cfg["mode"]),
+        profile=str(cfg["profile"]),
+        task=str(cfg["task"]),
+        run_root=str(cfg["run_root"]),
+        python=str(cfg["python"]),
+        launcher_cfg=cfg,
+        collect_overrides=_as_str_list(cfg.get("collect_overrides")),
+        cotrain_overrides=_as_str_list(cfg.get("cotrain_overrides")),
+        common_overrides=_as_str_list(cfg.get("common_overrides")),
     )
     print(f"mode: {plan.mode}")
+    print(f"profile: {plan.profile}")
     print(f"task: {plan.task}")
     print(f"run_root: {plan.run_root}")
     print(f"reward_dir: {plan.reward_dir}")
     print(f"hidden_dir: {plan.hidden_dir}")
     print(f"collect: {shlex.join(plan.collect_cmd)}")
     print(f"cotrain: {shlex.join(plan.cotrain_cmd)}")
-    if args.dry_run:
+    if bool(cfg.get("dry_run", False)):
         return 0
 
-    if not args.skip_asset_check:
-        if args.skip_collect:
+    if not bool(cfg.get("skip_asset_check", False)):
+        if bool(cfg.get("skip_collect", False)):
             errors = validate_collected_outputs(
                 reward_dir=plan.reward_dir,
                 hidden_dir=plan.hidden_dir,
@@ -353,15 +372,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             errors = validate_input_assets(
                 data_root=_data_root(),
                 task=plan.task,
+                launcher_cfg=cfg,
             )
         if errors:
             print("asset check failed:", file=sys.stderr)
             for error in errors:
                 print(f"  - {error}", file=sys.stderr)
-            print("Use --skip-asset-check only when custom Hydra overrides provide assets.", file=sys.stderr)
+            print(
+                "Use skip_asset_check=true only when custom Hydra overrides provide assets.",
+                file=sys.stderr,
+            )
             return 2
 
-    if not args.skip_collect:
+    if not bool(cfg.get("skip_collect", False)):
         subprocess.run(plan.collect_cmd, check=True)
     subprocess.run(plan.cotrain_cmd, check=True)
     return 0

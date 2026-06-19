@@ -10,6 +10,7 @@ from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
+from dreamervla.utils.paths import data_path
 from dreamervla.workers.env.env_worker import EnvWorker
 from dreamervla.workers.inference.inference_worker import InferenceWorker
 from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
@@ -52,8 +53,18 @@ class ColdStartRayCollectRunner(BaseRunner):
             return self._build_oft_components(cluster)
 
         num_envs = self._int_from(("env.num_workers", "num_env_workers"), 1)
-        reward_dir = str(self._select_first(("dump.reward_dir", "reward_dir"), "data/collected_rollouts/ray_synthetic/reward"))
-        hidden_dir = str(self._select_first(("dump.hidden_dir", "hidden_dir"), "data/collected_rollouts/ray_synthetic/hidden"))
+        reward_dir_value = self._select_first(("dump.reward_dir", "reward_dir"), None)
+        hidden_dir_value = self._select_first(("dump.hidden_dir", "hidden_dir"), None)
+        reward_dir = str(
+            reward_dir_value
+            if reward_dir_value is not None
+            else data_path("collected_rollouts", "ray_synthetic", "reward")
+        )
+        hidden_dir = str(
+            hidden_dir_value
+            if hidden_dir_value is not None
+            else data_path("collected_rollouts", "ray_synthetic", "hidden")
+        )
         shard_name = str(self._select_first(("dump.shard_name", "shard_name"), "ray_shard_000.hdf5"))
         preprocess_config = self._cfg_from("dump.preprocess_config", _default_preprocess_config())
         data_attrs = self._cfg_from("dump.data_attrs", {"task_suite_name": "synthetic", "env_name": "ray"})
@@ -142,6 +153,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             "env": env_cfg,
             "inference": {
                 "action_dim": collect_cfg["action_dim"],
+                "action_steps": collect_cfg["chunk_size"],
                 "device": "cuda",
                 "decoder": {
                     "target": "dreamervla.workers.inference.oft_rollout:OFTRolloutBundle",
@@ -152,6 +164,9 @@ class ColdStartRayCollectRunner(BaseRunner):
                         "history": collect_cfg["expected_history"],
                         "rotate_images_180": collect_cfg["expected_rotate_images_180"],
                         "center_crop": True,
+                        "obs_hidden_source": collect_cfg["expected_obs_hidden_source"],
+                        "expected_action_head_type": collect_cfg["expected_action_head_type"],
+                        "expected_include_state": collect_cfg["expected_include_state"],
                         "device": "cuda",
                     },
                 },
@@ -172,6 +187,12 @@ class ColdStartRayCollectRunner(BaseRunner):
         plan = self.build_oft_worker_plan()
         collect_cfg = plan["collect"]
         num_envs = self._int_from(("env.num_workers", "collect.envs_per_gpu", "num_env_workers"), 1)
+        task_ids = _resolve_ray_task_ids(
+            collect_cfg.get("task_ids", 0),
+            num_tasks=collect_cfg.get("num_tasks"),
+            suite=str(collect_cfg.get("task_suite_name", "")),
+        )
+        episodes_per_task = int(collect_cfg.get("episodes_per_task", 1))
 
         dump_cfg = plan["dump"]
         dump_group = WorkerGroup(
@@ -186,13 +207,22 @@ class ColdStartRayCollectRunner(BaseRunner):
 
         env_cfg = plan["env"]
         env_kwargs = dict(env_cfg.get("kwargs", {}))
+        initial_task = task_ids[0] if task_ids else int(env_kwargs["task_id"])
         env_group = WorkerGroup(
             EnvWorker,
             env_cfg,
-            task_id=env_kwargs["task_id"],
+            task_id=initial_task,
             replay=dump,
             record_builder=_build_oft_dump_step,
         ).launch(cluster, NodePlacementStrategy(num_envs))
+        env_task_ids: list[int | None] = [None] * num_envs
+        task_counts = {int(task_id): 0 for task_id in task_ids}
+        for env_id in range(num_envs):
+            task_id = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+            if task_id is None:
+                break
+            env_task_ids[env_id] = int(task_id)
+            env_group.execute_on(env_id).set_task(int(task_id)).wait()
 
         gpu_id = int(collect_cfg.get("gpu_id", 0))
         infer_group = WorkerGroup(RolloutInferenceWorker, plan["inference"], {}, num_envs=num_envs).launch(
@@ -203,6 +233,11 @@ class ColdStartRayCollectRunner(BaseRunner):
             "envs": env_group,
             "infer": infer_group,
             "num_envs": num_envs,
+            "env_task_ids": env_task_ids,
+            "task_counts": task_counts,
+            "task_ids": task_ids,
+            "episodes_per_task": episodes_per_task,
+            "target_episodes": episodes_per_task * len(task_ids),
         }
 
     def _run_loop(self, groups: dict[str, Any]) -> dict[str, float | int]:
@@ -213,35 +248,93 @@ class ColdStartRayCollectRunner(BaseRunner):
         infer = groups["infer"]
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
-        env_ids = list(range(num_envs))
-        target_episodes = self._int_from(("rollout.target_episodes", "target_episodes"), num_envs)
+        scheduled = "env_task_ids" in groups
+        env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
+        task_counts = dict(groups.get("task_counts", {}))
+        task_ids = list(groups.get("task_ids", []))
+        episodes_per_task = int(groups.get("episodes_per_task", 1))
+        env_ids = (
+            [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
+            if scheduled
+            else list(range(num_envs))
+        )
+        target_episodes = int(
+            groups.get(
+                "target_episodes",
+                self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
+            )
+        )
         max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
 
         steps = 0
-        while steps < max_steps and int(dump.size().wait()[0]) < target_episodes:
-            obs_batch = envs.current_obs().wait()
-            infer_out = infer.forward_batch(obs_batch, env_ids).wait()[0]
-            step_results = []
-            for rank, action, hidden in zip(
-                env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
-            ):
-                step_results.extend(envs.execute_on(rank).step(action, hidden).wait())
+        driver_roundtrips = 0
+        driver_step_calls = 0
+        driver_step_waits = 0
+
+        def wait_result(result: Any) -> list[Any]:
+            nonlocal driver_roundtrips
+            driver_roundtrips += 1
+            return result.wait()
+
+        def wait_results(results: list[Any]) -> list[Any]:
+            nonlocal driver_roundtrips
+            if not results:
+                return []
+            driver_roundtrips += 1
+            return _wait_worker_results(results)
+
+        while env_ids and steps < max_steps:
+            if int(wait_result(dump.size())[0]) >= target_episodes:
+                break
+            if scheduled:
+                obs_batch = wait_results(
+                    [envs.execute_on(env_id).current_obs() for env_id in env_ids]
+                )
+            else:
+                obs_batch = wait_result(envs.current_obs())
+            infer_out = wait_result(infer.forward_batch(obs_batch, env_ids))[0]
+            step_calls = [
+                envs.execute_on(rank).step(action, hidden)
+                for rank, action, hidden in zip(
+                    env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
+                )
+            ]
+            driver_step_calls += len(step_calls)
+            if step_calls:
+                driver_step_waits += 1
+            step_results = wait_results(step_calls)
             done_envs = [
                 env_id
                 for env_id, (_obs, done, _info) in zip(env_ids, step_results, strict=True)
                 if done
             ]
             if done_envs:
-                infer.reset_states(done_envs).wait()
+                wait_result(infer.reset_states(done_envs))
+            if scheduled and done_envs:
+                set_task_calls = []
+                for env_id in done_envs:
+                    next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    env_task_ids[int(env_id)] = next_task
+                    if next_task is not None:
+                        set_task_calls.append(
+                            envs.execute_on(int(env_id)).set_task(int(next_task))
+                        )
+                wait_results(set_task_calls)
+                env_ids = [
+                    idx for idx, task_id in enumerate(env_task_ids) if task_id is not None
+                ]
             steps += 1
 
-        episodes = int(dump.size().wait()[0])
-        dump.close().wait()
-        envs.close().wait()
+        episodes = int(wait_result(dump.size())[0])
+        wait_result(dump.close())
+        wait_result(envs.close())
         return {
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
             "env/num_env_workers": int(num_envs),
+            "time/driver_roundtrips": int(driver_roundtrips),
+            "time/driver_step_calls": int(driver_step_calls),
+            "time/driver_step_waits": int(driver_step_waits),
         }
 
     def _run_loop_overlap(self, groups: dict[str, Any]) -> dict[str, float | int]:
@@ -370,12 +463,69 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _wait_worker_results(results: list[Any]) -> list[Any]:
+    """Collect multiple WorkerGroupFuncResult objects with one driver wait."""
+    import ray
+
+    refs: list[Any] = []
+    for result in results:
+        refs.extend(list(getattr(result, "refs", [])))
+    if not refs:
+        return []
+    return list(ray.get(refs))
+
+
 def _first_task_id(task_ids: Any) -> int:
     if isinstance(task_ids, (list, tuple)):
         return int(task_ids[0]) if task_ids else 0
     if str(task_ids).strip().lower() == "all":
         return 0
     return int(task_ids)
+
+
+def _resolve_ray_task_ids(
+    task_ids: Any,
+    *,
+    num_tasks: Any | None,
+    suite: str,
+) -> list[int]:
+    if isinstance(task_ids, (list, tuple)):
+        return [int(task_id) for task_id in task_ids]
+    if isinstance(task_ids, str):
+        value = task_ids.strip()
+        if value.lower() == "all":
+            n_tasks = int(num_tasks) if num_tasks is not None else _default_num_tasks(suite)
+            return list(range(n_tasks))
+        if "," in value:
+            return [int(part.strip()) for part in value.split(",") if part.strip()]
+    return [int(task_ids)]
+
+
+def _default_num_tasks(suite: str) -> int:
+    # LIBERO goal/object/spatial/10 each expose ten task ids. Keep this as a
+    # fallback for the Ray driver, where querying a real env just to expand
+    # "all" would eagerly initialize robosuite before actor placement.
+    if str(suite).startswith("libero"):
+        return 10
+    return 1
+
+
+def _next_ray_task_id(
+    task_ids: list[int],
+    task_counts: dict[int, int],
+    episodes_per_task: int,
+) -> int | None:
+    """Reserve the next task id whose scheduled episode count is below target."""
+    candidates = [
+        (int(task_counts.get(int(task_id), 0)), index, int(task_id))
+        for index, task_id in enumerate(task_ids)
+        if int(task_counts.get(int(task_id), 0)) < int(episodes_per_task)
+    ]
+    if not candidates:
+        return None
+    current, _index, task_id = min(candidates)
+    task_counts[task_id] = current + 1
+    return task_id
 
 
 def _build_oft_dump_step(

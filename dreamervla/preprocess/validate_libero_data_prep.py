@@ -8,7 +8,6 @@ checks after this structural audit passes.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from dataclasses import dataclass, field
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dreamervla.preprocess.paths import PROJECT_ROOT
+from dreamervla.utils.hydra_config import script_namespace
 from dreamervla.utils.paths import data_root as default_data_root
 from dreamervla.utils.paths import processed_data_path
 
@@ -546,54 +546,12 @@ def _print_report(report: SuiteValidationReport) -> None:
     print()
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Validate LIBERO preprocessing stage outputs and manifests."
-    )
-    parser.add_argument(
-        "--suites",
-        nargs="+",
-        default=list(STANDARD_SUITES),
-        help="LIBERO suites to validate.",
-    )
-    parser.add_argument(
-        "--data-root",
-        type=Path,
-        default=default_data_root(),
-        help="Runtime DVLA data root containing configs/ and processed_data/.",
-    )
-    parser.add_argument(
-        "--processed-data-root",
-        type=Path,
-        default=None,
-        help=(
-            "Processed data root. Defaults to "
-            "<data-root>/processed_data/<artifact>."
-        ),
-    )
-    parser.add_argument("--his", type=int, default=1)
-    parser.add_argument("--action-horizon", type=int, default=1)
-    parser.add_argument("--image-resolution", type=int, default=256)
-    parser.add_argument(
-        "--skip-configs",
-        action="store_true",
-        help="Skip generated YAML config checks. Useful before stage 5 writes configs.",
-    )
-    parser.add_argument(
-        "--check-action-hidden",
-        action="store_true",
-        help="Also validate the legacy action-hidden HDF5 sidecar count.",
-    )
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = script_namespace("validate_libero_data_prep", argv)
 
-    data_root = args.data_root.expanduser()
+    data_root = Path(args.data_root).expanduser()
     processed_root_base = (
-        args.processed_data_root.expanduser()
+        Path(args.processed_data_root).expanduser()
         if args.processed_data_root is not None
         else processed_data_path()
     )

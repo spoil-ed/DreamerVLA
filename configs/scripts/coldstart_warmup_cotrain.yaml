@@ -1,0 +1,148 @@
+name: coldstart_warmup_cotrain
+mode: ray
+default_profile: release
+profile: ${default_profile}
+task: goal
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+run_root: ${data_root}/outputs/coldstart_warmup_cotrain/${now:%Y%m%d_%H%M%S}
+python: python
+dry_run: false
+skip_collect: false
+skip_asset_check: false
+common_overrides: []
+collect_overrides: []
+cotrain_overrides: []
+
+# Direct launcher controls. Leave values null to use the selected profile.
+# These are translated to the downstream Hydra keys listed in control_overrides.
+collect:
+  episodes_per_task: null
+  episode_horizon: null
+  memory_fraction: null
+  max_steps: null
+  envs_per_gpu: null   # no-Ray vectorized collector concurrency
+  num_workers: null    # Ray EnvWorker concurrency
+
+warmup:
+  wm_steps: null
+  classifier_steps: null
+  batch_size: null
+  classifier_batch_size: null
+  buffer_size: null
+  total_env_steps: null
+
+control_overrides:
+  collect:
+    common:
+      episodes_per_task: collect.episodes_per_task
+      episode_horizon: collect.episode_horizon
+      memory_fraction: collect.memory_fraction
+      max_steps: rollout.max_steps
+    noray:
+      envs_per_gpu: collect.envs_per_gpu
+    ray:
+      num_workers: env.num_workers
+  warmup:
+    wm_steps: training.wm_warmup_steps
+    classifier_steps: training.classifier_warmup_steps
+    batch_size: dataloader.batch_size
+    classifier_batch_size: training.classifier_batch_size
+    buffer_size: online_rollout.buffer_size
+    total_env_steps: online_rollout.total_env_steps
+
+tasks:
+  goal:
+    task_id: 0
+    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO
+    suite: libero_goal
+    ckpt_name: Openvla-oft-SFT-libero-goal-traj1
+    stats_key: libero_goal_no_noops
+    ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+  object:
+    task_id: 0
+    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_Object
+    suite: libero_object
+    ckpt_name: Openvla-oft-SFT-libero-object-traj1
+    stats_key: libero_object_no_noops
+    ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-object-traj1
+  spatial:
+    task_id: 0
+    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_Spatial
+    suite: libero_spatial
+    ckpt_name: Openvla-oft-SFT-libero-spatial-traj1
+    stats_key: libero_spatial_no_noops
+    ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
+  "10":
+    task_id: 0
+    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_10
+    suite: libero_10
+    ckpt_name: Openvla-oft-SFT-libero10-traj1
+    stats_key: libero_10_no_noops
+    ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero10-traj1
+
+modes:
+  ray:
+    collect:
+      - experiment=collect_rollouts_ray
+      - task={hydra_task}
+      - logger=tensorboard
+      - collect.task_ids=all
+      - collect.episodes_per_task=4
+  noray:
+    collect:
+      - experiment=collect_rollouts_onetraj
+      - task={hydra_task}
+      - logger=tensorboard
+      - collect.task_ids=all
+      - collect.episodes_per_task=4
+      - collect.gpu_id=0
+
+cotrain:
+  base:
+    - experiment=online_cotrain_pipeline_oft_action_hidden
+    - task={hydra_task}
+    - logger=tensorboard
+    - offline_warmup.data_dir={reward_dir}
+    - offline_warmup.hidden_dir={hidden_dir}
+    - offline_warmup.task_id=null
+    - env.task_ids=[0,1,2,3,4,5,6,7,8,9]
+
+profiles:
+  smoke:
+    collect:
+      ray:
+        - collect.episode_horizon=64
+        - collect.memory_fraction=0.8
+        - env.num_workers=2
+        - rollout.max_steps=256
+      noray:
+        - collect.episode_horizon=64
+        - collect.envs_per_gpu=1
+        - collect.memory_fraction=0.8
+    cotrain:
+      - training.debug=false
+      - training.wm_warmup_steps=1
+      - training.classifier_warmup_steps=1
+      - training.classifier_batch_size=1
+      - dataloader.batch_size=1
+      - online_rollout.buffer_size=100
+      - online_rollout.total_env_steps=0
+  release:
+    collect:
+      ray:
+        - collect.episode_horizon=300
+        - collect.memory_fraction=0.9
+        - env.num_workers=16
+        - rollout.max_steps=1200
+      noray:
+        - collect.episode_horizon=300
+        - collect.envs_per_gpu=32
+        - collect.memory_fraction=0.9
+    cotrain:
+      - training.debug=false
+      - training.wm_warmup_steps=256
+      - training.classifier_warmup_steps=256
+      - training.classifier_batch_size=512
+      - dataloader.batch_size=96
+      - online_rollout.buffer_size=10000
+      - online_rollout.total_env_steps=0

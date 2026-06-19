@@ -1,0 +1,4 @@
+libero_task_suite: null
+image_resolution: null
+raw_data_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256
+save_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/image_state_action_t_256

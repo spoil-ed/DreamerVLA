@@ -19,13 +19,32 @@ def test_official_openvla_oft_launcher_is_self_contained_and_portable() -> None:
     assert 'export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"' in text
     assert 'CAMERA_INPUTS="${CAMERA_INPUTS:-primary}"' in text
     assert 'NUM_IMAGES="${NUM_IMAGES:-1}"' in text
-    assert '--camera-inputs "${CAMERA_INPUTS}"' in text
+    assert 'camera_inputs="${CAMERA_INPUTS}"' in text
     assert 'USE_PROPRIO="${USE_PROPRIO:-0}"' in text
     assert 'NUM_OPEN_LOOP_STEPS="${NUM_OPEN_LOOP_STEPS:-8}"' in text
     assert "for " not in text
     assert "case " not in text
-    assert '--task-ids "${TASK_IDS}"' in text
-    assert "--no-use-proprio" in text
-    assert "--policy-mode" in text
+    assert "--config-name openvla_oft_official_eval" in text
+    assert 'task_ids="${TASK_IDS}"' in text
+    assert 'use_proprio="${USE_PROPRIO}"' in text
+    assert 'policy_mode="${POLICY_MODE}"' in text
+    for old_flag in (
+        "--ckpt",
+        "--suite",
+        "--task-ids",
+        "--num-trials",
+        "--gpu-id",
+        "--policy-mode",
+        "--camera-inputs",
+        "--num-images",
+        "--use-proprio",
+        "--no-use-proprio",
+        "--num-open-loop-steps",
+        "--env-img-res",
+        "--output-dir",
+        "--openvla-oft-root",
+    ):
+        assert old_flag not in text
     assert 'OPENVLA_OFT_ROOT="${OPENVLA_OFT_ROOT:-${DVLA_ROOT}/../WMPO/dependencies/openvla-oft}"' in text
     assert "python -m dreamervla.diagnostics.eval_openvla_oft_libero" in text
+    assert (project_root / "configs" / "scripts" / "openvla_oft_official_eval.yaml").is_file()

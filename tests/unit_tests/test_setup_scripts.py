@@ -157,6 +157,53 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "HF_ENDPOINT=https://hf-mirror.com" in download_step_text
 
 
+def test_install_verify_exports_dvla_root_to_python_diagnostics(tmp_path: Path) -> None:
+    root = _project_root()
+    log_path = tmp_path / "python_calls.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    conda_stub = bin_dir / "conda"
+    python_stub = bin_dir / "python"
+    conda_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"${1:-}\" == 'shell.bash' && \"${2:-}\" == 'hook' ]]; then\n"
+        "  printf '%s\\n' 'conda() { return 0; }'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    python_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf 'DVLA_ROOT=%s args=%s\\n' \"${DVLA_ROOT:-}\" \"$*\" >> \"${PYTHON_STUB_LOG}\"\n"
+        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamervla.diagnostics.verify_install' ]]; then\n"
+        "  test -n \"${DVLA_ROOT:-}\"\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    conda_stub.chmod(0o755)
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON_STUB_LOG": str(log_path),
+            "PATH": f"{bin_dir}:{env.get('PATH', '')}",
+        }
+    )
+    result = subprocess.run(
+        ["bash", "scripts/install/60_verify.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"DVLA_ROOT={root}" in log_path.read_text(encoding="utf-8")
+
+
 def test_script_orchestration_is_hydra_centered() -> None:
     root = _project_root()
     workflow = root / "dreamervla" / "launchers" / "workflow.py"
@@ -392,6 +439,30 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     assert "training.num_epochs=1" in log_text
 
 
+def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path: Path) -> None:
+    root = _project_root()
+    hidden_dir = tmp_path / "hidden"
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/train_wm.sh",
+            "experiment=oft_latent_classifier_chunk",
+            "task=OpenVLA_Onetraj_LIBERO",
+            f"task.openvla_oft.action_hidden_dir={hidden_dir}",
+            "dry_run=true",
+        ],
+        cwd=root,
+        env={**os.environ, "DVLA_DATA_ROOT": str(tmp_path / "data")},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "task=OpenVLA_Onetraj_LIBERO" in result.stdout
+    assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in result.stdout
+
+
 def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
     root = _project_root()
     text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")
@@ -468,10 +539,18 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    workflow_output = result.stdout + result.stderr
     log_text = log_path.read_text(encoding="utf-8")
-    assert "--gpu_devices 4,5" in log_text
-    assert "--num_procs 3" in log_text
-    assert "--overwrite" in log_text
+    assert "[workflow:preprocess_suite]" in workflow_output
+    assert "config=preprocess_suite" in workflow_output
+    assert "run 20_pretokenize_dataset" in workflow_output
+
+    dreamervla_calls = [
+        line for line in log_text.splitlines() if "dreamervla.preprocess." in line
+    ]
+    assert dreamervla_calls
+    assert any("dreamervla.preprocess.pretoken_state_action_model" in line for line in dreamervla_calls)
+    assert not any(re.search(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", line) for line in dreamervla_calls)
 
 
 def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
@@ -502,24 +581,18 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
         "done\n"
         "case \"${module}\" in\n"
         "  dreamervla.preprocess.libero_utils.regenerate_libero_dataset_filter_no_op)\n"
-        "    prev=''\n"
         "    for arg in \"$@\"; do\n"
-        "      if [[ \"${prev}\" == '--libero_target_dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
-        "      prev=\"${arg}\"\n"
+        "      if [[ \"${arg}\" == libero_target_dir=* ]]; then out=\"${arg#libero_target_dir=}\"; mkdir -p \"${out}\"; touch \"${out}/stub_demo.hdf5\"; fi\n"
         "    done\n"
         "    ;;\n"
         "  dreamervla.preprocess.filter_marked_libero_hdf5)\n"
-        "    prev=''\n"
         "    for arg in \"$@\"; do\n"
-        "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
-        "      prev=\"${arg}\"\n"
+        "      if [[ \"${arg}\" == output_dir=* ]]; then out=\"${arg#output_dir=}\"; mkdir -p \"${out}\"; touch \"${out}/stub_demo.hdf5\"; fi\n"
         "    done\n"
         "    ;;\n"
         "  dreamervla.preprocess.preprocess_remaining_steps_reward)\n"
-        "    prev=''\n"
         "    for arg in \"$@\"; do\n"
-        "      if [[ \"${prev}\" == '--output-dir' ]]; then mkdir -p \"${arg}\"; touch \"${arg}/stub_demo.hdf5\"; fi\n"
-        "      prev=\"${arg}\"\n"
+        "      if [[ \"${arg}\" == output_dir=* ]]; then out=\"${arg#output_dir=}\"; mkdir -p \"${out}\"; touch \"${out}/stub_demo.hdf5\"; fi\n"
         "    done\n"
         "    ;;\n"
         "esac\n",
@@ -681,8 +754,9 @@ def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     setup = (root / "SETUP.md").read_text(encoding="utf-8")
 
     assert "stage 1: replay and mark no-ops" in setup
-    assert "--keep-noops" in setup
+    assert "keep_noops=true" in setup
     assert "stage 2: filter marked no-ops" in setup
+    assert "filter_noops=true" in setup
     assert "dreamervla.preprocess.filter_marked_libero_hdf5" in setup
     assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256" in setup
     assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256" in setup
@@ -777,6 +851,38 @@ def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
         for path in active_shells
         if path_script_re.search(path.read_text(encoding="utf-8"))
     }
+
+    assert offenders == {}
+
+
+def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> None:
+    root = _project_root()
+    allowed_flags = {
+        "--config-name",
+        "--master-port",
+        "--module",
+        "--nnodes",
+        "--nproc-per-node",
+        "--standalone",
+    }
+    offenders: dict[str, list[str]] = {}
+
+    for script in sorted((root / "scripts").rglob("*.sh")):
+        if "archive" in script.relative_to(root / "scripts").parts:
+            continue
+        text = script.read_text(encoding="utf-8")
+        commands = re.sub(r"\\\n\s*", " ", text).splitlines()
+        for command in commands:
+            if "dreamervla." not in command:
+                continue
+            if "python -m dreamervla." not in command and "--module dreamervla." not in command:
+                continue
+            flags = sorted(
+                set(re.findall(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", command))
+            )
+            bad = [flag for flag in flags if flag not in allowed_flags]
+            if bad:
+                offenders.setdefault(str(script.relative_to(root)), []).extend(bad)
 
     assert offenders == {}
 

@@ -78,7 +78,7 @@ def test_coldstart_suite_binds_own_ckpt_and_suite(task, ckpt_suffix, unnorm_key,
     assert int(oft.expected_history) == 1
     assert int(oft.time_horizon) == 8
     assert int(oft.chunk_size) == 8
-    # inherited from the suite base
+    # cold-start stores the OFT action-query hidden consumed by the discrete actor.
     assert oft.expected_obs_hidden_source == "action_query"
     assert oft.expected_prompt_style == "vla_policy"
     assert oft.expected_rotate_images_180 is True

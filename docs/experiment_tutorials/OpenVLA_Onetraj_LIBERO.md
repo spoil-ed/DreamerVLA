@@ -158,19 +158,21 @@ ${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_2
 Manual integrity check:
 
 ```bash
-python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-  --dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
-  --reference-dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256" \
-  --match-reference-demos \
-  --match-reference-lengths
+python -m dreamervla.preprocess.check_artifacts \
+  command=hdf5-dir \
+  dir="${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
+  reference_dir="${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256" \
+  match_reference_demos=true \
+  match_reference_lengths=true
 
-python -m dreamervla.preprocess.check_artifacts hdf5-dir \
-  --dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1" \
-  --reference-dir "${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
-  --match-reference-demos \
-  --match-reference-lengths \
-  --require-complete-attr \
-  --require-config
+python -m dreamervla.preprocess.check_artifacts \
+  command=hdf5-dir \
+  dir="${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1" \
+  reference_dir="${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
+  match_reference_demos=true \
+  match_reference_lengths=true \
+  require_complete_attr=true \
+  require_config=true
 ```
 
 This checks that the reward HDF5 files match the no-noops source files and that
@@ -268,12 +270,12 @@ bash scripts/eval_libero_vla.sh gpus=0 \
 Raw OpenVLA-OFT checkpoint eval:
 
 ```bash
-CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
-SUITE=libero_goal \
-GPU_ID=0 \
-POLICY_MODE=discrete \
-CAMERA_INPUTS=primary \
-NUM_IMAGES=1 \
-USE_PROPRIO=0 \
-bash scripts/eval/launch_openvla_oft_official_libero_eval.sh
+bash scripts/eval/launch_openvla_oft_official_libero_eval.sh \
+  ckpt="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
+  suite=libero_goal \
+  gpu_id=0 \
+  policy_mode=discrete \
+  camera_inputs=primary \
+  num_images=1 \
+  use_proprio=false
 ```

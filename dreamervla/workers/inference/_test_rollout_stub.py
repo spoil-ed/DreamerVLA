@@ -6,7 +6,8 @@ from typing import Any
 
 import numpy as np
 
-HIDDEN_DIM = 229376  # 56 * 4096, the real OFT action-query hidden size.
+BACKBONE_DIM = 8  # Small synthetic backbone-latent dim for fast plumbing tests.
+HIDDEN_DIM = BACKBONE_DIM
 
 
 class StubExtractor:

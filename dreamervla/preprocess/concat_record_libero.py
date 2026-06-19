@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 from dreamervla.preprocess.concat_record import concat_records
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Concatenate LIBERO token record shards.")
-    parser.add_argument("--base-dir", type=Path, required=True)
-    parser.add_argument("--task-prefix", default="libero")
-    return parser
+from dreamervla.utils.hydra_config import script_namespace
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    args = script_namespace("concat_record_libero")
+    base_dir = Path(args.base_dir).expanduser()
     directories = sorted(
         path
-        for path in args.base_dir.iterdir()
+        for path in base_dir.iterdir()
         if path.is_dir() and path.name.startswith(args.task_prefix)
     )
     if not directories:
-        print(f"No subdirectories starting with {args.task_prefix!r} under {args.base_dir}")
+        print(f"No subdirectories starting with {args.task_prefix!r} under {base_dir}")
         return 0
     for directory in directories:
         save_path = directory / "record.json"

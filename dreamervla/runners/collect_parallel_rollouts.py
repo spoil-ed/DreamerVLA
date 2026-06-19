@@ -49,7 +49,9 @@ from dreamervla.runners.oft_collect_common import (
     make_preprocess_config,
     process_action,
     resolve_model_path,
+    vla_latent_spec,
 )
+from dreamervla.utils.paths import data_path, data_root
 
 _assert_policy_mode_matches = assert_policy_mode_matches
 _load_policy = load_policy
@@ -95,11 +97,11 @@ def _shard_work(
 
 _REQUIRED_COLLECT_KEYS: tuple[str, ...] = (
     "model_path", "policy_mode", "unnorm_key", "task_suite_name", "task_ids",
-    "episodes_per_task", "episode_horizon", "envs_per_gpu", "reward_dir", "hidden_dir",
-    "image_keys", "expected_history", "num_images_in_input", "expected_action_head_type",
-    "expected_include_state", "expected_obs_hidden_source", "expected_prompt_style",
-    "expected_rotate_images_180", "time_horizon", "token_dim", "action_dim",
-    "chunk_size", "resolution", "gpu_id",
+    "episodes_per_task", "episode_horizon", "envs_per_gpu", "memory_fraction",
+    "reward_dir", "hidden_dir", "image_keys", "expected_history", "num_images_in_input",
+    "expected_action_head_type", "expected_include_state", "expected_obs_hidden_source",
+    "expected_prompt_style", "expected_rotate_images_180", "time_horizon", "token_dim",
+    "action_dim", "chunk_size", "resolution", "gpu_id",
 )
 
 
@@ -122,6 +124,7 @@ def _run_episode(
     episode_horizon: int,
     task_id: int,
     rank: int = 0,
+    action_steps: int = 1,
 ) -> list[dict[str, Any]]:
     """Run one episode and return a list of per-step dicts for the writer.
 
@@ -152,9 +155,6 @@ def _run_episode(
     obs, _info = env.reset(episode_id=episode_id, task_id=task_id)
     extractor.reset()
 
-    # Capture the post-reset full record (t=0): states == init_state per contract.
-    rec0 = env.full_record()
-
     # Build the 8-dim proprio state for the extractor from full_record fields.
     # Layout: ee_pos(3) + ee_ori/axisangle(3) + gripper_states(2)
     # (matches env._format_obs "state" computation)
@@ -165,51 +165,13 @@ def _run_episode(
             rec["gripper_states"].astype(np.float32),
         ]).astype(np.float32)
 
-    # First step: use t=0 full_record for obs_embedding at step 0 (post-reset).
-    extractor_obs0 = {
-        "agentview_rgb": rec0["agentview_rgb"],     # raw, extractor rotates internally
-        "eye_in_hand_rgb": rec0["eye_in_hand_rgb"],
-        "state": _proprio_from_rec(rec0),
-    }
-    action_chunk0, flat_hidden0 = extractor.step(extractor_obs0, task_description)
-
     steps: list[dict[str, Any]] = []
     success = False
     done = False
-
-    # Execute first action (from the t=0 inference). Gripper post-process
-    # (process_action) is REQUIRED before env.step or grasping/success fails; the
-    # post-processed action is also what gets recorded for the WM (env returns no
-    # wm_action), matching the LIBERO-scale convention of the offline demos.
-    action = process_action(action_chunk0[0])
-    obs, reward, terminated, truncated, info = env.step(action)
-    done = bool(terminated or truncated)
-    success = bool(info.get("success", terminated))
-
-    # Record step 0: use rec0 obs fields + flat_hidden0
-    steps.append({
-        "actions": np.asarray(info.get("wm_action", info.get("env_action", action)), dtype=np.float64),
-        "rewards": np.float32(0.0),
-        "sparse_rewards": np.uint8(0),  # filled in post-episode
-        "dones": np.uint8(0),           # filled in post-episode
-        "robot_states": rec0["robot_states"].astype(np.float64),
-        "states": rec0["states"].astype(np.float64),
-        "obs": {
-            "agentview_rgb": rec0["agentview_rgb"],
-            "eye_in_hand_rgb": rec0["eye_in_hand_rgb"],
-            "ee_pos": rec0["ee_pos"].astype(np.float64),
-            "ee_ori": rec0["ee_ori"].astype(np.float64),
-            "ee_states": rec0["ee_states"].astype(np.float64),
-            "gripper_states": rec0["gripper_states"].astype(np.float64),
-            "joint_states": rec0["joint_states"].astype(np.float64),
-        },
-        "obs_embedding": flat_hidden0.numpy(),  # (229376,) float16
-    })
-
-    # Remaining steps
-    t = 1
+    t = 0
+    action_queue: list[Any] = []
+    action_steps = max(1, int(action_steps))
     while not done and t < episode_horizon:
-        # Get full_record for the current observation (post-step)
         rec = env.full_record()
 
         extractor_obs = {
@@ -218,8 +180,17 @@ def _run_episode(
             "state": _proprio_from_rec(rec),
         }
         action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
-        # receding-horizon closed-loop: execute ONE action, with gripper post-process
-        action = process_action(action_chunk[0])
+        if not action_queue:
+            chunk = list(action_chunk)
+            if len(chunk) < action_steps:
+                raise ValueError(
+                    f"policy returned {len(chunk)} actions, need action_steps={action_steps}"
+                )
+            action_queue = chunk[:action_steps]
+        # Gripper post-process (process_action) is REQUIRED before env.step or
+        # grasping/success fails; execute the predicted chunk open-loop before
+        # consuming actions from a later prediction.
+        action = process_action(action_queue.pop(0))
 
         obs, reward, terminated, truncated, info = env.step(action)
         done = bool(terminated or truncated)
@@ -248,8 +219,9 @@ def _run_episode(
     # Post-episode: set dones and sparse_rewards on terminal step.
     # sparse_rewards[T-1] = 1 iff success (per collector convention).
     # dones[T-1] = 1 always (episode ended).
-    steps[-1]["dones"] = np.uint8(1)
-    steps[-1]["sparse_rewards"] = np.uint8(1 if success else 0)
+    if steps:
+        steps[-1]["dones"] = np.uint8(1)
+        steps[-1]["sparse_rewards"] = np.uint8(1 if success else 0)
 
     print(
         f"  [rank={rank} episode {episode_id}] task_id={task_id} steps={len(steps)} "
@@ -342,6 +314,7 @@ def _collect_vectorized_path(
                 preprocess_config=(preprocess_config if rank == 0 else None),
                 data_attrs=data_attrs,
                 rank=rank,
+                action_steps=int(preprocess_config["chunk_size"]),
                 on_episode=lambda tid, ep, ns, ok: print(
                     f"  [rank={rank} vec] task={tid} ep={ep} steps={ns} success={ok}",
                     flush=True,
@@ -386,12 +359,14 @@ def collect_rollouts(
 
     os.environ.setdefault("MUJOCO_GL", "osmesa")
     os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
-    project_root = Path(__file__).resolve().parents[2]
-    os.environ.setdefault("DVLA_DATA_ROOT", str(project_root / "data"))
-    os.environ.setdefault("LIBERO_CONFIG_PATH", str(project_root / "data" / ".libero"))
+    data_root()
+    os.environ.setdefault("LIBERO_CONFIG_PATH", str(data_path(".libero")))
 
+    memory_fraction = float(cfg["memory_fraction"])
+    if not 0.0 < memory_fraction <= 1.0:
+        raise ValueError(f"collect.memory_fraction must be in (0, 1], got {memory_fraction}")
     torch.cuda.set_device(gpu_id)
-    torch.cuda.set_per_process_memory_fraction(0.8, device=gpu_id)
+    torch.cuda.set_per_process_memory_fraction(memory_fraction, device=gpu_id)
 
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.envs.train_env import (
@@ -419,6 +394,10 @@ def collect_rollouts(
 
     policy = _load_policy(cfg, gpu_id)
     _assert_policy_mode_matches(cfg)
+    if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
+        spec = vla_latent_spec(policy.vla, image_keys)
+        cfg["token_count"] = int(spec["token_count"])
+        cfg["hidden_dim"] = int(spec["flat_dim"])
     extractor = OFTRolloutHiddenExtractor(
         policy,
         image_keys=image_keys,
@@ -426,6 +405,7 @@ def collect_rollouts(
         rotate_images_180=rotate_images_180,
         center_crop=True,
         unnorm_key=unnorm_key,
+        obs_hidden_source=str(cfg["expected_obs_hidden_source"]),
     )
 
     preprocess_config = _make_preprocess_config(cfg)
@@ -508,6 +488,7 @@ def collect_rollouts(
                         episode_horizon=episode_horizon,
                         task_id=task_id,
                         rank=rank,
+                        action_steps=int(preprocess_config["chunk_size"]),
                     )
                     # episode_success is intentionally omitted here: the single-env
                     # _run_episode does not surface a success flag. Downstream

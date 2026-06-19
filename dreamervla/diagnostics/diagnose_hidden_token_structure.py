@@ -20,18 +20,24 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from dreamervla.utils.paths import data_path
+
 # ----- paths -----
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(
-    PROJECT_ROOT
-    / "data"
-    / "processed_data"
-    / "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+DATA_DIR: Path
+OUT_DIR: Path
+
+
+def _default_data_dir() -> Path:
+    return data_path(
+        "processed_data",
+        "libero_goal",
+        "no_noops_t_256_legacy_action_hidden_vla_policy_h2",
 )
-OUT_DIR = (
-    PROJECT_ROOT / "data" / "diagnostics" / "hidden_token_structure"
-)
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _default_out_dir() -> Path:
+    return data_path("diagnostics", "hidden_token_structure")
+
 
 N_TOKENS = 35
 T = 5
@@ -228,6 +234,11 @@ def gaussian_frechet_diag(mu_i, var_i, mu_j, var_j) -> float:
 
 
 def main():
+    global DATA_DIR, OUT_DIR
+    DATA_DIR = _default_data_dir()
+    OUT_DIR = _default_out_dir()
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     files = sorted(glob.glob(str(DATA_DIR / "*.hdf5")))
     print(f"[load] {len(files)} files in {DATA_DIR.name}")
 

@@ -25,6 +25,7 @@ from dreamervla.envs import (
 )
 from dreamervla.models.actor import RynnVLAActionHiddenActor
 from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+from dreamervla.utils.paths import data_path
 
 
 def _load_eval_cfg(overrides: list[str]) -> DictConfig:
@@ -660,8 +661,7 @@ def main() -> None:
     parser.add_argument(
         "--out",
         default=str(
-            PROJECT_ROOT
-            / "data/outputs/diagnostics/dreamervla_latent_distribution.json"
+            data_path("outputs", "diagnostics", "dreamervla_latent_distribution.json")
         ),
     )
     parser.add_argument("--tasks", default="0,3,6,8")
