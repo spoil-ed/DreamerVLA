@@ -126,6 +126,7 @@ This route uses **full-width attention** (`heads=16, dim_head=256` → inner=409
 No-Ray collector:
 
 ```bash
+DVLA_ROOT=/path/to/DreamerVLA DVLA_DATA_ROOT=/path/to/data \
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
   bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal
 ```
@@ -133,6 +134,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
 Ray collector:
 
 ```bash
+DVLA_ROOT=/path/to/DreamerVLA DVLA_DATA_ROOT=/path/to/data \
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal
 ```
