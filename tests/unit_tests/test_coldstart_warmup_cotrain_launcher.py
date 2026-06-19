@@ -424,3 +424,50 @@ def test_coldstart_launcher_has_no_argparse_cli() -> None:
     assert "import argparse" not in text
     assert "ArgumentParser" not in text
     assert "parse_args" not in text
+
+
+def test_multi_gpu_wraps_cotrain_in_torchrun_but_not_collect(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(
+        mode="noray", run_root=tmp_path, python="python", ngpu=4
+    )
+
+    # cotrain runs under torchrun DDP across the requested GPUs ...
+    assert "torch.distributed.run" in plan.cotrain_cmd
+    assert "--nproc-per-node=4" in plan.cotrain_cmd
+    assert plan.cotrain_cmd.count("dreamervla.train") == 1
+    # ... while collection stays single-process (vectorized / ray fan-out).
+    assert "torch.distributed.run" not in plan.collect_cmd
+
+
+def test_single_gpu_cotrain_has_no_torchrun(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(
+        mode="noray", run_root=tmp_path, python="python", ngpu=1
+    )
+
+    assert "torch.distributed.run" not in plan.cotrain_cmd
+    assert plan.cotrain_cmd[:3] == ["python", "-m", "dreamervla.train"]
+
+
+def test_multi_gpu_profile_is_gpu_count_agnostic(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    assert "multi_gpu" in cfg["profiles"]
+    # The profile bakes in NO GPU count — no fixed ray worker count tied to GPUs.
+    profile = cfg["profiles"]["multi_gpu"]
+    profile_keys = {_override_key(x) for x in profile["cotrain"]}
+    for mode_overrides in profile["collect"].values():
+        profile_keys |= {_override_key(x) for x in mode_overrides}
+    assert "env.num_workers" not in profile_keys
+
+    # GPU count is the variable `ngpu`: the same profile drives any count via torchrun.
+    for n in (2, 4, 8):
+        plan = build_pipeline_plan(
+            mode="ray", run_root=tmp_path, python="python", profile="multi_gpu", ngpu=n
+        )
+        assert f"--nproc-per-node={n}" in plan.cotrain_cmd
+        assert "torch.distributed.run" not in plan.collect_cmd

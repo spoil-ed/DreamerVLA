@@ -6,6 +6,14 @@ task: goal
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 run_root: ${data_root}/outputs/coldstart_warmup_cotrain/${now:%Y%m%d_%H%M%S}
 python: python
+# Multi-GPU cotrain: ngpu is a VARIABLE GPU count (not fixed to any machine). ngpu>1
+# wraps the cotrain stage in torchrun DDP across that many GPUs; ngpu=1 keeps single
+# process. Collection is unchanged (noray = vectorized one-GPU collector; ray = worker
+# fan-out via collect.num_workers). Under DDP, dataloader.batch_size is PER-GPU — tune
+# it with warmup.batch_size. Default 1 (single process); set ngpu=<N> for any N.
+ngpu: 1
+master_port: 29500
+distributed: true
 dry_run: false
 skip_collect: false
 skip_asset_check: false
@@ -144,5 +152,30 @@ profiles:
       - training.classifier_warmup_steps=256
       - training.classifier_batch_size=512
       - dataloader.batch_size=96
+      - online_rollout.buffer_size=10000
+      - online_rollout.total_env_steps=0
+  # Multi-GPU cotrain runtime profile — GPU-count-AGNOSTIC. The GPU count is the
+  # separate variable `ngpu` (e.g. `ngpu=4 profile=multi_gpu`); nothing here is tied to
+  # a fixed count. batch_size / classifier_batch_size are PER-GPU (global = value*ngpu),
+  # sized for the 610M query_after WM under DDP (distributed_strategy=ddp inherited from
+  # the cotrain base). Ray rollout-worker count stays the collect.num_workers control
+  # (independent of GPU count). total_env_steps=0 keeps warmup-only; raise to enable the
+  # online RL phase, and lower dataloader.batch_size if the 7B VLA + WM co-residency OOMs.
+  multi_gpu:
+    collect:
+      ray:
+        - collect.episode_horizon=300
+        - collect.memory_fraction=0.9
+        - rollout.max_steps=1200
+      noray:
+        - collect.episode_horizon=300
+        - collect.envs_per_gpu=32
+        - collect.memory_fraction=0.9
+    cotrain:
+      - training.debug=false
+      - training.wm_warmup_steps=256
+      - training.classifier_warmup_steps=256
+      - training.classifier_batch_size=64
+      - dataloader.batch_size=12
       - online_rollout.buffer_size=10000
       - online_rollout.total_env_steps=0

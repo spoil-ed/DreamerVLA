@@ -150,6 +150,8 @@ def build_pipeline_plan(
     collect_overrides: Sequence[str] = (),
     cotrain_overrides: Sequence[str] = (),
     common_overrides: Sequence[str] = (),
+    ngpu: int | None = None,
+    master_port: int | None = None,
 ) -> PipelinePlan:
     cfg = script_config("coldstart_warmup_cotrain") if launcher_cfg is None else launcher_cfg
     selected_mode = _normalize_mode(str(cfg["mode"] if mode is None else mode))
@@ -157,6 +159,13 @@ def build_pipeline_plan(
     _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")
     task_name, task_spec = _resolve_task(str(cfg["task"] if task is None else task), dict(cfg["tasks"]))
     python_cmd = str(cfg["python"] if python is None else python)
+    # Multi-GPU cotrain runs under torchrun DDP; collection stays single-process
+    # (noray = vectorized one-GPU collector; ray = its own worker fan-out).
+    selected_ngpu = int((cfg.get("ngpu", 1) if ngpu is None else ngpu) or 1)
+    selected_master_port = int(
+        cfg.get("master_port", 29500) if master_port is None else master_port
+    )
+    distributed = bool(cfg.get("distributed", True))
     root = Path(run_root).expanduser()
     reward_dir = root / "coldstart" / "reward"
     hidden_dir = root / "coldstart" / "hidden"
@@ -202,9 +211,18 @@ def build_pipeline_plan(
             *collect_overrides,
         ]
     )
+    cotrain_launch = [python_cmd, "-m"]
+    if distributed and selected_ngpu > 1:
+        cotrain_launch += [
+            "torch.distributed.run",
+            "--standalone",
+            "--nnodes=1",
+            f"--nproc-per-node={selected_ngpu}",
+            f"--master_port={selected_master_port}",
+            "-m",
+        ]
     cotrain_cmd = [
-        python_cmd,
-        "-m",
+        *cotrain_launch,
         "dreamervla.train",
         *_render_overrides(cfg["cotrain"]["base"], context),
         f"training.out_dir={cotrain_out}",
