@@ -402,7 +402,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             for error in errors:
                 print(f"  - {error}", file=sys.stderr)
             print(
-                "Use skip_asset_check=true only when custom Hydra overrides provide assets.",
+                f"Assets are resolved under data_root={_data_root()} "
+                "(= DVLA_DATA_ROOT, else <DVLA_ROOT>/data). DVLA_ROOT (code) and "
+                "DVLA_DATA_ROOT (data) are independent — if your checkpoints/ and "
+                "datasets/ live elsewhere, set DVLA_DATA_ROOT=<that dir> or pass "
+                "data_root=<that dir>. Use skip_asset_check=true only when custom "
+                "Hydra overrides already provide the assets.",
                 file=sys.stderr,
             )
             return 2
