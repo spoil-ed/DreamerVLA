@@ -1,0 +1,4 @@
+# @package _global_
+learner:
+  train_cfg:
+    precision: bf16

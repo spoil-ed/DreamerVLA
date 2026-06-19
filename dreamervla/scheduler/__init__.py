@@ -8,11 +8,19 @@ from __future__ import annotations
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
+from dreamervla.scheduler.collective import AsyncResult, TorchCollectiveGroup
+from dreamervla.scheduler.hardware import (
+    AcceleratorInfo,
+    count_local_accelerators,
+    discover_local_accelerators,
+)
 from dreamervla.scheduler.placement import (
+    FlexiblePlacementStrategy,
     NodePlacementStrategy,
     PackedPlacementStrategy,
     Placement,
     PlacementStrategy,
+    parse_accelerator_range,
 )
 from dreamervla.scheduler.worker import Worker
 from dreamervla.scheduler.worker_group import (
@@ -24,10 +32,17 @@ from dreamervla.scheduler.worker_group import (
 __all__ = [
     "Channel",
     "Cluster",
+    "AcceleratorInfo",
+    "AsyncResult",
+    "FlexiblePlacementStrategy",
     "NodePlacementStrategy",
     "PackedPlacementStrategy",
     "Placement",
     "PlacementStrategy",
+    "TorchCollectiveGroup",
+    "count_local_accelerators",
+    "discover_local_accelerators",
+    "parse_accelerator_range",
     "Worker",
     "WorkerGroup",
     "WorkerGroupFunc",

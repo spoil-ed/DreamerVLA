@@ -89,3 +89,119 @@ def test_learner_worker_runs_synthetic_ppo_and_syncs_policy_weights() -> None:
         assert torch.allclose(target.bias, after_state["bias"])
     finally:
         cluster.shutdown()
+
+
+def test_replay_worker_exposes_classifier_windows() -> None:
+    from dreamervla.workers.replay.replay_worker import ReplayWorker
+
+    worker = ReplayWorker({"capacity": 100, "sequence_length": 3, "task_ids": (0,), "rank": 0})
+    worker.init()
+    worker.add_episode(_episode(length=5))
+
+    assert worker.classifier_window_count(window=3, chunk_size=1) == 1
+    batch = worker.sample_classifier_windows(
+        2,
+        window=3,
+        chunk_size=1,
+        chunk_pool="last",
+        early_neg_stride=1,
+    )
+
+    assert batch["windows"].shape == (2, 3, 4)
+    assert batch["labels"].shape == (2,)
+
+
+def test_learner_worker_runs_configured_phase_updater() -> None:
+    from dreamervla.workers.actor.learner_worker import LearnerWorker
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+
+    try:
+        replay_group = WorkerGroup(
+            ReplayWorker,
+            {"capacity": 100, "sequence_length": 3, "task_ids": (0,), "rank": 0},
+        ).launch(cluster, NodePlacementStrategy(1))
+        replay = replay_group.workers[0]
+        for _ in range(4):
+            replay_group.add_episode(_episode()).wait()
+
+        model_cfg = {
+            "policy": {
+                "target": "dreamervla.workers.actor._test_models:TinyTrainablePolicy",
+                "kwargs": {"hidden_dim": 4, "action_dim": 7},
+            },
+            "world_model": {
+                "target": "dreamervla.workers.actor._test_models:TinyScalarModel",
+                "kwargs": {"hidden_dim": 4},
+            },
+        }
+        train_cfg = {
+            "mode": "phase_updater",
+            "batch_size": 2,
+            "device": "cpu",
+            "phase_updater": {
+                "target": "dreamervla.workers.actor._test_models:TinyWorldModelPhaseUpdater",
+                "kwargs": {},
+            },
+            "optimizers": {
+                "world_model": {"lr": 0.05},
+            },
+            "syncer": {"store_name": "learner_worker_phase_weight_store"},
+        }
+        learner = WorkerGroup(LearnerWorker, model_cfg, {}, train_cfg, replay).launch(
+            cluster, NodePlacementStrategy(1)
+        )
+
+        before = learner.state_dicts().wait()[0]["world_model"]["linear.bias"].clone()
+        metrics = learner.update("wm", 3).wait()[0]
+        after = learner.state_dicts().wait()[0]["world_model"]["linear.bias"]
+
+        assert metrics["train/wm_loss"] >= 0.0
+        assert not torch.allclose(before, after)
+    finally:
+        cluster.shutdown()
+
+
+def test_learner_worker_applies_manual_fsdp_manager_settings() -> None:
+    from dreamervla.workers.actor.learner_worker import LearnerWorker
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+
+    try:
+        replay_group = WorkerGroup(
+            ReplayWorker,
+            {"capacity": 100, "sequence_length": 3, "task_ids": (0,), "rank": 0},
+        ).launch(cluster, NodePlacementStrategy(1))
+        replay = replay_group.workers[0]
+
+        model_cfg = {
+            "policy": {
+                "target": "dreamervla.workers.actor._test_models:TinyCheckpointPolicy",
+                "kwargs": {"hidden_dim": 4, "action_dim": 7},
+            }
+        }
+        train_cfg = {
+            "mode": "synthetic_ppo",
+            "batch_size": 2,
+            "lr": 0.05,
+            "device": "cpu",
+            "fsdp": {
+                "strategy": "none",
+                "precision": "bf16",
+                "activation_checkpointing": True,
+            },
+            "syncer": {"store_name": "learner_worker_fsdp_weight_store"},
+        }
+        learner = WorkerGroup(LearnerWorker, model_cfg, {}, train_cfg, replay).launch(
+            cluster, NodePlacementStrategy(1)
+        )
+
+        state = learner.state_dicts().wait()[0]["policy"]
+
+        assert int(state["checkpoint_flag"].item()) == 1
+    finally:
+        cluster.shutdown()

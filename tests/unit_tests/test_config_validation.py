@@ -62,6 +62,58 @@ def test_validate_cfg_rejects_global_batch_not_divisible_by_world_size() -> None
         validate_cfg(cfg, world_size=4)
 
 
+def test_validate_cfg_rejects_ray_auto_vram_knobs() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "training": {"auto_vram_batch": True},
+            "collect": {"auto_vram_envs": True},
+        }
+    )
+
+    with pytest.raises(ValueError, match="auto_vram"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_accepts_manual_ray_precision_and_batch_knobs() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "env": {"num_workers": 2},
+            "rollout": {"steps": 4},
+            "replay": {"cfg": {"sequence_length": 3}},
+            "learner": {
+                "train_cfg": {
+                    "mode": "synthetic_ppo",
+                    "batch_size": 2,
+                    "precision": "bf16",
+                }
+            },
+        }
+    )
+
+    validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_unknown_ray_precision() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "learner": {"train_cfg": {"precision": "auto"}},
+        }
+    )
+
+    with pytest.raises(ValueError, match="learner.train_cfg.precision"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_unknown_model_type() -> None:
+    cfg = OmegaConf.create({"policy": {"model_type": "missing_model"}})
+
+    with pytest.raises(ValueError, match="unknown model_type"):
+        validate_cfg(cfg)
+
+
 def test_validate_cfg_rejects_missing_explicit_resume_path(tmp_path: Path) -> None:
     cfg = OmegaConf.create(
         {

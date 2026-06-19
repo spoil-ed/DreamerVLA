@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from dreamervla.scheduler.placement import (
+    FlexiblePlacementStrategy,
     NodePlacementStrategy,
     PackedPlacementStrategy,
+    parse_accelerator_range,
 )
 
 
@@ -48,3 +50,42 @@ def test_node_placement_yields_cpu_only_ranks() -> None:
     assert all(p.device == "cpu" for p in placements)
     assert all(p.visible_accelerators == [] for p in placements)
     assert all(p.local_world_size == 3 for p in placements)
+
+
+def test_parse_accelerator_range_expands_ranges_and_commas() -> None:
+    assert parse_accelerator_range("0-2,4,6-7") == [0, 1, 2, 4, 6, 7]
+
+
+def test_parse_accelerator_range_rejects_duplicates() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_accelerator_range("0-2,2")
+
+
+def test_flexible_placement_maps_explicit_gpu_groups() -> None:
+    placements = FlexiblePlacementStrategy([[2], [0, 1]]).get_placement(
+        _cluster(num_gpus=4)
+    )
+
+    assert [p.rank for p in placements] == [0, 1]
+    assert [p.visible_accelerators for p in placements] == [["0", "1"], ["2"]]
+    assert [p.device for p in placements] == ["cuda:0", "cuda:2"]
+    assert all(p.local_world_size == 2 for p in placements)
+
+
+def test_flexible_placement_accepts_range_strings() -> None:
+    placements = FlexiblePlacementStrategy(["1-2", "3"]).get_placement(
+        _cluster(num_gpus=4)
+    )
+
+    assert [p.visible_accelerators for p in placements] == [["1", "2"], ["3"]]
+
+
+def test_flexible_placement_rejects_out_of_range_gpu() -> None:
+    with pytest.raises(ValueError, match="GPU"):
+        FlexiblePlacementStrategy([[0], [4]]).get_placement(_cluster(num_gpus=4))
+
+
+def test_scheduler_package_exports_flexible_placement() -> None:
+    from dreamervla import scheduler
+
+    assert scheduler.FlexiblePlacementStrategy is FlexiblePlacementStrategy

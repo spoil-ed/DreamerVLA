@@ -3,13 +3,15 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import h5py
 import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+
+if TYPE_CHECKING:
+    import h5py
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

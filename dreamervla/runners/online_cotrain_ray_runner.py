@@ -155,8 +155,9 @@ class OnlineCotrainRayRunner(BaseRunner):
         weight_sync_every = self._int_from(
             ("sync.weight_sync_every", "weight_sync_every"), 1
         )
+        learner_phase = self._learner_update_phase()
 
-        ppo_updates = 0
+        learner_updates = 0
         policy_version = 0
         local_infer_version = 0
         last_loss = 0.0
@@ -168,7 +169,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             obs_batch = envs.current_obs().wait()
 
             if pending_learn is None and replay.ready(min_episodes).wait()[0]:
-                pending_learn = learner.update("rl", 1)
+                pending_learn = learner.update(learner_phase, 1)
                 pending_learn_start = time.perf_counter()
 
             rollout_start = time.perf_counter()
@@ -188,8 +189,8 @@ class OnlineCotrainRayRunner(BaseRunner):
                 learn_done = pending_learn.done()
                 if learn_done or step == rollout_steps - 1:
                     metrics = pending_learn.wait()[0]
-                    last_loss = float(metrics.get("train/rl_loss", 0.0))
-                    ppo_updates += 1
+                    last_loss = _learner_loss(metrics)
+                    learner_updates += 1
                     policy_version += 1
                     learner.sync_weights("policy", policy_version).wait()
                     if policy_version % weight_sync_every == 0:
@@ -204,18 +205,28 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         if pending_learn is not None:
             metrics = pending_learn.wait()[0]
-            last_loss = float(metrics.get("train/rl_loss", 0.0))
-            ppo_updates += 1
+            last_loss = _learner_loss(metrics)
+            learner_updates += 1
             policy_version += 1
             learner.sync_weights("policy", policy_version).wait()
 
         return {
             "rollout/episodes": int(replay.size().wait()[0]),
-            "train/ppo_updates": int(ppo_updates),
+            "train/learner_updates": int(learner_updates),
+            # Compatibility for older smoke tests and dashboards.
+            "train/ppo_updates": int(learner_updates),
             "sync/policy_version": int(policy_version),
             "time/overlap_events": int(overlap_events),
             "train/rl_loss": float(last_loss),
         }
+
+    def _learner_update_phase(self) -> str:
+        mode = str(
+            OmegaConf.select(self.cfg, "learner.train_cfg.mode", default="synthetic_ppo")
+        )
+        if mode == "dreamervla_cotrain":
+            return "cotrain"
+        return "rl"
 
     def _select_first(self, paths: tuple[str, ...], default: Any) -> Any:
         for path in paths:
@@ -263,3 +274,10 @@ def _plain(value: Any) -> Any:
     if isinstance(value, list):
         return [_plain(item) for item in value]
     return value
+
+
+def _learner_loss(metrics: dict[str, Any]) -> float:
+    for key in ("train/rl_loss", "rl/actor_loss", "wm/loss", "cls/loss"):
+        if key in metrics:
+            return float(metrics[key])
+    return 0.0

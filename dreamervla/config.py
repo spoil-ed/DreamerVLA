@@ -7,6 +7,7 @@ from typing import Any
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.algorithms.registry import get_actor_update_route
+from dreamervla.models.registry import validate_model_type
 from dreamervla.utils.metric_logger import MetricLogger
 
 
@@ -24,7 +25,9 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_resume_paths(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
+    _validate_model_registry_refs(cfg)
     _validate_online_cotrain_pipeline(cfg)
+    _validate_ray_manual_resources(cfg)
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
     return cfg
@@ -176,6 +179,62 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
             raise ValueError(f"training.{key} must be >= 0, got {val}")
 
 
+def _validate_model_registry_refs(cfg: DictConfig) -> None:
+    for key in (
+        "model.model_type",
+        "policy.model_type",
+        "encoder.model_type",
+        "world_model.model_type",
+        "learner.model_cfg.policy.model_type",
+        "learner.model_cfg.world_model.model_type",
+        "learner.model_cfg.classifier.model_type",
+    ):
+        model_type = OmegaConf.select(cfg, key, default=None)
+        if model_type is not None:
+            validate_model_type(str(model_type))
+
+
+def _validate_ray_manual_resources(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    is_ray_runner = target.endswith(
+        (
+            "OnlineCotrainRayRunner",
+            "ColdStartRayCollectRunner",
+        )
+    )
+    if not is_ray_runner:
+        return
+
+    forbidden = [
+        key
+        for key in (
+            "training.auto_vram_batch",
+            "collect.auto_vram_envs",
+        )
+        if OmegaConf.select(cfg, key, default=None) is not None
+    ]
+    if forbidden:
+        raise ValueError(
+            "Ray backend follows RLinf-style manual resource tuning; "
+            f"auto_vram knobs are not supported: {forbidden}"
+        )
+
+    _require_positive_if_present(cfg, "env.num_workers")
+    _require_positive_if_present(cfg, "rollout.steps")
+    _require_positive_if_present(cfg, "replay.cfg.sequence_length")
+    _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
+    _require_positive_if_present(cfg, "collect.envs_per_gpu")
+
+    precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
+    if precision is not None:
+        normalized = str(precision).strip().lower()
+        if normalized not in {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}:
+            raise ValueError(
+                "learner.train_cfg.precision must be one of "
+                f"fp32, bf16, or fp16; got {precision!r}"
+            )
+
+
 def _validate_existing_paths(cfg: DictConfig) -> None:
     for key in (
         "dataset.hdf5_dir",
@@ -241,6 +300,14 @@ def _require_equal_if_present(
         raise ValueError(
             f"{message} {left_key}={left!r}, {right_key}={right!r}"
         )
+
+
+def _require_positive_if_present(cfg: DictConfig, key: str) -> None:
+    value = OmegaConf.select(cfg, key, default=None)
+    if value is None:
+        return
+    if int(value) <= 0:
+        raise ValueError(f"{key} must be > 0, got {value!r}")
 
 
 def _normalize_backends(value: Any) -> list[str]:

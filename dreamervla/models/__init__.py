@@ -6,10 +6,20 @@ Prefer canonical subpackage imports for new code, for example
 
 from dreamervla.models.actor import VLAPolicy
 from dreamervla.models.critic.critic import Critic
+from dreamervla.models.registry import (
+    get_model,
+    register_model,
+    registered_model_types,
+    validate_model_type,
+)
 from dreamervla.models.world_model import DinoWMWorldModel
 
 __all__ = [
     "Critic",
     "DinoWMWorldModel",
     "VLAPolicy",
+    "get_model",
+    "register_model",
+    "registered_model_types",
+    "validate_model_type",
 ]

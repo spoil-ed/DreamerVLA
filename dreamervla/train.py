@@ -10,7 +10,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config import validate_cfg
-from dreamervla.runners import BaseRunner
+from dreamervla.runners.base_runner import BaseRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

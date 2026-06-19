@@ -1,0 +1,8 @@
+# @package _global_
+learner:
+  train_cfg:
+    fsdp:
+      strategy: fsdp
+      precision: bf16
+      cpu_offload: false
+      activation_checkpointing: true

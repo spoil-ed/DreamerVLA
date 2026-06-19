@@ -1,164 +1,234 @@
 from __future__ import annotations
 
-from dreamervla.runners.backbone_dreamerv3_wm_runner import (
-    BackboneDreamerV3WMRunner as _BackboneDreamerV3WMRunner,
-)
+import importlib
+from dataclasses import dataclass
+from typing import Any
+
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runners.chameleon_latent_action_wm_runner import (
-    ChameleonLatentActionWMRunner as _ChameleonLatentActionWMRunner,
-)
-from dreamervla.runners.collect_rollouts_runner import (
-    CollectRolloutsRunner as _CollectRolloutsRunner,
-)
-from dreamervla.runners.dreamerv3_pixel_runner import (
-    DreamerV3PixelRunner as _DreamerV3PixelRunner,
-)
-from dreamervla.runners.dreamerv3_token_runner import (
-    DreamerV3TokenRunner as _DreamerV3TokenRunner,
-)
-from dreamervla.runners.dreamervla_runner import (
-    DreamerVLARunner as _DreamerVLARunner,
-)
-from dreamervla.runners.embodied_eval_runner import (
-    EmbodiedEvalRunner as _EmbodiedEvalRunner,
-)
-from dreamervla.runners.latent_classifier_runner import (
-    LatentClassifierRunner as _LatentClassifierRunner,
-)
-from dreamervla.runners.latent_wm_runner import (
-    LatentWMTrainingRunner as _LatentWMTrainingRunner,
-)
-from dreamervla.runners.online_cotrain_pipeline_runner import (
-    OnlineCotrainPipelineRunner as _OnlineCotrainPipelineRunner,
-)
-from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
-from dreamervla.runners.openvla_oft_runner import (
-    OpenVLAOFTTrainingRunner as _OpenVLAOFTTrainingRunner,
-)
-from dreamervla.runners.vla_sft_runner import VLASFTRunner as _VLASFTRunner
 
 
-class ActionHiddenWMRunner(_BackboneDreamerV3WMRunner):
-    runner_name = "action_hidden_wm"
-    runner_status = "current"
-    runner_family = "world_model"
+@dataclass(frozen=True)
+class _RunnerSpec:
+    module: str
+    implementation: str
+    runner_name: str | None = None
+    runner_status: str | None = None
+    runner_family: str | None = None
 
 
-class PixelWMRunner(_DreamerV3PixelRunner):
-    runner_name = "pixel_wm"
-    runner_status = "secondary"
-    runner_family = "world_model"
+_RUNNER_SPECS: dict[str, _RunnerSpec] = {
+    "ActionHiddenWMRunner": _RunnerSpec(
+        "dreamervla.runners.backbone_dreamerv3_wm_runner",
+        "BackboneDreamerV3WMRunner",
+        runner_name="action_hidden_wm",
+        runner_status="current",
+        runner_family="world_model",
+    ),
+    "PixelWMRunner": _RunnerSpec(
+        "dreamervla.runners.dreamerv3_pixel_runner",
+        "DreamerV3PixelRunner",
+        runner_name="pixel_wm",
+        runner_status="secondary",
+        runner_family="world_model",
+    ),
+    "TokenWMRunner": _RunnerSpec(
+        "dreamervla.runners.dreamerv3_token_runner",
+        "DreamerV3TokenRunner",
+        runner_name="token_wm",
+        runner_status="secondary",
+        runner_family="world_model",
+    ),
+    "VLASFTRunner": _RunnerSpec(
+        "dreamervla.runners.vla_sft_runner",
+        "VLASFTRunner",
+        runner_name="vla_sft",
+        runner_status="current",
+        runner_family="vla",
+    ),
+    "OpenVLAOFTRunner": _RunnerSpec(
+        "dreamervla.runners.openvla_oft_runner",
+        "OpenVLAOFTTrainingRunner",
+        runner_name="openvla_oft",
+        runner_status="current",
+        runner_family="vla",
+    ),
+    "JointDreamerVLARunner": _RunnerSpec(
+        "dreamervla.runners.dreamervla_runner",
+        "DreamerVLARunner",
+        runner_name="joint_dreamervla",
+        runner_status="follow_up",
+        runner_family="actor",
+    ),
+    "EmbodiedEvalRunner": _RunnerSpec(
+        "dreamervla.runners.embodied_eval_runner",
+        "EmbodiedEvalRunner",
+        runner_name="embodied_eval",
+        runner_status="current",
+        runner_family="eval",
+    ),
+    "ChameleonLatentWMRunner": _RunnerSpec(
+        "dreamervla.runners.chameleon_latent_action_wm_runner",
+        "ChameleonLatentActionWMRunner",
+        runner_name="chameleon_latent_wm",
+        runner_status="secondary",
+        runner_family="world_model",
+    ),
+    "LatentWMRunner": _RunnerSpec(
+        "dreamervla.runners.latent_wm_runner",
+        "LatentWMTrainingRunner",
+        runner_name="latent_wm",
+        runner_status="current",
+        runner_family="world_model",
+    ),
+    "LatentClassifierRunner": _RunnerSpec(
+        "dreamervla.runners.latent_classifier_runner",
+        "LatentClassifierRunner",
+        runner_name="latent_classifier",
+        runner_status="current",
+        runner_family="reward",
+    ),
+    "OnlineCotrainRunner": _RunnerSpec(
+        "dreamervla.runners.online_cotrain_runner",
+        "OnlineCotrainRunner",
+        runner_name="online_cotrain",
+        runner_status="current",
+        runner_family="actor",
+    ),
+    "CollectRolloutsRunner": _RunnerSpec(
+        "dreamervla.runners.collect_rollouts_runner",
+        "CollectRolloutsRunner",
+        runner_name="collect_rollouts",
+        runner_status="current",
+        runner_family="rollout",
+    ),
+    "OnlineCotrainPipelineRunner": _RunnerSpec(
+        "dreamervla.runners.online_cotrain_pipeline_runner",
+        "OnlineCotrainPipelineRunner",
+        runner_name="online_cotrain_pipeline",
+        runner_status="current",
+        runner_family="actor",
+    ),
+    "OnlineCotrainRayRunner": _RunnerSpec(
+        "dreamervla.runners.online_cotrain_ray_runner",
+        "OnlineCotrainRayRunner",
+        runner_name="online_cotrain_ray",
+        runner_status="optional",
+        runner_family="actor",
+    ),
+    "ColdStartRayCollectRunner": _RunnerSpec(
+        "dreamervla.runners.cold_start_ray_collect_runner",
+        "ColdStartRayCollectRunner",
+        runner_name="collect_rollouts_ray",
+        runner_status="optional",
+        runner_family="rollout",
+    ),
+}
 
 
-class TokenWMRunner(_DreamerV3TokenRunner):
-    runner_name = "token_wm"
-    runner_status = "secondary"
-    runner_family = "world_model"
-
-
-class VLASFTRunner(_VLASFTRunner):
-    runner_name = "vla_sft"
-    runner_status = "current"
-    runner_family = "vla"
-
-
-class OpenVLAOFTRunner(_OpenVLAOFTTrainingRunner):
-    runner_name = "openvla_oft"
-    runner_status = "current"
-    runner_family = "vla"
-
-
-class JointDreamerVLARunner(_DreamerVLARunner):
-    runner_name = "joint_dreamervla"
-    runner_status = "follow_up"
-    runner_family = "actor"
-
-
-class EmbodiedEvalRunner(_EmbodiedEvalRunner):
-    runner_name = "embodied_eval"
-    runner_status = "current"
-    runner_family = "eval"
-
-
-class ChameleonLatentWMRunner(_ChameleonLatentActionWMRunner):
-    runner_name = "chameleon_latent_wm"
-    runner_status = "secondary"
-    runner_family = "world_model"
-
-
-class LatentWMRunner(_LatentWMTrainingRunner):
-    runner_name = "latent_wm"
-    runner_status = "current"
-    runner_family = "world_model"
-
-
-class LatentClassifierRunner(_LatentClassifierRunner):
-    runner_name = "latent_classifier"
-    runner_status = "current"
-    runner_family = "reward"
-
-
-class CollectRolloutsRunner(_CollectRolloutsRunner):
-    runner_name = "collect_rollouts"
-    runner_status = "current"
-    runner_family = "rollout"
-
-
-class OnlineCotrainPipelineRunner(_OnlineCotrainPipelineRunner):
-    runner_name = "online_cotrain_pipeline"
-    runner_status = "current"
-    runner_family = "actor"
-
-
-PUBLIC_RUNNERS = [
-    "ActionHiddenWMRunner",
-    "PixelWMRunner",
-    "TokenWMRunner",
-    "VLASFTRunner",
-    "OpenVLAOFTRunner",
-    "JointDreamerVLARunner",
-    "EmbodiedEvalRunner",
-    "ChameleonLatentWMRunner",
-    "LatentWMRunner",
-    "LatentClassifierRunner",
-    "OnlineCotrainRunner",
-    "OnlineCotrainPipelineRunner",
-    "OnlineCotrainRayRunner",
-    "ColdStartRayCollectRunner",
-    "CollectRolloutsRunner",
-]
+PUBLIC_RUNNERS = list(_RUNNER_SPECS)
 
 
 __all__ = [
-    "OnlineCotrainPipelineRunner",
     "BaseRunner",
     "PUBLIC_RUNNERS",
-    "ActionHiddenWMRunner",
-    "PixelWMRunner",
-    "TokenWMRunner",
-    "VLASFTRunner",
-    "OpenVLAOFTRunner",
-    "JointDreamerVLARunner",
-    "EmbodiedEvalRunner",
-    "ChameleonLatentWMRunner",
-    "LatentWMRunner",
-    "LatentClassifierRunner",
-    "OnlineCotrainRunner",
-    "OnlineCotrainRayRunner",
-    "ColdStartRayCollectRunner",
-    "CollectRolloutsRunner",
+    *PUBLIC_RUNNERS,
 ]
 
 
+_CLASS_CACHE: dict[str, type[Any]] = {}
+_IMPLEMENTATION_CACHE: dict[str, type[Any]] = {}
+
+
 def __getattr__(name: str) -> object:
-    if name == "OnlineCotrainRayRunner":
-        from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
-
-        return OnlineCotrainRayRunner
-    if name == "ColdStartRayCollectRunner":
-        from dreamervla.runners.cold_start_ray_collect_runner import (
-            ColdStartRayCollectRunner,
-        )
-
-        return ColdStartRayCollectRunner
+    if name in _RUNNER_SPECS:
+        return _load_public_runner(name)
     raise AttributeError(name)
+
+
+def __dir__() -> list[str]:
+    return sorted([*globals(), *PUBLIC_RUNNERS])
+
+
+def _load_public_runner(name: str) -> type[Any]:
+    cached = _CLASS_CACHE.get(name)
+    if cached is not None:
+        return cached
+
+    spec = _RUNNER_SPECS[name]
+    attrs = _public_runner_attrs(spec)
+
+    attrs.update(
+        {
+            "__doc__": (
+                f"Lazy public runner proxy for {spec.module}.{spec.implementation}."
+            ),
+            "__init__": _make_proxy_init(name),
+            "__getattr__": _proxy_getattr,
+            "setup": _proxy_setup,
+            "execute": _proxy_execute,
+            "teardown": _proxy_teardown,
+            "run": _proxy_run,
+        }
+    )
+    public_cls = type(name, (BaseRunner,), attrs)
+    _CLASS_CACHE[name] = public_cls
+    globals()[name] = public_cls
+    return public_cls
+
+
+def _make_proxy_init(name: str):
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
+        config = args[0] if args else kwargs.get("config")
+        output_dir = kwargs.get("output_dir")
+        if config is not None:
+            BaseRunner.__init__(self, config, output_dir=output_dir)
+        implementation = _load_implementation(name)
+        self._runner = implementation(*args, **kwargs)
+
+    return __init__
+
+
+def _load_implementation(name: str) -> type[Any]:
+    cached = _IMPLEMENTATION_CACHE.get(name)
+    if cached is not None:
+        return cached
+
+    spec = _RUNNER_SPECS[name]
+    module = importlib.import_module(spec.module)
+    implementation = getattr(module, spec.implementation)
+    public_impl = type(name, (implementation,), _public_runner_attrs(spec))
+    _IMPLEMENTATION_CACHE[name] = public_impl
+    return public_impl
+
+
+def _public_runner_attrs(spec: _RunnerSpec) -> dict[str, Any]:
+    attrs: dict[str, Any] = {"__module__": __name__}
+    if spec.runner_name is not None:
+        attrs["runner_name"] = spec.runner_name
+    if spec.runner_status is not None:
+        attrs["runner_status"] = spec.runner_status
+    if spec.runner_family is not None:
+        attrs["runner_family"] = spec.runner_family
+    return attrs
+
+
+def _proxy_getattr(self: Any, name: str) -> Any:
+    if name == "_runner":
+        raise AttributeError(name)
+    return getattr(self._runner, name)
+
+
+def _proxy_setup(self: Any) -> None:
+    return self._runner.setup()
+
+
+def _proxy_execute(self: Any) -> object:
+    return self._runner.execute()
+
+
+def _proxy_teardown(self: Any) -> None:
+    return self._runner.teardown()
+
+
+def _proxy_run(self: Any) -> object:
+    return self._runner.run()

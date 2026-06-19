@@ -36,6 +36,31 @@ class ReplayWorker(Worker):
     def sample(self, batch_size: int) -> dict[str, Any]:
         return self._replay().sample(int(batch_size))
 
+    def sample_classifier_windows(
+        self,
+        batch_size: int,
+        *,
+        window: int,
+        chunk_size: int,
+        chunk_pool: str,
+        early_neg_stride: int,
+    ) -> dict[str, Any]:
+        return self._replay().sample_classifier_windows(
+            int(batch_size),
+            window=int(window),
+            chunk_size=int(chunk_size),
+            chunk_pool=str(chunk_pool),
+            early_neg_stride=int(early_neg_stride),
+        )
+
+    def classifier_window_count(self, *, window: int, chunk_size: int) -> int:
+        return int(
+            self._replay().classifier_window_count(
+                window=int(window),
+                chunk_size=int(chunk_size),
+            )
+        )
+
     def size(self) -> int:
         return len(self._replay().episodes)
 

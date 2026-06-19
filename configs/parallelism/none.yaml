@@ -1,0 +1,8 @@
+# @package _global_
+learner:
+  train_cfg:
+    fsdp:
+      strategy: none
+      precision: fp32
+      cpu_offload: false
+      activation_checkpointing: false
