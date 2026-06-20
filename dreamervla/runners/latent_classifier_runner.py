@@ -263,6 +263,7 @@ class LatentClassifierRunner(BaseRunner):
         running_total = 0
 
         t0 = time.time()
+        self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         while self.epoch < num_epochs:
             for batch_idx, (xs, ys) in enumerate(self.train_loader):
                 if batch_idx >= steps_per_epoch:
@@ -289,16 +290,22 @@ class LatentClassifierRunner(BaseRunner):
                 self.global_step += 1
 
                 if self.global_step % log_every == 0:
+                    step_loss = running_loss / log_every
+                    step_acc = running_correct / max(running_total, 1)
                     self._log(
                         {
                             "event": "train_step",
                             "step": self.global_step,
                             "epoch": self.epoch,
-                            "loss": running_loss / log_every,
-                            "acc": running_correct / max(running_total, 1),
+                            "loss": step_loss,
+                            "acc": step_acc,
                             "grad_norm": grad_norm,
                             "wall_s": time.time() - t0,
                         }
+                    )
+                    self.console_metrics(
+                        f"train · epoch {self.epoch}",
+                        {"train/loss": float(step_loss), "train/acc": float(step_acc)},
                     )
                     running_loss = 0.0
                     running_correct = 0
@@ -337,6 +344,7 @@ class LatentClassifierRunner(BaseRunner):
                     self.save_checkpoint(tag="latest")
             self.epoch += 1
 
+        self.console_banner("TRAINING", done=True)
         # ---- final ckpt + summary ------------------------------------
         self.save_checkpoint(tag="final")
         summary = {

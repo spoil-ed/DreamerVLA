@@ -179,6 +179,7 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
                     OmegaConf.select(cfg, "training.tqdm_interval_sec", default=1.0)
                 ),
             )
+            self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
             while self.epoch < num_epochs:
                 sampler = getattr(dataloader, "sampler", None)
                 if hasattr(sampler, "set_epoch"):
@@ -215,6 +216,13 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
                     }
                     logger.log(step_log)
                     self.log_metrics(step_log, step=self.global_step)
+                    self.console_metrics(
+                        f"train · epoch {self.epoch}",
+                        {
+                            "train/loss": float(step_log["train_loss_value"]),
+                            "train/lr": float(step_log["lr"]),
+                        },
+                    )
                     history.append(step_log)
                     progress.set_postfix(
                         refresh=False, loss=float(step_log["train_loss_value"])
@@ -247,6 +255,7 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
 
                     self.global_step += 1
                 self.epoch += 1
+        self.console_banner("TRAINING", done=True)
         self.save_checkpoint()
         if save_components_every > 0:
             self._save_oft_components(self.global_step)
