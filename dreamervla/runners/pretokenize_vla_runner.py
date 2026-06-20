@@ -512,6 +512,7 @@ class PretokenizeVLARunner(BaseRunner):
                         task_description,
                     )
                 total_episodes += 1
+                self.console_record_success(bool(done))
                 ep_dt = time.time() - ep_t0
                 tag = "OK " if done else "FAIL"
                 # Reclaim any per-episode GPU/CPU memory leaked by the
@@ -786,6 +787,7 @@ class PretokenizeVLARunner(BaseRunner):
         if val_dataloaders and self.distributed.is_main_process:
             print(f"  Val dataloaders ready: {list(val_dataloaders.keys())}")
 
+        self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         try:
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
@@ -919,6 +921,16 @@ class PretokenizeVLARunner(BaseRunner):
                         / vla_count
                     )
 
+                    self.console_metrics(
+                        f"train · epoch {self.epoch}",
+                        {
+                            "train/vla_loss": float(step_log["train_vla_loss"]),
+                            "train/vla_token_loss": float(step_log["train_vla_token_loss"]),
+                            "train/vla_action_loss": float(step_log["train_vla_action_loss"]),
+                            "train/lr": float(step_log.get("lr", 0.0)),
+                        },
+                    )
+
                     # ---- Validation loss eval at end of epoch ----
                     eval_every = int(
                         OmegaConf.select(cfg, "eval.eval_every", default=1)
@@ -927,6 +939,20 @@ class PretokenizeVLARunner(BaseRunner):
                         for split_name, val_dl in val_dataloaders.items():
                             val_metrics = self.evaluate_val_loss(val_dl, split_name)
                             step_log.update(val_metrics)
+
+                    # ---- LIBERO rollout eval at end of epoch ----
+                    if (self.epoch % eval_every) == 0:
+                        libero_metrics = self.evaluate_libero(self.epoch)
+                        if libero_metrics:
+                            step_log.update(libero_metrics)
+                            self.console_metrics(
+                                f"eval · epoch {self.epoch}",
+                                {
+                                    "eval/success_rate": float(libero_metrics["eval_success_rate"]),
+                                    "eval/total_episodes": float(libero_metrics["eval_total_episodes"]),
+                                    "eval/total_successes": float(libero_metrics["eval_total_successes"]),
+                                },
+                            )
 
                     train_json_logger.log(step_log)
                     self.log_metrics(step_log, step=self.global_step)
@@ -951,6 +977,7 @@ class PretokenizeVLARunner(BaseRunner):
                     self.epoch += 1
                     if reached_max_steps:
                         break
+                self.console_banner("TRAINING", done=True)
         finally:
             self.distributed.barrier()
             self.distributed.cleanup()
