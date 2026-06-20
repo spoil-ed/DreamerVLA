@@ -3,12 +3,14 @@
 This recipe reproduces the OpenVLA-OFT one-trajectory LIBERO cold-start flow:
 
 ```text
-collect rollouts -> reward HDF5 + obs_embedding sidecar -> offline WM/classifier warmup
+collect rollouts -> reward HDF5 + obs_embedding sidecar -> offline WM/classifier warmup -> online cotrain
 ```
 
-The default release path is warmup-only: `online_rollout.total_env_steps=0`.
-Online cotrain remains available through Hydra overrides, but it is not the
-default release check.
+The default now runs the **full** pipeline end-to-end: collect → offline WM/classifier
+warmup (`2000`/`2000` steps) → **online cotrain** (`online_rollout.total_env_steps=200000`).
+Add `debug=true` to run the *same* pipeline at a tiny `debug_*` scale (a fast,
+memory-fittable smoke). Warmup-only is still available with
+`warmup.total_env_steps=0` (it does not load the VLA).
 
 ## Requirements
 
@@ -118,10 +120,11 @@ This route uses **full-width attention** (`heads=16, dim_head=256` → inner=409
 (`mlp_dim=4096`). ~610M params, under the 1B ceiling. All values live in
 `configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`.
 
-> Memory: ~610M is ~11x the old 55M compact WM. The default warmup-only path
-> (`online_rollout.total_env_steps=0`) does not load the VLA, so it fits easily.
-> For full online cotrain (VLA + WM co-resident), lower `dataloader.batch_size`
-> if you hit OOM. The new architecture is incompatible with old `model_dim=1024`
+> Memory: ~610M is ~11x the old 55M compact WM. The default full pipeline runs online
+> cotrain with the VLA + WM co-resident (memory-heavy — see the online-cotrain memory
+> note in **Run**; lower `dataloader.batch_size` / `algorithm.*`, or use `debug=true`,
+> if you OOM). Warmup-only (`online_rollout.total_env_steps=0`) does not load the VLA,
+> so it fits easily. The new architecture is incompatible with old `model_dim=1024`
 > warmup checkpoints — start fresh.
 
 ## Run
@@ -142,22 +145,38 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal
 ```
 
-The release profile defaults are intentionally configurable Hydra overrides:
+Both commands run the **full** pipeline by default. For a fast, low-memory smoke of
+the same flow, add `debug=true`:
 
-| Parameter | Release default |
-| --- | --- |
-| `collect.task_ids` | `all` |
-| `collect.episodes_per_task` | `4` |
-| `collect.episode_horizon` | `300` |
-| no-Ray `collect.envs_per_gpu` | `32` |
-| Ray `collect.num_workers` -> `env.num_workers` | `16` |
-| Ray `collect.max_steps` -> `rollout.max_steps` | `1200` |
-| Ray stop count | derived from `episodes_per_task * selected task_ids` |
-| `warmup.wm_steps` -> `training.wm_warmup_steps` | `256` |
-| `warmup.classifier_steps` -> `training.classifier_warmup_steps` | `256` |
-| `warmup.batch_size` -> `dataloader.batch_size` | `96` |
-| `warmup.classifier_batch_size` -> `training.classifier_batch_size` | `512` |
-| `warmup.total_env_steps` -> `online_rollout.total_env_steps` | `0` |
+```bash
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal debug=true
+```
+
+> **Memory (online cotrain):** the OFT actor RL update is heavy (a 32000-vocab
+> `lm_head` over the imagined rollout) with the ~7B OFT VLA resident, so the full RL
+> settings can OOM on an 80GB GPU. Lower `dataloader.batch_size` (PER-GPU under DDP)
+> and/or `algorithm.imagination_horizon` / `algorithm.ppo_rollouts_per_start` /
+> `algorithm.wmpo.episode_max_steps` if you hit it — `debug=true` is the verified
+> low-memory baseline. Run in the `dreamervla` conda env.
+
+Default is the **full** pipeline. Every value is a configurable Hydra override;
+`debug=true` swaps the whole right column in automatically (`training.debug=true` →
+`OnlineCotrainPipelineRunner._apply_debug_overrides`):
+
+| Parameter (launcher key → Hydra key) | Full (default) | `debug=true` |
+| --- | --- | --- |
+| `collect.task_ids` | `all` | `all` |
+| `collect.episodes_per_task` | `4` | `4` |
+| `collect.episode_horizon` | `300` | `300` |
+| `warmup.wm_steps` → `training.wm_warmup_steps` | `2000` | `2` |
+| `warmup.classifier_steps` → `training.classifier_warmup_steps` | `2000` | `2` |
+| `warmup.total_env_steps` → `online_rollout.total_env_steps` | `200000` | `160` |
+| `warmup.batch_size` → `dataloader.batch_size` | `96` release / `12` multi_gpu | `2` |
+| `online_rollout.episode_horizon` | `200` | `50` |
+| `online_rollout.max_train_updates` | unset (run to completion) | `4` |
+| `algorithm.imagination_horizon` | `5` | `3` |
+| `algorithm.ppo_rollouts_per_start` | `4` | `2` |
+| `algorithm.wmpo.episode_max_steps` | `300` | `150` |
 
 Adjust them with normal launcher overrides:
 
