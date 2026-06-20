@@ -947,6 +947,14 @@ class BaseRunner(ABC):
         self.finish_metric_logger()
 
     def _console_state_get(self) -> dict:
+        # Lazily build + cache the console state. All knobs are Hydra overrides
+        # (no config file required; read via OmegaConf.select with defaults):
+        #   console.banner_width   (int, default 65)  — width of === banners / metric boxes
+        #   console.log_every      (int, default 1)   — print the metric box every N console_metrics()
+        #                                               calls (floored at 1); pass force=True to bypass
+        #                                               for one-shot summary boxes
+        #   console.success_window (int, default 50)  — episodes in the VLA success-rate window
+        # Override per run, e.g. `console.log_every=50 console.success_window=100`.
         st = getattr(self, "_console_state", None)
         if st is None:
             st = {

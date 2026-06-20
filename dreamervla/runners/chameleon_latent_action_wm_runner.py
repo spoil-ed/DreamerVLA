@@ -94,9 +94,9 @@ class ChameleonLatentActionWMRunner(BaseRunner):
         self.device = self.distributed.resolve_device(
             str(OmegaConf.select(config, "trainer.device", default="auto"))
         )
-        if self.distributed.is_main_process and bool(
-            OmegaConf.select(config, "training.print_config", default=True)
-        ):
+        if self.distributed.is_main_process:
+            # print_config() self-gates on training.print_config (default False),
+            # so config is suppressed by default — consistent with other runners.
             self.print_config()
         set_seed(int(OmegaConf.select(config, "seed", default=7)) + self.rank)
 

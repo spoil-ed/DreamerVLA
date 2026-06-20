@@ -20,6 +20,9 @@ conda activate dreamervla
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-$(pwd -P)/data}"
 export MUJOCO_GL=osmesa
 export PYOPENGL_PLATFORM=osmesa
+# Multi-GPU DDP cotrain: disable NCCL NVLS (NVLink SHARP) to avoid collective
+# hangs/init failures on some driver+topology combos.
+export NCCL_NVLS_ENABLE=0
 ```
 
 Required files for the selected suite:
