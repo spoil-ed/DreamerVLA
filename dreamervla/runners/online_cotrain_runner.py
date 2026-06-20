@@ -47,11 +47,9 @@ from dreamervla.runners.online_replay import (
     get_replay_task_stats_global,
 )
 from dreamervla.runners.online_utils import (
-    SuccessTracker,
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
-from dreamervla.utils.console import fmt_value, metric_box
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
 
@@ -404,11 +402,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
         n_episodes = 0
         n_success = 0
         stop = False
-        success_window = int(OmegaConf.select(cfg, "console.success_window", default=50))
-        tracker = SuccessTracker(window=success_window)
-        log_every = int(OmegaConf.select(cfg, "console.log_every", default=1))
-        banner_width = int(OmegaConf.select(cfg, "console.banner_width", default=65))
-        update_idx = 0
 
         for env_step in range(1, total_env_steps + 1):
             if stop:
@@ -433,7 +426,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     n_episodes += 1
                     success = bool(rec["success"])
                     n_success += int(success)
-                    tracker.update(success)
+                    self.console_record_success(success)
                 episode = []
                 obs, _info = env.reset()
                 latent, prev_action = None, None
@@ -460,7 +453,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     "global_step": int(self.global_step),
                     "phase": "warmup" if in_warmup else "cotrain",
                     "rollout/success_rate": (n_success / n_episodes) if n_episodes else 0.0,
-                    "rollout/success_rate_windowed": tracker.rate(),
                     "buffer/size": float(replay.num_transitions),
                 }
                 # Phase WM (always) — policy/actor frozen (eval + no policy optim step)
@@ -531,28 +523,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     metrics["rl/returns_mean"] = float(ac_metrics.get("returns_mean", 0.0))
                     metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
 
+                self.console_metrics(f"{metrics['phase']} · step {self.global_step}", metrics)
                 if self.distributed.is_main_process:
-                    update_idx += 1
-                    if update_idx % log_every == 0:
-                        rows = []
-                        if not in_warmup:
-                            rows.append(
-                                f"VLA    succ@{success_window}={fmt_value(tracker.rate())} "
-                                f"(Δ {tracker.delta():+.3f} · best {tracker.best:.3f})   "
-                                f"return={fmt_value(metrics.get('rl/returns_mean', 0.0))}"
-                            )
-                        rows.append(
-                            f"train  wm={fmt_value(metrics.get('wm/loss', float('nan')))}  "
-                            f"actor={fmt_value(metrics.get('rl/actor_loss', float('nan')))}  "
-                            f"cls_acc={fmt_value(metrics.get('cls/acc', float('nan')))}"
-                        )
-                        rows.append(
-                            f"data   buf={fmt_value(metrics['buffer/size'])}  "
-                            f"ep={n_episodes}  cum_succ={fmt_value(metrics['rollout/success_rate'])}"
-                        )
-                        header = f"{metrics['phase']} · step {self.global_step}"
-                        print(metric_box(header, rows, width=banner_width), flush=True)
-                        tracker.mark_printed()
                     self.log_metrics(metrics, step=int(self.global_step))
                 history.append(metrics)
                 if self.distributed.is_main_process and ckpt_every > 0 and (self.global_step + 1) % ckpt_every == 0:
