@@ -940,20 +940,6 @@ class PretokenizeVLARunner(BaseRunner):
                             val_metrics = self.evaluate_val_loss(val_dl, split_name)
                             step_log.update(val_metrics)
 
-                    # ---- LIBERO rollout eval at end of epoch ----
-                    if (self.epoch % eval_every) == 0:
-                        libero_metrics = self.evaluate_libero(self.epoch)
-                        if libero_metrics:
-                            step_log.update(libero_metrics)
-                            self.console_metrics(
-                                f"eval · epoch {self.epoch}",
-                                {
-                                    "eval/success_rate": float(libero_metrics["eval_success_rate"]),
-                                    "eval/total_episodes": float(libero_metrics["eval_total_episodes"]),
-                                    "eval/total_successes": float(libero_metrics["eval_total_successes"]),
-                                },
-                            )
-
                     train_json_logger.log(step_log)
                     self.log_metrics(step_log, step=self.global_step)
 
