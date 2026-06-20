@@ -126,7 +126,10 @@ class BaseRunner(ABC):
         return self.get_log_dir().joinpath(name)
 
     def print_config(self) -> None:
-        # Config dump
+        # Config dump — suppressed by default; the resolved config is always
+        # persisted to resolved_config.yaml + .hydra/, so nothing is lost.
+        if not bool(OmegaConf.select(self.cfg, "training.print_config", default=False)):
+            return
         pprint(OmegaConf.to_container(self.config, resolve=True))
 
     def write_run_artifacts(self) -> dict[str, Any] | None:
@@ -149,6 +152,22 @@ class BaseRunner(ABC):
         )
         self._run_artifacts_written = True
         return manifest
+
+    def append_model_summary(self, summary: dict[str, Any]) -> None:
+        """Write runtime-derived model info (param counts, freeze flags) into
+        the existing run manifest. These are not in any config because they are
+        computed after model instantiation."""
+        if not self.is_main_process:
+            return
+        path = self.get_run_manifest_path()
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            manifest = {}
+        manifest["model"] = summary
+        path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     def build_run_manifest(self) -> dict[str, Any]:
         """Build a compact RLinf-style run manifest."""
