@@ -413,7 +413,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     if not bool(cfg.get("skip_collect", False)):
+        print("PHASE 1/2 START: cold-start collection", flush=True)
         subprocess.run(plan.collect_cmd, check=True)
+    else:
+        print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
+    print("PHASE 2/2 START: offline-warmup online cotrain", flush=True)
     subprocess.run(plan.cotrain_cmd, check=True)
     return 0
 

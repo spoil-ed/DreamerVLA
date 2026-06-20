@@ -20,7 +20,7 @@ from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
-from dreamervla.utils.console import count_trainable
+from dreamervla.utils.console import count_trainable, phase_banner
 
 
 class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
@@ -31,8 +31,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     runner_family = "actor"
 
     # ------------------------------------------------------------------ warmup
-    def _offline_warmup_wm(self, replay, *, steps: int, batch_size: int, optim_cfg) -> None:
+    def _offline_warmup_wm(self, replay, *, steps: int, batch_size: int, optim_cfg) -> float:
         self.world_model.train()
+        last = 0.0
         for i in range(int(steps)):
             wm_batch = self._build_wm_pretrain_batch(replay.sample(batch_size))
             if wm_batch is None:
@@ -45,12 +46,15 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 device=self.device,
                 optim_cfg=optim_cfg,
             )
+            last = float(m.get("loss", 0.0))
             if i % 50 == 0:
-                print(f"[pipeline][wm-warmup] step={i}/{steps} loss={float(m.get('loss', 0.0)):.4f}", flush=True)
+                print(f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}", flush=True)
+        return last
 
     def _offline_warmup_classifier(
         self, replay, *, steps: int, batch_size: int, early_neg_stride: int, grad_clip: float
-    ) -> None:
+    ) -> float:
+        last_acc = 0.0
         for i in range(int(steps)):
             m = online_classifier_update_step(
                 classifier=self.classifier,
@@ -61,8 +65,10 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
             )
+            last_acc = float(m["acc"])
             if i % 50 == 0:
-                print(f"[pipeline][cls-warmup] step={i}/{steps} loss={float(m['loss']):.4f} acc={float(m['acc']):.3f}", flush=True)
+                print(f"[pipeline][cls-warmup] step={i}/{steps} loss={float(m['loss']):.4f} acc={last_acc:.3f}", flush=True)
+        return last_acc
 
     # ------------------------------------------------------------ split ckpts
     def _wm_warmup_ckpt(self) -> str:
@@ -148,18 +154,24 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 raise RuntimeError("offline seeding produced an empty replay buffer")
 
         if need_wm:
-            self._offline_warmup_wm(warmup_replay, steps=wm_steps, batch_size=bs, optim_cfg=optim_cfg)
+            if self.distributed.is_main_process:
+                print(phase_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps"), flush=True)
+            wm_last = self._offline_warmup_wm(warmup_replay, steps=wm_steps, batch_size=bs, optim_cfg=optim_cfg)
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
+                print(phase_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True), flush=True)
         else:
             payload = torch.load(self._wm_warmup_ckpt(), map_location="cpu", weights_only=False)
             _unwrap(self.world_model).load_state_dict(payload["world_model"])
 
         if need_cls:
-            self._offline_warmup_classifier(warmup_replay, steps=cls_steps, batch_size=cls_bs,
+            if self.distributed.is_main_process:
+                print(phase_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps"), flush=True)
+            cls_last = self._offline_warmup_classifier(warmup_replay, steps=cls_steps, batch_size=cls_bs,
                                             early_neg_stride=early_neg_stride, grad_clip=grad_clip)
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
+                print(phase_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True), flush=True)
         else:
             payload = torch.load(self._cls_warmup_ckpt(), map_location="cpu", weights_only=False)
             _unwrap(self.classifier).load_state_dict(payload["classifier"])
@@ -174,6 +186,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0))
         if total_env_steps <= 0:
             if self.distributed.is_main_process:
-                print("[pipeline] warmup complete; online_rollout.total_env_steps=0", flush=True)
+                print(phase_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True), flush=True)
             return []
+        if self.distributed.is_main_process:
+            print(phase_banner("[3/3] ONLINE COTRAIN", subtitle=f"{total_env_steps} env steps"), flush=True)
         return self._online_cotrain_loop(cfg)
