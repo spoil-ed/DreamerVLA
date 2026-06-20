@@ -56,11 +56,6 @@ from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
 
 
-def _count_trainable(module: torch.nn.Module | None) -> int:
-    if module is None:
-        return 0
-    return int(sum(p.numel() for p in module.parameters() if p.requires_grad))
-
 
 class OnlineCotrainRunner(DreamerVLARunner):
     """Hydra runner for the unified online cotrain pipeline (see module docstring)."""
@@ -142,11 +137,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     seen.add(id(p))
         if self.distributed.is_main_process:
             print(
-                "[online-cotrain][freeze] trainable params  "
-                f"world_model={_count_trainable(self.world_model)}  "
-                f"policy={_count_trainable(self.policy)}  "
-                f"classifier={_count_trainable(getattr(self, 'classifier', None))}; "
-                "optimizer param sets are disjoint.",
+                "[ok] phase isolation: optimizer param sets are disjoint",
                 flush=True,
             )
 
