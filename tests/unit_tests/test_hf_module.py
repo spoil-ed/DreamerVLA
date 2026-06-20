@@ -1,5 +1,9 @@
-import torch
+import types
 
+import torch
+from omegaconf import OmegaConf
+
+from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 
 
@@ -18,3 +22,17 @@ def test_save_load_roundtrip(tmp_path):
     assert isinstance(loaded, torch.nn.Linear)
     for k, v in m.state_dict().items():
         assert torch.equal(loaded.state_dict()[k], v)
+
+
+def _runner(fmt):
+    obj = types.SimpleNamespace()
+    obj.cfg = OmegaConf.create({"training": {"checkpoint_format": fmt}})
+    obj.checkpoint_save_torch = types.MethodType(BaseRunner.checkpoint_save_torch, obj)
+    obj.checkpoint_save_hf = types.MethodType(BaseRunner.checkpoint_save_hf, obj)
+    return obj
+
+
+def test_checkpoint_format_flags():
+    assert _runner("both").checkpoint_save_torch() and _runner("both").checkpoint_save_hf()
+    assert _runner("torch").checkpoint_save_torch() and not _runner("torch").checkpoint_save_hf()
+    assert _runner("hf").checkpoint_save_hf() and not _runner("hf").checkpoint_save_torch()

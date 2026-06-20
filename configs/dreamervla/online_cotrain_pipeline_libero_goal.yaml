@@ -35,6 +35,7 @@ training:
   out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_pipeline/${now:%Y%m%d_%H%M%S}
   debug: false
   resume: false
+  checkpoint_format: both   # torch | hf | both
   distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: true
