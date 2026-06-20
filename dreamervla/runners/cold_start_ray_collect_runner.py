@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
+from tqdm import tqdm
 
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.scheduler.cluster import Cluster
@@ -282,6 +283,11 @@ class ColdStartRayCollectRunner(BaseRunner):
             "COLDSTART COLLECT",
             subtitle=f"target={target_episodes} episodes · envs={num_envs}",
         )
+        pbar = (
+            tqdm(total=target_episodes, desc="coldstart collect", unit="ep", mininterval=10.0)
+            if self.is_main_process
+            else None
+        )
 
         def wait_result(result: Any) -> list[Any]:
             nonlocal driver_roundtrips
@@ -296,7 +302,12 @@ class ColdStartRayCollectRunner(BaseRunner):
             return _wait_worker_results(results)
 
         while env_ids and steps < max_steps:
-            if int(wait_result(dump.size())[0]) >= target_episodes:
+            done_count = int(wait_result(dump.size())[0])
+            if pbar is not None:
+                pbar.n = done_count
+                pbar.set_postfix_str(f"step {steps}/{max_steps}")
+                pbar.refresh()
+            if done_count >= target_episodes:
                 break
             if scheduled:
                 obs_batch = wait_results(
@@ -338,6 +349,10 @@ class ColdStartRayCollectRunner(BaseRunner):
             steps += 1
 
         episodes = int(wait_result(dump.size())[0])
+        if pbar is not None:
+            pbar.n = episodes
+            pbar.refresh()
+            pbar.close()
         wait_result(dump.close())
         wait_result(envs.close())
         succ_rate = self.console_success_rate()

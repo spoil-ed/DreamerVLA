@@ -615,7 +615,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     metrics["rl/returns_mean"] = float(ac_metrics.get("returns_mean", 0.0))
                     metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
 
-                self.console_metrics(f"{metrics['phase']} · step {self.global_step}", metrics)
+                self.console_metrics(
+                    f"{metrics['phase']} · env {env_step}/{total_env_steps} "
+                    f"({100.0 * env_step / max(1, total_env_steps):.0f}%) · upd {self.global_step}",
+                    metrics,
+                )
                 if self.distributed.is_main_process:
                     self.log_metrics(metrics, step=int(self.global_step))
                 history.append(metrics)
