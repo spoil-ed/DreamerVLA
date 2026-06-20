@@ -119,13 +119,21 @@ done
 # ---- merge shards into the shared coldstart dir (unique, matching names) ---
 echo "[collect_parallel] merging shards -> $run_root/coldstart/{reward,hidden}"
 for g in "${GPUS_USED[@]}"; do
-  src_rw="$run_root/coldstart_g${g}/reward/ray_shard_000.hdf5"
-  src_hd="$run_root/coldstart_g${g}/hidden/ray_shard_000.hdf5"
-  if [[ ! -f "$src_rw" || ! -f "$src_hd" ]]; then
-    echo "[collect_parallel] WARN: missing shard for GPU $g (no episodes collected?) — skipping" >&2; continue
-  fi
-  cp -f "$src_rw" "$run_root/coldstart/reward/shard_g${g}.hdf5"
-  cp -f "$src_hd" "$run_root/coldstart/hidden/shard_g${g}.hdf5"
+  rwdir="$run_root/coldstart_g${g}/reward"
+  [[ -d "$rwdir" ]] || { echo "[collect_parallel] WARN: no reward dir for GPU $g — skipping" >&2; continue; }
+  shopt -s nullglob
+  found=0
+  for src_rw in "$rwdir"/*.hdf5; do
+    base="$(basename "$src_rw")"; src_hd="$run_root/coldstart_g${g}/hidden/$base"
+    [[ -f "$src_hd" ]] || { echo "[collect_parallel] WARN: missing hidden shard $base for GPU $g" >&2; continue; }
+    # unique name keyed by GPU + original shard name, identical in reward/ and hidden/
+    dst="g${g}_${base}"
+    cp -f "$src_rw" "$run_root/coldstart/reward/$dst"
+    cp -f "$src_hd" "$run_root/coldstart/hidden/$dst"
+    found=1
+  done
+  shopt -u nullglob
+  [[ "$found" == "0" ]] && echo "[collect_parallel] WARN: GPU $g produced no shards" >&2
 done
 # preprocess_config.json (identical across jobs) — copy one
 pc="$(find "$run_root"/coldstart_g*/hidden -name preprocess_config.json 2>/dev/null | head -1 || true)"
