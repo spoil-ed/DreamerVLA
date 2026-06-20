@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ class RolloutDumpWorker(Worker):
         shard_name: str = "ray_shard_000.hdf5",
         preprocess_config: dict[str, Any] | None = None,
         data_attrs: dict[str, Any] | None = None,
+        demos_per_shard: int = 0,
     ) -> None:
         super().__init__()
         self.reward_dir = str(reward_dir)
@@ -26,21 +28,35 @@ class RolloutDumpWorker(Worker):
         self.shard_name = str(shard_name)
         self.preprocess_config = dict(preprocess_config or {})
         self.data_attrs = dict(data_attrs or {})
+        self.demos_per_shard = int(demos_per_shard)
         self.writer: RolloutDumpWriter | None = None
         self.num_episodes = 0
+        self._shard_idx = 0
+        self._shard_demos = 0
+
+    def _shard_name(self, idx: int) -> str:
+        stem = self.shard_name[:-5] if self.shard_name.endswith(".hdf5") else self.shard_name
+        base = re.sub(r"_\d+$", "", stem)
+        return f"{base}_{idx:03d}.hdf5"
 
     def init(self) -> None:
+        first = self.shard_name if self.demos_per_shard <= 0 else self._shard_name(0)
         self.writer = RolloutDumpWriter(
-            Path(self.reward_dir),
-            Path(self.hidden_dir),
-            self.shard_name,
+            Path(self.reward_dir), Path(self.hidden_dir), first
         )
 
     def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not episode:
             return None
+        if self.demos_per_shard > 0 and self._shard_demos >= self.demos_per_shard:
+            self._writer().close()
+            self._shard_idx += 1
+            self._shard_demos = 0
+            self.writer = RolloutDumpWriter(
+                Path(self.reward_dir), Path(self.hidden_dir), self._shard_name(self._shard_idx)
+            )
         first = episode[0]
-        index = int(self.num_episodes)
+        index = self._shard_demos if self.demos_per_shard > 0 else int(self.num_episodes)
         self._writer().write_demo(
             index=index,
             steps=episode,
@@ -52,8 +68,9 @@ class RolloutDumpWorker(Worker):
             episode_success=bool(episode[-1].get("success", False)),
             episode_horizon=len(episode),
         )
+        self._shard_demos += 1
         self.num_episodes += 1
-        return {"episode_index": index, "length": len(episode)}
+        return {"episode_index": int(self.num_episodes - 1), "length": len(episode)}
 
     def size(self) -> int:
         return int(self.num_episodes)
