@@ -210,6 +210,11 @@ class SuccessTracker:
     denominator forever); a moving window over recent episodes reflects current
     policy quality. `delta()` is measured against the last `mark_printed()` so
     each printed box shows the change since the previous box.
+
+    `best` is only updated once the window is full; a run with fewer than
+    `window` total episodes therefore reports `best == 0.0`. This is intentional —
+    it prevents a single early success from inflating `best` to 1.0 on a
+    partially-filled window.
     """
 
     def __init__(self, window: int) -> None:
@@ -249,4 +254,5 @@ __all__ = [
     "load_world_model_state",
     "obs_batch_to_action_hidden",
     "obs_to_action_hidden",
+    "SuccessTracker",
 ]
