@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +201,46 @@ def obs_batch_to_action_hidden(
         for obs in obs_batch
     ]
     return torch.cat(embeddings, dim=0)
+
+
+class SuccessTracker:
+    """Windowed episode success rate with best-so-far and delta-since-last-print.
+
+    Cumulative success rate hides improvement (early failures sit in the
+    denominator forever); a moving window over recent episodes reflects current
+    policy quality. `delta()` is measured against the last `mark_printed()` so
+    each printed box shows the change since the previous box.
+    """
+
+    def __init__(self, window: int) -> None:
+        self._buf: deque[float] = deque(maxlen=max(1, int(window)))
+        self._best: float = 0.0
+        self._last_printed: float | None = None
+
+    def update(self, success: bool) -> None:
+        self._buf.append(1.0 if success else 0.0)
+        if len(self._buf) == self._buf.maxlen:
+            r = self.rate()
+            if r > self._best:
+                self._best = r
+
+    def rate(self) -> float:
+        return (sum(self._buf) / len(self._buf)) if self._buf else 0.0
+
+    @property
+    def best(self) -> float:
+        return self._best
+
+    def delta(self) -> float:
+        if self._last_printed is None:
+            return 0.0
+        return self.rate() - self._last_printed
+
+    def mark_printed(self) -> None:
+        self._last_printed = self.rate()
+
+    def __len__(self) -> int:
+        return len(self._buf)
 
 
 __all__ = [

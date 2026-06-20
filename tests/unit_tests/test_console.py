@@ -1,4 +1,5 @@
 from dreamervla.utils import console
+from dreamervla.runners.online_utils import SuccessTracker
 
 
 def test_fmt_value_thresholds():
@@ -30,3 +31,20 @@ def test_metric_box_renders_header_and_rows():
     assert lines[-1].startswith("╰") and lines[-1].endswith("╯")  # bottom corners
     assert all(len(ln) == 65 for ln in lines)
     assert any("succ@50" in ln for ln in lines)
+
+
+def test_success_tracker_window_best_and_delta():
+    t = SuccessTracker(window=4)
+    assert t.rate() == 0.0 and len(t) == 0
+    for s in (True, False, True, False):   # 2/4 = 0.5 over window
+        t.update(s)
+    assert t.rate() == 0.5
+    assert t.best == 0.5
+    # delta is vs last marked print; nothing marked yet -> 0.0
+    assert t.delta() == 0.0
+    t.mark_printed()
+    t.update(True)  # window now (F,T,F,T) -> 0.5 still; then drops oldest True
+    t.update(True)  # window (F,T,T,T) -> 0.75
+    assert t.rate() == 0.75
+    assert round(t.delta(), 3) == 0.25
+    assert t.best == 0.75
