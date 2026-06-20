@@ -152,6 +152,7 @@ def build_pipeline_plan(
     common_overrides: Sequence[str] = (),
     ngpu: int | None = None,
     master_port: int | None = None,
+    debug: bool | None = None,
 ) -> PipelinePlan:
     cfg = script_config("coldstart_warmup_cotrain") if launcher_cfg is None else launcher_cfg
     selected_mode = _normalize_mode(str(cfg["mode"] if mode is None else mode))
@@ -166,6 +167,7 @@ def build_pipeline_plan(
         cfg.get("master_port", 29500) if master_port is None else master_port
     )
     distributed = bool(cfg.get("distributed", True))
+    debug_enabled = bool(cfg.get("debug", False) if debug is None else debug)
     root = Path(run_root).expanduser()
     reward_dir = root / "coldstart" / "reward"
     hidden_dir = root / "coldstart" / "hidden"
@@ -235,6 +237,10 @@ def build_pipeline_plan(
         *common_overrides,
         *cotrain_overrides,
     ]
+    # debug=true overrides the profile's full values so the runner's central swap
+    # takes over (small debug_* scale). Appended last so it wins in Hydra.
+    if debug_enabled:
+        cotrain_cmd.append("training.debug=true")
     return PipelinePlan(
         mode=selected_mode,
         profile=selected_profile,
@@ -373,6 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         collect_overrides=_as_str_list(cfg.get("collect_overrides")),
         cotrain_overrides=_as_str_list(cfg.get("cotrain_overrides")),
         common_overrides=_as_str_list(cfg.get("common_overrides")),
+        debug=bool(cfg.get("debug", False)),
     )
     print(f"mode: {plan.mode}")
     print(f"profile: {plan.profile}")

@@ -86,6 +86,35 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     "classifier": _unwrap(self.classifier).state_dict(),
                     "classifier_threshold": float(self.classifier_threshold)}, self._cls_warmup_ckpt())
 
+    # ------------------------------------------------------------- debug swap
+    @staticmethod
+    def _apply_debug_overrides(cfg) -> None:
+        """When training.debug is set, swap every full knob for its debug_* value.
+
+        Applied once at the top of run() (force_add) so every downstream read —
+        warmup steps and the online loop alike — sees the small smoke values.
+        """
+        if not bool(OmegaConf.select(cfg, "training.debug", default=False)):
+            return
+        # full key -> debug key + fallback when the debug key is absent
+        swaps = [
+            ("training.wm_warmup_steps", "offline_warmup.debug_wm_warmup_steps", 2),
+            ("training.classifier_warmup_steps", "offline_warmup.debug_classifier_warmup_steps", 2),
+            ("online_rollout.total_env_steps", "online_rollout.debug_total_env_steps", 160),
+            ("online_rollout.max_train_updates", "online_rollout.debug_max_train_updates", 4),
+            ("online_rollout.episode_horizon", "online_rollout.debug_episode_horizon", 50),
+            ("online_rollout.min_replay", "online_rollout.debug_min_replay", 48),
+            ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
+            ("algorithm.imagination_horizon", "algorithm.debug_imagination_horizon", 3),
+            ("algorithm.ppo_rollouts_per_start", "algorithm.debug_ppo_rollouts_per_start", 2),
+            ("algorithm.wmpo.episode_max_steps", "algorithm.wmpo.debug_episode_max_steps", 150),
+        ]
+        for full_key, debug_key, fallback in swaps:
+            value = OmegaConf.select(cfg, debug_key, default=fallback)
+            if value is None:
+                continue
+            OmegaConf.update(cfg, full_key, value, force_add=True)
+
     # ------------------------------------------------------------------ main
     def run(self) -> list[dict[str, Any]]:
         import copy
@@ -93,6 +122,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         from dreamervla.runners.online_replay import OnlineReplay
 
         cfg = copy.deepcopy(self.cfg)
+        self._apply_debug_overrides(cfg)
         latent_type = str(OmegaConf.select(cfg, "latent_type", default="action_hidden"))
         if latent_type not in ("action_hidden", "backbone_latent"):
             raise ValueError(f"unknown latent_type={latent_type!r}")
@@ -117,8 +147,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             print(f"[ok] model ready · {total/1e6:.1f}M trainable", flush=True)
         os.makedirs(os.path.join(self.output_dir, "ckpt"), exist_ok=True)
 
-        # warmup knobs
-        ow = OmegaConf.select(cfg, "offline_warmup", default={}) or {}
+        # warmup knobs (debug values, if any, were applied by _apply_debug_overrides)
         wm_steps = int(OmegaConf.select(cfg, "training.wm_warmup_steps", default=2000))
         cls_steps = int(OmegaConf.select(cfg, "training.classifier_warmup_steps", default=2000))
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
@@ -131,10 +160,6 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         env_task_ids = tuple(int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]))
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
         resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
-
-        if bool(OmegaConf.select(cfg, "training.debug", default=False)):
-            wm_steps = int(OmegaConf.select(ow, "debug_wm_warmup_steps", default=2))
-            cls_steps = int(OmegaConf.select(ow, "debug_classifier_warmup_steps", default=2))
 
         need_wm = not (resume and os.path.exists(self._wm_warmup_ckpt()))
         need_cls = not (resume and os.path.exists(self._cls_warmup_ckpt()))

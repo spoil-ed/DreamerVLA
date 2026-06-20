@@ -186,6 +186,7 @@ algorithm:
   wmpo:
     chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
+    debug_episode_max_steps: 150
     classifier_min_steps: 4
     filter_zero_variance_groups: true
   actor_input_mode: pooled
@@ -193,6 +194,7 @@ algorithm:
   rssm_action_clip: true
   imag_last: 4
   imagination_horizon: 5
+  debug_imagination_horizon: 3
   horizon: 333
   contdisc: true
   lam: 0.95
@@ -201,6 +203,7 @@ algorithm:
   kl_penalty_kind: kl
   actor_bc_to_ref_scale: 0.1
   ppo_rollouts_per_start: 4
+  debug_ppo_rollouts_per_start: 2
   ppo_update_epochs: 1
   ppo_gamma: 1.0
   clip_ratio_low: 0.2
@@ -251,6 +254,7 @@ optim:
 
 dataloader:
   batch_size: 4
+  debug_batch_size: 2
 
 runner:
   logger:

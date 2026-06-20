@@ -520,3 +520,28 @@ def test_multi_gpu_profile_is_gpu_count_agnostic(tmp_path) -> None:
         )
         assert f"--nproc-per-node={n}" in plan.cotrain_cmd
         assert "torch.distributed.run" not in plan.collect_cmd
+
+
+@pytest.mark.parametrize("profile", ["release", "multi_gpu"])
+def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
+    cfg = _launcher_cfg()
+    cotrain = cfg["profiles"][profile]["cotrain"]
+
+    assert "training.debug=false" in cotrain
+    assert "online_rollout.total_env_steps=200000" in cotrain
+    assert "training.wm_warmup_steps=2000" in cotrain
+    assert "training.classifier_warmup_steps=2000" in cotrain
+
+
+def test_launcher_debug_control_appends_training_debug_to_cotrain(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan_default = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    assert "training.debug=true" not in plan_default.cotrain_cmd
+
+    plan_debug = build_pipeline_plan(
+        mode="noray", run_root=tmp_path, python="python", debug=True
+    )
+    assert "training.debug=true" in plan_debug.cotrain_cmd
+    # debug only affects cotrain, never the collect command.
+    assert "training.debug=true" not in plan_debug.collect_cmd
