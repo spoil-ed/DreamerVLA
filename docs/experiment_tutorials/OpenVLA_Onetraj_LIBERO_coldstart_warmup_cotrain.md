@@ -216,6 +216,32 @@ Each run writes one root:
 Use `run_root=...` for a stable output path. Use `skip_collect=true` to reuse an
 existing `<run_root>/coldstart/{reward,hidden}` pair and run warmup only.
 
+### Data & checkpoint format conventions
+
+> **Roadmap — planned, not yet implemented.** These are the target conventions;
+> current behavior is stated so the doc stays honest.
+
+**Data sharding — slice into reasonable shards.** Cold-start data must be split
+into reasonably-sized shards rather than one giant file. `offline_seed` already
+reads *every* `*.hdf5` under `reward/` and pairs the same-named shard under
+`hidden/`, so multi-shard is fully supported today.
+- *Current:* the Ray collector writes one shard per job (`ray_shard_000.hdf5`);
+  `scripts/collect_parallel.sh` merges per-GPU jobs as `shard_g{i}.hdf5`.
+- *Planned:* shard rotation inside the dump worker — roll a new shard every N
+  episodes (or at a size cap) so a single shard never grows unbounded.
+
+**Checkpoints — dual HF + torch, interchangeable.** Everything weight-related
+should save/load in **both** formats:
+- **HF style** via `save_pretrained` wrapping — each component (world model,
+  policy, critic, classifier) written as a HF-style directory (`config.json` +
+  `model.safetensors`), so checkpoints are portable and loadable with HF tooling.
+- **torch style** — the existing `.ckpt` (`torch.save` of `state_dict`s), kept
+  for resume compatibility.
+- *Current:* torch `.ckpt` only (`cotrain/ckpt/{wm_warmup,classifier_warmup}.ckpt`,
+  `cotrain/ckpt/latest.ckpt`).
+- *Planned:* add the HF (`save_pretrained`) path plus a format flag so both are
+  produced and consumed interchangeably.
+
 ## Inspect Results
 
 Success count:
