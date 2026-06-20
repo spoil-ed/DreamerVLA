@@ -198,9 +198,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
                 )
         else:
-            obs_embedding = obs_to_action_hidden(
-                self.encoder, processor, obs, self.device, target_token_id
-            )
+            oft_ah_extractor = getattr(self, "_oft_action_hidden_extractor", None)
+            if oft_ah_extractor is not None:
+                if is_first and hasattr(oft_ah_extractor, "reset"):
+                    oft_ah_extractor.reset()
+                _action_chunk, flat_hidden = oft_ah_extractor.step(
+                    obs,
+                    str(obs.get("task_description", "")),
+                )
+                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
+            else:
+                obs_embedding = obs_to_action_hidden(
+                    self.encoder, processor, obs, self.device, target_token_id
+                )
         if is_first:
             latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
         else:
@@ -245,6 +255,39 @@ class OnlineCotrainRunner(DreamerVLARunner):
         self._build_components(cfg)
         return self._online_cotrain_loop(cfg)
 
+    def build_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
+        """Return the frozen-encoder cfg, swapping in a CLEAN OpenVLAOFTPolicy cfg
+        for the OFT action_hidden route.
+
+        The composed ``encoder:`` node for this route is ``RynnVLAEncoder`` (inherited
+        from the base pipeline), and OmegaConf deep-merges any overlay onto it, so the
+        RynnVLA-only keys (tokenizer_path, chameleon_*, ...) would leak into
+        ``OpenVLAOFTPolicy.__init__``. Detect the route via ``latent_type=="action_hidden"``
+        plus a present ``task.openvla_oft`` block and build a fresh OFT encoder cfg from
+        ``task.openvla_oft.*`` (mirrors the backbone_latent encoder block)."""
+        latent_type = str(
+            getattr(self, "_latent_type", OmegaConf.select(cfg, "latent_type", default="action_hidden"))
+        )
+        oft = OmegaConf.select(cfg, "task.openvla_oft", default=None)
+        if latent_type == "action_hidden" and oft is not None:
+            return OmegaConf.create(
+                {
+                    "_target_": "dreamervla.models.encoder.OpenVLAOFTPolicy",
+                    "model_path": oft.ckpt_path,
+                    "component_ckpt_dir": oft.component_ckpt_dir,
+                    "resume_step": oft.resume_step,
+                    "torch_dtype": "bf16",
+                    "num_images_in_input": oft.num_images_in_input,
+                    "use_lora": False,
+                    "use_l1_regression": oft.use_l1_regression,
+                    "use_diffusion": False,
+                    "use_proprio": oft.use_proprio,
+                    "use_film": False,
+                    "freeze_vla_backbone": True,
+                }
+            )
+        return super().build_encoder_cfg(cfg)
+
     def _build_components(self, cfg: DictConfig) -> None:
         # ---- components (reuse hydra targets + inherited helpers; no offline run() touch)
         total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=1))
@@ -252,6 +295,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             self.encoder = None
             self.processor = None
             self._oft_input_token_extractor = None
+            self._oft_action_hidden_extractor = None
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
             self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
@@ -262,6 +306,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 else None
             )
             self._oft_input_token_extractor = self._build_oft_input_token_extractor(cfg)
+            self._oft_action_hidden_extractor = self._build_oft_action_hidden_extractor(cfg)
 
         self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
             device=self.device, dtype=torch.bfloat16
@@ -336,6 +381,53 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 )
             ),
             obs_hidden_source="input_token_embedding",
+        )
+
+    def _build_oft_action_hidden_extractor(self, cfg: DictConfig) -> Any | None:
+        """OFT action-query hidden extractor for the action_hidden online rollout.
+
+        Mirrors ``_build_oft_input_token_extractor`` but with
+        ``obs_hidden_source="action_query"`` so it emits the (56*4096,)=229376
+        action-query hidden matching the coldstart action_hidden sidecars. Returns
+        ``None`` for non-OFT (RynnVLA) encoders, which keep the ``obs_to_action_hidden``
+        path."""
+        if getattr(self, "_latent_type", "action_hidden") != "action_hidden":
+            return None
+        encoder = getattr(self, "encoder", None)
+        if encoder is None or not hasattr(encoder, "vla") or not hasattr(encoder, "processor"):
+            return None
+
+        stats_path = OmegaConf.select(
+            cfg,
+            "task.openvla_oft.dataset_statistics_path",
+            default=None,
+        )
+        if stats_path is not None and hasattr(encoder, "vla"):
+            path = Path(str(stats_path)).expanduser()
+            if path.is_file():
+                with path.open("r", encoding="utf-8") as handle:
+                    encoder.vla.norm_stats = json.load(handle)
+
+        from dreamervla.runners.rollout_hidden_extractor import OFTRolloutHiddenExtractor
+
+        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
+        image_keys = OmegaConf.select(env_cfg, "image_keys", default=["agentview_rgb"])
+        return OFTRolloutHiddenExtractor(
+            encoder,
+            image_keys=list(image_keys),
+            history=int(OmegaConf.select(env_cfg, "history_length", default=1)),
+            rotate_images_180=bool(
+                OmegaConf.select(env_cfg, "vla_rotate_180", default=True)
+            ),
+            center_crop=True,
+            unnorm_key=str(
+                OmegaConf.select(
+                    cfg,
+                    "task.openvla_oft.dataset_statistics_key",
+                    default="libero_goal_no_noops",
+                )
+            ),
+            obs_hidden_source="action_query",
         )
 
     def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
