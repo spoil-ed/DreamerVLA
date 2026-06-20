@@ -489,7 +489,7 @@ class DreamerV3TokenRunner(BaseRunner):
                             log_handle.write(json.dumps(row) + "\n")
                             log_handle.flush()
                             self.log_metrics(row, step=self.global_step)
-                            self.console_metrics(f"train · epoch {self.epoch}", row)
+                            self.console_metrics(f"train · epoch {self.epoch}", {f"train/{k}": v for k, v in row.items()})
 
                         self._maybe_save_viz(model_core, batch)
 

@@ -602,7 +602,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                             epoch_log.update(self.evaluate_val_loss(val_dl, split_name))
                     logger.log(epoch_log)
                     self.log_metrics(epoch_log, step=self.global_step)
-                    self.console_metrics(f"train · epoch {self.epoch}", epoch_log)
+                    self.console_metrics(f"train · epoch {self.epoch}", {self._normalize_metric_name(k): v for k, v in epoch_log.items()})
 
                     if (self.epoch % int(cfg.training.checkpoint_every)) == 0:
                         if bool(
