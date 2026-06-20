@@ -156,9 +156,13 @@ class OnlineCotrainRayRunner(BaseRunner):
         }
 
     def _run_loop(self, groups: dict[str, Any]) -> dict[str, float | int]:
+        self.console_banner("ONLINE COTRAIN (ray)", subtitle=f"envs={groups['num_envs']}")
         if not _uses_ray_worker_groups(groups):
-            return self._run_loop_sync(groups)
-        return self._run_loop_overlap(groups)
+            result = self._run_loop_sync(groups)
+        else:
+            result = self._run_loop_overlap(groups)
+        self.console_banner("ONLINE COTRAIN (ray)", done=True)
+        return result
 
     def _run_loop_sync(self, groups: dict[str, Any]) -> dict[str, float | int]:
         envs = groups["envs"]
@@ -214,13 +218,11 @@ class OnlineCotrainRayRunner(BaseRunner):
                 env_step_wait_s += time.perf_counter() - env_step_start
             rollout_end = time.perf_counter()
 
-            done_envs = [
-                env_id
-                for env_id, (_obs, done, _info) in zip(
-                    env_ids, step_results, strict=True
-                )
-                if done
-            ]
+            done_envs = []
+            for env_id, (_obs, done, info) in zip(env_ids, step_results, strict=True):
+                if done:
+                    done_envs.append(env_id)
+                    self.console_record_success(bool((info or {}).get("success", False)))
             if done_envs:
                 infer.reset_states(done_envs).wait()
 
@@ -234,6 +236,9 @@ class OnlineCotrainRayRunner(BaseRunner):
                     last_loss = _learner_loss(metrics)
                     learner_updates += 1
                     policy_version += 1
+                    update_metrics = {"train/rl_loss": last_loss, **last_metrics}
+                    self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
+                    self.log_metrics(update_metrics, step=self.global_step)
                     sync_start = time.perf_counter()
                     learner.sync_weights("policy", policy_version).wait()
                     if policy_version % weight_sync_every == 0:
@@ -258,6 +263,9 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             policy_version += 1
+            update_metrics = {"train/rl_loss": last_loss, **last_metrics}
+            self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
+            self.log_metrics(update_metrics, step=self.global_step)
             learner.sync_weights("policy", policy_version).wait()
 
         return {
@@ -371,8 +379,9 @@ class OnlineCotrainRayRunner(BaseRunner):
             env_id: int,
             step_result: tuple[dict[str, Any], bool, dict[str, Any]],
         ) -> None:
-            next_obs, done, _info = step_result
+            next_obs, done, info = step_result
             if done:
+                self.console_record_success(bool((info or {}).get("success", False)))
                 infer.reset_states([int(env_id)]).wait()
             if steps < rollout_steps:
                 ready_obs.append((int(env_id), next_obs))
@@ -406,6 +415,9 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             policy_version += 1
+            update_metrics = {"train/rl_loss": last_loss, **last_metrics}
+            self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
+            self.log_metrics(update_metrics, step=self.global_step)
 
             sync_start = time.perf_counter()
             learner.sync_weights("policy", policy_version).wait()
