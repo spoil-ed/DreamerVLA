@@ -88,17 +88,17 @@ class CollectRolloutsRunner(BaseRunner):
         def _on_episode(task_id: int, episode_id: int, n_steps: int, success: bool) -> None:
             successes.append(success)
             self.console_record_success(success)
-            self.console_metrics(
-                "collect",
-                {
-                    "collect/episodes": len(successes),
-                    "collect/success_rate": sum(successes) / len(successes),
-                },
-            )
 
         demos_written = collect_rollouts(cfg, rank, world_size, local_rank, on_episode=_on_episode)
 
         succ_rate = sum(successes) / len(successes) if successes else 0.0
+        self.console_metrics(
+            "collect",
+            {
+                "collect/episodes": len(successes),
+                "collect/success_rate": succ_rate,
+            },
+        )
         self.console_banner(
             "COLLECT ROLLOUTS",
             done=True,
