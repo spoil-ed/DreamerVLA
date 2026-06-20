@@ -79,4 +79,29 @@ class CollectRolloutsRunner(BaseRunner):
 
     def run(self) -> object:
         rank, world_size, local_rank = _get_dist_info()
-        return collect_rollouts(self._build_collect_cfg(), rank, world_size, local_rank)
+        cfg = self._build_collect_cfg()
+        task_suite = cfg.get("task_suite_name", "")
+        self.console_banner("COLLECT ROLLOUTS", subtitle=f"suite={task_suite} rank={rank}/{world_size}")
+
+        successes: list[bool] = []
+
+        def _on_episode(task_id: int, episode_id: int, n_steps: int, success: bool) -> None:
+            successes.append(success)
+            self.console_record_success(success)
+            self.console_metrics(
+                "collect",
+                {
+                    "collect/episodes": len(successes),
+                    "collect/success_rate": sum(successes) / len(successes),
+                },
+            )
+
+        demos_written = collect_rollouts(cfg, rank, world_size, local_rank, on_episode=_on_episode)
+
+        succ_rate = sum(successes) / len(successes) if successes else 0.0
+        self.console_banner(
+            "COLLECT ROLLOUTS",
+            done=True,
+            subtitle=f"{demos_written} episodes · succ {succ_rate:.3f}",
+        )
+        return demos_written

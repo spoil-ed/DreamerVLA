@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -253,6 +254,7 @@ def _collect_vectorized_path(
     history: int,
     rotate_images_180: bool,
     image_keys: list[str],
+    on_episode: Callable[[int, int, int, bool], None] | None = None,
 ) -> int:
     """Drive K env subprocesses with batched VLA inference; returns demos written.
 
@@ -303,6 +305,14 @@ def _collect_vectorized_path(
         def infer_fn(preps: list[dict[str, Any]]) -> list[tuple[list[Any], Any]]:
             return decoder.predict_batch(preps)
 
+        def _vec_on_episode(tid: int, ep: int, ns: int, ok: bool) -> None:
+            print(
+                f"  [rank={rank} vec] task={tid} ep={ep} steps={ns} success={ok}",
+                flush=True,
+            )
+            if on_episode is not None:
+                on_episode(tid, ep, ns, ok)
+
         with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
             return collect_vectorized(
                 vec_env,
@@ -315,10 +325,7 @@ def _collect_vectorized_path(
                 data_attrs=data_attrs,
                 rank=rank,
                 action_steps=int(preprocess_config["chunk_size"]),
-                on_episode=lambda tid, ep, ns, ok: print(
-                    f"  [rank={rank} vec] task={tid} ep={ep} steps={ns} success={ok}",
-                    flush=True,
-                ),
+                on_episode=_vec_on_episode,
             )
     finally:
         vec_env.close()
@@ -333,12 +340,16 @@ def collect_rollouts(
     rank: int,
     world_size: int,
     local_rank: int,
+    on_episode: Callable[[int, int, int, bool], None] | None = None,
 ) -> int:
     """Collect rollouts for this rank's work-slice; returns demos written.
 
     All extraction parameters come from ``cfg`` (no hardcoded defaults); see
     _REQUIRED_COLLECT_KEYS.  Layer-1 sharding uses (rank, world_size); Layer-2
     within-rank K-env batching is enabled by cfg["envs_per_gpu"] > 1.
+
+    on_episode: optional callback ``(task_id, episode_id, n_steps, success)``
+        invoked after each episode completes; used by the runner console API.
     """
     _require_keys(cfg)
     cfg["_rank"] = rank
@@ -458,6 +469,7 @@ def collect_rollouts(
             history=history,
             rotate_images_180=rotate_images_180,
             image_keys=image_keys,
+            on_episode=on_episode,
         )
     else:
         demo_index = 0
@@ -490,11 +502,11 @@ def collect_rollouts(
                         rank=rank,
                         action_steps=int(preprocess_config["chunk_size"]),
                     )
-                    # episode_success is intentionally omitted here: the single-env
-                    # _run_episode does not surface a success flag. Downstream
-                    # (offline_seed / WMPOAlignedLatentDataset) derives success from
-                    # sparse_rewards, so it stays recoverable. The vectorized path,
-                    # which has `success` in scope, passes episode_success explicitly.
+                    # Derive success from sparse_rewards on the terminal step;
+                    # this matches the vectorized path and the downstream reader.
+                    ep_success = bool(steps[-1]["sparse_rewards"]) if steps else False
+                    if on_episode is not None:
+                        on_episode(task_id, ep, len(steps), ep_success)
                     writer.write_demo(
                         index=demo_index,
                         steps=steps,
