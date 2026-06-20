@@ -19,6 +19,8 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
+from dreamervla.runners.online_utils import SuccessTracker
+from dreamervla.utils.console import fmt_value, metric_box, phase_banner
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
@@ -27,6 +29,26 @@ from dreamervla.utils.hf_checkpoint import (
 from dreamervla.utils.metric_logger import MetricLogger, NullMetricLogger
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _group_metric_rows(metrics: dict, *, skip_success: bool = False) -> list[str]:
+    """Group namespaced metrics into one row per prefix, dropping meta keys."""
+    meta = {"global_step", "step", "epoch", "ts", "phase"}
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for k, v in metrics.items():
+        if k in meta or isinstance(v, str):
+            continue
+        if skip_success and k.startswith("rollout/success_rate"):
+            continue
+        prefix, _, name = k.partition("/")
+        if not name:
+            prefix, name = "metrics", k
+        if prefix not in groups:
+            groups[prefix] = []
+            order.append(prefix)
+        groups[prefix].append(f"{name}={fmt_value(v)}")
+    return [f"{p:<7} " + "  ".join(groups[p]) for p in order]
 
 
 class BaseRunner(ABC):
@@ -923,6 +945,50 @@ class BaseRunner(ABC):
     def teardown(self) -> None:
         """Optional lifecycle hook after execution."""
         self.finish_metric_logger()
+
+    def _console_state_get(self) -> dict:
+        st = getattr(self, "_console_state", None)
+        if st is None:
+            st = {
+                "width": int(OmegaConf.select(self.cfg, "console.banner_width", default=65)),
+                "log_every": max(1, int(OmegaConf.select(self.cfg, "console.log_every", default=1))),
+                "window": int(OmegaConf.select(self.cfg, "console.success_window", default=50)),
+                "counter": 0,
+                "tracker": None,
+            }
+            self._console_state = st
+        return st
+
+    def console_banner(self, title: str, *, subtitle: str | None = None, done: bool = False) -> None:
+        if not self.is_main_process:
+            return
+        st = self._console_state_get()
+        print(phase_banner(title, subtitle=subtitle, done=done, width=st["width"]), flush=True)
+
+    def console_record_success(self, success: bool) -> None:
+        st = self._console_state_get()
+        if st["tracker"] is None:
+            st["tracker"] = SuccessTracker(window=st["window"])
+        st["tracker"].update(bool(success))
+
+    def console_metrics(self, header: str, metrics: dict) -> None:
+        if not self.is_main_process:
+            return
+        st = self._console_state_get()
+        st["counter"] += 1
+        if st["counter"] % st["log_every"] != 0:
+            return
+        tr = st["tracker"]
+        rows: list[str] = []
+        if tr is not None and len(tr) > 0:
+            rows.append(
+                f"VLA     succ@{st['window']}={fmt_value(tr.rate())} "
+                f"(Δ {tr.delta():+.3f} · best {tr.best:.3f})"
+            )
+        rows.extend(_group_metric_rows(metrics, skip_success=tr is not None))
+        print(metric_box(header, rows, width=st["width"]), flush=True)
+        if tr is not None:
+            tr.mark_printed()
 
     @abstractmethod
     def run(self) -> object:
