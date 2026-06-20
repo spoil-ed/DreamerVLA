@@ -57,6 +57,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             return self._build_oft_components(cluster)
 
         num_envs = self._int_from(("env.num_workers", "num_env_workers"), 1)
+        demos_per_shard = self._int_from(("collect.demos_per_shard", "demos_per_shard"), 0)
         reward_dir_value = self._select_first(("dump.reward_dir", "reward_dir"), None)
         hidden_dir_value = self._select_first(("dump.hidden_dir", "hidden_dir"), None)
         reward_dir = str(
@@ -80,6 +81,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             shard_name,
             preprocess_config,
             data_attrs,
+            demos_per_shard,
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 
@@ -191,6 +193,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         plan = self.build_oft_worker_plan()
         collect_cfg = plan["collect"]
         num_envs = self._int_from(("env.num_workers", "collect.envs_per_gpu", "num_env_workers"), 1)
+        demos_per_shard = self._int_from(("collect.demos_per_shard", "demos_per_shard"), 0)
         task_ids = _resolve_ray_task_ids(
             collect_cfg.get("task_ids", 0),
             num_tasks=collect_cfg.get("num_tasks"),
@@ -206,6 +209,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             str(dump_cfg.get("shard_name", "ray_shard_000.hdf5")),
             dump_cfg["preprocess_config"],
             dump_cfg["data_attrs"],
+            demos_per_shard,
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 

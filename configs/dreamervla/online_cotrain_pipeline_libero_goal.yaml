@@ -256,6 +256,9 @@ dataloader:
   batch_size: 4
   debug_batch_size: 2
 
+collect:
+  demos_per_shard: 0   # 0 = one shard per job; >0 = roll a new shard every N episodes
+
 runner:
   logger:
     logger_backends: [tensorboard]
