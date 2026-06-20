@@ -27,6 +27,7 @@ def test_save_load_roundtrip(tmp_path):
 def _runner(fmt):
     obj = types.SimpleNamespace()
     obj.cfg = OmegaConf.create({"training": {"checkpoint_format": fmt}})
+    obj._checkpoint_format = types.MethodType(BaseRunner._checkpoint_format, obj)
     obj.checkpoint_save_torch = types.MethodType(BaseRunner.checkpoint_save_torch, obj)
     obj.checkpoint_save_hf = types.MethodType(BaseRunner.checkpoint_save_hf, obj)
     return obj

@@ -158,12 +158,10 @@ class BaseRunner(ABC):
         return str(OmegaConf.select(self.cfg, "training.checkpoint_format", default="both")).lower()
 
     def checkpoint_save_torch(self) -> bool:
-        fmt = str(OmegaConf.select(self.cfg, "training.checkpoint_format", default="both")).lower()
-        return fmt in ("torch", "both")
+        return self._checkpoint_format() in ("torch", "both")
 
     def checkpoint_save_hf(self) -> bool:
-        fmt = str(OmegaConf.select(self.cfg, "training.checkpoint_format", default="both")).lower()
-        return fmt in ("hf", "both")
+        return self._checkpoint_format() in ("hf", "both")
 
     def write_run_artifacts(self) -> dict[str, Any] | None:
         """Write reproducibility artifacts for the current run."""
