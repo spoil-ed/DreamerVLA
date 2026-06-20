@@ -237,8 +237,8 @@ class OnlineCotrainRayRunner(BaseRunner):
                     learner_updates += 1
                     policy_version += 1
                     update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-                    self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
-                    self.log_metrics(update_metrics, step=self.global_step)
+                    self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+                    self.log_metrics(update_metrics, step=learner_updates)
                     sync_start = time.perf_counter()
                     learner.sync_weights("policy", policy_version).wait()
                     if policy_version % weight_sync_every == 0:
@@ -264,8 +264,8 @@ class OnlineCotrainRayRunner(BaseRunner):
             learner_updates += 1
             policy_version += 1
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-            self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
-            self.log_metrics(update_metrics, step=self.global_step)
+            self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+            self.log_metrics(update_metrics, step=learner_updates)
             learner.sync_weights("policy", policy_version).wait()
 
         return {
@@ -416,8 +416,8 @@ class OnlineCotrainRayRunner(BaseRunner):
             learner_updates += 1
             policy_version += 1
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-            self.console_metrics(f"cotrain · step {self.global_step}", update_metrics)
-            self.log_metrics(update_metrics, step=self.global_step)
+            self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+            self.log_metrics(update_metrics, step=learner_updates)
 
             sync_start = time.perf_counter()
             learner.sync_weights("policy", policy_version).wait()

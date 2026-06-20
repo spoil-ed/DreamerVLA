@@ -319,7 +319,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             for env_id, (_obs, done, _info) in zip(env_ids, step_results, strict=True):
                 if done:
                     done_envs.append(env_id)
-                    self.console_record_success(bool(_info.get("success", False)))
+                    self.console_record_success(bool((_info or {}).get("success", False)))
             if done_envs:
                 wait_result(infer.reset_states(done_envs))
             if scheduled and done_envs:
@@ -451,7 +451,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         ) -> None:
             next_obs, done, _info = step_result
             if done:
-                self.console_record_success(bool(_info.get("success", False)))
+                self.console_record_success(bool((_info or {}).get("success", False)))
                 infer.reset_states([int(env_id)]).wait()
                 if scheduled:
                     next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
