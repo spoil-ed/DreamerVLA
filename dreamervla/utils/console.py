@@ -61,5 +61,10 @@ def metric_box(header: str, rows: list[str], *, width: int = 65) -> str:
 
 
 def count_trainable(module) -> int:
-    """Number of trainable (requires_grad) parameters in a torch module."""
+    """Number of trainable (requires_grad) parameters in a torch module.
+
+    Returns 0 for a None module so callers can pass optional components.
+    """
+    if module is None:
+        return 0
     return int(sum(p.numel() for p in module.parameters() if p.requires_grad))

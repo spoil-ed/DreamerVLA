@@ -1,7 +1,6 @@
 import torch
 
 from dreamervla.utils import console
-from dreamervla.utils.console import count_trainable
 from dreamervla.runners.online_utils import SuccessTracker
 
 
@@ -38,10 +37,11 @@ def test_metric_box_renders_header_and_rows():
 
 def test_count_trainable_counts_only_grad_params():
     m = torch.nn.Linear(4, 3)            # 4*3 + 3 = 15 params
-    assert count_trainable(m) == 15
+    assert console.count_trainable(m) == 15
     for p in m.parameters():
         p.requires_grad_(False)
-    assert count_trainable(m) == 0
+    assert console.count_trainable(m) == 0
+    assert console.count_trainable(None) == 0
 
 
 def test_success_tracker_window_best_and_delta():
