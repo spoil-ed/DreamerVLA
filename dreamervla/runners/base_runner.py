@@ -971,12 +971,12 @@ class BaseRunner(ABC):
             st["tracker"] = SuccessTracker(window=st["window"])
         st["tracker"].update(bool(success))
 
-    def console_metrics(self, header: str, metrics: dict) -> None:
+    def console_metrics(self, header: str, metrics: dict, *, force: bool = False) -> None:
         if not self.is_main_process:
             return
         st = self._console_state_get()
         st["counter"] += 1
-        if st["counter"] % st["log_every"] != 0:
+        if not force and st["counter"] % st["log_every"] != 0:
             return
         tr = st["tracker"]
         rows: list[str] = []
@@ -989,6 +989,11 @@ class BaseRunner(ABC):
         print(metric_box(header, rows, width=st["width"]), flush=True)
         if tr is not None:
             tr.mark_printed()
+
+    def console_success_rate(self) -> float:
+        st = self._console_state_get()
+        tr = st["tracker"]
+        return tr.rate() if tr is not None else 0.0
 
     @abstractmethod
     def run(self) -> object:

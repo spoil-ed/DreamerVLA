@@ -9,7 +9,8 @@ def _runner(cfg, *, main=True):
     obj = types.SimpleNamespace()
     obj.cfg = cfg
     obj.is_main_process = main
-    for name in ("console_banner", "console_record_success", "console_metrics", "_console_state_get"):
+    for name in ("console_banner", "console_record_success", "console_metrics",
+                 "_console_state_get", "console_success_rate"):
         setattr(obj, name, types.MethodType(getattr(BaseRunner, name), obj))
     return obj
 
@@ -43,3 +44,45 @@ def test_console_metrics_throttle_and_vla_row(capsys):
     out = capsys.readouterr().out
     assert "VLA" in out and "succ@4=" in out and "wm_loss=0.18" in out
     assert all(len(ln) == 65 for ln in out.strip().splitlines())
+
+
+def test_console_metrics_force_bypasses_throttle(capsys):
+    cfg = OmegaConf.create({"console": {"banner_width": 65, "log_every": 5, "success_window": 4}})
+    r = _runner(cfg)
+    r.console_metrics("step 1", {"train/loss": 0.5}, force=True)  # call #1, log_every=5 -> should print
+    out = capsys.readouterr().out
+    assert out.strip() != "", "force=True must print regardless of throttle"
+    r.console_metrics("step 2", {"train/loss": 0.4})  # call #2, not a multiple of 5 -> no print
+    assert capsys.readouterr().out == ""
+
+
+def test_console_success_rate_zero_before_any_record():
+    cfg = OmegaConf.create({"console": {"banner_width": 65, "log_every": 1, "success_window": 4}})
+    r = _runner(cfg)
+    assert r.console_success_rate() == 0.0
+
+
+def test_console_success_rate_after_records():
+    cfg = OmegaConf.create({"console": {"banner_width": 65, "log_every": 1, "success_window": 4}})
+    r = _runner(cfg)
+    for s in (True, True, False, True):  # 3 successes / 4 total -> rate = 0.75
+        r.console_record_success(s)
+    assert abs(r.console_success_rate() - 0.75) < 1e-9
+
+
+def test_console_record_success_non_main():
+    cfg = OmegaConf.create({"console": {"banner_width": 65, "log_every": 1, "success_window": 4}})
+    r = _runner(cfg, main=False)
+    for s in (True, True, False):
+        r.console_record_success(s)
+    assert abs(r.console_success_rate() - (2 / 3)) < 1e-9
+
+
+def test_group_metric_rows_skip_success_drops_rollout_success_rate():
+    rows = _group_metric_rows(
+        {"rollout/success_rate": 0.5, "train/loss": 0.1},
+        skip_success=True,
+    )
+    joined = "\n".join(rows)
+    assert "success_rate" not in joined
+    assert "loss=0.1" in joined

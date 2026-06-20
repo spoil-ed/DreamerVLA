@@ -98,6 +98,7 @@ class CollectRolloutsRunner(BaseRunner):
                 "collect/episodes": len(successes),
                 "collect/success_rate": succ_rate,
             },
+            force=True,
         )
         self.console_banner(
             "COLLECT ROLLOUTS",

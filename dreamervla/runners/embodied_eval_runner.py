@@ -149,6 +149,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
             },
+            force=True,
         )
         self.console_banner(
             "EVALUATION", done=True, subtitle=f"succ {eval_rate:.3f}"
@@ -389,6 +390,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
             },
+            force=True,
         )
         self.console_banner(
             "EVALUATION", done=True, subtitle=f"succ {dreamer_eval_rate:.3f}"

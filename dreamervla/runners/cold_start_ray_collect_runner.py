@@ -340,9 +340,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         episodes = int(wait_result(dump.size())[0])
         wait_result(dump.close())
         wait_result(envs.close())
-        _st = self._console_state_get()
-        _tr = _st["tracker"]
-        succ_rate = _tr.rate() if _tr is not None and len(_tr) > 0 else 0.0
+        succ_rate = self.console_success_rate()
         self.console_banner(
             "COLDSTART COLLECT",
             done=True,
@@ -356,6 +354,7 @@ class ColdStartRayCollectRunner(BaseRunner):
                 "collect/success_rate": succ_rate,
                 "env/num_env_workers": int(num_envs),
             },
+            force=True,
         )
         return {
             "rollout/episodes": episodes,
@@ -532,9 +531,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         dump.close().wait()
         envs.close().wait()
         dump_wait_s += time.perf_counter() - start
-        _st = self._console_state_get()
-        _tr = _st["tracker"]
-        succ_rate = _tr.rate() if _tr is not None and len(_tr) > 0 else 0.0
+        succ_rate = self.console_success_rate()
         self.console_banner(
             "COLDSTART COLLECT",
             done=True,
@@ -548,6 +545,7 @@ class ColdStartRayCollectRunner(BaseRunner):
                 "collect/success_rate": succ_rate,
                 "env/num_env_workers": int(num_envs),
             },
+            force=True,
         )
         return {
             "rollout/episodes": episodes,
