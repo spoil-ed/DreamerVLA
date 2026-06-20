@@ -522,6 +522,7 @@ class DreamerV3PixelRunner(BaseRunner):
         )
         log_mode = "a" if resumed else "w"
         log_handle = open(self.log_path, log_mode) if self.is_main_process else None
+        self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         try:
             while self.epoch < num_epochs:
                 self.epoch += 1
@@ -586,6 +587,7 @@ class DreamerV3PixelRunner(BaseRunner):
                             log_handle.write(json.dumps(row) + "\n")
                             log_handle.flush()
                             self.log_metrics(row, step=self.global_step)
+                            self.console_metrics(f"train · epoch {self.epoch}", row)
 
                         self._maybe_save_viz(model_core, batch)
 
@@ -610,6 +612,7 @@ class DreamerV3PixelRunner(BaseRunner):
                 self.ckpt_dir / f"step_{self.global_step:08d}.ckpt",
             )
         self._barrier()
+        self.console_banner("TRAINING", done=True)
         self._print("[dreamerv3-pixel] done")
         self._print(f"  log  = {self.log_path}")
         if bool(OmegaConf.select(self.cfg, "training.save_final", default=True)):

@@ -447,6 +447,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
             getattr(self, "log_filename", "chameleon_latent_wm_logs.json.txt")
         )
         log_path = os.path.join(self.output_dir, log_name)
+        self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         try:
             with self.distributed.logger_context(log_path) as logger:
                 reached_max_steps = False
@@ -601,6 +602,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                             epoch_log.update(self.evaluate_val_loss(val_dl, split_name))
                     logger.log(epoch_log)
                     self.log_metrics(epoch_log, step=self.global_step)
+                    self.console_metrics(f"train · epoch {self.epoch}", epoch_log)
 
                     if (self.epoch % int(cfg.training.checkpoint_every)) == 0:
                         if bool(
@@ -626,6 +628,7 @@ class ChameleonLatentActionWMRunner(BaseRunner):
         finally:
             self.distributed.barrier()
             self.distributed.cleanup()
+        self.console_banner("TRAINING", done=True)
         return history
 
 

@@ -428,6 +428,7 @@ class DreamerV3TokenRunner(BaseRunner):
         )
         log_mode = "a" if resumed else "w"
         log_handle = open(self.log_path, log_mode)
+        self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         try:
             while self.epoch < num_epochs:
                 self.epoch += 1
@@ -488,6 +489,7 @@ class DreamerV3TokenRunner(BaseRunner):
                             log_handle.write(json.dumps(row) + "\n")
                             log_handle.flush()
                             self.log_metrics(row, step=self.global_step)
+                            self.console_metrics(f"train · epoch {self.epoch}", row)
 
                         self._maybe_save_viz(model_core, batch)
 
@@ -507,6 +509,7 @@ class DreamerV3TokenRunner(BaseRunner):
         self._save_ckpt(
             model_core, optimizer, self.ckpt_dir / f"step_{self.global_step:08d}.ckpt"
         )
+        self.console_banner("TRAINING", done=True)
         print("[dreamerv3-token] done")
         print(f"  log  = {self.log_path}")
         print(f"  ckpt = {self.ckpt_dir / 'latest.ckpt'}")
