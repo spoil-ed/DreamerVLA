@@ -278,6 +278,11 @@ class ColdStartRayCollectRunner(BaseRunner):
         driver_step_calls = 0
         driver_step_waits = 0
 
+        self.console_banner(
+            "COLDSTART COLLECT",
+            subtitle=f"target={target_episodes} episodes · envs={num_envs}",
+        )
+
         def wait_result(result: Any) -> list[Any]:
             nonlocal driver_roundtrips
             driver_roundtrips += 1
@@ -310,11 +315,11 @@ class ColdStartRayCollectRunner(BaseRunner):
             if step_calls:
                 driver_step_waits += 1
             step_results = wait_results(step_calls)
-            done_envs = [
-                env_id
-                for env_id, (_obs, done, _info) in zip(env_ids, step_results, strict=True)
-                if done
-            ]
+            done_envs = []
+            for env_id, (_obs, done, _info) in zip(env_ids, step_results, strict=True):
+                if done:
+                    done_envs.append(env_id)
+                    self.console_record_success(bool(_info.get("success", False)))
             if done_envs:
                 wait_result(infer.reset_states(done_envs))
             if scheduled and done_envs:
@@ -335,6 +340,23 @@ class ColdStartRayCollectRunner(BaseRunner):
         episodes = int(wait_result(dump.size())[0])
         wait_result(dump.close())
         wait_result(envs.close())
+        _st = self._console_state_get()
+        _tr = _st["tracker"]
+        succ_rate = _tr.rate() if _tr is not None and len(_tr) > 0 else 0.0
+        self.console_banner(
+            "COLDSTART COLLECT",
+            done=True,
+            subtitle=f"{episodes} episodes · succ {succ_rate:.3f}",
+        )
+        self.console_metrics(
+            "collect",
+            {
+                "collect/episodes": episodes,
+                "collect/steps": int(steps),
+                "collect/success_rate": succ_rate,
+                "env/num_env_workers": int(num_envs),
+            },
+        )
         return {
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
@@ -369,6 +391,11 @@ class ColdStartRayCollectRunner(BaseRunner):
             )
         )
         max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
+
+        self.console_banner(
+            "COLDSTART COLLECT",
+            subtitle=f"target={target_episodes} episodes · envs={num_envs} · overlap",
+        )
 
         pending_steps: dict[Any, tuple[int, Any, float]] = {}
         pending_infers: dict[Any, tuple[list[int], Any, float]] = {}
@@ -424,6 +451,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         ) -> None:
             next_obs, done, _info = step_result
             if done:
+                self.console_record_success(bool(_info.get("success", False)))
                 infer.reset_states([int(env_id)]).wait()
                 if scheduled:
                     next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
@@ -504,6 +532,23 @@ class ColdStartRayCollectRunner(BaseRunner):
         dump.close().wait()
         envs.close().wait()
         dump_wait_s += time.perf_counter() - start
+        _st = self._console_state_get()
+        _tr = _st["tracker"]
+        succ_rate = _tr.rate() if _tr is not None and len(_tr) > 0 else 0.0
+        self.console_banner(
+            "COLDSTART COLLECT",
+            done=True,
+            subtitle=f"{episodes} episodes · succ {succ_rate:.3f}",
+        )
+        self.console_metrics(
+            "collect",
+            {
+                "collect/episodes": episodes,
+                "collect/steps": int(steps),
+                "collect/success_rate": succ_rate,
+                "env/num_env_workers": int(num_envs),
+            },
+        )
         return {
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
