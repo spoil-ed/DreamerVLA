@@ -136,15 +136,29 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
         # ── rollout ──────────────────────────────────────────────────────────
         os.makedirs(self.output_dir, exist_ok=True)
         self._init_policy_trace(cfg)
+        task_suite_name = str(
+            OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
+        )
+        self.console_banner("EVALUATION", subtitle=f"suite={task_suite_name}")
         metrics = self.evaluate_libero(epoch=-1)
+        eval_rate = float(metrics.get("eval_success_rate", 0.0))
+        self.console_metrics(
+            "eval",
+            {
+                "eval/success_rate": eval_rate,
+                "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
+                "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
+            },
+        )
+        self.console_banner(
+            "EVALUATION", done=True, subtitle=f"succ {eval_rate:.3f}"
+        )
 
         # ── dump metrics ─────────────────────────────────────────────────────
         if self.distributed.is_main_process:
             metrics_out = {
                 "ckpt_path": ckpt_path,
-                "task_suite": str(
-                    OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
-                ),
+                "task_suite": task_suite_name,
                 "num_episodes_per_task": int(
                     OmegaConf.select(cfg, "eval.num_episodes_per_task", default=50)
                 ),
@@ -359,7 +373,26 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
 
         self._build_dreamer_modules(train_cfg, payload)
         os.makedirs(self.output_dir, exist_ok=True)
+        dreamer_suite_name = str(
+            OmegaConf.select(train_cfg, "eval.task_suite_name", default="libero_goal")
+        )
+        self.console_banner(
+            "EVALUATION",
+            subtitle=f"dreamer suite={dreamer_suite_name}",
+        )
         metrics = self.evaluate_libero(epoch=-1)
+        dreamer_eval_rate = float(metrics.get("eval_success_rate", 0.0))
+        self.console_metrics(
+            "eval",
+            {
+                "eval/success_rate": dreamer_eval_rate,
+                "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
+                "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
+            },
+        )
+        self.console_banner(
+            "EVALUATION", done=True, subtitle=f"succ {dreamer_eval_rate:.3f}"
+        )
         if bool(getattr(self, "_real_relabel_enabled", False)):
             self._write_real_relabel_summary()
             metrics.update(
@@ -2064,6 +2097,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                         task_description,
                     )
                 total_episodes += 1
+                self.console_record_success(bool(done))
                 if bool(getattr(self, "_real_relabel_enabled", False)):
                     finite_rewards = [
                         float(x) for x in wm_reward_trace if np.isfinite(float(x))
