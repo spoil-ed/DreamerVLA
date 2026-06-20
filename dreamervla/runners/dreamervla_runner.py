@@ -1681,6 +1681,7 @@ class DreamerVLARunner(BaseRunner):
         try:
             with train_logger_cm as train_json_logger:
                 reached_max_steps = False
+                self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
                 while self.epoch < num_epochs:
                     self.set_dataloader_epoch(train_dataloader, self.epoch)
 
@@ -2053,12 +2054,42 @@ class DreamerVLARunner(BaseRunner):
                     step_log.setdefault("epoch_actor_loss", float("inf"))
                     step_log.setdefault("epoch_critic_loss", float("inf"))
 
+                    _epoch_train_keys = {
+                        "epoch_wm_loss",
+                        "epoch_actor_loss",
+                        "epoch_critic_loss",
+                        "epoch_returns_mean",
+                        "epoch_reward_mean",
+                        "epoch_return_scale",
+                    }
+                    _train_console_metrics = {
+                        self._normalize_metric_name(k): v
+                        for k, v in step_log.items()
+                        if k in _epoch_train_keys
+                    }
+                    if _train_console_metrics:
+                        self.console_metrics(
+                            f"train · epoch {self.epoch}", _train_console_metrics
+                        )
+
                     eval_every = int(
                         OmegaConf.select(cfg, "eval.eval_every", default=1)
                     )
+                    _eval_console_metrics: dict[str, float] = {}
                     if val_dataloaders and (self.epoch % eval_every) == 0:
                         for split_name, val_dl in val_dataloaders.items():
-                            step_log.update(self.evaluate_val_loss(val_dl, split_name))
+                            _val_metrics = self.evaluate_val_loss(val_dl, split_name)
+                            step_log.update(_val_metrics)
+                            _eval_console_metrics.update(
+                                {
+                                    self._normalize_metric_name(k): v
+                                    for k, v in _val_metrics.items()
+                                }
+                            )
+                    if _eval_console_metrics:
+                        self.console_metrics(
+                            f"eval · epoch {self.epoch}", _eval_console_metrics
+                        )
 
                     train_json_logger.log(step_log)
                     self.log_metrics(step_log, step=self.global_step)
@@ -2083,6 +2114,7 @@ class DreamerVLARunner(BaseRunner):
                     self.epoch += 1
                     if reached_max_steps:
                         break
+                self.console_banner("TRAINING", done=True)
         finally:
             self.distributed.barrier()
             self.distributed.cleanup()
