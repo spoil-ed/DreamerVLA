@@ -334,6 +334,55 @@ def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
     assert f"training.classifier_batch_size={classifier_batch_size}" in out
 
 
+def test_launcher_prints_phase_start_banners(tmp_path, monkeypatch, capsys) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    exit_code = mod.main([f"run_root={tmp_path}", "skip_asset_check=true"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    collect_at = out.find("PHASE 1/2 START: cold-start collection")
+    cotrain_at = out.find("PHASE 2/2 START: offline-warmup online cotrain")
+    assert collect_at != -1, out
+    assert cotrain_at != -1, out
+    assert collect_at < cotrain_at  # collect banner streams before cotrain banner
+    assert len(rec.calls) == 2  # collect then cotrain both launched
+
+
+def test_launcher_banner_marks_skipped_collection(tmp_path, monkeypatch, capsys) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    exit_code = mod.main(
+        [f"run_root={tmp_path}", "skip_asset_check=true", "skip_collect=true"]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "PHASE 1/2 SKIPPED: cold-start collection" in out
+    assert "PHASE 2/2 START: offline-warmup online cotrain" in out
+    assert len(rec.calls) == 1  # only cotrain launched when collection is skipped
+
+
 def test_ray_launcher_does_not_freeze_total_episodes_when_episodes_per_task_changes(
     tmp_path,
 ) -> None:
