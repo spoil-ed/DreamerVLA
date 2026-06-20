@@ -20,6 +20,7 @@ from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
+from dreamervla.utils.console import count_trainable
 
 
 class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
@@ -96,6 +97,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             OmegaConf.update(cfg, "env.obs_hidden_source", "input_token_embedding", force_add=True)
 
         self._build_components(cfg)
+        if self.distributed.is_main_process:
+            trainable = {
+                "world_model": count_trainable(self.world_model),
+                "policy": count_trainable(self.policy),
+                "critic": count_trainable(self.critic),
+                "classifier": count_trainable(self.classifier),
+            }
+            total = sum(trainable.values())
+            self.append_model_summary(
+                {"total_trainable": total, "trainable_params": trainable}
+            )
+            print(f"[ok] model ready · {total/1e6:.1f}M trainable", flush=True)
         os.makedirs(os.path.join(self.output_dir, "ckpt"), exist_ok=True)
 
         # warmup knobs

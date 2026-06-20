@@ -58,3 +58,8 @@ def metric_box(header: str, rows: list[str], *, width: int = 65) -> str:
     body = ["│" + _fit(r) + "│" for r in rows]
     bottom = "╰" + ("─" * inner) + "╯"
     return "\n".join([top, *body, bottom])
+
+
+def count_trainable(module) -> int:
+    """Number of trainable (requires_grad) parameters in a torch module."""
+    return int(sum(p.numel() for p in module.parameters() if p.requires_grad))
