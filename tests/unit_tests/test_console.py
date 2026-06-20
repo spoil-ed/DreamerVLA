@@ -59,3 +59,18 @@ def test_success_tracker_window_best_and_delta():
     assert t.rate() == 0.75
     assert round(t.delta(), 3) == 0.25
     assert t.best == 0.75
+
+
+def test_cotrain_box_strings_are_wellformed_for_a_synthetic_step():
+    tr = SuccessTracker(window=50)
+    for s in (True, False, True):
+        tr.update(s)
+    rows = [
+        f"VLA    succ@50={console.fmt_value(tr.rate())} (Δ {tr.delta():+.3f} · best {tr.best:.3f})   return=0.71",
+        "train  wm=0.182  actor=0.226  cls_acc=0.95",
+        "data   buf=10000  ep=3  cum_succ=0.667",
+    ]
+    box = console.metric_box("cotrain · step 1600", rows, width=65)
+    assert all(len(ln) == 65 for ln in box.splitlines())
+    skip = console.phase_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True)
+    assert "skipped" in skip and len(skip) == 65
