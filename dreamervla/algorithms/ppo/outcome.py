@@ -59,6 +59,7 @@ from dreamervla.algorithms.ppo.grpo import (
     _ppo_clip_term,
     _ppo_ratio,
     _repeat_latent,
+    masked_mean_ratio_chunk_term,
 )
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
@@ -464,8 +465,13 @@ def dino_wmpo_outcome_step(
     total_kl = 0.0
     total_entropy_sum = 0.0  # sum_{epoch, chunk, rollout} (entropy * mask)
     grad_norm = 0.0
-    mask_sum_total = float(chunk_mask.sum().item())  # PPO loss normalizer
-    bc_mask_sum_total = float(bc_chunk_mask.sum().item())  # BC loss normalizer
+    mask_sum_total = float(chunk_mask.sum().item())  # PPO signal / entropy denom
+    bc_mask_sum_total = float(bc_chunk_mask.sum().item())  # BC signal
+    # RLinf masked_mean_ratio: per-rollout valid-chunk counts (clamp ≥1 so empty
+    # rollouts, whose terms are masked to 0, do not divide by zero). Each rollout
+    # is then weighted equally over B_eff regardless of episode length.
+    ppo_per_rollout_count = chunk_mask.sum(dim=0).clamp(min=1.0)  # [B_eff]
+    bc_per_rollout_count = bc_chunk_mask.sum(dim=0).clamp(min=1.0)  # [B_eff]
     # Optimizer step is skipped when no chunk contributes a real gradient
     # (no PPO mask AND no BC anchor signal). Without this guard, Adam decays
     # its momentum/velocity state on a zero-gradient step, which moves
@@ -533,19 +539,23 @@ def dino_wmpo_outcome_step(
             new_lp, entropy_t, _ = policy(eval_batch)
             mask_c = chunk_mask[c]  # [B_eff], 0/1 per rollout
             ratio = _ppo_ratio(new_lp, old_lp, clip_log_ratio=clip_log_ratio)
-            ppo_loss = (
-                _ppo_clip_term(
-                    ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-                )
-                * mask_c
-            ).sum()
-            ent_term = (entropy_t * mask_c).sum()
+            ppo_clip = _ppo_clip_term(
+                ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+            )  # [B_eff]
             # Backprop chunk-by-chunk instead of accumulating all chunk graphs.
             # Long-imagine PPO has many actor forwards (T_max / K); holding them
             # all until a single backward can exceed 80GB even for small batches.
             # Note: kl_coef is no longer applied as a separate loss term — it
             # has been folded into advantages via returns_adjusted above.
-            loss_c = (ppo_loss - entropy_coef * ent_term) / max(1.0, mask_sum_total)
+            # RLinf masked_mean_ratio: per-rollout (episode-length) normalization
+            # so each rollout is weighted equally regardless of length.
+            ppo_term = masked_mean_ratio_chunk_term(
+                ppo_clip, mask_c, ppo_per_rollout_count, B_eff
+            )
+            ent_term = masked_mean_ratio_chunk_term(
+                entropy_t, mask_c, ppo_per_rollout_count, B_eff
+            )
+            loss_c = ppo_term - entropy_coef * ent_term
             total_entropy_sum += float((entropy_t.detach() * mask_c).sum().item())
 
             if epoch_idx == update_epochs - 1:
@@ -585,8 +595,8 @@ def dino_wmpo_outcome_step(
                         # PPO mask. This keeps BC active on zero-variance
                         # groups (where it's still a valid regularizer) while
                         # eliminating spurious BC signal on past-finish
-                        # chunks. Normalizer is per-(chunk, rollout) like
-                        # PPO, so ``actor_bc_to_ref_scale`` carries the
+                        # chunks. Normalizer is per-rollout masked_mean_ratio
+                        # like PPO, so ``actor_bc_to_ref_scale`` carries the
                         # literal relative weight against PPO inside the
                         # active region.
                         bc_mask_c = bc_chunk_mask[c]
@@ -595,11 +605,13 @@ def dino_wmpo_outcome_step(
                             .square()
                             .mean(dim=(-1, -2))
                         )  # [B_eff]
-                        bc_loss_c = (bc_per_rollout * bc_mask_c).sum()
-                        loss_c = loss_c + actor_bc_ref_scale * bc_loss_c / max(
-                            1.0, bc_mask_sum_total
+                        bc_term = masked_mean_ratio_chunk_term(
+                            bc_per_rollout, bc_mask_c, bc_per_rollout_count, B_eff
                         )
-                        epoch_bc_ref_loss_sum += float(bc_loss_c.detach().item())
+                        loss_c = loss_c + actor_bc_ref_scale * bc_term
+                        epoch_bc_ref_loss_sum += float(
+                            (bc_per_rollout * bc_mask_c).sum().detach().item()
+                        )
                         epoch_bc_ref_count += int(bc_mask_c.sum().item())
             loss_c.backward()
             epoch_actor_loss += float(loss_c.detach().item())
@@ -662,8 +674,9 @@ def dino_wmpo_outcome_step(
         )
     else:
         mean_finish_step_complete = -1.0
-    # avg_entropy normalized by sum-of-mask across all epochs, matching the
-    # PPO loss normalization granularity (per valid (chunk, rollout) pair).
+    # avg_entropy metric: mean entropy per valid (chunk, rollout) pair across all
+    # epochs. (Reporting granularity only; the loss now uses the per-rollout
+    # masked_mean_ratio normalization above.)
     entropy_denom = float(update_epochs) * max(1.0, mask_sum_total)
     avg_entropy_val = total_entropy_sum / entropy_denom
 

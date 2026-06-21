@@ -31,6 +31,27 @@ def _entropy_coef(algorithm_cfg: Any) -> float:
     return float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
 
 
+def masked_mean_ratio_chunk_term(
+    value_vec: torch.Tensor,  # [B_eff] this chunk's per-rollout values
+    mask_c: torch.Tensor,  # [B_eff] this chunk's 0/1 validity
+    per_rollout_count: torch.Tensor,  # [B_eff] each rollout's total valid-chunk count (>=1)
+    b_eff: int,
+) -> torch.Tensor:
+    """One chunk's contribution to RLinf ``masked_mean_ratio`` over the
+    ``[num_chunks, B_eff]`` outcome layout.
+
+    Summed across all chunks this equals ``mean_over_rollouts(
+    mean_over_valid_chunks(value))`` — every rollout weighted equally regardless
+    of episode length, matching RLinf's ``(value / loss_mask_ratio * mask).mean()``
+    (``loss_mask_ratio = valid_count / num_chunks``). Replaces the prior global
+    per-(chunk, rollout) masked mean, which over-weighted long/failed rollouts.
+
+    Computed per chunk so the caller can keep backpropagating chunk-by-chunk
+    (the outcome route holds one chunk's graph at a time to bound memory).
+    """
+    return ((value_vec * mask_c) / per_rollout_count).sum() / float(b_eff)
+
+
 def _ppo_ratio(
     log_prob: torch.Tensor,
     old_log_prob: torch.Tensor,
