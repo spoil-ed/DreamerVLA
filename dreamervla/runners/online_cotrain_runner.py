@@ -675,6 +675,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
             ):
                 blk = OmegaConf.to_container(OmegaConf.select(self.cfg, cfg_key), resolve=True)
                 target = blk.pop("_target_")
+                if name == "policy":
+                    # HF policy artifact is self-contained: weights live in model.safetensors.
+                    # Strip the external action-head ckpt path so load_module_pretrained does
+                    # not attempt a wasteful/failing preload before from_pretrained overwrites.
+                    blk.pop("init_action_head_ckpt", None)
                 save_module_pretrained(
                     _unwrap(module),
                     os.path.join(ckpt_dir, f"latest_hf_{name}"),
