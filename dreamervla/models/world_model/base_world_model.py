@@ -206,6 +206,18 @@ class DreamerV3ActorAdapterMixin(BaseWorldModel):
             return self.observe_sequence(batch)
         raise ValueError(f"Unknown DreamerV3 actor-adapter mode: {mode!r}")
 
+    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
+        return torch.cat(
+            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
+            dim=-1,
+        )
+
+    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if isinstance(batch, dict) and batch.get("mode") is not None:
+            return self._forward_actor_adapter(batch)
+        out = self.loss(batch)
+        return self._compat_forward_dict(out)
+
     @staticmethod
     def _compat_forward_dict(out: DreamerV3Loss) -> dict[str, torch.Tensor]:
         result = {"_loss": out.loss, **out.metrics}

@@ -120,12 +120,6 @@ class _DreamerV3TokenWorldModelBase(DreamerV3ActorAdapterMixin):
         self.contdisc = bool(contdisc)
         self.horizon = int(horizon)
 
-    def feature(self, seq: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat(
-            [seq["deter"], seq["stoch"].reshape(*seq["stoch"].shape[:2], -1)],
-            dim=-1,
-        )
-
     def loss(self, batch: dict[str, torch.Tensor]) -> DreamerV3Loss:
         tokens = batch["tokens"].long()
         actions = batch["actions"]
@@ -208,12 +202,6 @@ class _DreamerV3TokenWorldModelBase(DreamerV3ActorAdapterMixin):
             "rep_entropy": kls["rep_entropy"].detach(),
         }
         return DreamerV3Loss(loss=loss, metrics=metrics)
-
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if isinstance(batch, dict) and batch.get("mode") is not None:
-            return self._forward_actor_adapter(batch)
-        out = self.loss(batch)
-        return self._compat_forward_dict(out)
 
 
 __all__ = ["_DreamerV3TokenWorldModelBase"]
