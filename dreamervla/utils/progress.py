@@ -8,7 +8,7 @@ logs. clock/sink are injectable for deterministic tests.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from dreamervla.utils.console import format_progress_line
 
@@ -71,7 +71,7 @@ class ProgressReporter:
         )
         self._last_print_t = now
 
-    def __enter__(self) -> "ProgressReporter":
+    def __enter__(self) -> ProgressReporter:
         return self
 
     def __exit__(self, *exc) -> None:

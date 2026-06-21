@@ -21,13 +21,13 @@ from torch.utils.data import DataLoader
 
 from dreamervla.runners.online_utils import SuccessTracker
 from dreamervla.utils.console import fmt_value, metric_box, phase_banner
-from dreamervla.utils.progress import ProgressReporter
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
     resolve_hf_checkpoint_dir,
 )
 from dreamervla.utils.metric_logger import MetricLogger, NullMetricLogger
+from dreamervla.utils.progress import ProgressReporter
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 

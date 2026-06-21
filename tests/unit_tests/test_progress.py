@@ -42,7 +42,9 @@ def test_close_always_prints_final_summary():
 def test_disabled_is_silent():
     out = []
     r = ProgressReporter(10, "x", enabled=False, sink=out.append, clock=_Clock())
-    r.update(); r.set(5); r.close()
+    r.update()
+    r.set(5)
+    r.close()
     assert out == []
 
 
