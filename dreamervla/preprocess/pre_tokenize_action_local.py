@@ -13,6 +13,7 @@ from dreamervla.preprocess.pre_tokenize_action_state_local import (
     build_wm_action_mask,
     ensure_next_obs,
 )
+from dreamervla.utils.progress import ProgressReporter
 
 
 class ItemProcessor(FlexARItemProcessorAction):
@@ -177,9 +178,11 @@ if __name__ == "__main__":
 
     derived_count = 0
     skipped_existing = 0
+    pbar = ProgressReporter(
+        end_idx - rank_start_idx, f"rank{rank} pre-tokenize", unit="item"
+    )
     for i in range(rank_start_idx, end_idx):
-        if i % 10 == 0:
-            print(f"{i}/{end_idx}  (next_obs derived so far: {derived_count})")
+        pbar.update()
 
         record = None
         pkl_path = os.path.join(save_dir, f"{i}.pkl")
@@ -291,6 +294,8 @@ if __name__ == "__main__":
                 f.write("finished")
             else:
                 f.write(f"{i}")
+
+    pbar.close()
 
     missing_after = [
         i

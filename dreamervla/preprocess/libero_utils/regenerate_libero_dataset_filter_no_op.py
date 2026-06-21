@@ -25,7 +25,6 @@ import os
 import h5py
 import numpy as np
 import robosuite.utils.transform_utils as T
-import tqdm
 from libero.libero import benchmark
 
 from dreamervla.preprocess.libero_utils.libero_utils import (
@@ -37,6 +36,7 @@ from dreamervla.preprocess.libero_utils.noop_marking import (
     is_noop_action,
 )
 from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.progress import ProgressReporter
 
 NOOP_MARKING_SCHEME = SCHEME_NAME
 
@@ -118,7 +118,8 @@ def main(args):
     IMAGE_RESOLUTION = args.image_resolution
     print(IMAGE_RESOLUTION)
 
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    tasks_pbar = ProgressReporter(num_tasks_in_suite, "regenerate no-op filter", unit="task")
+    for task_id in range(num_tasks_in_suite):
         # Get task in suite
         task = task_suite.get_task(task_id)
         env, task_description = get_libero_env(task, resolution=IMAGE_RESOLUTION)
@@ -325,7 +326,9 @@ def main(args):
         print(
             f"Saved regenerated demos for task '{task_description}' at: {new_data_path}"
         )
+        tasks_pbar.update()
 
+    tasks_pbar.close()
     print(
         f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}"
     )

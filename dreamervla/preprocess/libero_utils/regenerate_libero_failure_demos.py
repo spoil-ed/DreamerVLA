@@ -36,7 +36,6 @@ import os
 import h5py
 import numpy as np
 import robosuite.utils.transform_utils as T
-import tqdm
 from libero.libero import benchmark
 
 from dreamervla.preprocess.libero_utils.libero_utils import (
@@ -44,6 +43,7 @@ from dreamervla.preprocess.libero_utils.libero_utils import (
     get_libero_env,
 )
 from dreamervla.preprocess.libero_utils.noop_marking import is_noop_action
+from dreamervla.utils.progress import ProgressReporter
 
 
 def _load_metainfo(path: str) -> dict:
@@ -93,7 +93,9 @@ def main(args):
 
     IMAGE_RESOLUTION = args.image_resolution
 
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite), desc="tasks"):
+    tasks_pbar = ProgressReporter(num_tasks_in_suite, "tasks", unit="task")
+    for task_id in range(num_tasks_in_suite):
+        tasks_pbar.update()
         task = task_suite.get_task(task_id)
         env, task_description = get_libero_env(task, resolution=IMAGE_RESOLUTION)
         task_key = task_description.replace(" ", "_")
@@ -145,9 +147,11 @@ def main(args):
         grp.attrs["suite"] = args.libero_task_suite
         grp.attrs["task_description"] = task_description
 
-        for demo_key in tqdm.tqdm(
-            task_failure_keys, desc=f"  failures in task_{task_id}", leave=False
-        ):
+        failures_pbar = ProgressReporter(
+            len(task_failure_keys), f"  failures in task_{task_id}", unit="demo"
+        )
+        for demo_key in task_failure_keys:
+            failures_pbar.update()
             if demo_key not in orig_data:
                 print(f"  [{demo_key}] missing in raw HDF5, skipping")
                 continue
@@ -264,6 +268,7 @@ def main(args):
             num_demos_written += 1
             per_task["written"] += 1
 
+        failures_pbar.close()
         orig_data_file.close()
         new_data_file.close()
         summary["tasks"][task_key] = per_task
@@ -273,6 +278,7 @@ def main(args):
             f"written={per_task['written']}/{per_task['attempted']}"
         )
 
+    tasks_pbar.close()
     summary_path = os.path.join(args.libero_target_dir, "failure_regen_summary.json")
     summary["totals"] = {
         "demos_attempted": num_demos_attempted,

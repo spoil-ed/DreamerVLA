@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.progress import ProgressReporter
 
 
 def recreate_directory(path: Path) -> None:
@@ -33,7 +34,6 @@ def parse_args() -> SimpleNamespace:
 
 def main(args: SimpleNamespace) -> None:
     import h5py
-    import tqdm
     from libero.libero import benchmark
 
     print(f"Regenerating {args.libero_task_suite} dataset!")
@@ -49,7 +49,8 @@ def main(args: SimpleNamespace) -> None:
     raw_data_dir = Path(args.raw_data_dir)
     recreate_directory(save_dir)
 
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    tasks_pbar = ProgressReporter(num_tasks_in_suite, "save img/action/state", unit="task")
+    for task_id in range(num_tasks_in_suite):
         task = task_suite.get_task(task_id)
         orig_data_path = raw_data_dir / f"{task.name}_demo.hdf5"
         if not orig_data_path.exists():
@@ -131,6 +132,9 @@ def main(args: SimpleNamespace) -> None:
                         orig_rgb_wrist[step_idx],
                         img_dir_wrist / f"image_{step_idx}.png",
                     )
+
+        tasks_pbar.update()
+    tasks_pbar.close()
 
 
 if __name__ == "__main__":

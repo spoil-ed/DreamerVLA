@@ -8,9 +8,9 @@ from typing import Any
 
 import h5py
 import numpy as np
-from tqdm import tqdm
 
 from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.progress import ProgressReporter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -242,22 +242,24 @@ def main() -> None:
         raise RuntimeError(f"No HDF5 files found under {input_dir}")
 
     records: list[dict[str, Any]] = []
-    for source_path in tqdm(files, desc="remaining-step rewards"):
-        output_path = output_dir / source_path.name
-        if output_path.exists() and not args.overwrite:
-            raise FileExistsError(
-                f"output exists, pass overwrite=true to replace: {output_path}"
+    with ProgressReporter(len(files), "remaining-step rewards", unit="file") as pbar:
+        for source_path in files:
+            output_path = output_dir / source_path.name
+            if output_path.exists() and not args.overwrite:
+                raise FileExistsError(
+                    f"output exists, pass overwrite=true to replace: {output_path}"
+                )
+            if output_path.exists():
+                output_path.unlink()
+            records.append(
+                _copy_file_with_remaining_rewards(
+                    source_path,
+                    output_path,
+                    metainfo=metainfo,
+                    args=args,
+                )
             )
-        if output_path.exists():
-            output_path.unlink()
-        records.append(
-            _copy_file_with_remaining_rewards(
-                source_path,
-                output_path,
-                metainfo=metainfo,
-                args=args,
-            )
-        )
+            pbar.update()
 
     summary = {
         "scheme": SCHEME_NAME,

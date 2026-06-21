@@ -14,7 +14,6 @@ import h5py
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
 
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
@@ -23,6 +22,7 @@ from dreamervla.preprocess.sidecar_schema import (
     required_demo_datasets,
 )
 from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.progress import ProgressReporter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -677,7 +677,10 @@ def _write_source_sidecars(
         if args.max_demos_per_file is not None:
             demo_keys = demo_keys[: int(args.max_demos_per_file)]
 
-        for demo_key in tqdm(demo_keys, desc=f"rank{rank} {source_path.name}", leave=False):
+        pbar = ProgressReporter(
+            len(demo_keys), f"rank{rank} {source_path.name}", unit="demo"
+        )
+        for demo_key in demo_keys:
             demo = data_group[demo_key]
             obs_group = demo["obs"]
             for key in image_keys:
@@ -794,6 +797,8 @@ def _write_source_sidecars(
                     input_dset[start:end] = input_tokens.astype(dtype, copy=False)
                 frames_written += int(end - start)
             demos_written += 1
+            pbar.update()
+        pbar.close()
 
         if out_c is not None:
             out_c.attrs["complete"] = True

@@ -14,7 +14,6 @@ import h5py
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,6 +28,7 @@ from dreamervla.preprocess.sidecar_schema import (
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_runner_payload
 from dreamervla.utils.hydra_config import script_namespace
 from dreamervla.utils.paths import checkpoints_path
+from dreamervla.utils.progress import ProgressReporter
 
 
 def _project_path(path: str | Path) -> Path:
@@ -397,45 +397,27 @@ def _monitor_global_progress(
 ) -> None:
     if total_demos <= 0:
         return
-    last_demos = 0
-    with tqdm(
-        total=total_demos,
-        desc="total demos",
-        position=world_size,
-        leave=True,
-        mininterval=1.0,
-    ) as pbar:
-        while not stop_event.is_set():
-            completed_demos = 0
-            completed_frames = 0
-            for rank in range(world_size):
-                progress = _read_rank_progress(progress_dir, rank, run_id)
-                if not progress:
-                    continue
-                completed_demos += int(progress.get("completed_demos", 0))
-                completed_frames += int(progress.get("completed_frames", 0))
-            if completed_demos > last_demos:
-                pbar.update(completed_demos - last_demos)
-                last_demos = completed_demos
-            pbar.set_postfix(
-                frames=f"{completed_frames}/{total_frames}",
-                refresh=False,
-            )
-            if completed_demos >= total_demos:
-                break
-            time.sleep(2.0)
-
+    pbar = ProgressReporter(total_demos, "total demos", unit="demo")
+    while not stop_event.is_set():
         completed_demos = 0
-        completed_frames = 0
         for rank in range(world_size):
             progress = _read_rank_progress(progress_dir, rank, run_id)
             if not progress:
                 continue
             completed_demos += int(progress.get("completed_demos", 0))
-            completed_frames += int(progress.get("completed_frames", 0))
-        if completed_demos > last_demos:
-            pbar.update(completed_demos - last_demos)
-        pbar.set_postfix(frames=f"{completed_frames}/{total_frames}", refresh=True)
+        pbar.set(completed_demos)
+        if completed_demos >= total_demos:
+            break
+        time.sleep(2.0)
+
+    completed_demos = 0
+    for rank in range(world_size):
+        progress = _read_rank_progress(progress_dir, rank, run_id)
+        if not progress:
+            continue
+        completed_demos += int(progress.get("completed_demos", 0))
+    pbar.set(completed_demos)
+    pbar.close()
 
 
 def _make_encoder(args: SimpleNamespace, device: torch.device) -> RynnVLAEncoder:
@@ -657,14 +639,10 @@ def _write_source_sidecar(
         if args.max_demos_per_file is not None:
             demo_keys = demo_keys[: int(args.max_demos_per_file)]
 
-        iterator = tqdm(
-            demo_keys,
-            desc=f"rank{rank} {source_path.name}",
-            position=rank,
-            leave=False,
-            mininterval=1.0,
+        pbar = ProgressReporter(
+            len(demo_keys), f"rank{rank} {source_path.name}", unit="demo"
         )
-        for demo_key in iterator:
+        for demo_key in demo_keys:
             demo = data_group[demo_key]
             obs_group = demo["obs"]
             for key in image_keys:
@@ -834,6 +812,8 @@ def _write_source_sidecar(
                 current_file=source_path.name,
                 current_demo=demo_key,
             )
+            pbar.update()
+        pbar.close()
 
         out.attrs["complete"] = False
         out.attrs["source_hdf5"] = str(source_path)
