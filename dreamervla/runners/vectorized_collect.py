@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from dreamervla.runners.oft_collect_common import process_action
+from dreamervla.utils.progress import ProgressReporter
 
 # Per-step proprio fed to the extractor: ee_pos(3) + ee_ori/axisangle(3) + gripper(2) = 8.
 _PROPRIO_KEYS = ("ee_pos", "ee_ori", "gripper_states")
@@ -158,6 +159,7 @@ def collect_vectorized(
     for k in range(num_envs):
         _start_slot(k)
 
+    pbar = ProgressReporter(len(queue), "collect", unit="ep", enabled=(rank == 0))
     while any(active):
         active_ids = [k for k in range(num_envs) if active[k]]
         preps = [
@@ -210,9 +212,11 @@ def collect_vectorized(
                 if on_episode is not None:
                     on_episode(slot_task[k], slot_ep[k], len(steps), success)
                 demo_index += 1
+                pbar.set(demo_index - start_demo_index)
                 finished.append(k)
 
         for k in finished:
             _start_slot(k)
 
+    pbar.close()
     return demo_index - start_demo_index

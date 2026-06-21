@@ -52,6 +52,7 @@ from dreamervla.runners.online_utils import (  # noqa: E402
     obs_to_action_hidden,
 )
 from dreamervla.utils.paths import checkpoints_path  # noqa: E402
+from dreamervla.utils.progress import ProgressReporter  # noqa: E402
 from dreamervla.utils.seed import set_seed  # noqa: E402
 from dreamervla.utils.torch_utils import freeze_module  # noqa: E402
 
@@ -232,6 +233,7 @@ def main() -> None:
     prev_wm_action: torch.Tensor | None = None
     completed_episodes = 0
 
+    pbar = ProgressReporter(int(args.num_episodes), "collect", unit="ep")
     try:
         while completed_episodes < args.num_episodes:
             obs_embedding = obs_to_action_hidden(
@@ -301,6 +303,7 @@ def main() -> None:
                     success=bool(terminated),
                 )
                 completed_episodes += 1
+                pbar.set(completed_episodes)
                 elapsed = time.time() - start_time
                 print(
                     f"[collect] episode {completed_episodes}/{args.num_episodes} "
@@ -324,6 +327,7 @@ def main() -> None:
             flush=True,
         )
     finally:
+        pbar.close()
         dumper.close()
         env.close()
 

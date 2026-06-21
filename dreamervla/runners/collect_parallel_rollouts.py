@@ -53,6 +53,7 @@ from dreamervla.runners.oft_collect_common import (
     vla_latent_spec,
 )
 from dreamervla.utils.paths import data_path, data_root
+from dreamervla.utils.progress import ProgressReporter
 
 _assert_policy_mode_matches = assert_policy_mode_matches
 _load_policy = load_policy
@@ -479,7 +480,10 @@ def collect_rollouts(
                 "task_suite_name": task_suite_name,
                 "env_name": env.task_description,
             }
-            with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
+            with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer, \
+                    ProgressReporter(
+                        len(my_work), "collect", unit="ep", enabled=(rank == 0)
+                    ) as pbar:
                 current_task_id = -1
                 task_description = env.task_description
                 for task_id, ep in my_work:
@@ -518,6 +522,7 @@ def collect_rollouts(
                         episode_horizon=episode_horizon,
                     )
                     demo_index += 1
+                    pbar.set(demo_index)
 
     t_collect = time.time() - t_collect_start
     print(

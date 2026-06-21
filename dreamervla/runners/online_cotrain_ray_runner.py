@@ -194,6 +194,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         pending_learn_start = 0.0
 
         for step in range(rollout_steps):
+            self.console_progress(step + 1, rollout_steps, "rollout", unit="step")
             obs_batch = envs.current_obs().wait()
 
             if pending_learn is None and replay.ready(min_episodes).wait()[0]:
@@ -444,6 +445,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         launch_infer()
 
         while pending_infers or pending_steps or ready_obs:
+            self.console_progress(steps, rollout_steps, "rollout", unit="step")
             finish_learner(block=False)
             maybe_launch_learner()
             launch_infer()
