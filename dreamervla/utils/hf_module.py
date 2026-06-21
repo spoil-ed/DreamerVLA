@@ -30,11 +30,14 @@ class HFModuleWrapper(PreTrainedModel):
         super().__init__(config)
         if module is None:
             module = hydra.utils.instantiate({"_target_": config.target, **config.init_args})
-        self.module = module
+        # NOTE: do not name this attribute ``module`` — transformers' ``unwrap_model``
+        # recursively unwraps any ``.module`` (the DDP convention), which would strip
+        # the wrapper down to the bare inner module during save_pretrained (4.40.1).
+        self.wrapped_module = module
         self.post_init()
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - not used for save/load
-        return self.module(*args, **kwargs)
+        return self.wrapped_module(*args, **kwargs)
 
 
 def save_module_pretrained(
@@ -47,4 +50,4 @@ def save_module_pretrained(
 
 def load_module_pretrained(save_dir: str, *, map_location: str = "cpu") -> torch.nn.Module:
     wrapper = HFModuleWrapper.from_pretrained(save_dir)
-    return wrapper.module.to(map_location)
+    return wrapper.wrapped_module.to(map_location)
