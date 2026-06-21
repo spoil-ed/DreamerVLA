@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +62,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
     runner_name = "online_cotrain"
     runner_status = "current"
     runner_family = "actor"
+
+    # Checkpoint keys: extend the parent's so the trainable cotrain scalar
+    # (classifier_threshold) round-trips and the frozen reference policy is never
+    # checkpointed. encoder/_unwrapped_world_model are already excluded by parent.
+    include_keys = (*DreamerVLARunner.include_keys, "classifier_threshold")
+    exclude_keys = (*DreamerVLARunner.exclude_keys, "ref_policy")
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -448,6 +453,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
         )
 
     def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
+        # Mid-cotrain resume: restore module weights, optimizer state, and
+        # global_step from checkpoints/latest.ckpt when training.resume=true.
+        # The env rollout loop warm-restarts (env_step/replay are not serialized).
+        self.resume()
         processor = self.processor
         algo = OmegaConf.select(cfg, "algorithm")
         # ---- run-control knobs
@@ -503,7 +512,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
             )
 
         history: list[dict[str, float | str | int]] = []
-        os.makedirs(os.path.join(self.output_dir, "ckpt"), exist_ok=True)
         obs, _info = env.reset()
         latent: Any = None
         prev_action: torch.Tensor | None = None
@@ -515,6 +523,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         for env_step in range(1, total_env_steps + 1):
             if stop:
                 break
+            self.console_progress(env_step, total_env_steps, "cotrain", unit="env")
             policy_action, obs_embedding, latent = self._rollout_action(
                 self.world_model, self.policy, processor, obs, latent, prev_action, target_token_id
             )
@@ -653,43 +662,46 @@ class OnlineCotrainRunner(DreamerVLARunner):
         return history
 
     def _save_cotrain_ckpt(self) -> None:
-        ckpt_dir = os.path.join(self.output_dir, "ckpt")
-        os.makedirs(ckpt_dir, exist_ok=True)
+        # Torch checkpoint (the resume artifact: all 4 modules + their optimizers
+        # + global_step + classifier_threshold) goes through the inherited base
+        # saver, which also emits the HF sidecars via _save_checkpoint_sidecars.
         if self.checkpoint_save_torch():
-            torch.save(
-                {
-                    "global_step": int(self.global_step),
-                    "world_model": _unwrap(self.world_model).state_dict(),
-                    "policy": _unwrap(self.policy).state_dict(),
-                    "critic": _unwrap(self.critic).state_dict(),
-                    "classifier": _unwrap(self.classifier).state_dict(),
-                    "classifier_threshold": float(self.classifier_threshold),
-                },
-                os.path.join(ckpt_dir, "latest.ckpt"),
-            )
-        if self.checkpoint_save_hf():
-            for name, module, cfg_key in (
-                ("world_model", self.world_model, "world_model"),
-                ("policy", self.policy, "policy"),
-                ("critic", self.critic, "critic"),
-            ):
-                blk = OmegaConf.to_container(OmegaConf.select(self.cfg, cfg_key), resolve=True)
-                target = blk.pop("_target_")
-                if name == "policy":
-                    # HF policy artifact is self-contained: weights live in model.safetensors.
-                    # Strip the external action-head ckpt path so load_module_pretrained does
-                    # not attempt a wasteful/failing preload before from_pretrained overwrites.
-                    blk.pop("init_action_head_ckpt", None)
-                save_module_pretrained(
-                    _unwrap(module),
-                    os.path.join(ckpt_dir, f"latest_hf_{name}"),
-                    target=target,
-                    init_args=blk,
-                )
+            path = Path(self.save_checkpoint())
+        elif self.checkpoint_save_hf():
+            # HF-only export (not resumable): write just the sidecars.
+            path = self.get_checkpoint_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._save_checkpoint_sidecars(path, payload={})
+        else:
+            return
+        print(f"[online-cotrain] ckpt -> {path.parent}", flush=True)
+
+    def _save_checkpoint_sidecars(self, path: Path, payload: dict) -> None:
+        # Portable per-component HF artifacts next to the torch checkpoint, e.g.
+        # checkpoints/latest_hf_world_model. Self-contained (weights in
+        # model.safetensors); the policy block drops its external action-head path.
+        if not self.checkpoint_save_hf():
+            return
+        ckpt_dir = path.parent
+        stem = path.stem
+        for name, module, cfg_key in (
+            ("world_model", self.world_model, "world_model"),
+            ("policy", self.policy, "policy"),
+            ("critic", self.critic, "critic"),
+        ):
+            blk = OmegaConf.to_container(OmegaConf.select(self.cfg, cfg_key), resolve=True)
+            target = blk.pop("_target_")
+            if name == "policy":
+                blk.pop("init_action_head_ckpt", None)
             save_module_pretrained(
-                _unwrap(self.classifier),
-                os.path.join(ckpt_dir, "latest_hf_classifier"),
-                target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
-                init_args=getattr(self, "_classifier_cls_kwargs", {}),
+                _unwrap(module),
+                str(ckpt_dir / f"{stem}_hf_{name}"),
+                target=target,
+                init_args=blk,
             )
-        print(f"[online-cotrain] ckpt -> {ckpt_dir}", flush=True)
+        save_module_pretrained(
+            _unwrap(self.classifier),
+            str(ckpt_dir / f"{stem}_hf_classifier"),
+            target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
+            init_args=getattr(self, "_classifier_cls_kwargs", {}),
+        )
