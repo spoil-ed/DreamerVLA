@@ -683,16 +683,13 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
             return input_tokens_item
 
     def decode_image(self, tokens: list[int]) -> Image.Image:
-        print(tokens, len(tokens))
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
         if tokens[-1] == self.token2id(self.image_end_token):
             tokens = tokens[:-1]
-        print(tokens, len(tokens))
 
         h_grids, w_grids = tokens[0] - 8804, tokens[1] - 8804
         tokens = tokens[2:]
-        print(tokens, len(tokens))
         h_latent_dim, w_latent_dim = h_grids * 2, w_grids * 2
 
         for i in range(len(tokens)):

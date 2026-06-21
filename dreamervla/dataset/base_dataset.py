@@ -5,9 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import torch
-from PIL import Image
 from torch.utils.data import Dataset
 
 if TYPE_CHECKING:
@@ -76,10 +74,6 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
             key for key in data_group.keys() if cls.extract_demo_index(key) >= 0
         ]
         return sorted(demo_keys, key=cls.extract_demo_index)
-
-    @staticmethod
-    def image_from_array(rgb_frame: np.ndarray) -> Image.Image:
-        return Image.fromarray(rgb_frame[::-1, ::-1].astype(np.uint8))
 
     @staticmethod
     def pad_action_batch(

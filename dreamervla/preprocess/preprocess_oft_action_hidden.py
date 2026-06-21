@@ -359,10 +359,9 @@ def _predict_intermediates_chunk(
         )
         input_tokens = None
         if want_input_tokens:
-            token_count, input_flat_dim = _input_token_sidecar_dims(
+            _token_count, input_flat_dim = _input_token_sidecar_dims(
                 vla, image_keys=image_keys, token_dim=int(args.token_dim)
             )
-            del token_count
             input_tokens = np.zeros((batch, input_flat_dim), dtype=np.float32)
         return hidden_c, hidden_d, action_hidden, input_tokens
 
