@@ -98,14 +98,14 @@ modes:
       - task={hydra_task}
       - logger=tensorboard
       - collect.task_ids=all
-      - collect.episodes_per_task=4
+      - collect.episodes_per_task=50
   noray:
     collect:
       - experiment=collect_rollouts_onetraj
       - task={hydra_task}
       - logger=tensorboard
       - collect.task_ids=all
-      - collect.episodes_per_task=4
+      - collect.episodes_per_task=50
       - collect.gpu_id=0
 
 cotrain:
@@ -122,11 +122,13 @@ profiles:
   smoke:
     collect:
       ray:
+        - collect.episodes_per_task=2
         - collect.episode_horizon=64
         - collect.memory_fraction=0.8
         - env.num_workers=2
         - rollout.max_steps=256
       noray:
+        - collect.episodes_per_task=2
         - collect.episode_horizon=64
         - collect.envs_per_gpu=1
         - collect.memory_fraction=0.8
@@ -144,7 +146,6 @@ profiles:
         - collect.episode_horizon=300
         - collect.memory_fraction=0.9
         - env.num_workers=16
-        - rollout.max_steps=1200
       noray:
         - collect.episode_horizon=300
         - collect.envs_per_gpu=32
@@ -170,7 +171,6 @@ profiles:
       ray:
         - collect.episode_horizon=300
         - collect.memory_fraction=0.9
-        - rollout.max_steps=1200
       noray:
         - collect.episode_horizon=300
         - collect.envs_per_gpu=32

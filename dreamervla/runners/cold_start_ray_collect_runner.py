@@ -274,8 +274,11 @@ class ColdStartRayCollectRunner(BaseRunner):
                 ),
             )
         )
+        episode_horizon = self._int_from(
+            ("collect.episode_horizon", "episode_horizon"), 300
+        )
         max_steps = self._int_from(
-            ("rollout.max_steps", "rollout_steps"), target_episodes * 8
+            ("rollout.max_steps", "rollout_steps"), target_episodes * episode_horizon
         )
 
         steps = 0
@@ -408,7 +411,12 @@ class ColdStartRayCollectRunner(BaseRunner):
                 self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
             )
         )
-        max_steps = self._int_from(("rollout.max_steps", "rollout_steps"), target_episodes * 8)
+        episode_horizon = self._int_from(
+            ("collect.episode_horizon", "episode_horizon"), 300
+        )
+        max_steps = self._int_from(
+            ("rollout.max_steps", "rollout_steps"), target_episodes * episode_horizon
+        )
 
         self.console_banner(
             "COLDSTART COLLECT",

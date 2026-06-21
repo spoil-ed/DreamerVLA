@@ -25,7 +25,7 @@ collect:
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
   gpu_id: 0                # single-process device; ignored under torchrun
   task_ids: all            # "all", csv ("0,2"), int, or list
-  episodes_per_task: 2
+  episodes_per_task: 50    # all LIBERO init states per task (one episode each)
   episode_horizon: 64      # must be >= WM sequence_length (36 for discrete chunk WM)
   envs_per_gpu: 1          # K within-rank envs; >1 enables batched vectorized path
   memory_fraction: 0.8     # PyTorch allocator cap for the collector process

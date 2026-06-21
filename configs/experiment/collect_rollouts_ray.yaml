@@ -9,7 +9,7 @@ mode: oft
 collect:
   policy_mode: auto
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
-  episodes_per_task: 2
+  episodes_per_task: 50   # all LIBERO init states per task (one episode each)
   episode_horizon: 64
   envs_per_gpu: 2
   memory_fraction: 0.8
@@ -23,7 +23,8 @@ env:
 
 rollout:
   target_episodes: 4
-  max_steps: 256
+  # max_steps unset -> auto-derives as target_episodes * episode_horizon so the
+  # full per-task init-state sweep is never truncated (real stop = done_count>=target).
 
 training:
   out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_coldstart_oft}

@@ -10,7 +10,7 @@
 #
 # Usage:
 #   bash scripts/collect_parallel.sh task=goal ngpu=6 run_root=/path/to/run \
-#        [episodes_per_task=4] [episode_horizon=300] [num_workers=4] \
+#        [episodes_per_task=50] [episode_horizon=300] [num_workers=4] \
 #        [task_ids=0,1,2,3,4,5,6,7,8,9] [dry_run=false]
 #
 # Then run warmup + (full) cotrain on the merged data:
@@ -22,7 +22,7 @@ set -euo pipefail
 task=goal
 ngpu=6
 run_root=""
-episodes_per_task=4
+episodes_per_task=50
 episode_horizon=300
 num_workers=4
 task_ids="0,1,2,3,4,5,6,7,8,9"
@@ -86,7 +86,6 @@ for ((g=0; g<ngpu; g++)); do
         collect.episode_horizon="$episode_horizon"
         collect.memory_fraction=0.9
         env.num_workers="$num_workers"
-        rollout.max_steps=1200
         task.openvla_oft.hdf5_reward_dir="$rw"
         task.openvla_oft.action_hidden_dir="$hid"
         training.out_dir="$run_root/collect_g${g}" )
