@@ -19,6 +19,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.online_utils import SuccessTracker
 from dreamervla.utils.console import fmt_value, metric_box, phase_banner
 from dreamervla.utils.hf_checkpoint import (
@@ -797,6 +798,7 @@ class BaseRunner(ABC):
             return str(path.absolute())
 
         payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
             "cfg": self.cfg,
             "state_dicts": {},
             "pickles": {},

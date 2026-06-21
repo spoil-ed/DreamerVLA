@@ -26,7 +26,7 @@ from dreamervla.algorithms.dreamervla import (
     world_model_pretrain_step,
 )
 from dreamervla.algorithms.registry import get_actor_update_route
-from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION, DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
@@ -116,6 +116,7 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
 )
 from dreamervla.utils.fixed_step_video import FixedStepVideoRecorder
+from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.paths import checkpoints_path
 from dreamervla.utils.seed import set_seed
@@ -497,6 +498,7 @@ def save_checkpoint(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     path = ckpt_dir / f"step={env_step:07d}-updates={update_step:07d}.ckpt"
     payload = {
+        "format_version": CHECKPOINT_FORMAT_VERSION,
         "env_step": int(env_step),
         "update_step": int(update_step),
         "cfg": OmegaConf.to_container(cfg, resolve=True),
@@ -543,7 +545,7 @@ def load_training_checkpoint(
     path = Path(ckpt_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"resume ckpt not found: {path}")
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload = load_runner_payload(path)
     state_dicts = payload.get("state_dicts", {})
     modules = {
         "world_model": world_model,
