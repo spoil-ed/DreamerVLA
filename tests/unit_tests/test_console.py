@@ -1,6 +1,7 @@
 import torch
 
 from dreamervla.utils import console
+from dreamervla.utils.console import format_progress_line
 from dreamervla.runners.online_utils import SuccessTracker
 
 
@@ -74,3 +75,23 @@ def test_cotrain_box_strings_are_wellformed_for_a_synthetic_step():
     assert all(len(ln) == 65 for ln in box.splitlines())
     skip = console.phase_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True)
     assert "skipped" in skip and len(skip) == 65
+
+
+def test_format_progress_line_with_total():
+    s = format_progress_line(
+        "pretokenize", 12800, 50000, elapsed_s=201.0, eta_s=585.0, rate=63.7
+    )
+    assert s == "pretokenize 12800/50000 (26%) · 03:21<09:45 · 63.7 it/s"
+
+
+def test_format_progress_line_open_ended():
+    s = format_progress_line(
+        "collect", 812, None, elapsed_s=201.0, eta_s=None, rate=4.0, unit="ep"
+    )
+    assert s == "collect 812 · 03:21 · 4.0 ep/s"
+
+
+def test_format_progress_line_hour_duration_and_zero_total():
+    s = format_progress_line("train", 0, 0, elapsed_s=3725.0, eta_s=0.0, rate=0.0)
+    # total<=0 is treated as open-ended (no pct/eta); duration rolls to h:mm:ss
+    assert s == "train 0 · 1:02:05 · 0.0 it/s"

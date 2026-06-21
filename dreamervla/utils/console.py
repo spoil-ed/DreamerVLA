@@ -68,3 +68,38 @@ def count_trainable(module) -> int:
     if module is None:
         return 0
     return int(sum(p.numel() for p in module.parameters() if p.requires_grad))
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration as mm:ss, or h:mm:ss past an hour."""
+    s = int(max(0.0, seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def format_progress_line(
+    desc: str,
+    current: int,
+    total: int | None,
+    *,
+    elapsed_s: float,
+    eta_s: float | None,
+    rate: float,
+    unit: str = "it",
+) -> str:
+    """RLinf-style one-line progress string.
+
+    total>0  -> "desc cur/total (pct%) · elapsed<eta · rate unit/s"
+    total in (None, <=0) -> "desc cur · elapsed · rate unit/s" (open-ended).
+    """
+    if total and total > 0:
+        pct = int(round(100.0 * current / total))
+        head = f"{desc} {current}/{total} ({pct}%)"
+        timing = f"{_fmt_duration(elapsed_s)}<{_fmt_duration(eta_s or 0.0)}"
+    else:
+        head = f"{desc} {current}"
+        timing = _fmt_duration(elapsed_s)
+    return f"{head} · {timing} · {rate:.1f} {unit}/s"
