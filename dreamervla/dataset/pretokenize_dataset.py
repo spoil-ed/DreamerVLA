@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import pickle
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,9 +9,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from dreamervla.dataset import _pretokenize_helpers as _h
 from dreamervla.dataset.base_dataset import BaseDataset
-
-_FRAME_RE = re.compile(r"image_(\d+)\.png$")
 
 
 @dataclass(frozen=True)
@@ -190,15 +188,7 @@ class PretokenizeDataset(BaseDataset):
             prompt_text=config.get("prompt_text"),
         )
 
-    @staticmethod
-    def _load_config(path: Path) -> dict[str, Any]:
-        if path.suffix == ".json":
-            with path.open("r", encoding="utf-8") as handle:
-                return json.load(handle)
-        import yaml
-
-        with path.open("r", encoding="utf-8") as handle:
-            return yaml.load(handle, Loader=yaml.FullLoader)
+    _load_config = staticmethod(_h.load_config)
 
     @property
     def data_spec(self) -> PretokenizeDataSpec:
@@ -305,22 +295,7 @@ class PretokenizeDataset(BaseDataset):
             "id": int(payload.get("id", record.get("id", index))),
         }
 
-    @staticmethod
-    def _load_action_sequence(action: list[Any]) -> torch.Tensor:
-        values: list[np.ndarray] = []
-        for entry in action:
-            if isinstance(entry, str):
-                path = Path(entry).expanduser()
-                if path.is_file():
-                    values.append(np.asarray(np.load(path), dtype=np.float32))
-                continue
-            values.append(np.asarray(entry, dtype=np.float32))
-        if not values:
-            return torch.zeros((0, 0), dtype=torch.float32)
-        array = np.asarray(values, dtype=np.float32)
-        if array.ndim == 1:
-            array = array[:, None]
-        return torch.tensor(array, dtype=torch.float32)
+    _load_action_sequence = staticmethod(_h.load_action_sequence)
 
     def _index_sequence_records(self) -> None:
         for record_index, record in enumerate(self.records):
@@ -390,54 +365,11 @@ class PretokenizeDataset(BaseDataset):
                     continue
                 self._windows.append(_Window(records=records))
 
-    @staticmethod
-    def _select_current_third_view(images: Any) -> str:
-        paths = [str(path) for path in (images or [])]
-        third = [path for path in paths if "/imgs_third_view/" in path]
-        if third:
-            return third[-1]
-        return paths[-1] if paths else ""
-
-    @staticmethod
-    def _parse_image_path(path: str) -> tuple[str, str, int] | None:
-        parts = Path(path).parts
-        if "imgs_third_view" not in parts:
-            return None
-        view_idx = parts.index("imgs_third_view")
-        if view_idx < 2:
-            return None
-        match = _FRAME_RE.match(parts[-1])
-        if match is None:
-            return None
-        task_name = parts[view_idx - 2]
-        trj_name = parts[view_idx - 1]
-        trajectory_key = f"{task_name}/{trj_name}"
-        return task_name, trajectory_key, int(match.group(1))
-
-    @staticmethod
-    def _sibling_step_path(
-        image_path: str, dirname: str, prefix: str, suffix: str
-    ) -> str:
-        path = Path(image_path)
-        match = _FRAME_RE.match(path.name)
-        if match is None:
-            return ""
-        frame_index = int(match.group(1))
-        trj_dir = path.parent.parent
-        return str(trj_dir / dirname / f"{prefix}_{frame_index}{suffix}")
-
-    @staticmethod
-    def _load_step_action(path: str, action_dim: int) -> torch.Tensor:
-        if path and Path(path).is_file():
-            action = np.asarray(np.load(path), dtype=np.float32).reshape(-1)
-            return torch.tensor(action, dtype=torch.float32)
-        return torch.zeros(action_dim, dtype=torch.float32)
-
-    @staticmethod
-    def _load_step_reward(path: str) -> float:
-        if path and Path(path).is_file():
-            return float(np.asarray(np.load(path), dtype=np.float32).reshape(-1)[0])
-        return 0.0
+    _select_current_third_view = staticmethod(_h.select_current_third_view)
+    _parse_image_path = staticmethod(_h.parse_image_path)
+    _sibling_step_path = staticmethod(_h.sibling_step_path)
+    _load_step_action = staticmethod(_h.load_step_action)
+    _load_step_reward = staticmethod(_h.load_step_reward)
 
     def _getitem_sequence(self, index: int) -> dict[str, Any]:
         window = self._windows[index]
