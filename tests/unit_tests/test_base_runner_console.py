@@ -86,3 +86,29 @@ def test_group_metric_rows_skip_success_drops_rollout_success_rate():
     joined = "\n".join(rows)
     assert "success_rate" not in joined
     assert "loss=0.1" in joined
+
+
+def _progress_runner(cfg, *, main=True):
+    obj = types.SimpleNamespace()
+    obj.cfg = cfg
+    obj.is_main_process = main
+    for name in ("console_progress", "_console_state_get"):
+        setattr(obj, name, types.MethodType(getattr(BaseRunner, name), obj))
+    return obj
+
+
+def test_console_progress_prints_and_caches_per_desc(capsys):
+    cfg = OmegaConf.create({"console": {"progress_every_s": 0.0}})
+    r = _progress_runner(cfg)
+    r.console_progress(1, 10, "train")
+    r.console_progress(2, 10, "train")
+    out = capsys.readouterr().out
+    assert "train 1/10" in out and "train 2/10" in out
+    # one cached reporter per desc
+    assert set(r._console_state["progress"].keys()) == {"train"}
+
+
+def test_console_progress_guarded_on_non_main(capsys):
+    cfg = OmegaConf.create({"console": {"progress_every_s": 0.0}})
+    _progress_runner(cfg, main=False).console_progress(1, 10, "train")
+    assert capsys.readouterr().out == ""

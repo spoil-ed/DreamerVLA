@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 
 from dreamervla.runners.online_utils import SuccessTracker
 from dreamervla.utils.console import fmt_value, metric_box, phase_banner
+from dreamervla.utils.progress import ProgressReporter
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
@@ -953,6 +954,10 @@ class BaseRunner(ABC):
 
     def teardown(self) -> None:
         """Optional lifecycle hook after execution."""
+        st = getattr(self, "_console_state", None)
+        if st is not None:
+            for rep in st.get("progress", {}).values():
+                rep.close()
         self.finish_metric_logger()
 
     def _console_state_get(self) -> dict:
@@ -963,6 +968,8 @@ class BaseRunner(ABC):
         #                                               calls (floored at 1); pass force=True to bypass
         #                                               for one-shot summary boxes
         #   console.success_window (int, default 50)  — episodes in the VLA success-rate window
+        #   console.progress_every_s (float, default 5.0) — min wall-time between progress lines
+        #                                               (0 prints every call); gates console_progress()
         # Override per run, e.g. `console.log_every=50 console.success_window=100`.
         st = getattr(self, "_console_state", None)
         if st is None:
@@ -970,11 +977,35 @@ class BaseRunner(ABC):
                 "width": int(OmegaConf.select(self.cfg, "console.banner_width", default=65)),
                 "log_every": max(1, int(OmegaConf.select(self.cfg, "console.log_every", default=1))),
                 "window": int(OmegaConf.select(self.cfg, "console.success_window", default=50)),
+                "progress_every_s": float(
+                    OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
+                ),
                 "counter": 0,
                 "tracker": None,
+                "progress": {},
             }
             self._console_state = st
         return st
+
+    def console_progress(
+        self, current: int, total: int | None, desc: str, *, unit: str = "it"
+    ) -> None:
+        # One uniform progress line per flow. Caches a wall-time-throttled
+        # ProgressReporter per ``desc`` so every loop reports identically; the
+        # reporter is main-process-guarded and closed in ``teardown``.
+        st = self._console_state_get()
+        reporters = st["progress"]
+        rep = reporters.get(desc)
+        if rep is None:
+            rep = ProgressReporter(
+                total,
+                desc,
+                enabled=self.is_main_process,
+                min_interval_s=st["progress_every_s"],
+                unit=unit,
+            )
+            reporters[desc] = rep
+        rep.set(current)
 
     def console_banner(self, title: str, *, subtitle: str | None = None, done: bool = False) -> None:
         if not self.is_main_process:
