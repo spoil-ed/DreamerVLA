@@ -1,121 +1,32 @@
-# Experiment Tutorials
+# Experiment tutorials
 
-These tutorials are short end-to-end recipes. They start from a clean checkout,
-then go through install, download, preprocessing, training, and final LIBERO
-eval.
+Step-only end-to-end recipes (clean checkout → install → download → preprocess →
+train → eval). **All background, rationale, memory/OOM, WM sizing and logging notes
+are in [EXPLAINED.md](EXPLAINED.md).** Parameter reference:
+[../PARAMETERS.md](../PARAMETERS.md).
 
-Use Hydra overrides for normal changes:
-
-```bash
-gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20 out_dir=/tmp/run
-```
-
-The shell launchers are intentionally thin. They set project/data roots and
-call the Hydra launcher; all experiment choice is in `experiment=...` and
-normal Hydra keys.
+Normal changes are Hydra overrides, e.g.
+`gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20 out_dir=/tmp/run`.
 
 ## Recipes
 
-| Pipeline | Hydra task | Preprocess artifact | Main configs |
-| --- | --- | --- | --- |
-| [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `RynnVLA_LIBERO` | `RynnVLA_LIBERO_libero_goal` | `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome` |
-| [OpenVLA_Onetraj_LIBERO](OpenVLA_Onetraj_LIBERO.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome` |
-| [OpenVLA_Onetraj_LIBERO — action-hidden WM (Scheme 2; offline + online cotrain)](OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk`, `oft_latent_classifier_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome`, `online_cotrain_oft_action_hidden` |
-| [OpenVLA_Onetraj_LIBERO — backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `OpenVLA_Onetraj_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `oft_world_model_dinowm_chunk_input_tokens`, `oft_latent_classifier_chunk_input_tokens`, `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, `online_cotrain_oft_backbone_latent` |
-| [OpenVLA_Onetraj_LIBERO — cold-start rollout collection (pure Hydra)](OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md) | `OpenVLA_Onetraj_ColdStart_LIBERO` | `OpenVLA_Onetraj_LIBERO_libero_goal` | `collect_rollouts_onetraj`, `oft_discrete_token_world_model_dinowm_chunk` |
-| [OpenVLA_Onetraj_LIBERO — cold-start collection and warmup](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md) | `OpenVLA_Onetraj_ColdStart_LIBERO` | generated cold-start rollouts | `collect_rollouts_ray`, `collect_rollouts_onetraj`, `online_cotrain_pipeline_oft_action_hidden` |
-| [Ray online cotrain backend](../ray_online_cotrain_backend.md) | synthetic smoke / `libero_goal` gated real smoke | generated online replay / cold-start rollouts | `online_cotrain_ray_synthetic`, `online_cotrain_ray_dreamervla_tiny`, `online_cotrain_ray_oft`, `collect_rollouts_ray_synthetic`, `collect_rollouts_ray` |
+| Pipeline | Hydra `task=` | Main configs |
+| --- | --- | --- |
+| [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `rynnvla_libero` | `world_model_dinowm_chunk`, `dreamervla_rynn_dino_wm_wmpo_outcome` |
+| [OpenVLA one-traj](OpenVLA_Onetraj_LIBERO.md) | `openvla_onetraj_libero` | `oft_discrete_token_world_model_dinowm_chunk`, `dreamervla_oft_discrete_token_dino_wm_wmpo_outcome` |
+| [OFT action-hidden WM (Scheme A)](OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md) | `openvla_onetraj_libero` | `oft_world_model_dinowm_chunk`, `oft_latent_classifier_chunk`, `dreamervla_oft_dino_wm_wmpo_outcome`, `online_cotrain_oft_action_hidden` |
+| [OFT backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `openvla_onetraj_libero` | `oft_world_model_dinowm_chunk_input_tokens`, `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, `online_cotrain_oft_backbone_latent` |
+| [Cold-start rollout collection](OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_onetraj`, `oft_discrete_token_world_model_dinowm_chunk` |
+| [Cold-start collect + warmup + cotrain](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_ray`, `online_cotrain_pipeline_oft_action_hidden` |
+| [Ray online cotrain backend](../ray_online_cotrain_backend.md) | synthetic / gated real smoke | `online_cotrain_ray_*`, `collect_rollouts_ray*` |
 
-The pipeline task name is the Hydra `task=` value. The preprocessing artifact
-name appends the raw dataset suite, so intermediate folders and sidecars stay
-unambiguous on disk. The raw benchmark suite is still `libero_goal` in these
-tutorials.
+The `task=` token is snake_case; on-disk data artifacts keep their historical
+`task.artifact_name` directories (e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths
+inside the commands mix the two — this is intentional (see EXPLAINED.md).
 
-The mainline latent route is Scheme A: action-slot hidden tokens generated by
-the VLA action head and consumed directly by the WM, classifier, and DreamerVLA
-actor.
+## Validation notes
 
-World-model predictor (latest, 2026-06-19): DINO-WM concat conditioning on
-**discrete** OpenVLA-OFT latents (no L1 head), `num_hist=3` autoregressive
-recursion, sized per scheme under a 1B cap — query_after (action-hidden, 56
-tokens) uses full-width attention (~610M); query_before (input-token, 512 tokens)
-stays lean (~313M) because its sequence is ~9× longer. Details in the two WM
-tutorials above.
-
-## Memory / OOM (online cotrain)
-
-The WMPO RL update imagines an **effective batch**
-`B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
-through the world model at once, so `B_eff` (not the raw batch) is the memory
-dial. The fast fix is `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
-plus a sane `algorithm.imag_last` (start states per replay window; default 4,
-diverse strided selection). With `batch_size=12, imag_last=4` this fits an 80GB
-GPU at ~66.7 GB. Full breakdown (chunk-granular video, sliced `lm_head`, the
-shrink-`B_eff` order) is in the
-[cold-start collection and warmup](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md)
-tutorial's "Memory (online cotrain)" note.
-
-## Validation Notes
-
-| Note | Purpose |
-| --- | --- |
-| [RLinf-aligned LIBERO rollout implementation notes](RLinf_aligned_LIBERO_rollout_execution_plan.md) | Records the OpenVLA-OFT / RLinf action contract and the shared standalone, no-Ray, and Ray collection rollout core. |
-| [Ray online cotrain backend](../ray_online_cotrain_backend.md) | Shows the single-node Ray proof commands, overlap metrics, gated real OFT/LIBERO smoke routes, and model/data decoupling boundary. |
-
-## Logging
-
-Grouped training defaults to TensorBoard plus W&B online. If you are looking
-for "TensorFlow logging" in these recipes, the supported switch is the
-TensorBoard event writer, not a separate TensorFlow training backend:
-
-```bash
-logger=tensorboard_wandb runner.logger.wandb_mode=online
-```
-
-Use TensorBoard plus offline W&B:
-
-```bash
-logger=tensorboard_wandb runner.logger.wandb_mode=offline
-```
-
-Use local TensorBoard only:
-
-```bash
-logger=tensorboard
-```
-
-Use W&B online only:
-
-```bash
-logger=wandb runner.logger.wandb_mode=online
-```
-
-The same `logger=...` overrides work with `scripts/train_vla.sh`,
-`scripts/train_wm.sh`, and `scripts/train_dreamervla.sh`. TensorBoard event
-files are written under `${training.out_dir}/log/tensorboard`; W&B run files are
-written under `${training.out_dir}/log/wandb`.
-
-Visualize TensorBoard logs:
-
-```bash
-tensorboard --logdir "${OUT_DIR}/log/tensorboard" --host 0.0.0.0 --port 6006
-```
-
-If training runs on a remote host, forward the port and open
-`http://localhost:6006` locally:
-
-```bash
-ssh -L 6006:localhost:6006 user@host
-```
-
-For W&B online mode, open the run URL printed in the training log. For offline
-mode, upload the local W&B run files after training:
-
-```bash
-wandb sync "${OUT_DIR}/log/wandb"
-```
-
-Classifier and WMPO training need both success and failure rollout corpora. The
-standard LIBERO download gives success demos. If you do not have failure demos
-and matching sidecars yet, stop after WM training or use the actor-critic route
-where applicable.
+- [RLinf-aligned LIBERO rollout](RLinf_aligned_LIBERO_rollout_execution_plan.md) — the
+  OpenVLA-OFT / RLinf action contract and the shared rollout core.
+- [Ray online cotrain backend](../ray_online_cotrain_backend.md) — single-node Ray
+  proof commands and gated real OFT/LIBERO smoke.

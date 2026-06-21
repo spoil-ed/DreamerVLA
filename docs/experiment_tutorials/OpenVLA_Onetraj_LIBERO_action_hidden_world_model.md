@@ -1,191 +1,56 @@
-# OpenVLA-OFT One-Trajectory — Action-Hidden World Model DreamerVLA
+# OpenVLA-OFT one-trajectory — action-hidden WM (Scheme A)
 
-Complete, **verified-runnable** script for the OpenVLA-OFT one-trajectory
-action-hidden DreamerVLA pipeline on LIBERO-Goal.
+Background, WM architecture, memory/OOM & known gaps: [EXPLAINED.md](EXPLAINED.md) ·
+parameters: [../PARAMETERS.md](../PARAMETERS.md).
 
-Latent route: **Scheme A — action hidden** (the action-slot hidden tokens the
-OFT action head consumes, `[T, 56, 4096]` per frame; flat `obs_embedding` dim
-`56*4096 = 229376`). The world model predicts future action-hidden; the
-classifier scores imagined latent windows; the DreamerVLA actor is trained by
-`wmpo_outcome` imagined rollout.
-
-Pipeline (each stage is its own Hydra entry; chained by checkpoint path):
-
-```
-preprocess (reward HDF5 + OFT action-hidden sidecar)
-   → world model         (experiment=oft_world_model_dinowm_chunk)
-   → success classifier  (experiment=oft_latent_classifier_chunk)
-   → DreamerVLA actor    (experiment=dreamervla_oft_dino_wm_wmpo_outcome,
-                          init from WM + classifier ckpts; wmpo_outcome)
-   → LIBERO eval
-```
-
-> The sub-training logic is **unchanged** — every stage runs the existing real
-> runner (`OFTDinoWMRunner` / `LatentClassifierRunner` / `JointDreamerVLARunner`
-> with the `wmpo_outcome` route). This recipe only wires data/config/ckpt paths.
-
-## World Model architecture (latest, 2026-06-19)
-
-DINO-WM paradigm on **discrete** OpenVLA-OFT latents (no L1 action head). The
-action-hidden sidecar gives `token_count=56`, `token_dim=4096`.
-
-- **Concat conditioning** (DINO-WM `concat_dim=1`): the action is encoded to
-  `action_emb_dim=10`, tiled to every obs token, and concatenated on the channel
-  axis, pinning `model_dim = token_dim + action_emb_dim*num_action_repeat = 4106`.
-- **Autoregressive recursion** (`num_hist=3` sliding window; predictions feed back):
-
-```text
-ê_{t+1} = F_w(e_{t-2}, e_{t-1}, e_t,      a_t)
-ê_{t+2} = F_w(e_{t-1}, e_t,     ê_{t+1},  a_{t+1})
-ê_{t+3} = F_w(e_t,     ê_{t+1}, ê_{t+2},  a_{t+2})
-ê_{t+4} = F_w(ê_{t+1}, ê_{t+2}, ê_{t+3},  a_{t+3})
-```
-
-- **Predictor sizing (balanced, ~610M):** `depth=6, heads=16, dim_head=256`
-  (inner = 4096 = `model_dim`, full-width attention — no compression of the dense
-  4096-d tokens), lean `mlp_dim=4096`. The 168-token sequence
-  (`num_hist*token_count`) makes full-width attention nearly free, so capacity is
-  spent here. Under the 1B cap.
-- **Rollout length is a hyperparameter:** `num_hist=3`, `chunk_size=8`,
-  `chunk_rollout_chunks=4` → supervised horizon `N*K=32`, dataset
-  `sequence_length = H + N*K + 1 = 36`.
-
-All OpenVLA query_after routes share this profile:
-`configs/worldmodel/openvla_oft_action_chunk.yaml`,
-`configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`,
-`configs/dreamervla/openvla_oft_wmpo_outcome.yaml`.
-
-## Unified online cotrain (single Hydra call)
-
-`dreamervla.runners.OnlineCotrainRunner` implements the unified pipeline in **one
-`train` call**: one-traj VLA → **parallel online rollout** (one
-`DreamerVLAOnlineTrainEnv` per `torchrun` rank) → `OnlineReplay` →
-**warmup (WM + classifier only, `training.warmup_steps`)** →
-**cotrain (WM + classifier + slow-policy RL, `dino_wmpo_outcome_step`)**. It
-reuses the existing step functions (`world_model_pretrain_step`,
-`online_classifier_update_step`, `dino_wmpo_outcome_step`); WM/actor are frozen
-during WM/classifier updates and the actor only updates in the RL phase
-(asserted at runtime).
-
-```bash
-# full (N GPUs = N parallel rollouts + DDP cotrain)
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --standalone --nproc_per_node=4 \
-  -m dreamervla.train experiment=online_cotrain_oft_action_hidden
-# one-command dry-run (rollout -> replay -> WM/cls warmup -> RL cotrain)
-WANDB_MODE=disabled python -m dreamervla.train \
-  experiment=online_cotrain_oft_action_hidden training.debug=true
-```
-
-Config: `configs/experiment/online_cotrain_oft_action_hidden.yaml` (`latent_type=action_hidden`,
-`warmup_steps`, `train_actor_after_warmup`, `train_classifier_inline`,
-`online_rollout.*`, `optim.policy.lr=5e-7` slow policy). The **online env-rollout
-policy is the RynnVLA one-trajectory VLA** (the ~40% seed) since this route's
-online action-hidden extractor is RynnVLA-based; the **OpenVLA-OFT**
-one-trajectory checkpoint uses the OFFLINE staged path below. The Scheme 1 /
-backbone-latent OpenVLA-OFT online route is opt-in and documented separately.
-
-## 0. System
+## 0. Env
 
 ```bash
 cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 conda activate dreamervla
-# LIBERO rendering on this host: EGL crashes in robosuite read_pixels; use osmesa.
 export MUJOCO_GL=osmesa
-# Grouped training defaults to tensorboard+wandb(online). For local runs use
-# tensorboard only (no W&B API key needed):
-#   logger=tensorboard
 ```
 
-Required assets (already present on this host):
-
-```text
-data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1   # OFT one-traj ckpt (discrete)
-data/datasets/libero/libero_goal/*.hdf5                                    # raw LIBERO-Goal demos
-```
-
-## 1. Preprocess — reward HDF5 + OFT action-hidden sidecar
+## 1. Preprocess (reward HDF5 + OFT action-hidden sidecar)
 
 ```bash
-# 1a. no-op filter + remaining-steps reward HDF5
 bash scripts/preprocess/prepare_libero_data.sh \
-  task=OpenVLA_Onetraj_LIBERO libero_suite=libero_goal \
+  task=openvla_onetraj_libero libero_suite=libero_goal \
   only=[10_hdf5_reward] gpus=0 ngpu=1
 
-# 1b. OFT Scheme-A action-hidden sidecar (discrete one-traj ckpt)
 OFT_CKPT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
 bash scripts/preprocess/prepare_libero_data.sh \
-  task=OpenVLA_Onetraj_LIBERO libero_suite=libero_goal \
+  task=openvla_onetraj_libero libero_suite=libero_goal \
   only=[35_oft_action_hidden] gpus=0 ngpu=1 \
   env.OFT_LATENT_SCHEME=action_hidden env.OFT_POLICY_MODE=discrete \
   env.OFT_HISTORY=2 env.OFT_IMAGE_KEYS="agentview_rgb eye_in_hand_rgb" \
   env.OFT_CKPT="${OFT_CKPT}"
 ```
 
-Artifacts:
-
-```text
-data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
-data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h2
-```
-
-The OFT preprocess module accepts `--max-files` / `--max-demos-per-file` and
-`--fake-oft-components` (structural-only, no 7B inference) for fast plumbing
-tests.
-
 ## 2. World model
 
 ```bash
-bash scripts/train_wm.sh \
-  experiment=oft_world_model_dinowm_chunk task=OpenVLA_Onetraj_LIBERO \
+bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
-Produces a `ChunkAwareDinoWMWorldModel` checkpoint under
-`${training.out_dir}/ckpt/latest.ckpt` (obs latent dim `229376`).
-
-## 3. Success / reward classifier
+## 3. Classifier
 
 ```bash
-bash scripts/train_wm.sh \
-  experiment=oft_latent_classifier_chunk task=OpenVLA_Onetraj_LIBERO \
+bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk task=openvla_onetraj_libero \
   gpus=0 batch_size=8 num_workers=4
 ```
 
-`LatentSuccessClassifier` over flat `obs_embedding` windows. Failure rollouts
-are optional (`data.failure_dir_*` default to null → success-only). The
-DreamerVLA stage loads the classifier **best-format** checkpoint
-(`{model, config.classifier, threshold}`); the best ckpt is produced when
-`training.episode_eval_enabled=true`.
-
-## 4. DreamerVLA actor (wmpo_outcome)
+## 4. DreamerVLA (wmpo_outcome)
 
 ```bash
-bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_oft_dino_wm_wmpo_outcome task=OpenVLA_Onetraj_LIBERO \
-  gpus=0 ngpu=1 batch_size=2 num_workers=2 \
-  -- \
+bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_wmpo_outcome task=openvla_onetraj_libero \
+  gpus=0 ngpu=1 batch_size=2 num_workers=2 -- \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
-
-WM + classifier are frozen; the actor is updated by `dino_wmpo_outcome_step`
-(imagined chunk rollout → classifier outcome reward → PPO), slow policy
-`optim.policy.lr=5e-7`.
-
-> **OFT memory note (`wmpo_outcome`).** The imagined **effective batch** is
-> `B_eff = batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
-> (one imagined episode per start state × GRPO group). The OFT action-hidden
-> latent (`56×4096`) makes every imagined frame large, so `B_eff` drives memory.
-> The route is already tuned: it caps imagination starts with `algorithm.imag_last`
-> (diverse *strided* selection, default 4), stores the imagined video at the
-> classifier's **chunk granularity** (1/K the frames), and computes only the
-> action-token `lm_head` columns (not the full 32000-vocab logits). If you hit
-> CUDA OOM, set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` first, then
-> shrink `B_eff` via `algorithm.imag_last` → `ppo_rollouts_per_start` →
-> `wmpo.episode_max_steps`. See the cold-start cotrain tutorial's
-> "Memory (online cotrain)" note for the full breakdown.
 
 ## 5. Eval
 
@@ -194,50 +59,49 @@ bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
   eval.ckpt_path="${DVLA_DATA_ROOT}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
   eval.dreamer_policy_source=ckpt eval.dreamer_actor_input_source=rssm \
-  eval.task_suite_name=libero_goal eval.num_episodes_per_task=10 \
-  training.device=cuda:0
+  eval.task_suite_name=libero_goal eval.num_episodes_per_task=10 training.device=cuda:0
 ```
 
----
-
-## Verified smoke (CPU/GPU, reuses existing data, no full training)
-
-The following exact commands were run on this host and **complete without
-error**, exercising the real WM / classifier / DreamerVLA training logic on the
-existing LIBERO-Goal OFT action-hidden sidecar. They point the
-`OpenVLA_Onetraj_LIBERO` task at the already-present `libero_goal_*` artifacts
-(only `expected_model_path` differs, so it is overridden to match the sidecar).
+## 6. Unified online cotrain (one Hydra call)
 
 ```bash
-cd DreamerVLA
+# full (N GPUs = N parallel rollouts + DDP cotrain)
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --standalone --nproc_per_node=4 \
+  -m dreamervla.train experiment=online_cotrain_oft_action_hidden
+# one-command dry-run
+WANDB_MODE=disabled python -m dreamervla.train \
+  experiment=online_cotrain_oft_action_hidden training.debug=true
+```
+
+## 7. Verified smoke (tiny: 1 file, balanced set → ckpt)
+
+```bash
 SC=data/processed_data/libero_goal_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
 RW=data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
-MP="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT/libero_goal"   # sidecar's stored model_path
+MP="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT/libero_goal"
 PY="PYTHONPATH=. python"
 
-# --- WM smoke (8 steps, 1 file, tiny balanced set) → ckpt
+# WM smoke
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.train \
-  experiment=oft_world_model_dinowm_chunk task=OpenVLA_Onetraj_LIBERO logger=tensorboard \
+  experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_wm_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
   dataset.hdf5_dir=$RW dataset.hidden_dir=$SC dataset.expected_model_path=$MP \
   dataset.max_files=1 dataset.max_demos_per_file=3 dataset.balanced_length=8
 
-# --- classifier smoke (success-only) → ckpt
+# classifier smoke
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.train \
-  experiment=oft_latent_classifier_chunk task=OpenVLA_Onetraj_LIBERO logger=tensorboard \
+  experiment=oft_latent_classifier_chunk task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_cls_smoke training.num_epochs=1 \
   training.batch_size=2 training.num_workers=0 training.episode_eval_enabled=false \
   task.openvla_oft.hdf5_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
   data.success_dir_raw=$RW data.success_dir_hidden=$SC
 
-# --- DreamerVLA wmpo_outcome smoke → ckpt
-#  (init from the WM + classifier smoke ckpts; OFT latent is large, so cap the
-#   imagination starts/horizon and enable expandable_segments)
+# DreamerVLA wmpo_outcome smoke (memory-bounded imagination)
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
-  experiment=dreamervla_oft_dino_wm_wmpo_outcome task=OpenVLA_Onetraj_LIBERO logger=tensorboard \
+  experiment=dreamervla_oft_dino_wm_wmpo_outcome task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_dvla_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 dataloader.multiprocessing_context=null dataloader.persistent_workers=false \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
@@ -247,53 +111,3 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
   init.world_model_state_ckpt=/tmp/oft_onetraj_wm_smoke/ckpt/latest.ckpt \
   init.classifier_state_ckpt=/tmp/oft_onetraj_cls_smoke/best_format.ckpt
 ```
-
-Notes that made the smoke run (all of these are general OFT-route facts, not
-hacks):
-
-1. **`dataloader.multiprocessing_context=null`** is required when
-   `num_workers=0` (the joint runner does not sanitize the worker kwargs).
-2. **Classifier ckpt format.** `LatentClassifierRunner` writes a snapshot
-   (`{cfg, state_dicts, pickles}`); `JointDreamerVLARunner` expects the
-   best-format `{model, config.classifier, threshold}`. Run the classifier with
-   `episode_eval_enabled=true` to emit a best ckpt, or re-wrap the snapshot:
-   ```python
-   import torch
-   from omegaconf import OmegaConf
-   d = torch.load("…/checkpoints/latest.ckpt", map_location="cpu", weights_only=False)
-   m = {k[7:] if k.startswith("module.") else k: v for k, v in d["state_dicts"]["model"].items()}
-   blob = OmegaConf.to_container(d["cfg"].classifier, resolve=True); blob.pop("_target_", None)
-   blob["latent_dim"] = int(next(v for k, v in m.items() if k.endswith("input_proj.weight")).shape[1])
-   torch.save({"model": m, "config": {"classifier": blob}, "threshold": 0.5}, "…/best_format.ckpt")
-   ```
-3. **Tokenized-latent flatten (code fix applied).** The OFT world model emits a
-   4-D imagined `hidden_seq` `[B, T, 56, 4096]`; `dino_wmpo_outcome_step` and
-   `LatentSuccessClassifier.predict_success` assume the flat `[B, T, 229376]`
-   contract (matching how the classifier is trained on flat `obs_embedding`).
-   `dreamervla/algorithms/ppo/outcome.py` now flattens the trailing token axes
-   for any `ndim > 3` latent before scoring (no-op for the already-flat RynnVLA
-   latent).
-4. **Memory-bounded imagination (current behaviour).** `dino_wmpo_outcome_step`
-   caps imagination starts with `algorithm.imag_last` (diverse strided selection
-   over the replay window), stores the imagined video at the classifier's chunk
-   granularity (`chunk_pool` applied while generating → 1/K the frames, identical
-   success scoring via `predict_success(pre_pooled=True)`), and the
-   `OpenVLADiscreteTokenActor` computes only the action-token `lm_head` columns.
-   Together these keep `B_eff = batch × imag_last × ppo_rollouts_per_start` the
-   single memory dial — see the cotrain tutorial's memory note.
-
-## Known gaps / not covered
-
-- **OpenVLA-OFT online query_before is separate.** This action-hidden recipe is
-  the offline staged path for OpenVLA-OFT action-query hidden. The opt-in
-  backbone-latent online route uses an OFT input-token extractor and is covered
-  in the backbone-latent tutorial.
-- **Backbone-latent (Scheme B) variant.** The analogous input-token route
-  (`experiment=oft_world_model_dinowm_chunk_input_tokens`,
-  `oft_latent_classifier_chunk_input_tokens`,
-  `dreamervla_oft_dino_wm_wmpo_outcome_input_tokens`, policy
-  `LatentToOpenVLADiscreteTokenActor`) composes as a discrete bridge. It is not
-  smoked in this action-hidden recipe.
-- The smoke uses tiny budgets and a random-init WM/classifier, so RL advantages
-  are zero-variance (groups filtered, `G=0`); it verifies the pipeline runs,
-  not convergence.

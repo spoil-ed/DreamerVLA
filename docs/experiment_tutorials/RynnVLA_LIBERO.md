@@ -1,194 +1,99 @@
-# RynnVLA_LIBERO Pipeline
+# RynnVLA + LIBERO-Goal
 
-Goal: run the default RynnVLA + LIBERO-Goal pipeline with a matching Hydra task
-name and processed-data artifact name.
+Background & parameters: [EXPLAINED.md](EXPLAINED.md) · [../PARAMETERS.md](../PARAMETERS.md).
 
-Canonical task name:
-
-```text
-RynnVLA_LIBERO
-```
-
-This writes intermediate data under:
-
-```text
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/
-```
-
-The raw benchmark suite is still `libero_goal`; `RynnVLA_LIBERO` is the
-pipeline task name and `RynnVLA_LIBERO_libero_goal` is the preprocessing
-artifact name.
-
-## 0. System
+## 1. Install
 
 ```bash
 cd DreamerVLA
 export DVLA_ROOT="$(pwd -P)"
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
-
 bash scripts/install_env.sh
 conda activate dreamervla
 ```
 
-## 1. Download
+## 2. Download
 
 ```bash
 bash scripts/download_assets.sh env.LIBERO_SUITES=[libero_goal]
 ```
 
-This downloads RynnVLA assets and the LIBERO-Goal raw dataset.
-
-## 2. Preprocess
-
-Action-hidden Scheme A:
-
-RynnVLA action-hidden WM/DreamerVLA routes use reward-labeled HDF5 from
-`10_hdf5_reward` plus the legacy RynnVLA sidecar from `30_action_hidden`. They
-do not need `20_pretokenize_dataset`; that step is for token-record SFT and
-older pretokenized dataset routes. OpenVLA-OFT uses the same reward stage but a
-different sidecar extractor, `35_oft_action_hidden`, because its action head and
-hidden-state layout are different.
+## 3. Preprocess (reward HDF5 + action-hidden sidecar)
 
 ```bash
 bash scripts/preprocess/prepare_libero_data.sh \
-  task=RynnVLA_LIBERO \
-  libero_suite=libero_goal \
-  only=[10_hdf5_reward,30_action_hidden] \
-  gpus=0 ngpu=1
+  task=rynnvla_libero libero_suite=libero_goal \
+  only=[10_hdf5_reward,30_action_hidden] gpus=0 ngpu=1
 ```
-
-Expected artifacts:
-
-```text
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward
-${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2
-```
-
-Manual integrity check:
 
 ```bash
-python -m dreamervla.preprocess.check_artifacts \
-  command=hdf5-dir \
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
   dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
   reference_dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256" \
-  match_reference_demos=true \
-  match_reference_lengths=true
+  match_reference_demos=true match_reference_lengths=true
 
-python -m dreamervla.preprocess.check_artifacts \
-  command=hdf5-dir \
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
   dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2" \
   reference_dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
-  match_reference_demos=true \
-  match_reference_lengths=true \
-  require_complete_attr=true \
-  require_config=true
-```
+  match_reference_demos=true match_reference_lengths=true require_complete_attr=true require_config=true
 
-This checks that the reward HDF5 files match the no-noops source files and that
-the action-hidden sidecar has the same file set, demo keys, per-demo lengths,
-`complete=true` markers, and `preprocess_config.json` schema metadata.
-
-If `.tmp` or `.rank*.tmp` files remain under the artifact directories, the usual
-reason is that preprocessing was interrupted before the atomic rename to the
-final `.hdf5` completed. Re-running the same preprocessing step removes the old
-rank-local tmp for that output before writing it again. Only delete tmp files by
-hand after confirming no preprocessing process is still running:
-
-```bash
 find "${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal" \
   -type f \( -name "*.tmp" -o -name "*.rank*.tmp" \) -print
 ```
 
-## 3. Optional VLA SFT
-
-Use the downloaded RynnVLA checkpoint by default. To train a one-trajectory VLA
-checkpoint:
+## 4. (Optional) VLA SFT
 
 ```bash
-bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=RynnVLA_LIBERO \
+bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=4
 ```
 
-Grouped training now defaults to TensorBoard plus online W&B. Add logging
-overrides to any training command when you want a different mode. The project
-uses TensorBoard event files for the local TensorFlow-compatible log viewer:
+## 5. World model
 
 ```bash
-logger=tensorboard_wandb runner.logger.wandb_mode=online
-logger=tensorboard_wandb runner.logger.wandb_mode=offline
-logger=tensorboard
-logger=wandb runner.logger.wandb_mode=online
-```
-
-TensorBoard writes `${training.out_dir}/log/tensorboard`; W&B writes
-`${training.out_dir}/log/wandb`. `wandb_mode=offline` keeps the W&B run local for
-later sync.
-
-If you use a new VLA checkpoint, rerun `30_action_hidden` with `VLA_CKPT` or
-`ENCODER_STATE_CKPT` pointing to that checkpoint.
-
-## 4. World Model
-
-```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=RynnVLA_LIBERO \
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=16 num_workers=4
 ```
 
-Smoke run:
+Smoke:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=RynnVLA_LIBERO \
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=0 num_epochs=1 out_dir=/tmp/rynnvla_libero_wm_smoke
 ```
 
-## 5. Classifier
-
-WMPO needs failure rollout HDF5 files and matching failure sidecars.
+## 6. Classifier
 
 ```bash
-bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=RynnVLA_LIBERO gpus=0 \
+bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=rynnvla_libero gpus=0 \
   data.failure_dir_raw="${DVLA_DATA_ROOT}/collected_rollouts/RynnVLA_LIBERO_libero_goal_failures/reward" \
   data.failure_dir_hidden="${DVLA_DATA_ROOT}/collected_rollouts/RynnVLA_LIBERO_libero_goal_failures/hidden" \
   batch_size=32 num_workers=4
 ```
 
-## 6. DreamerVLA
+## 7. DreamerVLA
 
 ```bash
-bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_wmpo_outcome \
-  task=RynnVLA_LIBERO \
+bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=2 \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
-> Memory: the actor update imagines
-> `B_eff = batch × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
-> trajectories. The RynnVLA latent is smaller than OFT, but the same dials apply —
-> `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` + a smaller `algorithm.imag_last`
-> if you OOM. See the [Memory / OOM note](README.md#memory--oom-online-cotrain).
-
-Without a classifier, use the actor-critic fallback:
+Actor-critic fallback (no classifier):
 
 ```bash
-bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_actor_critic \
-  task=RynnVLA_LIBERO \
+bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_actor_critic task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=2 \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt"
 ```
 
-## 7. Eval
+## 8. Eval
 
 ```bash
 bash scripts/eval_libero_vla.sh gpus=0 \
   eval.ckpt_kind=dreamer \
   eval.ckpt_path="${DVLA_DATA_ROOT}/outputs/dreamervla/<run>/checkpoints/latest.ckpt" \
-  eval.dreamer_policy_source=ckpt \
-  eval.dreamer_actor_input_source=rssm \
-  eval.task_suite_name=libero_goal \
-  eval.num_episodes_per_task=10 \
-  training.device=cuda:0
+  eval.dreamer_policy_source=ckpt eval.dreamer_actor_input_source=rssm \
+  eval.task_suite_name=libero_goal eval.num_episodes_per_task=10 training.device=cuda:0
 ```

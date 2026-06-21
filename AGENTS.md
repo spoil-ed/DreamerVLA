@@ -300,5 +300,6 @@ Python 3.11; type hints and docstrings on public APIs. Name classes by their rol
 ## Further reading
 
 - [Repository structure](docs/repository_structure.md) · [Install](docs/install.md) · [Script registry](scripts/README.md) · [Config registry](configs/README.md)
+- [Parameter reference](docs/PARAMETERS.md) · [Experiment tutorials](docs/experiment_tutorials/) · [Tutorials explained](docs/experiment_tutorials/EXPLAINED.md)
 - [Write-up](docs/dreamervla_writeup.md) · [Data layout](docs/data_layout.md)
 - [README](README.md) · [中文 README](README.zh-CN.md)

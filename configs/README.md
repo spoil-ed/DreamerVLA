@@ -174,12 +174,12 @@ task/libero_goal.yaml
 task/libero_object.yaml
 task/libero_spatial.yaml
 task/libero_10.yaml
-task/RynnVLA_LIBERO.yaml
-task/OpenVLA_Onetraj_LIBERO.yaml
-task/OpenVLA_Onetraj_LIBERO_Object.yaml
-task/OpenVLA_Onetraj_LIBERO_Spatial.yaml
-task/OpenVLA_Onetraj_LIBERO_10.yaml
-task/OpenVLA_Onetraj_ColdStart_LIBERO*.yaml
+task/rynnvla_libero.yaml
+task/openvla_onetraj_libero.yaml
+task/openvla_onetraj_libero_object.yaml
+task/openvla_onetraj_libero_spatial.yaml
+task/openvla_onetraj_libero_10.yaml
+task/openvla_onetraj_coldstart_libero*.yaml
 ```
 
 Switch tasks with Hydra, for example:
@@ -188,13 +188,14 @@ Switch tasks with Hydra, for example:
 bash scripts/train_vla.sh task=libero_object
 bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_spatial
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=RynnVLA_LIBERO
-bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=OpenVLA_Onetraj_LIBERO
+bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero
+bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero
 ```
 
-`RynnVLA_LIBERO` and `OpenVLA_Onetraj_LIBERO` are pipeline task aliases over
+`rynnvla_libero` and `openvla_onetraj_libero` are pipeline task aliases over
 the raw `libero_goal` benchmark suite. Their preprocessing artifact names append
-the dataset suite, e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`, and use matching
+the dataset suite, e.g. `OpenVLA_Onetraj_LIBERO_libero_goal` (artifact dirs keep
+their historical names), and use matching
 processed-data prefixes under `processed_data/<artifact>/<stage>`.
 The OpenVLA one-trajectory matrix also has object, spatial, and libero_10 task
 configs. Cold-start OpenVLA tasks inherit the matching one-trajectory VLA and
