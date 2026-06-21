@@ -11,6 +11,7 @@ from dreamervla.models.world_model.common import (
     _module_device,
     _module_dtype,
 )
+from dreamervla.models.world_model.reward_heads import _reward_pred
 
 
 class BaseWorldModel(nn.Module, ABC):
@@ -19,12 +20,6 @@ class BaseWorldModel(nn.Module, ABC):
     @abstractmethod
     def loss(self, batch: dict[str, torch.Tensor]) -> Any:
         raise NotImplementedError
-
-
-def _reward_pred(head: nn.Module, pred: torch.Tensor) -> torch.Tensor:
-    if hasattr(head, "pred"):
-        return head.pred(pred)
-    return pred.squeeze(-1)
 
 
 @dataclass
