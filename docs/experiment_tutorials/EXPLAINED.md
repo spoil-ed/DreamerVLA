@@ -132,9 +132,13 @@ need `export NCCL_NVLS_ENABLE=0` to avoid NVLink-SHARP collective hangs.
 
 ## OpenVLA-OFT needs the transformers fork
 
-The OFT route requires the moojink transformers fork (same `4.40.1` version string as
-vanilla); vanilla transformers 4.40.1 yields 0% garbage actions. Use the dedicated
-`dvla_oft` env where indicated. See
+The OFT route requires the moojink transformers fork
+(`github.com/moojink/transformers-openvla-oft`, bidirectional Llama attention) — same
+`4.40.1` version string as vanilla, but vanilla yields garbage actions (≈0% success).
+The install scripts make this fork **the single authoritative transformers in the main
+`dreamervla` env** (`scripts/install/40_third_party.sh`); `scripts/install/60_verify.sh`
+FATAL-checks that the installed transformers is the fork, so no separate env is needed.
+See
 [`RLinf_aligned_LIBERO_rollout_execution_plan.md`](RLinf_aligned_LIBERO_rollout_execution_plan.md)
 for the full OpenVLA-OFT / RLinf action contract and root-cause record.
 
