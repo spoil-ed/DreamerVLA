@@ -26,6 +26,8 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+from dreamervla.diagnostics._common import resolve_device
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -40,7 +42,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
 
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(ckpt["cfg"])

@@ -28,7 +28,9 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
+from dreamervla.diagnostics._common import resolve_device
 from dreamervla.models.world_model.dreamerv3_torch import DreamerV3LatentState
+from dreamervla.utils.latent import slice_latent
 
 
 def parse_args():
@@ -56,19 +58,11 @@ def parse_args():
     return p.parse_args()
 
 
-def slice_latent(latent: DreamerV3LatentState, t: int) -> DreamerV3LatentState:
-    return DreamerV3LatentState(
-        deter=latent.deter[:, t],
-        stoch=latent.stoch[:, t],
-        logits=latent.logits[:, t],
-    )
-
-
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
 
     # 1. Load checkpoint and reconstruct cfg
     ckpt_path = Path(args.ckpt).expanduser().resolve()

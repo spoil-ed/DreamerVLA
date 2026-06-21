@@ -28,7 +28,9 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+from dreamervla.diagnostics._common import resolve_device
 from dreamervla.models.world_model.dreamerv3_torch import DreamerV3LatentState
+from dreamervla.utils.latent import reward_of, slice_latent
 
 
 def parse_args():
@@ -41,18 +43,6 @@ def parse_args():
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--out-json", default=None)
     return p.parse_args()
-
-
-def slice_latent(latent, t):
-    return DreamerV3LatentState(
-        deter=latent.deter[:, t],
-        stoch=latent.stoch[:, t],
-        logits=latent.logits[:, t],
-    )
-
-
-def reward_of(world_model, latent: DreamerV3LatentState) -> float:
-    return float(world_model.state_reward(latent).float().cpu().item())
 
 
 def feat_of(latent: DreamerV3LatentState) -> torch.Tensor:
@@ -77,7 +67,7 @@ def prepare_world_model_state_dict(world_model, state_dict):
 
 def main():
     args = parse_args()
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
 
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = OmegaConf.create(ckpt["cfg"])

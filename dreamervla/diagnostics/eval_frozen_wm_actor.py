@@ -23,6 +23,7 @@ from omegaconf import OmegaConf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from dreamervla.diagnostics._common import resolve_device  # noqa: E402
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamervla.runners.online_utils import (  # noqa: E402
     build_encoder,
@@ -153,7 +154,7 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
     out_dir = Path(args.out_dir).expanduser().resolve()
     (out_dir / "videos").mkdir(parents=True, exist_ok=True)
 

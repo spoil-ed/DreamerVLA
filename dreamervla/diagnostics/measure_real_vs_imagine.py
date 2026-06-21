@@ -29,6 +29,7 @@ from omegaconf import OmegaConf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from dreamervla.diagnostics._common import resolve_device
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.models.world_model.dreamerv3_torch import DreamerV3LatentState
 from dreamervla.runners.online_utils import (
@@ -84,7 +85,7 @@ def parse_args():
 def main():
     args = parse_args()
     set_seed(args.seed)
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = resolve_device(args.device)
 
     cfg = OmegaConf.load(args.config)
     cfg.init.vla_ckpt_path = args.vla_ckpt_path
