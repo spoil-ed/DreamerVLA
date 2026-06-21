@@ -288,6 +288,9 @@ class LatentClassifierRunner(BaseRunner):
                 running_loss += float(loss.item())
 
                 self.global_step += 1
+                self.console_progress(
+                    self.global_step, num_epochs * steps_per_epoch, "train"
+                )
 
                 if self.global_step % log_every == 0:
                     step_loss = running_loss / log_every
