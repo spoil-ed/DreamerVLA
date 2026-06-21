@@ -13,6 +13,12 @@ from collections.abc import Callable
 from dreamervla.utils.console import format_progress_line
 
 
+def _flush_print(line: str) -> None:
+    # flush=True so progress surfaces under non-TTY block-buffered stdout
+    # (nohup / Ray worker logs), matching console_banner / console_metrics.
+    print(line, flush=True)
+
+
 class ProgressReporter:
     def __init__(
         self,
@@ -23,7 +29,7 @@ class ProgressReporter:
         min_interval_s: float = 5.0,
         unit: str = "it",
         clock: Callable[[], float] = time.monotonic,
-        sink: Callable[[str], None] = print,
+        sink: Callable[[str], None] = _flush_print,
     ) -> None:
         self.total = total
         self.desc = desc

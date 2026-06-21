@@ -80,6 +80,15 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m:02d}:{sec:02d}"
 
 
+_BAR_WIDTH = 20
+
+
+def _progress_bar(current: int, total: int, width: int = _BAR_WIDTH) -> str:
+    """Solid/light block bar, e.g. ``████░░░░``; one line, no carriage return."""
+    filled = max(0, min(width, int(round(width * current / total))))
+    return "█" * filled + "░" * (width - filled)
+
+
 def format_progress_line(
     desc: str,
     current: int,
@@ -97,7 +106,7 @@ def format_progress_line(
     """
     if total and total > 0:
         pct = int(round(100.0 * current / total))
-        head = f"{desc} {current}/{total} ({pct}%)"
+        head = f"{desc} [{_progress_bar(current, total)}] {current}/{total} ({pct}%)"
         timing = f"{_fmt_duration(elapsed_s)}<{_fmt_duration(eta_s or 0.0)}"
     else:
         head = f"{desc} {current}"

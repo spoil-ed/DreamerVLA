@@ -103,7 +103,7 @@ def test_console_progress_prints_and_caches_per_desc(capsys):
     r.console_progress(1, 10, "train")
     r.console_progress(2, 10, "train")
     out = capsys.readouterr().out
-    assert "train 1/10" in out and "train 2/10" in out
+    assert "train [" in out and "1/10" in out and "2/10" in out
     # one cached reporter per desc
     assert set(r._console_state["progress"].keys()) == {"train"}
 

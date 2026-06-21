@@ -21,13 +21,13 @@ def _reporter(total=100, **kw):
 def test_first_update_prints_then_throttled_by_walltime():
     r, clk, out = _reporter()
     r.update()                 # first tick always prints
-    assert len(out) == 1 and out[0].startswith("train 1/100")
+    assert len(out) == 1 and "train [" in out[0] and "1/100" in out[0]
     clk.t += 2.0
     r.update()                 # 2s < 5s -> suppressed
     assert len(out) == 1
     clk.t += 4.0
     r.update()                 # 6s since last print -> prints
-    assert len(out) == 2 and out[1].startswith("train 3/100")
+    assert len(out) == 2 and "3/100" in out[1]
 
 
 def test_close_always_prints_final_summary():
@@ -36,7 +36,17 @@ def test_close_always_prints_final_summary():
     clk.t += 1.0
     r.set(100)                 # throttled
     r.close()                  # always prints final
-    assert out[-1].startswith("train 100/100")
+    assert "100/100" in out[-1]
+
+
+def test_default_sink_flushes(monkeypatch):
+    # Progress lines must flush so they surface under non-TTY block-buffered
+    # stdout (nohup / Ray worker logs); a missing flush is why they vanish.
+    calls = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: calls.append((a, k)))
+    r = ProgressReporter(10, "train", clock=_Clock())  # default sink
+    r.update()
+    assert calls and calls[-1][1].get("flush") is True
 
 
 def test_disabled_is_silent():

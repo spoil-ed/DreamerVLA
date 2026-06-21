@@ -81,7 +81,17 @@ def test_format_progress_line_with_total():
     s = format_progress_line(
         "pretokenize", 12800, 50000, elapsed_s=201.0, eta_s=585.0, rate=63.7
     )
-    assert s == "pretokenize 12800/50000 (26%) · 03:21<09:45 · 63.7 it/s"
+    bar = "█" * 5 + "░" * 15  # 12800/50000 -> round(20*0.256)=5 filled
+    assert s == f"pretokenize [{bar}] 12800/50000 (26%) · 03:21<09:45 · 63.7 it/s"
+
+
+def test_format_progress_line_bar_fill_scales_with_progress():
+    empty = format_progress_line("c", 0, 100, elapsed_s=1.0, eta_s=1.0, rate=1.0)
+    half = format_progress_line("c", 50, 100, elapsed_s=1.0, eta_s=1.0, rate=1.0)
+    full = format_progress_line("c", 100, 100, elapsed_s=1.0, eta_s=1.0, rate=1.0)
+    assert f"[{'░' * 20}]" in empty
+    assert f"[{'█' * 10}{'░' * 10}]" in half
+    assert f"[{'█' * 20}]" in full
 
 
 def test_format_progress_line_open_ended():
