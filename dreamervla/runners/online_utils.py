@@ -73,32 +73,44 @@ def build_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEnco
     return encoder
 
 
-def load_world_model_state(
-    world_model: torch.nn.Module, ckpt_path: str, reset_reward_head: bool = False
-) -> None:
-    path = Path(ckpt_path).expanduser().resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"world model ckpt not found: {path}")
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    state = payload.get("state_dicts", {}).get("world_model") or payload.get("model")
-    if state is None:
-        raise RuntimeError(f"{path} has no state_dicts.world_model or model")
+def load_world_model_state_from_dict(
+    world_model: torch.nn.Module,
+    state: dict[str, Any],
+    *,
+    remap_reward_head: bool = True,
+    skip_shape_mismatch: bool = True,
+    reset_reward_head: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Load a world-model state dict with opt-in key fix-ups (DIAG-01).
+
+    ``module.`` prefixes are always stripped and floating tensors cast to the model
+    dtype. ``remap_reward_head`` rewrites legacy ``reward_head.net.*`` keys to the
+    current ``reward_head.net.net.*`` layout; ``skip_shape_mismatch`` drops keys whose
+    tensor shape disagrees with the model. ``reset_reward_head`` skips reward-head
+    tensors entirely. Returns ``load_state_dict``'s ``(missing, unexpected)``.
+    """
     model_state = world_model.state_dict()
     dtype = next(world_model.parameters()).dtype
     cleaned: dict[str, torch.Tensor] = {}
     skipped_reward = 0
     for raw_key, value in state.items():
-        key = str(raw_key).removeprefix("module.")
+        key = str(raw_key).removeprefix("_fsdp_wrapped_module.").removeprefix("module.")
         if reset_reward_head and key.startswith("reward_head."):
             skipped_reward += 1
             continue
-        if key.startswith("reward_head.net.") and not key.startswith(
-            "reward_head.net.net."
+        if (
+            remap_reward_head
+            and key.startswith("reward_head.net.")
+            and not key.startswith("reward_head.net.net.")
         ):
             candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
             if candidate in model_state:
                 key = candidate
-        if key in model_state and tuple(value.shape) != tuple(model_state[key].shape):
+        if (
+            skip_shape_mismatch
+            and key in model_state
+            and tuple(value.shape) != tuple(model_state[key].shape)
+        ):
             continue
         cleaned[key] = (
             value.to(dtype=dtype) if torch.is_floating_point(value) else value
@@ -110,6 +122,22 @@ def load_world_model_state(
     )
     if skipped_reward:
         print(f"[init] skipped reward head tensors: {skipped_reward}", flush=True)
+    return missing, unexpected
+
+
+def load_world_model_state(
+    world_model: torch.nn.Module, ckpt_path: str, reset_reward_head: bool = False
+) -> None:
+    path = Path(ckpt_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"world model ckpt not found: {path}")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    state = payload.get("state_dicts", {}).get("world_model") or payload.get("model")
+    if state is None:
+        raise RuntimeError(f"{path} has no state_dicts.world_model or model")
+    load_world_model_state_from_dict(
+        world_model, state, reset_reward_head=reset_reward_head
+    )
 
 
 @torch.no_grad()

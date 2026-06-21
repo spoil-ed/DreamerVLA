@@ -17,13 +17,7 @@ from omegaconf import OmegaConf
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.models.world_model.dreamerv3_torch import _reward_pred
-
-
-def _strip_prefix(key: str) -> str:
-    for prefix in ("_fsdp_wrapped_module.", "module."):
-        if key.startswith(prefix):
-            return key[len(prefix) :]
-    return key
+from dreamervla.runners.online_utils import load_world_model_state_from_dict
 
 
 def _load_world_model(
@@ -43,18 +37,9 @@ def _load_world_model(
     state = payload.get("state_dicts", {}).get("world_model")
     if state is None:
         raise RuntimeError(f"{ckpt_path} has no state_dicts.world_model")
-    target_sd = world_model.state_dict()
-    remapped = {}
-    for key, value in state.items():
-        key = _strip_prefix(key)
-        if key.startswith("reward_head.net.") and not key.startswith(
-            "reward_head.net.net."
-        ):
-            candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
-            if candidate in target_sd:
-                key = candidate
-        remapped[key] = value
-    missing, unexpected = world_model.load_state_dict(remapped, strict=False)
+    missing, unexpected = load_world_model_state_from_dict(
+        world_model, state, skip_shape_mismatch=False
+    )
     world_model.eval()
     return world_model, {
         "missing": missing,
