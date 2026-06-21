@@ -600,6 +600,9 @@ def imagine_actor_critic_step(
     repl_slowreg = (
         float(repl_cfg.get("slowreg", slowreg)) if hasattr(repl_cfg, "get") else slowreg
     )
+    repl_slowtar = (
+        bool(repl_cfg.get("slowtar", slowtar)) if hasattr(repl_cfg, "get") else slowtar
+    )
     repval_enabled = bool(algorithm_cfg.get("repval_loss", True))
     repval_scale = float(algorithm_cfg.get("repval_scale", 0.3))
     grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
@@ -1146,7 +1149,20 @@ def imagine_actor_critic_step(
                         "Replay latent shape changed unexpectedly: "
                         f"B={B_rep}, K={K_rep}, expected B={replay_batch_size}, K={starts}"
                     )
-                replay_boot = raw_returns[:, 0].reshape(B_rep, K_rep)
+                # A4: bootstrap the replay lambda-return with the critic's
+                # per-state value on the replay posterior states (standard
+                # DreamerV3 repval), not the single imagined return scalar.
+                # repl_loss.slowtar selects the target vs fast critic.
+                replay_boot_feats = replay_critic_feat.reshape(B_rep * K_rep, D_rep)
+                replay_fast_values = critic(
+                    {"mode": "value", "hidden": replay_boot_feats}
+                ).view(B_rep, K_rep)
+                replay_slow_values = target_critic(
+                    {"mode": "value", "hidden": replay_boot_feats}
+                ).view(B_rep, K_rep)
+                replay_boot = (
+                    replay_slow_values if repl_slowtar else replay_fast_values
+                ).to(dtype=returns.dtype)
                 replay_returns = compute_replay_lambda_returns(
                     last=replay_last,
                     terminal=replay_terminal,
