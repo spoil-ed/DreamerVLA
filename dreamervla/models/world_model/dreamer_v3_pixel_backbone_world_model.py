@@ -11,6 +11,7 @@ from dreamervla.models.world_model.base_world_model import (
     DreamerV3LatentState,
     DreamerV3Loss,
 )
+from dreamervla.models.world_model.common import _module_device, _module_dtype
 from dreamervla.models.world_model.dreamerv3_torch import (
     DreamerV3PixelDecoder,
     DreamerV3RSSM,
@@ -22,8 +23,6 @@ from dreamervla.models.world_model.dreamerv3_torch import (
     ResMLPHead,
     _BackboneObsEncoder,
     _make_reward_head,
-    _module_device,
-    _module_dtype,
     _reward_loss,
     _reward_pred,
 )

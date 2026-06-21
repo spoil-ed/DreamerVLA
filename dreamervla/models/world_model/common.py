@@ -53,6 +53,8 @@ def _module_ref_tensor(module: nn.Module) -> torch.Tensor | None:
         return tensor
     for tensor in module.buffers(recurse=True):
         return tensor
+    # DataParallel replicas can expose copied weights as plain Tensor
+    # attributes instead of registered Parameters.
     for child in module.modules():
         for attr in ("weight", "bias"):
             tensor = getattr(child, attr, None)

@@ -12,6 +12,11 @@ from dreamervla.models.world_model.base_world_model import (
     DreamerV3Loss,
 )
 from dreamervla.models.world_model.block_linear import BlockLinear
+from dreamervla.models.world_model.common import (
+    ChannelRMSNorm,
+    RMSNorm,
+    _module_dtype,
+)
 from dreamervla.models.world_model.reward_heads import (
     BinaryRewardHead,
     SymexpTwoHotHead,
@@ -19,33 +24,6 @@ from dreamervla.models.world_model.reward_heads import (
     _reward_loss,
     _reward_pred,
 )
-
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = float(eps)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dtype = x.dtype
-        x32 = x.float()
-        rms = x32.square().mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
-        return (x32 * rms).to(dtype) * self.weight.to(dtype=dtype)
-
-
-class ChannelRMSNorm(nn.Module):
-    def __init__(self, channels: int, eps: float = 1e-6) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(channels))
-        self.eps = float(eps)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dtype = x.dtype
-        x32 = x.float()
-        rms = x32.square().mean(dim=1, keepdim=True).add(self.eps).rsqrt()
-        weight = self.weight.to(dtype=dtype).view(1, -1, 1, 1)
-        return (x32 * rms).to(dtype) * weight
 
 
 def _act(name: str) -> nn.Module:
@@ -59,31 +37,6 @@ def _act(name: str) -> nn.Module:
     if name == "elu":
         return nn.ELU()
     raise ValueError(f"Unsupported activation: {name}")
-
-
-def _module_ref_tensor(module: nn.Module) -> torch.Tensor | None:
-    for tensor in module.parameters(recurse=True):
-        return tensor
-    for tensor in module.buffers(recurse=True):
-        return tensor
-    # DataParallel replicas can expose copied weights as plain Tensor
-    # attributes instead of registered Parameters.
-    for child in module.modules():
-        for attr in ("weight", "bias"):
-            tensor = getattr(child, attr, None)
-            if isinstance(tensor, torch.Tensor):
-                return tensor
-    return None
-
-
-def _module_dtype(module: nn.Module, fallback: torch.dtype) -> torch.dtype:
-    tensor = _module_ref_tensor(module)
-    return tensor.dtype if tensor is not None else fallback
-
-
-def _module_device(module: nn.Module, fallback: torch.device) -> torch.device:
-    tensor = _module_ref_tensor(module)
-    return tensor.device if tensor is not None else fallback
 
 
 class DreamerV3PixelEncoder(nn.Module):

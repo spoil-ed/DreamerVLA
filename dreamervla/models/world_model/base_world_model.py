@@ -7,6 +7,11 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from dreamervla.models.world_model.common import (
+    _module_device,
+    _module_dtype,
+)
+
 
 class BaseWorldModel(nn.Module, ABC):
     """Common base class for DreamerVLA world models."""
@@ -14,29 +19,6 @@ class BaseWorldModel(nn.Module, ABC):
     @abstractmethod
     def loss(self, batch: dict[str, torch.Tensor]) -> Any:
         raise NotImplementedError
-
-
-def _module_ref_tensor(module: nn.Module) -> torch.Tensor | None:
-    for tensor in module.parameters(recurse=True):
-        return tensor
-    for tensor in module.buffers(recurse=True):
-        return tensor
-    for child in module.modules():
-        for attr in ("weight", "bias"):
-            tensor = getattr(child, attr, None)
-            if isinstance(tensor, torch.Tensor):
-                return tensor
-    return None
-
-
-def _module_dtype(module: nn.Module, fallback: torch.dtype) -> torch.dtype:
-    tensor = _module_ref_tensor(module)
-    return tensor.dtype if tensor is not None else fallback
-
-
-def _module_device(module: nn.Module, fallback: torch.device) -> torch.device:
-    tensor = _module_ref_tensor(module)
-    return tensor.device if tensor is not None else fallback
 
 
 def _reward_pred(head: nn.Module, pred: torch.Tensor) -> torch.Tensor:

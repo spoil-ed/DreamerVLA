@@ -7,14 +7,13 @@ import torch.nn.functional as F
 from torch import nn
 
 from dreamervla.models.world_model.base_world_model import DreamerV3ActorAdapterMixin
+from dreamervla.models.world_model.common import _module_device, _module_dtype
 from dreamervla.models.world_model.dreamerv3_torch import (
     DreamerV3Loss,
     DreamerV3PixelDecoder,
     FullHiddenSequenceDecoder,
     MLPHead,
     _make_reward_head,
-    _module_device,
-    _module_dtype,
     _reward_loss,
     _reward_pred,
 )

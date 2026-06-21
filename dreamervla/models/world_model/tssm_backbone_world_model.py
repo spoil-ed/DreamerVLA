@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dreamervla.models.world_model.base_world_model import DreamerV3ActorAdapterMixin
+from dreamervla.models.world_model.common import _module_device
 from dreamervla.models.world_model.dreamerv3_torch import (
     DreamerV3Loss,
     DreamerV3PixelDecoder,
@@ -14,7 +15,6 @@ from dreamervla.models.world_model.dreamerv3_torch import (
     MLPHead,
     _BackboneObsEncoder,
     _make_reward_head,
-    _module_device,
     _reward_loss,
     _reward_pred,
 )
