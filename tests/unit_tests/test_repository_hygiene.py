@@ -377,7 +377,13 @@ def test_package_has_no_redundant_top_level_command_groups() -> None:
 def test_chameleon_lazy_exports_only_existing_modeling_symbols() -> None:
     project_root = Path(__file__).resolve().parents[2]
     init_path = (
-        project_root / "dreamervla" / "models" / "chameleon_model" / "chameleon" / "__init__.py"
+        project_root
+        / "dreamervla"
+        / "models"
+        / "embodiment"
+        / "chameleon_model"
+        / "chameleon"
+        / "__init__.py"
     )
     text = init_path.read_text(encoding="utf-8")
 
