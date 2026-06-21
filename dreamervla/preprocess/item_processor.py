@@ -24,7 +24,58 @@ from dreamervla.preprocess.xllmx.data.item_processor import MMConvItemProcessor
 logger = logging.getLogger(__name__)
 
 
-class FlexARItemProcessor(MMConvItemProcessor):
+class _FlexARItemProcessorBase(MMConvItemProcessor):
+    """Shared helpers identical across every FlexAR item processor variant.
+
+    Holds only the methods whose bodies are byte-identical across all four
+    concrete processors (``get_n_grids_token``, ``token2id``, ``process_item``).
+    Variant-specific pieces (``__init__``, ``process_image``, ``decode_image``,
+    action/state handling and per-class norm constants) stay on each subclass.
+    """
+
+    @staticmethod
+    def get_n_grids_token(n_grids):
+        return f"<reserved{8800 + n_grids:05d}>"
+
+    def token2id(self, token: str) -> int:
+        return self.tokenizer.tokenizer.vocab[token]
+
+    def process_item(self, item, training_mode=False, out_flatten=True):
+        if not out_flatten:
+            return super().process_item(item, training_mode=training_mode)
+
+        if training_mode:
+            tokens, labels = super().process_item(item, training_mode=training_mode)
+            input_tokens_item = []
+            modified_labels_item = []
+            for token_or_media, ori_label in zip(tokens, labels, strict=True):
+                if isinstance(token_or_media, int):
+                    token = token_or_media
+                    input_tokens_item.append(token)
+                    modified_labels_item.append(ori_label)
+                else:
+                    input_tokens_item += token_or_media["input_ids"]
+                    if ori_label <= 0:  # in the prompt part
+                        modified_labels_item += [-100] * len(
+                            token_or_media["input_ids"]
+                        )
+                    else:
+                        modified_labels_item += token_or_media["labels"]
+
+            return input_tokens_item, modified_labels_item
+        else:
+            tokens = super().process_item(item, training_mode=training_mode)
+            input_tokens_item = []
+            for token_or_media in tokens:
+                if isinstance(token_or_media, int):
+                    input_tokens_item.append(token_or_media)
+                else:
+                    input_tokens_item += token_or_media["input_ids"]
+
+            return input_tokens_item
+
+
+class FlexARItemProcessor(_FlexARItemProcessorBase):
     image_start_token = (
         "<racm3:break>"  # fixed tokens for start and end, so can hardcode
     )
@@ -83,13 +134,6 @@ class FlexARItemProcessor(MMConvItemProcessor):
             device=device,
         )
 
-    @staticmethod
-    def get_n_grids_token(n_grids):
-        return f"<reserved{8800 + n_grids:05d}>"
-
-    def token2id(self, token: str) -> int:
-        return self.tokenizer.tokenizer.vocab[token]
-
     @torch.no_grad()
     def process_image(self, image) -> dict:
         if isinstance(image, Image.Image):
@@ -135,39 +179,6 @@ class FlexARItemProcessor(MMConvItemProcessor):
 
         return {"input_ids": result_toks, "labels": result_toks}
 
-    def process_item(self, item, training_mode=False, out_flatten=True):
-        if not out_flatten:
-            return super().process_item(item, training_mode=training_mode)
-
-        if training_mode:
-            tokens, labels = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            modified_labels_item = []
-            for token_or_media, ori_label in zip(tokens, labels, strict=True):
-                if isinstance(token_or_media, int):
-                    token = token_or_media
-                    input_tokens_item.append(token)
-                    modified_labels_item.append(ori_label)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-                    if ori_label <= 0:  # in the prompt part
-                        modified_labels_item += [-100] * len(
-                            token_or_media["input_ids"]
-                        )
-                    else:
-                        modified_labels_item += token_or_media["labels"]
-            return input_tokens_item, modified_labels_item
-        else:
-            tokens = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            for token_or_media in tokens:
-                if isinstance(token_or_media, int):
-                    input_tokens_item.append(token_or_media)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-
-            return input_tokens_item
-
     def decode_image(self, tokens: list[int]) -> Image.Image:
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
@@ -192,7 +203,7 @@ class FlexARItemProcessor(MMConvItemProcessor):
         )
 
 
-class FlexARItemProcessorAction(MMConvItemProcessor):
+class FlexARItemProcessorAction(_FlexARItemProcessorBase):
     image_start_token = (
         "<racm3:break>"  # fixed tokens for start and end, so can hardcode
     )
@@ -260,13 +271,6 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
         # Create Uniform Bins + Compute Bin Centers
         self.bins = np.linspace(self.min_action, self.max_action, self.n_bins)
         self.bin_centers = (self.bins[:-1] + self.bins[1:]) / 2.0
-
-    @staticmethod
-    def get_n_grids_token(n_grids):
-        return f"<reserved{8800 + n_grids:05d}>"
-
-    def token2id(self, token: str) -> int:
-        return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
     def process_image(self, image) -> dict:
@@ -361,40 +365,6 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
 
         return norm_action
 
-    def process_item(self, item, training_mode=False, out_flatten=True):
-        if not out_flatten:
-            return super().process_item(item, training_mode=training_mode)
-
-        if training_mode:
-            tokens, labels = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            modified_labels_item = []
-            for token_or_media, ori_label in zip(tokens, labels, strict=True):
-                if isinstance(token_or_media, int):
-                    token = token_or_media
-                    input_tokens_item.append(token)
-                    modified_labels_item.append(ori_label)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-                    if ori_label <= 0:  # in the prompt part
-                        modified_labels_item += [-100] * len(
-                            token_or_media["input_ids"]
-                        )
-                    else:
-                        modified_labels_item += token_or_media["labels"]
-
-            return input_tokens_item, modified_labels_item
-        else:
-            tokens = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            for token_or_media in tokens:
-                if isinstance(token_or_media, int):
-                    input_tokens_item.append(token_or_media)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-
-            return input_tokens_item
-
     def decode_image(self, tokens: list[int]) -> Image.Image:
         # print('0', tokens, len(tokens))
         if tokens[0] == self.token2id(self.image_start_token):
@@ -422,7 +392,7 @@ class FlexARItemProcessorAction(MMConvItemProcessor):
         )
 
 
-class FlexARItemProcessorActionState(MMConvItemProcessor):
+class FlexARItemProcessorActionState(_FlexARItemProcessorBase):
     image_start_token = (
         "<racm3:break>"  # fixed tokens for start and end, so can hardcode
     )
@@ -495,13 +465,6 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         self.bins = np.linspace(self.min_action, self.max_action, self.n_bins)
         self.bin_centers = (self.bins[:-1] + self.bins[1:]) / 2.0
         self.device = device
-
-    @staticmethod
-    def get_n_grids_token(n_grids):
-        return f"<reserved{8800 + n_grids:05d}>"
-
-    def token2id(self, token: str) -> int:
-        return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
     def process_image(self, image) -> dict:
@@ -648,40 +611,6 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
 
         return norm_state
 
-    def process_item(self, item, training_mode=False, out_flatten=True):
-        if not out_flatten:
-            return super().process_item(item, training_mode=training_mode)
-
-        if training_mode:
-            tokens, labels = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            modified_labels_item = []
-            for token_or_media, ori_label in zip(tokens, labels, strict=True):
-                if isinstance(token_or_media, int):
-                    token = token_or_media
-                    input_tokens_item.append(token)
-                    modified_labels_item.append(ori_label)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-                    if ori_label <= 0:  # in the prompt part
-                        modified_labels_item += [-100] * len(
-                            token_or_media["input_ids"]
-                        )
-                    else:
-                        modified_labels_item += token_or_media["labels"]
-
-            return input_tokens_item, modified_labels_item
-        else:
-            tokens = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            for token_or_media in tokens:
-                if isinstance(token_or_media, int):
-                    input_tokens_item.append(token_or_media)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-
-            return input_tokens_item
-
     def decode_image(self, tokens: list[int]) -> Image.Image:
         if tokens[0] == self.token2id(self.image_start_token):
             tokens = tokens[1:]
@@ -706,7 +635,7 @@ class FlexARItemProcessorActionState(MMConvItemProcessor):
         )
 
 
-class FlexARItemProcessorActionFast(MMConvItemProcessor):
+class FlexARItemProcessorActionFast(_FlexARItemProcessorBase):
     image_start_token = (
         "<racm3:break>"  # fixed tokens for start and end, so can hardcode
     )
@@ -775,13 +704,6 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
         self.action_tokenizer = AutoProcessor.from_pretrained(
             "physical-intelligence/fast", trust_remote_code=True
         )
-
-    @staticmethod
-    def get_n_grids_token(n_grids):
-        return f"<reserved{8800 + n_grids:05d}>"
-
-    def token2id(self, token: str) -> int:
-        return self.tokenizer.tokenizer.vocab[token]
 
     @torch.no_grad()
     def process_image(self, image) -> dict:
@@ -852,40 +774,6 @@ class FlexARItemProcessorActionFast(MMConvItemProcessor):
             discretized_actions - 1, a_min=0, a_max=bin_centers.shape[0] - 1
         )
         return bin_centers[discretized_actions]
-
-    def process_item(self, item, training_mode=False, out_flatten=True):
-        if not out_flatten:
-            return super().process_item(item, training_mode=training_mode)
-
-        if training_mode:
-            tokens, labels = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            modified_labels_item = []
-            for token_or_media, ori_label in zip(tokens, labels, strict=True):
-                if isinstance(token_or_media, int):
-                    token = token_or_media
-                    input_tokens_item.append(token)
-                    modified_labels_item.append(ori_label)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-                    if ori_label <= 0:  # in the prompt part
-                        modified_labels_item += [-100] * len(
-                            token_or_media["input_ids"]
-                        )
-                    else:
-                        modified_labels_item += token_or_media["labels"]
-
-            return input_tokens_item, modified_labels_item
-        else:
-            tokens = super().process_item(item, training_mode=training_mode)
-            input_tokens_item = []
-            for token_or_media in tokens:
-                if isinstance(token_or_media, int):
-                    input_tokens_item.append(token_or_media)
-                else:
-                    input_tokens_item += token_or_media["input_ids"]
-
-            return input_tokens_item
 
     def decode_image(self, tokens: list[int]) -> Image.Image:
         if tokens[0] == self.token2id(self.image_start_token):
