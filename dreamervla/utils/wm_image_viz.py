@@ -94,6 +94,30 @@ def _decode_bpe_block_to_pil(
     return tensor_to_pil(pixels[0])
 
 
+def _safe_decode(
+    decode_fn,
+    *,
+    what: str | None,
+    sample: int,
+    view: int | None = None,
+) -> Image.Image | None:
+    """Run ``decode_fn()`` and return its PIL, or ``None`` on any exception.
+
+    When ``what`` is given, a failure prints the standardized
+    ``[viz] {what} decode failed ...`` diagnostic line (matching the legacy
+    per-route messages, including the optional ``view`` segment). When ``what``
+    is ``None`` the failure is swallowed silently, matching the routes that
+    previously caught without printing.
+    """
+    try:
+        return decode_fn()
+    except Exception as exc:  # noqa: BLE001 - diagnostic-only viz path
+        if what is not None:
+            view_seg = f" view {view}" if view is not None else ""
+            print(f"[viz] {what} decode failed for sample {sample}{view_seg}: {exc}")
+        return None
+
+
 def _save_panel_strip(
     path: Path,
     panels: list[tuple[str, Image.Image | None]],
@@ -266,16 +290,18 @@ class WorldModelImageVisualizer:
         idx_in_img_vocab = image_vocab_logits.argmax(dim=-1)
         predicted_bpe = self.image_token_bpe_ids[idx_in_img_vocab].tolist()
 
-        try:
-            cur_pil = _decode_bpe_block_to_pil(block_ids, self.bpe2vq, self.vq_model)
-        except Exception:
-            cur_pil = None
-        try:
-            pred_pil = _decode_bpe_block_to_pil(
+        cur_pil = _safe_decode(
+            lambda: _decode_bpe_block_to_pil(block_ids, self.bpe2vq, self.vq_model),
+            what=None,
+            sample=0,
+        )
+        pred_pil = _safe_decode(
+            lambda: _decode_bpe_block_to_pil(
                 predicted_bpe, self.bpe2vq, self.vq_model
-            )
-        except Exception:
-            pred_pil = None
+            ),
+            what=None,
+            sample=0,
+        )
         return cur_pil, pred_pil
 
     @torch.no_grad()
@@ -354,6 +380,37 @@ class WorldModelImageVisualizer:
             ids[idx, : row_t.numel()] = row_t
             mask[idx, : row_t.numel()] = True
         return ids, mask
+
+    def _decode_gt_next(
+        self,
+        nxt_seq: list[int],
+        which_block: int,
+        *,
+        sample: int,
+        view: int | None = None,
+        what: str | None,
+    ) -> Image.Image | None:
+        """Decode the gt-next image block selected by ``which_block``.
+
+        Returns ``None`` when the next frame has no matching block (or the
+        index is out of range), and routes any decode failure through
+        ``_safe_decode`` so the diagnostic/silent behavior matches the caller.
+        """
+
+        def _decode() -> Image.Image | None:
+            nxt_blocks = extract_image_blocks(nxt_seq)
+            if not nxt_blocks:
+                return None
+            bidx = which_block if which_block >= 0 else len(nxt_blocks) + which_block
+            if not (0 <= bidx < len(nxt_blocks)):
+                return None
+            return _decode_bpe_block_to_pil(
+                nxt_blocks[bidx][2],
+                self.bpe2vq,
+                self.vq_model,
+            )
+
+        return _safe_decode(_decode, what=what, sample=sample, view=view)
 
     @torch.no_grad()
     def visualize_batch(
@@ -434,57 +491,41 @@ class WorldModelImageVisualizer:
             for i in range(n):
                 panels: list[tuple[str, Image.Image | None]] = []
                 offset = 0
-                nxt_blocks = extract_image_blocks(nxt_ids[i])
                 for view_idx, block_ids in enumerate(cur_block_ids[i]):
-                    try:
-                        cur_pil = _decode_bpe_block_to_pil(
+                    cur_pil = _safe_decode(
+                        lambda block_ids=block_ids: _decode_bpe_block_to_pil(
                             block_ids,
                             self.bpe2vq,
                             self.vq_model,
-                        )
-                    except Exception as exc:
-                        print(
-                            f"[viz] gt_cur decode failed for sample {i} view {view_idx}: {exc}"
-                        )
-                        cur_pil = None
+                        ),
+                        what="gt_cur",
+                        sample=i,
+                        view=view_idx,
+                    )
 
-                    gt_next_pil = None
-                    try:
-                        which_block = self.which_blocks[view_idx]
-                        bidx = (
-                            which_block
-                            if which_block >= 0
-                            else len(nxt_blocks) + which_block
-                        )
-                        if 0 <= bidx < len(nxt_blocks):
-                            gt_next_pil = _decode_bpe_block_to_pil(
-                                nxt_blocks[bidx][2],
-                                self.bpe2vq,
-                                self.vq_model,
-                            )
-                    except Exception as exc:
-                        print(
-                            f"[viz] gt_next decode failed for sample {i} view {view_idx}: {exc}"
-                        )
+                    gt_next_pil = self._decode_gt_next(
+                        nxt_ids[i],
+                        self.which_blocks[view_idx],
+                        sample=i,
+                        view=view_idx,
+                        what="gt_next",
+                    )
 
-                    pred_next_pil = None
-                    try:
-                        n_block_tokens = sum(
-                            1 for tok in block_ids if int(tok) in self._image_bpe_set
-                        )
-                        pred_ids_i = pred_bpe[
-                            i, offset : offset + n_block_tokens
-                        ].tolist()
-                        offset += n_block_tokens
-                        pred_next_pil = _decode_bpe_block_to_pil(
+                    n_block_tokens = sum(
+                        1 for tok in block_ids if int(tok) in self._image_bpe_set
+                    )
+                    pred_ids_i = pred_bpe[i, offset : offset + n_block_tokens].tolist()
+                    offset += n_block_tokens
+                    pred_next_pil = _safe_decode(
+                        lambda pred_ids_i=pred_ids_i: _decode_bpe_block_to_pil(
                             pred_ids_i,
                             self.bpe2vq,
                             self.vq_model,
-                        )
-                    except Exception as exc:
-                        print(
-                            f"[viz] pred_next decode failed for sample {i} view {view_idx}: {exc}"
-                        )
+                        ),
+                        what="pred_next",
+                        sample=i,
+                        view=view_idx,
+                    )
 
                     label = self.which_block_labels[view_idx]
                     panels.extend(
@@ -518,42 +559,30 @@ class WorldModelImageVisualizer:
             saved: list[Path] = []
             for i in range(n):
                 # gt current (from raw block ids of current frame)
-                try:
-                    cur_pil = _decode_bpe_block_to_pil(
+                cur_pil = _safe_decode(
+                    lambda i=i: _decode_bpe_block_to_pil(
                         cur_block_ids[i],
                         self.bpe2vq,
                         self.vq_model,
-                    )
-                except Exception as exc:
-                    print(f"[viz] gt_cur decode failed for sample {i}: {exc}")
-                    cur_pil = None
+                    ),
+                    what="gt_cur",
+                    sample=i,
+                )
                 # gt next (from raw block ids of next frame, if any)
-                gt_next_pil = None
-                try:
-                    nxt_blocks = extract_image_blocks(nxt_ids[i])
-                    if nxt_blocks:
-                        bidx = (
-                            self.which_block
-                            if self.which_block >= 0
-                            else len(nxt_blocks) + self.which_block
-                        )
-                        if 0 <= bidx < len(nxt_blocks):
-                            gt_next_pil = _decode_bpe_block_to_pil(
-                                nxt_blocks[bidx][2],
-                                self.bpe2vq,
-                                self.vq_model,
-                            )
-                except Exception as exc:
-                    print(f"[viz] gt_next decode failed for sample {i}: {exc}")
-                    gt_next_pil = None
+                gt_next_pil = self._decode_gt_next(
+                    nxt_ids[i],
+                    self.which_block,
+                    sample=i,
+                    what="gt_next",
+                )
                 # predicted next from WM conv deconv
-                try:
-                    pred_latent_pil = self._decode_image_hiddens_to_pil(
+                pred_latent_pil = _safe_decode(
+                    lambda i=i: self._decode_image_hiddens_to_pil(
                         pred_image_hiddens[i]
-                    )
-                except Exception as exc:
-                    print(f"[viz] pred_latent decode failed for sample {i}: {exc}")
-                    pred_latent_pil = None
+                    ),
+                    what="pred_latent",
+                    sample=i,
+                )
 
                 path = out_dir / f"{tag}_sample{i:02d}.png"
                 _save_panel_strip(
@@ -589,32 +618,22 @@ class WorldModelImageVisualizer:
                 current_full_hidden=cur_full[i],
                 current_input_ids=cur_ids[i],
             )
-            gt_next_pil = None
-            try:
-                nxt_blocks = extract_image_blocks(nxt_ids[i])
-                if nxt_blocks:
-                    bidx = (
-                        self.which_block
-                        if self.which_block >= 0
-                        else len(nxt_blocks) + self.which_block
-                    )
-                    if 0 <= bidx < len(nxt_blocks):
-                        gt_next_pil = _decode_bpe_block_to_pil(
-                            nxt_blocks[bidx][2],
-                            self.bpe2vq,
-                            self.vq_model,
-                        )
-            except Exception:
-                gt_next_pil = None
+            gt_next_pil = self._decode_gt_next(
+                nxt_ids[i],
+                self.which_block,
+                sample=i,
+                what=None,
+            )
 
             pred_latent_pil = None
             if pred_image_hiddens_b is not None:
-                try:
-                    pred_latent_pil = self._decode_image_hiddens_to_pil(
+                pred_latent_pil = _safe_decode(
+                    lambda i=i: self._decode_image_hiddens_to_pil(
                         pred_image_hiddens_b[i]
-                    )
-                except Exception:
-                    pred_latent_pil = None
+                    ),
+                    what=None,
+                    sample=i,
+                )
 
             path = out_dir / f"{tag}_sample{i:02d}.png"
             _save_panel_strip(
