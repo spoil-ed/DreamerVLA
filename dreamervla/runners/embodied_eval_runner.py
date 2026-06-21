@@ -36,6 +36,7 @@ from transformers import GenerationConfig
 
 from dreamervla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.runners import _embodied_eval_helpers as _eh
 from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
@@ -203,44 +204,10 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
         except TypeError:
             return torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    @staticmethod
-    def _normalize_vla_encoder_state_for_single_process_eval(
-        payload: dict[str, Any],
-    ) -> None:
-        """Make DDP-saved VLA encoder checkpoints load into single-process eval.
-
-        VLA SFT checkpoints saved under DDP can contain backbone keys like
-        ``backbone.module.model...``. Eval constructs the unwrapped encoder, so
-        those keys need to become ``backbone.model...`` before strict loading.
-        """
-        encoder_state = payload.get("state_dicts", {}).get("encoder")
-        if not isinstance(encoder_state, dict):
-            return
-        if not any(str(key).startswith("backbone.module.") for key in encoder_state):
-            return
-        payload["state_dicts"]["encoder"] = {
-            (
-                str(key).replace("backbone.module.", "backbone.", 1)
-                if str(key).startswith("backbone.module.")
-                else key
-            ): value
-            for key, value in encoder_state.items()
-        }
-
-    @staticmethod
-    def _checkpoint_cfg_from_payload(payload: dict[str, Any]) -> DictConfig:
-        cfg = payload.get("cfg")
-        if cfg is None:
-            raise RuntimeError(
-                "Dreamer checkpoint has no saved cfg; cannot rebuild Dreamer modules."
-            )
-        if isinstance(cfg, DictConfig):
-            return copy.deepcopy(cfg)
-        if isinstance(cfg, dict):
-            return OmegaConf.create(copy.deepcopy(cfg))
-        raise TypeError(
-            f"Dreamer checkpoint cfg must be DictConfig or dict, got {type(cfg).__name__}"
-        )
+    _normalize_vla_encoder_state_for_single_process_eval = staticmethod(
+        _eh.normalize_vla_encoder_state_for_single_process_eval
+    )
+    _checkpoint_cfg_from_payload = staticmethod(_eh.checkpoint_cfg_from_payload)
 
     def _run_dreamer_eval(
         self,
@@ -565,15 +532,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             with open(self._real_relabel_jsonl_path, "w"):
                 pass
 
-    @staticmethod
-    def _real_relabel_sparse_rewards(
-        success: bool, finish_step: int, max_steps: int
-    ) -> list[float]:
-        length = max(1, min(int(finish_step), int(max_steps)))
-        rewards = [0.0] * length
-        if success:
-            rewards[length - 1] = 1.0
-        return rewards
+    _real_relabel_sparse_rewards = staticmethod(_eh.real_relabel_sparse_rewards)
 
     def _append_real_relabel_record(self, record: dict[str, Any]) -> None:
         if not bool(getattr(self, "_real_relabel_enabled", False)):
@@ -678,27 +637,8 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             with open(self._policy_trace_path, "w"):
                 pass
 
-    @staticmethod
-    def _to_numpy_array(value: Any) -> np.ndarray | None:
-        if value is None:
-            return None
-        if isinstance(value, torch.Tensor):
-            return value.detach().cpu().float().numpy()
-        return np.asarray(value, dtype=np.float32)
-
-    @staticmethod
-    def _array_summary(value: np.ndarray | None) -> dict[str, Any] | None:
-        if value is None:
-            return None
-        arr = np.asarray(value, dtype=np.float32)
-        return {
-            "shape": list(arr.shape),
-            "mean": float(arr.mean()),
-            "std": float(arr.std()),
-            "min": float(arr.min()),
-            "max": float(arr.max()),
-            "l2": float(np.linalg.norm(arr.reshape(-1))),
-        }
+    _to_numpy_array = staticmethod(_eh.to_numpy_array)
+    _array_summary = staticmethod(_eh.array_summary)
 
     def _write_policy_trace(
         self,
@@ -774,13 +714,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                 f.write(json.dumps(record) + "\n")
         self._policy_trace_count = index + 1
 
-    @staticmethod
-    def _action_clip_bounds() -> tuple[np.ndarray, np.ndarray]:
-        min_values = np.array(
-            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
-        )
-        max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
-        return min_values, max_values
+    _action_clip_bounds = staticmethod(_eh.action_clip_bounds)
 
     def _policy_first_action_raw_from_hidden(self, hidden: torch.Tensor) -> np.ndarray:
         action, _, extra = self.policy(
@@ -810,16 +744,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             np.float32, copy=False
         )
 
-    @staticmethod
-    def _action_stats(
-        prefix: str, left: np.ndarray, right: np.ndarray
-    ) -> dict[str, float]:
-        diff = np.asarray(left, dtype=np.float32) - np.asarray(right, dtype=np.float32)
-        return {
-            f"{prefix}_mse": float(np.mean(np.square(diff))),
-            f"{prefix}_mae": float(np.mean(np.abs(diff))),
-            f"{prefix}_max_abs": float(np.max(np.abs(diff))),
-        }
+    _action_stats = staticmethod(_eh.action_stats)
 
     def _dreamer_policy_raw_to_env_action(self, action_raw: np.ndarray) -> np.ndarray:
         action = np.asarray(action_raw[:7], dtype=np.float32)
@@ -1268,12 +1193,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             if unexpected:
                 print(f"  [Eval]   unexpected first 5: {unexpected[:5]}")
 
-    @staticmethod
-    def _strip_wrapping_prefix(key: str) -> str:
-        for prefix in ("_fsdp_wrapped_module.", "module."):
-            if key.startswith(prefix):
-                return key[len(prefix) :]
-        return key
+    _strip_wrapping_prefix = staticmethod(_eh.strip_wrapping_prefix)
 
     def _attach_image_token_mapping(self) -> None:
         wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
@@ -1580,18 +1500,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             restored.append((Image.fromarray(third), Image.fromarray(wrist)))
         return restored
 
-    @staticmethod
-    def _resize_hwc_uint8(image: np.ndarray, size: int) -> np.ndarray:
-        if image.shape[0] == size and image.shape[1] == size:
-            return np.ascontiguousarray(image)
-        try:
-            resample = Image.Resampling.BILINEAR
-        except AttributeError:
-            resample = Image.BILINEAR
-        return np.asarray(
-            Image.fromarray(image).resize((size, size), resample=resample),
-            dtype=np.uint8,
-        )
+    _resize_hwc_uint8 = staticmethod(_eh.resize_hwc_uint8)
 
     def _pixel_obs_for_wm(
         self, frame_history: list[tuple[Image.Image, Image.Image]]
