@@ -26,6 +26,7 @@ from dreamervla.algorithms.dreamervla import (
     world_model_pretrain_step,
 )
 from dreamervla.algorithms.registry import get_actor_update_route
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 
 
@@ -274,7 +275,9 @@ def parse_args() -> argparse.Namespace:
         "0 means use the full returned chunk, which is the normal 5-step chunk setting.",
     )
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--target-token-id", type=int, default=10004)
+    parser.add_argument(
+        "--target-token-id", type=int, default=DEFAULT_ACTION_TOKEN_ID
+    )
     parser.add_argument("--rssm-action-scale", default="env", choices=["policy", "env"])
     parser.add_argument(
         "--run-wm-phase", action=argparse.BooleanOptionalAction, default=True

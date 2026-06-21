@@ -44,6 +44,7 @@ from omegaconf import OmegaConf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID  # noqa: E402
 from dreamervla.dataset.online_rollout_dumper import RolloutDumper  # noqa: E402
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamervla.runners.online_utils import (  # noqa: E402
@@ -113,7 +114,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-episodes", type=int, default=200)
     parser.add_argument("--episodes-per-shard", type=int, default=25)
     parser.add_argument("--episode-horizon", type=int, default=200)
-    parser.add_argument("--target-token-id", type=int, default=10004)
+    parser.add_argument(
+        "--target-token-id", type=int, default=DEFAULT_ACTION_TOKEN_ID
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
         "--deterministic-collect",

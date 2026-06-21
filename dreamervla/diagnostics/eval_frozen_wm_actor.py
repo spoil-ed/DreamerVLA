@@ -23,6 +23,7 @@ from omegaconf import OmegaConf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID  # noqa: E402
 from dreamervla.diagnostics._common import resolve_device  # noqa: E402
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamervla.runners.online_utils import (  # noqa: E402
@@ -107,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--episode-horizon", type=int, default=200)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--device", default="cuda:0")
-    p.add_argument("--target-token-id", type=int, default=10004)
+    p.add_argument("--target-token-id", type=int, default=DEFAULT_ACTION_TOKEN_ID)
     p.add_argument("--rssm-action-scale", default="env")
     p.add_argument("--imagination-horizon", type=int, default=10)
     p.add_argument(

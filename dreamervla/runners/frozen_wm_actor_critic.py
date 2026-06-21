@@ -21,6 +21,7 @@ from dreamervla.algorithms.dreamervla import (  # noqa: E402
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID  # noqa: E402
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker  # noqa: E402
 from dreamervla.runners.online_dreamervla import (  # noqa: E402
@@ -131,7 +132,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override cfg.optim.policy.lr. Use 0.0 to keep the policy fixed.",
     )
-    parser.add_argument("--target-token-id", type=int, default=10004)
+    parser.add_argument(
+        "--target-token-id", type=int, default=DEFAULT_ACTION_TOKEN_ID
+    )
     parser.add_argument("--rssm-action-scale", default="env", choices=["policy", "env"])
     parser.add_argument("--video-every-env-steps", type=int, default=500)
     parser.add_argument("--video-fps", type=int, default=30)

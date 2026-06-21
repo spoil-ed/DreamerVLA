@@ -31,6 +31,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.models.reward import (
     LatentSuccessClassifier,
@@ -468,7 +469,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
             OmegaConf.select(cfg, "training.train_classifier_inline", default=True)
         )
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
-        target_token_id = int(OmegaConf.select(cfg, "env.target_token_id", default=10004))
+        target_token_id = int(
+            OmegaConf.select(
+                cfg, "env.target_token_id", default=DEFAULT_ACTION_TOKEN_ID
+            )
+        )
         seq_len = int(OmegaConf.select(oc, "sequence_length", default=24))
         batch_size = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         min_replay = int(OmegaConf.select(oc, "min_replay", default=seq_len * batch_size))

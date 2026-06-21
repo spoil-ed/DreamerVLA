@@ -35,6 +35,7 @@ from PIL import Image
 from transformers import GenerationConfig
 
 from dreamervla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
@@ -55,6 +56,15 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
     @property
     def default_output_dir(self) -> str:
         return str(data_path("outputs", "eval", "eval_libero_vla"))
+
+    @property
+    def _action_token_id(self) -> int:
+        """Action-token id used for all token insertions (X-03; adjustable)."""
+        return int(
+            OmegaConf.select(
+                self.cfg, "eval.target_token_id", default=DEFAULT_ACTION_TOKEN_ID
+            )
+        )
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:
@@ -1413,8 +1423,10 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
     def _encode_hidden_sequence_from_tokenized(
         self,
         input_ids_list: list[list[int]],
-        target_token_id: int = 10004,
+        target_token_id: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if target_token_id is None:
+            target_token_id = self._action_token_id
         labels_list = [[-100] * len(seq) for seq in input_ids_list]
         lengths = [len(seq) for seq in input_ids_list]
         with torch.no_grad():
@@ -1455,9 +1467,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                 hidden_states=hidden_states,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                target_token_id=int(
-                    OmegaConf.select(self.cfg, "eval.target_token_id", default=10004)
-                ),
+                target_token_id=self._action_token_id,
                 eval=True,
             )
             return action_hidden.float().detach()
@@ -1646,7 +1656,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
         input_ids = torch.zeros(
             batch, seq_len + 1, dtype=torch.long, device=hidden_states.device
         )
-        input_ids[:, seq_len] = 10004
+        input_ids[:, seq_len] = self._action_token_id
         attention_mask = torch.ones(
             batch, seq_len + 1, dtype=torch.bool, device=hidden_states.device
         )
@@ -1687,12 +1697,14 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             ).float()
             if input_ids is not None:
                 seq_input_ids = torch.tensor(
-                    [input_ids + [10004]], dtype=torch.long, device=self.device
+                    [input_ids + [self._action_token_id]],
+                    dtype=torch.long,
+                    device=self.device,
                 )
                 if seq_input_ids.shape[1] < hidden_states.shape[1] + 1:
                     pad = hidden_states.shape[1] + 1 - seq_input_ids.shape[1]
                     seq_input_ids = F.pad(seq_input_ids, (0, pad), value=0)
-                    seq_input_ids[:, hidden_states.shape[1]] = 10004
+                    seq_input_ids[:, hidden_states.shape[1]] = self._action_token_id
                 seq_input_ids = seq_input_ids[:, : hidden_states.shape[1] + 1]
                 seq_attention_mask = torch.ones_like(seq_input_ids, dtype=torch.bool)
             else:
@@ -1705,7 +1717,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                     "hidden_states": hidden_states,
                     "input_ids": seq_input_ids,
                     "attention_mask": seq_attention_mask,
-                    "target_token_id": 10004,
+                    "target_token_id": self._action_token_id,
                     "deterministic": bool(
                         getattr(self, "_dreamer_deterministic", True)
                     ),
@@ -2273,11 +2285,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                     hidden_states=hidden_states,
                     input_ids=seq_input_ids,
                     attention_mask=seq_attention_mask,
-                    target_token_id=int(
-                        OmegaConf.select(
-                            self.cfg, "eval.target_token_id", default=10004
-                        )
-                    ),
+                    target_token_id=self._action_token_id,
                     eval=True,
                 )
                 try:
@@ -2384,7 +2392,7 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                         "hidden_states": hidden_states,
                         "input_ids": seq_input_ids,
                         "attention_mask": seq_attention_mask,
-                        "target_token_id": 10004,
+                        "target_token_id": self._action_token_id,
                         "deterministic": bool(
                             getattr(self, "_dreamer_deterministic", True)
                         ),

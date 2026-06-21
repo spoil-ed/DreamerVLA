@@ -5,6 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.actor.base_actor import BaseActor
 from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
@@ -177,7 +178,7 @@ class VLAActionHeadActor(BaseActor):
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
-        target_token_id: int = 10004,
+        target_token_id: int = DEFAULT_ACTION_TOKEN_ID,
     ) -> torch.Tensor:
         """Native ActionHead path using full VLA token hidden states."""
         param_dtype = self.hidden_projection.weight.dtype
@@ -304,7 +305,9 @@ class VLAActionHeadActor(BaseActor):
                 hidden_states=hidden_states,
                 input_ids=input_ids,
                 attention_mask=batch.get("attention_mask"),
-                target_token_id=int(batch.get("target_token_id", 10004)),
+                target_token_id=int(
+                    batch.get("target_token_id", DEFAULT_ACTION_TOKEN_ID)
+                ),
             )
         return self._action_chunk_from_single_context(batch["hidden"])
 

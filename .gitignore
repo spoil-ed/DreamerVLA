@@ -22,6 +22,7 @@ third_party/
 /data/
 
 # Local training / experiment logs
+log/
 logs/
 train.log
 *.log

@@ -10,6 +10,7 @@ from typing import Any
 import torch
 from transformers.utils import logging as hf_logging
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     ChameleonXLLMXForConditionalGeneration_ck_action_head,
 )
@@ -435,7 +436,7 @@ class RynnVLAEncoder(BaseEncoder):
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
-        target_token_id: int = 10004,
+        target_token_id: int = DEFAULT_ACTION_TOKEN_ID,
         eval: bool = True,
     ) -> torch.Tensor:
         action_head = getattr(self.backbone, "action_head", None)

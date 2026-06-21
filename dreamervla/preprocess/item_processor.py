@@ -9,6 +9,7 @@ from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.embodiment.chameleon_model import chameleon_vae_ori
 from dreamervla.models.encoder.rynnvla_image_ops import (
     generate_crop_size_list,
@@ -217,7 +218,7 @@ class FlexARItemProcessorAction(_FlexARItemProcessorBase):
     def decode_token_ids_to_actions(self, dis_action):
         bins = np.linspace(-1, 1, 256)
         bin_centers = (bins[:-1] + bins[1:]) / 2.0
-        discretized_actions = dis_action - 1 - 10004
+        discretized_actions = dis_action - 1 - DEFAULT_ACTION_TOKEN_ID
         discretized_actions = np.clip(
             discretized_actions - 1, a_min=0, a_max=bin_centers.shape[0] - 1
         )

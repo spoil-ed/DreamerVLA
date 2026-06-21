@@ -21,6 +21,7 @@ import numpy as np
 from libero.libero import benchmark as libero_benchmark
 from PIL import Image
 
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.envs.libero_env import (
     TASK_MAX_STEPS,
     get_libero_dummy_action,
@@ -79,7 +80,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     include_state: bool = True
     obs_hidden_source: Literal["action_query", "input_token_embedding"] = "action_query"
     action_head_type: Literal["legacy", "oft_discrete_token", "oft_l1_regression"] = "legacy"
-    target_token_id: int = 10004
+    target_token_id: int = DEFAULT_ACTION_TOKEN_ID
     full_record: bool = False
     validate_canonical: bool = True
 

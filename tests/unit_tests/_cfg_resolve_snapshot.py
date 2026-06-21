@@ -24,7 +24,13 @@ from pathlib import Path
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-CONFIG_DIR = str((Path(__file__).resolve().parent.parent / "configs").resolve())
+CONFIG_DIR = str(
+    next(
+        p / "configs"
+        for p in Path(__file__).resolve().parents
+        if (p / "configs").is_dir()
+    )
+)
 
 
 def snapshot(out_dir: str, selections: list[str]) -> None:
