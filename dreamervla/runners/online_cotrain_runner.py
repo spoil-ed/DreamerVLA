@@ -93,6 +93,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             cls_kwargs.get("token_pool", "flat")
         ) != "mean":
             cls_kwargs["latent_dim"] = int(OmegaConf.select(cfg, "world_model.obs_dim"))
+        self._classifier_cls_kwargs = dict(cls_kwargs)
         cls_cfg = LatentSuccessClassifierConfig(**cls_kwargs)
         classifier = LatentSuccessClassifier(cls_cfg).to(self.device)
         warm = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)

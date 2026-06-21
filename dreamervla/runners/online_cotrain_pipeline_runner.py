@@ -21,6 +21,7 @@ from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
 from dreamervla.utils.console import count_trainable
+from dreamervla.utils.hf_module import save_module_pretrained
 
 
 class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
@@ -77,14 +78,35 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     def _cls_warmup_ckpt(self) -> str:
         return os.path.join(self.output_dir, "ckpt", "classifier_warmup.ckpt")
 
+    def _wm_warmup_hf_dir(self) -> str:
+        return os.path.join(self.output_dir, "ckpt", "wm_warmup_hf")
+
+    def _cls_warmup_hf_dir(self) -> str:
+        return os.path.join(self.output_dir, "ckpt", "classifier_warmup_hf")
+
     def _save_wm_warmup(self) -> None:
-        torch.save({"global_step": int(self.global_step),
-                    "world_model": _unwrap(self.world_model).state_dict()}, self._wm_warmup_ckpt())
+        if self.checkpoint_save_torch():
+            torch.save({"global_step": int(self.global_step),
+                        "world_model": _unwrap(self.world_model).state_dict()}, self._wm_warmup_ckpt())
+        if self.checkpoint_save_hf():
+            wm_cfg = OmegaConf.to_container(OmegaConf.select(self.cfg, "world_model"), resolve=True)
+            target = wm_cfg.pop("_target_")
+            save_module_pretrained(_unwrap(self.world_model), self._wm_warmup_hf_dir(),
+                                   target=target, init_args=wm_cfg)
 
     def _save_cls_warmup(self) -> None:
-        torch.save({"global_step": int(self.global_step),
-                    "classifier": _unwrap(self.classifier).state_dict(),
-                    "classifier_threshold": float(self.classifier_threshold)}, self._cls_warmup_ckpt())
+        if self.checkpoint_save_torch():
+            torch.save({"global_step": int(self.global_step),
+                        "classifier": _unwrap(self.classifier).state_dict(),
+                        "classifier_threshold": float(self.classifier_threshold)}, self._cls_warmup_ckpt())
+        if self.checkpoint_save_hf():
+            cls_kwargs = getattr(self, "_classifier_cls_kwargs", {})
+            save_module_pretrained(
+                _unwrap(self.classifier),
+                self._cls_warmup_hf_dir(),
+                target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
+                init_args=cls_kwargs,
+            )
 
     # ------------------------------------------------------------- debug swap
     @staticmethod
