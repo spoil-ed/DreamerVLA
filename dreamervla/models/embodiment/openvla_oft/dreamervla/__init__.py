@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
-import os
-
 import torch
 from omegaconf import DictConfig
 from transformers import (
@@ -23,6 +20,8 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
 )
+
+from dreamervla.models.embodiment._norm_stats import merge_norm_stats_into_config
 
 
 def get_model_config_and_input_processor(cfg: DictConfig):
@@ -73,13 +72,7 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
         cfg.model_path, trust_remote_code=cfg.trust_remote_code
     )
 
-    dataset_statistics_path = os.path.join(cfg.model_path, "dataset_statistics.json")
-    if os.path.isfile(dataset_statistics_path):
-        with open(dataset_statistics_path) as f:
-            new_norm_stats = json.load(f)
-            norm_stats = getattr(actor_model_config, "norm_stats", {})
-            norm_stats.update(new_norm_stats)
-            actor_model_config.norm_stats = norm_stats
+    merge_norm_stats_into_config(actor_model_config, cfg.model_path)
 
     override_config_kwargs = cfg
     if override_config_kwargs is not None:
