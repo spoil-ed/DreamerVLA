@@ -45,17 +45,20 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
 
 ## P3 — structural (god-file splits; behaviour-preserving, suite-verifiable)
 
+Seam details: the archived execution plan `../history/2026-06-21-backlog-execution.md`
+(Tasks 10–13). The clean approach for a coupled god-class is mixins (move cohesive
+method groups to sibling mixin classes the runner inherits — zero call-site change).
+
 - [ ] **`algorithms/dreamervla.imagine_actor_critic_step`** (819 lines) — single cohesive
   function threading ~50 locals; decomposing into helpers risks dropping a variable and can
   hurt readability. Extract only cleanly-bounded sub-computations with explicit in/out, or
-  leave. Seams: `2026-06-21-backlog-execution.md` Task 10.
+  leave. (Task 10.)
 - [~] **`embodied_eval_runner.py`** (2431, was 2522) — Tier-1 done: 9 pure static helpers →
   `_embodied_eval_helpers.py` (pass-3 log). REMAINING: the higher-coupling cohesive groups
   (action decoding/unnorm, image processing, VLA hidden encoding, dreamer-latent action,
-  policy-trace export) — extract via dependency-injection delegators, or leave. Seams:
-  Task 13.
+  policy-trace export) — extract via mixins. (Task 13.)
 - [ ] **`online_dreamervla.py`** (1856) — split AFTER RUN-01 + the X-01 scheme-unify (they
-  rewrite the same DDP / save-load regions). Seams: Task 12.
+  rewrite the same DDP / save-load regions). (Task 12.)
 
 ## Verification gaps (not yet run)
 
