@@ -2,7 +2,27 @@
 
 Open work only. Done items: `2026-06-21-cleanup-execution-log.md`. Detail:
 `2026-06-21-codebase-cleanup-review.md` (cleanup), `2026-06-21-rlinf-alignment-correctness-audit.md` (RLinf).
-Constraint on all code work: **behaviour-preserving** unless flagged "changes numerics".
+
+## Core requirements (核心思想 — govern every item below)
+
+1. **维持功能 / behaviour-preserving** — the #1 red line. Only merge code proven
+   equivalent (AST/diff for identical, algebra/0.0-diff for math, seeded-batch for
+   models); where implementations genuinely diverge, **flag it, do not silently
+   unify**. Full unit suite stays green after every commit; anything that changes
+   numerics is marked "changes numerics" and needs an explicit decision.
+2. **统一实现 / one implementation per job** — the same functionality lives in ONE
+   place; no competing or copy-pasted schemes ("front does it one way, back another").
+   Make one canonical helper/interface, route all consumers through it (e.g. progress
+   reporter, PPO primitives in `grpo.py`).
+3. **对齐 RLinf** — the upstream `RLinf` repo (workspace sibling) is the reference for
+   RL correctness and for overall code-tree alignment; diverge only deliberately.
+4. **正确合理的接口** — algorithm primitives have one correct, extensible interface
+   (opt-in, default-off options) so future PPO / other-algorithm calls stay correct;
+   no lying/dead parameters.
+5. **干净 + 简短可读** — minimal, surgical changes; no speculative/bloated code; keep
+   structure short and readable (code and docs).
+
+Constraint shorthand below: **behaviour-preserving** unless flagged "changes numerics".
 
 ## P0 — correctness (highest value)
 
