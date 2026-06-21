@@ -200,10 +200,15 @@ class OpenVLADiscreteTokenActor(BaseActor):
 
     def _action_token_logits(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         action_hidden = self._action_hidden(hidden)
-        logits = self.lm_head(action_hidden)
-        action_logits = logits.index_select(
-            dim=-1, index=self._action_token_ids.to(device=logits.device)
-        )
+        # Compute ONLY the action-token columns by slicing the lm_head weight to
+        # the action token rows first, so the full [.., vocab_size] logits tensor
+        # is never materialized (the vocab tail is only used to extract these
+        # columns). Mathematically + gradient identical to
+        # ``self.lm_head(action_hidden).index_select(-1, action_token_ids)`` —
+        # lm_head has no bias, and unselected rows get zero gradient either way.
+        ids = self._action_token_ids.to(device=action_hidden.device)
+        action_weight = self.lm_head.weight.index_select(0, ids)
+        action_logits = torch.nn.functional.linear(action_hidden, action_weight)
         return action_logits.float(), action_hidden.float()
 
     def _classes_to_actions(self, classes: torch.Tensor) -> torch.Tensor:

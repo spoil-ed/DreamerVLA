@@ -174,10 +174,18 @@ WM + classifier are frozen; the actor is updated by `dino_wmpo_outcome_step`
 (imagined chunk rollout → classifier outcome reward → PPO), slow policy
 `optim.policy.lr=5e-7`.
 
-> OFT memory note: the OFT action-hidden latent (`229376`) is ~6.5× the RynnVLA
-> latent, so the imagined video tensor is large. If you hit CUDA OOM, set
-> `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` and/or lower
-> `algorithm.wmpo.episode_max_steps` and `algorithm.ppo_rollouts_per_start`.
+> **OFT memory note (`wmpo_outcome`).** The imagined **effective batch** is
+> `B_eff = batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
+> (one imagined episode per start state × GRPO group). The OFT action-hidden
+> latent (`56×4096`) makes every imagined frame large, so `B_eff` drives memory.
+> The route is already tuned: it caps imagination starts with `algorithm.imag_last`
+> (diverse *strided* selection, default 4), stores the imagined video at the
+> classifier's **chunk granularity** (1/K the frames), and computes only the
+> action-token `lm_head` columns (not the full 32000-vocab logits). If you hit
+> CUDA OOM, set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` first, then
+> shrink `B_eff` via `algorithm.imag_last` → `ppo_rollouts_per_start` →
+> `wmpo.episode_max_steps`. See the cold-start cotrain tutorial's
+> "Memory (online cotrain)" note for the full breakdown.
 
 ## 5. Eval
 
@@ -226,7 +234,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.tr
 
 # --- DreamerVLA wmpo_outcome smoke → ckpt
 #  (init from the WM + classifier smoke ckpts; OFT latent is large, so cap the
-#   imagined horizon and enable expandable_segments)
+#   imagination starts/horizon and enable expandable_segments)
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
   experiment=dreamervla_oft_dino_wm_wmpo_outcome task=OpenVLA_Onetraj_LIBERO logger=tensorboard \
@@ -235,7 +243,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
   dataset.hdf5_dir=$RW dataset.hidden_dir=$SC dataset.expected_model_path=$MP \
   dataset.max_files=1 dataset.max_demos_per_file=3 dataset.balanced_length=4 \
-  algorithm.wmpo.episode_max_steps=40 algorithm.ppo_rollouts_per_start=2 \
+  algorithm.wmpo.episode_max_steps=40 algorithm.ppo_rollouts_per_start=2 algorithm.imag_last=2 \
   init.world_model_state_ckpt=/tmp/oft_onetraj_wm_smoke/ckpt/latest.ckpt \
   init.classifier_state_ckpt=/tmp/oft_onetraj_cls_smoke/best_format.ckpt
 ```
@@ -265,6 +273,14 @@ hacks):
    `dreamervla/algorithms/ppo/outcome.py` now flattens the trailing token axes
    for any `ndim > 3` latent before scoring (no-op for the already-flat RynnVLA
    latent).
+4. **Memory-bounded imagination (current behaviour).** `dino_wmpo_outcome_step`
+   caps imagination starts with `algorithm.imag_last` (diverse strided selection
+   over the replay window), stores the imagined video at the classifier's chunk
+   granularity (`chunk_pool` applied while generating → 1/K the frames, identical
+   success scoring via `predict_success(pre_pooled=True)`), and the
+   `OpenVLADiscreteTokenActor` computes only the action-token `lm_head` columns.
+   Together these keep `B_eff = batch × imag_last × ppo_rollouts_per_start` the
+   single memory dial — see the cotrain tutorial's memory note.
 
 ## Known gaps / not covered
 

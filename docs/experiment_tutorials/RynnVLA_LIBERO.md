@@ -164,6 +164,12 @@ bash scripts/train_dreamervla.sh \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
+> Memory: the actor update imagines
+> `B_eff = batch × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
+> trajectories. The RynnVLA latent is smaller than OFT, but the same dials apply —
+> `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` + a smaller `algorithm.imag_last`
+> if you OOM. See the [Memory / OOM note](README.md#memory--oom-online-cotrain).
+
 Without a classifier, use the actor-critic fallback:
 
 ```bash

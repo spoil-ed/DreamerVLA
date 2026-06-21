@@ -46,7 +46,7 @@ _warned_missing_cfg: bool = False
 
 from dreamervla.algorithms.dreamervla import (
     _detach_latent,
-    _flatten_last_steps,
+    _flatten_strided_steps,
     _latent_time_dim,
     _policy_reference_action_chunk,
     _temporarily_freeze,
@@ -210,12 +210,29 @@ def dino_wmpo_outcome_step(
 
     obs = move_mapping_to_device(dict(obs), device)
 
+    # Cap the imagination start points per window with ``imag_last`` and spread
+    # them EVENLY over the window instead of taking the last-N adjacent frames.
+    # Every frame in the observed window is a valid start (observe_sequence
+    # builds a num_hist history for each), but the frames are consecutive
+    # states from one real trajectory: taking the last N gives near-identical,
+    # redundant starts, while using all 36 explodes the effective batch
+    # B_eff = B * starts * group_size through the WM. The window length is sized
+    # for WM chunk-rollout training (H + N*K + 1), not for RL. ``imag_last``
+    # sets how many starts; strided selection over [num_hist-1, T-1] makes them
+    # diverse (different trajectory phases) while keeping a full real history.
+    imag_last = int(algorithm_cfg.get("imag_last", 4))
+    wm_module = getattr(chunk_world_model, "module", chunk_world_model)
+    num_hist = int(getattr(wm_module, "num_hist", 1))
     with torch.no_grad():
         latent_seq = _detach_latent(
             _world_model_observe_sequence(chunk_world_model, obs)
         )
-        T_hist = _latent_time_dim(latent_seq)
-        current = _repeat_latent(_flatten_last_steps(latent_seq, T_hist), group_size)
+        seq_len = _latent_time_dim(latent_seq)
+        T_hist = min(imag_last if imag_last > 0 else seq_len, seq_len)
+        current = _repeat_latent(
+            _flatten_strided_steps(latent_seq, T_hist, min_start=num_hist - 1),
+            group_size,
+        )
 
     actor_feats: list[torch.Tensor] = []
     actions: list[torch.Tensor] = []
@@ -224,10 +241,65 @@ def dino_wmpo_outcome_step(
     ref_kls: list[torch.Tensor] = []
     video_latents: list[torch.Tensor] = []
 
+    # Classifier granularity drives BOTH (a) how we POOL the imagined frames we
+    # store and (b) how finish_step is mapped back to env-steps. Detect it ONCE
+    # here, before the rollout, so the imagined "video" can be stored at the
+    # classifier's native granularity: a chunk classifier only ever looks at one
+    # pooled frame per chunk (``chunk_pool``), so storing every imagined env-step
+    # wastes K× the memory. Pooling each chunk as it is generated is identical to
+    # the classifier's internal ``_chunk_aggregate`` (same chunk_pool), so
+    # success detection is unchanged — see predict_success(pre_pooled=...).
+    classifier_cfg = getattr(classifier_module, "cfg", None)
+    cfg_override = wmpo_cfg.get("classifier_granularity", None)
+    if classifier_cfg is None and cfg_override is None:
+        global _warned_missing_cfg
+        if not _warned_missing_cfg:
+            _warned_missing_cfg = True
+            _logger.warning(
+                "dino_wmpo_outcome_step: classifier_module has no `.cfg`; "
+                "defaulting granularity='action'. If the classifier is "
+                "chunk-granular, set `algorithm.wmpo.classifier_granularity: "
+                "chunk` (and optionally `chunk_pool`) to avoid silent "
+                "off-by-K reward placement."
+            )
+    cls_gran = (
+        str(cfg_override)
+        if cfg_override is not None
+        else str(getattr(classifier_cfg, "granularity", "action"))
+    )
+    chunk_granular = cls_gran == "chunk"
+    if chunk_granular:
+        chunk_pool = str(
+            wmpo_cfg.get("classifier_chunk_pool", None)
+            or getattr(classifier_cfg, "chunk_pool", "last")
+        )
+        finish_offset = (
+            K - 1 if chunk_pool == "last" else (0 if chunk_pool == "first" else K // 2)
+        )
+    else:
+        chunk_pool = None
+        finish_offset = 0
+
+    # Store the per-chunk actor features in the dtype the policy actually consumes
+    # them in (its action head casts the hidden to ``lm_head.weight.dtype``), not
+    # an unconditional float32. With a bf16 action head this halves the
+    # accumulated ``actor_feats`` (num_chunks x [B_eff, token_count, dim]) with
+    # ZERO change to the logits/log-probs (verified: bf16-in == float32-in once
+    # the head casts). Falls back to float32 for actors without an ``lm_head``.
+    _policy_module = getattr(policy, "module", policy)
+    _lm_head = getattr(_policy_module, "lm_head", None)
+    feat_dtype = (
+        _lm_head.weight.dtype
+        if _lm_head is not None and hasattr(_lm_head, "weight")
+        else torch.float32
+    )
+
     with _temporarily_freeze(chunk_world_model):
         for _ in range(num_chunks):
             actor_feat = (
-                _world_model_actor_input(chunk_world_model, current).detach().float()
+                _world_model_actor_input(chunk_world_model, current)
+                .detach()
+                .to(feat_dtype)
             )
             with torch.no_grad():
                 # Stochastic full action chunk. This is the PPO action unit for
@@ -279,7 +351,19 @@ def dino_wmpo_outcome_step(
                         "actions": action_chunk.detach(),
                     }
                 )
-                video_latents.append(next_seq["hidden_seq"])
+                hidden_seq = next_seq["hidden_seq"]  # [B_eff, K, ...] all K frames
+                if chunk_granular:
+                    # Store ONE pooled frame per chunk (== classifier
+                    # _chunk_aggregate over this chunk's K frames). 1/K memory.
+                    if chunk_pool == "first":
+                        pooled = hidden_seq[:, 0]
+                    elif chunk_pool == "mean":
+                        pooled = hidden_seq.mean(dim=1)
+                    else:  # "last"
+                        pooled = hidden_seq[:, -1]
+                    video_latents.append(pooled.unsqueeze(1))  # [B_eff, 1, ...]
+                else:
+                    video_latents.append(hidden_seq)
                 current = _detach_latent(
                     {
                         "history": next_seq["history"],
@@ -288,7 +372,8 @@ def dino_wmpo_outcome_step(
                     }
                 )
 
-    # [B_eff, num_chunks * K, latent_dim]
+    # chunk classifier: [B_eff, num_chunks, latent_dim] (one pooled frame/chunk)
+    # action classifier: [B_eff, num_chunks * K, latent_dim] (every env-step)
     video = torch.cat(video_latents, dim=1)
     # Tokenized world models (e.g. OpenVLA-OFT action-hidden, [.,.,N_tokens,token_dim])
     # emit a 4-D hidden_seq; flatten the trailing token axes to the flat
@@ -299,50 +384,24 @@ def dino_wmpo_outcome_step(
         video = video.reshape(video.shape[0], video.shape[1], -1)
     B_eff = video.shape[0]
     with torch.no_grad():
+        # ``pre_pooled`` only matters for a chunk classifier (we pooled each
+        # chunk while generating); pass it only on that path so action-granular
+        # classifiers / minimal mocks that predate the kwarg keep working.
         success_info = classifier_module.predict_success(
             video,
             threshold=float(classifier_threshold),
             stride=1,
             min_steps=classifier_min_steps,
+            **({"pre_pooled": True} if chunk_granular else {}),
         )
     complete = success_info["complete"]
-    # predict_success returns finish_step in the classifier's NATIVE unit
-    # (chunk for chunk classifier).  Map to env-step at the boundary so
-    # _build_reward_tensor / build_valid_chunk_count stay in env-step units.
-    # Defensive ``getattr(module, "cfg", None)`` keeps this path safe for
-    # action-granularity classifiers / minimal mocks that don't expose ``cfg``.
-    # When ``cfg`` is missing we fall back to "action" granularity, which
-    # produces wrong (off-by-K) reward placement if the classifier is in
-    # fact chunk-granular. The wmpo override ``classifier_granularity``
-    # lets callers force the correct branch when ``cfg`` is unreachable;
-    # we also log a one-shot warning so the silent miscoding becomes
-    # observable instead of dashboard-invisible.
-    classifier_cfg = getattr(classifier_module, "cfg", None)
-    cfg_override = wmpo_cfg.get("classifier_granularity", None)
-    if classifier_cfg is None and cfg_override is None:
-        global _warned_missing_cfg
-        if not _warned_missing_cfg:
-            _warned_missing_cfg = True
-            _logger.warning(
-                "dino_wmpo_outcome_step: classifier_module has no `.cfg`; "
-                "defaulting granularity='action'. If the classifier is "
-                "chunk-granular, set `algorithm.wmpo.classifier_granularity: "
-                "chunk` (and optionally `chunk_pool`) to avoid silent "
-                "off-by-K reward placement."
-            )
-    if cfg_override is not None:
-        cls_gran = str(cfg_override)
-    else:
-        cls_gran = str(getattr(classifier_cfg, "granularity", "action"))
-    if cls_gran == "chunk":
-        pool = str(
-            wmpo_cfg.get("classifier_chunk_pool", None)
-            or getattr(classifier_cfg, "chunk_pool", "last")
-        )
-        offset = K - 1 if pool == "last" else (0 if pool == "first" else K // 2)
-        # Unfired entries already encode "T_scan - 1" in chunk units → maps to
-        # the very last env-step within the last chunk, which equals T_max - 1.
-        finish_step = success_info["finish_step"] * K + offset
+    # Map finish_step from the classifier's NATIVE unit back to env-step units
+    # (``chunk_granular`` / ``finish_offset`` were resolved before the rollout).
+    # For a chunk classifier finish_step is in chunks; convert at the boundary.
+    # Unfired entries already encode "T_scan - 1" in chunk units → the last
+    # env-step of the last chunk (= T_max - 1).
+    if chunk_granular:
+        finish_step = success_info["finish_step"] * K + finish_offset
     else:
         finish_step = success_info["finish_step"]
 

@@ -42,6 +42,19 @@ tokens) uses full-width attention (~610M); query_before (input-token, 512 tokens
 stays lean (~313M) because its sequence is ~9× longer. Details in the two WM
 tutorials above.
 
+## Memory / OOM (online cotrain)
+
+The WMPO RL update imagines an **effective batch**
+`B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
+through the world model at once, so `B_eff` (not the raw batch) is the memory
+dial. The fast fix is `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+plus a sane `algorithm.imag_last` (start states per replay window; default 4,
+diverse strided selection). With `batch_size=12, imag_last=4` this fits an 80GB
+GPU at ~66.7 GB. Full breakdown (chunk-granular video, sliced `lm_head`, the
+shrink-`B_eff` order) is in the
+[cold-start collection and warmup](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md)
+tutorial's "Memory (online cotrain)" note.
+
 ## Validation Notes
 
 | Note | Purpose |

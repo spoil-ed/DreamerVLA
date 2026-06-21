@@ -121,11 +121,13 @@ This route uses **full-width attention** (`heads=16, dim_head=256` → inner=409
 `configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`.
 
 > Memory: ~610M is ~11x the old 55M compact WM. The default full pipeline runs online
-> cotrain with the VLA + WM co-resident (memory-heavy — see the online-cotrain memory
-> note in **Run**; lower `dataloader.batch_size` / `algorithm.*`, or use `debug=true`,
-> if you OOM). Warmup-only (`online_rollout.total_env_steps=0`) does not load the VLA,
-> so it fits easily. The new architecture is incompatible with old `model_dim=1024`
-> warmup checkpoints — start fresh.
+> cotrain with the VLA + WM co-resident (memory-heavy — see the **"Memory (online
+> cotrain)"** note under **Run** for the `B_eff` breakdown; the short version is
+> `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` plus a sane
+> `algorithm.imag_last`, or `debug=true`). Warmup-only
+> (`online_rollout.total_env_steps=0`) does not load the VLA, so it fits easily. The
+> new architecture is incompatible with old `model_dim=1024` warmup checkpoints —
+> start fresh.
 
 ## Run
 
@@ -152,12 +154,35 @@ the same flow, add `debug=true`:
 bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal debug=true
 ```
 
-> **Memory (online cotrain):** the OFT actor RL update is heavy (a 32000-vocab
-> `lm_head` over the imagined rollout) with the ~7B OFT VLA resident, so the full RL
-> settings can OOM on an 80GB GPU. Lower `dataloader.batch_size` (PER-GPU under DDP)
-> and/or `algorithm.imagination_horizon` / `algorithm.ppo_rollouts_per_start` /
-> `algorithm.wmpo.episode_max_steps` if you hit it — `debug=true` is the verified
-> low-memory baseline. Run in the `dreamervla` conda env.
+> **Memory (online cotrain) — the WMPO RL update.** The actor update
+> (`dino_wmpo_outcome_step`) imagines an **effective batch**
+>
+> ```
+> B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start
+> ```
+>
+> of trajectories through the 610M world model **at once** (one imagined episode
+> per start state × GRPO group). Everything heavy scales with `B_eff`: the WM
+> attention forward (`to_qkv`), the imagined latent "video" the success classifier
+> scores, and the actor log-prob pass. With `batch_size=12, imag_last=4, group=4`
+> → `B_eff=192`, which fits an 80GB GPU at **~66.7 GB once you set**:
+>
+> ```bash
+> export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # reclaims the warmup-fragmented floor — single biggest win
+> ```
+>
+> The route is already memory-tuned: it (a) **caps imagination starts with
+> `algorithm.imag_last`** (default 4, diverse *strided* selection across the
+> replay window) instead of imagining from every one of the 36 frames, (b) stores
+> the imagined video at the classifier's **chunk granularity** (1/K the frames),
+> and (c) computes **only the action-token `lm_head` columns** (not the full
+> 32000-vocab logits). So at `batch_size=12` no change is needed beyond
+> `expandable_segments`. If you still OOM (e.g. the release profile's
+> `batch_size=96` → `B_eff=1536`), shrink `B_eff` in this order: lower
+> `algorithm.imag_last` → `dataloader.batch_size` (PER-GPU under DDP) →
+> `algorithm.ppo_rollouts_per_start` (keep ≥2 for GRPO variance) →
+> `algorithm.wmpo.episode_max_steps` (episode length → video size). `debug=true`
+> remains the verified tiny baseline. Run in the `dreamervla` conda env.
 
 Default is the **full** pipeline. Every value is a configurable Hydra override;
 `debug=true` swaps the whole right column in automatically (`training.debug=true` →
@@ -176,6 +201,7 @@ Default is the **full** pipeline. Every value is a configurable Hydra override;
 | `online_rollout.max_train_updates` | unset (run to completion) | `4` |
 | `algorithm.imagination_horizon` | `5` | `3` |
 | `algorithm.ppo_rollouts_per_start` | `4` | `2` |
+| `algorithm.imag_last` (imagination starts/window — B_eff cap) | `4` | `4` (not swapped) |
 | `algorithm.wmpo.episode_max_steps` | `300` | `150` |
 
 Adjust them with normal launcher overrides:

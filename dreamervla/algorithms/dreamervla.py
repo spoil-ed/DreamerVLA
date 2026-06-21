@@ -293,6 +293,41 @@ def _flatten_last_steps(value: Any, steps: int) -> Any:
     return value
 
 
+def _flatten_strided_steps(value: Any, num_starts: int, min_start: int = 0) -> Any:
+    """Flatten ``num_starts`` imagination start positions into the batch dim.
+
+    Unlike :func:`_flatten_last_steps` (which takes the last ``num_starts``
+    *adjacent* frames — near-identical consecutive states), this spreads the
+    starts EVENLY over the valid range ``[min_start, T-1]`` so the imagined
+    rollouts begin from diverse phases of the real trajectory. ``min_start``
+    should be ``num_hist - 1`` so every start carries a full (unpadded) history.
+    Same start count (=> same effective batch / memory), better state coverage.
+    """
+    T = _latent_time_dim(value)
+    lo = max(0, min(int(min_start), T - 1))
+    avail = T - lo
+    n = max(1, min(int(num_starts), avail))
+    if n >= avail:
+        idx = torch.arange(lo, T)
+    else:
+        idx = torch.unique(torch.linspace(lo, T - 1, steps=n).round().long())
+
+    def _apply(v: Any) -> Any:
+        if isinstance(v, torch.Tensor):
+            if v.ndim < 2:
+                raise ValueError(f"Expected [B,T,...] tensor, got {tuple(v.shape)}")
+            bsz = int(v.shape[0])
+            sel = v.index_select(1, idx.to(v.device))
+            return sel.reshape(bsz * sel.shape[1], *v.shape[2:])
+        if is_dataclass(v):
+            return replace(v, **{f.name: _apply(getattr(v, f.name)) for f in fields(v)})
+        if isinstance(v, dict):
+            return {key: _apply(item) for key, item in v.items()}
+        return v
+
+    return _apply(value)
+
+
 def _world_model_observe_sequence(
     world_model: nn.Module, obs: Mapping[str, Any]
 ) -> Any:

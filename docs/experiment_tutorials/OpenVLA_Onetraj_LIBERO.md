@@ -254,6 +254,12 @@ bash scripts/train_dreamervla.sh \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
+> Memory: the actor update imagines
+> `B_eff = batch × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
+> trajectories through the WM at once. If you OOM, set
+> `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` and lower `algorithm.imag_last`
+> first — see the [Memory / OOM note](README.md#memory--oom-online-cotrain).
+
 ## 6. Eval
 
 ```bash

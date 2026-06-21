@@ -91,6 +91,13 @@ bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_wmpo_outcome_
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
 ```
 
+> Memory: the actor update imagines
+> `B_eff = batch × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
+> trajectories. The input-token route has a longer 512-token WM sequence, so
+> set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` and keep
+> `algorithm.imag_last` small if you OOM — see the
+> [Memory / OOM note](README.md#memory--oom-online-cotrain).
+
 ## Unified online cotrain (warmup → cotrain)
 
 The unified online cotrain runner `OnlineCotrainRunner` implements:

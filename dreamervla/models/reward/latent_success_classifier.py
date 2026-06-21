@@ -189,6 +189,7 @@ class LatentSuccessClassifier(nn.Module):
         threshold: float,
         stride: int = 1,
         min_steps: int = 0,
+        pre_pooled: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Earliest-window success scan over a latent video.
 
@@ -221,7 +222,16 @@ class LatentSuccessClassifier(nn.Module):
         W = self.cfg.window
         device = latent_video.device
         gran = str(getattr(self.cfg, "granularity", "action"))
-        scan_video = self._chunk_aggregate(latent_video) if gran == "chunk" else latent_video
+        # ``pre_pooled``: caller already aggregated the video to the classifier's
+        # native granularity (e.g. WMPO imagination pools each chunk as it is
+        # generated, storing 1/K the frames). Skip the internal aggregate so we
+        # don't pool twice. Pooling at generation time with the same chunk_pool
+        # is identical to ``_chunk_aggregate`` here, so the scan is unchanged.
+        scan_video = (
+            latent_video
+            if (gran != "chunk" or pre_pooled)
+            else self._chunk_aggregate(latent_video)
+        )
 
         T_scan = scan_video.shape[1]
         complete = torch.zeros(B, dtype=torch.bool, device=device)
