@@ -806,6 +806,7 @@ def test_release_scripts_tree_is_curated() -> None:
     assert top_level_files == {
         "README.md",
         "check_ray.sh",
+        "collect_parallel.sh",
         "download_assets.sh",
         "e2e_coldstart_warmup_cotrain_noray.sh",
         "e2e_coldstart_warmup_cotrain_ray.sh",

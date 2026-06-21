@@ -8,7 +8,5 @@ def test_preprocess_item_processor_imports_from_preprocess_helpers() -> None:
 
     assert hasattr(module, "FlexARItemProcessorAction")
     assert hasattr(module, "FlexARItemProcessorActionState")
-    assert hasattr(module, "FlexARItemProcessorActionFast")
     assert module.FlexARItemProcessor_Action is module.FlexARItemProcessorAction
     assert module.FlexARItemProcessor_Action_State is module.FlexARItemProcessorActionState
-    assert module.FlexARItemProcessor_Action_FAST is module.FlexARItemProcessorActionFast

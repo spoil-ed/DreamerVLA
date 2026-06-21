@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python, OmegaConf/Hydra, pytest. Config knobs via `OmegaConf.select(cfg, "console.*", default=...)`.
 
-**Builds on:** `docs/plans/2026-06-20-train-console-output-vla-signal.md` (Tier 0/1, merged). Helpers `phase_banner`/`metric_box`/`fmt_value`/`count_trainable` (console.py) and `SuccessTracker` (online_utils.py) already exist.
+**Builds on:** `docs/history/2026-06-20-train-console-output-vla-signal.md` (Tier 0/1, merged). Helpers `phase_banner`/`metric_box`/`fmt_value`/`count_trainable` (console.py) and `SuccessTracker` (online_utils.py) already exist.
 
 **Commit rules (this repo):** every commit uses `git commit --signoff`; commit *descriptions* must not contain `===` or `/`; ruff runs on changed Python (no unused imports / trailing whitespace).
 

@@ -107,6 +107,9 @@ def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
             "out_dir": str(tmp_path),
             "debug": True,
             "resume": resume,
+            # orchestration uses fake nn.Linear modules; HF export needs real
+            # target/init_args, so pin torch-only (the test asserts the .ckpt).
+            "checkpoint_format": "torch",
         },
         "offline_warmup": {
             "data_dir": str(tmp_path / "offline_data"),
@@ -119,6 +122,9 @@ def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
     })
     if total_env_steps is not None:
         OmegaConf.update(cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True)
+        # cfg sets debug=True, so _apply_debug_overrides swaps in the debug knob;
+        # pin it too or the requested step count is overwritten by the fallback.
+        OmegaConf.update(cfg, "online_rollout.debug_total_env_steps", int(total_env_steps), force_add=True)
     return cfg
 
 
@@ -145,6 +151,8 @@ def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, to
     def fake_build_components(self, cfg):
         calls.append("build")
         self.world_model = torch.nn.Linear(2, 2)
+        self.policy = None
+        self.critic = None
         self.classifier = torch.nn.Linear(2, 2)
         self.classifier_threshold = 0.5
 
@@ -162,9 +170,11 @@ def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, to
 
     def fake_wm_warmup(self, replay, *, steps, batch_size, optim_cfg):
         calls.append("wm_warmup")
+        return 0.0  # run() formats the returned loss into the warmup banner
 
     def fake_cls_warmup(self, replay, *, steps, batch_size, early_neg_stride, grad_clip):
         calls.append("cls_warmup")
+        return 0.0  # run() formats the returned acc into the warmup banner
 
     def fake_online_loop(self, cfg):
         calls.append("online")

@@ -14,6 +14,7 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `train_vla.sh` | VLA SFT via Hydra experiment configs |
 | `train_wm.sh` | World-model and classifier training via Hydra experiment configs |
 | `train_dreamervla.sh` | DreamerVLA training via Hydra experiment configs |
+| `collect_parallel.sh` | Data-parallel Ray cold-start collection (one job per GPU), merged into one dir for the warmup/cotrain launcher (`skip_collect=true`) |
 | `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline WM/classifier warmup |
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline WM/classifier warmup |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
@@ -182,7 +183,6 @@ Python modules:
 | Module | Purpose |
 | --- | --- |
 | `dreamervla.runners.online_dreamervla` | Online WMPO experiment loop |
-| `dreamervla.runners.online_dreamervla_multiproc` | Multi-process online collector variant |
 | `dreamervla.runners.frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
 | `dreamervla.runners.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
 

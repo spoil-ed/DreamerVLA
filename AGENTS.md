@@ -54,8 +54,7 @@ experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal`).
 `cfg._target_` to a **Runner** class and runs `setup → execute → teardown`.
 The runner owns dataset, encoder, world model, actor / critic / reward,
 optimizer, logger, and checkpoints. Online RL uses an in-process
-`DreamerVLAOnlineTrainEnv` (or the multi-proc variant in
-`dreamervla.runners.online_dreamervla_multiproc`). Optional Ray runners may use
+`DreamerVLAOnlineTrainEnv`. Optional Ray runners may use
 worker / scheduler helpers internally, but they remain explicit
 `experiment=<name>` routes and must not fork the model, data, checkpoint, or
 metric contracts.

@@ -74,3 +74,47 @@ God-file decompositions (`embodied_eval_runner` 2514 LOC, `online_dreamervla`
 `pretokenize_dataset` 822 LOC) and MOD-07 (two intentional OFT action-model
 implementations). Also noted by the token-WM pass: the pixel WMs share the same
 loss scaffolding as the token WMs — a larger follow-on unification.
+
+## Done — backlog execution pass 2 (2026-06-21, this branch)
+
+Full unit suite green in the `dreamervla` env (**582 passed, 7 skipped**; baseline
+was 571 passed + the 6 pre-existing failures, plus 5 new guard tests). All items
+behaviour-preserving **except A2/A3**, an explicit maintainer-approved
+`changes-numerics` opt-in. Corresponding backlog entries removed.
+
+- **P0 green suite** — fixed the 6 pre-existing unit failures by repairing test
+  mocks / script curation only (zero production change). `test_online_cotrain_pipeline`
+  fake `_build_components` now sets `policy`/`critic`, pins `checkpoint_format=torch`,
+  returns warmup losses, and pins the debug `total_env_steps` knob;
+  `test_online_cotrain_ray_runner` gives the `__new__`-built runner a
+  `NullMetricLogger`; `test_setup_scripts` + `scripts/README.md` register the new
+  `collect_parallel.sh`. (Note: run unit tests in the `dreamervla` conda env —
+  the base env's transformers version yields ~13 spurious failures.)
+- **PRE-02 / PRE-03 / MOD-10 / RUN-14** — deleted verified-dead code: two orphan
+  preprocess scripts; base `FlexARItemProcessor` + test-only
+  `FlexARItemProcessorActionFast` (plus the now-unused `AutoProcessor` import,
+  aliases, `__all__` entries, and the `test_preprocess_imports` asserts); the
+  always-raising `OFTActionHiddenEncoder` placeholder (+ `encoder/__init__`
+  re-export); the unwired `online_dreamervla_multiproc.py` fork (+ AGENTS.md /
+  `scripts/README.md` mentions).
+- **CFG-04** — `configs/task/_base_libero.yaml` + four thin suite files
+  (468 → 206 lines). Verified: all 13 task configs (incl. the `OpenVLA_Onetraj_*`,
+  `ColdStart_*`, `RynnVLA_*` inheritance chain) resolve byte-identically vs the
+  pre-change hydra compose.
+- **ppo_gamma/lam (audit verify)** — every RL config sets `ppo_gamma: 1.0` +
+  `lam: 0.95` explicitly (deliberate: `lam` matches RLinf, `gamma=1.0` is intended
+  for the episodic sparse-outcome return). No change needed.
+- **A2/A3 numerical-stability guards (changes-numerics, approved)** — enabled the
+  RLinf-aligned dual-clip `clip_ratio_c: 3.0` and the summed-trajectory log-ratio
+  clamp `clip_log_ratio: 10.0` in all 6 RL `algorithm:` blocks (the `dense` /
+  `dense_chunk` / `outcome` routes already read both keys; threaded them through the
+  `relabel` route too). Both are no-ops at the default (None); the dual-clip
+  primitive is algebraically identical to RLinf's `min(loss, c·|adv|)`. Locked by
+  new `test_ppo_clip_guards.py` (5 tests incl. default-off equivalence). The
+  `clip_log_ratio` value is a conservative anti-overflow bound (RLinf has no
+  per-trajectory analogue — it sums per-token); tune to the observed distribution.
+- **Rename `_real_relabel_ppo_loss` → `_real_relabel_anchor_loss`** — it is a
+  frozen-old-logprob, constant-advantage BC anchor, not on-policy PPO (4 internal
+  refs; the registry `ppo` route alias is unchanged, so configs are unaffected).
+- **CFG-06 (already done)** — the `OpenVLA_Onetraj_*` task configs and the rynnvla
+  `*_input_token_chunk` classifier already compose thin `defaults:`; nothing to do.

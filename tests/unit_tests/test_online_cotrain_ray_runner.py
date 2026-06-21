@@ -94,6 +94,7 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     from omegaconf import OmegaConf
 
     from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+    from dreamervla.utils.metric_logger import NullMetricLogger
 
     cfg = OmegaConf.create(
         {
@@ -104,6 +105,7 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     )
     runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
     runner.cfg = cfg
+    runner._metric_logger = NullMetricLogger()
     learner = _Learner()
 
     history = runner._run_loop(

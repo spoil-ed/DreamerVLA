@@ -8,9 +8,9 @@
 
 **Tech Stack:** Python, OmegaConf/Hydra, pytest. Runs in the `dreamervla` conda env: `conda run -n dreamervla python -m pytest tests/unit_tests -q`.
 
-**Spec:** `docs/plans/2026-06-21-pipeline-progress-and-cotrain-resume.md`
+**Spec:** `docs/history/2026-06-21-pipeline-progress-and-cotrain-resume.md`
 
-**Builds on:** the console family from `docs/plans/2026-06-20-train-console-*` — `console_banner`/`console_record_success`/`console_metrics` on `BaseRunner`, backed by `dreamervla/utils/console.py`. `console_progress` is the next member of that family.
+**Builds on:** the console family from `docs/history/2026-06-20-train-console-*` — `console_banner`/`console_record_success`/`console_metrics` on `BaseRunner`, backed by `dreamervla/utils/console.py`. `console_progress` is the next member of that family.
 
 **Commit rules (this repo):** every commit uses `git commit --signoff`; commit descriptions must not contain `===` or `/`; ruff runs on changed Python (no unused imports / trailing whitespace). Append the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 

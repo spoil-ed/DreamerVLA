@@ -177,6 +177,10 @@ algorithm:
   ppo_gamma: 1.0
   clip_ratio_low: 0.2
   clip_ratio_high: 0.28
+  # A2/A3 numerical-stability guards (RLinf-aligned dual-clip; log-ratio
+  # clamp guards the summed-trajectory ratio before exp). changes-numerics.
+  clip_ratio_c: 3.0
+  clip_log_ratio: 10.0
   advantage_eps: 1.0e-6
   tdmpc_ac:
     enabled: false

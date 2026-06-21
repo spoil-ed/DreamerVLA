@@ -1,0 +1,106 @@
+# Shared base for the four LIBERO suites (libero_{goal,object,spatial,10}).
+# Each suite composes `defaults: [_base_libero, _self_]` and overrides only the
+# fields that genuinely differ: name/suite/task_name, the action/time horizon,
+# the legacy action-hidden dims, the OpenVLA-OFT checkpoint block, and the
+# failure dir. Suite-templated paths resolve through ${task.suite}.
+
+image_resolution: 256
+image_size: 64
+image_keys: [agentview_rgb, eye_in_hand_rgb]
+hidden_key: obs_embedding
+
+action_dim: 7
+
+vla_init_tag: ${task.suite}
+vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/${task.suite}
+
+tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
+text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
+chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
+chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
+
+pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.suite}/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
+pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.suite}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
+pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.suite}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
+
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256
+hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_remaining_reward
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
+
+legacy_action_hidden:
+  expected_action_head_type: legacy
+  expected_obs_hidden_source: action_query
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  token_dim: 1024
+  latent_stage: query_after
+
+legacy_input_tokens:
+  expected_action_head_type: legacy
+  expected_obs_hidden_source: input_token_embedding
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  wm_obs_dim: 8388608
+  token_count: 2048
+  token_dim: 4096
+  chunk_size: ${task.legacy_action_hidden.chunk_size}
+  action_hidden_dim: 1024
+  latent_stage: query_before
+  latent_source: RynnVLA current-frame Chameleon VQ input tokens [2048,4096]
+
+openvla_oft:
+  dataset_statistics_key: ${task.suite}_no_noops
+  action_horizon: 8
+  time_horizon: 8
+  image_resolution: 224
+  num_images_in_input: 2
+  use_wrist_image: true
+  use_proprio: true
+  use_l1_regression: true
+  hdf5_dir: ${task.hdf5_dir}
+  hdf5_reward_dir: ${task.hdf5_reward_dir}
+  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
+  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
+  failure_action_hidden_dir: null
+  failure_input_token_hidden_dir: null
+  expected_action_head_type: oft_l1_regression
+  expected_obs_hidden_source: action_query
+  expected_prompt_style: vla_policy
+  expected_history: 2
+  expected_include_state: true
+  expected_rotate_images_180: true
+  wm_obs_dim: 229376
+  token_count: 56
+  token_dim: 4096
+  chunk_size: ${task.openvla_oft.time_horizon}
+  latent_stage: query_after
+  latent_source: OpenVLA-OFT legacy [8,7,4096] action hidden
+  input_tokens:
+    expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
+    expected_obs_hidden_source: input_token_embedding
+    expected_prompt_style: ${task.openvla_oft.expected_prompt_style}
+    expected_history: ${task.openvla_oft.expected_history}
+    expected_include_state: ${task.openvla_oft.expected_include_state}
+    expected_rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
+    wm_obs_dim: 2097152
+    token_count: 512
+    token_dim: 4096
+    chunk_size: ${task.openvla_oft.chunk_size}
+    action_hidden_dim: 4096
+    latent_stage: query_before
+    latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
+  sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
+  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  classifier_target: dreamervla.models.reward.LatentSuccessClassifier
+  actor_target: dreamervla.models.actor.RynnVLAActionHiddenActor
+  actor_head_type: legacy
+  actor_adapter_type: residual_mlp
+  actor_adapter_hidden_dim: 1024
+  actor_freeze_output_projection: false
+  critic_target: dreamervla.models.critic.twohot_critic.TwohotCritic

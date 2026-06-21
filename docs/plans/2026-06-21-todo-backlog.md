@@ -1,8 +1,11 @@
 # TODO backlog (open items)
 
-Open work only. Done items: `2026-06-21-cleanup-execution-log.md`. Detail:
-`2026-06-21-codebase-cleanup-review.md` (cleanup), `2026-06-21-rlinf-alignment-correctness-audit.md` (RLinf).
-
+Open work only. Done items: `../history/2026-06-21-cleanup-execution-log.md`. Detail:
+`../history/2026-06-21-codebase-cleanup-review.md` (cleanup),
+`../history/2026-06-21-rlinf-alignment-correctness-audit.md` (RLinf).
+(Completed plans/designs/audits were archived to `docs/history/` on 2026-06-21;
+this file is the only live open-items list.)
+  
 ## Core requirements (核心思想 — govern every item below)
 
 1. **维持功能 / behaviour-preserving** — the #1 red line. Only merge code proven
@@ -27,28 +30,19 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
 ## P0 — correctness (highest value)
 
 - [ ] **A4-intent** — replay λ-return `boot=raw_returns[:,0]` (imagined return) vs the
-  standard DreamerV3 critic-value bootstrap. Dead param/compute already removed; decide
-  if `boot` should be the per-state critic value. *(changes numerics — needs design call)*
-- [ ] **Enable A2/A3 guards** — `_ppo_ratio(clip_log_ratio=)` + `_ppo_clip_term(clip_ratio_c=)`
-  now exist (default-off). Decide whether to set them in the RL configs (RLinf uses `clip_ratio_c: 3.0`). *(changes numerics if enabled)*
-- [ ] **Fix the 6 pre-existing failing tests** — 3× `test_online_cotrain_pipeline` (mock
-  doesn't set `self.policy`), 1× `test_online_cotrain_ray_runner` (`_metric_logger`), 2×
-  `test_setup_scripts` (script-curation). Restores a green suite.
+  standard DreamerV3 critic-value bootstrap. Dead param/compute already removed.
+  *Introduced to maintainer; kept as-is (imagined-return boot) — flip to critic-value
+  bootstrap only on request.* *(changes numerics — needs design call)*
 - [ ] **outcome loss normalization** — global mask-sum denominator biases gradient toward
-  long/failed rollouts vs RLinf `masked_mean_ratio`. Decide intended weighting. *(numerics)*
-- [ ] **Verify `ppo_gamma`/`lam` in YAML** — default `ppo_gamma=1.0`; RLinf embodiment uses
-  0.99/0.95. Confirm configs set these deliberately.
-
-## P1 — keep/delete decisions (need your call, then I act)
-
-- [ ] **PRE-02** — delete orphan scripts `pretoken_world_model.py`,
-  `world_model_bi_views_conv_generation.py` (0 refs, ~384 LOC).
-- [ ] **PRE-03** — drop unused `FlexARItemProcessor` (base) + `FlexARItemProcessorActionFast` (test-only).
-- [ ] **MOD-10** — `encoder/oft_action_hidden_encoder.py` placeholder (always raises) — delete or keep as scaffold.
-- [ ] **RUN-14** — `online_dreamervla_multiproc.py` unwired fork — archive/delete/wire.
-- [ ] **DIAG-06** — 16 doc-only diagnostics scripts (4 test-pinned) — archive or prune as a batch.
-- [ ] **MOD-07** — two OFT action-model impls (`official` vs `dreamervla`) — retire one?
-- [ ] **Rename `real_relabel_ppo_loss`** — it's a frozen-old-logprob BC anchor, not PPO; name overstates fidelity.
+  long/failed rollouts vs RLinf `masked_mean_ratio`. *Introduced; kept as-is — open the
+  RLinf-aligned `masked_mean` only on request.* *(numerics)*
+- [ ] **A1 / ALG-03 (entropy-key)** — `outcome.py:192` reads `entropy_coef` only, dropping the
+  `actent` fallback that `dense`/`dense_chunk` use; the `wmpo_outcome` configs expose `actent`,
+  so on the cotrain-default outcome route any `actent` is a silent no-op (entropy → 0). Not
+  biting today (all configs set entropy 0) but a latent landmine — tuning exploration there does
+  nothing. *Fix (cheap, low-risk): read the same `actent`/`entropy_coef` fallback, or rename all
+  three routes to RLinf `entropy_bonus`; needs a maintainer call (intended vs bug).* Siblings
+  A2/A3 (log-ratio clamp + dual-clip) already landed — see the cleanup-execution-log pass 2.
 
 ## P2 — needs migration design (feature, not pure refactor)
 
@@ -64,12 +58,15 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
 
 - [ ] Split god-files: `embodied_eval_runner.py` (2514), `online_dreamervla.main` (1265),
   `algorithms/dreamervla.imagine_actor_critic_step` (834), `pretokenize_dataset.py` (822).
+- [ ] Pixel WMs share the same loss scaffolding as the token WMs (noted by the token-WM
+  unification pass) — a larger follow-on unification, not yet started.
 
 ## P4 — config dedup (low risk; verify resolved config byte-identical)
 
-- [ ] **CFG-04** `configs/task/libero_{goal,object,spatial,10}.yaml` → `_base_libero.yaml` + thin `defaults:`.
 - [ ] **CFG-05** `_base_wmpo_outcome.yaml` for the 2 parallel `*_wmpo_outcome` configs.
-- [ ] **CFG-06** thin `defaults:` for `OpenVLA_Onetraj_*` + rynnvla classifier variants. **CFG-08** task naming snake_case.
+- [ ] **CFG-08** task naming snake_case (`OpenVLA_Onetraj_*`, `RynnVLA_LIBERO` → snake_case;
+  update ~15 `task=` refs + script case-arms + test asserts). *(CFG-06 already done: the
+  `OpenVLA_Onetraj_*` + rynnvla classifier configs are already thin `defaults:`.)*
 
 ## Verification gaps (not yet run)
 
@@ -77,6 +74,10 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
 
 ## Won't-fix / intentional (record only)
 
+**DIAG-06** (16 doc-only diagnostics) and **MOD-07** (`official` OFT action-model) — kept by
+maintainer decision: not zero-import dead code (the diagnostics carry README rows + hygiene
+test pins; `official` is called by `diagnostics/eval_openvla_oft_libero.py`) and they hold
+paper/diagnostic value.
 ALG-02 (return assembly differs by rank/discount), UDA-06/04, MOD-05 (vendored OFT loader),
 HF `register()` triplets (different classes per site), JSONL logging (`JsonLogger` drops
 non-numeric fields — different job), RUN-09 (`build_optimizer` filters `requires_grad`),

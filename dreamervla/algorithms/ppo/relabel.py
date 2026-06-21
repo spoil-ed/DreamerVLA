@@ -22,11 +22,14 @@ _ZERO_METRICS = {
 }
 
 
-def _real_relabel_ppo_loss(
+def _real_relabel_anchor_loss(
     policy: nn.Module,
     real_relabel_batch: Mapping[str, torch.Tensor] | None,
     clip_low: float,
     clip_high: float,
+    *,
+    clip_log_ratio: float | None = None,
+    clip_ratio_c: float | None = None,
 ) -> tuple[torch.Tensor | None, dict[str, float]]:
     if not real_relabel_batch:
         return None, dict(_ZERO_METRICS)
@@ -53,8 +56,10 @@ def _real_relabel_ppo_loss(
     advantage = advantage.to(device=log_prob.device, dtype=log_prob.dtype)
     old_log_prob = old_log_prob.to(device=log_prob.device, dtype=log_prob.dtype)
     weight = weight.to(device=log_prob.device, dtype=log_prob.dtype).clamp_min(0.0)
-    ratio = _ppo_ratio(log_prob, old_log_prob)
-    per_item = _ppo_clip_term(ratio, advantage, clip_low, clip_high)
+    ratio = _ppo_ratio(log_prob, old_log_prob, clip_log_ratio=clip_log_ratio)
+    per_item = _ppo_clip_term(
+        ratio, advantage, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+    )
     denom = weight.sum().clamp_min(1.0)
     loss = (per_item * weight).sum() / denom
     clipfrac = (
@@ -76,4 +81,4 @@ def _real_relabel_ppo_loss(
     return loss, metrics
 
 
-__all__ = ["_real_relabel_ppo_loss"]
+__all__ = ["_real_relabel_anchor_loss"]

@@ -56,7 +56,7 @@ from dreamervla.algorithms.ppo.grpo import (
     _ppo_ratio,
     _repeat_latent,
 )
-from dreamervla.algorithms.ppo.relabel import _real_relabel_ppo_loss
+from dreamervla.algorithms.ppo.relabel import _real_relabel_anchor_loss
 from dreamervla.algorithms.ppo.tdmpc_critic import (
     _sequence_field,
     _tdmpc_action_dim,
@@ -370,11 +370,13 @@ def dino_wmpo_dense_step(
         if bc_ref_losses
         else actor_pg_loss.new_zeros(())
     )
-    real_relabel_loss, real_relabel_metrics = _real_relabel_ppo_loss(
+    real_relabel_loss, real_relabel_metrics = _real_relabel_anchor_loss(
         policy=policy,
         real_relabel_batch=real_relabel_batch,
         clip_low=clip_low,
         clip_high=clip_high,
+        clip_log_ratio=clip_log_ratio,
+        clip_ratio_c=clip_ratio_c,
     )
     if real_relabel_loss is None or real_relabel_scale <= 0.0:
         real_relabel_term = actor_pg_loss.new_zeros(())
@@ -672,11 +674,13 @@ def dino_wmpo_dense_step(
             if bc_ref_losses
             else actor_pg_loss.new_zeros(())
         )
-        real_relabel_loss, real_relabel_metrics = _real_relabel_ppo_loss(
+        real_relabel_loss, real_relabel_metrics = _real_relabel_anchor_loss(
             policy=policy,
             real_relabel_batch=real_relabel_batch,
             clip_low=clip_low,
             clip_high=clip_high,
+            clip_log_ratio=clip_log_ratio,
+            clip_ratio_c=clip_ratio_c,
         )
         if real_relabel_loss is None or real_relabel_scale <= 0.0:
             real_relabel_term = actor_pg_loss.new_zeros(())
