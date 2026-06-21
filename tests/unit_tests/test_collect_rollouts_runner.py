@@ -16,7 +16,7 @@ def test_collect_rollouts_experiment_composes_and_validates():
             config_name="train",
             overrides=[
                 "experiment=collect_rollouts_onetraj",
-                "task=OpenVLA_Onetraj_ColdStart_LIBERO",
+                "task=openvla_onetraj_coldstart_libero",
             ],
         )
     OmegaConf.resolve(cfg)

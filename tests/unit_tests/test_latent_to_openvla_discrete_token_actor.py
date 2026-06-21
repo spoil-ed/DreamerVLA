@@ -77,7 +77,7 @@ def test_backbone_latent_online_route_wires_discrete_actor() -> None:
             config_name="train",
             overrides=[
                 "dreamervla=openvla_oft_input_token_wmpo_outcome",
-                "task=OpenVLA_Onetraj_LIBERO",
+                "task=openvla_onetraj_libero",
             ],
         )
 

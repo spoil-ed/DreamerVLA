@@ -19,7 +19,7 @@
 # predict_next_chunk hidden_seq[:, -1] emits at inference time.
 #
 # Launch:
-#   bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=RynnVLA_LIBERO gpus=4
+#   bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=rynnvla_libero gpus=4
 
 defaults:
   - _self_

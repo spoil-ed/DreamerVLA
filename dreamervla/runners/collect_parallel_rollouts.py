@@ -29,7 +29,7 @@ Image rotation contract (explicit):
 
 Entry point (pure Hydra; torchrun M-rank):
   torchrun --standalone --nproc_per_node=2 -m dreamervla.train \\
-    experiment=collect_rollouts_onetraj task=OpenVLA_Onetraj_ColdStart_LIBERO \\
+    experiment=collect_rollouts_onetraj task=openvla_onetraj_coldstart_libero \\
     collect.task_ids=all collect.episodes_per_task=2 collect.episode_horizon=64
 """
 

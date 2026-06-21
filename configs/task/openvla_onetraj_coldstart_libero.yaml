@@ -1,5 +1,5 @@
 defaults:
-  - OpenVLA_Onetraj_LIBERO
+  - openvla_onetraj_libero
   - _self_
 
 name: OpenVLA_Onetraj_ColdStart_LIBERO

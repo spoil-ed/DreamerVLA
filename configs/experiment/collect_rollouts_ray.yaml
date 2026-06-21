@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - _self_
-  - /task: OpenVLA_Onetraj_ColdStart_LIBERO
+  - /task: openvla_onetraj_coldstart_libero
 
 _target_: dreamervla.runners.ColdStartRayCollectRunner
 mode: oft

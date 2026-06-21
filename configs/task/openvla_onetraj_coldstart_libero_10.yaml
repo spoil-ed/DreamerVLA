@@ -1,15 +1,15 @@
-# Cold-start rollout collection for the libero_spatial one-trajectory OFT VLA.
+# Cold-start rollout collection for the libero_10 one-trajectory OFT VLA.
 # Single source of truth for collection (write) AND discrete-WM consumption (read):
-# suite=libero_spatial bound to ITS OWN traj1 DISCRETE ckpt (single-frame h1, no proprio).
-# Mirrors OpenVLA_Onetraj_ColdStart_LIBERO (goal) for the libero_spatial suite.
+# suite=libero_10 bound to ITS OWN traj1 DISCRETE ckpt (single-frame h1, no proprio).
+# Mirrors OpenVLA_Onetraj_ColdStart_LIBERO (goal) for the libero_10 suite.
 # expected_obs_hidden_source=action_query / expected_prompt_style=vla_policy /
-# expected_rotate_images_180=true are inherited from libero_spatial.
+# expected_rotate_images_180=true are inherited from libero_10.
 defaults:
-  - OpenVLA_Onetraj_LIBERO_Spatial
+  - openvla_onetraj_libero_10
   - _self_
 
-name: OpenVLA_Onetraj_ColdStart_LIBERO_Spatial
-artifact_name: OpenVLA_Onetraj_LIBERO_libero_spatial
+name: OpenVLA_Onetraj_ColdStart_LIBERO_10
+artifact_name: OpenVLA_Onetraj_LIBERO_libero_10
 
 # collected (model-generated) rollouts -> marked root data/collected_rollouts/
 # (not processed_data/, which holds offline-preprocessed demos).

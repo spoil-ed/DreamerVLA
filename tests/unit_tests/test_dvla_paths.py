@@ -44,7 +44,7 @@ def test_coldstart_plan_uses_dvla_root_data_interpolation(tmp_path: Path) -> Non
 
     plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
 
-    assert "task=OpenVLA_Onetraj_ColdStart_LIBERO" in plan.cotrain_cmd
+    assert "task=openvla_onetraj_coldstart_libero" in plan.cotrain_cmd
     assert not any(override.startswith("+policy.init_lm_head_ckpt=") for override in plan.cotrain_cmd)
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -53,7 +53,7 @@ def test_coldstart_plan_uses_dvla_root_data_interpolation(tmp_path: Path) -> Non
             config_name="train",
             overrides=[
                 "experiment=online_cotrain_pipeline_oft_action_hidden",
-                "task=OpenVLA_Onetraj_ColdStart_LIBERO",
+                "task=openvla_onetraj_coldstart_libero",
             ],
         )
     assert cfg.policy.init_lm_head_ckpt == cfg.task.openvla_oft.ckpt_path

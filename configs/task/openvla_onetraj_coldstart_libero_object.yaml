@@ -5,7 +5,7 @@
 # expected_obs_hidden_source=action_query / expected_prompt_style=vla_policy /
 # expected_rotate_images_180=true are inherited from libero_object.
 defaults:
-  - OpenVLA_Onetraj_LIBERO_Object
+  - openvla_onetraj_libero_object
   - _self_
 
 name: OpenVLA_Onetraj_ColdStart_LIBERO_Object

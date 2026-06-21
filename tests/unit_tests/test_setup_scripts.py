@@ -302,7 +302,7 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert 'TASK_NAME="${TASK_NAME:-${TASK}}"' in pretokenize_text
     assert 'ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"' in pretokenize_text
     assert 'ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"' in pretokenize_text
-    assert "RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO" in pretokenize_text
+    assert "rynnvla_libero|openvla_onetraj_libero" in pretokenize_text
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
     assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"' in reward_text
@@ -447,7 +447,7 @@ def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path:
             "bash",
             "scripts/train_wm.sh",
             "experiment=oft_latent_classifier_chunk",
-            "task=OpenVLA_Onetraj_LIBERO",
+            "task=openvla_onetraj_libero",
             f"task.openvla_oft.action_hidden_dir={hidden_dir}",
             "dry_run=true",
         ],
@@ -459,7 +459,7 @@ def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "task=OpenVLA_Onetraj_LIBERO" in result.stdout
+    assert "task=openvla_onetraj_libero" in result.stdout
     assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in result.stdout
 
 

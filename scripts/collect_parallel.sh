@@ -46,10 +46,10 @@ done
 
 # ---- task -> hydra task name (mirrors configs/scripts/coldstart_warmup_cotrain.yaml) ----
 case "$task" in
-  goal)    hydra_task=OpenVLA_Onetraj_ColdStart_LIBERO ;;
-  object)  hydra_task=OpenVLA_Onetraj_ColdStart_LIBERO_Object ;;
-  spatial) hydra_task=OpenVLA_Onetraj_ColdStart_LIBERO_Spatial ;;
-  10)      hydra_task=OpenVLA_Onetraj_ColdStart_LIBERO_10 ;;
+  goal)    hydra_task=openvla_onetraj_coldstart_libero ;;
+  object)  hydra_task=openvla_onetraj_coldstart_libero_object ;;
+  spatial) hydra_task=openvla_onetraj_coldstart_libero_spatial ;;
+  10)      hydra_task=openvla_onetraj_coldstart_libero_10 ;;
   *) echo "[collect_parallel] unknown task '$task' (expected goal|object|spatial|10)" >&2; exit 2 ;;
 esac
 

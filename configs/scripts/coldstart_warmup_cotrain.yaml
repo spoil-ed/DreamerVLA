@@ -64,28 +64,28 @@ control_overrides:
 tasks:
   goal:
     task_id: 0
-    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO
+    hydra_task: openvla_onetraj_coldstart_libero
     suite: libero_goal
     ckpt_name: Openvla-oft-SFT-libero-goal-traj1
     stats_key: libero_goal_no_noops
     ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
   object:
     task_id: 0
-    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_Object
+    hydra_task: openvla_onetraj_coldstart_libero_object
     suite: libero_object
     ckpt_name: Openvla-oft-SFT-libero-object-traj1
     stats_key: libero_object_no_noops
     ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-object-traj1
   spatial:
     task_id: 0
-    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_Spatial
+    hydra_task: openvla_onetraj_coldstart_libero_spatial
     suite: libero_spatial
     ckpt_name: Openvla-oft-SFT-libero-spatial-traj1
     stats_key: libero_spatial_no_noops
     ckpt_path: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
   "10":
     task_id: 0
-    hydra_task: OpenVLA_Onetraj_ColdStart_LIBERO_10
+    hydra_task: openvla_onetraj_coldstart_libero_10
     suite: libero_10
     ckpt_name: Openvla-oft-SFT-libero10-traj1
     stats_key: libero_10_no_noops

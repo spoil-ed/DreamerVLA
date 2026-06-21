@@ -205,7 +205,7 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
     ]
     oft = [
         "experiment=oft_world_model_dinowm_chunk",
-        "task=OpenVLA_Onetraj_LIBERO",
+        "task=openvla_onetraj_libero",
         "worldmodel=openvla_oft_input_token_chunk",
     ]
 
@@ -247,7 +247,7 @@ def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
             config_name="train",
             overrides=[
                 "experiment=online_cotrain_pipeline_oft_action_hidden",
-                "task=OpenVLA_Onetraj_ColdStart_LIBERO",
+                "task=openvla_onetraj_coldstart_libero",
                 f"offline_warmup.data_dir={reward_dir}",
                 f"offline_warmup.hidden_dir={hidden_dir}",
             ],
@@ -278,7 +278,7 @@ def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() 
             config_name="train",
             overrides=[
                 "experiment=online_cotrain_oft_backbone_latent",
-                "task=OpenVLA_Onetraj_LIBERO",
+                "task=openvla_onetraj_libero",
             ],
         )
 

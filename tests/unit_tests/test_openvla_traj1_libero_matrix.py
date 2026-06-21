@@ -7,18 +7,18 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 MATRIX = [
-    ("OpenVLA_Onetraj_LIBERO", "OpenVLA_Onetraj_ColdStart_LIBERO", "libero_goal"),
+    ("openvla_onetraj_libero", "openvla_onetraj_coldstart_libero", "libero_goal"),
     (
-        "OpenVLA_Onetraj_LIBERO_Object",
-        "OpenVLA_Onetraj_ColdStart_LIBERO_Object",
+        "openvla_onetraj_libero_object",
+        "openvla_onetraj_coldstart_libero_object",
         "libero_object",
     ),
     (
-        "OpenVLA_Onetraj_LIBERO_Spatial",
-        "OpenVLA_Onetraj_ColdStart_LIBERO_Spatial",
+        "openvla_onetraj_libero_spatial",
+        "openvla_onetraj_coldstart_libero_spatial",
         "libero_spatial",
     ),
-    ("OpenVLA_Onetraj_LIBERO_10", "OpenVLA_Onetraj_ColdStart_LIBERO_10", "libero_10"),
+    ("openvla_onetraj_libero_10", "openvla_onetraj_coldstart_libero_10", "libero_10"),
 ]
 
 

@@ -10,7 +10,7 @@
 
 defaults:
   - online_cotrain_oft_action_hidden
-  - override /task: OpenVLA_Onetraj_LIBERO
+  - override /task: openvla_onetraj_libero
   - _self_
 
 latent_type: backbone_latent

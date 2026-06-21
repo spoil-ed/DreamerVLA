@@ -17,28 +17,28 @@ from dreamervla.config import validate_cfg
 # (task name, ckpt dir suffix, unnorm key, suite, artifact substring)
 SUITES = [
     (
-        "OpenVLA_Onetraj_ColdStart_LIBERO",
+        "openvla_onetraj_coldstart_libero",
         "Openvla-oft-SFT-libero-goal-traj1",
         "libero_goal_no_noops",
         "libero_goal",
         "OpenVLA_Onetraj_LIBERO_libero_goal",
     ),
     (
-        "OpenVLA_Onetraj_ColdStart_LIBERO_10",
+        "openvla_onetraj_coldstart_libero_10",
         "Openvla-oft-SFT-libero10-traj1",
         "libero_10_no_noops",
         "libero_10",
         "OpenVLA_Onetraj_LIBERO_libero_10",
     ),
     (
-        "OpenVLA_Onetraj_ColdStart_LIBERO_Object",
+        "openvla_onetraj_coldstart_libero_object",
         "Openvla-oft-SFT-libero-object-traj1",
         "libero_object_no_noops",
         "libero_object",
         "OpenVLA_Onetraj_LIBERO_libero_object",
     ),
     (
-        "OpenVLA_Onetraj_ColdStart_LIBERO_Spatial",
+        "openvla_onetraj_coldstart_libero_spatial",
         "Openvla-oft-SFT-libero-spatial-traj1",
         "libero_spatial_no_noops",
         "libero_spatial",

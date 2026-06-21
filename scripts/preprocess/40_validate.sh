@@ -10,7 +10,7 @@ LIBERO_SUITE="${LIBERO_SUITE:-${TASK}}"
 TASK_NAME="${TASK_NAME:-${TASK}}"
 if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
   case "${TASK_NAME}" in
-    RynnVLA_LIBERO|OpenVLA_Onetraj_LIBERO) LIBERO_SUITE="libero_goal" ;;
+    rynnvla_libero|openvla_onetraj_libero) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
 ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
