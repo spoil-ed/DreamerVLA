@@ -12,7 +12,6 @@ from typing import Any
 import hydra
 import numpy as np
 import torch
-import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
@@ -513,6 +512,9 @@ class PretokenizeVLARunner(BaseRunner):
                     )
                 total_episodes += 1
                 self.console_record_success(bool(done))
+                self.console_progress(
+                    total_episodes, len(task_ids) * num_episodes, "eval"
+                )
                 ep_dt = time.time() - ep_t0
                 tag = "OK " if done else "FAIL"
                 # Reclaim any per-episode GPU/CPU memory leaked by the
@@ -800,106 +802,101 @@ class PretokenizeVLARunner(BaseRunner):
                     train_vla_action_losses: list[float] = []
 
                     self.encoder.train()
-                    with tqdm.tqdm(
-                        train_dataloader,
-                        desc=f"Training epoch {self.epoch}",
-                        disable=not self.distributed.is_main_process,
-                        leave=False,
-                        mininterval=cfg.training.tqdm_interval_sec,
-                    ) as tepoch:
-                        for batch_idx, batch in enumerate(tepoch):
-                            has_tokenized = isinstance(
-                                batch.get("input_ids"), list
-                            ) and isinstance(batch.get("labels"), list)
-                            if not has_tokenized:
-                                continue
+                    for batch_idx, batch in enumerate(train_dataloader):
+                        has_tokenized = isinstance(
+                            batch.get("input_ids"), list
+                        ) and isinstance(batch.get("labels"), list)
+                        if not has_tokenized:
+                            continue
 
-                            vla_loss_dict = (
-                                self.encoder.compute_action_sft_loss_from_tokenized(
-                                    input_ids_list=batch["input_ids"],
-                                    labels_list=batch["labels"],
-                                    token_loss_coef=float(
-                                        OmegaConf.select(
-                                            cfg,
-                                            "training.vla_token_loss_coef",
-                                            default=1.0,
-                                        )
-                                    ),
-                                    action_loss_coef=float(
-                                        OmegaConf.select(
-                                            cfg,
-                                            "training.vla_action_loss_coef",
-                                            default=1.0,
-                                        )
-                                    ),
-                                )
-                            )
-                            vla_raw_loss = vla_loss_dict["loss"]
-                            vla_loss = (
-                                vla_raw_loss / cfg.training.gradient_accumulate_every
-                            )
-                            vla_loss.backward()
-
-                            grad_clip_norm = cfg.optim.get("grad_clip_norm")
-                            if grad_clip_norm is not None:
-                                self.distributed.clip_grad_norm(
-                                    self.encoder.backbone, float(grad_clip_norm)
-                                )
-
-                            self.vla_optimizer.step()
-                            self.vla_optimizer.zero_grad(
-                                set_to_none=bool(
-                                    cfg.optim.get("zero_grad_set_to_none", True)
-                                )
-                            )
-                            lr_scheduler.step()
-
-                            # update ema
-                            if self.vla_ema is not None:
-                                self.vla_ema.step(self.encoder)
-
-                            train_vla_losses.append(float(vla_raw_loss.item()))
-                            train_vla_token_losses.append(
-                                float(vla_loss_dict["token_loss"].item())
-                            )
-                            train_vla_action_losses.append(
-                                float(vla_loss_dict["action_loss"].item())
-                            )
-
-                            local_step_metrics = {
-                                "train_vla_loss": float(vla_raw_loss.item()),
-                                "train_vla_token_loss": float(
-                                    vla_loss_dict["token_loss"].item()
+                        vla_loss_dict = (
+                            self.encoder.compute_action_sft_loss_from_tokenized(
+                                input_ids_list=batch["input_ids"],
+                                labels_list=batch["labels"],
+                                token_loss_coef=float(
+                                    OmegaConf.select(
+                                        cfg,
+                                        "training.vla_token_loss_coef",
+                                        default=1.0,
+                                    )
                                 ),
-                                "train_vla_action_loss": float(
-                                    vla_loss_dict["action_loss"].item()
+                                action_loss_coef=float(
+                                    OmegaConf.select(
+                                        cfg,
+                                        "training.vla_action_loss_coef",
+                                        default=1.0,
+                                    )
                                 ),
-                                "lr": float(lr_scheduler.get_last_lr()[0]),
-                            }
-                            reduced = self.distributed.reduce_mean_dict(
-                                local_step_metrics
                             )
-                            step_log = {
-                                **reduced,
-                                "global_step": self.global_step,
-                                "epoch": self.epoch,
-                            }
-                            tepoch.set_postfix(
-                                refresh=False, vla=float(step_log["train_vla_loss"])
+                        )
+                        vla_raw_loss = vla_loss_dict["loss"]
+                        vla_loss = (
+                            vla_raw_loss / cfg.training.gradient_accumulate_every
+                        )
+                        vla_loss.backward()
+
+                        grad_clip_norm = cfg.optim.get("grad_clip_norm")
+                        if grad_clip_norm is not None:
+                            self.distributed.clip_grad_norm(
+                                self.encoder.backbone, float(grad_clip_norm)
                             )
 
-                            is_last_batch = batch_idx == (len(train_dataloader) - 1)
-                            if not is_last_batch:
-                                train_json_logger.log(step_log)
-                                self.log_metrics(step_log, step=self.global_step)
-                                self.global_step += 1
+                        self.vla_optimizer.step()
+                        self.vla_optimizer.zero_grad(
+                            set_to_none=bool(
+                                cfg.optim.get("zero_grad_set_to_none", True)
+                            )
+                        )
+                        lr_scheduler.step()
 
-                            if (
-                                cfg.training.max_train_steps is not None
-                                and batch_idx >= (cfg.training.max_train_steps - 1)
-                            ):
-                                reached_max_steps = True
-                                break
+                        # update ema
+                        if self.vla_ema is not None:
+                            self.vla_ema.step(self.encoder)
+
+                        train_vla_losses.append(float(vla_raw_loss.item()))
+                        train_vla_token_losses.append(
+                            float(vla_loss_dict["token_loss"].item())
+                        )
+                        train_vla_action_losses.append(
+                            float(vla_loss_dict["action_loss"].item())
+                        )
+
+                        local_step_metrics = {
+                            "train_vla_loss": float(vla_raw_loss.item()),
+                            "train_vla_token_loss": float(
+                                vla_loss_dict["token_loss"].item()
+                            ),
+                            "train_vla_action_loss": float(
+                                vla_loss_dict["action_loss"].item()
+                            ),
+                            "lr": float(lr_scheduler.get_last_lr()[0]),
+                        }
+                        reduced = self.distributed.reduce_mean_dict(
+                            local_step_metrics
+                        )
+                        step_log = {
+                            **reduced,
+                            "global_step": self.global_step,
+                            "epoch": self.epoch,
+                        }
+                        self.console_progress(
+                            int(self.global_step),
+                            len(train_dataloader) * num_epochs,
+                            "train",
+                        )
+
+                        is_last_batch = batch_idx == (len(train_dataloader) - 1)
+                        if not is_last_batch:
+                            train_json_logger.log(step_log)
+                            self.log_metrics(step_log, step=self.global_step)
+                            self.global_step += 1
+
+                        if (
+                            cfg.training.max_train_steps is not None
+                            and batch_idx >= (cfg.training.max_train_steps - 1)
+                        ):
+                            reached_max_steps = True
+                            break
 
                     if not train_vla_losses:
                         self.global_step += 1

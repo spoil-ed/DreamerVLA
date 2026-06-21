@@ -34,6 +34,7 @@ from pathlib import Path
 
 # Single source of truth for the gripper post-process, shared with the collectors.
 from dreamervla.runners.oft_collect_common import process_action
+from dreamervla.utils.progress import ProgressReporter
 
 
 def policy_obs_from_env(obs: dict) -> dict:
@@ -111,26 +112,30 @@ def main() -> int:
     total = 0
     succ = 0
     per_task: dict[int, float] = {}
-    for tid in task_ids:
-        env = LIBERODreamerEnv(
-            task_suite_name=args.suite,
-            task_id=tid,
-            resolution=256,
-            warmup_steps=args.num_steps_wait,
-            seed=args.seed,
-        )
-        t_succ = 0
-        for trial in range(args.num_trials):
-            s = run_episode(policy, env, episode_id=trial)
-            t_succ += int(s)
-            total += 1
-            succ += int(s)
-            print(
-                f"[task {tid} trial {trial}] success={s}  running={succ}/{total}",
-                flush=True,
+    with ProgressReporter(
+        len(task_ids) * args.num_trials, "rollout", unit="ep"
+    ) as pbar:
+        for tid in task_ids:
+            env = LIBERODreamerEnv(
+                task_suite_name=args.suite,
+                task_id=tid,
+                resolution=256,
+                warmup_steps=args.num_steps_wait,
+                seed=args.seed,
             )
-        env.close()
-        per_task[tid] = t_succ / max(1, args.num_trials)
+            t_succ = 0
+            for trial in range(args.num_trials):
+                s = run_episode(policy, env, episode_id=trial)
+                t_succ += int(s)
+                total += 1
+                succ += int(s)
+                pbar.set(total)
+                print(
+                    f"[task {tid} trial {trial}] success={s}  running={succ}/{total}",
+                    flush=True,
+                )
+            env.close()
+            per_task[tid] = t_succ / max(1, args.num_trials)
 
     print("=== RLINF-ALIGNED ROLLOUT SUMMARY ===", flush=True)
     print(f"suite={args.suite}  unnorm_key={args.unnorm_key}", flush=True)

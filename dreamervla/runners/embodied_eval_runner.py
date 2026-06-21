@@ -2100,6 +2100,9 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
                     )
                 total_episodes += 1
                 self.console_record_success(bool(done))
+                self.console_progress(
+                    total_episodes, len(task_ids) * num_episodes, "eval"
+                )
                 if bool(getattr(self, "_real_relabel_enabled", False)):
                     finite_rewards = [
                         float(x) for x in wm_reward_trace if np.isfinite(float(x))

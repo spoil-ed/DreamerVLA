@@ -6,7 +6,6 @@ from typing import Any
 
 import hydra
 import torch
-import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf
 
@@ -137,7 +136,6 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
         num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
         num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
         total_train_steps = max(1, num_epochs * len(dataloader))
-        remaining_train_steps = max(0, num_epochs - self.epoch) * len(dataloader)
         grad_accumulation = int(
             OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1)
         )
@@ -170,15 +168,6 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
             )
         )
         with JsonLogger(log_path) as logger:
-            progress = tqdm.tqdm(
-                total=remaining_train_steps,
-                initial=0,
-                disable=not self.distributed.is_main_process,
-                desc=f"OpenVLA-OFT train ({num_epochs} epochs)",
-                mininterval=float(
-                    OmegaConf.select(cfg, "training.tqdm_interval_sec", default=1.0)
-                ),
-            )
             self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
             while self.epoch < num_epochs:
                 sampler = getattr(dataloader, "sampler", None)
@@ -223,11 +212,10 @@ class OpenVLAOFTTrainingRunner(BaseRunner):
                             "train/lr": float(step_log["lr"]),
                         },
                     )
-                    history.append(step_log)
-                    progress.set_postfix(
-                        refresh=False, loss=float(step_log["train_loss_value"])
+                    self.console_progress(
+                        int(self.global_step), total_train_steps, "train"
                     )
-                    progress.update(1)
+                    history.append(step_log)
 
                     if (
                         self.global_step > 0
