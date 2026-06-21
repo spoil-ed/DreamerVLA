@@ -18,7 +18,7 @@ Use the project Python 3.11 environment. The smoke commands below were
 validated with:
 
 ```bash
-export PYTHON=/home/user01/miniconda3/envs/dreamervla/bin/python
+export PYTHON=~/miniconda3/envs/dreamervla/bin/python
 "${PYTHON}" --version
 ```
 

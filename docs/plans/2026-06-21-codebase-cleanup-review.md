@@ -374,11 +374,11 @@ maintainer keep/delete decision.
   earlier "root scratch files" claim was wrong; the scratch lives under
   `.planning/`.) Fix: `git rm -r --cached .planning/` + add `.planning/` to
   `.gitignore`.
-- **CFG-02 [HARDCODE/test-gap][med]** The `.planning/**` drafts (and
-  `docs/ray_online_cotrain_backend.md`) embed machine-local `/mnt/data/spoil/...`
-  / `/home/user01` paths that `test_active_files_do_not_pin_machine_local_roots`
-  misses (`.planning/` is skipped via `skip_parts`). Untracking `.planning/`
-  (CFG-01) removes the leak.
+- **CFG-02 [HARDCODE/test-gap][med]** Some tracked docs embedded machine-local
+  absolute paths (rooted at `mnt`/`home`) that
+  `test_active_files_do_not_pin_machine_local_roots` flags. Fix: use portable
+  forms (`~`, `$CONDA_PREFIX`); untracking `.planning/` (CFG-01) removes the
+  per-session drafts that carried the rest.
 - **CFG-03 [DEAD][high]** `models/chameleon_model/` (see MOD-01) — same item from
   the config/hygiene side; delete + repoint `test_repository_hygiene.py:380`.
 - **CFG-04 [DUP][high]** `configs/task/libero_{goal,object,spatial,10}.yaml` — 4
