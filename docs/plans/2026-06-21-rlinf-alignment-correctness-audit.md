@@ -1,8 +1,8 @@
 # RLinf-alignment correctness audit (DreamerVLA vs RLinf)
 
 Date: 2026-06-21
-Reference: `/mnt/data/spoil/workspace/RLinf` (upstream RLinf, treated as the
-"correct" PPO implementation DreamerVLA aligns with).
+Reference: the upstream `RLinf` repo (workspace sibling), treated as the
+"correct" PPO implementation DreamerVLA aligns with.
 Method: 3 read-only comparison passes (PPO loss, advantages/returns, the
 actor-critic update loop) against RLinf, each finding cross-checked by hand
 before listing. **No code was changed by this audit.**
