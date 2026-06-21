@@ -28,7 +28,17 @@ def resolve_hf_checkpoint_dir(path: str | Path) -> Path:
     """Resolve a Hugging Face checkpoint directory, including one nested level."""
     candidate = Path(path).expanduser().resolve()
     if candidate.is_file():
-        candidate = candidate.parent
+        # A file is an HF checkpoint only if it lives directly inside an HF dir
+        # (e.g. .../latest_hf/model.safetensors). A torch resume artifact such as
+        # checkpoints/latest.ckpt must NOT be classified as HF just because sibling
+        # HF sidecar dirs (latest_hf_policy/, ...) share its parent — so do not scan
+        # the parent's subdirs for a file input.
+        parent = candidate.parent
+        if _is_hf_dir(parent):
+            return parent
+        raise FileNotFoundError(
+            f"Unable to locate a Hugging Face checkpoint under: {candidate}"
+        )
     if _is_hf_dir(candidate):
         return candidate
     if candidate.is_dir():
@@ -51,15 +61,18 @@ def is_hf_checkpoint(path: str | Path | None) -> bool:
 
 
 def load_runner_payload(path: str | Path, **kwargs: Any) -> dict[str, Any]:
-    """Load the legacy DreamerVLA runner payload from a torch checkpoint file."""
+    """Load the DreamerVLA runner payload from a torch checkpoint file.
+
+    Loads eagerly (no ``mmap``). Resume restores module/optimizer tensors that training
+    then overwrites in place — ``checkpoints/latest.ckpt`` is rewritten every
+    ``checkpoint_every`` updates. An mmap-backed tensor stays a view of that file, so the
+    next overwrite either reads the rewritten bytes (silent optimizer-state corruption) or
+    faults (SIGBUS) on the next access. Eager copies are independent of the on-disk file.
+    """
     kwargs.setdefault("map_location", "cpu")
     kwargs.setdefault("weights_only", False)
-    try:
-        kwargs.setdefault("mmap", True)
-        return torch.load(path, **kwargs)
-    except TypeError:
-        kwargs.pop("mmap", None)
-        return torch.load(path, **kwargs)
+    kwargs.pop("mmap", None)
+    return torch.load(path, **kwargs)
 
 
 def load_hf_prefixed_tensors(
