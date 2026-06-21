@@ -8,7 +8,6 @@ from typing import Any
 import hydra
 import torch
 import torch.nn.functional as F
-import tqdm
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
@@ -415,9 +414,7 @@ class DreamerV3TokenRunner(BaseRunner):
         save_every = int(
             OmegaConf.select(self.cfg, "training.save_every", default=1000)
         )
-        tqdm_interval_sec = float(
-            OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0)
-        )
+        progress_total = max(1, num_epochs * len(loader))
         warmup = int(OmegaConf.select(self.cfg, "optim.warmup", default=1000))
         base_lr = float(OmegaConf.select(self.cfg, "optim.lr", default=4e-5))
         grad_clip = float(OmegaConf.select(self.cfg, "optim.grad_clip", default=100.0))
@@ -432,76 +429,60 @@ class DreamerV3TokenRunner(BaseRunner):
         try:
             while self.epoch < num_epochs:
                 self.epoch += 1
-                with tqdm.tqdm(
-                    loader,
-                    desc=f"Training epoch {self.epoch}",
-                    leave=False,
-                    mininterval=tqdm_interval_sec,
-                ) as tepoch:
-                    for batch in tepoch:
-                        if warmup > 0:
-                            lr_scale = min(
-                                1.0, float(self.global_step + 1) / float(warmup)
-                            )
-                            for group in optimizer.param_groups:
-                                group["lr"] = base_lr * lr_scale
-
-                        batch = _to_device(batch, self.device)
-                        model.train()
-                        with warnings.catch_warnings():
-                            warnings.filterwarnings(
-                                "ignore",
-                                message=r".*Was asked to gather along dimension 0.*",
-                                category=UserWarning,
-                            )
-                            out = model(batch)
-                        loss = out["_loss"].mean()
-                        optimizer.zero_grad(set_to_none=True)
-                        loss.backward()
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), grad_clip
+                for batch in loader:
+                    if warmup > 0:
+                        lr_scale = min(
+                            1.0, float(self.global_step + 1) / float(warmup)
                         )
-                        optimizer.step()
+                        for group in optimizer.param_groups:
+                            group["lr"] = base_lr * lr_scale
 
-                        row = {
-                            "global_step": self.global_step,
-                            "epoch": self.epoch,
-                            "lr": float(optimizer.param_groups[0]["lr"]),
-                            "grad_norm": float(grad_norm),
-                            **{
-                                k: float(v.detach().float().mean().cpu())
-                                for k, v in out.items()
-                                if k != "_loss"
-                            },
-                        }
-                        tepoch.set_postfix(
-                            refresh=False,
-                            step=f"{self.global_step}",
-                            wm=float(row["loss"]),
-                            rec=float(row["rec_loss"]),
-                            ce=float(row["token_ce"]),
-                            acc=float(row["token_acc"]),
-                            dyn=float(row["dyn_loss"]),
-                            rep=float(row["rep_loss"]),
-                            uniq=float(row["pred_unique_tokens"]),
+                    batch = _to_device(batch, self.device)
+                    model.train()
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=r".*Was asked to gather along dimension 0.*",
+                            category=UserWarning,
                         )
-                        if log_every > 0 and self.global_step % log_every == 0:
-                            log_handle.write(json.dumps(row) + "\n")
-                            log_handle.flush()
-                            self.log_metrics(row, step=self.global_step)
-                            self.console_metrics(f"train · epoch {self.epoch}", {f"train/{k}": v for k, v in row.items()})
+                        out = model(batch)
+                    loss = out["_loss"].mean()
+                    optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), grad_clip
+                    )
+                    optimizer.step()
 
-                        self._maybe_save_viz(model_core, batch)
+                    row = {
+                        "global_step": self.global_step,
+                        "epoch": self.epoch,
+                        "lr": float(optimizer.param_groups[0]["lr"]),
+                        "grad_norm": float(grad_norm),
+                        **{
+                            k: float(v.detach().float().mean().cpu())
+                            for k, v in out.items()
+                            if k != "_loss"
+                        },
+                    }
+                    self.console_progress(self.global_step, progress_total, "train")
+                    if log_every > 0 and self.global_step % log_every == 0:
+                        log_handle.write(json.dumps(row) + "\n")
+                        log_handle.flush()
+                        self.log_metrics(row, step=self.global_step)
+                        self.console_metrics(f"train · epoch {self.epoch}", {f"train/{k}": v for k, v in row.items()})
 
-                        if (
-                            save_every > 0
-                            and self.global_step > 0
-                            and self.global_step % save_every == 0
-                        ):
-                            self._save_ckpt(
-                                model_core, optimizer, self.ckpt_dir / "latest.ckpt"
-                        )
-                        self.global_step += 1
+                    self._maybe_save_viz(model_core, batch)
+
+                    if (
+                        save_every > 0
+                        and self.global_step > 0
+                        and self.global_step % save_every == 0
+                    ):
+                        self._save_ckpt(
+                            model_core, optimizer, self.ckpt_dir / "latest.ckpt"
+                    )
+                    self.global_step += 1
         finally:
             log_handle.close()
 

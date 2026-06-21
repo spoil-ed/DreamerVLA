@@ -18,7 +18,6 @@ from typing import Any
 
 import hydra
 import torch
-import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
@@ -447,6 +446,11 @@ class ChameleonLatentActionWMRunner(BaseRunner):
             getattr(self, "log_filename", "chameleon_latent_wm_logs.json.txt")
         )
         log_path = os.path.join(self.output_dir, log_name)
+        progress_total = max(
+            1,
+            (len(train_dataloader) * num_epochs)
+            // int(cfg.training.gradient_accumulate_every),
+        )
         self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         try:
             with self.distributed.logger_context(log_path) as logger:
@@ -463,125 +467,97 @@ class ChameleonLatentActionWMRunner(BaseRunner):
                     self.world_model_optimizer.zero_grad(
                         set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
                     )
-                    with tqdm.tqdm(
-                        train_dataloader,
-                        desc=f"Training epoch {self.epoch}",
-                        disable=not self.distributed.is_main_process,
-                        leave=False,
-                        mininterval=float(
-                            OmegaConf.select(
-                                cfg, "training.tqdm_interval_sec", default=1.0
-                            )
-                        ),
-                    ) as tepoch:
-                        for batch_idx, batch in enumerate(tepoch):
-                            wm_batch = self._build_world_model_batch(batch)
-                            if wm_batch is None:
-                                continue
-                            out = self.world_model(wm_batch)
-                            raw_loss = out["loss"]
-                            loss = raw_loss / accum_steps
-                            loss.backward()
-                            micro_batches += 1
+                    for batch_idx, batch in enumerate(train_dataloader):
+                        wm_batch = self._build_world_model_batch(batch)
+                        if wm_batch is None:
+                            continue
+                        out = self.world_model(wm_batch)
+                        raw_loss = out["loss"]
+                        loss = raw_loss / accum_steps
+                        loss.backward()
+                        micro_batches += 1
 
-                            reached_max_steps = (
-                                cfg.training.max_train_steps is not None
-                                and batch_idx >= (int(cfg.training.max_train_steps) - 1)
-                            )
-                            do_optimizer_step = (
-                                micro_batches % accum_steps
-                            ) == 0 or reached_max_steps
-                            if do_optimizer_step:
-                                grad_clip_norm = cfg.optim.get("grad_clip_norm")
-                                if grad_clip_norm is not None:
-                                    grad_norm = self.distributed.clip_grad_norm(
-                                        self.world_model, float(grad_clip_norm)
-                                    )
-                                else:
-                                    grad_norm = float("nan")
-                                self.world_model_optimizer.step()
-                                self.world_model_optimizer.zero_grad(
-                                    set_to_none=bool(
-                                        cfg.optim.get("zero_grad_set_to_none", True)
-                                    )
+                        reached_max_steps = (
+                            cfg.training.max_train_steps is not None
+                            and batch_idx >= (int(cfg.training.max_train_steps) - 1)
+                        )
+                        do_optimizer_step = (
+                            micro_batches % accum_steps
+                        ) == 0 or reached_max_steps
+                        if do_optimizer_step:
+                            grad_clip_norm = cfg.optim.get("grad_clip_norm")
+                            if grad_clip_norm is not None:
+                                grad_norm = self.distributed.clip_grad_norm(
+                                    self.world_model, float(grad_clip_norm)
                                 )
-                                lr_scheduler.step()
                             else:
                                 grad_norm = float("nan")
-
-                            local_metrics: dict[str, float] = {}
-                            for key, value in out.items():
-                                if key == "_loss":
-                                    continue
-                                if isinstance(value, torch.Tensor) and value.ndim == 0:
-                                    local_metrics[f"train_{key}"] = float(value.item())
-                                    epoch_metrics.setdefault(key, []).append(
-                                        float(value.item())
-                                    )
-                            diag_every = int(
-                                OmegaConf.select(
-                                    cfg,
-                                    "diagnostics.action_sensitivity_every",
-                                    default=100,
+                            self.world_model_optimizer.step()
+                            self.world_model_optimizer.zero_grad(
+                                set_to_none=bool(
+                                    cfg.optim.get("zero_grad_set_to_none", True)
                                 )
                             )
-                            if diag_every > 0 and (batch_idx % diag_every) == 0:
-                                diag_fn = getattr(
-                                    self.distributed.unwrap_module(self.world_model),
-                                    "action_sensitivity_metrics",
-                                    None,
+                            lr_scheduler.step()
+                        else:
+                            grad_norm = float("nan")
+
+                        local_metrics: dict[str, float] = {}
+                        for key, value in out.items():
+                            if key == "_loss":
+                                continue
+                            if isinstance(value, torch.Tensor) and value.ndim == 0:
+                                local_metrics[f"train_{key}"] = float(value.item())
+                                epoch_metrics.setdefault(key, []).append(
+                                    float(value.item())
                                 )
-                                if callable(diag_fn):
-                                    diag = diag_fn(wm_batch)
-                                    for key, value in diag.items():
-                                        if (
-                                            isinstance(value, torch.Tensor)
-                                            and value.ndim == 0
-                                        ):
-                                            local_metrics[f"train_{key}"] = float(
-                                                value.item()
-                                            )
-                            if math.isfinite(float(grad_norm)):
-                                local_metrics["train_grad_norm"] = float(grad_norm)
-                            local_metrics["lr"] = float(lr_scheduler.get_last_lr()[0])
-                            local_metrics["optimizer_step"] = float(do_optimizer_step)
-                            reduced = self.distributed.reduce_mean_dict(local_metrics)
-                            step_log = {
-                                **reduced,
-                                "global_step": self.global_step,
-                                "epoch": self.epoch,
-                            }
-                            if (
-                                do_optimizer_step
-                                and log_every > 0
-                                and (self.global_step % log_every) == 0
-                            ):
-                                logger.log(step_log)
-                                self.log_metrics(step_log, step=self.global_step)
-                            postfix: dict[str, float] = {}
-                            for name, keys in (
-                                ("loss", ("train_loss",)),
-                                ("rec", ("train_rec_loss",)),
-                                (
-                                    "mse",
-                                    (
-                                        "train_image_mse",
-                                        "train_mse_loss",
-                                        "train_latent_mse_loss",
-                                    ),
-                                ),
-                                ("psnr", ("train_image_psnr",)),
-                                ("flow", ("train_flow_loss",)),
-                                ("cos", ("train_pred_target_cos",)),
-                            ):
-                                value = self._first_finite_metric(step_log, *keys)
-                                if value is not None:
-                                    postfix[name] = value
-                            tepoch.set_postfix(postfix, refresh=False)
-                            if do_optimizer_step:
-                                self.global_step += 1
-                            if reached_max_steps:
-                                break
+                        diag_every = int(
+                            OmegaConf.select(
+                                cfg,
+                                "diagnostics.action_sensitivity_every",
+                                default=100,
+                            )
+                        )
+                        if diag_every > 0 and (batch_idx % diag_every) == 0:
+                            diag_fn = getattr(
+                                self.distributed.unwrap_module(self.world_model),
+                                "action_sensitivity_metrics",
+                                None,
+                            )
+                            if callable(diag_fn):
+                                diag = diag_fn(wm_batch)
+                                for key, value in diag.items():
+                                    if (
+                                        isinstance(value, torch.Tensor)
+                                        and value.ndim == 0
+                                    ):
+                                        local_metrics[f"train_{key}"] = float(
+                                            value.item()
+                                        )
+                        if math.isfinite(float(grad_norm)):
+                            local_metrics["train_grad_norm"] = float(grad_norm)
+                        local_metrics["lr"] = float(lr_scheduler.get_last_lr()[0])
+                        local_metrics["optimizer_step"] = float(do_optimizer_step)
+                        reduced = self.distributed.reduce_mean_dict(local_metrics)
+                        step_log = {
+                            **reduced,
+                            "global_step": self.global_step,
+                            "epoch": self.epoch,
+                        }
+                        if (
+                            do_optimizer_step
+                            and log_every > 0
+                            and (self.global_step % log_every) == 0
+                        ):
+                            logger.log(step_log)
+                            self.log_metrics(step_log, step=self.global_step)
+                        self.console_progress(
+                            self.global_step, progress_total, "train"
+                        )
+                        if do_optimizer_step:
+                            self.global_step += 1
+                        if reached_max_steps:
+                            break
 
                     if not epoch_metrics:
                         self.epoch += 1

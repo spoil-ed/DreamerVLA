@@ -17,7 +17,7 @@ class BackboneDreamerV3WMRunner(DreamerV3PixelRunner):
     """Pixel DreamerV3 trainer with only the observation encoder replaced.
 
     The training loop, optimizer, checkpoint format, visualizer cadence, and
-    tqdm postfix are inherited from ``DreamerV3PixelRunner``.  This runner
+    progress line are inherited from ``DreamerV3PixelRunner``.  This runner
     only prepares ``obs_embedding`` by running frozen RynnVLA-002 on the pixel
     observations before the normal DreamerV3 world-model forward pass.
     """

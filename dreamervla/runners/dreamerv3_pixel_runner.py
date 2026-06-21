@@ -9,7 +9,6 @@ from typing import Any
 import hydra
 import torch
 import torch.distributed as dist
-import tqdm
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
@@ -427,17 +426,6 @@ class DreamerV3PixelRunner(BaseRunner):
             for key, value in zip(keys, values.detach().cpu().tolist(), strict=True)
         }
 
-    def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:
-        return {
-            "step": f"{self.global_step}/{max_steps}",
-            "wm": float(row["loss"]),
-            "rec": float(row.get("rec_loss", 0.0)),
-            "dyn": float(row.get("dyn_loss", 0.0)),
-            "rep": float(row.get("rep_loss", 0.0)),
-            "mse": float(row.get("image_mse", 0.0)),
-            "psnr": float(row.get("image_psnr", 0.0)),
-        }
-
     def run(self) -> None:
         if self.is_main_process:
             self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -508,9 +496,6 @@ class DreamerV3PixelRunner(BaseRunner):
         save_every = int(
             OmegaConf.select(self.cfg, "training.save_every", default=1000)
         )
-        tqdm_interval_sec = float(
-            OmegaConf.select(self.cfg, "training.tqdm_interval_sec", default=1.0)
-        )
         warmup = int(OmegaConf.select(self.cfg, "optim.warmup", default=1000))
         base_lr = float(OmegaConf.select(self.cfg, "optim.lr", default=4e-5))
         grad_clip = float(OmegaConf.select(self.cfg, "optim.grad_clip", default=100.0))
@@ -528,78 +513,69 @@ class DreamerV3PixelRunner(BaseRunner):
                 self.epoch += 1
                 if sampler is not None:
                     sampler.set_epoch(self.epoch)
-                with tqdm.tqdm(
-                    loader,
-                    desc=f"Training epoch {self.epoch}",
-                    disable=not self.is_main_process,
-                    leave=False,
-                    mininterval=tqdm_interval_sec,
-                ) as tepoch:
-                    for batch in tepoch:
-                        if warmup > 0:
-                            lr_scale = min(
-                                1.0, float(self.global_step + 1) / float(warmup)
-                            )
-                            for group in optimizer.param_groups:
-                                group["lr"] = base_lr * lr_scale
-
-                        if self._move_batch_to_device_before_prepare():
-                            batch = _to_device(batch, self.device)
-                        batch = self._prepare_batch_for_model(batch, model_core)
-                        model.train()
-                        with warnings.catch_warnings():
-                            warnings.filterwarnings(
-                                "ignore",
-                                message=r".*Was asked to gather along dimension 0.*",
-                                category=UserWarning,
-                            )
-                            out = model(batch)
-                        loss = out["_loss"].mean()
-                        optimizer.zero_grad(set_to_none=True)
-                        loss.backward()
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), grad_clip
+                for batch in loader:
+                    if warmup > 0:
+                        lr_scale = min(
+                            1.0, float(self.global_step + 1) / float(warmup)
                         )
-                        optimizer.step()
+                        for group in optimizer.param_groups:
+                            group["lr"] = base_lr * lr_scale
 
-                        row = {
-                            "global_step": self.global_step,
-                            "epoch": self.epoch,
-                            "lr": float(optimizer.param_groups[0]["lr"]),
-                            "grad_norm": float(grad_norm),
-                            **self._reduce_metrics(
-                                {
-                                    k: float(v.detach().float().mean().cpu())
-                                    for k, v in out.items()
-                                    if k != "_loss"
-                                }
-                            ),
-                        }
-                        tepoch.set_postfix(
-                            self._progress_postfix(row, total_steps), refresh=False
+                    if self._move_batch_to_device_before_prepare():
+                        batch = _to_device(batch, self.device)
+                    batch = self._prepare_batch_for_model(batch, model_core)
+                    model.train()
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=r".*Was asked to gather along dimension 0.*",
+                            category=UserWarning,
                         )
-                        if (
-                            self.is_main_process
-                            and log_handle is not None
-                            and log_every > 0
-                            and self.global_step % log_every == 0
-                        ):
-                            log_handle.write(json.dumps(row) + "\n")
-                            log_handle.flush()
-                            self.log_metrics(row, step=self.global_step)
-                            self.console_metrics(f"train · epoch {self.epoch}", {f"train/{k}": v for k, v in row.items()})
+                        out = model(batch)
+                    loss = out["_loss"].mean()
+                    optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), grad_clip
+                    )
+                    optimizer.step()
 
-                        self._maybe_save_viz(model_core, batch)
+                    row = {
+                        "global_step": self.global_step,
+                        "epoch": self.epoch,
+                        "lr": float(optimizer.param_groups[0]["lr"]),
+                        "grad_norm": float(grad_norm),
+                        **self._reduce_metrics(
+                            {
+                                k: float(v.detach().float().mean().cpu())
+                                for k, v in out.items()
+                                if k != "_loss"
+                            }
+                        ),
+                    }
+                    self.console_progress(self.global_step, total_steps, "train")
+                    if (
+                        self.is_main_process
+                        and log_handle is not None
+                        and log_every > 0
+                        and self.global_step % log_every == 0
+                    ):
+                        log_handle.write(json.dumps(row) + "\n")
+                        log_handle.flush()
+                        self.log_metrics(row, step=self.global_step)
+                        self.console_metrics(f"train · epoch {self.epoch}", {f"train/{k}": v for k, v in row.items()})
 
-                        if (
-                            save_every > 0
-                            and self.global_step > 0
-                            and self.global_step % save_every == 0
-                        ):
-                            self._save_ckpt(
-                                model_core, optimizer, self.ckpt_dir / "latest.ckpt"
-                            )
-                        self.global_step += 1
+                    self._maybe_save_viz(model_core, batch)
+
+                    if (
+                        save_every > 0
+                        and self.global_step > 0
+                        and self.global_step % save_every == 0
+                    ):
+                        self._save_ckpt(
+                            model_core, optimizer, self.ckpt_dir / "latest.ckpt"
+                        )
+                    self.global_step += 1
         finally:
             if log_handle is not None:
                 log_handle.close()

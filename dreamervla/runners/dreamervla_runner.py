@@ -30,7 +30,6 @@ from typing import Any
 import hydra
 import torch
 import torch.nn.functional as F
-import tqdm
 from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
@@ -1677,6 +1676,7 @@ class DreamerVLARunner(BaseRunner):
 
         train_log_path = os.path.join(self.output_dir, "dreamervla_logs.json.txt")
         train_logger_cm = self.distributed.logger_context(train_log_path)
+        progress_total = max(1, num_epochs * len(train_dataloader))
 
         try:
             with train_logger_cm as train_json_logger:
@@ -1693,330 +1693,315 @@ class DreamerVLARunner(BaseRunner):
                     epoch_rewards: list[float] = []
                     epoch_scales: list[float] = []
 
-                    with tqdm.tqdm(
-                        train_dataloader,
-                        desc=f"Epoch {self.epoch}",
-                        disable=not self.distributed.is_main_process,
-                        leave=False,
-                        mininterval=cfg.training.tqdm_interval_sec,
-                    ) as tepoch:
-                        for batch_idx, batch in enumerate(tepoch):
-                            local_metrics: dict[str, float] = {}
-                            step_had_update = False
+                    for batch_idx, batch in enumerate(train_dataloader):
+                        local_metrics: dict[str, float] = {}
+                        step_had_update = False
 
-                            # Phase 1 — world-model pretraining
-                            if run_wm_phase:
-                                wm_batch = self._build_wm_pretrain_batch(batch)
-                                if wm_batch is not None:
-                                    self.world_model.train()
-                                    self.policy.eval()
-                                    self.critic.eval()
-                                    wm_metrics = world_model_pretrain_step(
+                        # Phase 1 — world-model pretraining
+                        if run_wm_phase:
+                            wm_batch = self._build_wm_pretrain_batch(batch)
+                            if wm_batch is not None:
+                                self.world_model.train()
+                                self.policy.eval()
+                                self.critic.eval()
+                                wm_metrics = world_model_pretrain_step(
+                                    policy=self.policy,
+                                    world_model=self.world_model,
+                                    optimizer=self.world_model_optimizer,
+                                    batch=wm_batch,
+                                    device=self.device,
+                                    optim_cfg=optim_cfg,
+                                )
+                                wm_lr_scheduler.step()
+                                if self.world_model_ema is not None:
+                                    self.world_model_ema.step(self.world_model)
+                                epoch_wm_losses.append(wm_metrics["loss"])
+                                local_metrics["train_wm_loss"] = wm_metrics["loss"]
+                                local_metrics["train_wm_transition_loss"] = (
+                                    wm_metrics["transition_loss"]
+                                )
+                                local_metrics["train_wm_reward_loss"] = wm_metrics[
+                                    "reward_loss"
+                                ]
+                                local_metrics["train_wm_grad_norm"] = wm_metrics[
+                                    "grad_norm"
+                                ]
+                                for name, value in wm_metrics.items():
+                                    if name not in {
+                                        "loss",
+                                        "transition_loss",
+                                        "reward_loss",
+                                        "grad_norm",
+                                    }:
+                                        local_metrics[f"train_wm_{name}"] = value
+                                local_metrics["wm_lr"] = float(
+                                    wm_lr_scheduler.get_last_lr()[0]
+                                )
+                                step_had_update = True
+
+                        # Phase 2 — DreamerV3 actor-critic imagination
+                        if run_ac_phase:
+                            ac_batch = self._build_actor_critic_batch(batch)
+                            if ac_batch is not None:
+                                self.world_model.eval()
+                                if actor_update_kind == "dreamer":
+                                    ac_metrics = imagine_actor_critic_step(
                                         policy=self.policy,
                                         world_model=self.world_model,
-                                        optimizer=self.world_model_optimizer,
-                                        batch=wm_batch,
+                                        critic=self.critic,
+                                        target_critic=self.target_critic,
+                                        actor_optimizer=self.policy_optimizer,
+                                        critic_optimizer=self.critic_optimizer,
+                                        return_tracker=self.return_tracker,
+                                        obs=ac_batch["obs"],
                                         device=self.device,
+                                        algorithm_cfg=algorithm_cfg,
                                         optim_cfg=optim_cfg,
+                                        ref_policy=self.ref_policy,
                                     )
-                                    wm_lr_scheduler.step()
-                                    if self.world_model_ema is not None:
-                                        self.world_model_ema.step(self.world_model)
-                                    epoch_wm_losses.append(wm_metrics["loss"])
-                                    local_metrics["train_wm_loss"] = wm_metrics["loss"]
-                                    local_metrics["train_wm_transition_loss"] = (
-                                        wm_metrics["transition_loss"]
-                                    )
-                                    local_metrics["train_wm_reward_loss"] = wm_metrics[
-                                        "reward_loss"
-                                    ]
-                                    local_metrics["train_wm_grad_norm"] = wm_metrics[
-                                        "grad_norm"
-                                    ]
-                                    for name, value in wm_metrics.items():
-                                        if name not in {
-                                            "loss",
-                                            "transition_loss",
-                                            "reward_loss",
-                                            "grad_norm",
-                                        }:
-                                            local_metrics[f"train_wm_{name}"] = value
-                                    local_metrics["wm_lr"] = float(
-                                        wm_lr_scheduler.get_last_lr()[0]
-                                    )
-                                    step_had_update = True
-
-                            # Phase 2 — DreamerV3 actor-critic imagination
-                            if run_ac_phase:
-                                ac_batch = self._build_actor_critic_batch(batch)
-                                if ac_batch is not None:
-                                    self.world_model.eval()
-                                    if actor_update_kind == "dreamer":
-                                        ac_metrics = imagine_actor_critic_step(
-                                            policy=self.policy,
-                                            world_model=self.world_model,
-                                            critic=self.critic,
-                                            target_critic=self.target_critic,
-                                            actor_optimizer=self.policy_optimizer,
-                                            critic_optimizer=self.critic_optimizer,
-                                            return_tracker=self.return_tracker,
-                                            obs=ac_batch["obs"],
-                                            device=self.device,
-                                            algorithm_cfg=algorithm_cfg,
-                                            optim_cfg=optim_cfg,
-                                            ref_policy=self.ref_policy,
+                                else:
+                                    if actor_update_route is None:
+                                        raise RuntimeError(
+                                            "Actor update route was not resolved."
                                         )
-                                    else:
-                                        if actor_update_route is None:
-                                            raise RuntimeError(
-                                                "Actor update route was not resolved."
-                                            )
-                                        actor_kwargs = {
-                                            "policy": self.policy,
-                                            actor_update_route.world_model_arg: self.world_model,
-                                            "actor_optimizer": self.policy_optimizer,
-                                            "obs": ac_batch["obs"],
-                                            "device": self.device,
-                                            "algorithm_cfg": algorithm_cfg,
-                                            "optim_cfg": optim_cfg,
-                                            "ref_policy": self.ref_policy,
-                                        }
-                                        if actor_update_route.requires_classifier:
-                                            actor_kwargs.update(
-                                                {
-                                                    "classifier": self.classifier,
-                                                    "classifier_threshold": self.classifier_threshold,
-                                                }
-                                            )
-                                        if actor_update_route.uses_real_relabel:
-                                            actor_kwargs["real_relabel_batch"] = (
-                                                self._sample_real_relabel_batch(
-                                                    algorithm_cfg
-                                                )
-                                            )
-                                        if actor_update_route.uses_critic:
-                                            actor_kwargs.update(
-                                                {
-                                                    "critic": self.critic,
-                                                    "target_critic": self.target_critic,
-                                                    "critic_optimizer": self.critic_optimizer,
-                                                }
-                                            )
-                                        ac_metrics = actor_update_route.step_fn(
-                                            **actor_kwargs
+                                    actor_kwargs = {
+                                        "policy": self.policy,
+                                        actor_update_route.world_model_arg: self.world_model,
+                                        "actor_optimizer": self.policy_optimizer,
+                                        "obs": ac_batch["obs"],
+                                        "device": self.device,
+                                        "algorithm_cfg": algorithm_cfg,
+                                        "optim_cfg": optim_cfg,
+                                        "ref_policy": self.ref_policy,
+                                    }
+                                    if actor_update_route.requires_classifier:
+                                        actor_kwargs.update(
+                                            {
+                                                "classifier": self.classifier,
+                                                "classifier_threshold": self.classifier_threshold,
+                                            }
                                         )
-                                    epoch_actor_losses.append(ac_metrics["actor_loss"])
-                                    epoch_critic_losses.append(
-                                        ac_metrics["critic_loss"]
+                                    if actor_update_route.uses_real_relabel:
+                                        actor_kwargs["real_relabel_batch"] = (
+                                            self._sample_real_relabel_batch(
+                                                algorithm_cfg
+                                            )
+                                        )
+                                    if actor_update_route.uses_critic:
+                                        actor_kwargs.update(
+                                            {
+                                                "critic": self.critic,
+                                                "target_critic": self.target_critic,
+                                                "critic_optimizer": self.critic_optimizer,
+                                            }
+                                        )
+                                    ac_metrics = actor_update_route.step_fn(
+                                        **actor_kwargs
                                     )
-                                    epoch_returns.append(ac_metrics["returns_mean"])
-                                    epoch_rewards.append(ac_metrics["reward_mean"])
-                                    epoch_scales.append(ac_metrics["return_scale"])
-                                    local_metrics.update(
-                                        {
-                                            "train_actor_loss": ac_metrics[
-                                                "actor_loss"
-                                            ],
-                                            "train_actor_bc_loss": ac_metrics.get(
-                                                "actor_bc_loss", 0.0
-                                            ),
-                                            "train_actor_bc_scale": ac_metrics.get(
-                                                "actor_bc_scale", 0.0
-                                            ),
-                                            "train_actor_vla_drift_raw_mse": ac_metrics.get(
-                                                "actor_vla_drift_raw_mse", 0.0
-                                            ),
-                                            "train_actor_vla_drift_env_mse": ac_metrics.get(
-                                                "actor_vla_drift_env_mse", 0.0
-                                            ),
-                                            "train_actor_vla_drift_env_mse_clipped": ac_metrics.get(
-                                                "actor_vla_drift_env_mse_clipped", 0.0
-                                            ),
-                                            "train_actor_vla_drift_env_mae": ac_metrics.get(
-                                                "actor_vla_drift_env_mae", 0.0
-                                            ),
-                                            "train_critic_loss": ac_metrics[
-                                                "critic_loss"
-                                            ],
-                                            "train_returns_mean": ac_metrics[
-                                                "returns_mean"
-                                            ],
-                                            "train_returns_std": ac_metrics[
-                                                "returns_std"
-                                            ],
-                                            "train_raw_returns_mean": ac_metrics.get(
-                                                "raw_returns_mean",
-                                                ac_metrics["returns_mean"],
-                                            ),
-                                            "train_raw_returns_std": ac_metrics.get(
-                                                "raw_returns_std",
-                                                ac_metrics["returns_std"],
-                                            ),
-                                            "train_advantage_mean": ac_metrics.get(
-                                                "advantage_mean", 0.0
-                                            ),
-                                            "train_advantage_std": ac_metrics.get(
-                                                "advantage_std", 0.0
-                                            ),
-                                            "train_advantage_mag": ac_metrics.get(
-                                                "advantage_mag", 0.0
-                                            ),
-                                            "train_return_norm_enabled": ac_metrics.get(
-                                                "return_norm_enabled", 0.0
-                                            ),
-                                            "train_return_norm_low": ac_metrics.get(
-                                                "return_norm_low", 0.0
-                                            ),
-                                            "train_return_norm_high": ac_metrics.get(
-                                                "return_norm_high", 0.0
-                                            ),
-                                            "train_return_norm_scale": ac_metrics.get(
-                                                "return_norm_scale", 1.0
-                                            ),
-                                            "train_return_norm_batch_scale": ac_metrics.get(
-                                                "return_norm_batch_scale", 1.0
-                                            ),
-                                            "train_ret_normed_min": ac_metrics.get(
-                                                "ret_normed_min", 0.0
-                                            ),
-                                            "train_ret_normed_max": ac_metrics.get(
-                                                "ret_normed_max", 0.0
-                                            ),
-                                            "train_ret_normed_rate": ac_metrics.get(
-                                                "ret_normed_rate", 0.0
-                                            ),
-                                            "train_return_scale": ac_metrics[
-                                                "return_scale"
-                                            ],
-                                            "train_reward_mean": ac_metrics[
-                                                "reward_mean"
-                                            ],
-                                            "train_success_return_shaping_scale": ac_metrics.get(
-                                                "success_return_shaping_scale", 0.0
-                                            ),
-                                            "train_success_return_mean": ac_metrics.get(
-                                                "success_return_mean", 0.0
-                                            ),
-                                            "train_success_return_delta_mean": ac_metrics.get(
-                                                "success_return_delta_mean", 0.0
-                                            ),
-                                            "train_success_return_delta_std": ac_metrics.get(
-                                                "success_return_delta_std", 0.0
-                                            ),
-                                            "train_continue_mean": ac_metrics.get(
-                                                "continue_mean", 1.0
-                                            ),
-                                            "train_value_mean": ac_metrics[
-                                                "value_mean"
-                                            ],
-                                            "train_critic_target_mean": ac_metrics.get(
-                                                "critic_target_mean", 0.0
-                                            ),
-                                            "train_repval_loss": ac_metrics.get(
-                                                "repval_loss", 0.0
-                                            ),
-                                            "train_repval_applied": ac_metrics.get(
-                                                "repval_applied", 0.0
-                                            ),
-                                            "train_repval_weight_mean": ac_metrics.get(
-                                                "repval_weight_mean", 0.0
-                                            ),
-                                            "train_imagine_weight_mean": ac_metrics.get(
-                                                "imagine_weight_mean", 1.0
-                                            ),
-                                            "train_actor_grad_norm": ac_metrics[
-                                                "actor_grad_norm"
-                                            ],
-                                            "train_critic_grad_norm": ac_metrics[
-                                                "critic_grad_norm"
-                                            ],
-                                            "train_ppo_update_epochs": ac_metrics.get(
-                                                "ppo_update_epochs", 1.0
-                                            ),
-                                            "train_ppo_ratio_mean": ac_metrics.get(
-                                                "ppo_ratio_mean", 1.0
-                                            ),
-                                            "train_ppo_ratio_min": ac_metrics.get(
-                                                "ppo_ratio_min", 1.0
-                                            ),
-                                            "train_ppo_ratio_max": ac_metrics.get(
-                                                "ppo_ratio_max", 1.0
-                                            ),
-                                            "train_ppo_clipfrac": ac_metrics.get(
-                                                "ppo_clipfrac", 0.0
-                                            ),
-                                            "train_real_relabel_applied": ac_metrics.get(
-                                                "real_relabel_applied", 0.0
-                                            ),
-                                            "train_real_relabel_loss": ac_metrics.get(
-                                                "real_relabel_loss", 0.0
-                                            ),
-                                            "train_real_relabel_term": ac_metrics.get(
-                                                "real_relabel_term", 0.0
-                                            ),
-                                            "train_real_relabel_ratio_mean": ac_metrics.get(
-                                                "real_relabel_ratio_mean", 1.0
-                                            ),
-                                            "train_real_relabel_clipfrac": ac_metrics.get(
-                                                "real_relabel_clipfrac", 0.0
-                                            ),
-                                            "train_real_relabel_advantage_mean": ac_metrics.get(
-                                                "real_relabel_advantage_mean", 0.0
-                                            ),
-                                        }
-                                    )
-                                    for name, value in ac_metrics.items():
-                                        if (
-                                            name.startswith("actor_grad_norm_")
-                                            or name.startswith("tdmpc_")
-                                        ) and isinstance(value, (int, float)):
-                                            local_metrics[f"train_{name}"] = value
-                                    policy_lr_scheduler.step()
-                                    critic_lr_scheduler.step()
-                                    local_metrics["policy_lr"] = float(
-                                        policy_lr_scheduler.get_last_lr()[0]
-                                    )
-                                    local_metrics["critic_lr"] = float(
-                                        critic_lr_scheduler.get_last_lr()[0]
-                                    )
-                                    step_had_update = True
+                                epoch_actor_losses.append(ac_metrics["actor_loss"])
+                                epoch_critic_losses.append(
+                                    ac_metrics["critic_loss"]
+                                )
+                                epoch_returns.append(ac_metrics["returns_mean"])
+                                epoch_rewards.append(ac_metrics["reward_mean"])
+                                epoch_scales.append(ac_metrics["return_scale"])
+                                local_metrics.update(
+                                    {
+                                        "train_actor_loss": ac_metrics[
+                                            "actor_loss"
+                                        ],
+                                        "train_actor_bc_loss": ac_metrics.get(
+                                            "actor_bc_loss", 0.0
+                                        ),
+                                        "train_actor_bc_scale": ac_metrics.get(
+                                            "actor_bc_scale", 0.0
+                                        ),
+                                        "train_actor_vla_drift_raw_mse": ac_metrics.get(
+                                            "actor_vla_drift_raw_mse", 0.0
+                                        ),
+                                        "train_actor_vla_drift_env_mse": ac_metrics.get(
+                                            "actor_vla_drift_env_mse", 0.0
+                                        ),
+                                        "train_actor_vla_drift_env_mse_clipped": ac_metrics.get(
+                                            "actor_vla_drift_env_mse_clipped", 0.0
+                                        ),
+                                        "train_actor_vla_drift_env_mae": ac_metrics.get(
+                                            "actor_vla_drift_env_mae", 0.0
+                                        ),
+                                        "train_critic_loss": ac_metrics[
+                                            "critic_loss"
+                                        ],
+                                        "train_returns_mean": ac_metrics[
+                                            "returns_mean"
+                                        ],
+                                        "train_returns_std": ac_metrics[
+                                            "returns_std"
+                                        ],
+                                        "train_raw_returns_mean": ac_metrics.get(
+                                            "raw_returns_mean",
+                                            ac_metrics["returns_mean"],
+                                        ),
+                                        "train_raw_returns_std": ac_metrics.get(
+                                            "raw_returns_std",
+                                            ac_metrics["returns_std"],
+                                        ),
+                                        "train_advantage_mean": ac_metrics.get(
+                                            "advantage_mean", 0.0
+                                        ),
+                                        "train_advantage_std": ac_metrics.get(
+                                            "advantage_std", 0.0
+                                        ),
+                                        "train_advantage_mag": ac_metrics.get(
+                                            "advantage_mag", 0.0
+                                        ),
+                                        "train_return_norm_enabled": ac_metrics.get(
+                                            "return_norm_enabled", 0.0
+                                        ),
+                                        "train_return_norm_low": ac_metrics.get(
+                                            "return_norm_low", 0.0
+                                        ),
+                                        "train_return_norm_high": ac_metrics.get(
+                                            "return_norm_high", 0.0
+                                        ),
+                                        "train_return_norm_scale": ac_metrics.get(
+                                            "return_norm_scale", 1.0
+                                        ),
+                                        "train_return_norm_batch_scale": ac_metrics.get(
+                                            "return_norm_batch_scale", 1.0
+                                        ),
+                                        "train_ret_normed_min": ac_metrics.get(
+                                            "ret_normed_min", 0.0
+                                        ),
+                                        "train_ret_normed_max": ac_metrics.get(
+                                            "ret_normed_max", 0.0
+                                        ),
+                                        "train_ret_normed_rate": ac_metrics.get(
+                                            "ret_normed_rate", 0.0
+                                        ),
+                                        "train_return_scale": ac_metrics[
+                                            "return_scale"
+                                        ],
+                                        "train_reward_mean": ac_metrics[
+                                            "reward_mean"
+                                        ],
+                                        "train_success_return_shaping_scale": ac_metrics.get(
+                                            "success_return_shaping_scale", 0.0
+                                        ),
+                                        "train_success_return_mean": ac_metrics.get(
+                                            "success_return_mean", 0.0
+                                        ),
+                                        "train_success_return_delta_mean": ac_metrics.get(
+                                            "success_return_delta_mean", 0.0
+                                        ),
+                                        "train_success_return_delta_std": ac_metrics.get(
+                                            "success_return_delta_std", 0.0
+                                        ),
+                                        "train_continue_mean": ac_metrics.get(
+                                            "continue_mean", 1.0
+                                        ),
+                                        "train_value_mean": ac_metrics[
+                                            "value_mean"
+                                        ],
+                                        "train_critic_target_mean": ac_metrics.get(
+                                            "critic_target_mean", 0.0
+                                        ),
+                                        "train_repval_loss": ac_metrics.get(
+                                            "repval_loss", 0.0
+                                        ),
+                                        "train_repval_applied": ac_metrics.get(
+                                            "repval_applied", 0.0
+                                        ),
+                                        "train_repval_weight_mean": ac_metrics.get(
+                                            "repval_weight_mean", 0.0
+                                        ),
+                                        "train_imagine_weight_mean": ac_metrics.get(
+                                            "imagine_weight_mean", 1.0
+                                        ),
+                                        "train_actor_grad_norm": ac_metrics[
+                                            "actor_grad_norm"
+                                        ],
+                                        "train_critic_grad_norm": ac_metrics[
+                                            "critic_grad_norm"
+                                        ],
+                                        "train_ppo_update_epochs": ac_metrics.get(
+                                            "ppo_update_epochs", 1.0
+                                        ),
+                                        "train_ppo_ratio_mean": ac_metrics.get(
+                                            "ppo_ratio_mean", 1.0
+                                        ),
+                                        "train_ppo_ratio_min": ac_metrics.get(
+                                            "ppo_ratio_min", 1.0
+                                        ),
+                                        "train_ppo_ratio_max": ac_metrics.get(
+                                            "ppo_ratio_max", 1.0
+                                        ),
+                                        "train_ppo_clipfrac": ac_metrics.get(
+                                            "ppo_clipfrac", 0.0
+                                        ),
+                                        "train_real_relabel_applied": ac_metrics.get(
+                                            "real_relabel_applied", 0.0
+                                        ),
+                                        "train_real_relabel_loss": ac_metrics.get(
+                                            "real_relabel_loss", 0.0
+                                        ),
+                                        "train_real_relabel_term": ac_metrics.get(
+                                            "real_relabel_term", 0.0
+                                        ),
+                                        "train_real_relabel_ratio_mean": ac_metrics.get(
+                                            "real_relabel_ratio_mean", 1.0
+                                        ),
+                                        "train_real_relabel_clipfrac": ac_metrics.get(
+                                            "real_relabel_clipfrac", 0.0
+                                        ),
+                                        "train_real_relabel_advantage_mean": ac_metrics.get(
+                                            "real_relabel_advantage_mean", 0.0
+                                        ),
+                                    }
+                                )
+                                for name, value in ac_metrics.items():
+                                    if (
+                                        name.startswith("actor_grad_norm_")
+                                        or name.startswith("tdmpc_")
+                                    ) and isinstance(value, (int, float)):
+                                        local_metrics[f"train_{name}"] = value
+                                policy_lr_scheduler.step()
+                                critic_lr_scheduler.step()
+                                local_metrics["policy_lr"] = float(
+                                    policy_lr_scheduler.get_last_lr()[0]
+                                )
+                                local_metrics["critic_lr"] = float(
+                                    critic_lr_scheduler.get_last_lr()[0]
+                                )
+                                step_had_update = True
 
-                            if not step_had_update:
-                                continue
+                        if not step_had_update:
+                            continue
 
-                            reduced = self.distributed.reduce_mean_dict(local_metrics)
-                            step_log = {
-                                **reduced,
-                                "global_step": self.global_step,
-                                "epoch": self.epoch,
-                            }
+                        reduced = self.distributed.reduce_mean_dict(local_metrics)
+                        step_log = {
+                            **reduced,
+                            "global_step": self.global_step,
+                            "epoch": self.epoch,
+                        }
 
-                            pbar_postfix: dict[str, float] = {}
-                            if "train_wm_loss" in reduced:
-                                pbar_postfix["wm"] = reduced["train_wm_loss"]
-                            if "train_actor_loss" in reduced:
-                                pbar_postfix["actor"] = reduced["train_actor_loss"]
-                            if "train_critic_loss" in reduced:
-                                pbar_postfix["critic"] = reduced["train_critic_loss"]
-                            if "train_returns_mean" in reduced:
-                                pbar_postfix["G"] = reduced["train_returns_mean"]
-                            if pbar_postfix:
-                                tepoch.set_postfix(refresh=False, **pbar_postfix)
+                        self.console_progress(
+                            self.global_step, progress_total, "train"
+                        )
 
-                            self._maybe_save_token_viz(batch)
+                        self._maybe_save_token_viz(batch)
 
-                            is_last_batch = batch_idx == len(train_dataloader) - 1
-                            if not is_last_batch:
-                                train_json_logger.log(step_log)
-                                self.log_metrics(step_log, step=self.global_step)
-                                self.global_step += 1
+                        is_last_batch = batch_idx == len(train_dataloader) - 1
+                        if not is_last_batch:
+                            train_json_logger.log(step_log)
+                            self.log_metrics(step_log, step=self.global_step)
+                            self.global_step += 1
 
-                            if (
-                                cfg.training.max_train_steps is not None
-                                and batch_idx >= cfg.training.max_train_steps - 1
-                            ):
-                                reached_max_steps = True
-                                break
+                        if (
+                            cfg.training.max_train_steps is not None
+                            and batch_idx >= cfg.training.max_train_steps - 1
+                        ):
+                            reached_max_steps = True
+                            break
 
                     if not epoch_wm_losses and not epoch_actor_losses:
                         self.global_step += 1
