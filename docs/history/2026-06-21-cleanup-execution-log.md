@@ -32,11 +32,10 @@ exactly** (e.g. PPO reductions, actor `require_all_valid`, token-WM
 
 ## Flagged — NOT changed because it would alter behavior
 
-- **ALG-03 (likely a real bug, not style):** the `outcome` PPO route uses
-  `cfg.get("entropy_coef", 0.0)` and **drops the `actent` fallback** that
-  `dense`/`dense_chunk` have. A config with `actent` set but not `entropy_coef`
-  silently trains `outcome` with entropy 0. Needs a maintainer decision
-  (intended vs bug) — not unifiable without changing behavior.
+- **ALG-03 (RESOLVED 2026-06-21):** all three PPO routes now read entropy via the
+  shared `grpo._entropy_coef` (`actent` → `entropy_coef` → 0.0); the `outcome` route
+  no longer drops the `actent` fallback. (Originally flagged: `outcome` used
+  `cfg.get("entropy_coef", 0.0)`, dropping `actent`.)
 - **DIAG-01 (WM-load):** `online_utils.load_world_model_state` is strictly *more*
   transformative than the inline diagnostic loaders (reward-head key remap +
   shape-mismatch skip, both live on real ckpts). Routing through it changes which

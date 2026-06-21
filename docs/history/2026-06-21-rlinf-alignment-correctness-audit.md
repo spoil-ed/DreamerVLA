@@ -13,6 +13,10 @@ Severity legend: 🔴 likely bug · 🟠 robustness gap vs RLinf · 🟡 behavio
 ## Verified, actionable
 
 ### 🔴 A1 — `outcome.py` silently ignores the `actent` entropy key (ALG-03)
+**RESOLVED (2026-06-21):** all three routes now read entropy via the shared
+`grpo._entropy_coef` (`actent` → `entropy_coef` → 0.0); `outcome.py:196` no longer
+drops the `actent` fallback. Original finding kept below for the record.
+
 `dense.py:93` / `dense_chunk.py:112` read `cfg.get("actent", cfg.get("entropy_coef", 0.0))`,
 but `outcome.py:192` reads `entropy_coef` **only**. The `wmpo_outcome` configs expose
 the key **`actent`** (e.g. `configs/dreamervla/openvla_oft_wmpo_outcome.yaml:171`), so on

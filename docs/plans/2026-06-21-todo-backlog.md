@@ -36,13 +36,10 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
 - [ ] **outcome loss normalization** — global mask-sum denominator biases gradient toward
   long/failed rollouts vs RLinf `masked_mean_ratio`. *Introduced; kept as-is — open the
   RLinf-aligned `masked_mean` only on request.* *(numerics)*
-- [ ] **A1 / ALG-03 (entropy-key)** — `outcome.py:192` reads `entropy_coef` only, dropping the
-  `actent` fallback that `dense`/`dense_chunk` use; the `wmpo_outcome` configs expose `actent`,
-  so on the cotrain-default outcome route any `actent` is a silent no-op (entropy → 0). Not
-  biting today (all configs set entropy 0) but a latent landmine — tuning exploration there does
-  nothing. *Fix (cheap, low-risk): read the same `actent`/`entropy_coef` fallback, or rename all
-  three routes to RLinf `entropy_bonus`; needs a maintainer call (intended vs bug).* Siblings
-  A2/A3 (log-ratio clamp + dual-clip) already landed — see the cleanup-execution-log pass 2.
+- [x] **A1 / ALG-03 (entropy-key)** — RESOLVED in code: all three PPO routes
+  (`outcome.py:196`, `dense.py`, `dense_chunk.py`) read entropy via `grpo._entropy_coef`
+  (`actent` → `entropy_coef` → 0.0); no silent `actent` no-op remains. Siblings A2/A3
+  (log-ratio clamp + dual-clip) already landed — see the cleanup-execution-log pass 2.
 
 ## P2 — needs migration design (feature, not pure refactor)
 
