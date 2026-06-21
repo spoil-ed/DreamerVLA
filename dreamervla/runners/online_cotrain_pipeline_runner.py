@@ -21,7 +21,7 @@ from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
 from dreamervla.utils.console import count_trainable
-from dreamervla.utils.hf_module import save_module_pretrained
+from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 
 
 class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
@@ -183,8 +183,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
         resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
 
-        need_wm = not (resume and os.path.exists(self._wm_warmup_ckpt()))
-        need_cls = not (resume and os.path.exists(self._cls_warmup_ckpt()))
+        need_wm = not (resume and (os.path.exists(self._wm_warmup_ckpt()) or os.path.isdir(self._wm_warmup_hf_dir())))
+        need_cls = not (resume and (os.path.exists(self._cls_warmup_ckpt()) or os.path.isdir(self._cls_warmup_hf_dir())))
 
         warmup_replay = OnlineReplay(capacity=buffer_size, sequence_length=seq_len,
                                      task_ids=env_task_ids, rank=self._rank)
@@ -207,8 +207,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 self._save_wm_warmup()
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
         else:
-            payload = torch.load(self._wm_warmup_ckpt(), map_location="cpu", weights_only=False)
-            _unwrap(self.world_model).load_state_dict(payload["world_model"])
+            if os.path.exists(self._wm_warmup_ckpt()):
+                payload = torch.load(self._wm_warmup_ckpt(), map_location="cpu", weights_only=False)
+                _unwrap(self.world_model).load_state_dict(payload["world_model"])
+            elif os.path.isdir(self._wm_warmup_hf_dir()):
+                src = load_module_pretrained(self._wm_warmup_hf_dir())
+                _unwrap(self.world_model).load_state_dict(src.state_dict())
 
         if need_cls:
             self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
@@ -218,9 +222,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 self._save_cls_warmup()
                 self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True)
         else:
-            payload = torch.load(self._cls_warmup_ckpt(), map_location="cpu", weights_only=False)
-            _unwrap(self.classifier).load_state_dict(payload["classifier"])
-            self.classifier_threshold = float(payload.get("classifier_threshold", self.classifier_threshold))
+            if os.path.exists(self._cls_warmup_ckpt()):
+                payload = torch.load(self._cls_warmup_ckpt(), map_location="cpu", weights_only=False)
+                _unwrap(self.classifier).load_state_dict(payload["classifier"])
+                self.classifier_threshold = float(payload.get("classifier_threshold", self.classifier_threshold))
+            elif os.path.isdir(self._cls_warmup_hf_dir()):
+                src = load_module_pretrained(self._cls_warmup_hf_dir())
+                _unwrap(self.classifier).load_state_dict(src.state_dict())
 
         # online cotrain with RL from the start (already warm): force warmup_steps=0.
         # Debug runs would otherwise re-read online_rollout.debug_warmup_steps in the online

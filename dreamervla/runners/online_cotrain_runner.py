@@ -50,7 +50,8 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
-from dreamervla.utils.hf_module import save_module_pretrained
+from dreamervla.utils.hf_checkpoint import is_hf_checkpoint
+from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
 
@@ -99,12 +100,16 @@ class OnlineCotrainRunner(DreamerVLARunner):
         classifier = LatentSuccessClassifier(cls_cfg).to(self.device)
         warm = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
         if warm:
-            payload = torch.load(str(warm), map_location="cpu", weights_only=False)
-            model_sd = payload.get("model", payload.get("state_dicts", {}).get("model"))
-            classifier.load_state_dict(model_sd)
-            self.classifier_threshold = float(
-                payload.get("threshold", self.classifier_threshold)
-            )
+            if is_hf_checkpoint(str(warm)):
+                src = load_module_pretrained(str(warm))
+                classifier.load_state_dict(src.state_dict())
+            else:
+                payload = torch.load(str(warm), map_location="cpu", weights_only=False)
+                model_sd = payload.get("model", payload.get("state_dicts", {}).get("model"))
+                classifier.load_state_dict(model_sd)
+                self.classifier_threshold = float(
+                    payload.get("threshold", self.classifier_threshold)
+                )
             if self.distributed.is_main_process:
                 print(f"[online-cotrain] classifier warm-started from {warm}", flush=True)
         for p in classifier.parameters():
@@ -116,6 +121,16 @@ class OnlineCotrainRunner(DreamerVLARunner):
             raise ValueError("online cotrain requires `optim.classifier`.")
         self.classifier_optimizer = build_optimizer(self.classifier, cls_optim_cfg)
         self._cls_window = int(getattr(cls_cfg, "window", 8))
+
+    def _load_world_model_init_ckpt(self, ckpt_path: str) -> None:
+        """HF-aware override: load from HF dir or fall back to torch ckpt (parent)."""
+        if is_hf_checkpoint(ckpt_path):
+            src = load_module_pretrained(ckpt_path)
+            self._unwrapped_world_model.load_state_dict(src.state_dict())
+            if self.distributed.is_main_process:
+                print(f"[init] world_model loaded from HF dir: {ckpt_path}", flush=True)
+        else:
+            super()._load_world_model_init_ckpt(ckpt_path)
 
     def _assert_optimizers_disjoint(self) -> None:
         seen: set[int] = set()
