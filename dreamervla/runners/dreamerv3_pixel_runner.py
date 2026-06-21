@@ -14,23 +14,20 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from dreamervla.runners._dreamer_runner_common import (
+    DreamerCkptResumeMixin,
+    to_device,
+)
 from dreamervla.runners.base_runner import BaseRunner
 
 
-def _to_device(value: Any, device: torch.device) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value.to(device, non_blocking=True)
-    if isinstance(value, dict):
-        return {k: _to_device(v, device) for k, v in value.items()}
-    return value
-
-
-class DreamerV3PixelRunner(BaseRunner):
+class DreamerV3PixelRunner(DreamerCkptResumeMixin, BaseRunner):
     """Standalone pixel-level DreamerV3 world-model trainer for LIBERO."""
 
     runner_name = "pixel_wm"
     runner_status = "secondary"
     runner_family = "world_model"
+    _ckpt_log_tag = "dreamerv3-pixel"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
@@ -137,124 +134,6 @@ class DreamerV3PixelRunner(BaseRunner):
     def _move_batch_to_device_before_prepare(self) -> bool:
         return True
 
-    def _save_ckpt(
-        self,
-        model_core: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        path: Path,
-    ) -> None:
-        if not self.is_main_process:
-            return
-        payload = {
-            "model": model_core.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "global_step": self.global_step,
-            "epoch": self.epoch,
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all()
-                if torch.cuda.is_available()
-                else [],
-            },
-            "cfg": OmegaConf.to_container(self.cfg, resolve=True),
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        torch.save(payload, tmp_path)
-        tmp_path.replace(path)
-
-    def _resolve_resume_path(self) -> Path:
-        configured = OmegaConf.select(self.cfg, "training.resume_path", default=None)
-        if configured is None:
-            return self.ckpt_dir / "latest.ckpt"
-        path = Path(str(configured)).expanduser()
-        if not path.is_absolute():
-            path = (Path.cwd() / path).resolve()
-        if path.is_dir():
-            if (path / "ckpt" / "latest.ckpt").is_file():
-                return path / "ckpt" / "latest.ckpt"
-            return path / "latest.ckpt"
-        return path
-
-    def _maybe_resume(
-        self,
-        model_core: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-    ) -> bool:
-        if not bool(OmegaConf.select(self.cfg, "training.resume", default=False)):
-            return False
-        path = self._resolve_resume_path()
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"training.resume=true but checkpoint not found: {path}"
-            )
-        self._print(f"[dreamerv3-pixel] resuming from {path}")
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        model_sd = payload.get("model")
-        if model_sd is None and "state_dicts" in payload:
-            model_sd = payload["state_dicts"].get("model") or payload[
-                "state_dicts"
-            ].get("model_core")
-        if model_sd is None:
-            raise KeyError(f"Checkpoint {path} does not contain a model state_dict")
-        strict = bool(
-            OmegaConf.select(self.cfg, "training.resume_strict", default=True)
-        )
-        missing, unexpected = model_core.load_state_dict(model_sd, strict=strict)
-        if missing or unexpected:
-            self._print(
-                f"[dreamerv3-pixel] resume model missing={len(missing)} unexpected={len(unexpected)}"
-            )
-
-        skip_optimizer = bool(
-            OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False)
-        )
-        if not skip_optimizer and "optimizer" in payload:
-            optimizer.load_state_dict(payload["optimizer"])
-        elif skip_optimizer:
-            self._print(
-                "[dreamerv3-pixel] skipping optimizer state (training.resume_skip_optimizer=true)"
-            )
-
-        # ``resume_reset_step`` = warm-start a NEW training run from the ckpt's
-        # model weights only.  global_step / epoch / RNG stay at their
-        # initial (fresh-seed) values so the lr warmup, save-every cadence,
-        # and epoch budget all behave as a fresh run.  Use this when the
-        # training objective or model topology has changed (e.g. switching
-        # per-step teacher forcing -> chunk_loss with a new mask_obs_token).
-        reset_step = bool(
-            OmegaConf.select(self.cfg, "training.resume_reset_step", default=False)
-        )
-        if reset_step:
-            self._print(
-                "[dreamerv3-pixel] resume_reset_step=true: keeping fresh "
-                f"global_step={self.global_step} epoch={self.epoch} and RNG"
-            )
-        else:
-            self.global_step = int(payload.get("global_step", self.global_step))
-            self.epoch = int(payload.get("epoch", self.epoch))
-            rng = payload.get("rng")
-            if isinstance(rng, dict):
-                torch_state = rng.get("torch")
-                if isinstance(torch_state, torch.Tensor):
-                    torch.set_rng_state(torch_state)
-                cuda_state = rng.get("cuda")
-                if (
-                    torch.cuda.is_available()
-                    and isinstance(cuda_state, list)
-                    and cuda_state
-                ):
-                    try:
-                        torch.cuda.set_rng_state_all(cuda_state)
-                    except Exception as exc:
-                        self._print(
-                            f"[dreamerv3-pixel] warning: could not restore CUDA RNG: {exc}"
-                        )
-        self._print(
-            f"[dreamerv3-pixel] resumed at global_step={self.global_step} epoch={self.epoch}"
-        )
-        return True
-
     @staticmethod
     def _tensor_to_pil(image: torch.Tensor):
         from PIL import Image
@@ -271,34 +150,6 @@ class DreamerV3PixelRunner(BaseRunner):
             raise ValueError(f"Expected 3 channels per view, got {image.shape[0]}")
         arr = (image.permute(1, 2, 0).numpy() * 255.0).round().astype("uint8")
         return Image.fromarray(arr, mode="RGB")
-
-    @staticmethod
-    def _save_viz_strip(
-        path: Path, panels: list[tuple[str, Any]], cell_size: int
-    ) -> None:
-        from PIL import Image, ImageDraw
-
-        header = 22
-        canvas = Image.new(
-            "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
-        )
-        draw = ImageDraw.Draw(canvas)
-        for idx, (label, image) in enumerate(panels):
-            x0 = idx * cell_size
-            if image is not None:
-                canvas.paste(
-                    image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
-                )
-            else:
-                draw.rectangle(
-                    [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
-                )
-                draw.text(
-                    (x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
-                )
-            draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(path)
 
     @torch.no_grad()
     def _maybe_save_viz(
@@ -522,7 +373,7 @@ class DreamerV3PixelRunner(BaseRunner):
                             group["lr"] = base_lr * lr_scale
 
                     if self._move_batch_to_device_before_prepare():
-                        batch = _to_device(batch, self.device)
+                        batch = to_device(batch, self.device)
                     batch = self._prepare_batch_for_model(batch, model_core)
                     model.train()
                     with warnings.catch_warnings():

@@ -11,25 +11,22 @@ import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
+from dreamervla.runners._dreamer_runner_common import (
+    DreamerCkptResumeMixin,
+    to_device,
+)
 from dreamervla.runners.base_runner import BaseRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _to_device(value: Any, device: torch.device) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value.to(device, non_blocking=True)
-    if isinstance(value, dict):
-        return {k: _to_device(v, device) for k, v in value.items()}
-    return value
-
-
-class DreamerV3TokenRunner(BaseRunner):
+class DreamerV3TokenRunner(DreamerCkptResumeMixin, BaseRunner):
     """Standalone DreamerV3-style world-model trainer for image tokens."""
 
     runner_name = "token_wm"
     runner_status = "secondary"
     runner_family = "world_model"
+    _ckpt_log_tag = "dreamerv3-token"
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
@@ -64,107 +61,6 @@ class DreamerV3TokenRunner(BaseRunner):
             ),
             collate_fn=getattr(dataset, "collate_fn", None),
         )
-
-    def _save_ckpt(
-        self,
-        model_core: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        path: Path,
-    ) -> None:
-        payload = {
-            "model": model_core.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "global_step": self.global_step,
-            "epoch": self.epoch,
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all()
-                if torch.cuda.is_available()
-                else [],
-            },
-            "cfg": OmegaConf.to_container(self.cfg, resolve=True),
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        torch.save(payload, tmp_path)
-        tmp_path.replace(path)
-
-    def _resolve_resume_path(self) -> Path:
-        configured = OmegaConf.select(self.cfg, "training.resume_path", default=None)
-        if configured is None:
-            return self.ckpt_dir / "latest.ckpt"
-        path = Path(str(configured)).expanduser()
-        if not path.is_absolute():
-            path = (Path.cwd() / path).resolve()
-        if path.is_dir():
-            if (path / "ckpt" / "latest.ckpt").is_file():
-                return path / "ckpt" / "latest.ckpt"
-            return path / "latest.ckpt"
-        return path
-
-    def _maybe_resume(
-        self,
-        model_core: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-    ) -> bool:
-        if not bool(OmegaConf.select(self.cfg, "training.resume", default=False)):
-            return False
-        path = self._resolve_resume_path()
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"training.resume=true but checkpoint not found: {path}"
-            )
-        print(f"[dreamerv3-token] resuming from {path}")
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        model_sd = payload.get("model")
-        if model_sd is None and "state_dicts" in payload:
-            model_sd = payload["state_dicts"].get("model") or payload[
-                "state_dicts"
-            ].get("model_core")
-        if model_sd is None:
-            raise KeyError(f"Checkpoint {path} does not contain a model state_dict")
-        strict = bool(
-            OmegaConf.select(self.cfg, "training.resume_strict", default=True)
-        )
-        missing, unexpected = model_core.load_state_dict(model_sd, strict=strict)
-        if missing or unexpected:
-            print(
-                f"[dreamerv3-token] resume model missing={len(missing)} unexpected={len(unexpected)}"
-            )
-
-        skip_optimizer = bool(
-            OmegaConf.select(self.cfg, "training.resume_skip_optimizer", default=False)
-        )
-        if not skip_optimizer and "optimizer" in payload:
-            optimizer.load_state_dict(payload["optimizer"])
-        elif skip_optimizer:
-            print(
-                "[dreamerv3-token] skipping optimizer state (training.resume_skip_optimizer=true)"
-            )
-
-        self.global_step = int(payload.get("global_step", self.global_step))
-        self.epoch = int(payload.get("epoch", self.epoch))
-        rng = payload.get("rng")
-        if isinstance(rng, dict):
-            torch_state = rng.get("torch")
-            if isinstance(torch_state, torch.Tensor):
-                torch.set_rng_state(torch_state)
-            cuda_state = rng.get("cuda")
-            if (
-                torch.cuda.is_available()
-                and isinstance(cuda_state, list)
-                and cuda_state
-            ):
-                try:
-                    torch.cuda.set_rng_state_all(cuda_state)
-                except Exception as exc:
-                    print(
-                        f"[dreamerv3-token] warning: could not restore CUDA RNG: {exc}"
-                    )
-        print(
-            f"[dreamerv3-token] resumed at global_step={self.global_step} epoch={self.epoch}"
-        )
-        return True
 
     def _maybe_build_viz(self) -> None:
         viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
@@ -227,34 +123,6 @@ class DreamerV3TokenRunner(BaseRunner):
         )
         pixels = vq_tokens_to_pixels(token_ids, self.vq_model, h_latent=h, w_latent=w)
         return tensor_to_pil(pixels[0])
-
-    @staticmethod
-    def _save_viz_strip(
-        path: Path, panels: list[tuple[str, Any]], cell_size: int
-    ) -> None:
-        from PIL import Image, ImageDraw
-
-        header = 22
-        canvas = Image.new(
-            "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
-        )
-        draw = ImageDraw.Draw(canvas)
-        for idx, (label, image) in enumerate(panels):
-            x0 = idx * cell_size
-            if image is not None:
-                canvas.paste(
-                    image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
-                )
-            else:
-                draw.rectangle(
-                    [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
-                )
-                draw.text(
-                    (x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
-                )
-            draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(path)
 
     @torch.no_grad()
     def _maybe_save_viz(
@@ -437,7 +305,7 @@ class DreamerV3TokenRunner(BaseRunner):
                         for group in optimizer.param_groups:
                             group["lr"] = base_lr * lr_scale
 
-                    batch = _to_device(batch, self.device)
+                    batch = to_device(batch, self.device)
                     model.train()
                     with warnings.catch_warnings():
                         warnings.filterwarnings(

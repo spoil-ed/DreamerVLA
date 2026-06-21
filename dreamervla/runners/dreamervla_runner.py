@@ -41,6 +41,7 @@ from dreamervla.algorithms.dreamervla import (
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.dataset import BaseDataset
 from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.runners._dreamer_runner_common import save_viz_strip
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
@@ -693,33 +694,7 @@ class DreamerVLARunner(BaseRunner):
         pixels = vq_tokens_to_pixels(token_ids, self.vq_model, h_latent=h, w_latent=w)
         return tensor_to_pil(pixels[0])
 
-    @staticmethod
-    def _save_viz_strip(
-        path: pathlib.Path, panels: list[tuple[str, Any]], cell_size: int
-    ) -> None:
-        from PIL import Image, ImageDraw
-
-        header = 22
-        canvas = Image.new(
-            "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
-        )
-        draw = ImageDraw.Draw(canvas)
-        for idx, (label, image) in enumerate(panels):
-            x0 = idx * cell_size
-            if image is not None:
-                canvas.paste(
-                    image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
-                )
-            else:
-                draw.rectangle(
-                    [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
-                )
-                draw.text(
-                    (x0 + 8, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
-                )
-            draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(path)
+    _save_viz_strip = staticmethod(save_viz_strip)
 
     @torch.no_grad()
     def _maybe_save_token_viz(self, batch: dict[str, Any]) -> None:
