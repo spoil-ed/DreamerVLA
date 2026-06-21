@@ -73,11 +73,22 @@ WANDB_MODE=disabled python -m dreamervla.train \
   experiment=online_cotrain_oft_action_hidden training.debug=true
 ```
 
-## 7. Verified smoke (tiny: 1 file, balanced set → ckpt)
+## 7. Tiny offline smoke (1 file, balanced set → ckpt)
+
+`SC` (hidden sidecar) **must match the experiment's expected OFT metadata** —
+`action_head_type`, `history`, `include_state`, `obs_hidden_source` are cross-checked
+against `task.openvla_oft.expected_*` and the run aborts on any mismatch. For
+`task=openvla_onetraj_libero` the expectation is `oft_discrete_token`, `history=1`,
+`include_state=false`, `obs_hidden_source=action_query` (the `_oft_legacy_action_hidden_vla_policy_h1`
+sidecar from the discrete recipe). Set `SC`/`RW` to a sidecar+reward pair you generated
+with those settings; the on-disk `*_oft_*_legacy_action_hidden_vla_policy_h2` dumps are
+the **L1-regression** route (`oft_l1_regression`, `history=2`) and will be rejected by the
+discrete WM. The WM/classifier/DreamerVLA offline routes below were each run end-to-end to
+a `latest.ckpt` against a metadata-matching discrete sidecar.
 
 ```bash
-SC=data/processed_data/libero_goal_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2
-RW=data/processed_data/libero_goal_no_noops_t_256_pi06_remaining_reward
+SC=<discrete action-query sidecar matching task.openvla_oft.expected_* (history=1)>
+RW=<matching reward HDF5 dir>
 MP="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT/libero_goal"
 PY="PYTHONPATH=. python"
 
