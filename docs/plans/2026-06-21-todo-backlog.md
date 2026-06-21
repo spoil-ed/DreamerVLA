@@ -49,9 +49,11 @@ Constraint shorthand below: **behaviour-preserving** unless flagged "changes num
   function threading ~50 locals; decomposing into helpers risks dropping a variable and can
   hurt readability. Extract only cleanly-bounded sub-computations with explicit in/out, or
   leave. Seams: `2026-06-21-backlog-execution.md` Task 10.
-- [ ] **`embodied_eval_runner.py`** (2514) — extract the low-coupling / static helper methods
-  to sibling modules (pretokenize-style delegators), keep the tightly-`self`-coupled rollout
-  core. Seams: Task 13.
+- [~] **`embodied_eval_runner.py`** (2431, was 2522) — Tier-1 done: 9 pure static helpers →
+  `_embodied_eval_helpers.py` (pass-3 log). REMAINING: the higher-coupling cohesive groups
+  (action decoding/unnorm, image processing, VLA hidden encoding, dreamer-latent action,
+  policy-trace export) — extract via dependency-injection delegators, or leave. Seams:
+  Task 13.
 - [ ] **`online_dreamervla.py`** (1856) — split AFTER RUN-01 + the X-01 scheme-unify (they
   rewrite the same DDP / save-load regions). Seams: Task 12.
 

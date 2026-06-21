@@ -54,6 +54,11 @@ Items below are DONE and removed from the open backlog. Verification gaps that r
   into `dreamervla/dataset/_pretokenize_helpers.py`; the dataset classes keep them as
   static-method delegators (call sites + subclasses unchanged). Dropped the now-unused
   `import re`. The high-coupling init/windowing core stays.
+- **embodied_eval_runner.py (Tier-1)** — extracted the 9 zero-coupling static methods
+  (encoder-state normalize, ckpt-cfg, real-relabel rewards, numpy/array/action-stats utils,
+  clip-bounds, prefix-strip, image-resize) into `dreamervla/runners/_embodied_eval_helpers.py`
+  with static-method delegators. god-file 2522 → 2431 LOC. The higher-coupling rollout /
+  action-decoding / vla-encoding / dreamer-latent tiers remain in the open backlog.
 - **pixel-WM loss scaffolding** — ASSESSED: **genuinely diverges, not unified.** Shared core
   shape, but token WM uses categorical CE (configurable reduction) vs pixel-WM fixed-mean
   MSE, and `dreamer_v3_pixel_backbone_world_model` adds two extra terms (hidden_mse,
