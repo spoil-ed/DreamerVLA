@@ -113,3 +113,17 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
         if not values:
             return torch.zeros(0, dtype=torch.long)
         return torch.tensor(values, dtype=torch.long)
+
+    @staticmethod
+    def cached_hdf5_file(
+        cache: dict[str, h5py.File],
+        path: str,
+        open_kwargs: dict[str, Any],
+    ) -> h5py.File:
+        handle = cache.get(path)
+        if handle is None:
+            import h5py
+
+            handle = h5py.File(path, **open_kwargs)
+            cache[path] = handle
+        return handle

@@ -15,6 +15,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
+from dreamervla.dataset.base_dataset import BaseDataset
 from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
 _DEMO_RE = re.compile(r"^demo_(\d+)$")
@@ -201,11 +202,9 @@ class VLASFTHDF5Dataset(Dataset):
         return len(self.samples)
 
     def _file(self, path: str) -> h5py.File:
-        handle = self._file_cache.get(path)
-        if handle is None:
-            handle = h5py.File(path, **self._hdf5_open_kwargs)
-            self._file_cache[path] = handle
-        return handle
+        return BaseDataset.cached_hdf5_file(
+            self._file_cache, path, self._hdf5_open_kwargs
+        )
 
     def _action_chunk(self, demo: h5py.Group, index: int) -> np.ndarray:
         raw = np.asarray(demo["actions"], dtype=np.float32)

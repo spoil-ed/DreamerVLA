@@ -144,11 +144,9 @@ class PixelSequenceDataset(BaseDataset):
         return len(self._entries)
 
     def _file(self, path: str) -> h5py.File:
-        handle = self._file_cache.get(path)
-        if handle is None:
-            handle = h5py.File(path, **self._hdf5_open_kwargs)
-            self._file_cache[path] = handle
-        return handle
+        return self.cached_hdf5_file(
+            self._file_cache, path, self._hdf5_open_kwargs
+        )
 
     def _resize_images(self, images: torch.Tensor) -> torch.Tensor:
         # images: [T, C, H, W] in [0, 255]
