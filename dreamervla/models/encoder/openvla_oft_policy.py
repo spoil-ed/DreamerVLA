@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
+from dreamervla.utils.hf_checkpoint import strip_module_prefix
 from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
 
@@ -21,15 +22,6 @@ def _torch_dtype(name: str | torch.dtype) -> torch.dtype:
     if normalized in {"fp32", "float32"}:
         return torch.float32
     raise ValueError(f"Unsupported torch dtype: {name}")
-
-
-def _strip_module_prefix(
-    state_dict: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    return {
-        key[7:] if key.startswith("module.") else key: value
-        for key, value in state_dict.items()
-    }
 
 
 def _load_component_state(
@@ -49,7 +41,7 @@ def _load_component_state(
     if not path.is_file():
         raise FileNotFoundError(f"OpenVLA-OFT component checkpoint not found: {path}")
     state_dict = torch.load(path, map_location="cpu", weights_only=True)
-    module.load_state_dict(_strip_module_prefix(state_dict))
+    module.load_state_dict(strip_module_prefix(state_dict))
 
 
 class OpenVLAOFTPolicy(nn.Module):

@@ -5,6 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from dreamervla.models.actor._load import extract_state_dict
 from dreamervla.models.actor.base_actor import BaseActor
 from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
@@ -236,27 +237,11 @@ class LatentToActionHiddenActor(BaseActor):
             )
         candidates.append(payload)
 
-        expected_keys = set(self.output_projection.state_dict().keys())
-        prefixes = ("module.", "output_projection.", "action_head.")
-        for candidate in candidates:
-            normalized: dict[str, torch.Tensor] = {}
-            for key, value in candidate.items():
-                if not isinstance(key, str) or not isinstance(value, torch.Tensor):
-                    continue
-                normalized_key = key
-                changed = True
-                while changed:
-                    changed = False
-                    for prefix in prefixes:
-                        if normalized_key.startswith(prefix):
-                            normalized_key = normalized_key[len(prefix) :]
-                            changed = True
-                            break
-                if normalized_key in expected_keys:
-                    normalized[normalized_key] = value.to(dtype=torch.float32)
-            if normalized:
-                return normalized
-        return {}
+        return extract_state_dict(
+            candidates,
+            ("module.", "output_projection.", "action_head."),
+            set(self.output_projection.state_dict().keys()),
+        )
 
     def reference_action_chunk(self, hidden: torch.Tensor) -> torch.Tensor:
         action_hidden = self._action_hidden(hidden)

@@ -14,6 +14,16 @@ HF_WEIGHT_NAMES = (
 )
 
 
+def strip_module_prefix(
+    state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Strip a single leading ``module.`` from each key (DDP unwrap)."""
+    return {
+        key[len("module.") :] if key.startswith("module.") else key: value
+        for key, value in state_dict.items()
+    }
+
+
 def resolve_hf_checkpoint_dir(path: str | Path) -> Path:
     """Resolve a Hugging Face checkpoint directory, including one nested level."""
     candidate = Path(path).expanduser().resolve()

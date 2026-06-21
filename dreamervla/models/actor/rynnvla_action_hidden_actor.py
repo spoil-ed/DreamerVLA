@@ -5,6 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from dreamervla.models.actor._load import extract_state_dict
 from dreamervla.models.actor.base_actor import BaseActor
 from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
@@ -180,30 +181,12 @@ class RynnVLAActionHiddenActor(BaseActor):
                 candidates.append(value)
         candidates.append(payload)
 
-        expected_keys = set(self.output_projection.state_dict().keys())
-        prefixes = ("module.", "output_projection.", "action_head.")
-        for candidate in candidates:
-            if not candidate or not all(
-                isinstance(k, str) and isinstance(v, torch.Tensor)
-                for k, v in candidate.items()
-            ):
-                continue
-            normalized: dict[str, torch.Tensor] = {}
-            for key, value in candidate.items():
-                normalized_key = key
-                changed = True
-                while changed:
-                    changed = False
-                    for prefix in prefixes:
-                        if normalized_key.startswith(prefix):
-                            normalized_key = normalized_key[len(prefix) :]
-                            changed = True
-                            break
-                if normalized_key in expected_keys:
-                    normalized[normalized_key] = value.to(dtype=torch.float32)
-            if normalized:
-                return normalized
-        return {}
+        return extract_state_dict(
+            candidates,
+            ("module.", "output_projection.", "action_head."),
+            set(self.output_projection.state_dict().keys()),
+            require_all_valid=True,
+        )
 
     def _reshape_action_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim == 3:

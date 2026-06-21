@@ -8,22 +8,11 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
+from dreamervla.models.actor._load import extract_state_dict
 from dreamervla.models.actor.base_actor import BaseActor
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_prefixes(key: str, prefixes: tuple[str, ...]) -> str:
-    changed = True
-    while changed:
-        changed = False
-        for prefix in prefixes:
-            if key.startswith(prefix):
-                key = key[len(prefix) :]
-                changed = True
-                break
-    return key
 
 
 class OpenVLADiscreteTokenActor(BaseActor):
@@ -177,18 +166,7 @@ class OpenVLADiscreteTokenActor(BaseActor):
             candidates.append(payload)
 
         strip_prefixes = ("module.", "backbone.", *prefixes)
-        expected = {"weight"}
-        for candidate in candidates:
-            normalized: dict[str, torch.Tensor] = {}
-            for key, value in candidate.items():
-                if not isinstance(key, str) or not isinstance(value, torch.Tensor):
-                    continue
-                stripped = _strip_prefixes(key, strip_prefixes)
-                if stripped in expected:
-                    normalized[stripped] = value.to(dtype=torch.float32)
-            if normalized:
-                return normalized
-        return {}
+        return extract_state_dict(candidates, strip_prefixes, {"weight"})
 
     def _reshape_action_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim == 3:
