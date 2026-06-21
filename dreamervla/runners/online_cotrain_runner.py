@@ -50,6 +50,7 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.utils.hf_module import save_module_pretrained
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
 
@@ -637,16 +638,38 @@ class OnlineCotrainRunner(DreamerVLARunner):
         return history
 
     def _save_cotrain_ckpt(self) -> None:
-        path = os.path.join(self.output_dir, "ckpt", "latest.ckpt")
-        torch.save(
-            {
-                "global_step": int(self.global_step),
-                "world_model": _unwrap(self.world_model).state_dict(),
-                "policy": _unwrap(self.policy).state_dict(),
-                "critic": _unwrap(self.critic).state_dict(),
-                "classifier": _unwrap(self.classifier).state_dict(),
-                "classifier_threshold": float(self.classifier_threshold),
-            },
-            path,
-        )
-        print(f"[online-cotrain] ckpt -> {path}", flush=True)
+        ckpt_dir = os.path.join(self.output_dir, "ckpt")
+        os.makedirs(ckpt_dir, exist_ok=True)
+        if self.checkpoint_save_torch():
+            torch.save(
+                {
+                    "global_step": int(self.global_step),
+                    "world_model": _unwrap(self.world_model).state_dict(),
+                    "policy": _unwrap(self.policy).state_dict(),
+                    "critic": _unwrap(self.critic).state_dict(),
+                    "classifier": _unwrap(self.classifier).state_dict(),
+                    "classifier_threshold": float(self.classifier_threshold),
+                },
+                os.path.join(ckpt_dir, "latest.ckpt"),
+            )
+        if self.checkpoint_save_hf():
+            for name, module, cfg_key in (
+                ("world_model", self.world_model, "world_model"),
+                ("policy", self.policy, "policy"),
+                ("critic", self.critic, "critic"),
+            ):
+                blk = OmegaConf.to_container(OmegaConf.select(self.cfg, cfg_key), resolve=True)
+                target = blk.pop("_target_")
+                save_module_pretrained(
+                    _unwrap(module),
+                    os.path.join(ckpt_dir, f"latest_hf_{name}"),
+                    target=target,
+                    init_args=blk,
+                )
+            save_module_pretrained(
+                _unwrap(self.classifier),
+                os.path.join(ckpt_dir, "latest_hf_classifier"),
+                target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
+                init_args=getattr(self, "_classifier_cls_kwargs", {}),
+            )
+        print(f"[online-cotrain] ckpt -> {ckpt_dir}", flush=True)
