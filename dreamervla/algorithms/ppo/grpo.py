@@ -23,6 +23,22 @@ def _repeat_latent(value: Any, repeats: int) -> Any:
     raise TypeError(f"Unsupported latent type for repeat: {type(value).__name__}")
 
 
+def _ppo_clip_term(
+    ratio: torch.Tensor,
+    advantage: torch.Tensor,
+    clip_low: float,
+    clip_high: float,
+) -> torch.Tensor:
+    """Per-element PPO clipped surrogate loss (negated, ready to minimize).
+
+    Returns ``max(-adv * ratio, -adv * ratio_clipped)`` elementwise, which is
+    algebraically identical to ``-min(adv * ratio, adv * ratio_clipped)``.
+    The caller applies its own reduction (mean / masked sum / weighted sum).
+    """
+    ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
+    return torch.maximum(-advantage * ratio, -advantage * ratio_clipped)
+
+
 def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.Tensor:
     """Group-relative z-score normalization of per-rollout returns (GRPO).
 
@@ -54,4 +70,4 @@ def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.
     return ((groups - mean) / std).reshape_as(score)
 
 
-__all__ = ["_group_advantage", "_repeat_latent"]
+__all__ = ["_group_advantage", "_ppo_clip_term", "_repeat_latent"]

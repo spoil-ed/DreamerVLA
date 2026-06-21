@@ -49,7 +49,11 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_observe_sequence,
     _world_model_state_reward,
 )
-from dreamervla.algorithms.ppo.grpo import _group_advantage, _repeat_latent
+from dreamervla.algorithms.ppo.grpo import (
+    _group_advantage,
+    _ppo_clip_term,
+    _repeat_latent,
+)
 from dreamervla.algorithms.ppo.relabel import _real_relabel_ppo_loss
 from dreamervla.algorithms.ppo.tdmpc_critic import (
     _sequence_field,
@@ -351,10 +355,7 @@ def dino_wmpo_dense_step(
     log_prob_traj = log_prob_stack.sum(dim=1)
     old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
     ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-    ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-    actor_pg_loss = torch.maximum(
-        -advantages * ratio, -advantages * ratio_clipped
-    ).mean()
+    actor_pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
     actor_entropy_loss = (
         -(entropy_coef * entropy_stack.sum(dim=1)).mean()
         if entropy_coef
@@ -654,10 +655,7 @@ def dino_wmpo_dense_step(
         entropy_stack = torch.stack(entropies, dim=1)
         log_prob_traj = log_prob_stack.sum(dim=1)
         ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-        ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-        actor_pg_loss = torch.maximum(
-            -advantages * ratio, -advantages * ratio_clipped
-        ).mean()
+        actor_pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
         actor_entropy_loss = (
             -(entropy_coef * entropy_stack.sum(dim=1)).mean()
             if entropy_coef

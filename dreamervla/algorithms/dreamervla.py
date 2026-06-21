@@ -387,6 +387,28 @@ def _policy_reference_action_chunk(
     return None
 
 
+def _lambda_return_recurrence(
+    live: torch.Tensor,  # [B,T-1]
+    cont: torch.Tensor,  # [B,T-1]
+    rewards: torch.Tensor,  # [B,T]
+    boot: torch.Tensor,  # [B,T]
+) -> torch.Tensor:  # [B,T-1]
+    """Backward DreamerV3 lambda-return recurrence shared by the imagine/replay
+    helpers.
+
+    ``live`` (discounted continuation) and ``cont`` (lambda trace weight) are
+    constructed by the caller; everything downstream is identical.
+    """
+    interm = rewards[:, 1:] + (1.0 - cont) * live * boot[:, 1:]
+    ret = boot[:, -1]
+    returns: list[torch.Tensor] = []
+    for idx in reversed(range(live.shape[1])):
+        ret = interm[:, idx] + live[:, idx] * cont[:, idx] * ret
+        returns.append(ret)
+    returns.reverse()
+    return torch.stack(returns, dim=1)
+
+
 def compute_lambda_returns(
     rewards: torch.Tensor,  # [B,H+1]
     continues: torch.Tensor,  # [B,H+1]
@@ -408,14 +430,7 @@ def compute_lambda_returns(
         )
     live = continues[:, 1:] * float(disc)
     cont = torch.full_like(live, float(lam))
-    interm = rewards[:, 1:] + (1.0 - cont) * live * boot[:, 1:]
-    ret = boot[:, -1]
-    returns: list[torch.Tensor] = []
-    for idx in reversed(range(live.shape[1])):
-        ret = interm[:, idx] + live[:, idx] * cont[:, idx] * ret
-        returns.append(ret)
-    returns.reverse()
-    return torch.stack(returns, dim=1)
+    return _lambda_return_recurrence(live, cont, rewards, boot)
 
 
 def compute_replay_lambda_returns(
@@ -443,14 +458,7 @@ def compute_replay_lambda_returns(
         )
     live = (1.0 - terminal.float())[:, 1:] * float(disc)
     cont = (1.0 - last.float())[:, 1:] * float(lam)
-    interm = rewards[:, 1:] + (1.0 - cont) * live * boot[:, 1:]
-    ret = boot[:, -1]
-    returns: list[torch.Tensor] = []
-    for idx in reversed(range(live.shape[1])):
-        ret = interm[:, idx] + live[:, idx] * cont[:, idx] * ret
-        returns.append(ret)
-    returns.reverse()
-    return torch.stack(returns, dim=1)
+    return _lambda_return_recurrence(live, cont, rewards, boot)
 
 
 @dataclass

@@ -53,7 +53,11 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_actor_input,
     _world_model_observe_sequence,
 )
-from dreamervla.algorithms.ppo.grpo import _group_advantage, _repeat_latent
+from dreamervla.algorithms.ppo.grpo import (
+    _group_advantage,
+    _ppo_clip_term,
+    _repeat_latent,
+)
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
@@ -466,9 +470,9 @@ def dino_wmpo_outcome_step(
             new_lp, entropy_t, _ = policy(eval_batch)
             mask_c = chunk_mask[c]  # [B_eff], 0/1 per rollout
             ratio = torch.exp(new_lp - old_lp)
-            unclipped = ratio * advantages
-            clipped = torch.clamp(ratio, 1.0 - clip_low, 1.0 + clip_high) * advantages
-            ppo_loss = -(torch.min(unclipped, clipped) * mask_c).sum()
+            ppo_loss = (
+                _ppo_clip_term(ratio, advantages, clip_low, clip_high) * mask_c
+            ).sum()
             ent_term = (entropy_t * mask_c).sum()
             # Backprop chunk-by-chunk instead of accumulating all chunk graphs.
             # Long-imagine PPO has many actor forwards (T_max / K); holding them

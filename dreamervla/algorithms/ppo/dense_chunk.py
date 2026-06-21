@@ -57,7 +57,11 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_observe_sequence,
     _world_model_state_reward,
 )
-from dreamervla.algorithms.ppo.grpo import _group_advantage, _repeat_latent
+from dreamervla.algorithms.ppo.grpo import (
+    _group_advantage,
+    _ppo_clip_term,
+    _repeat_latent,
+)
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
@@ -308,8 +312,7 @@ def dino_wmpo_dense_chunk_step(
         log_prob_traj = log_prob_stack.sum(dim=1)
         old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
         ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-        ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-        pg_loss = torch.maximum(-advantages * ratio, -advantages * ratio_clipped).mean()
+        pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
         ent_loss = (
             -(entropy_coef * entropy_stack.sum(dim=1)).mean()
             if entropy_coef
