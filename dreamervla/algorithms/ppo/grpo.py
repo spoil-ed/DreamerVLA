@@ -23,20 +23,52 @@ def _repeat_latent(value: Any, repeats: int) -> Any:
     raise TypeError(f"Unsupported latent type for repeat: {type(value).__name__}")
 
 
+def _entropy_coef(algorithm_cfg: Any) -> float:
+    """The single PPO entropy coefficient, honored identically by every route.
+
+    Reads ``actent`` first, then ``entropy_coef`` (legacy alias), default 0.
+    """
+    return float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
+
+
+def _ppo_ratio(
+    log_prob: torch.Tensor,
+    old_log_prob: torch.Tensor,
+    *,
+    clip_log_ratio: float | None = None,
+) -> torch.Tensor:
+    """Importance ratio ``exp(log_prob - old_log_prob)``.
+
+    ``clip_log_ratio`` (default off) clamps the log-ratio to ``[-c, c]`` before
+    ``exp`` for numerical stability (matches RLinf's log-ratio clamp); it is
+    especially relevant here because callers sum log-probs over a trajectory.
+    """
+    log_ratio = log_prob - old_log_prob
+    if clip_log_ratio is not None:
+        log_ratio = log_ratio.clamp(-float(clip_log_ratio), float(clip_log_ratio))
+    return torch.exp(log_ratio)
+
+
 def _ppo_clip_term(
     ratio: torch.Tensor,
     advantage: torch.Tensor,
     clip_low: float,
     clip_high: float,
+    *,
+    clip_ratio_c: float | None = None,
 ) -> torch.Tensor:
     """Per-element PPO clipped surrogate loss (negated, ready to minimize).
 
-    Returns ``max(-adv * ratio, -adv * ratio_clipped)`` elementwise, which is
-    algebraically identical to ``-min(adv * ratio, adv * ratio_clipped)``.
-    The caller applies its own reduction (mean / masked sum / weighted sum).
+    Returns ``max(-adv * ratio, -adv * ratio_clipped)`` elementwise. When
+    ``clip_ratio_c`` (>1, default off) is set, the loss is additionally capped at
+    ``clip_ratio_c * |adv|`` (PPO dual-clip), bounding the negative-advantage /
+    exploded-ratio case. The caller applies its own reduction.
     """
     ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
-    return torch.maximum(-advantage * ratio, -advantage * ratio_clipped)
+    term = torch.maximum(-advantage * ratio, -advantage * ratio_clipped)
+    if clip_ratio_c is not None:
+        term = torch.minimum(term, float(clip_ratio_c) * advantage.abs())
+    return term
 
 
 def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.Tensor:
@@ -70,4 +102,10 @@ def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.
     return ((groups - mean) / std).reshape_as(score)
 
 
-__all__ = ["_group_advantage", "_ppo_clip_term", "_repeat_latent"]
+__all__ = [
+    "_entropy_coef",
+    "_group_advantage",
+    "_ppo_clip_term",
+    "_ppo_ratio",
+    "_repeat_latent",
+]

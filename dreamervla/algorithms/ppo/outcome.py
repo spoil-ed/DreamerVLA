@@ -54,8 +54,10 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_observe_sequence,
 )
 from dreamervla.algorithms.ppo.grpo import (
+    _entropy_coef,
     _group_advantage,
     _ppo_clip_term,
+    _ppo_ratio,
     _repeat_latent,
 )
 from dreamervla.utils.torch_utils import move_mapping_to_device
@@ -187,9 +189,11 @@ def dino_wmpo_outcome_step(
     update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
+    clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)
+    clip_log_ratio = algorithm_cfg.get("clip_log_ratio", None)
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     actor_bc_ref_scale = float(algorithm_cfg.get("actor_bc_to_ref_scale", 0.0))
-    entropy_coef = float(algorithm_cfg.get("entropy_coef", 0.0))
+    entropy_coef = _entropy_coef(algorithm_cfg)
     adv_eps = float(algorithm_cfg.get("advantage_eps", 1.0e-6))
     grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
     zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
@@ -469,9 +473,12 @@ def dino_wmpo_outcome_step(
                 eval_batch["action_token_ids"] = token_ids
             new_lp, entropy_t, _ = policy(eval_batch)
             mask_c = chunk_mask[c]  # [B_eff], 0/1 per rollout
-            ratio = torch.exp(new_lp - old_lp)
+            ratio = _ppo_ratio(new_lp, old_lp, clip_log_ratio=clip_log_ratio)
             ppo_loss = (
-                _ppo_clip_term(ratio, advantages, clip_low, clip_high) * mask_c
+                _ppo_clip_term(
+                    ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+                )
+                * mask_c
             ).sum()
             ent_term = (entropy_t * mask_c).sum()
             # Backprop chunk-by-chunk instead of accumulating all chunk graphs.

@@ -50,8 +50,10 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_state_reward,
 )
 from dreamervla.algorithms.ppo.grpo import (
+    _entropy_coef,
     _group_advantage,
     _ppo_clip_term,
+    _ppo_ratio,
     _repeat_latent,
 )
 from dreamervla.algorithms.ppo.relabel import _real_relabel_ppo_loss
@@ -90,9 +92,9 @@ def dino_wmpo_dense_step(
     update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
-    entropy_coef = float(
-        algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0))
-    )
+    clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)
+    clip_log_ratio = algorithm_cfg.get("clip_log_ratio", None)
+    entropy_coef = _entropy_coef(algorithm_cfg)
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     actor_bc_ref_scale = float(algorithm_cfg.get("actor_bc_to_ref_scale", 0.0))
     real_relabel_cfg = algorithm_cfg.get("real_rollout_relabel", {}) or {}
@@ -354,8 +356,10 @@ def dino_wmpo_dense_step(
 
     log_prob_traj = log_prob_stack.sum(dim=1)
     old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
-    ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-    actor_pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
+    ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
+    actor_pg_loss = _ppo_clip_term(
+        ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+    ).mean()
     actor_entropy_loss = (
         -(entropy_coef * entropy_stack.sum(dim=1)).mean()
         if entropy_coef
@@ -654,8 +658,10 @@ def dino_wmpo_dense_step(
         log_prob_stack = torch.stack(new_log_probs, dim=1)
         entropy_stack = torch.stack(entropies, dim=1)
         log_prob_traj = log_prob_stack.sum(dim=1)
-        ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-        actor_pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
+        ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
+        actor_pg_loss = _ppo_clip_term(
+            ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+        ).mean()
         actor_entropy_loss = (
             -(entropy_coef * entropy_stack.sum(dim=1)).mean()
             if entropy_coef

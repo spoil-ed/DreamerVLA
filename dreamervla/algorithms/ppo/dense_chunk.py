@@ -58,8 +58,10 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_state_reward,
 )
 from dreamervla.algorithms.ppo.grpo import (
+    _entropy_coef,
     _group_advantage,
     _ppo_clip_term,
+    _ppo_ratio,
     _repeat_latent,
 )
 from dreamervla.utils.torch_utils import move_mapping_to_device
@@ -109,9 +111,9 @@ def dino_wmpo_dense_chunk_step(
     update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
-    entropy_coef = float(
-        algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0))
-    )
+    clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)
+    clip_log_ratio = algorithm_cfg.get("clip_log_ratio", None)
+    entropy_coef = _entropy_coef(algorithm_cfg)
     kl_coef = float(algorithm_cfg.get("kl_coef", 0.0))
     gamma = float(algorithm_cfg.get("ppo_gamma", 1.0))
     adv_eps = float(algorithm_cfg.get("advantage_eps", 1.0e-6))
@@ -311,8 +313,10 @@ def dino_wmpo_dense_chunk_step(
 
         log_prob_traj = log_prob_stack.sum(dim=1)
         old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
-        ratio = torch.exp(log_prob_traj - old_log_prob_traj)
-        pg_loss = _ppo_clip_term(ratio, advantages, clip_low, clip_high).mean()
+        ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
+        pg_loss = _ppo_clip_term(
+            ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+        ).mean()
         ent_loss = (
             -(entropy_coef * entropy_stack.sum(dim=1)).mean()
             if entropy_coef

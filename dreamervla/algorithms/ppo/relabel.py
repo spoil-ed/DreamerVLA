@@ -10,7 +10,7 @@ from collections.abc import Mapping
 import torch
 from torch import nn
 
-from dreamervla.algorithms.ppo.grpo import _ppo_clip_term
+from dreamervla.algorithms.ppo.grpo import _ppo_clip_term, _ppo_ratio
 
 _ZERO_METRICS = {
     "real_relabel_applied": 0.0,
@@ -53,7 +53,7 @@ def _real_relabel_ppo_loss(
     advantage = advantage.to(device=log_prob.device, dtype=log_prob.dtype)
     old_log_prob = old_log_prob.to(device=log_prob.device, dtype=log_prob.dtype)
     weight = weight.to(device=log_prob.device, dtype=log_prob.dtype).clamp_min(0.0)
-    ratio = torch.exp(log_prob - old_log_prob)
+    ratio = _ppo_ratio(log_prob, old_log_prob)
     per_item = _ppo_clip_term(ratio, advantage, clip_low, clip_high)
     denom = weight.sum().clamp_min(1.0)
     loss = (per_item * weight).sum() / denom

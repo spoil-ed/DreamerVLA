@@ -412,21 +412,19 @@ def _lambda_return_recurrence(
 def compute_lambda_returns(
     rewards: torch.Tensor,  # [B,H+1]
     continues: torch.Tensor,  # [B,H+1]
-    values: torch.Tensor,  # [B,H+1]
     boot: torch.Tensor,  # [B,H+1]
     disc: float,
     lam: float,
 ) -> torch.Tensor:  # [B,H]
     """DreamerV3 lambda return, matching dreamerv3/agent.py::lambda_return.
 
-    Reward/continue/value are defined for the start state plus H imagined
-    states. The return for action t uses reward/continue/value at t+1.
+    Reward/continue/bootstrap are defined for the start state plus H imagined
+    states. The return for action t uses reward/continue/bootstrap at t+1.
     """
-    if not (rewards.shape == continues.shape == values.shape == boot.shape):
+    if not (rewards.shape == continues.shape == boot.shape):
         raise ValueError(
             "lambda_return expects equal [B,H+1] shapes, got "
-            f"{tuple(rewards.shape)}, {tuple(continues.shape)}, "
-            f"{tuple(values.shape)}, {tuple(boot.shape)}"
+            f"{tuple(rewards.shape)}, {tuple(continues.shape)}, {tuple(boot.shape)}"
         )
     live = continues[:, 1:] * float(disc)
     cont = torch.full_like(live, float(lam))
@@ -437,7 +435,6 @@ def compute_replay_lambda_returns(
     last: torch.Tensor,  # [B,T]
     terminal: torch.Tensor,  # [B,T]
     rewards: torch.Tensor,  # [B,T]
-    values: torch.Tensor,  # [B,T]
     boot: torch.Tensor,  # [B,T]
     disc: float,
     lam: float,
@@ -448,13 +445,11 @@ def compute_replay_lambda_returns(
     removes environment continuation. `boot` is the imagined return seeded from
     each replay posterior state, exactly like DreamerV3's `repval_loss`.
     """
-    if not (
-        last.shape == terminal.shape == rewards.shape == values.shape == boot.shape
-    ):
+    if not (last.shape == terminal.shape == rewards.shape == boot.shape):
         raise ValueError(
             "replay lambda_return expects equal [B,T] shapes, got "
-            f"{tuple(last.shape)}, {tuple(terminal.shape)}, {tuple(rewards.shape)}, "
-            f"{tuple(values.shape)}, {tuple(boot.shape)}"
+            f"{tuple(last.shape)}, {tuple(terminal.shape)}, "
+            f"{tuple(rewards.shape)}, {tuple(boot.shape)}"
         )
     live = (1.0 - terminal.float())[:, 1:] * float(disc)
     cont = (1.0 - last.float())[:, 1:] * float(lam)
@@ -567,9 +562,6 @@ def imagine_actor_critic_step(
     slowreg = float(algorithm_cfg.get("slowreg", 1.0))
     repl_cfg = algorithm_cfg.get("repl_loss", {})
     repl_lam = float(repl_cfg.get("lam", lam)) if hasattr(repl_cfg, "get") else lam
-    repl_slowtar = (
-        bool(repl_cfg.get("slowtar", slowtar)) if hasattr(repl_cfg, "get") else slowtar
-    )
     repl_slowreg = (
         float(repl_cfg.get("slowreg", slowreg)) if hasattr(repl_cfg, "get") else slowreg
     )
@@ -895,7 +887,6 @@ def imagine_actor_critic_step(
                 reward_stack,
                 continue_stack,
                 target_values,
-                target_values,
                 disc=disc,
                 lam=lam,
             )
@@ -1120,22 +1111,11 @@ def imagine_actor_critic_step(
                         "Replay latent shape changed unexpectedly: "
                         f"B={B_rep}, K={K_rep}, expected B={replay_batch_size}, K={starts}"
                     )
-                replay_flat = replay_critic_feat.reshape(B_rep * K_rep, D_rep)
-                replay_values = critic({"mode": "value", "hidden": replay_flat}).view(
-                    B_rep, K_rep
-                )
-                replay_slow_values = target_critic(
-                    {"mode": "value", "hidden": replay_flat}
-                ).view(B_rep, K_rep)
-                replay_target_values = (
-                    replay_slow_values if repl_slowtar else replay_values
-                )
                 replay_boot = raw_returns[:, 0].reshape(B_rep, K_rep)
                 replay_returns = compute_replay_lambda_returns(
                     last=replay_last,
                     terminal=replay_terminal,
                     rewards=replay_rewards,
-                    values=replay_target_values,
                     boot=replay_boot,
                     disc=replay_disc,
                     lam=repl_lam,

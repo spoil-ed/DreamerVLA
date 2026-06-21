@@ -71,7 +71,6 @@ def test_return_tracker_reports_dreamerv3_offset_and_scale():
 
 def test_replay_lambda_returns_respect_terminal_and_last_flags():
     rewards = torch.tensor([[0.0, 1.0, 2.0]])
-    values = torch.zeros_like(rewards)
     boot = torch.tensor([[5.0, 7.0, 11.0]])
     terminal = torch.tensor([[0.0, 1.0, 0.0]])
     last = torch.zeros_like(rewards)
@@ -80,7 +79,6 @@ def test_replay_lambda_returns_respect_terminal_and_last_flags():
         last=last,
         terminal=terminal,
         rewards=rewards,
-        values=values,
         boot=boot,
         disc=0.9,
         lam=0.5,
