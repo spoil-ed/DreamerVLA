@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
+
 HF_WEIGHT_NAMES = (
     "model.safetensors",
     "pytorch_model.bin",
@@ -72,7 +74,27 @@ def load_runner_payload(path: str | Path, **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("map_location", "cpu")
     kwargs.setdefault("weights_only", False)
     kwargs.pop("mmap", None)
-    return torch.load(path, **kwargs)
+    payload = torch.load(path, **kwargs)
+    _check_format_version(payload, path)
+    return payload
+
+
+def _check_format_version(payload: Any, path: str | Path) -> None:
+    """Fail loudly when a checkpoint is newer than this code can read.
+
+    Only the unsafe direction is rejected. A missing or older ``format_version``
+    stays loadable so legacy / HF payloads keep working (dual-read contract).
+    """
+    if not isinstance(payload, dict):
+        return
+    version = payload.get("format_version")
+    if not isinstance(version, int):
+        return
+    if version > CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(
+            f"checkpoint {path} has format_version={version}, but this build supports "
+            f"up to {CHECKPOINT_FORMAT_VERSION}; upgrade DreamerVLA to load it."
+        )
 
 
 def load_hf_prefixed_tensors(
