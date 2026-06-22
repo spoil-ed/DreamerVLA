@@ -44,6 +44,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from dreamervla.dataset.collection_manifest import next_shard_index
 from dreamervla.runners.oft_collect_common import (
     assert_policy_mode_matches,
     load_policy,
@@ -402,7 +403,11 @@ def collect_rollouts(
     reward_dir.mkdir(parents=True, exist_ok=True)
     hidden_dir.mkdir(parents=True, exist_ok=True)
 
-    shard_name = f"r{rank}_shard_000.hdf5" if is_distributed else "shard_000.hdf5"
+    # Append-aware: a fresh dir yields index 000 (byte-identical to the old fixed
+    # name); a resumed collection writes the next index instead of overwriting.
+    shard_prefix = f"r{rank}_shard" if is_distributed else "shard"
+    shard_idx = next_shard_index(reward_dir, prefix=shard_prefix)
+    shard_name = f"{shard_prefix}_{shard_idx:03d}.hdf5"
 
     policy = _load_policy(cfg, gpu_id)
     _assert_policy_mode_matches(cfg)

@@ -20,6 +20,13 @@ dry_run: false
 debug: false
 skip_collect: false
 skip_asset_check: false
+# Episode-level resume for the unified data/collected_rollouts/<suite> space.
+# When collect_target_episodes is set, a relaunch counts what is already on disk
+# and tops up to that TOTAL (spread over collect_num_tasks tasks) by appending new
+# shards; collection is skipped once the target is reached. Left null = no resume
+# planning (each run still appends + writes the manifest).
+collect_target_episodes: null
+collect_num_tasks: 10
 common_overrides: []
 collect_overrides: []
 cotrain_overrides: []

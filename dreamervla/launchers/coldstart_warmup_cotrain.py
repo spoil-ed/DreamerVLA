@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,11 @@ from typing import Any, Literal
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.dataset.collection_manifest import (
+    count_collected_episodes,
+    resume_plan,
+    write_manifest,
+)
 from dreamervla.utils.hydra_config import script_config
 from dreamervla.utils.paths import data_root
 
@@ -30,6 +37,7 @@ class PipelinePlan:
     profile: str
     task: str
     run_root: Path
+    collected_root: Path
     reward_dir: Path
     hidden_dir: Path
     collect_cmd: list[str]
@@ -169,8 +177,11 @@ def build_pipeline_plan(
     distributed = bool(cfg.get("distributed", True))
     debug_enabled = bool(cfg.get("debug", False) if debug is None else debug)
     root = Path(run_root).expanduser()
-    reward_dir = root / "coldstart" / "reward"
-    hidden_dir = root / "coldstart" / "hidden"
+    # Collected episodes live in a stable, per-suite UNIFIED space so reruns
+    # accumulate/resume there; only the training outputs stay run-isolated.
+    collected_root = _data_root() / "collected_rollouts" / str(task_spec["suite"])
+    reward_dir = collected_root / "reward"
+    hidden_dir = collected_root / "hidden"
     collect_out = root / "collect"
     cotrain_out = root / "cotrain"
     context = {
@@ -246,6 +257,7 @@ def build_pipeline_plan(
         profile=selected_profile,
         task=task_name,
         run_root=root,
+        collected_root=collected_root,
         reward_dir=reward_dir,
         hidden_dir=hidden_dir,
         collect_cmd=collect_cmd,
@@ -419,14 +431,72 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 2
 
-    if not bool(cfg.get("skip_collect", False)):
+    target_episodes = cfg.get("collect_target_episodes")
+    num_tasks = int(cfg.get("collect_num_tasks", 10) or 10)
+    collect_cmd = list(plan.collect_cmd)
+    run_collect = not bool(cfg.get("skip_collect", False))
+    if run_collect and target_episodes is not None:
+        collected = count_collected_episodes(plan.reward_dir)
+        rp = resume_plan(
+            target_total=int(target_episodes), num_tasks=num_tasks, collected=collected
+        )
+        if rp["complete"]:
+            print(
+                f"PHASE 1/2 SKIPPED: target {target_episodes} reached "
+                f"({collected} episodes already in {plan.collected_root})",
+                flush=True,
+            )
+            run_collect = False
+        else:
+            collect_cmd.append(f"collect.episodes_per_task={rp['episodes_per_task']}")
+            print(
+                f"[resume] {collected}/{target_episodes} collected; topping up "
+                f"{rp['remaining']} ({rp['episodes_per_task']}/task, appending shards)",
+                flush=True,
+            )
+    if run_collect:
         print("PHASE 1/2 START: cold-start collection", flush=True)
-        subprocess.run(plan.collect_cmd, check=True)
+        subprocess.run(collect_cmd, check=True)
     else:
         print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
+    _write_collection_manifest(plan, target_episodes=target_episodes, num_tasks=num_tasks)
     print("PHASE 2/2 START: offline-warmup online cotrain", flush=True)
     subprocess.run(plan.cotrain_cmd, check=True)
     return 0
+
+
+def _write_collection_manifest(
+    plan: PipelinePlan, *, target_episodes: int | None, num_tasks: int
+) -> None:
+    """Write metadata + config next to the unified collected_rollouts data."""
+    collected = count_collected_episodes(plan.reward_dir)
+    shards = (
+        sorted(p.name for p in plan.reward_dir.glob("*.hdf5"))
+        if plan.reward_dir.is_dir()
+        else []
+    )
+    complete = target_episodes is not None and collected >= int(target_episodes)
+    write_manifest(
+        plan.collected_root,
+        {
+            "task": plan.task,
+            "mode": plan.mode,
+            "profile": plan.profile,
+            "reward_dir": str(plan.reward_dir),
+            "hidden_dir": str(plan.hidden_dir),
+            "target_episodes": target_episodes,
+            "num_tasks": num_tasks,
+            "collected_episodes": collected,
+            "shards": shards,
+            "status": "complete" if complete else "in_progress",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "collect_cmd": list(plan.collect_cmd),
+        },
+    )
+    # Co-locate the resolved collection config with the data (best-effort).
+    resolved = plan.run_root / "collect" / "resolved_config.yaml"
+    if resolved.is_file():
+        shutil.copy2(resolved, plan.collected_root / "resolved_config.yaml")
 
 
 if __name__ == "__main__":

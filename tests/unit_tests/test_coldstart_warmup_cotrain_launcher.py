@@ -347,7 +347,9 @@ def test_launcher_prints_phase_start_banners(tmp_path, monkeypatch, capsys) -> N
     rec = _Recorder()
     monkeypatch.setattr(mod, "subprocess", rec)
 
-    exit_code = mod.main([f"run_root={tmp_path}", "skip_asset_check=true"])
+    exit_code = mod.main(
+        [f"run_root={tmp_path}", f"data_root={tmp_path}", "skip_asset_check=true"]
+    )
     out = capsys.readouterr().out
 
     assert exit_code == 0
@@ -373,7 +375,12 @@ def test_launcher_banner_marks_skipped_collection(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(mod, "subprocess", rec)
 
     exit_code = mod.main(
-        [f"run_root={tmp_path}", "skip_asset_check=true", "skip_collect=true"]
+        [
+            f"run_root={tmp_path}",
+            f"data_root={tmp_path}",
+            "skip_asset_check=true",
+            "skip_collect=true",
+        ]
     )
     out = capsys.readouterr().out
 
@@ -391,6 +398,67 @@ def test_ray_launcher_does_not_freeze_total_episodes_when_episodes_per_task_chan
     plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python")
 
     assert not any(item.startswith("rollout.target_episodes=") for item in plan.collect_cmd)
+
+
+def test_plan_uses_unified_collected_rollouts_space(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DVLA_DATA_ROOT", str(tmp_path))
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    run_root = tmp_path / "run"
+    plan = build_pipeline_plan(mode="noray", task="goal", run_root=run_root, python="python")
+
+    # Collected data lives in the stable, per-suite unified space (not the run_root).
+    assert plan.reward_dir == tmp_path / "collected_rollouts" / "libero_goal" / "reward"
+    assert plan.hidden_dir == tmp_path / "collected_rollouts" / "libero_goal" / "hidden"
+    assert plan.collected_root == tmp_path / "collected_rollouts" / "libero_goal"
+    # Training outputs stay isolated under the timestamped run_root.
+    assert f"training.out_dir={run_root / 'collect'}" in plan.collect_cmd
+    assert f"training.out_dir={run_root / 'cotrain'}" in plan.cotrain_cmd
+
+
+def test_launcher_resume_skips_collection_and_writes_manifest(tmp_path, monkeypatch, capsys) -> None:
+    import h5py
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+    from dreamervla.dataset.collection_manifest import read_manifest
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    reward = tmp_path / "collected_rollouts" / "libero_goal" / "reward"
+    reward.mkdir(parents=True)
+    with h5py.File(str(reward / "shard_000.hdf5"), "w") as f:
+        data = f.create_group("data")
+        data.attrs["num_demos"] = 6
+        for i in range(6):
+            data.create_group(f"demo_{i}")
+
+    exit_code = mod.main(
+        [
+            f"run_root={tmp_path / 'run'}",
+            f"data_root={tmp_path}",
+            "task=goal",
+            "skip_asset_check=true",
+            "collect_target_episodes=6",
+            "collect_num_tasks=2",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "PHASE 1/2 SKIPPED" in out
+    assert len(rec.calls) == 1  # only cotrain runs; collection target already met
+
+    manifest = read_manifest(tmp_path / "collected_rollouts" / "libero_goal")
+    assert manifest["collected_episodes"] == 6
+    assert manifest["status"] == "complete"
 
 
 def test_asset_validation_reports_missing_inputs(tmp_path) -> None:
