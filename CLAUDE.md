@@ -20,8 +20,7 @@ from AGENTS.md.
 - Mainline training defaults to `logger=tensorboard_wandb`; add
   `runner.logger.wandb_mode=offline` for offline W&B, or use
   `logger=tensorboard` / `logger=wandb` for a single backend.
-- OFT Scheme-A sidecars should match the preprocess launcher output:
-  `${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2`.
+- OFT Scheme-A sidecars should match the preprocess launcher output, whose `history`follows the         checkpoint's `num_images_in_input` (the bundled OFT ckpts are 1-image →`${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1`).
 
 ## RLinf Alignment Snapshot
 
