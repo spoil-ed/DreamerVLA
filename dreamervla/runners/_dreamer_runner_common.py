@@ -15,6 +15,8 @@ from typing import Any
 import torch
 from omegaconf import OmegaConf
 
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+
 
 def to_device(value: Any, device: torch.device) -> Any:
     if isinstance(value, torch.Tensor):
@@ -77,12 +79,7 @@ class DreamerCkptResumeMixin:
             "optimizer": optimizer.state_dict(),
             "global_step": self.global_step,
             "epoch": self.epoch,
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all()
-                if torch.cuda.is_available()
-                else [],
-            },
+            "rng": capture_rng_state(),
             "cfg": OmegaConf.to_container(self.cfg, resolve=True),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,21 +159,7 @@ class DreamerCkptResumeMixin:
         else:
             self.global_step = int(payload.get("global_step", self.global_step))
             self.epoch = int(payload.get("epoch", self.epoch))
-            rng = payload.get("rng")
-            if isinstance(rng, dict):
-                torch_state = rng.get("torch")
-                if isinstance(torch_state, torch.Tensor):
-                    torch.set_rng_state(torch_state)
-                cuda_state = rng.get("cuda")
-                if (
-                    torch.cuda.is_available()
-                    and isinstance(cuda_state, list)
-                    and cuda_state
-                ):
-                    try:
-                        torch.cuda.set_rng_state_all(cuda_state)
-                    except Exception as exc:
-                        log(f"[{tag}] warning: could not restore CUDA RNG: {exc}")
+            restore_rng_state(payload.get("rng"))
         log(f"[{tag}] resumed at global_step={self.global_step} epoch={self.epoch}")
         return True
 
