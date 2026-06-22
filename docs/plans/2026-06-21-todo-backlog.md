@@ -118,17 +118,22 @@ module paths, links — all resolve). Concrete fixes made:
   requirement. The offline WM route itself was re-verified to a `latest.ckpt` against a
   metadata-matching discrete sidecar.
 
-**Scheme-A `history` — RESOLVED (2026-06-22, maintainer decision = option (a)): h1 discrete.**
-Scheme-A is the h1 discrete action-query route, matching `task.openvla_oft.expected_*`
-(`expected_history=1`, `expected_action_head_type=oft_discrete_token`, single agentview camera →
-`token_count=56`, `wm_obs_dim=229376`; `action_hidden_dir=..._h1`). The action-hidden WM
-(`oft_world_model_dinowm_chunk` → `worldmodel/openvla_oft_action_chunk`) inherits those, so the
-sidecar is `..._oft_legacy_action_hidden_vla_policy_h1`. Fixed: action-hidden tutorial §1 now
-preprocesses with `OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb` (was h2 + two cameras), matching
-the discrete recipe §3. **TODO (manual):** `CLAUDE.md` lines 23–24 still say `..._h2` — it is
-write-protected from agents (ARS scope guard), so the maintainer must change `h2` → `h1` there.
-The on-disk `*_h2` action-hidden dumps remain the separate (not-yet-validated) L1-regression
-route and are intentionally not used by the discrete Scheme-A recipe.
+**Scheme-A `history` — clarified (2026-06-22): history is per-checkpoint, NOT a fixed scheme.**
+The OFT `history` (h1/h2) is `num_images_in_input ÷ #cameras` — a property of how the OFT
+checkpoint was SFT'd (`vla.vision_backbone.get_num_images_in_input()`), not a universal Scheme-A
+constant. Do **not** hardcode h1 or h2 anywhere; every consumer derives it from one source,
+`task.openvla_oft.expected_history`, which must equal the checkpoint's value (collect/online/WM
+already do: `oft_collect_common.py:154`, `env.history_length=${...expected_history}`, the WM
+config `expected_history: ${...}`).
+**Verified — all bundled OFT checkpoints are 1-image (h1):** `Openvla-oft-SFT-traj1/*` and
+`OpenVLA-OFT/*` have no `num_images_in_input` in `config.json` (→ default 1, `modeling_prismatic.py:93`),
+`image_sizes=[224,224]`, and the working ~50% LIBERO eval ran at `num_images=1` (a 2-image model
+couldn't reach ~50% missing a frame; `rlinf_libero_rollout.py:8` documents the traj1 contract).
+So for these ckpts `expected_history=1`; a checkpoint SFT'd for 2 images would be h2. Tutorial §1
+sets `OFT_HISTORY=1` to match the traj1 ckpt it uses (was h2). `CLAUDE.md` lines 23–24 still hardcode
+`..._h2` and are agent-write-protected (ARS scope guard) → maintainer should make that line
+ckpt-relative (it is `_h1` for the bundled ckpts). The on-disk `*_h2` action-hidden dumps are the
+separate L1-regression route, not these discrete ckpts.
 
 ## Won't-fix / intentional (record only)
 

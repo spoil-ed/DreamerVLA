@@ -15,6 +15,11 @@ export MUJOCO_GL=osmesa
 
 ## 1. Preprocess (reward HDF5 + OFT action-hidden sidecar)
 
+`OFT_HISTORY × #OFT_IMAGE_KEYS` must equal the OFT checkpoint's `num_images_in_input` (how it
+was SFT'd) — it is **checkpoint-determined, not a fixed scheme**. The bundled traj1 ckpt is
+1-image, so `OFT_HISTORY=1` + single `agentview_rgb`; a checkpoint SFT'd for 2 images would use a
+matching `OFT_HISTORY`/cameras.
+
 ```bash
 bash scripts/preprocess/prepare_libero_data.sh \
   task=openvla_onetraj_libero libero_suite=libero_goal \
