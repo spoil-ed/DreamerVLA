@@ -34,6 +34,44 @@ def _tiny_chunk_wm(**overrides) -> ChunkAwareDinoWMWorldModel:
     return ChunkAwareDinoWMWorldModel(**cfg)
 
 
+def _run_chunk_rollout(wm, seed: int = 0):
+    torch.manual_seed(seed)
+    b, h, n, d = 1, wm.num_hist, wm.token_count, wm.token_dim
+    history = torch.randn(b, h, n, d)
+    latent = {
+        "hidden": history[:, -1],
+        "history": history,
+        "actions": torch.zeros(b, h, wm.action_dim),
+    }
+    action_chunk = torch.randn(b, wm.chunk_size, wm.action_dim)
+    out = wm.predict_next_chunk(latent, action_chunk)
+    loss = out["hidden_seq"].pow(2).sum()
+    wm.zero_grad(set_to_none=True)
+    loss.backward()
+    grads = {k: v.grad.detach().clone() for k, v in wm.named_parameters() if v.grad is not None}
+    return out["hidden_seq"].detach().clone(), grads
+
+
+def test_grad_checkpoint_defaults_off() -> None:
+    assert _tiny_chunk_wm().grad_checkpoint is False
+
+
+def test_chunk_rollout_grad_checkpoint_is_numerically_equivalent() -> None:
+    # Gradient checkpointing the autoregressive rollout must not change the math
+    # (it only trades compute for activation memory). dropout=0 in the fixture.
+    plain = _tiny_chunk_wm(grad_checkpoint=False).train()
+    ckpt = _tiny_chunk_wm(grad_checkpoint=True).train()
+    ckpt.load_state_dict(plain.state_dict())
+
+    seq_plain, grads_plain = _run_chunk_rollout(plain)
+    seq_ckpt, grads_ckpt = _run_chunk_rollout(ckpt)
+
+    assert torch.allclose(seq_plain, seq_ckpt, atol=1e-6)
+    assert grads_plain.keys() == grads_ckpt.keys()
+    for key in grads_plain:
+        assert torch.allclose(grads_plain[key], grads_ckpt[key], atol=1e-6), key
+
+
 def test_chunk_wm_requires_dinowm_concat_model_dim() -> None:
     with pytest.raises(ValueError, match="model_dim.*token_dim.*action_emb_dim"):
         _tiny_chunk_wm(model_dim=4)

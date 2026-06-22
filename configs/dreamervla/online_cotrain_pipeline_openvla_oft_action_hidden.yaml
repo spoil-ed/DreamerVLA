@@ -37,6 +37,10 @@ world_model:
   latent_source: ${task.openvla_oft.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
+  # Recompute the chunk rollout's N*K (=chunk_rollout_chunks*chunk_size) autoregressive
+  # steps in backward instead of storing them: activation memory drops from O(N*K) to
+  # O(1), numerically identical. Keeps batch_size=96 within 80GB during WM warmup.
+  grad_checkpoint: true
   model_dim: 4106
   # DINO-WM balanced predictor (query_after / action-hidden, seq = num_hist*token_count = 168):
   # FULL-WIDTH attention inner = heads*dim_head = 4096 = model_dim — no compression of the

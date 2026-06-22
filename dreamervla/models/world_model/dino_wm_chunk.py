@@ -6,6 +6,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
 
@@ -133,6 +134,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         mask_init_scale: float = 0.02,
         chunk_rollout_chunks: int = 1,
         chunk_rollout_loss_scale: float = 0.0,
+        grad_checkpoint: bool = False,
         action_emb_dim: int = 10,
         num_action_repeat: int = 1,
         dim_head: int = 64,
@@ -194,6 +196,10 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         # ``chunk_rollout_loss_scale`` > 0 to enable.
         self.chunk_rollout_chunks = int(chunk_rollout_chunks)
         self.chunk_rollout_loss_scale = float(chunk_rollout_loss_scale)
+        # Recompute each autoregressive step's activations in backward instead of
+        # storing them — cuts the chunk rollout's activation memory from O(N*K) to
+        # O(1). Opt-in; numerically identical to the plain path. See predict_next_chunk.
+        self.grad_checkpoint = bool(grad_checkpoint)
         self.dim_head = int(dim_head)
         self.slots_per_step = self.token_count
         self.pos_context_len = self.num_hist
@@ -320,6 +326,32 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "actions": next_action_history,
         }
 
+    def _predict_next_step(
+        self,
+        cur: dict[str, torch.Tensor],
+        action: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """One autoregressive step, optionally gradient-checkpointed.
+
+        When ``grad_checkpoint`` is on (and we are building a graph), the step's
+        activations are recomputed in backward instead of stored. Numerically
+        identical to the plain path; ``use_reentrant=False`` preserves RNG so
+        dropout matches on recompute.
+        """
+        if not (self.grad_checkpoint and self.training and torch.is_grad_enabled()):
+            return self.predict_next(cur, action)
+
+        def _fn(hidden, history, actions, act):
+            out = self.predict_next(
+                {"hidden": hidden, "history": history, "actions": actions}, act
+            )
+            return out["hidden"], out["history"], out["actions"]
+
+        hidden, history, actions = checkpoint(
+            _fn, cur["hidden"], cur["history"], cur["actions"], action, use_reentrant=False
+        )
+        return {"hidden": hidden, "history": history, "actions": actions}
+
     def predict_next_chunk(
         self,
         latent: dict[str, torch.Tensor] | torch.Tensor,
@@ -363,7 +395,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         }
         preds: list[torch.Tensor] = []
         for step in range(K):
-            cur = self.predict_next(cur, action_chunk_v[:, step])
+            cur = self._predict_next_step(cur, action_chunk_v[:, step])
             preds.append(cur["hidden"])
         hidden_seq = torch.stack(preds, dim=1)
 
