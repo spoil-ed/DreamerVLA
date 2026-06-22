@@ -30,7 +30,7 @@ model (+ classifier) → DreamerVLA actor-critic / WMPO-outcome RL**.
   - `diagnostics/` — importable diagnostics, eval CLIs, smoke checks.
   - `scheduler/`, `workers/`, `hybrid_engines/` — optional Ray-backend primitives; keep them behind Hydra-selected runners and out of the default path.
   - `utils/` — checkpoint, logger, optim, EMA, viz, shared helpers. `legacy/` — isolated old-artifact utilities; never import from active configs/runners.
-- **`configs/`** — Hydra. `train.yaml` is the grouped train/eval entry; pick recipes with `experiment=<name>` composed from cohesive groups (`VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`, `evaluation/`, `task/`, `logger/`).
+- **`configs/`** — Hydra. `train.yaml` is the grouped train/eval entry; select a recipe with `experiment=<name>` from `experiment/`, which composes the cohesive groups `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`, `evaluation/`, `task/`, and `logger/`.
 - **`scripts/`** — thin, resumable shell launchers only; implementation lives under `dreamervla/` and runs via `python -m`.
 - **`tests/`** — `unit_tests/` and `e2e_tests/` (the latter may spawn subprocs / real env / real ckpts).
 - **`data/`** — runtime inputs/outputs (`datasets/`, `checkpoints/`, `processed_data/`, `outputs/`); **`third_party/`** — vendored upstreams (LIBERO, OpenVLA-OFT, robosuite, …).
