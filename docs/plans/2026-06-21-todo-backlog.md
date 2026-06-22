@@ -59,6 +59,66 @@ absent). Per core-req#1 they were not shipped blind. The clean seams already exi
   `test_online_env_episode_end`) and the 1264-line `main()` loop (unverifiable without the RynnVLA
   run). Do **after** RUN-01 + X-01② settle the DDP / save-load regions they rewrite.
 
+## RLinf-alignment learnings (open enhancements)
+
+Surfaced 2026-06-22 by re-surveying the sibling `RLinf` repo against the current tree
+(core-req#3). Each was **verified to be a genuine gap** (not already present) and fits the
+single-machine scope; the deliberately-out-of-scope RLinf features (collocated/disaggregated/
+hybrid placement modes, vLLM/SGLang, Megatron TP+PP, multi-node, VRAM auto-sizing, Channel
+key-routing) stay non-targets per `../ray_rlinf_alignment_todo.md` and are not listed here.
+
+- [x] **RLINF-01 — capture/restore RNG state on the online DreamerVLA checkpoint path.**
+  *Landed 2026-06-22 (TDD, suite green):* canonical `capture_rng_state()` / `restore_rng_state()`
+  in `dreamervla/utils/seed.py` (python `random` + torch + cuda; numpy is outside `set_seed`'s
+  contract) wired into `_online_dreamervla_checkpoint.save_checkpoint` (adds `payload["rng"]`) and
+  `load_training_checkpoint` (restored last, after all state-dict loads). **Additive +
+  backward-compatible** — old ckpts lack the key → restore is a no-op (core-req#1 preserved).
+  Unit cover: `tests/unit_tests/test_rng_checkpoint.py` (helper round-trip + bit-exact
+  save→load draws + None/partial tolerance).
+  *Consolidation (done 2026-06-22, core-req#2):* DreamerV3's inline RNG
+  (`_dreamer_runner_common.py` `_save_ckpt`/`_maybe_resume`) now routes through the same shared
+  helper. Two **flagged behaviour changes** (approved): DreamerV3 resume now (i) also restores
+  python `random` (it previously snapshotted torch+cuda only — strictly more deterministic) and
+  (ii) warns via `warnings.warn` instead of a `[tag]` log line on a CUDA-RNG restore failure.
+  Unit cover added (`test_dreamerv3_*` in the same file). RNG capture/restore is now single-source.
+  *Remaining (deferred):* (a) the multi-GPU RynnVLA save→resume bit-exact smoke is GPU-gated
+  (this box lacks the ckpts; same gate as RUN-01/X-01); (b) when **X-01** rewrites the envelope,
+  fold `rng` into the canonical BaseRunner envelope.
+
+- [x] **RLINF-02 — structured `Timers` helper + opt-in `torch.profiler`.**
+  *Landed 2026-06-22 (TDD, suite green):* `dreamervla/utils/timers.py` — `Timers` (context-manager
+  timing, mean/sum/min/max reduction, `to_metrics(prefix="time")` namespacing, optional `cuda_sync`)
+  + `Profiler` (config-gated, **default-off** `torch.profiler` wrapper with schedule + chrome-trace
+  export; a safe no-op when disabled). Unit cover: `tests/unit_tests/test_timers.py` (6 tests, incl.
+  CPU trace emission). **Unblocks the deferred P5 "kernel tuning gated on benchmark data"** —
+  hotspot selection now has a profiler.
+  *Remaining (GPU-gated):* wire into the training loops — reroute the scattered `f"time/..."`
+  points (e.g. `online_cotrain_ray_runner.py`) through `Timers` (core-req#2) and add the default-off
+  `Profiler` to the loop. Deferred because every integration site is in the GPU/Ray-gated loops this
+  box cannot run; the helper is staged ahead of wiring (mirrors the `_online_dreamervla_*` seams).
+
+- [x] **RLINF-03 — add `.github/workflows/` CI.**
+  *Landed 2026-06-22:* `.github/workflows/ci.yml` — a `lint` job (`ruff check dreamervla tests`,
+  ruff pinned `0.15.14`) on push/PR. Made the tree repo-wide ruff-clean first: one pre-existing
+  `I001` import-sort in `tests/unit_tests/test_actor_file_split_imports.py` was auto-fixed
+  (behaviour-neutral). Lint command verified green locally.
+  *Intentionally scoped down (documented in the workflow):* the pytest suite is **not** run on
+  stock runners — it needs the hand-built `dreamervla` conda env (transformers 4.40.1 fork,
+  robosuite/third_party) that isn't reproducible from PyPI; `ruff format --check` (≈244 files are
+  historically unformatted) and the `__init__.py`-presence check (several PEP 420 namespace
+  packages by design) are omitted to avoid a false-red gate.
+
+- [x] **RLINF-04 — validate checkpoint `format_version` on load.**
+  *Landed 2026-06-22 (TDD, suite green):* `format_version` was written by every writer
+  (`_online_dreamervla_checkpoint`, `base_runner`) but **never checked**, so a newer-format ckpt
+  loaded by older code was silently mishandled. Added `_check_format_version` inside
+  `dreamervla/utils/hf_checkpoint.load_runner_payload` — the single chokepoint for all four
+  runner-payload consumers (online resume, BaseRunner, embodied eval, rynn preprocess). Only the
+  unsafe direction hard-fails (ckpt newer than code); missing/older versions stay loadable, so the
+  dual-read backward-compat contract holds (core-req#1). RLinf stores+validates its version on
+  load; CLAUDE.md calls for early resume-checkpoint validation. Unit cover:
+  `tests/unit_tests/test_checkpoint_version_guard.py` (future rejected / current + legacy accepted).
+
 ## Won't-fix / intentional (record only)
 
 **DIAG-06** (16 doc-only diagnostics) and **MOD-07** (`official` OFT action-model) — kept by
