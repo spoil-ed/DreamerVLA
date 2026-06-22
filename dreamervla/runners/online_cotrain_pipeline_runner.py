@@ -137,6 +137,24 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 continue
             OmegaConf.update(cfg, full_key, value, force_add=True)
 
+    # ------------------------------------------------------------- gpu reclaim
+    def _empty_cuda_cache(self) -> None:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _set_encoder_device(self, device: Any) -> None:
+        """Move the frozen encoder on/off the GPU and reclaim freed blocks.
+
+        The encoder is unused during warmup (warmup reads pre-seeded sidecar
+        embeddings), so parking it on CPU frees its weights until the online phase
+        restores it. Frozen + inference-only, so the round trip is numerically inert.
+        No-op when there is no encoder (e.g. total_env_steps<=0 builds encoder=None).
+        """
+        encoder = getattr(self, "encoder", None)
+        if encoder is not None:
+            encoder.to(device)
+        self._empty_cuda_cache()
+
     # ------------------------------------------------------------------ main
     def run(self) -> list[dict[str, Any]]:
         import copy
@@ -199,6 +217,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 print(f"[pipeline] seeded {n} offline episodes, {warmup_replay.num_transitions} transitions", flush=True)
             if n == 0 or warmup_replay.num_transitions == 0:
                 raise RuntimeError("offline seeding produced an empty replay buffer")
+            # The frozen encoder is idle during warmup — park it off-GPU to reclaim
+            # its weights (restored before the online phase below).
+            self._set_encoder_device("cpu")
 
         if need_wm:
             self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
@@ -240,5 +261,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         if total_env_steps <= 0:
             self.console_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True)
             return []
+        # Restore the encoder onto the device for the online phase that uses it.
+        self._set_encoder_device(self.device)
         self.console_banner("[3/3] ONLINE COTRAIN", subtitle=f"{total_env_steps} env steps")
         return self._online_cotrain_loop(cfg)
