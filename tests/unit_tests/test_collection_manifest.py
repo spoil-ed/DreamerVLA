@@ -9,9 +9,12 @@ import h5py
 
 from dreamervla.dataset.collection_manifest import (
     count_collected_episodes,
+    count_episodes_per_task,
+    format_collection_report,
     next_shard_index,
     read_manifest,
     resume_plan,
+    summarize_collection,
     write_manifest,
 )
 
@@ -22,6 +25,15 @@ def _write_shard(path, num_demos: int) -> None:
         data.attrs["num_demos"] = num_demos
         for i in range(num_demos):
             data.create_group(f"demo_{i}")
+
+
+def _write_shard_with_task_ids(path, task_ids) -> None:
+    with h5py.File(str(path), "w") as f:
+        data = f.create_group("data")
+        data.attrs["num_demos"] = len(task_ids)
+        for i, tid in enumerate(task_ids):
+            grp = data.create_group(f"demo_{i}")
+            grp.attrs["task_id"] = int(tid)
 
 
 def test_count_collected_episodes_sums_num_demos_across_shards(tmp_path):
@@ -83,3 +95,53 @@ def test_manifest_roundtrips(tmp_path):
 
 def test_read_manifest_missing_returns_none(tmp_path):
     assert read_manifest(tmp_path) is None
+
+
+def test_count_episodes_per_task_buckets_by_task_id_attr(tmp_path):
+    _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 0, 1])
+    _write_shard_with_task_ids(tmp_path / "shard_001.hdf5", [1, 2])
+    assert count_episodes_per_task(tmp_path) == {0: 2, 1: 2, 2: 1}
+
+
+def test_summarize_collection_reports_totals_per_task_and_remaining(tmp_path):
+    _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 0, 1])
+
+    summary = summarize_collection(tmp_path, target_total=10, num_tasks=2)
+
+    assert summary["total"] == 3
+    assert summary["per_task"] == {0: 2, 1: 1}
+    assert summary["target_total"] == 10
+    assert summary["target_per_task"] == 5
+    assert summary["remaining"] == 7
+    assert summary["complete"] is False
+
+
+def test_summarize_collection_complete_when_target_met(tmp_path):
+    _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 1, 2])
+
+    summary = summarize_collection(tmp_path, target_total=3, num_tasks=3)
+
+    assert summary["complete"] is True
+    assert summary["remaining"] == 0
+
+
+def test_summarize_collection_without_target_leaves_remaining_none(tmp_path):
+    _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 1])
+
+    summary = summarize_collection(tmp_path, target_total=None, num_tasks=2)
+
+    assert summary["total"] == 2
+    assert summary["remaining"] is None
+    assert summary["complete"] is False
+
+
+def test_format_collection_report_mentions_counts_and_target(tmp_path):
+    _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 0, 1])
+    summary = summarize_collection(tmp_path, target_total=10, num_tasks=2)
+
+    report = format_collection_report(summary, root=tmp_path)
+
+    assert "3" in report  # collected
+    assert "10" in report  # target
+    assert "7" in report  # remaining
+    assert "task" in report.lower()

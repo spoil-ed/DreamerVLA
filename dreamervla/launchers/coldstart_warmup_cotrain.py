@@ -18,8 +18,9 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.dataset.collection_manifest import (
-    count_collected_episodes,
+    format_collection_report,
     resume_plan,
+    summarize_collection,
     write_manifest,
 )
 from dreamervla.utils.hydra_config import script_config
@@ -435,23 +436,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     num_tasks = int(cfg.get("collect_num_tasks", 10) or 10)
     collect_cmd = list(plan.collect_cmd)
     run_collect = not bool(cfg.get("skip_collect", False))
-    if run_collect and target_episodes is not None:
-        collected = count_collected_episodes(plan.reward_dir)
-        rp = resume_plan(
-            target_total=int(target_episodes), num_tasks=num_tasks, collected=collected
+    if run_collect:
+        # Identify what is already collected and print it BEFORE deciding to collect,
+        # resume, or skip — never load blindly.
+        summary = summarize_collection(
+            plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
         )
-        if rp["complete"]:
+        print(format_collection_report(summary, root=plan.collected_root), flush=True)
+        if target_episodes is not None and summary["complete"]:
             print(
-                f"PHASE 1/2 SKIPPED: target {target_episodes} reached "
-                f"({collected} episodes already in {plan.collected_root})",
+                f"PHASE 1/2 SKIPPED: target {target_episodes} already collected",
                 flush=True,
             )
             run_collect = False
-        else:
+        elif target_episodes is not None:
+            rp = resume_plan(
+                target_total=int(target_episodes),
+                num_tasks=num_tasks,
+                collected=summary["total"],
+            )
             collect_cmd.append(f"collect.episodes_per_task={rp['episodes_per_task']}")
             print(
-                f"[resume] {collected}/{target_episodes} collected; topping up "
-                f"{rp['remaining']} ({rp['episodes_per_task']}/task, appending shards)",
+                f"[resume] topping up {rp['remaining']} episodes "
+                f"({rp['episodes_per_task']}/task, appending shards)",
                 flush=True,
             )
     if run_collect:
@@ -469,13 +476,14 @@ def _write_collection_manifest(
     plan: PipelinePlan, *, target_episodes: int | None, num_tasks: int
 ) -> None:
     """Write metadata + config next to the unified collected_rollouts data."""
-    collected = count_collected_episodes(plan.reward_dir)
+    summary = summarize_collection(
+        plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
+    )
     shards = (
         sorted(p.name for p in plan.reward_dir.glob("*.hdf5"))
         if plan.reward_dir.is_dir()
         else []
     )
-    complete = target_episodes is not None and collected >= int(target_episodes)
     write_manifest(
         plan.collected_root,
         {
@@ -486,9 +494,10 @@ def _write_collection_manifest(
             "hidden_dir": str(plan.hidden_dir),
             "target_episodes": target_episodes,
             "num_tasks": num_tasks,
-            "collected_episodes": collected,
+            "collected_episodes": summary["total"],
+            "episodes_per_task": summary["per_task"],
             "shards": shards,
-            "status": "complete" if complete else "in_progress",
+            "status": "complete" if summary["complete"] else "in_progress",
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "collect_cmd": list(plan.collect_cmd),
         },

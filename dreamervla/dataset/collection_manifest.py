@@ -44,6 +44,77 @@ def count_collected_episodes(reward_dir: str | Path) -> int:
     return total
 
 
+def count_episodes_per_task(reward_dir: str | Path) -> dict[int, int]:
+    """Episodes already on disk bucketed by their ``task_id`` demo attr."""
+    import h5py
+
+    directory = Path(reward_dir).expanduser()
+    counts: dict[int, int] = {}
+    if not directory.is_dir():
+        return counts
+    for shard in sorted(directory.glob("*.hdf5")):
+        try:
+            with h5py.File(str(shard), "r") as f:
+                data = f.get("data")
+                if data is None:
+                    continue
+                for key in data.keys():
+                    tid = int(data[key].attrs.get("task_id", -1))
+                    counts[tid] = counts.get(tid, 0) + 1
+        except (OSError, KeyError) as exc:
+            warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
+    return counts
+
+
+def summarize_collection(
+    reward_dir: str | Path, *, target_total: int | None, num_tasks: int
+) -> dict[str, Any]:
+    """Inspect existing collected data and report progress toward the target."""
+    per_task = count_episodes_per_task(reward_dir)
+    total = sum(per_task.values())
+    remaining: int | None = None
+    target_per_task: int | None = None
+    complete = False
+    if target_total is not None:
+        target_total = int(target_total)
+        remaining = max(0, target_total - total)
+        complete = remaining == 0
+        target_per_task = math.ceil(target_total / num_tasks) if num_tasks > 0 else None
+    return {
+        "per_task": dict(sorted(per_task.items())),
+        "total": total,
+        "target_total": target_total,
+        "target_per_task": target_per_task,
+        "num_tasks": int(num_tasks),
+        "remaining": remaining,
+        "complete": complete,
+    }
+
+
+def format_collection_report(summary: dict[str, Any], *, root: str | Path) -> str:
+    """Human-readable pre-collection report (counts, tasks, what is still needed)."""
+    lines = [f"[collect] inspecting {root}"]
+    total = summary["total"]
+    target = summary["target_total"]
+    if target is None:
+        lines.append(f"  collected: {total} episodes (no target set)")
+    elif summary["complete"]:
+        lines.append(f"  collected: {total} / {target} target  (complete)")
+    else:
+        lines.append(
+            f"  collected: {total} / {target} target  (need {summary['remaining']} more)"
+        )
+    per_task = summary["per_task"]
+    if per_task:
+        parts = " ".join(f"task{tid}={n}" for tid, n in per_task.items())
+        tpt = summary["target_per_task"]
+        suffix = f"  (target {tpt}/task)" if tpt is not None else ""
+        lines.append(f"  per task:  {parts}{suffix}")
+    else:
+        lines.append("  per task:  (none collected yet)")
+    return "\n".join(lines)
+
+
 def next_shard_index(directory: str | Path, *, prefix: str) -> int:
     """Lowest unused ``{prefix}_{NNN}.hdf5`` index in ``directory`` (0 if none)."""
     path = Path(directory).expanduser()

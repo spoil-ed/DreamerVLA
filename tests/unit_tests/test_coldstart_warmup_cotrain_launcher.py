@@ -461,6 +461,50 @@ def test_launcher_resume_skips_collection_and_writes_manifest(tmp_path, monkeypa
     assert manifest["status"] == "complete"
 
 
+def test_launcher_prints_inspection_report_then_resumes(tmp_path, monkeypatch, capsys) -> None:
+    import h5py
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    reward = tmp_path / "collected_rollouts" / "libero_goal" / "reward"
+    reward.mkdir(parents=True)
+    with h5py.File(str(reward / "shard_000.hdf5"), "w") as f:
+        data = f.create_group("data")
+        data.attrs["num_demos"] = 2
+        for i, tid in enumerate([0, 1]):
+            data.create_group(f"demo_{i}").attrs["task_id"] = tid
+
+    exit_code = mod.main(
+        [
+            f"run_root={tmp_path / 'run'}",
+            f"data_root={tmp_path}",
+            "task=goal",
+            "skip_asset_check=true",
+            "collect_target_episodes=10",
+            "collect_num_tasks=2",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    # Existing data is identified and reported before collecting (no blind load).
+    assert "inspecting" in out
+    assert "collected: 2 / 10" in out
+    assert "task0=1" in out and "task1=1" in out
+    assert "[resume] topping up 8" in out
+    assert len(rec.calls) == 2  # not complete -> collect + cotrain both run
+
+
 def test_asset_validation_reports_missing_inputs(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import validate_input_assets
 
