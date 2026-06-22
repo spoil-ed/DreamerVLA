@@ -37,6 +37,8 @@ from transformers import GenerationConfig
 from dreamervla.algorithms.tdmpc_mpc import TDMPCMPCConfig, TDMPCMPCPlanner
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.runners import _embodied_eval_helpers as _eh
+from dreamervla.runners._embodied_eval_export_mixin import EmbodiedEvalExportMixin
+from dreamervla.runners._embodied_eval_image_token_mixin import EmbodiedEvalImageTokenMixin
 from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
@@ -47,7 +49,7 @@ from dreamervla.utils.paths import data_path
 from dreamervla.utils.torch_utils import freeze_module
 
 
-class EmbodiedEvalRunner(PretokenizeVLARunner):
+class EmbodiedEvalRunner(EmbodiedEvalExportMixin, EmbodiedEvalImageTokenMixin, PretokenizeVLARunner):
     """Load a VLA or Dreamer ckpt -> run LIBERO rollout -> dump JSON metrics."""
 
     runner_name = "libero_eval"
@@ -511,92 +513,9 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             )
         return TDMPCMPCPlanner(config)
 
-    def _init_real_relabel_export(self, cfg: DictConfig) -> None:
-        self._real_relabel_enabled = bool(
-            OmegaConf.select(cfg, "eval.export_real_relabel", default=False)
-        )
-        self._real_relabel_records: list[dict[str, Any]] = []
-        self._real_relabel_success_rate = 0.0
-        relabel_dir = OmegaConf.select(cfg, "eval.real_relabel_dir", default=None)
-        if relabel_dir is None:
-            relabel_dir = os.path.join(self.output_dir, "real_relabel")
-        self._real_relabel_dir = str(relabel_dir)
-        self._real_relabel_jsonl_path = os.path.join(
-            self._real_relabel_dir, "real_rollout_relabel_records.jsonl"
-        )
-        self._real_relabel_summary_path = os.path.join(
-            self._real_relabel_dir, "real_rollout_relabel_summary.json"
-        )
-        if self._real_relabel_enabled and self.distributed.is_main_process:
-            os.makedirs(self._real_relabel_dir, exist_ok=True)
-            with open(self._real_relabel_jsonl_path, "w"):
-                pass
 
-    _real_relabel_sparse_rewards = staticmethod(_eh.real_relabel_sparse_rewards)
 
-    def _append_real_relabel_record(self, record: dict[str, Any]) -> None:
-        if not bool(getattr(self, "_real_relabel_enabled", False)):
-            return
-        self._real_relabel_records.append(record)
-        with open(self._real_relabel_jsonl_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
 
-    def _write_real_relabel_summary(self) -> None:
-        records = list(getattr(self, "_real_relabel_records", []))
-        successes = int(sum(int(bool(row.get("complete", False))) for row in records))
-        success_rate = successes / max(len(records), 1)
-        self._real_relabel_success_rate = float(success_rate)
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for row in records:
-            groups.setdefault(str(row.get("prompt_key", "")), []).append(row)
-        group_rows = []
-        for prompt_key, rows in sorted(groups.items()):
-            acc = (
-                float(np.mean([float(row.get("acc", 0.0)) for row in rows]))
-                if rows
-                else 0.0
-            )
-            group_rows.append(
-                {
-                    "prompt_key": prompt_key,
-                    "num_samples": len(rows),
-                    "successes": int(
-                        sum(int(bool(row.get("complete", False))) for row in rows)
-                    ),
-                    "acc_mean": acc,
-                    "keep_by_accuracy_band": bool(0.01 <= acc <= 0.99),
-                }
-            )
-        summary = {
-            "num_records": len(records),
-            "successes": successes,
-            "success_rate": float(success_rate),
-            "records_jsonl": str(getattr(self, "_real_relabel_jsonl_path", "")),
-            "wmpo_style_filter": {
-                "accuracy_lower_bound": 0.01,
-                "accuracy_upper_bound": 0.99,
-                "num_prompt_groups": len(group_rows),
-                "num_kept_prompt_groups": int(
-                    sum(int(row["keep_by_accuracy_band"]) for row in group_rows)
-                ),
-                "num_records": len(records),
-                "num_kept_records": int(
-                    sum(
-                        len(groups[row["prompt_key"]])
-                        for row in group_rows
-                        if row["keep_by_accuracy_band"]
-                    )
-                ),
-                "groups": group_rows,
-            },
-        }
-        os.makedirs(self._real_relabel_dir, exist_ok=True)
-        with open(self._real_relabel_summary_path, "w") as f:
-            json.dump(summary, f, indent=2)
-        print(
-            f"  [Eval] wrote real relabel summary -> {self._real_relabel_summary_path}",
-            flush=True,
-        )
 
     def _maybe_add_hidden_noise(self, hidden: torch.Tensor) -> torch.Tensor:
         noise_std = float(getattr(self, "_hidden_noise_std", 0.0))
@@ -622,97 +541,8 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
             self._hidden_noise_count += 1
         return perturbed
 
-    def _init_policy_trace(self, cfg: DictConfig) -> None:
-        self._policy_trace_enabled = bool(
-            OmegaConf.select(cfg, "eval.trace_policy_debug", default=False)
-        )
-        self._policy_trace_limit = int(
-            OmegaConf.select(cfg, "eval.trace_policy_debug_limit", default=64)
-        )
-        self._policy_trace_count = 0
-        self._policy_trace_dir = os.path.join(self.output_dir, "policy_trace_arrays")
-        self._policy_trace_path = os.path.join(self.output_dir, "policy_trace.jsonl")
-        if self._policy_trace_enabled and self.distributed.is_main_process:
-            os.makedirs(self._policy_trace_dir, exist_ok=True)
-            with open(self._policy_trace_path, "w"):
-                pass
 
-    _to_numpy_array = staticmethod(_eh.to_numpy_array)
-    _array_summary = staticmethod(_eh.array_summary)
 
-    def _write_policy_trace(
-        self,
-        *,
-        source: str,
-        state: np.ndarray,
-        action_chunk_raw: np.ndarray,
-        action_chunk_env: np.ndarray,
-        action_hidden: Any | None = None,
-        wm_style_action_hidden: Any | None = None,
-        live_action_hidden: Any | None = None,
-        recon_action_hidden: Any | None = None,
-        obs_embedding: Any | None = None,
-        actor_input: Any | None = None,
-        rssm_latent: Any | None = None,
-        input_ids: Any | None = None,
-    ) -> None:
-        if not bool(getattr(self, "_policy_trace_enabled", False)):
-            return
-        index = int(getattr(self, "_policy_trace_count", 0))
-        if index >= int(getattr(self, "_policy_trace_limit", 64)):
-            return
-
-        arrays: dict[str, np.ndarray] = {
-            "state": np.asarray(state, dtype=np.float32).reshape(-1),
-            "action_chunk_raw": np.asarray(action_chunk_raw, dtype=np.float32),
-            "action_chunk_env": np.asarray(action_chunk_env, dtype=np.float32),
-        }
-        optional_arrays = {
-            "action_hidden": self._to_numpy_array(action_hidden),
-            "wm_style_action_hidden": self._to_numpy_array(wm_style_action_hidden),
-            "live_action_hidden": self._to_numpy_array(live_action_hidden),
-            "recon_action_hidden": self._to_numpy_array(recon_action_hidden),
-            "obs_embedding": self._to_numpy_array(obs_embedding),
-            "actor_input": self._to_numpy_array(actor_input),
-            "input_ids": self._to_numpy_array(input_ids),
-        }
-        if rssm_latent is not None:
-            for attr in ("deter", "stoch", "logits", "mean", "std", "h"):
-                if hasattr(rssm_latent, attr):
-                    optional_arrays[f"rssm_{attr}"] = self._to_numpy_array(
-                        getattr(rssm_latent, attr)
-                    )
-        for key, value in optional_arrays.items():
-            if value is not None:
-                arrays[key] = np.asarray(value, dtype=np.float32)
-
-        array_path = os.path.join(
-            self._policy_trace_dir, f"step_{index:06d}_{source}.npz"
-        )
-        np.savez_compressed(array_path, **arrays)
-        context = dict(getattr(self, "_libero_current_eval_context", {}) or {})
-        raw_chunk = arrays["action_chunk_raw"].reshape(
-            -1, arrays["action_chunk_raw"].shape[-1]
-        )
-        env_chunk = arrays["action_chunk_env"].reshape(
-            -1, arrays["action_chunk_env"].shape[-1]
-        )
-        record = {
-            "index": index,
-            "source": str(source),
-            "context": context,
-            "array_path": array_path,
-            "state": arrays["state"].tolist(),
-            "first_action_raw": raw_chunk[0].tolist(),
-            "first_action_env": env_chunk[0].tolist(),
-            "summaries": {
-                key: self._array_summary(value) for key, value in arrays.items()
-            },
-        }
-        if self.distributed.is_main_process:
-            with open(self._policy_trace_path, "a") as f:
-                f.write(json.dumps(record) + "\n")
-        self._policy_trace_count = index + 1
 
     _action_clip_bounds = staticmethod(_eh.action_clip_bounds)
 
@@ -1195,124 +1025,11 @@ class EmbodiedEvalRunner(PretokenizeVLARunner):
 
     _strip_wrapping_prefix = staticmethod(_eh.strip_wrapping_prefix)
 
-    def _attach_image_token_mapping(self) -> None:
-        wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
-        if (
-            wm is None
-            or not getattr(wm, "spatial_codec", False)
-            or self.encoder is None
-        ):
-            return
-        lm_head = self.encoder.backbone.lm_head
-        vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
-        image_token_bpe_ids = torch.tensor(
-            sorted(vocab_mapping.bpe2img.keys()), dtype=torch.long
-        )
-        full_vocab_size = int(lm_head.weight.shape[0])
-        wm_io_mode = str(getattr(wm, "io_mode", "hidden"))
-        wm.attach_lm_head(
-            lm_head if wm_io_mode == "hidden" else None,
-            image_token_bpe_ids,
-            full_vocab_size=full_vocab_size,
-        )
-        if self.distributed.is_main_process:
-            tag = "lm_head" if wm_io_mode == "hidden" else "vocab (token mode)"
-            print(f"  [Eval] attached {tag} for image-token mapping.")
 
-    def _wm_io_mode(self) -> str:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
-        if wm is None:
-            return "hidden"
-        explicit = getattr(wm, "io_mode", None)
-        if explicit is not None:
-            return str(explicit)
-        encoder = getattr(wm, "encoder", None)
-        if (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
-        ):
-            return "token"
-        return "hidden"
 
-    def _wm_expects_image_vocab_tokens(self) -> bool:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
-        encoder = getattr(wm, "encoder", None)
-        return (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
-        )
 
-    def _wm_expects_pixel_images(self) -> bool:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
-        encoder = getattr(wm, "encoder", None)
-        return (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3PixelEncoder"
-        )
 
-    def _get_image_bpe_set(self) -> set[int]:
-        cached = getattr(self, "_image_bpe_set_cache", None)
-        if cached is not None:
-            return cached
-        vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
-        self._image_bpe_set_cache = set(vocab_mapping.bpe2img.keys())
-        return self._image_bpe_set_cache
 
-    def _extract_image_bpe_ids(self, input_ids_list: list[list[int]]) -> torch.Tensor:
-        from dreamervla.utils.wm_image_viz import extract_image_blocks
-
-        wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
-        wm_encoder = getattr(wm, "encoder", None)
-        n_img_tok = int(
-            getattr(wm, "n_image_tokens", getattr(wm_encoder, "n_image_tokens", 256))
-        )
-        which_blocks_cfg = OmegaConf.select(
-            self.cfg, "eval.dreamer_which_image_blocks", default=None
-        )
-        if which_blocks_cfg is None:
-            which_blocks = [
-                int(
-                    OmegaConf.select(
-                        self.cfg, "eval.dreamer_which_image_block", default=-2
-                    )
-                )
-            ]
-        else:
-            which_blocks = [int(item) for item in which_blocks_cfg]
-        img_bpe = self._get_image_bpe_set()
-        bpe2img = None
-        if self._wm_expects_image_vocab_tokens():
-            bpe2img = self.encoder.backbone.model.vocabulary_mapping.bpe2img
-        rows: list[list[int]] = []
-        for idx, seq in enumerate(input_ids_list):
-            blocks = extract_image_blocks(list(seq))
-            if not blocks:
-                raise ValueError(
-                    f"rollout sample {idx}: no image block found in tokens"
-                )
-            tok_ids: list[int] = []
-            for which_block in which_blocks:
-                bidx = which_block if which_block >= 0 else len(blocks) + which_block
-                if not (0 <= bidx < len(blocks)):
-                    raise ValueError(
-                        f"rollout sample {idx}: image block {which_block} out of range"
-                    )
-                _start, _end, block_ids = blocks[bidx]
-                tok_ids.extend(int(tok) for tok in block_ids if int(tok) in img_bpe)
-            if len(tok_ids) != n_img_tok:
-                raise ValueError(
-                    f"rollout sample {idx}: image blocks {which_blocks} have {len(tok_ids)} image tokens, expected {n_img_tok}"
-                )
-            if bpe2img is not None:
-                tok_ids = [int(bpe2img[int(tok)]) for tok in tok_ids]
-            rows.append(tok_ids)
-        return torch.tensor(rows, dtype=torch.long, device=self.device)
 
     def _encode_hidden_from_tokenized(
         self, input_ids_list: list[list[int]]
