@@ -25,7 +25,7 @@ bash scripts/preprocess/prepare_libero_data.sh \
   task=openvla_onetraj_libero libero_suite=libero_goal \
   only=[35_oft_action_hidden] gpus=0 ngpu=1 \
   env.OFT_LATENT_SCHEME=action_hidden env.OFT_POLICY_MODE=discrete \
-  env.OFT_HISTORY=2 env.OFT_IMAGE_KEYS="agentview_rgb eye_in_hand_rgb" \
+  env.OFT_HISTORY=1 env.OFT_IMAGE_KEYS=agentview_rgb \
   env.OFT_CKPT="${OFT_CKPT}"
 ```
 

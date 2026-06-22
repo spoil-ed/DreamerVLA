@@ -118,16 +118,17 @@ module paths, links — all resolve). Concrete fixes made:
   requirement. The offline WM route itself was re-verified to a `latest.ckpt` against a
   metadata-matching discrete sidecar.
 
-**FLAG — Scheme-A `history` (h1 vs h2) inconsistency (needs a research-config decision):**
-The action-hidden / Scheme-A tutorial §1 preprocesses with `OFT_HISTORY=2`, and `CLAUDE.md`'s
-routing snapshot says Scheme-A sidecars are `..._h2`. But **every config/experiment expects h1
-discrete**: `task.openvla_oft` defaults `expected_history=1`, `expected_action_head_type=
-oft_discrete_token`, `action_hidden_dir=..._h1`, and the action-hidden WM
-(`oft_world_model_dinowm_chunk` → `worldmodel/openvla_oft_action_chunk`) only *inherits* those
-(no h2 override). The only on-disk `*_h2` action-hidden sidecars are L1-regression. So either
-(a) Scheme-A is h1 discrete and CLAUDE.md/§1 should say h1, or (b) Scheme-A is h2 discrete and
-the WM/classifier/dreamer experiments are missing h2 overrides + a discrete-h2 sidecar must be
-regenerated. Not silently changed — config semantics are a maintainer decision.
+**Scheme-A `history` — RESOLVED (2026-06-22, maintainer decision = option (a)): h1 discrete.**
+Scheme-A is the h1 discrete action-query route, matching `task.openvla_oft.expected_*`
+(`expected_history=1`, `expected_action_head_type=oft_discrete_token`, single agentview camera →
+`token_count=56`, `wm_obs_dim=229376`; `action_hidden_dir=..._h1`). The action-hidden WM
+(`oft_world_model_dinowm_chunk` → `worldmodel/openvla_oft_action_chunk`) inherits those, so the
+sidecar is `..._oft_legacy_action_hidden_vla_policy_h1`. Fixed: action-hidden tutorial §1 now
+preprocesses with `OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb` (was h2 + two cameras), matching
+the discrete recipe §3. **TODO (manual):** `CLAUDE.md` lines 23–24 still say `..._h2` — it is
+write-protected from agents (ARS scope guard), so the maintainer must change `h2` → `h1` there.
+The on-disk `*_h2` action-hidden dumps remain the separate (not-yet-validated) L1-regression
+route and are intentionally not used by the discrete Scheme-A recipe.
 
 ## Won't-fix / intentional (record only)
 
