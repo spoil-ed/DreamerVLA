@@ -33,10 +33,7 @@ from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
-from dreamervla.models.reward import (
-    LatentSuccessClassifier,
-    LatentSuccessClassifierConfig,
-)
+from dreamervla.models.reward import build_classifier
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_dreamervla import (
     _unwrap,
@@ -91,7 +88,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if cls_blob is not None
             else {}
         )
-        cls_kwargs.pop("_target_", None)
         # Default latent_dim to the WM obs dim, EXCEPT when token_pool="mean":
         # then the classifier pools tokens and its latent_dim must stay token_dim
         # (the flat obs_dim would make the input projection enormous, e.g. the
@@ -100,9 +96,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
             cls_kwargs.get("token_pool", "flat")
         ) != "mean":
             cls_kwargs["latent_dim"] = int(OmegaConf.select(cfg, "world_model.obs_dim"))
-        self._classifier_cls_kwargs = dict(cls_kwargs)
-        cls_cfg = LatentSuccessClassifierConfig(**cls_kwargs)
-        classifier = LatentSuccessClassifier(cls_cfg).to(self.device)
+        self._classifier_cls_kwargs = {
+            key: value for key, value in cls_kwargs.items() if key != "_target_"
+        }
+        classifier = build_classifier(cls_kwargs).to(self.device)
         warm = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
         if warm:
             if is_hf_checkpoint(str(warm)):
@@ -125,7 +122,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if cls_optim_cfg is None:
             raise ValueError("online cotrain requires `optim.classifier`.")
         self.classifier_optimizer = build_optimizer(self.classifier, cls_optim_cfg)
-        self._cls_window = int(getattr(cls_cfg, "window", 8))
+        self._cls_window = int(cls_kwargs.get("window", 8))
 
     def _load_world_model_init_ckpt(self, ckpt_path: str) -> None:
         """HF-aware override: load from HF dir or fall back to torch ckpt (parent)."""

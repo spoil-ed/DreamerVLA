@@ -1493,10 +1493,7 @@ class DreamerVLARunner(BaseRunner):
             self.actor_update_route is not None
             and self.actor_update_route.requires_classifier
         ):
-            from dreamervla.models.reward import (
-                LatentSuccessClassifier,
-                LatentSuccessClassifierConfig,
-            )
+            from dreamervla.models.reward import build_classifier
 
             classifier_ckpt_path = OmegaConf.select(
                 cfg, "init.classifier_state_ckpt", default=None
@@ -1514,8 +1511,7 @@ class DreamerVLARunner(BaseRunner):
                 raise RuntimeError(
                     f"classifier ckpt {classifier_ckpt_path} has no config.classifier blob"
                 )
-            cls_cfg = LatentSuccessClassifierConfig(**cls_cfg_blob)
-            self.classifier = LatentSuccessClassifier(cls_cfg).to(self.device).eval()
+            self.classifier = build_classifier(cls_cfg_blob).to(self.device).eval()
             self.classifier.load_state_dict(cls_payload["model"])
             freeze_module(self.classifier)
             override_thresh = OmegaConf.select(

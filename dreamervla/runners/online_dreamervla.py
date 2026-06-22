@@ -27,7 +27,7 @@ from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.dataset.online_rollout_dumper import RolloutDumper
 from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
-from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamervla.models.reward import build_classifier
 from dreamervla.runners._online_dreamervla_dist import (  # noqa: E402
     _dist_all_reduce_flag,
     _dist_all_reduce_int,
@@ -631,8 +631,7 @@ def main() -> None:
             raise RuntimeError(
                 f"classifier ckpt {args.classifier_ckpt} has no config.classifier blob"
             )
-        cls_cfg = LatentSuccessClassifierConfig(**cls_config_blob)
-        classifier = LatentSuccessClassifier(cls_cfg).to(device).eval()
+        classifier = build_classifier(cls_config_blob).to(device).eval()
         classifier.load_state_dict(cls_payload["model"])
         if bool(args.update_classifier_online):
             for param in classifier.parameters():
