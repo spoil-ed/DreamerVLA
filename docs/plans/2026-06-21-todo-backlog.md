@@ -1,11 +1,8 @@
 # TODO backlog (open items)
 
-Open work only. Done items: `../history/2026-06-21-backlog-execution-log.md` (pass 3,
-branch `chore/backlog-execution`) and `../history/2026-06-21-cleanup-execution-log.md`
-(passes 1–2). Detail: `../history/2026-06-21-codebase-cleanup-review.md` (cleanup),
-`../history/2026-06-21-rlinf-alignment-correctness-audit.md` (RLinf).
-(Completed plans/designs/audits were archived to `docs/history/` on 2026-06-21;
-this file is the only live open-items list.)
+Open work only. Done items live in `../history/2026-06-21-backlog-execution-log.md`
+(passes 1–3 + the 2026-06-21→22 GPU-box execution) and the other `docs/history/`
+logs. This file is the only live open-items list.
 
 ## Core requirements (核心思想 — govern every item below)
 
@@ -15,125 +12,52 @@ this file is the only live open-items list.)
    unify**. Full unit suite stays green after every commit; anything that changes
    numerics is marked "changes numerics" and needs an explicit decision.
 2. **统一实现 / one implementation per job** — the same functionality lives in ONE
-   place; no competing or copy-pasted schemes ("front does it one way, back another").
-   Make one canonical helper/interface, route all consumers through it (e.g. progress
-   reporter, PPO primitives in `grpo.py`).
+   place; no competing or copy-pasted schemes. Make one canonical helper/interface,
+   route all consumers through it.
 3. **对齐 RLinf** — the upstream `RLinf` repo (workspace sibling) is the reference for
-   RL correctness and for overall code-tree alignment; diverge only deliberately.
-4. **正确合理的接口** — algorithm primitives have one correct, extensible interface
-   (opt-in, default-off options) so future PPO / other-algorithm calls stay correct;
-   no lying/dead parameters.
-5. **干净 + 简短可读** — minimal, surgical changes; no speculative/bloated code; keep
-   structure short and readable (code and docs).
+   RL correctness and overall code-tree alignment; diverge only deliberately.
+4. **正确合理的接口** — algorithm/helper primitives have one correct, extensible
+   interface (opt-in, default-off options); no lying/dead parameters.
+5. **干净 + 简短可读** — minimal, surgical changes; no speculative/bloated code.
 
-Constraint shorthand below: **behaviour-preserving** unless flagged "changes numerics".
+## Open items — all gated on the RynnVLA online path
 
-## P2 — migration design (verification-gated)
+The three remaining items all touch the **standalone RynnVLA `online_dreamervla` path**,
+whose behaviour-changing parts the **unit suite cannot verify** (no multi-GPU DDP test) and
+which **this box cannot run** (its WM/classifier ckpts — `outputs/worldmodel/
+rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt` + the outcome classifier — are
+absent). Per core-req#1 they were not shipped blind. The clean seams already exist (extracted
+2026-06-22, see history log): `_online_dreamervla_dist.py` and `_online_dreamervla_checkpoint.py`.
 
-- [~] **X-01 (scheme-unify, remaining half)** — analysed 2026-06-21; partially resolved,
-  format-breaking remainder **deferred** per core-req#1 (the #1 red line) + verification gate.
-  - **① BaseRunner `{format_version,cfg,state_dicts,pickles}`** is the canonical writer (OFT
-    cotrain via `online_cotrain_runner` + offline runners already use it; step counters live in
-    `pickles`). Its save→resume→continue is now **GPU-verified** (see Verification gaps). The
-    shared dual-read load path (`load_runner_payload`, reads versioned + legacy) is in place.
-  - **③ WM-only / classifier `{model,threshold,config,f1}`** is a genuinely-divergent
-    standalone *inference artifact* (loaded directly via `cls_payload["model"]`, classifier
-    eval, warmup reuse), **not** a runner-resume payload → per core-req#1 **flag, do NOT unify**.
-  - **② `online_dreamervla.save_checkpoint` `{...,env_step,update_step,...}`** (RynnVLA standalone
-    `main()`) keeps step counters at the **top level**, and that is a *consumer contract*:
-    `load_training_checkpoint`, `frozen_wm_actor_critic`, and three diagnostics
-    (`measure_reward_and_drift` reads `ckpt["env_step"]` directly, `measure_wm_imagine_actor`,
-    `measure_wm_imagine_fidelity`) read it top-level. Collapsing ② into ①'s pickled envelope is
-    therefore a **multi-site format break** on a path only reachable through the standalone
-    RynnVLA `main()`, which this box's RynnVLA online setup cannot GPU-verify. Deferring it (it is
-    also entangled with RUN-01, which would BaseRunner-ify that `main()` and is the clean route).
-- [~] **RUN-01** — analysed 2026-06-21; **deferred** (verification-gated). `online_dreamervla.main`
-  is a standalone argparse script (`python -m dreamervla.runners.online_dreamervla`, `__main__`;
-  only `scripts/README.md` references it) — the RynnVLA online path, **not** the mainline OFT
-  cotrain. The mainline `online_cotrain_runner` is a `BaseRunner` and **already** routes DDP
-  through the base helper (`self.distributed.wrap_trainable_module`). Routing `online_dreamervla`
-  through the same helper requires extending it with an **opt-in `find_unused_parameters`**
-  (base helper hard-codes `False`; online_dreamervla needs `True` for the outcome branch — a
-  genuine divergence) and an opt-in NCCL timeout (`DVLA_DDP_TIMEOUT_SEC`). Adding that opt-in
-  without also routing `online_dreamervla` would be a dead parameter (core-req#4), and the
-  routing is a real `main()` restructure that needs a **RynnVLA multi-GPU** save→resume smoke to
-  prove behaviour-preservation — not safely doable on this box's RynnVLA setup. Left as the
-  documented next step; the helper API (`_wrap_module_with_ddp`) is the seam.
+- [ ] **RUN-01 — route `online_dreamervla.main` DDP through the base helper.** Code-solvable:
+  online_dreamervla wraps each *whole* module → maps to `helper.wrap_trainable_module`
+  (not the per-child `wrap_world_model`). Needs **three default-off opt-ins** on
+  `NopretokenizeSFTDistributedHelper` to preserve genuine divergences (so the mainline OFT
+  callers stay byte-identical):
+  1. `find_unused_parameters` — `True` for world_model/policy/critic, `False` for the classifier
+     (helper currently hardcodes `False`).
+  2. `broadcast_buffers` — online_dreamervla uses the DDP default **`True`**; the helper's
+     `_wrap_module_with_ddp` hardcodes **`False`** (easy to miss — naive routing silently flips it).
+  3. NCCL **timeout** — `DVLA_DDP_TIMEOUT_SEC` (helper's `initialize` has none).
+  Keep the custom all-reduce error-wrapping (`_dist_all_reduce_flag/int`) — a deliberate divergence.
+  **Verify with a RynnVLA multi-GPU save→resume smoke** before relying on it; suite-green ≠ verified.
 
-## P3 — structural (god-file splits; behaviour-preserving, suite-verifiable)
+- [ ] **X-01 (②, format-breaking remainder) — unify `online_dreamervla.save_checkpoint`.**
+  Collapse its `{format_version, env_step, update_step (top-level), cfg, state_dicts}` into the
+  canonical BaseRunner envelope `{format_version, cfg, state_dicts, pickles}`. This is a
+  **multi-site format break**: top-level `env_step`/`update_step` is a consumer contract for
+  `load_training_checkpoint`, `frozen_wm_actor_critic`, and three diagnostics
+  (`measure_reward_and_drift` reads `ckpt["env_step"]` directly, `measure_wm_imagine_actor`,
+  `measure_wm_imagine_fidelity`). Needs a dual-read loader + a **RynnVLA GPU save→resume** to prove
+  old + new ckpts resume. (Resolved already: ① BaseRunner is the canonical writer and is
+  GPU-verified; ③ the WM-only/classifier `{model,...}` payload is a genuinely-divergent inference
+  artifact, flagged **not** unified per core-req#1. The shared dual-read `load_runner_payload` is
+  in place.) Entangled with RUN-01 (BaseRunner-ifying `main()` is the clean route).
 
-Seam details: the archived execution plan `../history/2026-06-21-backlog-execution.md`
-(Tasks 10–13). The clean approach for a coupled god-class is mixins (move cohesive
-method groups to sibling mixin classes the runner inherits — zero call-site change).
-
-- [x] **`algorithms/dreamervla.imagine_actor_critic_step`** — assessed → **leave** (Task 10).
-  Single cohesive DreamerV3 actor-critic update threading ~40 config-derived scalars + many
-  accumulator lists; the only cleanly-bounded block (config parsing) would trade ~50 fewer
-  lines for ~40 attribute-access renames and the "dropped variable" hazard the item warns of —
-  not a net win. The nested helpers (`_flat_grad`/`_norm`/`_sequence_field`) are already
-  extracted. Left intact per the item's own "extract cleanly-bounded, or leave" guidance.
-- [x] **`embodied_eval_runner.py`** (2431 → **1351**) — **done** (Task 13). All five remaining
-  groups extracted into four sibling mixins the runner inherits (zero call-site change, MRO
-  resolves all self-calls): `_embodied_eval_export_mixin` (real-relabel + policy-trace export),
-  `_embodied_eval_image_token_mixin` (WM IO-mode + image-BPE tokens), `_embodied_eval_action_mixin`
-  (action decode/unnorm + TDMPC + hidden-vs-recon compare), `_embodied_eval_latent_mixin`
-  (VLA-hidden encoding + dreamer latent/observation). Behaviour-preserving; suite green (597).
-  Commits `6cdd9e7`, `bedc9c2`.
-- [ ] **`online_dreamervla.py`** (1856) — deferred: gated AFTER RUN-01 + X-01 (they rewrite the
-  same DDP / save-load regions, both deferred below for verification reasons).
-
-## Verification gaps — DONE (2026-06-21, GPU box, 8×H100)
-
-- [x] **GPU cotrain smoke (save→resume→continue) + `tests/e2e_tests`.** Ran on GPU 4–7.
-  - `tests/e2e_tests`: **43 passed, 3 skipped** (the 3 skips are `DVLA_GPU_E2E` / real-OFT-ckpt
-    gated). Unit baseline **597 passed, 7 skipped** (was 593 + 4 new regression tests).
-  - **GPU online-RL cotrain smoke** (`online_cotrain_pipeline_oft_action_hidden`,
-    `training.debug=true`, resolved cfg has `update_type=wmpo_outcome` + `repval_loss=true`)
-    ran warmup → online RL → ckpt with **no NaN/crash**, exercising both landed numerics flips
-    (**A4** critic-value replay bootstrap on the `repval_loss=true` path; **outcome masked_mean**
-    on the wmpo_outcome route) — A4's named GPU-smoke gate is satisfied.
-  - **save→resume→continue**: Run1 saved at `global_step=2`; Run2 `training.resume=true` resumed
-    and continued to `global_step=4`, **clean exit-0** on real disk.
-  - The smoke surfaced + fixed **two real resume bugs** (commit `099e3d6`, regression tests in
-    `test_checkpoint_format_version.py`): (1) `is_hf_checkpoint(latest.ckpt)` mis-detected the
-    torch ckpt as HF when sibling `latest_hf_*/` sidecars existed (default
-    `checkpoint_format=both`) → `resolve_hf_checkpoint_dir` no longer scans a file's sibling
-    subdirs; (2) `load_runner_payload(mmap=True)` left resumed optimizer tensors as views of
-    `latest.ckpt`, which the next overwrite corrupted (silent) or SIGBUS'd → eager load.
-
-## Docs — `experiment_tutorials` (2026-06-21)
-
-Audited every tutorial against the repo (experiment/task tokens, script paths, Hydra keys,
-module paths, links — all resolve). Concrete fixes made:
-- **EXPLAINED.md** (commit `418c167`): the OFT transformers-fork note said "use the dedicated
-  `dvla_oft` env" — **wrong**. Verified by dist-info: the fork
-  (`github.com/moojink/transformers-openvla-oft`) is installed as the single authoritative
-  transformers **in the main `dreamervla` env** (`scripts/install/40_third_party.sh`;
-  `60_verify.sh` FATAL-checks it); `dvla_oft` is now vanilla PyPI. Corrected.
-- **action-hidden tutorial §7** (commit `631acdd`): the "verified smoke" pinned
-  `SC=..._oft_official_legacy_action_hidden_vla_policy_h2`, but that on-disk sidecar is the
-  **L1-regression** route (`oft_l1_regression`, history=2, include_state=true) and the discrete
-  WM (`task=openvla_onetraj_libero` expects `oft_discrete_token`, history=1, include_state=false)
-  aborts on the metadata mismatch. Replaced the broken pin with the explicit metadata-match
-  requirement. The offline WM route itself was re-verified to a `latest.ckpt` against a
-  metadata-matching discrete sidecar.
-
-**Scheme-A `history` — clarified (2026-06-22): history is per-checkpoint, NOT a fixed scheme.**
-The OFT `history` (h1/h2) is `num_images_in_input ÷ #cameras` — a property of how the OFT
-checkpoint was SFT'd (`vla.vision_backbone.get_num_images_in_input()`), not a universal Scheme-A
-constant. Do **not** hardcode h1 or h2 anywhere; every consumer derives it from one source,
-`task.openvla_oft.expected_history`, which must equal the checkpoint's value (collect/online/WM
-already do: `oft_collect_common.py:154`, `env.history_length=${...expected_history}`, the WM
-config `expected_history: ${...}`).
-**Verified — all bundled OFT checkpoints are 1-image (h1):** `Openvla-oft-SFT-traj1/*` and
-`OpenVLA-OFT/*` have no `num_images_in_input` in `config.json` (→ default 1, `modeling_prismatic.py:93`),
-`image_sizes=[224,224]`, and the working ~50% LIBERO eval ran at `num_images=1` (a 2-image model
-couldn't reach ~50% missing a frame; `rlinf_libero_rollout.py:8` documents the traj1 contract).
-So for these ckpts `expected_history=1`; a checkpoint SFT'd for 2 images would be h2. Tutorial §1
-sets `OFT_HISTORY=1` to match the traj1 ckpt it uses (was h2). `CLAUDE.md` lines 23–24 still hardcode
-`..._h2` and are agent-write-protected (ARS scope guard) → maintainer should make that line
-ckpt-relative (it is `_h1` for the bundled ckpts). The on-disk `*_h2` action-hidden dumps are the
-separate L1-regression route, not these discrete ckpts.
+- [ ] **`online_dreamervla.py` `main()` split (P3).** The dist + checkpoint seams are already
+  extracted (1861→1679). The remainder is `parse_args` (text-pinned by
+  `test_online_env_episode_end`) and the 1264-line `main()` loop (unverifiable without the RynnVLA
+  run). Do **after** RUN-01 + X-01② settle the DDP / save-load regions they rewrite.
 
 ## Won't-fix / intentional (record only)
 

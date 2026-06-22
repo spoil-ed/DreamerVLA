@@ -85,3 +85,35 @@ Items below are DONE and removed from the open backlog. Verification gaps that r
 - **Tutorials → step-only + one explanation file** — every `docs/experiment_tutorials/` recipe
   slimmed to commands-only with snake_case `task=` tokens; all prose moved into
   `docs/experiment_tutorials/EXPLAINED.md`. Cross-linked from AGENTS.md / configs/README.md.
+
+## GPU-box execution (2026-06-21 → 06-22, branch `chore/backlog-execution`, 8×H100)
+
+Moved here from the open TODO once completed + pushed (`e3edf4e..c309cf0`).
+
+- **Verification gate (was the #1 open gap).** `tests/e2e_tests` 43 passed / 3 gated-skip;
+  unit suite 597 passed / 7 skipped. GPU online-RL cotrain smoke
+  (`online_cotrain_pipeline_oft_action_hidden`, `training.debug=true`, resolved cfg
+  `update_type=wmpo_outcome` + `repval_loss=true`) ran warmup→online→ckpt with no NaN/crash →
+  the two landed numerics flips (**A4** critic-value replay bootstrap; **outcome masked_mean**)
+  are GPU-exercised; A4's named GPU-smoke gate satisfied. **save→resume→continue**: `global_step`
+  2→4, clean exit-0 on real disk.
+- **Two real resume bugs found + fixed** (commit `099e3d6`, regression tests in
+  `test_checkpoint_format_version.py`): (1) `is_hf_checkpoint` mis-detected the torch
+  `latest.ckpt` as HF when sibling per-module `latest_hf_*/` dirs existed (default
+  `checkpoint_format=both`) → `resolve_hf_checkpoint_dir` no longer scans a file's sibling
+  subdirs; (2) `load_runner_payload(mmap=True)` left resumed optimizer tensors as mmap views of
+  `latest.ckpt` → the next overwrite silently corrupted them / SIGBUS'd → eager load.
+- **P3 embodied_eval split DONE** (2431→1351): four sibling mixins
+  `_embodied_eval_{export,image_token,action,latent}_mixin.py` (commits `6cdd9e7`,`bedc9c2`).
+  **imagine_actor_critic_step → leave** (cohesive ~40-local DreamerV3 update; no clean-bounded
+  extraction worth the dropped-variable hazard).
+- **P3 online_dreamervla seams extracted** (1861→1679, commits `767c774`,`b9a23f2`):
+  `_online_dreamervla_dist.py` (torchrun/NCCL helpers — the RUN-01 seam) and
+  `_online_dreamervla_checkpoint.py` (save/load — the X-01 seam), pure relocation + re-export.
+  `parse_args` + the 1264-line `main()` stay (text-pinned / unverifiable).
+- **Docs aligned.** EXPLAINED OFT-fork env corrected (fork is in the main `dreamervla` env,
+  `60_verify.sh`-checked, not `dvla_oft`); action-hidden §7 sidecar requirement fixed; AGENTS.md
+  polished 306→154 (big-picture, repo-aligned); CLAUDE.md Scheme-A note + tutorial §1 made
+  checkpoint-relative. **Scheme-A `history` resolved = h1 (per-checkpoint, not a fixed scheme):**
+  OFT `history` = `num_images_in_input ÷ #cameras`; all bundled OFT ckpts are 1-image (h1),
+  derived from the single source `task.openvla_oft.expected_history`.
