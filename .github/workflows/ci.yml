@@ -1,0 +1,31 @@
+# RLINF-03: lightweight CI gate (RLinf-aligned engineering hygiene).
+#
+# Scope note — this repo deliberately runs only the dependency-free checks on
+# stock GitHub runners:
+#   * `ruff check` is the whole-repo lint gate (fast, no heavy deps).
+#   * The pytest suite is NOT run here: it requires the hand-built `dreamervla`
+#     conda env (transformers 4.40.1 fork, robosuite/third_party, torch) which
+#     is not reproducible from PyPI on a stock runner. Run it locally with
+#     `conda run -n dreamervla python -m pytest tests/unit_tests`.
+#   * `ruff format --check` and an `__init__.py`-presence check are intentionally
+#     omitted: most history is not `ruff format`-clean, and several packages use
+#     PEP 420 namespace packages (no `__init__.py`) on purpose.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install "ruff==0.15.14"
+      - name: Lint
+        run: ruff check dreamervla tests
