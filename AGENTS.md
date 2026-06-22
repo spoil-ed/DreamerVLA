@@ -52,12 +52,27 @@ contracts of the non-Ray path.
 1. **Hydra is the source of truth.** Real training dims, model widths, horizons, batch
    sizes, sidecar names, checkpoint paths, and task behavior come from config — not from
    defaults baked into runner/worker logic. Code defaults are only for synthetic smokes,
-   back-compat, or safe local fallbacks.
+   back-compat, or safe local fallbacks. **Asserts validate, they never decide.** Every
+   parameter is set in Hydra config from the start, never chosen by an `assert`, fallback,
+   or in-function constant; asserts only check that two quantities align
+   (`derived == cfg.value`, `lhs == rhs`), never equal a literal.
 2. **Name by role, not by artifact.** Classes/modules are named for their contract
    (`OFTBatchedDecoder`, `VecRolloutEnv`, `PixelHiddenSequenceDataset`), never for a
    concrete model/benchmark/checkpoint/sidecar — unless the class genuinely implements
    that one external boundary. Bind concrete choices through Hydra targets, registries,
-   protocols, and task configs so one class serves many variants.
+   protocols, and task configs so one class serves many variants. **Keep models, datasets,
+   and implementation classes decoupled** — each depends on the others only through a
+   protocol / registry / Hydra target, never by importing or hardcoding a concrete sibling,
+   so any model, dataset, or impl can be swapped from config alone.
+   *Hydra-core construction (the rules that prevent the coupling traps we keep hitting):*
+   build every component with `hydra.utils.instantiate(cfg.<component>)` — never
+   `ConcreteClass(...)` in runner/algorithm/worker logic. Give constructors a
+   `__init__(self, cfg=None, **kwargs)` shape so a `_target_` instantiates directly; don't
+   force callers to hand-build a Config dataclass. When rebuilding from a checkpoint, route
+   through ONE `_target_`-aware builder that falls back to the legacy default, so old ckpts
+   load and new ones swap. Select implementations in config (compose/override), never by a
+   runtime `cfg._target_ = "..."` mutation or `isinstance(x, Concrete)` branch. Keep
+   "contract" params (history, dtype, sampling mode) in config too, not baked into the call.
 3. **Derive downstream dims from the VLA + task, not by copying.** World-model,
    classifier, actor, replay, and sidecar dimensions flow from the selected VLA head +
    dataset/task metadata via Hydra interpolation. Don't change `wm_obs_dim` / `token_count`

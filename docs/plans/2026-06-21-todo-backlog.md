@@ -119,6 +119,31 @@ key-routing) stay non-targets per `../ray_rlinf_alignment_todo.md` and are not l
   load; CLAUDE.md calls for early resume-checkpoint validation. Unit cover:
   `tests/unit_tests/test_checkpoint_version_guard.py` (future rejected / current + legacy accepted).
 
+## Hydra-core decoupling roadmap
+
+Goal: every model/dataset/impl built via `hydra.utils.instantiate(cfg.<x>)`, swappable from
+config alone (AGENTS.md §1/§2 + the Hydra-core construction rules added there).
+
+- [x] **DECOUPLE-01 — success classifier via a `_target_`-aware builder.** *Landed 2026-06-22
+  (TDD, suite green):* `dreamervla.models.reward.build_classifier` honors a Hydra `_target_`,
+  else falls back to the default `LatentSuccessClassifier` — byte-identical for legacy ckpts.
+  Routed the three hardcoded sites (`online_dreamervla`, `dreamervla_runner`,
+  `online_cotrain_runner`) through it; `latent_classifier_runner` already used the pattern.
+  Cover: `tests/unit_tests/test_build_classifier.py`.
+- [ ] **DECOUPLE-02 — env / encoder / policy construction (GPU-gated).** `OpenVLAOFTPolicy`,
+  `RynnVLAEncoder`, `DreamerVLAOnlineTrainEnv` are built with hardcoded params in
+  runners/`online_utils`/`oft_collect_common`; route through `instantiate(cfg.<x>)` and move the
+  baked "contract" params into config. Deferred: these run only on GPU/LIBERO and the box cannot
+  E2E-verify; refactoring blind risks breaking real training (core-req#1).
+- [ ] **DECOUPLE-03 — action head injection.** `L1RegressionActionHead` is hardcoded in three
+  actors + an encoder; inject via a protocol + config `_target_`. Deep model-internal, GPU-gated.
+- [ ] **DECOUPLE-04 — small impls.** `ReturnPercentileTracker` direct instantiation (low value);
+  `BalancedTerminalDataset` runtime `cfg._target_` mutation → move selection into config; the
+  HF-save `target=` string in `online_cotrain_runner` → derive from config; `soft_update` lives
+  under `models/critic` but is used by `algorithms/` → move to a shared util.
+- Won't-fix: `ChunkAwareDinoWMWorldModel(DinoWMWorldModel)` inheritance is code reuse and is
+  already swappable via `world_model._target_` — not a coupling violation.
+
 ## Won't-fix / intentional (record only)
 
 **DIAG-06** (16 doc-only diagnostics) and **MOD-07** (`official` OFT action-model) — kept by
