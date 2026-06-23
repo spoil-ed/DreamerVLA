@@ -124,6 +124,12 @@ key-routing) stay non-targets per `../ray_rlinf_alignment_todo.md` and are not l
 Goal: every model/dataset/impl built via `hydra.utils.instantiate(cfg.<x>)`, swappable from
 config alone (AGENTS.md §1/§2 + the Hydra-core construction rules added there).
 
+Coverage: a deterministic full-tree sweep (2026-06-22) over all `dreamervla/` subdirs +
+three antipattern classes (cross-module concrete imports, runtime `_target_` mutation,
+`isinstance`-on-sibling). No `isinstance`-on-concrete-sibling exists; the items below are the
+complete set. (The earlier Explore audit only scoped `models/dataset/runners/algorithms/
+workers`, so it missed the `preprocess/` and `envs/` sites now folded into DECOUPLE-02/04.)
+
 - [x] **DECOUPLE-01 — success classifier via a `_target_`-aware builder.** *Landed 2026-06-22
   (TDD, suite green):* `dreamervla.models.reward.build_classifier` honors a Hydra `_target_`,
   else falls back to the default `LatentSuccessClassifier` — byte-identical for legacy ckpts.
@@ -131,16 +137,19 @@ config alone (AGENTS.md §1/§2 + the Hydra-core construction rules added there)
   `online_cotrain_runner`) through it; `latent_classifier_runner` already used the pattern.
   Cover: `tests/unit_tests/test_build_classifier.py`.
 - [ ] **DECOUPLE-02 — env / encoder / policy construction (GPU-gated).** `OpenVLAOFTPolicy`,
-  `RynnVLAEncoder`, `DreamerVLAOnlineTrainEnv` are built with hardcoded params in
-  runners/`online_utils`/`oft_collect_common`; route through `instantiate(cfg.<x>)` and move the
-  baked "contract" params into config. Deferred: these run only on GPU/LIBERO and the box cannot
-  E2E-verify; refactoring blind risks breaking real training (core-req#1).
+  `RynnVLAEncoder`, `DreamerVLAOnlineTrainEnv` are built with hardcoded params across
+  `runners/online_utils`, `runners/oft_collect_common`, `envs/train_env.py:694`, and
+  `preprocess/preprocess_oft_action_hidden.py:273` + `preprocess/preprocess_rynn_pixel_hidden.py:430`;
+  route through `instantiate(cfg.<x>)` and move the baked "contract" params into config. Deferred:
+  these run only on GPU/LIBERO and the box cannot E2E-verify; refactoring blind risks breaking real
+  training (core-req#1).
 - [ ] **DECOUPLE-03 — action head injection.** `L1RegressionActionHead` is hardcoded in three
   actors + an encoder; inject via a protocol + config `_target_`. Deep model-internal, GPU-gated.
 - [ ] **DECOUPLE-04 — small impls.** `ReturnPercentileTracker` direct instantiation (low value);
-  `BalancedTerminalDataset` runtime `cfg._target_` mutation → move selection into config; the
-  HF-save `target=` string in `online_cotrain_runner` → derive from config; `soft_update` lives
-  under `models/critic` but is used by `algorithms/` → move to a shared util.
+  `BalancedTerminalDataset` runtime `cfg._target_` mutation (`frozen_wm_actor_critic.py:240`,
+  `diagnostics/finetune_reward_head_sparse.py:160`) → move selection into config; the HF-save
+  `target=` string in `online_cotrain_runner` → derive from config; `soft_update` lives under
+  `models/critic` but is used by `algorithms/` → move to a shared util.
 - Won't-fix: `ChunkAwareDinoWMWorldModel(DinoWMWorldModel)` inheritance is code reuse and is
   already swappable via `world_model._target_` — not a coupling violation.
 
