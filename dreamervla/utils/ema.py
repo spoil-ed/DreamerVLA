@@ -38,11 +38,26 @@ class EMAHelper:
                 if name in self.shadow:
                     self.shadow[name].copy_(param.detach())
             return
+        # Fuse the per-parameter `shadow.mul_(decay).add_(param, alpha=1-decay)`
+        # blend into multi-tensor `torch._foreach_*` kernels. `_foreach_` requires a
+        # homogeneous (dtype, device) list, so bucket the pairs in
+        # `named_parameters()` order (the old loop's order) and issue one fused
+        # mul_/add_ pair per bucket. Within a bucket each tensor receives the same two
+        # ops in the same order as before -> numerically identical.
+        buckets: dict[
+            tuple[torch.dtype, torch.device],
+            tuple[list[torch.Tensor], list[torch.Tensor]],
+        ] = {}
         for name, param in model.named_parameters():
             shadow = self.shadow.get(name)
             if shadow is None:
                 continue
-            shadow.mul_(self.decay).add_(param.detach(), alpha=1.0 - self.decay)
+            dst, src = buckets.setdefault((shadow.dtype, shadow.device), ([], []))
+            dst.append(shadow)
+            src.append(param.detach())
+        for dst, src in buckets.values():
+            torch._foreach_mul_(dst, self.decay)
+            torch._foreach_add_(dst, src, alpha=1.0 - self.decay)
 
     def state_dict(self) -> dict[str, Any]:
         return {
