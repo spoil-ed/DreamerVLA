@@ -1,7 +1,8 @@
 # Backlog execution log (pass 3, 2026-06-21)
 
 Branch: `chore/backlog-execution` (off `main`). Source: the open-items backlog
-`docs/plans/2026-06-21-todo-backlog.md`. Constraint honored: **behaviour-preserving**
+`docs/superpowers/plans/2026-06-21-todo-backlog.md` (since moved to the local planning workspace).
+Constraint honored: **behaviour-preserving**
 (every commit ran the full unit suite green in the `dreamervla` env), except the two
 maintainer-approved `changes-numerics` flips, which are flagged below. Suite: baseline
 584 → **593 passed, 7 skipped** (+9 new guard/regression tests).

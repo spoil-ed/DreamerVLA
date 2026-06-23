@@ -14,7 +14,7 @@ Start here. This maps the `docs/` tree and points to the single live to-do list.
 
 | Dir / file | What it is |
 |---|---|
-| `plans/2026-06-21-todo-backlog.md` | **THE single open-items list** — everything still to do. Start here for "what's next". |
+| `docs/superpowers/` *(local, gitignored)* | **The live open-items to-do** (`plans/2026-06-21-todo-backlog.md`) — everything still to do. It lives in the local planning workspace (not in version control); the routing snapshot below mirrors it. |
 | `plans/2026-06-23-perf-audit-execution-roadmap.md` | Perf-audit status ledger + per-item detail (merged items link into `history/`). |
 | `plans/performance_optimization_audit.md` | Perf **findings** ("which line is slow"); the concepts are in `performance_optimization_concepts.md`. |
 | `plans/2026-06-23-cotrain-*.md` | Cotrain vectorized-egl rollout + readiness-gate detailed plans. |
@@ -29,9 +29,10 @@ Start here. This maps the `docs/` tree and points to the single live to-do list.
 
 ## Everything to do
 
-The canonical, detailed list is [`plans/2026-06-21-todo-backlog.md`](plans/2026-06-21-todo-backlog.md)
-(it consolidates the backlog + the open cotrain-throughput and performance-audit items). Grouped here by
-**where it can run** — the GPU box (the machine with cards) vs CPU:
+The authoritative live list is the **local** `docs/superpowers/plans/2026-06-21-todo-backlog.md`
+(the gitignored planning workspace — not in version control). It consolidates the backlog + the open
+cotrain-throughput and performance-audit items. A high-level routing snapshot, grouped by **where it can
+run** — the GPU box (the machine with cards) vs CPU:
 
 ### Runnable on the GPU box now
 - **RUN-01** — RynnVLA multi-GPU save→resume smoke for the helper-routed online DDP (code landed; the
