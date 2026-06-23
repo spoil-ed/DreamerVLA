@@ -220,3 +220,32 @@ def test_vectorized_rollout_train_hook_can_stop():
         action_steps=1, image_size=64, task_ids=[0], train_hook=hook,
     )
     assert calls["n"] == 3  # returned promptly on the stop signal
+
+
+def test_vectorized_rollout_train_hook_runs_with_grad_enabled():
+    """Rollout is ``@torch.no_grad()``, but the training burst (the hook) must run
+    with grad ENABLED so the WM/classifier/RL backward builds a graph. Regression
+    for the no_grad-wrapped-burst bug (loss did not require grad)."""
+    import torch
+
+    class _Replay:
+        sequence_length = 2
+
+        def add_episode(self, ep):
+            return None
+
+    runner = _make_min_runner()
+    vec = _FakeVec(num_envs=2, horizon=3, full_record_fn=_full_record)
+    extractors = [_FakeExtractor(), _FakeExtractor()]
+    seen = {"grad": None}
+
+    def hook(env_step):
+        seen["grad"] = torch.is_grad_enabled()
+        return True  # stop immediately
+
+    runner._vectorized_cotrain_rollout(
+        vec=vec, extractors=extractors, replay=_Replay(),
+        num_envs=2, total_env_steps=1000, episode_horizon=3,
+        action_steps=1, image_size=64, task_ids=[0], train_hook=hook,
+    )
+    assert seen["grad"] is True

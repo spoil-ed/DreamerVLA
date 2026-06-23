@@ -1029,8 +1029,15 @@ class OnlineCotrainRunner(DreamerVLARunner):
                         counters["n_success"] += int(success)
                         self.console_record_success(success)
                     recs[k] = _start_slot(k)
-                if train_hook is not None and train_hook(env_step):
-                    return
+                # The rollout runs under the method-level no_grad, but the training
+                # burst (forward + backward) must build a graph — re-enable grad
+                # just for the hook, matching the single-env loop where no_grad is
+                # scoped to ``_rollout_action`` only.
+                if train_hook is not None:
+                    with torch.enable_grad():
+                        stop = train_hook(env_step)
+                    if stop:
+                        return
             self.console_progress(
                 min(env_step, total_env_steps), total_env_steps, "cotrain", unit="env"
             )
