@@ -119,9 +119,11 @@ def _build_reward_tensor(
         return reward
     finish = finish_step.detach().cpu().long().clamp(min=0, max=max_steps - 1)
     comp = complete.detach().cpu().bool()
-    for i in range(batch):
-        if comp[i].item():
-            reward[i, finish[i].item()] = 1.0
+    # Vectorized sparse placement: write float(complete) at the finish column of
+    # each row in a single scatter_. One index per row (no accumulation), and a
+    # 0.0 write for incomplete rows is a no-op against the zero base — bit-for-bit
+    # identical to the prior ``if comp[i]: reward[i, finish[i]] = 1.0`` loop.
+    reward.scatter_(1, finish.unsqueeze(1), comp.float().unsqueeze(1))
     return reward
 
 
