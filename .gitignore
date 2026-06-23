@@ -36,7 +36,6 @@ wandb/
 .codex/
 .cursor/
 .planning/
-docs/superpowers/
 docs/TODO.md
 docs/task_plan.md
 docs/*_plan.md
