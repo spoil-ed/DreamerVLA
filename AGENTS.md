@@ -5,6 +5,10 @@ docs linked at the bottom; contribution mechanics live in [CONTRIBUTING.md](CONT
 This file stays short and big-picture — when in doubt, follow the invariants below and
 point readers at the reference docs rather than restating detail here.
 
+**What's done and what's left** are the companion ledgers [docs/HISTORY.md](docs/HISTORY.md)
+(shipped work) and [docs/TODO.md](docs/TODO.md) (open work). AGENTS.md is the stable
+rules/architecture; those two are the volatile state — read them together to align on any task.
+
 ## What Dreamer-VLA is
 
 A single-machine, multi-GPU research framework that pairs a **VLA encoder**
@@ -158,12 +162,12 @@ counting); `if` only for run/skip/required-input guards. Commits: Conventional C
 
 ## Further reading
 
+[**History (done)**](docs/HISTORY.md) · [**TODO (open)**](docs/TODO.md) ·
 [Repository structure](docs/repository_structure.md) ·
 [Install](docs/install.md) ·
 [Config registry](configs/README.md) ·
 [Script registry](scripts/README.md) ·
 [Parameter reference](docs/PARAMETERS.md) ·
 [Experiment tutorials](docs/experiment_tutorials/) + [explained](docs/experiment_tutorials/EXPLAINED.md) ·
-[Write-up](docs/dreamervla_writeup.md) ·
 [Data layout](docs/data_layout.md) ·
 [README](README.md) / [中文](README.zh-CN.md)
