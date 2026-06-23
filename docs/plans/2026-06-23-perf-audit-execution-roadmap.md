@@ -74,26 +74,28 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
 
 | Item | Phase | Plan doc | Status | Commit |
 |------|:-----:|----------|--------|--------|
-| W0 / Option 1 | 0 | `2026-06-23-cotrain-vec-egl-rollout.md` | reviewed SAFE, **MERGED** d25d0fc, GPU smoke running | d25d0fc |
+| W0 / Option 1 | 0 | `2026-06-23-cotrain-vec-egl-rollout.md` | reviewed SAFE, **MERGED** d25d0fc; **validated e2e** (osmesa 4-env ~6.4 env/s, warmup+RL bursts+ckpt, clean exit); egl runtime pending free GPU | d25d0fc |
+| Option-1 enable_grad fix | 0 | `2026-06-23-cotrain-vec-egl-rollout.md` | **MERGED** (rollout @no_grad wrapped the burst → fixed) | e23e7da |
+| egl-wiring fix (drop forced PYOPENGL_PLATFORM=egl) | 0 | `2026-06-23-cotrain-readiness-gate-and-egl-wiring.md` | **MERGED**; egl runtime verify pending free GPU | 0e68754 |
 | W1 reduce_mean_dict | 1 | `2026-06-23-perf-w1-reduce-mean-dict.md` | **MERGED** | b58d782 |
 | W5 bin decode (Q10 done) / single-forward (todo) | 1 | `2026-06-23-perf-q10-bin-centers-vectorize.md` | Q10 **MERGED**; single-forward not started | 6d340f7 |
 | Q1 ema _foreach_ | 1 | `2026-06-23-perf-q1-ema-foreach.md` | **MERGED** | d9dced7 |
-| Q2 drop .clone() | 1 | _tbd_ | not started (Wave 3, needs mutation-safety) | — |
+| Q2 drop .clone() | 1 | `2026-06-23-perf-q2q6-clone-d2h.md` | **MERGED** (device-conditional `_independent_cpu`) | ba18d0f |
 | Q3/Q4 HDF5 slice-read | 1 | `2026-06-23-perf-q3q4-hdf5-slice-read.md` | **MERGED** | 29cf619 |
 | Q5 sparse-reward scatter | 1 | `2026-06-23-perf-q5-sparse-reward-scatter.md` | **MERGED** | 4eec644 |
-| Q6 batched D2H | 1 | _tbd_ | not started | — |
-| Q7 metric materialize gate | 1 | _tbd_ | not started | — |
-| Q9 img2bpe GPU buffer | 1 | _tbd_ | not started | — |
-| Q11 parallel ray.get | 1 | _tbd_ | not started | — |
-| cotrain readiness-gate | 1 | _tbd_ | not started | — |
-| prompt-tokenize cache | 1 | _tbd_ | not started | — |
-| W2 atomic checkpoint | 2 | _tbd_ | not started | — |
+| Q6 batched D2H | 1 | `2026-06-23-perf-q2q6-clone-d2h.md` | **MERGED** | ba18d0f |
+| Q7 metric materialize gate | 1 | `2026-06-23-perf-q7-metric-materialize-gate.md` | agent in progress | — |
+| Q9 img2bpe GPU buffer | 1 | _tbd_ | not started (next wave, vendored) | — |
+| Q11 parallel ray.get | 1 | `2026-06-23-perf-q11-bucket-parallel-rayget.md` | **MERGED** | 3094775 |
+| cotrain readiness-gate | 1 | `2026-06-23-cotrain-readiness-gate-and-egl-wiring.md` | **MERGED** | 0e68754 |
+| prompt-tokenize cache | 1 | `2026-06-23-perf-prompt-tokenize-cache.md` | agent in progress | — |
+| W2 atomic checkpoint | 2 | `2026-06-23-perf-w2-atomic-checkpoint.md` | **MERGED** 4aa4346 (atomic temp→rename active for every save; single-serialize `extra_paths` capability added+tested but call-sites in `openvla_oft_runner.py`/`pretokenize_vla_runner.py` not yet rewired — deliberate strict-scope deviation) | 4aa4346 |
 | W7 dataloader/non_blocking | 2 | _tbd_ | not started | — |
-| B diagnostics gating | 2 | _tbd_ | not started | — |
+| B / H4 grad-diagnostics gating | 2 | `2026-06-23-perf-h4-gate-grad-diagnostics.md` | **MERGED** 889d3cb (per-step actor grad-norm/cosine extra-backwards gated behind `optim.grad_diagnostics`, default OFF; OFF math bit-identical, atol=0). Broader B (other per-step diagnostics/sync, if any) still TBD | 889d3cb |
 | H3 replay readiness incremental | 2 | _tbd_ | not started | — |
-| W6 dense ← outcome micro-batch | 3 | _tbd_ | not started | — |
-| W3 manifest-first | 3 | _tbd_ | not started | — |
-| W4 hdf5 handle cache | 3 | _tbd_ | not started | — |
+| W6 dense ← outcome micro-batch | 3 | `2026-06-23-perf-w6-dense-microbatch.md` | agent in progress | — |
+| W3 manifest-first | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 — but GUARDED/dormant: shipped manifests store the *next*-frame image, so the manifest-first path falls back to the (unchanged) pickle scan; byte-identity preserved, no perf win until the preprocess writer also emits the current-obs image (out of scope) | 6e09282 |
+| W4 hdf5 handle cache | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 (per-worker bounded-LRU frame cache `_load_frame_payload`, cap 64; overlapping stride-1 windows unpickle a shared frame once; byte-identical) | 6e09282 |
 | W8 bf16 frozen eval | 3 | _tbd_ | not started | — |
 | H2 replay contiguous layout | 3 | _tbd_ | not started | — |
 | H5/H6 WM KV-cache / SDPA | 3 | _tbd_ | not started | — |
