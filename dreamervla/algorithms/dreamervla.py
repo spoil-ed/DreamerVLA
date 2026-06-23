@@ -607,6 +607,10 @@ def imagine_actor_critic_step(
     repval_scale = float(algorithm_cfg.get("repval_scale", 0.3))
     grad_clip = float(optim_cfg.get("grad_clip_norm", 1.0))
     zero_grad = bool(optim_cfg.get("zero_grad_set_to_none", True))
+    # Per-step actor grad-norm / cosine instrumentation is diagnostic-only and
+    # costs up to 4 extra retain_graph autograd.grad passes plus 5 full-parameter
+    # traversals every step. Gate it OFF by default (PERF-H4).
+    grad_diagnostics = bool(optim_cfg.get("grad_diagnostics", False))
     disc = 1.0 if contdisc else 1.0 - 1.0 / float(env_horizon)
     replay_disc = 1.0 - 1.0 / float(env_horizon)
 
@@ -999,64 +1003,73 @@ def imagine_actor_critic_step(
             + actor_bc_ref_loss_scaled
         )
 
-        # ── Per-component actor-gradient instrumentation ─────────────────────
+        # ── Per-component actor-gradient instrumentation (diagnostic-only) ───
         # For each loss term, compute the gradient w.r.t. policy parameters and
         # record its L2 norm (and cosine with the PG term). This lets us see
         # whether the actor is being moved by the REINFORCE signal or by the
-        # BC anchor pulling it back toward SFT.
-        actor_params = [p for p in policy.parameters() if p.requires_grad]
+        # BC anchor pulling it back toward SFT. Each ``_flat_grad`` runs an extra
+        # ``autograd.grad(..., retain_graph=True)`` (up to 4/step, pinning the
+        # actor graph), so the whole block is gated behind ``grad_diagnostics``
+        # (PERF-H4). Defaults below match the OFF / unavailable convention (0.0).
+        actor_grad_pg_norm = 0.0
+        actor_grad_bc_ref_norm = 0.0
+        actor_grad_entropy_norm = 0.0
+        actor_grad_bc_vla_norm = 0.0
+        cos_pg_bcref = 0.0
+        if grad_diagnostics:
+            actor_params = [p for p in policy.parameters() if p.requires_grad]
 
-        def _flat_grad(loss_t: torch.Tensor) -> torch.Tensor | None:
-            # Returns a flat tensor of size sum(p.numel() for p in actor_params).
-            # Params with no gradient w.r.t. loss_t (e.g. log_std for a
-            # deterministic MSE loss) are filled with zeros so different
-            # components can be compared element-wise (norms, cosines).
-            if not loss_t.requires_grad or loss_t.grad_fn is None:
-                return None
-            try:
-                grads = torch.autograd.grad(
-                    loss_t,
-                    actor_params,
-                    retain_graph=True,
-                    allow_unused=True,
-                    create_graph=False,
-                )
-            except RuntimeError:
-                return None
-            pieces = []
-            has_any = False
-            for g, p in zip(grads, actor_params, strict=True):
-                if g is None:
-                    pieces.append(
-                        torch.zeros(p.numel(), device=p.device, dtype=p.dtype)
+            def _flat_grad(loss_t: torch.Tensor) -> torch.Tensor | None:
+                # Returns a flat tensor of size sum(p.numel() for p in actor_params).
+                # Params with no gradient w.r.t. loss_t (e.g. log_std for a
+                # deterministic MSE loss) are filled with zeros so different
+                # components can be compared element-wise (norms, cosines).
+                if not loss_t.requires_grad or loss_t.grad_fn is None:
+                    return None
+                try:
+                    grads = torch.autograd.grad(
+                        loss_t,
+                        actor_params,
+                        retain_graph=True,
+                        allow_unused=True,
+                        create_graph=False,
                     )
-                else:
-                    pieces.append(g.detach().reshape(-1))
-                    has_any = True
-            if not has_any:
-                return None
-            return torch.cat(pieces)
+                except RuntimeError:
+                    return None
+                pieces = []
+                has_any = False
+                for g, p in zip(grads, actor_params, strict=True):
+                    if g is None:
+                        pieces.append(
+                            torch.zeros(p.numel(), device=p.device, dtype=p.dtype)
+                        )
+                    else:
+                        pieces.append(g.detach().reshape(-1))
+                        has_any = True
+                if not has_any:
+                    return None
+                return torch.cat(pieces)
 
-        g_pg = _flat_grad(actor_pg_loss)
-        g_bcref = (
-            _flat_grad(actor_bc_ref_loss_scaled) if actor_bc_ref_scale > 0.0 else None
-        )
-        g_ent = _flat_grad(actor_entropy_loss) if entropy_coef != 0.0 else None
-        g_bcvla = _flat_grad(actor_bc_loss_scaled) if actor_bc_scale > 0.0 else None
+            g_pg = _flat_grad(actor_pg_loss)
+            g_bcref = (
+                _flat_grad(actor_bc_ref_loss_scaled)
+                if actor_bc_ref_scale > 0.0
+                else None
+            )
+            g_ent = _flat_grad(actor_entropy_loss) if entropy_coef != 0.0 else None
+            g_bcvla = _flat_grad(actor_bc_loss_scaled) if actor_bc_scale > 0.0 else None
 
-        def _norm(g: torch.Tensor | None) -> float:
-            return float(g.norm().cpu()) if g is not None else 0.0
+            def _norm(g: torch.Tensor | None) -> float:
+                return float(g.norm().cpu()) if g is not None else 0.0
 
-        actor_grad_pg_norm = _norm(g_pg)
-        actor_grad_bc_ref_norm = _norm(g_bcref)
-        actor_grad_entropy_norm = _norm(g_ent)
-        actor_grad_bc_vla_norm = _norm(g_bcvla)
+            actor_grad_pg_norm = _norm(g_pg)
+            actor_grad_bc_ref_norm = _norm(g_bcref)
+            actor_grad_entropy_norm = _norm(g_ent)
+            actor_grad_bc_vla_norm = _norm(g_bcvla)
 
-        if g_pg is not None and g_bcref is not None:
-            denom = (g_pg.norm() * g_bcref.norm()).clamp_min(1e-12)
-            cos_pg_bcref = float(((g_pg * g_bcref).sum() / denom).cpu())
-        else:
-            cos_pg_bcref = 0.0
+            if g_pg is not None and g_bcref is not None:
+                denom = (g_pg.norm() * g_bcref.norm()).clamp_min(1e-12)
+                cos_pg_bcref = float(((g_pg * g_bcref).sum() / denom).cpu())
         # log_prob and advantage diagnostics
         log_prob_mean = float(log_prob_stack.detach().mean().cpu())
         log_prob_std = float(log_prob_stack.detach().std().cpu())
@@ -1064,13 +1077,21 @@ def imagine_actor_critic_step(
 
         actor_optimizer.zero_grad(set_to_none=zero_grad)
         actor_loss.backward()
-        actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
-        actor_action_head_grad_norm = _named_grad_norm(policy, "action")
-        actor_output_projection_grad_norm = _named_grad_norm(
-            policy, "output_projection"
-        )
-        actor_policy_head_grad_norm = _named_grad_norm(policy, "policy_head")
-        actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
+        # Per-submodule grad norms are diagnostic-only (5 full-parameter
+        # traversals); gate behind ``grad_diagnostics`` (PERF-H4).
+        actor_adapter_grad_norm = 0.0
+        actor_action_head_grad_norm = 0.0
+        actor_output_projection_grad_norm = 0.0
+        actor_policy_head_grad_norm = 0.0
+        actor_log_std_grad_norm = 0.0
+        if grad_diagnostics:
+            actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
+            actor_action_head_grad_norm = _named_grad_norm(policy, "action")
+            actor_output_projection_grad_norm = _named_grad_norm(
+                policy, "output_projection"
+            )
+            actor_policy_head_grad_norm = _named_grad_norm(policy, "policy_head")
+            actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
         actor_grad_norm = torch.nn.utils.clip_grad_norm_(
             policy.parameters(), max_norm=grad_clip
         )
