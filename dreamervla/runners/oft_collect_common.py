@@ -27,6 +27,48 @@ def process_action(action: Any) -> np.ndarray:
     return a
 
 
+def pop_open_loop_action(
+    action_chunk: Any,
+    action_queue: list,
+    action_steps: int | None = None,
+) -> np.ndarray:
+    """The open-loop action CORE shared by ALL three OFT rollouts (single-env
+    collector, batched vectorized collector, online cotrain): refill
+    ``action_queue`` from ``action_chunk`` once drained, pop one action, and
+    gripper-post-process it (``process_action`` — mandatory before ``env.step`` or
+    grasping/success fails). ``action_steps`` (default = full chunk) caps how many
+    of the predicted chunk run open-loop before re-querying. Mutates
+    ``action_queue`` in place; returns the post-processed action."""
+    if not action_queue:
+        chunk = list(action_chunk)
+        n = len(chunk) if action_steps is None else int(action_steps)
+        if len(chunk) < n:
+            raise ValueError(
+                f"policy returned {len(chunk)} actions, need action_steps={n}"
+            )
+        action_queue.extend(chunk[:n])
+    return process_action(action_queue.pop(0))
+
+
+def oft_open_loop_action(
+    extractor: Any,
+    extractor_obs: Any,
+    task_description: str,
+    action_queue: list,
+    action_steps: int | None = None,
+) -> tuple[np.ndarray, Any]:
+    """One SINGLE-ENV OFT open-loop rollout step — the shared implementation used
+    by the collector (``collect_parallel_rollouts``) and the online cotrain rollout
+    (``OnlineCotrainRunner._rollout_action``) so the two can never drift. Runs the
+    OFT forward (``extractor.step``) for this frame's ``flat_hidden`` (= the
+    ``obs_embedding`` the WM/classifier consume), then takes the open-loop action
+    via ``pop_open_loop_action`` (the same core the batched vectorized collector
+    uses). Returns ``(action, flat_hidden)``."""
+    action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
+    action = pop_open_loop_action(action_chunk, action_queue, action_steps)
+    return action, flat_hidden
+
+
 def resolve_model_path(model_path: str) -> str:
     """Absolute path for a checkpoint dir; relative paths resolve against cwd."""
     p = Path(model_path)

@@ -154,8 +154,12 @@ class _EpisodeExtractor:
 
 def test_single_episode_executes_action_chunk_open_loop(monkeypatch):
     import dreamervla.runners.collect_parallel_rollouts as mod
+    import dreamervla.runners.oft_collect_common as occ
 
-    monkeypatch.setattr(mod, "process_action", lambda action: np.asarray(action, dtype=np.float64))
+    # process_action is now applied inside the shared oft_open_loop_action; patch it
+    # at its real call site so the open-loop action SEQUENCE check stays independent
+    # of the gripper transform.
+    monkeypatch.setattr(occ, "process_action", lambda action: np.asarray(action, dtype=np.float64))
     env = _EpisodeEnv(done_after=5)
     extractor = _EpisodeExtractor()
 

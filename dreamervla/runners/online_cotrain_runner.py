@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,12 +30,21 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 
+# Force CPU software rendering for robosuite offscreen cameras BEFORE any import
+# below pulls in robosuite (which otherwise defaults MUJOCO_GL=egl). The GPU/EGL
+# backend's ``read_pixels`` aborts (SIGABRT) intermittently mid-rollout; osmesa is
+# stable. This MUST precede the ``train_env`` import and matches the collector
+# (collect_parallel_rollouts). setdefault so an explicit MUJOCO_GL still wins.
+os.environ.setdefault("MUJOCO_GL", "osmesa")
+os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.models.reward import build_classifier
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
+from dreamervla.runners.oft_collect_common import oft_open_loop_action
 from dreamervla.runners.online_dreamervla import (
     _unwrap,
     online_classifier_update_step,
@@ -159,6 +169,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
             )
 
     def _build_env(self, cfg: DictConfig) -> DreamerVLAOnlineTrainEnv:
+        # MUJOCO_GL=osmesa is forced at module import (before robosuite loads); see
+        # the top of this file. Setting it here would be too late (egl already locked).
         env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
         task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
         task_ids = [int(x) for x in task_ids] if task_ids is not None else None
@@ -195,42 +207,61 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
     @torch.no_grad()
     def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
-        """One env-step action via WM latent -> policy sample. Mirrors
-        online_dreamervla. Returns (policy_action[7], obs_embedding, latent).
+        """One env-step action + the WM-input latent (``obs_embedding``) for this
+        frame. Returns (action[7], obs_embedding, latent_or_None).
 
-        ``obs_embedding`` is the latent the WM consumes: the post-Action-Query
-        action-hidden (``action_hidden``) or the pre-Action-Query backbone
-        input-token latent (``backbone_latent``)."""
-        is_first = bool(obs.get("is_first", False)) or latent is None
-        if getattr(self, "_latent_type", "action_hidden") == "backbone_latent":
-            oft_extractor = getattr(self, "_oft_input_token_extractor", None)
-            if oft_extractor is not None:
-                if is_first and hasattr(oft_extractor, "reset"):
-                    oft_extractor.reset()
-                _action_chunk, flat_hidden = oft_extractor.step(
-                    obs,
-                    str(obs.get("task_description", "")),
+        UNIFIED with the collector rollout (``collect_parallel_rollouts``): when an
+        OFT extractor is present the env is driven by the OFT policy's OWN action
+        chunk — executed open-loop and gripper-post-processed via
+        ``process_action`` — NOT the RL actor head or a WM-latent rollout. The
+        actor is optimized purely in imagination (``dino_wmpo_outcome_step``); the
+        env rollout only needs on-distribution states + a per-step
+        ``obs_embedding`` for WM / classifier training, so re-using the proven
+        collector action path keeps the simulation stable. The actor-head +
+        WM-latent path is kept only as a fallback for encoder-based setups without
+        an OFT extractor.
+
+        ``obs_embedding`` is the post-Action-Query action-hidden
+        (``action_hidden``) or the pre-Action-Query backbone input-token latent
+        (``backbone_latent``)."""
+        is_first = bool(obs.get("is_first", False))
+        if is_first or not hasattr(self, "_rollout_action_queue"):
+            self._rollout_action_queue = []
+        task_desc = str(obs.get("task_description", ""))
+        backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
+        if not backbone:
+            # action_hidden recipe (the OFT cotrain default): drive the env with the
+            # OFT policy's OWN action chunk via the SHARED collector path
+            # (oft_open_loop_action) — no actor head / WM latent. The actor is
+            # trained only in imagination (dino_wmpo_outcome_step), so re-using the
+            # proven collector action path keeps the simulation stable.
+            extractor = getattr(self, "_oft_action_hidden_extractor", None)
+            if extractor is not None:
+                if is_first and hasattr(extractor, "reset"):
+                    extractor.reset()
+                action, flat_hidden = oft_open_loop_action(
+                    extractor, obs, task_desc, self._rollout_action_queue
                 )
+                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
+                return np.asarray(action, dtype=np.float32).reshape(-1)[:7], obs_embedding, None
+            obs_embedding = obs_to_action_hidden(
+                self.encoder, processor, obs, self.device, target_token_id
+            )
+        else:
+            # backbone_latent recipe: the OFT input-token extractor supplies the
+            # WM-input latent, but the action still comes from the WM-latent + actor
+            # head (deliberate, distinct from the action_hidden path above).
+            extractor = getattr(self, "_oft_input_token_extractor", None)
+            if extractor is not None:
+                if is_first and hasattr(extractor, "reset"):
+                    extractor.reset()
+                _chunk, flat_hidden = extractor.step(obs, task_desc)
                 obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
             else:
                 obs_embedding = obs_to_input_token_embedding(
                     self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
                 )
-        else:
-            oft_ah_extractor = getattr(self, "_oft_action_hidden_extractor", None)
-            if oft_ah_extractor is not None:
-                if is_first and hasattr(oft_ah_extractor, "reset"):
-                    oft_ah_extractor.reset()
-                _action_chunk, flat_hidden = oft_ah_extractor.step(
-                    obs,
-                    str(obs.get("task_description", "")),
-                )
-                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
-            else:
-                obs_embedding = obs_to_action_hidden(
-                    self.encoder, processor, obs, self.device, target_token_id
-                )
-        if is_first:
+        if latent is None or is_first:
             latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
         else:
             latent = world_model(

@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from dreamervla.runners.oft_collect_common import process_action
+from dreamervla.runners.oft_collect_common import pop_open_loop_action
 from dreamervla.utils.progress import ProgressReporter
 
 # Per-step proprio fed to the extractor: ee_pos(3) + ee_ori/axisangle(3) + gripper(2) = 8.
@@ -172,14 +172,11 @@ def collect_vectorized(
         # sidecar stores the current observation's hidden state.
         actions = []
         for i, k in enumerate(active_ids):
-            if not action_queues[k]:
-                chunk = list(outs[i][0])
-                if len(chunk) < action_steps:
-                    raise ValueError(
-                        f"policy returned {len(chunk)} actions, need action_steps={action_steps}"
-                    )
-                action_queues[k] = chunk[:action_steps]
-            actions.append(process_action(action_queues[k].pop(0)))
+            # Same open-loop action core (refill chunk + process_action) as the
+            # single-env collector and the online cotrain rollout — one shared impl.
+            actions.append(
+                pop_open_loop_action(outs[i][0], action_queues[k], action_steps)
+            )
         step_results = vec_env.step(actions, env_ids=active_ids)
 
         finished: list[int] = []

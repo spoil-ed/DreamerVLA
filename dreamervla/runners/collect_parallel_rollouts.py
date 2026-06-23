@@ -49,7 +49,7 @@ from dreamervla.runners.oft_collect_common import (
     assert_policy_mode_matches,
     load_policy,
     make_preprocess_config,
-    process_action,
+    oft_open_loop_action,
     resolve_model_path,
     vla_latent_spec,
 )
@@ -182,18 +182,13 @@ def _run_episode(
             "eye_in_hand_rgb": rec["eye_in_hand_rgb"],
             "state": _proprio_from_rec(rec),
         }
-        action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
-        if not action_queue:
-            chunk = list(action_chunk)
-            if len(chunk) < action_steps:
-                raise ValueError(
-                    f"policy returned {len(chunk)} actions, need action_steps={action_steps}"
-                )
-            action_queue = chunk[:action_steps]
-        # Gripper post-process (process_action) is REQUIRED before env.step or
-        # grasping/success fails; execute the predicted chunk open-loop before
-        # consuming actions from a later prediction.
-        action = process_action(action_queue.pop(0))
+        # Open-loop OFT action + per-step obs_embedding — the SINGLE shared
+        # implementation also used by the online cotrain rollout
+        # (oft_open_loop_action). process_action (inside it) does the LIBERO
+        # gripper binarize/invert required before env.step.
+        action, flat_hidden = oft_open_loop_action(
+            extractor, extractor_obs, task_description, action_queue, action_steps
+        )
 
         obs, reward, terminated, truncated, info = env.step(action)
         done = bool(terminated or truncated)
