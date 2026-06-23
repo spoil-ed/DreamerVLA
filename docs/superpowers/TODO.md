@@ -1,7 +1,7 @@
 # TODO — open work (code master plan)
 
 > The single forward plan: every open item, grouped by where it can run. Done/shipped work →
-> [HISTORY.md](HISTORY.md); architecture & rules → [AGENTS.md](../AGENTS.md). When an item lands,
+> [HISTORY.md](../HISTORY.md); architecture & rules → [AGENTS.md](../../AGENTS.md). When an item lands,
 > move its line to `HISTORY.md` with the commit hash so this stays the live "what's next".
 
 - Last updated: 2026-06-23

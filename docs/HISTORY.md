@@ -2,7 +2,7 @@
 
 > Summarized log of shipped work — the "what already exists" outline. The full per-commit
 > detail lives in `git log`; this is the code-level summary that used to be scattered across
-> `docs/history/`. Architecture & rules → [AGENTS.md](../AGENTS.md); open work → [TODO.md](TODO.md).
+> `docs/history/`. Architecture & rules → [AGENTS.md](../AGENTS.md); open work → [TODO.md](superpowers/TODO.md).
 > When an item lands, add a line here (with its commit) and remove it from `TODO.md`.
 
 - Last updated: 2026-06-23

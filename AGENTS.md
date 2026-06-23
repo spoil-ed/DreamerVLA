@@ -6,7 +6,7 @@ This file stays short and big-picture — when in doubt, follow the invariants b
 point readers at the reference docs rather than restating detail here.
 
 **What's done and what's left** are the companion ledgers [docs/HISTORY.md](docs/HISTORY.md)
-(shipped work) and [docs/TODO.md](docs/TODO.md) (open work). AGENTS.md is the stable
+(shipped work) and [docs/superpowers/TODO.md](docs/superpowers/TODO.md) (open work). AGENTS.md is the stable
 rules/architecture; those two are the volatile state — read them together to align on any task.
 
 ## What Dreamer-VLA is
@@ -162,7 +162,7 @@ counting); `if` only for run/skip/required-input guards. Commits: Conventional C
 
 ## Further reading
 
-[**History (done)**](docs/HISTORY.md) · [**TODO (open)**](docs/TODO.md) ·
+[**History (done)**](docs/HISTORY.md) · [**TODO (open)**](docs/superpowers/TODO.md) ·
 [Repository structure](docs/repository_structure.md) ·
 [Install](docs/install.md) ·
 [Config registry](configs/README.md) ·

@@ -3,7 +3,7 @@
 - 日期:2026-06-19
 - 用途:记录 DreamerVLA 可选 Ray backend **已经按 RLinf 工程组织落地**的部分(含代码落点),
   以及对齐时确立的**设计立场 / 通信模型 / 工程经验**(evergreen 参考)。
-- 配套:待实现项见 **`docs/TODO.md`**(Ray backend remaining 段);对齐基准是相邻 `RLinf` 仓库。
+- 配套:待实现项见 **`docs/superpowers/TODO.md`**(Ray backend remaining 段);对齐基准是相邻 `RLinf` 仓库。
 
 > **一句话**:单机 Ray 对齐的**核心已完成**——RLinf 风格 scheduler 骨架、env/infer/replay/learner workers、
 > 真实 DreamerVLA learner 训练闭环、手动显存栈(FSDP/AMP/offload/激活重计算)、collective 权重同步、
