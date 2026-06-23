@@ -1,12 +1,14 @@
 # 设计:离线 warmup → 在线 cotrain 流水线（统一回放池预灌注）
 
+> **归档说明（2026-06-23）**：本设计稿已从 `docs/superpowers/specs/` 移入设计史；所述 `OnlineCotrainPipelineRunner` 已实现（即 Ray backend 的单机 parity 基线，见 `docs/ray_rlinf_alignment_implemented.md` §3.2）。原 §9 的"未来 Ray 方案"已落地为可选 Ray backend，以 `docs/ray_*.md` 为准。
+
 - 日期：2026-06-17
 - 状态：已批准（待 spec 复核）
 - 主题：在 runner 层提供一条"训练 DreamerVLA + 对 world model / classifier 做 warmup"的流水线；warmup 使用之前采集的离线轨迹数据，随后转入在线 cotrain。
 - 关联：
   - `dreamervla/runners/online_cotrain_runner.py`（复用其全部在线机制）
-  - `docs/superpowers/specs/2026-06-16-rlinf-vectorized-rollout-migration.md` §10（Ray TODO，本设计实现后补充）
-  - `AGENTS.md:6`、`AGENTS.md:69`（单机 torchrun 为主线，不引入 Ray stack）
+  - `docs/history/2026-06-16-rlinf-vectorized-rollout-migration.md`（并行采集器设计史）
+  - `AGENTS.md:6`、`AGENTS.md:69`（单机 torchrun 为主线；Ray 已实现为可选 backend，见 `docs/ray_*.md`）
 
 ---
 
@@ -50,7 +52,7 @@
 
 **非目标**
 
-- 不引入 Ray / 多节点 / 集群（仅在 §9 作为未来文档项补充）。
+- 不引入 Ray / 多节点 / 集群（Ray 整体-loop 方案已实现为可选 backend，见 `docs/ray_*.md`）。
 - 不改 `OnlineCotrainRunner` 的纯在线行为（只做机械抽取以便子类复用）。
 - 不改离线 `DreamerVLARunner.run()`。（采集器仅做 §4.1 的 per-demo 身份元数据补齐，
   向后兼容；不动其采集逻辑/吞吐路径。）
@@ -237,20 +239,11 @@ run():
 
 ---
 
-## 9. Ray 方案补充（本设计实现后，写入 migration spec §10）
+## 9. Ray 方案（已实现）
 
-接 `2026-06-16-rlinf-vectorized-rollout-migration.md:237-239` 现有 Ray bullet 往下写，
-**针对本条在线 cotrain loop**（policy + replay + learner）：
-
-- **异构 worker 放置**：推理 actor（VLA encoder + WM 前向产 latent/action）、env worker、
-  learner（WM/classifier/RL 反传）可放不同设备/进程，按各自吞吐独立扩缩。
-- **infer-step-learner 流水线重叠**：rollout 推理、env step、learner 更新三者重叠，掩盖
-  互相等待（本采集器内的 infer/step 重叠用双缓冲即可，无需 Ray；此处针对整体 loop）。
-- **多节点**：replay 作为共享/分片服务，多机 env worker + 多机 learner（DDP/FSDP）。
-- **立场重申**：单机 torchrun/DDP/FSDP 仍为主线（`AGENTS.md:6`、`AGENTS.md:69`）；Ray 仅
-  作整体 loop 的**未来架构选项**记录，本期不实现。
-
-纯文档，不引入依赖。
+本设计当初设想的整体在线 cotrain loop 的 Ray 化（异构 worker 放置、infer-step-learner 流水线
+重叠、多节点 replay）已落地为可选 Ray backend，详见 `docs/ray_rlinf_alignment_implemented.md`
+与 `docs/ray_online_cotrain_backend.md`。（原"未来 Ray 方案"草案不再于此重复。）
 
 ---
 
@@ -266,7 +259,6 @@ run():
 5. `OnlineCotrainRunner` 纯在线行为不变（仅机械抽取方法）。
 6. 采集器 `write_demo` 持久化 per-demo `task_id`/`episode_id`（+ 建议档），向后兼容
    现有 reader（§4.1）。
-7. migration spec §10 Ray bullet 已补充本 loop 的 Ray 方案。
 
 ---
 

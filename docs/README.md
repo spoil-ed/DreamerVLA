@@ -14,12 +14,12 @@ Start here. This maps the `docs/` tree and points to the single live to-do list.
 
 | Dir / file | What it is |
 |---|---|
-| `superpowers/` | Planning workspace (tracked): the live open-items to-do (`plans/2026-06-21-todo-backlog.md`) + design specs/plans drafts. The routing snapshot below mirrors the to-do. |
+| `superpowers/` | Planning workspace (tracked): the live open-items to-do (`plans/2026-06-21-todo-backlog.md`) + plan drafts + eval-alignment findings. The routing snapshot below mirrors the to-do. |
 | `plans/2026-06-23-perf-audit-execution-roadmap.md` | Perf-audit status ledger + per-item detail (merged items link into `history/`). |
 | `plans/performance_optimization_audit.md` | Perf **findings** ("which line is slow"); the concepts are in `performance_optimization_concepts.md`. |
 | `plans/2026-06-23-cotrain-*.md` | Cotrain vectorized-egl rollout + readiness-gate detailed plans. |
 | `plans/2026-06-23-perf-prompt-tokenize-cache.md` | The one in-progress perf item. |
-| `history/` | **Done** work: execution logs + archived per-item plans (perf `W*/Q*/H*`, `mem-rl-01`, RUN-01 landed, …). |
+| `history/` | **Done** work: execution logs + archived per-item plans & design specs (perf `W*/Q*/H*`, `mem-rl-01`, RUN-01 landed, collector/warmup-cotrain design, …). |
 | `experiment_tutorials/` | How to run each recipe (coldstart → warmup → cotrain, world-model, rollout collection). |
 | `specs/` | Design specs (train-console output). |
 | `model_datasets/` | Dataset cards (OFT / RynnVLA LIBERO). |

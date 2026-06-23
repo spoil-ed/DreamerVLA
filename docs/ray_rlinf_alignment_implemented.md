@@ -31,7 +31,7 @@
   `send/recv/flush_sends`,为 NCCL 权重同步打底。
 
 ### 1.2 Workers(`dreamervla/workers/`)
-- `env/env_worker.py` —— 每 env 一 actor,done 自动 reset,step 内灌 `replay.add_episode`。
+- `env/env_worker.py` —— 每 env 一 actor(= 进程级隔离;刻意不在 actor 内再嵌 `SubprocVecEnv` 叠两层并行),done 自动 reset,step 内灌 `replay.add_episode`。
 - `inference/inference_worker.py` —— encoder+world_model+policy 同 actor 批量前向(刻意不拆推理链)。
 - `inference/rollout_inference_worker.py` —— OFT 冷启动采集,per-env action queue + 夹爪后处理。
 - `replay/replay_worker.py` —— 包 `OnlineReplay`(`add_episode/sample/size/ready/task_stats`)。
@@ -143,13 +143,14 @@
 - 不新增 `training.auto_vram_batch` / `collect.auto_vram_envs`;不做 probe + 反推;不把 `0.85*total_vram` 当 runtime 填充目标;不做 OOM-retry 自动降档。
 - RLinf 本身也没有 auto-batch-size / OOM-retry / DeepSpeed/Lightning。对齐 = **移植手动 config 栈**。
 - 系统职责:暴露杠杆(batch/env/FSDP/offload/precision/checkpointing/kernel)+ `validate_cfg` 启动前校验组合自洽 + runner 记录显存峰值/吞吐供人工调参。
-- (历史)`docs/superpowers/plans/2026-06-19-vram-autosize.md` 方向已废弃,理由同上。
+- (历史)曾有 "VRAM 自适应" 方向的草案,已废弃,理由同上。
 
 ### 3.2 依赖定位:Ray 保持 opt-in(有意保留的差异)
 - RLinf:`ray[default]>=2.47.0` 为**核心必装**(ray-first 框架)。
 - DreamerVLA:`[project.optional-dependencies] ray`,基础依赖仅 `hydra-core`/`omegaconf`;`scheduler/__init__.py` **禁止单机 torchrun 路径 import 本包**。
 - 立场:工程组织按 RLinf 补齐,但 ray 是**可选后端、不是默认拓扑**;纯单机用户零 ray 开销。多节点不作为目标。
 - 单机 parity 基线:`OnlineCotrainPipelineRunner`(单机 torchrun)是 ray backend 的功能基线与训练等价对照(parity 测试见 todo P0)。
+- (设计史)早期 Ray scaffolding 草案曾拟 "ray 必装、不做 import 隔离";对齐评审时反转为上述 opt-in + import 隔离,纯单机用户零 ray 开销。
 
 ---
 

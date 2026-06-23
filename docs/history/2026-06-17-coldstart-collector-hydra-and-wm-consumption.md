@@ -1,8 +1,11 @@
 # 冷启动采集器 Hydra 化 + 与 WM 消费对齐(设计)
 
+> **归档说明(2026-06-23)**:本设计稿已从 `docs/superpowers/specs/` 移入设计史;所述 Hydra 化采集器(`CollectRolloutsRunner`)已实现。
+> 产物与 discrete WM 的 dump-schema/parity 契约另见 `docs/ray_rlinf_alignment_todo.md` §3。
+
 - 日期:2026-06-17
 - 状态:**§4 已定 + 设计已批准(2026-06-17)**,待写实现计划;并行采集/批量推理/discrete 已实现见
-  `docs/superpowers/specs/2026-06-16-rlinf-vectorized-rollout-migration.md`
+  `docs/history/2026-06-16-rlinf-vectorized-rollout-migration.md`
 - 目标:把采集器从 `key=value` argparse 改为 **Hydra 入口**,使采集与 WM 训练**读同一份 task
   config**(单一真相源),并实测产物被现有 discrete WM dataset 零改动消费。
 

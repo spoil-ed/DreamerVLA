@@ -1,5 +1,8 @@
 # 并行 Rollout 采集器（解耦式，喂离线 World Model + Classifier）
 
+> **归档说明（2026-06-23）**：本设计稿已从 `docs/superpowers/specs/` 移入设计史；所述并行采集器已实现。
+> 与 Ray backend 的关系见 `docs/ray_rlinf_alignment_implemented.md`（单机 parity 基线 = `OnlineCotrainPipelineRunner`），Ray 设计以 `docs/ray_*.md` 为准。
+
 - 日期：2026-06-16
 - 状态：设计已确认并按 `data/datasets/libero` 实测数据对齐修订，待写实现计划
 - 修订：落盘 schema 改为对齐 LIBERO 实测量（维度随场景、dtype/嵌套一致）；

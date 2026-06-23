@@ -4,8 +4,8 @@
 
 > 本目录原先散着十来份 plan/TODO。多数工作其实**已在仓库且验证过**,只是 churn 后没回填勾选。
 > 2026-06-19 做了一次合并:**完全完成的删掉**,**未确认完成的合并到这里**(下面的"剩余工作"段)。
-> 现在 `docs/superpowers/TODO/` 只剩本 INDEX;`docs/superpowers/specs/` 保留为设计存档;
-> `docs/superpowers/plans/` 已空。
+> 现在 `docs/superpowers/TODO/` 只剩本 INDEX;原 `docs/superpowers/specs/` 的设计稿已移入 `docs/history/`(设计存档);
+> `docs/superpowers/plans/` 存放活跃 to-do(`2026-06-21-todo-backlog.md`)与 plan 草稿。
 
 ## 已删除(完全完成,代码在仓且验证过)
 
