@@ -85,7 +85,7 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
 | Q5 sparse-reward scatter | 1 | `2026-06-23-perf-q5-sparse-reward-scatter.md` | **MERGED** | 4eec644 |
 | Q6 batched D2H | 1 | `2026-06-23-perf-q2q6-clone-d2h.md` | **MERGED** | ba18d0f |
 | Q7 metric materialize gate | 1 | `2026-06-23-perf-q7-metric-materialize-gate.md` | **MERGED** fac9302 (offline dreamerv3 pixel+token runners: per-step `grad_norm`/metric `.cpu()` D2H moved inside the existing `log_every` gate; logged values byte-identical, `_loss` backward target left on-device) | fac9302 |
-| Q9 img2bpe GPU buffer | 1 | `2026-06-23-perf-q9-img2bpe-device-buffer.md` | agent in progress (vendored; non-persistent buffer) | — |
+| Q9 img2bpe GPU buffer | 1 | `2026-06-23-perf-q9-img2bpe-device-buffer.md` | **MERGED** 8bae134 — `convert_img2bpe` now gathers on the input's own device (per-device mapping cache), killing the per-call `.to("cpu")` D2H + H2D round-trip; tokens byte-identical. NB: `ChameleonImageVocabularyMapping` is a plain class (not `nn.Module`), so the planned `register_buffer(persistent=False)` was infeasible → device-cache used instead; no `state_dict` keys added | 8bae134 |
 | Q11 parallel ray.get | 1 | `2026-06-23-perf-q11-bucket-parallel-rayget.md` | **MERGED** | 3094775 |
 | cotrain readiness-gate | 1 | `2026-06-23-cotrain-readiness-gate-and-egl-wiring.md` | **MERGED** | 0e68754 |
 | prompt-tokenize cache | 1 | `2026-06-23-perf-prompt-tokenize-cache.md` | agent in progress | — |
