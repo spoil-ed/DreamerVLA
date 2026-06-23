@@ -97,10 +97,10 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
 | W3 manifest-first | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 — but GUARDED/dormant: shipped manifests store the *next*-frame image, so the manifest-first path falls back to the (unchanged) pickle scan; byte-identity preserved, no perf win until the preprocess writer also emits the current-obs image (out of scope) | 6e09282 |
 | W4 hdf5 handle cache | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 (per-worker bounded-LRU frame cache `_load_frame_payload`, cap 64; overlapping stride-1 windows unpickle a shared frame once; byte-identical) | 6e09282 |
 | W8 bf16 frozen eval | 3 | _tbd_ | not started | — |
-| H2 replay contiguous layout | 3 | _tbd_ | not started | — |
+| H2 replay contiguous layout | 3 | _tbd_ | **DEFERRED (no-GPU)** — see §5 triage. `sample()` restacking is CPU-measurable, but the minimal "cache per-field arrays at add" doubles replay HOST memory (OOM-risk, unsmokeable now) and the full array-only rewrite touches every consumer (`_episode_success`/`finish_step`/`_sample_limit`/`sample_classifier_windows`/`episodes`); warrants a real-run host-mem + throughput check | — |
 | H5/H6 WM KV-cache / SDPA | 3 | _tbd_ | not started | — |
 | H7 autocast/GradScaler | 3 | _tbd_ | not started | — |
-| H9 chameleon mask | 3 | _tbd_ | not started | — |
+| H9 chameleon mask | 3 | `2026-06-23-perf-h9-chameleon-mask-cache.md` | agent in progress (vendored; byte-identity-or-fallback cache of `_update_causal_mask`) | — |
 
 ---
 
@@ -124,3 +124,35 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
   training / Ray / dataset paths and can be scheduled by which path is being pushed.
 - Do NOT launch a multi-agent Workflow for this without explicit user opt-in; per-item forks/Explores
   via the Agent tool are the default execution vehicle.
+
+## 5. No-GPU triage (2026-06-23)
+
+User constraint in effect: **no GPU may be used** — keep adding code, but every change is verified by a
+CPU unit test only; GPU smokes are unavailable. This splits the remaining items by what is verifiable now.
+
+**DONE under no-GPU this session** (correctness CPU-verified; throughput win realized later on GPU):
+W2 (4aa4346), H4 (889d3cb), W3+W4 (6e09282), Q7 (fac9302), Q9 (8bae134). In flight: W6 (dense
+micro-batch — CPU gradient-accumulation equivalence test), H9 (chameleon mask cache — byte-identity test).
+
+**Rule applied:** if *correctness* is CPU-verifiable (even when the speed win only shows on GPU) → DO IT
+now with a CPU equivalence/behavior test and document the win as pending GPU validation. If *correctness or
+safety itself* needs GPU / a real run → PARK.
+
+**PARKED — correctness/safety not CPU-verifiable without GPU:**
+- **W5 single-forward** (openvla decode): replacing autoregressive `generate()` with one forward is only
+  equivalent if the OFT model's action tokens are conditionally independent given the prefix — a property of
+  the *real* model's attention mask, which a tiny CPU stub cannot prove. It feeds RL logprobs/values, so a
+  silent mismatch corrupts training. Needs a real-OFT-ckpt decode-equivalence smoke.
+- **W2 caller-wiring** (fold latest+top-k into one `save_checkpoint(extra_paths=...)`): requires moving a
+  `broadcast_object` collective before the save, changing the distributed-checkpoint collective ordering.
+  Reasoned lockstep-safe, but unsmokeable on the FSDP path. Atomic-write win is already active regardless.
+- **H2 replay contiguous layout**: minimal version doubles replay host memory (OOM-risk); full rewrite is a
+  broad multi-consumer refactor. Warrants a real-run host-mem + throughput check.
+- **W7 dataloader `pin_memory`/`non_blocking`**, **H7 autocast/GradScaler**, **egl 4× rollout**: pure
+  throughput/precision-on-device items whose value AND numerics are only observable on GPU.
+
+**Still CPU-doable (correctness CPU-verifiable) — candidates after W6/H9:** H3 (readiness counts
+incremental — note: marginal now that the readiness-gate already cut its call frequency), W8 (bf16
+`inference_mode` for frozen eval-only submodules — equivalence within tolerance on CPU; must touch only
+no-grad/eval paths), H5/H6 (WM `scaled_dot_product_attention` swap — CPU equivalence-testable; KV-cache is
+more involved). These are lower value/risk than the items already landed; pick by which path is being pushed.
