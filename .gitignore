@@ -44,6 +44,19 @@ docs/findings.md
 docs/history.md
 docs/graveyard_candidates_*.md
 
+# LaTeX build artifacts under docs/paper/ (the .tex/.sty/.bib sources stay tracked)
+docs/paper/**/*.pdf
+docs/paper/**/*.aux
+docs/paper/**/*.out
+docs/paper/**/*.bbl
+docs/paper/**/*.blg
+docs/paper/**/*.toc
+docs/paper/**/*.lof
+docs/paper/**/*.lot
+docs/paper/**/*.fls
+docs/paper/**/*.fdb_latexmk
+docs/paper/**/*.synctex.gz
+
 # other
 CLAUDE.local.md
 AGENTS.local.md
