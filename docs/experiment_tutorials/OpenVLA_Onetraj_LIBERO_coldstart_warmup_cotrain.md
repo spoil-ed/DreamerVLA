@@ -16,6 +16,14 @@ export NCCL_NVLS_ENABLE=0    # multi-GPU DDP cotrain
 bash scripts/install/60_verify.sh
 ```
 
+> **Render backend.** Single-env rollout (`online_rollout.num_envs=1`) renders via **osmesa** (the
+> `MUJOCO_GL=osmesa` exports above — the validated, stable path). The shipped goal config defaults to
+> the **vectorized egl** path (`online_rollout.num_envs=4`, `online_rollout.render_backend=egl`): K
+> parallel `VecRolloutEnv` children with egl-isolated GL contexts, ~4× rollout throughput,
+> **action_hidden only** (`backbone_latent` requires `num_envs=1`). The egl runtime is still pending a
+> free-GPU verify (the `COTRAIN-EGL` item in [`../plans/2026-06-21-todo-backlog.md`](../plans/2026-06-21-todo-backlog.md));
+> fall back to `online_rollout.num_envs=1` + osmesa if egl aborts.
+
 ## 1. One-command e2e
 
 ```bash
