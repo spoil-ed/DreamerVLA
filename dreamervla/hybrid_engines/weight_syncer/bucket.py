@@ -77,8 +77,11 @@ class BucketWeightSyncer(WeightSyncer):
     def push(self, key: str, state_dict: dict[str, Any], version: int) -> None:
         cpu_state = {name: _to_cpu_tensor(value) for name, value in state_dict.items()}
         buckets = bucket_state_dict(cpu_state, self.bucket_bytes)
-        for index, bucket in enumerate(buckets):
-            ray.get(self._store.set.remote(_bucket_key(key, index), int(version), bucket))
+        bucket_refs = [
+            self._store.set.remote(_bucket_key(key, index), int(version), bucket)
+            for index, bucket in enumerate(buckets)
+        ]
+        ray.get(bucket_refs)
         meta = {"num_buckets": torch.tensor(len(buckets), dtype=torch.int64)}
         ray.get(self._store.set.remote(_meta_key(key), int(version), meta))
 
@@ -92,8 +95,10 @@ class BucketWeightSyncer(WeightSyncer):
         meta = _resolve(meta)
         num_buckets = int(meta["num_buckets"].item())
         merged: dict[str, torch.Tensor] = {}
-        for index in range(num_buckets):
-            bucket_item = ray.get(self._store.get.remote(_bucket_key(key, index)))
+        bucket_items = ray.get(
+            [self._store.get.remote(_bucket_key(key, index)) for index in range(num_buckets)]
+        )
+        for index, bucket_item in enumerate(bucket_items):
             if bucket_item is None:
                 raise RuntimeError(
                     f"missing bucket {index} for key {key!r}; weight store is inconsistent"
