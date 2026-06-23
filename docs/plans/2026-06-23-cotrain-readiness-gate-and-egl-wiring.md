@@ -103,7 +103,7 @@ Free GPU = 1/2/3 (check `nvidia-smi`). Launch the cotrain with `render_backend=e
 NOT set `PYOPENGL_PLATFORM=egl`:
 
 ```bash
-R=/mnt/data/spoil/workspace/DreamerVLA
+R="${DVLA_ROOT:-$(pwd -P)}"   # repo root; avoid hard-pinned machine-local paths
 conda run -n dreamervla env CUDA_VISIBLE_DEVICES=1 DVLA_DATA_ROOT=$R/data \
   MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa NCCL_NVLS_ENABLE=0 PYTHONFAULTHANDLER=1 \
   python -m dreamervla.train \
