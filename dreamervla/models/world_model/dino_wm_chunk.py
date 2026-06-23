@@ -37,14 +37,21 @@ class _DinoStyleAttention(nn.Module):
         heads: int,
         dim_head: int,
         dropout: float = 0.0,
+        attn_impl: str = "manual",
     ) -> None:
         super().__init__()
         if heads < 1:
             raise ValueError(f"heads must be >= 1, got {heads}")
         if dim_head < 1:
             raise ValueError(f"dim_head must be >= 1, got {dim_head}")
+        if attn_impl not in ("manual", "sdpa"):
+            raise ValueError(
+                f"attn_impl must be 'manual' or 'sdpa', got {attn_impl!r}"
+            )
         self.heads = int(heads)
         self.dim_head = int(dim_head)
+        self.attn_impl = str(attn_impl)
+        self.dropout_p = float(dropout)
         self.scale = float(dim_head) ** -0.5
         inner_dim = self.heads * self.dim_head
         self.norm = nn.LayerNorm(dim)
@@ -64,6 +71,22 @@ class _DinoStyleAttention(nn.Module):
             t.reshape(bsz, seq_len, self.heads, self.dim_head).transpose(1, 2)
             for t in qkv
         )
+        if self.attn_impl == "sdpa":
+            attn_mask = (
+                mask.to(device=q.device, dtype=q.dtype)[None, None]
+                if mask is not None
+                else None
+            )
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout_p if self.training else 0.0,
+                scale=self.scale,
+            )
+            out = out.transpose(1, 2).reshape(bsz, seq_len, -1)
+            return self.to_out(out)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         if mask is not None:
             dots = dots + mask.to(device=dots.device, dtype=dots.dtype)[None, None]
@@ -83,6 +106,7 @@ class _DinoStyleTransformer(nn.Module):
         dim_head: int,
         mlp_dim: int,
         dropout: float,
+        attn_impl: str = "manual",
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
@@ -94,6 +118,7 @@ class _DinoStyleTransformer(nn.Module):
                             heads=int(heads),
                             dim_head=int(dim_head),
                             dropout=float(dropout),
+                            attn_impl=str(attn_impl),
                         ),
                         _DinoStyleFeedForward(
                             dim, int(mlp_dim), dropout=float(dropout)
@@ -138,6 +163,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         action_emb_dim: int = 10,
         num_action_repeat: int = 1,
         dim_head: int = 64,
+        attn_impl: str = "manual",
         **kwargs: Any,
     ) -> None:
         args_list = list(args)
@@ -201,6 +227,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         # O(1). Opt-in; numerically identical to the plain path. See predict_next_chunk.
         self.grad_checkpoint = bool(grad_checkpoint)
         self.dim_head = int(dim_head)
+        self.attn_impl = str(attn_impl)
         self.slots_per_step = self.token_count
         self.pos_context_len = self.num_hist
         self.obs_norm = nn.Identity()
@@ -220,6 +247,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             dim_head=self.dim_head,
             mlp_dim=int(kwargs.get("mlp_dim", 2048) if len(args_list) <= 8 else args_list[8]),
             dropout=float(kwargs.get("dropout", 0.1) if len(args_list) <= 9 else args_list[9]),
+            attn_impl=self.attn_impl,
         )
         self.out_norm = nn.Identity()
         self.out_proj = nn.Identity()
