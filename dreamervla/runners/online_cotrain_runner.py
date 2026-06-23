@@ -57,10 +57,77 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.runners.vectorized_collect import (
+    dreamer_image_from_record,
+    extractor_obs_from_record,
+    proprio_from_record,
+)
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
+
+
+def build_cotrain_replay_transition(
+    rec: dict[str, Any],
+    obs_embedding: np.ndarray,
+    wm_action: np.ndarray,
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    *,
+    task_id: int,
+    task_description: str,
+    step: int,
+    is_first: bool,
+    image_size: int,
+) -> dict[str, Any]:
+    """Replay transition rebuilt in the parent from a child ``full_record``.
+
+    Multi-env env instances live in child processes, so the parent cannot call
+    ``DreamerVLAOnlineTrainEnv.make_transition``. This rebuilds the same record
+    from the child's ``full_record`` + per-slot state and is numerically
+    equivalent to ``make_transition`` for the OFT ``action_hidden`` rollout
+    (env action scale == ``wm_action`` scale; ``info['wm_action']`` is the
+    executed env-scale action)."""
+    done = bool(terminated or truncated)
+    wm = np.asarray(wm_action, dtype=np.float32).reshape(-1)[:7]
+    return {
+        "image": dreamer_image_from_record(rec, image_size),
+        "state": proprio_from_record(rec),
+        "action": wm,
+        "wm_action": wm,
+        "obs_embedding": np.asarray(obs_embedding, dtype=np.float32),
+        "reward": np.float32(reward),
+        "done": np.float32(done),
+        "discount": np.float32(0.0 if terminated else 1.0),
+        "is_first": bool(is_first),
+        "is_terminal": bool(terminated),
+        "is_last": bool(done),
+        "task_id": int(task_id),
+        "step": int(step),
+        "task_description": str(task_description),
+    }
+
+
+def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -> None:
+    """Early validation for the online rollout knobs (RLinf-style fail-fast).
+
+    ``num_envs>1`` enables the vectorized egl path, which supports the OFT
+    ``action_hidden`` rollout only and a real render backend per child."""
+    if num_envs < 1:
+        raise ValueError(f"online_rollout.num_envs must be >= 1, got {num_envs}")
+    if num_envs > 1:
+        if render_backend not in ("egl", "osmesa"):
+            raise ValueError(
+                "online_rollout.render_backend must be 'egl' or 'osmesa' for "
+                f"num_envs>1, got {render_backend!r}"
+            )
+        if latent_type == "backbone_latent":
+            raise ValueError(
+                "vectorized rollout (num_envs>1) supports the OFT action_hidden "
+                "path only; backbone_latent requires num_envs=1"
+            )
 
 
 class OnlineCotrainRunner(DreamerVLARunner):
@@ -168,42 +235,38 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 flush=True,
             )
 
+    def _env_cfg_kwargs(self, cfg: DictConfig) -> dict[str, Any]:
+        """DreamerVLAOnlineTrainEnvConfig kwargs shared by the single-env builder and
+        the vectorized VecRolloutEnv children — one source of truth so both render
+        the same observations (action_input='normalized', same history/rotate/etc.)."""
+        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
+        task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
+        task_ids = tuple(int(x) for x in task_ids) if task_ids is not None else None
+        seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
+        return {
+            "task_suite_name": str(
+                OmegaConf.select(env_cfg, "task_suite_name", default="libero_goal")
+            ),
+            "task_id": int(task_ids[0]) if task_ids else 0,
+            "task_ids": task_ids,
+            "seed": seed,
+            "max_steps": int(OmegaConf.select(env_cfg, "episode_horizon", default=200)),
+            "action_input": "normalized",
+            "history_length": int(OmegaConf.select(env_cfg, "history_length", default=2)),
+            "include_state": bool(OmegaConf.select(env_cfg, "include_state", default=True)),
+            "vla_rotate_180": bool(OmegaConf.select(env_cfg, "vla_rotate_180", default=True)),
+            "obs_hidden_source": str(
+                OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
+            ),
+            "action_head_type": str(
+                OmegaConf.select(env_cfg, "action_head_type", default="legacy")
+            ),
+        }
+
     def _build_env(self, cfg: DictConfig) -> DreamerVLAOnlineTrainEnv:
         # MUJOCO_GL=osmesa is forced at module import (before robosuite loads); see
         # the top of this file. Setting it here would be too late (egl already locked).
-        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
-        task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
-        task_ids = [int(x) for x in task_ids] if task_ids is not None else None
-        seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
-        return DreamerVLAOnlineTrainEnv(
-            {
-                "task_suite_name": str(
-                    OmegaConf.select(env_cfg, "task_suite_name", default="libero_goal")
-                ),
-                "task_id": int(task_ids[0]) if task_ids else 0,
-                "task_ids": task_ids,
-                "seed": seed,
-                "max_steps": int(
-                    OmegaConf.select(env_cfg, "episode_horizon", default=200)
-                ),
-                "action_input": "normalized",
-                "history_length": int(
-                    OmegaConf.select(env_cfg, "history_length", default=2)
-                ),
-                "include_state": bool(
-                    OmegaConf.select(env_cfg, "include_state", default=True)
-                ),
-                "vla_rotate_180": bool(
-                    OmegaConf.select(env_cfg, "vla_rotate_180", default=True)
-                ),
-                "obs_hidden_source": str(
-                    OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
-                ),
-                "action_head_type": str(
-                    OmegaConf.select(env_cfg, "action_head_type", default="legacy")
-                ),
-            }
-        )
+        return DreamerVLAOnlineTrainEnv(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
     def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
@@ -515,6 +578,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
+        num_envs = int(OmegaConf.select(oc, "num_envs", default=1))
+        render_backend = str(OmegaConf.select(oc, "render_backend", default="egl"))
+        validate_rollout_cfg(
+            num_envs, render_backend, getattr(self, "_latent_type", "action_hidden")
+        )
 
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
             total_env_steps = int(OmegaConf.select(oc, "debug_total_env_steps", default=64))
@@ -526,7 +594,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
         env_task_ids = OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]
         env_task_ids = tuple(int(x) for x in env_task_ids)
-        env = self._build_env(cfg)
         replay = OnlineReplay(
             capacity=buffer_size,
             sequence_length=seq_len,
@@ -543,13 +610,47 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 flush=True,
             )
 
+        # Shared run-control knobs + counters: the legacy single-env loop and the
+        # vectorized (num_envs>1) rollout both drive the same training burst.
+        knobs = {
+            "min_replay": min_replay,
+            "min_eps": min_eps,
+            "is_dist": is_dist,
+            "train_every": train_every,
+            "updates_per_train": updates_per_train,
+            "max_train_updates": max_train_updates,
+            "warmup_steps": warmup_steps,
+            "train_actor_after": train_actor_after,
+            "train_cls_inline": train_cls_inline,
+            "cls_bs": cls_bs,
+            "early_neg_stride": early_neg_stride,
+            "batch_size": batch_size,
+            "optim_cfg": optim_cfg,
+            "algo": algo,
+            "ckpt_every": ckpt_every,
+        }
+        counters = {"n_episodes": 0, "n_success": 0}
         history: list[dict[str, float | str | int]] = []
+
+        if num_envs > 1:
+            return self._run_vectorized_cotrain(
+                cfg,
+                replay=replay,
+                num_envs=num_envs,
+                render_backend=render_backend,
+                total_env_steps=total_env_steps,
+                episode_horizon=episode_horizon,
+                env_task_ids=env_task_ids,
+                knobs=knobs,
+                counters=counters,
+                history=history,
+            )
+
+        env = self._build_env(cfg)
         obs, _info = env.reset()
         latent: Any = None
         prev_action: torch.Tensor | None = None
         episode: list[dict[str, Any]] = []
-        n_episodes = 0
-        n_success = 0
         stop = False
 
         for env_step in range(1, total_env_steps + 1):
@@ -573,117 +674,23 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if done:
                 rec = replay.add_episode(episode)
                 if rec is not None:
-                    n_episodes += 1
+                    counters["n_episodes"] += 1
                     success = bool(rec["success"])
-                    n_success += int(success)
+                    counters["n_success"] += int(success)
                     self.console_record_success(success)
                 episode = []
                 obs, _info = env.reset()
                 latent, prev_action = None, None
 
-            # ---- training bursts (lockstep across ranks via global-ready flag)
-            _stats, _cov_ready, all_ready = get_replay_task_stats_global(
-                replay,
-                task_ids=env_task_ids,
-                min_transitions=min_replay,
-                min_episodes_per_task=min_eps,
-                device=self.device,
-                is_dist=is_dist,
-                world_size=self._world_size,
+            stop = self._run_training_bursts(
+                env_step,
+                total_env_steps,
+                replay=replay,
+                env_task_ids=env_task_ids,
+                knobs=knobs,
+                counters=counters,
+                history=history,
             )
-            num_updates = 0
-            if all_ready and env_step % train_every == 0:
-                num_updates = updates_per_train
-            for _ in range(num_updates):
-                if max_train_updates is not None and self.global_step >= int(max_train_updates):
-                    stop = True
-                    break
-                in_warmup = self.global_step < warmup_steps
-                metrics: dict[str, float | str | int] = {
-                    "global_step": int(self.global_step),
-                    "phase": "warmup" if in_warmup else "cotrain",
-                    "rollout/success_rate": (n_success / n_episodes) if n_episodes else 0.0,
-                    "buffer/size": float(replay.num_transitions),
-                }
-                # Phase WM (always) — policy/actor frozen (eval + no policy optim step)
-                self.world_model.train()
-                self.policy.eval()
-                self.critic.eval()
-                _unwrap(self.classifier).eval()
-                wm_batch = self._build_wm_pretrain_batch(replay.sample(batch_size))
-                if wm_batch is not None:
-                    wm_metrics = world_model_pretrain_step(
-                        policy=self.policy,
-                        world_model=self.world_model,
-                        optimizer=self.world_model_optimizer,
-                        batch=wm_batch,
-                        device=self.device,
-                        optim_cfg=optim_cfg,
-                    )
-                    metrics["wm/loss"] = float(wm_metrics.get("loss", 0.0))
-
-                # Phase CLS (always) — WM/actor frozen; classifier trains
-                if train_cls_inline and replay.classifier_window_count(
-                    window=self._cls_window,
-                    chunk_size=int(getattr(_unwrap(self.classifier).cfg, "chunk_size", 1)),
-                ) > 0:
-                    cls_metrics = online_classifier_update_step(
-                        classifier=self.classifier,
-                        optimizer=self.classifier_optimizer,
-                        replay=replay,
-                        device=self.device,
-                        batch_size=cls_bs,
-                        early_neg_stride=early_neg_stride,
-                        grad_clip=float(OmegaConf.select(optim_cfg, "grad_clip_norm", default=1.0)),
-                    )
-                    metrics["cls/loss"] = float(cls_metrics["loss"])
-                    metrics["cls/acc"] = float(cls_metrics["acc"])
-                    metrics["cls/f1"] = float(cls_metrics["f1"])
-
-                # Phase RL (cotrain only) — WM + classifier frozen; slow policy
-                if (not in_warmup) and train_actor_after:
-                    self.world_model.eval()
-                    _unwrap(self.classifier).eval()
-                    assert not _unwrap(self.world_model).training, "WM must be frozen in RL phase"
-                    assert not _unwrap(self.classifier).training, "classifier must be frozen in RL phase"
-                    rl_batch = replay.sample(batch_size)
-                    # raw replay fields (tokenized obs_embedding [B,T,N,D] kept as-is);
-                    # mirrors online_dreamervla (do NOT route through the offline
-                    # _build_actor_critic_batch, which expects flat [B,T,D]).
-                    obs_for_update = {
-                        k: rl_batch[k]
-                        for k in (
-                            "obs_embedding", "actions", "rewards", "dones",
-                            "is_first", "is_terminal", "is_last",
-                        )
-                    }
-                    ac_metrics = dino_wmpo_outcome_step(
-                        policy=self.policy,
-                        chunk_world_model=self.world_model,
-                        classifier=_unwrap(self.classifier),  # predict_success: DDP wrapper hides it
-                        classifier_threshold=self.classifier_threshold,
-                        actor_optimizer=self.policy_optimizer,
-                        obs=obs_for_update,
-                        device=self.device,
-                        algorithm_cfg=algo,
-                        optim_cfg=optim_cfg,
-                        ref_policy=self.ref_policy,
-                    )
-                    metrics["rl/actor_loss"] = float(ac_metrics.get("actor_loss", 0.0))
-                    metrics["rl/returns_mean"] = float(ac_metrics.get("returns_mean", 0.0))
-                    metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
-
-                self.console_metrics(
-                    f"{metrics['phase']} · env {env_step}/{total_env_steps} "
-                    f"({100.0 * env_step / max(1, total_env_steps):.0f}%) · upd {self.global_step}",
-                    metrics,
-                )
-                if self.distributed.is_main_process:
-                    self.log_metrics(metrics, step=int(self.global_step))
-                history.append(metrics)
-                if self.distributed.is_main_process and ckpt_every > 0 and (self.global_step + 1) % ckpt_every == 0:
-                    self._save_cotrain_ckpt()
-                self.global_step += 1
 
         if self.distributed.is_main_process:
             self._save_cotrain_ckpt()
@@ -692,6 +699,341 @@ class OnlineCotrainRunner(DreamerVLARunner):
         except Exception:
             pass
         return history
+
+    def _run_training_bursts(
+        self,
+        env_step: int,
+        total_env_steps: int,
+        *,
+        replay: OnlineReplay,
+        env_task_ids: tuple[int, ...],
+        knobs: dict[str, Any],
+        counters: dict[str, int],
+        history: list,
+    ) -> bool:
+        """Run the WM/classifier/RL training bursts for one env-step. Returns True
+        when ``max_train_updates`` is reached (caller should stop). Shared by the
+        legacy single-env loop and the vectorized (num_envs>1) rollout — the burst
+        math is identical; only the rollout that fills ``replay`` differs."""
+        # ---- training bursts (lockstep across ranks via global-ready flag)
+        _stats, _cov_ready, all_ready = get_replay_task_stats_global(
+            replay,
+            task_ids=env_task_ids,
+            min_transitions=knobs["min_replay"],
+            min_episodes_per_task=knobs["min_eps"],
+            device=self.device,
+            is_dist=knobs["is_dist"],
+            world_size=self._world_size,
+        )
+        num_updates = 0
+        if all_ready and env_step % knobs["train_every"] == 0:
+            num_updates = knobs["updates_per_train"]
+        for _ in range(num_updates):
+            if (
+                knobs["max_train_updates"] is not None
+                and self.global_step >= int(knobs["max_train_updates"])
+            ):
+                return True
+            in_warmup = self.global_step < knobs["warmup_steps"]
+            metrics: dict[str, float | str | int] = {
+                "global_step": int(self.global_step),
+                "phase": "warmup" if in_warmup else "cotrain",
+                "rollout/success_rate": (
+                    (counters["n_success"] / counters["n_episodes"])
+                    if counters["n_episodes"]
+                    else 0.0
+                ),
+                "buffer/size": float(replay.num_transitions),
+            }
+            # Phase WM (always) — policy/actor frozen (eval + no policy optim step)
+            self.world_model.train()
+            self.policy.eval()
+            self.critic.eval()
+            _unwrap(self.classifier).eval()
+            wm_batch = self._build_wm_pretrain_batch(replay.sample(knobs["batch_size"]))
+            if wm_batch is not None:
+                wm_metrics = world_model_pretrain_step(
+                    policy=self.policy,
+                    world_model=self.world_model,
+                    optimizer=self.world_model_optimizer,
+                    batch=wm_batch,
+                    device=self.device,
+                    optim_cfg=knobs["optim_cfg"],
+                )
+                metrics["wm/loss"] = float(wm_metrics.get("loss", 0.0))
+
+            # Phase CLS (always) — WM/actor frozen; classifier trains
+            if knobs["train_cls_inline"] and replay.classifier_window_count(
+                window=self._cls_window,
+                chunk_size=int(getattr(_unwrap(self.classifier).cfg, "chunk_size", 1)),
+            ) > 0:
+                cls_metrics = online_classifier_update_step(
+                    classifier=self.classifier,
+                    optimizer=self.classifier_optimizer,
+                    replay=replay,
+                    device=self.device,
+                    batch_size=knobs["cls_bs"],
+                    early_neg_stride=knobs["early_neg_stride"],
+                    grad_clip=float(
+                        OmegaConf.select(knobs["optim_cfg"], "grad_clip_norm", default=1.0)
+                    ),
+                )
+                metrics["cls/loss"] = float(cls_metrics["loss"])
+                metrics["cls/acc"] = float(cls_metrics["acc"])
+                metrics["cls/f1"] = float(cls_metrics["f1"])
+
+            # Phase RL (cotrain only) — WM + classifier frozen; slow policy
+            if (not in_warmup) and knobs["train_actor_after"]:
+                self.world_model.eval()
+                _unwrap(self.classifier).eval()
+                assert not _unwrap(self.world_model).training, "WM must be frozen in RL phase"
+                assert not _unwrap(self.classifier).training, "classifier must be frozen in RL phase"
+                rl_batch = replay.sample(knobs["batch_size"])
+                # raw replay fields (tokenized obs_embedding [B,T,N,D] kept as-is);
+                # mirrors online_dreamervla (do NOT route through the offline
+                # _build_actor_critic_batch, which expects flat [B,T,D]).
+                obs_for_update = {
+                    k: rl_batch[k]
+                    for k in (
+                        "obs_embedding", "actions", "rewards", "dones",
+                        "is_first", "is_terminal", "is_last",
+                    )
+                }
+                ac_metrics = dino_wmpo_outcome_step(
+                    policy=self.policy,
+                    chunk_world_model=self.world_model,
+                    classifier=_unwrap(self.classifier),  # predict_success: DDP wrapper hides it
+                    classifier_threshold=self.classifier_threshold,
+                    actor_optimizer=self.policy_optimizer,
+                    obs=obs_for_update,
+                    device=self.device,
+                    algorithm_cfg=knobs["algo"],
+                    optim_cfg=knobs["optim_cfg"],
+                    ref_policy=self.ref_policy,
+                )
+                metrics["rl/actor_loss"] = float(ac_metrics.get("actor_loss", 0.0))
+                metrics["rl/returns_mean"] = float(ac_metrics.get("returns_mean", 0.0))
+                metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
+
+            self.console_metrics(
+                f"{metrics['phase']} · env {env_step}/{total_env_steps} "
+                f"({100.0 * env_step / max(1, total_env_steps):.0f}%) · upd {self.global_step}",
+                metrics,
+            )
+            if self.distributed.is_main_process:
+                self.log_metrics(metrics, step=int(self.global_step))
+            history.append(metrics)
+            if (
+                self.distributed.is_main_process
+                and knobs["ckpt_every"] > 0
+                and (self.global_step + 1) % knobs["ckpt_every"] == 0
+            ):
+                self._save_cotrain_ckpt()
+            self.global_step += 1
+        return False
+
+    def _run_vectorized_cotrain(
+        self,
+        cfg: DictConfig,
+        *,
+        replay: OnlineReplay,
+        num_envs: int,
+        render_backend: str,
+        total_env_steps: int,
+        episode_horizon: int,
+        env_task_ids: tuple[int, ...],
+        knobs: dict[str, Any],
+        counters: dict[str, int],
+        history: list,
+    ) -> list:
+        """num_envs>1 path: spawn K VecRolloutEnv child envs (egl-isolated GL contexts)
+        and run the continuous vectorized rollout, interleaving the same training burst
+        per env-step. The legacy single-env osmesa path (num_envs==1) is untouched."""
+        from dreamervla.runners.vec_rollout_env import VecRolloutEnv
+
+        main_extractor = getattr(self, "_oft_action_hidden_extractor", None)
+        if main_extractor is None:
+            raise RuntimeError(
+                "vectorized cotrain (num_envs>1) requires an OFT action_hidden "
+                "extractor; none was built (non-OFT encoder?). Use num_envs=1."
+            )
+        # One extractor per slot (isolated history); reuse the main one for slot 0.
+        extractors = [main_extractor] + [
+            self._build_oft_action_hidden_extractor(cfg) for _ in range(num_envs - 1)
+        ]
+
+        # Children render with `render_backend` (egl isolated per child -> no robosuite
+        # read_pixels SIGABRT); spawn does not inherit runtime env edits, so pass them.
+        env_vars = {
+            k: os.environ[k]
+            for k in ("MUJOCO_GL", "PYOPENGL_PLATFORM", "DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
+            if k in os.environ
+        }
+        env_vars["MUJOCO_GL"] = render_backend
+        env_vars["PYOPENGL_PLATFORM"] = render_backend
+
+        image_size = int(OmegaConf.select(cfg, "env.image_size", default=64))
+        cfg_kwargs = {
+            **self._env_cfg_kwargs(cfg),
+            "full_record": True,
+            "image_size": image_size,
+        }
+        if self.distributed.is_main_process:
+            print(
+                f"[online-cotrain] vectorized rollout: {num_envs} envs, "
+                f"render_backend={render_backend}",
+                flush=True,
+            )
+        vec = VecRolloutEnv(num_envs=num_envs, cfg_kwargs=cfg_kwargs, env_vars=env_vars)
+        try:
+            def _train_hook(env_step: int) -> bool:
+                return self._run_training_bursts(
+                    env_step,
+                    total_env_steps,
+                    replay=replay,
+                    env_task_ids=env_task_ids,
+                    knobs=knobs,
+                    counters=counters,
+                    history=history,
+                )
+
+            self._vectorized_cotrain_rollout(
+                vec=vec,
+                extractors=extractors,
+                replay=replay,
+                num_envs=num_envs,
+                total_env_steps=total_env_steps,
+                episode_horizon=episode_horizon,
+                action_steps=None,  # full-chunk open-loop, matching the single-env path
+                image_size=image_size,
+                task_ids=env_task_ids,
+                train_hook=_train_hook,
+                counters=counters,
+            )
+        finally:
+            try:
+                vec.close()
+            except Exception:
+                pass
+        if self.distributed.is_main_process:
+            self._save_cotrain_ckpt()
+        return history
+
+    @torch.no_grad()
+    def _vectorized_cotrain_rollout(
+        self,
+        *,
+        vec: Any,
+        extractors: list,
+        replay: Any,
+        num_envs: int,
+        total_env_steps: int,
+        episode_horizon: int,
+        action_steps: int | None,
+        image_size: int,
+        task_ids,
+        train_hook=None,
+        counters: dict[str, int] | None = None,
+    ) -> None:
+        """Continuous K-slot online rollout over ``vec`` (VecRolloutEnv).
+
+        Mirrors ``vectorized_collect.collect_vectorized``: one action queue and one
+        OFT extractor per slot (isolated history), all slots stepped in parallel via
+        the send-all/recv-all barrier; finished slots refill immediately (infinite
+        episodes until ``total_env_steps``). Transitions are rebuilt in the parent
+        from each child ``full_record`` (env lives in the child) and pushed to
+        ``replay``. ``train_hook(env_step) -> stop`` interleaves the training burst
+        per env-step exactly like the single-env loop; it is None in unit tests."""
+        if counters is None:
+            counters = {"n_episodes": 0, "n_success": 0}
+        task_cycle = [int(t) for t in task_ids] or [0]
+        if action_steps is not None:
+            action_steps = max(1, int(action_steps))
+        action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
+        episodes: list[list[dict[str, Any]]] = [[] for _ in range(num_envs)]
+        slot_task = [-1] * num_envs
+        slot_desc = [""] * num_envs
+        slot_ep = [-1] * num_envs
+        slot_step = [0] * num_envs
+        ep_counter = 0
+
+        def _start_slot(k: int) -> dict[str, Any]:
+            nonlocal ep_counter
+            tid = task_cycle[ep_counter % len(task_cycle)]
+            ep = ep_counter
+            ep_counter += 1
+            if slot_task[k] != tid:  # reconfigure env only on task boundary
+                slot_desc[k] = vec.set_task([tid], env_ids=[k])[0]
+                slot_task[k] = tid
+            rec = vec.reset([tid], [ep], env_ids=[k])[0]
+            extractors[k].reset()
+            action_queues[k].clear()
+            episodes[k] = []
+            slot_ep[k] = ep
+            slot_step[k] = 0
+            return rec
+
+        recs: list[Any] = [None] * num_envs
+        for k in range(num_envs):
+            recs[k] = _start_slot(k)
+
+        env_step = 0
+        ids = list(range(num_envs))
+        while env_step < total_env_steps:
+            outs = [
+                oft_open_loop_action(
+                    extractors[k],
+                    extractor_obs_from_record(recs[k]),
+                    slot_desc[k],
+                    action_queues[k],
+                    action_steps,
+                )
+                for k in ids
+            ]  # (action, flat_hidden) per slot
+            actions = [
+                np.asarray(outs[k][0], dtype=np.float32).reshape(-1)[:7] for k in ids
+            ]
+            step_results = vec.step(actions, env_ids=ids)
+            for k in ids:
+                _action, flat_hidden = outs[k]
+                reward, terminated, truncated, info, rec_after = step_results[k]
+                wm_action = np.asarray(
+                    info.get("wm_action", actions[k]), dtype=np.float32
+                ).reshape(-1)[:7]
+                emb = flat_hidden.reshape(-1)
+                if hasattr(emb, "detach"):
+                    emb = emb.detach().cpu().float().numpy()
+                tr = build_cotrain_replay_transition(
+                    recs[k],
+                    np.asarray(emb, dtype=np.float32),
+                    wm_action,
+                    reward,
+                    terminated,
+                    truncated,
+                    task_id=slot_task[k],
+                    task_description=slot_desc[k],
+                    step=slot_step[k],
+                    is_first=(slot_step[k] == 0),
+                    image_size=image_size,
+                )
+                episodes[k].append(tr)
+                slot_step[k] += 1
+                env_step += 1
+                recs[k] = rec_after
+                done = bool(terminated or truncated) or slot_step[k] >= episode_horizon
+                if done:
+                    rec_added = replay.add_episode(episodes[k])
+                    if rec_added is not None:
+                        counters["n_episodes"] += 1
+                        success = bool(rec_added["success"])
+                        counters["n_success"] += int(success)
+                        self.console_record_success(success)
+                    recs[k] = _start_slot(k)
+                if train_hook is not None and train_hook(env_step):
+                    return
+            self.console_progress(
+                min(env_step, total_env_steps), total_env_steps, "cotrain", unit="env"
+            )
 
     def _save_cotrain_ckpt(self) -> None:
         # Torch checkpoint (the resume artifact: all 4 modules + their optimizers
