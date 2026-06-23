@@ -41,6 +41,22 @@ def proprio_from_record(rec: dict[str, Any]) -> np.ndarray:
     return np.concatenate([rec[k].astype(np.float32) for k in _PROPRIO_KEYS]).astype(np.float32)
 
 
+def dreamer_image_from_record(rec: dict[str, Any], image_size: int) -> np.ndarray:
+    """Dreamer (6,S,S) uint8 image from a full_record (matches env._format_obs 'image').
+
+    agentview_rgb / eye_in_hand_rgb in the full_record are the same camera tensors
+    _format_obs resizes + CHW-concats; reuse the env's resize primitive so the
+    multi-env replay image is byte-identical to the single-env one.
+    """
+    from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
+
+    third = DreamerVLAOnlineTrainEnv._resize_hwc_uint8(rec["agentview_rgb"], image_size)
+    wrist = DreamerVLAOnlineTrainEnv._resize_hwc_uint8(rec["eye_in_hand_rgb"], image_size)
+    return np.concatenate(
+        [third.transpose(2, 0, 1), wrist.transpose(2, 0, 1)], axis=0
+    ).astype(np.uint8, copy=False)
+
+
 def extractor_obs_from_record(rec: dict[str, Any]) -> dict[str, Any]:
     """Build the extractor's obs dict (raw images + 8-dim proprio) from a full_record."""
     return {
