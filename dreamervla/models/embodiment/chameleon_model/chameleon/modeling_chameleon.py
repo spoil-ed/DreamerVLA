@@ -1219,6 +1219,7 @@ class ChameleonImageVocabularyMapping:
     def __init__(self, vocab_map):
         self.vocab_map = vocab_map
         self.image_token_id = vocab_map.get("<image>")
+        self._img2bpe_mapping_cache = {}
 
     @cached_property
     def val2name(self):
@@ -1251,17 +1252,19 @@ class ChameleonImageVocabularyMapping:
             sorted(self.bpe2img.values())
         )
 
-    @cached_property
-    def img2bpe_mapping_tensor(self):
-        mapping = torch.zeros(max(self.img2bpe.keys()) + 1, dtype=torch.int)
-        for k, v in self.img2bpe.items():
-            mapping[k] = v
+    def img2bpe_mapping_tensor(self, device):
+        mapping = self._img2bpe_mapping_cache.get(device)
+        if mapping is None:
+            mapping = torch.zeros(
+                max(self.img2bpe.keys()) + 1, dtype=torch.int, device=device
+            )
+            for k, v in self.img2bpe.items():
+                mapping[k] = v
+            self._img2bpe_mapping_cache[device] = mapping
         return mapping
 
     def convert_img2bpe(self, img_batch: torch.Tensor) -> torch.Tensor:
-        device = img_batch.device
-        img_tokens = self.img2bpe_mapping_tensor[img_batch.to("cpu")]
-        return img_tokens.to(device)
+        return self.img2bpe_mapping_tensor(img_batch.device)[img_batch]
 
 
 CHAMELEON_START_DOCSTRING = r"""
