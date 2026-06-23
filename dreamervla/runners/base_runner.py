@@ -4,8 +4,10 @@ import copy
 import json
 import math
 import numbers
+import os
 import pathlib
 import pickle
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
@@ -773,11 +775,13 @@ class BaseRunner(ABC):
         tag: str = "latest",
         exclude_keys: tuple[str, ...] | None = None,
         include_keys: tuple[str, ...] | None = None,
+        extra_paths: tuple[str | pathlib.Path, ...] = (),
     ) -> str:
         # Checkpoint path
         if path is None:
             path = self.get_checkpoint_path(tag=tag)
         path = pathlib.Path(path)
+        extra = tuple(pathlib.Path(p) for p in extra_paths)
 
         # Payload config
         if exclude_keys is None:
@@ -815,9 +819,16 @@ class BaseRunner(ABC):
                 payload["pickles"][key] = pickle.dumps(value)
 
         if is_main_process:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(payload, path)
+            # Serialize the payload ONCE (atomic temp-then-rename), then
+            # materialize it at any extra destinations (top-k) by linking the
+            # already-written file instead of re-running torch.save on the same
+            # bytes. Sidecars are emitted per destination from the in-memory
+            # payload.
+            _atomic_torch_save(payload, path)
             self._save_checkpoint_sidecars(path, payload)
+            for dst in extra:
+                _materialize_checkpoint_copy(path, dst)
+                self._save_checkpoint_sidecars(dst, payload)
         return str(path.absolute())
 
     def get_checkpoint_path(
@@ -1049,6 +1060,30 @@ class BaseRunner(ABC):
     def run(self) -> object:
         # Runner API
         raise NotImplementedError
+
+
+def _atomic_torch_save(payload: Any, path: pathlib.Path) -> None:
+    # Temp-then-rename write so a crash mid-write never leaves a half-written
+    # checkpoint at the destination (mirrors _dreamer_runner_common._save_ckpt).
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, tmp_path)
+    tmp_path.replace(path)
+
+
+def _materialize_checkpoint_copy(src: pathlib.Path, dst: pathlib.Path) -> None:
+    # Place the already-serialized checkpoint at an additional destination
+    # without re-serializing: hardlink when possible, fall back to a file copy
+    # (e.g. cross-filesystem). Atomic via a temp-then-rename either way.
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dst.with_suffix(dst.suffix + ".tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    try:
+        os.link(src, tmp_path)
+    except OSError:
+        shutil.copyfile(src, tmp_path)
+    tmp_path.replace(dst)
 
 
 def _copy_to_cpu(value: Any) -> Any:
