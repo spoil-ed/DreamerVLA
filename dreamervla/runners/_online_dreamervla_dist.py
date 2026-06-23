@@ -7,32 +7,9 @@ via the re-export in online_dreamervla. Also the clean seam for RUN-01.
 
 from __future__ import annotations
 
-import datetime as _dt
-import os
-
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-
-def _init_distributed() -> tuple[int, int, int, bool]:
-    """Init NCCL process group from torchrun env vars; no-op for single-process.
-
-    Returns: (rank, world_size, local_rank, is_dist).
-    """
-    if "LOCAL_RANK" not in os.environ:
-        return 0, 1, 0, False
-    local_rank = int(os.environ["LOCAL_RANK"])
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-    if not dist.is_initialized():
-        timeout_s = int(os.environ.get("DVLA_DDP_TIMEOUT_SEC", "600"))
-        dist.init_process_group(
-            backend="nccl", timeout=_dt.timedelta(seconds=timeout_s)
-        )
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    return rank, world_size, local_rank, True
 
 
 def _unwrap(module: torch.nn.Module) -> torch.nn.Module:

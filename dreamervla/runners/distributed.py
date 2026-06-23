@@ -4,6 +4,7 @@ import contextlib
 import functools
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import torch
@@ -54,6 +55,7 @@ class NopretokenizeSFTDistributedHelper:
         strategy: str = "ddp",
         fsdp_mixed_precision: str = "bf16",
         enable_activation_checkpointing: bool = True,
+        nccl_timeout_seconds: int | None = None,
     ) -> NopretokenizeSFTDistributedHelper:
         normalized_strategy = str(strategy).lower()
         if normalized_strategy not in {"ddp", "fsdp"}:
@@ -64,7 +66,10 @@ class NopretokenizeSFTDistributedHelper:
             if world_size > 1:
                 if torch.cuda.is_available():
                     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
-                dist.init_process_group(backend="nccl")
+                init_kwargs: dict[str, Any] = {"backend": "nccl"}
+                if nccl_timeout_seconds is not None:
+                    init_kwargs["timeout"] = timedelta(seconds=int(nccl_timeout_seconds))
+                dist.init_process_group(**init_kwargs)
 
         rank = (
             int(dist.get_rank()) if dist.is_available() and dist.is_initialized() else 0
@@ -154,14 +159,24 @@ class NopretokenizeSFTDistributedHelper:
             ):
                 setattr(world_model, name, self._wrap_module_with_ddp(child))
 
-    def wrap_trainable_module(self, module: Any) -> Any:
+    def wrap_trainable_module(
+        self,
+        module: Any,
+        *,
+        find_unused_parameters: bool | None = None,
+        broadcast_buffers: bool | None = None,
+    ) -> Any:
         if not self.is_distributed or module is None:
             return module
         if self.uses_fsdp:
             return self._wrap_with_fsdp(module)
         if not any(p.requires_grad for p in module.parameters()):
             return module
-        return self._wrap_module_with_ddp(module)
+        return self._wrap_module_with_ddp(
+            module,
+            find_unused_parameters=find_unused_parameters,
+            broadcast_buffers=broadcast_buffers,
+        )
 
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
         if isinstance(module, (DDP, FSDP)):
@@ -281,13 +296,25 @@ class NopretokenizeSFTDistributedHelper:
             )
         optimizer.load_state_dict(converted_state_dict)
 
-    def _wrap_module_with_ddp(self, module: torch.nn.Module) -> DDP:
+    def _wrap_module_with_ddp(
+        self,
+        module: torch.nn.Module,
+        *,
+        find_unused_parameters: bool | None = None,
+        broadcast_buffers: bool | None = None,
+    ) -> DDP:
         return DDP(
             module,
             device_ids=[self.local_rank],
             output_device=self.local_rank,
-            broadcast_buffers=False,
-            find_unused_parameters=False,
+            broadcast_buffers=(
+                False if broadcast_buffers is None else bool(broadcast_buffers)
+            ),
+            find_unused_parameters=(
+                False
+                if find_unused_parameters is None
+                else bool(find_unused_parameters)
+            ),
         )
 
     def _wrap_with_fsdp(self, module: torch.nn.Module) -> FSDP:

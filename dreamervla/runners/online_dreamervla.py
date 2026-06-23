@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import time
 from collections import Counter, deque
@@ -15,7 +16,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from omegaconf import OmegaConf
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,9 +32,9 @@ from dreamervla.runners._online_dreamervla_dist import (  # noqa: E402
     _dist_all_reduce_flag,
     _dist_all_reduce_int,
     _dist_barrier,
-    _init_distributed,
     _unwrap,
 )
+from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamervla.runners.online_replay import (
     OnlineReplay,
     get_replay_task_stats_global,
@@ -418,7 +418,14 @@ def main() -> None:
         if args.actor_update_kind == "dreamer"
         else get_actor_update_route(args.actor_update_kind)
     )
-    rank, world_size, local_rank, is_dist = _init_distributed()
+    distributed = NopretokenizeSFTDistributedHelper.initialize(
+        strategy="ddp",
+        nccl_timeout_seconds=int(os.environ.get("DVLA_DDP_TIMEOUT_SEC", "600")),
+    )
+    rank = distributed.rank
+    world_size = distributed.world_size
+    local_rank = distributed.local_rank
+    is_dist = distributed.is_distributed
     is_rank0 = rank == 0
     # Per-rank seed offset → each rank's env explores independently.
     set_seed(args.seed + rank)
@@ -586,29 +593,21 @@ def main() -> None:
     target_critic.load_state_dict(critic.state_dict())
     freeze_module(target_critic)
 
-    # DDP-wrap the three trainable modules. Encoder, ref_policy, and
-    # target_critic stay un-wrapped. The classifier is wrapped later only when
-    # online classifier updates are enabled. find_unused_parameters=True because outcome.py's
-    # _temporarily_freeze flips requires_grad on world_model during PPO step.
-    if is_dist:
-        world_model = DDP(
-            world_model,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=True,
-        )
-        policy = DDP(
-            policy,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=True,
-        )
-        critic = DDP(
-            critic,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=True,
-        )
+    # Route DDP wrapping through the shared distributed helper (RUN-01). Encoder,
+    # ref_policy, and target_critic stay un-wrapped. The classifier is wrapped later
+    # only when online classifier updates are enabled. find_unused_parameters=True
+    # because outcome.py's _temporarily_freeze flips requires_grad on world_model during
+    # the PPO step; broadcast_buffers=True preserves the online path's historical DDP
+    # default (the helper otherwise defaults it to False for the OFT callers).
+    world_model = distributed.wrap_trainable_module(
+        world_model, find_unused_parameters=True, broadcast_buffers=True
+    )
+    policy = distributed.wrap_trainable_module(
+        policy, find_unused_parameters=True, broadcast_buffers=True
+    )
+    critic = distributed.wrap_trainable_module(
+        critic, find_unused_parameters=True, broadcast_buffers=True
+    )
 
     wm_optimizer = build_optimizer(world_model, cfg.optim.world_model)
     policy_optimizer = build_optimizer(policy, cfg.optim.policy)
@@ -636,13 +635,9 @@ def main() -> None:
         if bool(args.update_classifier_online):
             for param in classifier.parameters():
                 param.requires_grad_(True)
-            if is_dist:
-                classifier = DDP(
-                    classifier,
-                    device_ids=[local_rank],
-                    output_device=local_rank,
-                    find_unused_parameters=False,
-                )
+            classifier = distributed.wrap_trainable_module(
+                classifier, find_unused_parameters=False, broadcast_buffers=True
+            )
             classifier_optimizer = torch.optim.AdamW(
                 classifier.parameters(),
                 lr=float(args.classifier_lr),
