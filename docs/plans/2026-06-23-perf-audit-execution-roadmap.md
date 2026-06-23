@@ -98,10 +98,10 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
 | W4 hdf5 handle cache | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 (per-worker bounded-LRU frame cache `_load_frame_payload`, cap 64; overlapping stride-1 windows unpickle a shared frame once; byte-identical) | 6e09282 |
 | W8 bf16 frozen eval | 3 | _tbd_ | not started | — |
 | H2 replay contiguous layout | 3 | _tbd_ | **DEFERRED (no-GPU)** — see §5 triage. `sample()` restacking is CPU-measurable, but the minimal "cache per-field arrays at add" doubles replay HOST memory (OOM-risk, unsmokeable now) and the full array-only rewrite touches every consumer (`_episode_success`/`finish_step`/`_sample_limit`/`sample_classifier_windows`/`episodes`); warrants a real-run host-mem + throughput check | — |
-| H5 WM SDPA (dino_wm) | 3 | `2026-06-23-perf-h5-dino-wm-sdpa.md` | agent in progress (switchable `attn_impl`, default=manual ⇒ zero numeric change; sdpa path for GPU flash-attn) | — |
+| H5 WM SDPA (dino_wm) | 3 | `2026-06-23-perf-h5-dino-wm-sdpa.md` | **MERGED** d4d857a — switchable `attn_impl` (default `"manual"` = byte-identical to old code; `"sdpa"` routes `F.scaled_dot_product_attention` with explicit `scale=self.scale`, mask→attn_mask, dropout→dropout_p) threaded `ChunkAwareDinoWMWorldModel`→`_DinoStyleTransformer`→attention, all inside dino_wm_chunk.py. CPU equiv max-abs-diff ~8.9e-8 (mask + no-mask). Enable via `world_model.attn_impl=sdpa` + GPU validation | d4d857a |
 | H6 WM KV-cache | 3 | _tbd_ | not started (more involved; deferred after H5) | — |
 | H7 autocast/GradScaler | 3 | _tbd_ | not started | — |
-| H9 chameleon mask | 3 | `2026-06-23-perf-h9-chameleon-mask-cache.md` | agent in progress (vendored; byte-identity-or-fallback cache of `_update_causal_mask`) | — |
+| H9 chameleon mask | 3 | `2026-06-23-perf-h9-chameleon-mask-cache.md` | **MERGED** c69eb48 — original build renamed byte-for-byte to `_build_causal_mask`; thin `_update_causal_mask` shell caches ONLY the `attention_mask is None` case (common training/same-len-rollout) on an O(1) key + O(L) `cache_position` confirm; any non-None mask falls through to the original path (stale-hit structurally impossible). 6-case CPU byte-identity test | c69eb48 |
 
 ---
 
