@@ -93,12 +93,13 @@ eval-only submodules), H2 (`online_replay` → per-field contiguous arrays), H5/
 | W7 dataloader/non_blocking | 2 | _tbd_ | not started | — |
 | B / H4 grad-diagnostics gating | 2 | `2026-06-23-perf-h4-gate-grad-diagnostics.md` | **MERGED** 889d3cb (per-step actor grad-norm/cosine extra-backwards gated behind `optim.grad_diagnostics`, default OFF; OFF math bit-identical, atol=0). Broader B (other per-step diagnostics/sync, if any) still TBD | 889d3cb |
 | H3 replay readiness incremental | 2 | _tbd_ | not started | — |
-| W6 dense ← outcome micro-batch | 3 | `2026-06-23-perf-w6-dense-microbatch.md` | agent in progress | — |
+| W6 dense ← outcome micro-batch | 3 | `2026-06-23-perf-w6-dense-microbatch.md` | **MERGED** 016b900 — dense.py + dense_chunk.py PPO actor backward micro-batched over the group-aligned B_eff axis (knob `wmpo.update_micro_batch_starts`, default = single full-batch backward = original). Global-B_eff normalizer ⇒ per-slice grad sum == full-batch `.mean()` grad; BC anchor uses explicit `sum/(B_eff·K·A·bc_steps)` (slice-invariant), real_relabel added once, TD-MPC critic untouched. CPU equiv test atol=1e-6 incl. BC-anchor + unequal slices | 016b900 |
 | W3 manifest-first | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 — but GUARDED/dormant: shipped manifests store the *next*-frame image, so the manifest-first path falls back to the (unchanged) pickle scan; byte-identity preserved, no perf win until the preprocess writer also emits the current-obs image (out of scope) | 6e09282 |
 | W4 hdf5 handle cache | 3 | `2026-06-23-perf-w3w4-pretokenize-io.md` | **MERGED** 6e09282 (per-worker bounded-LRU frame cache `_load_frame_payload`, cap 64; overlapping stride-1 windows unpickle a shared frame once; byte-identical) | 6e09282 |
 | W8 bf16 frozen eval | 3 | _tbd_ | not started | — |
 | H2 replay contiguous layout | 3 | _tbd_ | **DEFERRED (no-GPU)** — see §5 triage. `sample()` restacking is CPU-measurable, but the minimal "cache per-field arrays at add" doubles replay HOST memory (OOM-risk, unsmokeable now) and the full array-only rewrite touches every consumer (`_episode_success`/`finish_step`/`_sample_limit`/`sample_classifier_windows`/`episodes`); warrants a real-run host-mem + throughput check | — |
-| H5/H6 WM KV-cache / SDPA | 3 | _tbd_ | not started | — |
+| H5 WM SDPA (dino_wm) | 3 | `2026-06-23-perf-h5-dino-wm-sdpa.md` | agent in progress (switchable `attn_impl`, default=manual ⇒ zero numeric change; sdpa path for GPU flash-attn) | — |
+| H6 WM KV-cache | 3 | _tbd_ | not started (more involved; deferred after H5) | — |
 | H7 autocast/GradScaler | 3 | _tbd_ | not started | — |
 | H9 chameleon mask | 3 | `2026-06-23-perf-h9-chameleon-mask-cache.md` | agent in progress (vendored; byte-identity-or-fallback cache of `_update_causal_mask`) | — |
 
