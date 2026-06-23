@@ -561,8 +561,8 @@ Expected: no errors.
 Run:
 ```bash
 conda run -n dreamervla env CUDA_VISIBLE_DEVICES=<free> python -m dreamervla.train \
-  experiment=online_cotrain_pipeline_libero_goal task=libero_goal \
-  debug=true online_rollout.num_envs=4 online_rollout.render_backend=egl
+  experiment=online_cotrain_pipeline_oft_action_hidden \
+  training.debug=true online_rollout.num_envs=4 online_rollout.render_backend=egl
 ```
 Expected: **no SIGABRT**; K child envs start under egl; rollout reaches a training burst; run exits clean.
 
@@ -628,6 +628,6 @@ conda run -n dreamervla python -m pytest tests/unit_tests -q
 conda run -n dreamervla ruff check dreamervla/runners/online_cotrain_runner.py dreamervla/runners/vectorized_collect.py
 # GPU smoke (egl multi-env)
 conda run -n dreamervla env CUDA_VISIBLE_DEVICES=<free> python -m dreamervla.train \
-  experiment=online_cotrain_pipeline_libero_goal task=libero_goal \
-  debug=true online_rollout.num_envs=4 online_rollout.render_backend=egl
+  experiment=online_cotrain_pipeline_oft_action_hidden \
+  training.debug=true online_rollout.num_envs=4 online_rollout.render_backend=egl
 ```
