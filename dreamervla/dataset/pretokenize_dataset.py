@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,13 @@ class PretokenizeDataset(BaseDataset):
         self._sequence_records: list[_FrameRecord] = []
         self._windows: list[_Window] = []
         self.action_dim = 0
+        # Per-worker bounded LRU of loaded frame payloads (W4): stride=1 makes
+        # adjacent sequence windows reload nearly the same frames, so cache the
+        # decoded pickle keyed by frame path. A plain instance attribute means
+        # each DataLoader worker process gets its own copy (mirrors the
+        # ``cached_hdf5_file`` per-worker handle-cache idiom; never shared).
+        self._frame_payload_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._frame_cache_capacity = 64
         num_samples = len(self.records)
 
         if self.sequence_mode:
@@ -297,40 +305,111 @@ class PretokenizeDataset(BaseDataset):
 
     _load_action_sequence = staticmethod(_h.load_action_sequence)
 
+    @staticmethod
+    def _record_current_image(record: dict[str, Any]) -> Any:
+        """Current-frame image list carried by the manifest, if any.
+
+        Mirrors ``one_trajectory_pretokenize_dataset.py`` by preferring the
+        ``meta.next_obs.image`` / ``next_obs.image`` field. The W3 manifest-first
+        index is only taken when this image parses to the same current-frame
+        layout the pickle scan would build (validated by the caller), so it stays
+        byte-identical to ``payload['image']``.
+        """
+        meta = record.get("meta")
+        if isinstance(meta, dict):
+            next_obs = meta.get("next_obs")
+            if isinstance(next_obs, dict) and next_obs.get("image"):
+                return next_obs.get("image")
+        next_obs = record.get("next_obs")
+        if isinstance(next_obs, dict) and next_obs.get("image"):
+            return next_obs.get("image")
+        return None
+
+    def _frame_from_manifest(
+        self, record_index: int, record: dict[str, Any]
+    ) -> _FrameRecord | None:
+        """Build a frame record from the manifest without unpickling (W3).
+
+        Returns ``None`` (caller falls back to the pickle scan) when the manifest
+        lacks a current-frame image or it does not match the on-disk current-frame
+        layout (its sibling ``action`` file is absent), keeping byte-identity.
+        """
+        images = self._record_current_image(record)
+        if images is None:
+            return None
+        image_path = self._select_current_third_view(images)
+        parsed = self._parse_image_path(image_path)
+        if parsed is None:
+            return None
+        task_name, trajectory_key, frame_index = parsed
+        action_path = self._sibling_step_path(image_path, "action", "action", ".npy")
+        # Guard: only trust the manifest image when it is provably the current
+        # frame (its sibling action file exists on disk). Manifests that store
+        # the *next* observation will miss this and fall back to the scan.
+        if not action_path or not Path(action_path).is_file():
+            return None
+        file_path = self.resolve_project_path(
+            record["file"], base_dir=self.manifest_path.parent
+        )
+        manifest_task = record.get("meta", {}).get("task_name") if isinstance(
+            record.get("meta"), dict
+        ) else None
+        return _FrameRecord(
+            file=str(file_path),
+            task_name=str(manifest_task or task_name),
+            trajectory_key=trajectory_key,
+            frame_index=frame_index,
+            image_path=image_path,
+            action_path=action_path,
+            reward_path=self._sibling_step_path(image_path, "reward", "reward", ".npy"),
+            record_index=record_index,
+            record_meta=dict(record.get("meta", {})),
+        )
+
+    def _frame_from_pickle(
+        self, record_index: int, record: dict[str, Any]
+    ) -> _FrameRecord | None:
+        file_path = self.resolve_project_path(
+            record["file"], base_dir=self.manifest_path.parent
+        )
+        try:
+            with file_path.open("rb") as handle:
+                payload = pickle.load(handle)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        image_path = self._select_current_third_view(payload.get("image", []))
+        parsed = self._parse_image_path(image_path)
+        if parsed is None:
+            return None
+        task_name, trajectory_key, frame_index = parsed
+        return _FrameRecord(
+            file=str(file_path),
+            task_name=str(payload.get("task_name") or task_name),
+            trajectory_key=trajectory_key,
+            frame_index=frame_index,
+            image_path=image_path,
+            action_path=self._sibling_step_path(image_path, "action", "action", ".npy"),
+            reward_path=self._sibling_step_path(image_path, "reward", "reward", ".npy"),
+            record_index=record_index,
+            record_meta=dict(record.get("meta", {})),
+        )
+
     def _index_sequence_records(self) -> None:
         for record_index, record in enumerate(self.records):
             if not isinstance(record, dict) or "file" not in record:
                 continue
-            file_path = self.resolve_project_path(
-                record["file"], base_dir=self.manifest_path.parent
-            )
-            try:
-                with file_path.open("rb") as handle:
-                    payload = pickle.load(handle)
-            except Exception:
+            # W3: prefer the manifest field over unpickling every frame; fall
+            # back to the pickle scan when the manifest can't supply the current
+            # frame. Both paths build the identical _FrameRecord.
+            frame = self._frame_from_manifest(record_index, record)
+            if frame is None:
+                frame = self._frame_from_pickle(record_index, record)
+            if frame is None:
                 continue
-            if not isinstance(payload, dict):
-                continue
-            image_path = self._select_current_third_view(payload.get("image", []))
-            parsed = self._parse_image_path(image_path)
-            if parsed is None:
-                continue
-            task_name, trajectory_key, frame_index = parsed
-            frame = _FrameRecord(
-                file=str(file_path),
-                task_name=str(payload.get("task_name") or task_name),
-                trajectory_key=trajectory_key,
-                frame_index=frame_index,
-                image_path=image_path,
-                action_path=self._sibling_step_path(
-                    image_path, "action", "action", ".npy"
-                ),
-                reward_path=self._sibling_step_path(
-                    image_path, "reward", "reward", ".npy"
-                ),
-                record_index=record_index,
-                record_meta=dict(record.get("meta", {})),
-            )
+            trajectory_key = frame.trajectory_key
+            frame_index = frame.frame_index
             # Prefer the first record for each frame. In mixed manifests this is
             # normally the action sample; its wm_obs_input_ids are the same image
             # observation we need for sequence WM training.
@@ -371,6 +450,26 @@ class PretokenizeDataset(BaseDataset):
     _load_step_action = staticmethod(_h.load_step_action)
     _load_step_reward = staticmethod(_h.load_step_reward)
 
+    def _load_frame_payload(self, file_path: str) -> dict[str, Any]:
+        """Load a frame payload via a per-worker bounded LRU (W4).
+
+        Overlapping stride=1 windows reload the same frame; cache the decoded
+        pickle keyed by path so a shared frame is read from disk once. Returns
+        the same dict ``pickle.load`` would; downstream code copies before use,
+        so a cached object is byte-identical.
+        """
+        cache = self._frame_payload_cache
+        cached = cache.get(file_path)
+        if cached is not None:
+            cache.move_to_end(file_path)
+            return cached
+        with Path(file_path).open("rb") as handle:
+            payload = pickle.load(handle)
+        cache[file_path] = payload
+        if len(cache) > self._frame_cache_capacity:
+            cache.popitem(last=False)
+        return payload
+
     def _getitem_sequence(self, index: int) -> dict[str, Any]:
         window = self._windows[index]
         token_seq: list[list[int]] = []
@@ -383,8 +482,7 @@ class PretokenizeDataset(BaseDataset):
 
         for idx, frame in enumerate(window.records):
             frame_path = Path(frame.file)
-            with frame_path.open("rb") as handle:
-                payload = pickle.load(handle)
+            payload = self._load_frame_payload(frame.file)
             obs_ids = payload.get("wm_obs_input_ids")
             if not isinstance(obs_ids, list):
                 raise KeyError(f"missing wm_obs_input_ids in {frame.file}")
