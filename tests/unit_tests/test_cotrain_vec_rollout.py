@@ -113,3 +113,110 @@ def test_validate_rollout_cfg_rejects_zero_envs():
 
     with pytest.raises(ValueError, match="num_envs"):
         validate_rollout_cfg(num_envs=0, render_backend="egl", latent_type="action_hidden")
+
+
+# --------------------------------------------------------------- Task 4
+class _FakeVec:
+    """Stand-in for VecRolloutEnv: canned full_records, done after `horizon` steps."""
+
+    def __init__(self, num_envs, horizon, full_record_fn):
+        self.num_envs = num_envs
+        self.h = horizon
+        self._fr = full_record_fn
+        self._step = [0] * num_envs
+
+    def set_task(self, task_ids, env_ids=None):
+        return [f"task {t}" for t in task_ids]
+
+    def reset(self, task_ids, episode_ids, env_ids=None):
+        ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
+        for k in ids:
+            self._step[k] = 0
+        return [self._fr() for _ in ids]
+
+    def step(self, actions, env_ids=None):
+        ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
+        out = []
+        for k in ids:
+            self._step[k] += 1
+            term = self._step[k] >= self.h
+            out.append((1.0, term, False, {}, self._fr()))
+        return out
+
+
+class _FakeExtractor:
+    def __init__(self):
+        self.resets = 0
+
+    def reset(self):
+        self.resets += 1
+
+    def step(self, obs, desc):
+        import torch
+
+        return ([np.zeros(7, np.float32)], torch.zeros(8))
+
+
+def _make_min_runner():
+    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+
+    r = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
+    r.console_progress = lambda *a, **k: None
+    r.console_record_success = lambda *a, **k: None
+    return r
+
+
+def test_vectorized_rollout_isolated_queues_and_episode_grouping():
+    captured = []
+
+    class _Replay:
+        sequence_length = 2
+
+        def add_episode(self, ep):
+            captured.append(list(ep))
+            return None  # mimic too-short / no-success-record path
+
+    runner = _make_min_runner()
+    vec = _FakeVec(num_envs=2, horizon=3, full_record_fn=_full_record)
+    extractors = [_FakeExtractor(), _FakeExtractor()]
+    runner._vectorized_cotrain_rollout(
+        vec=vec, extractors=extractors, replay=_Replay(),
+        num_envs=2, total_env_steps=12, episode_horizon=3,
+        action_steps=1, image_size=64, task_ids=[0, 1],
+    )
+    # 12 env-steps / (2 envs * 3 horizon) = 2 episodes per slot = 4 episodes
+    assert len(captured) == 4
+    for ep in captured:
+        assert len(ep) == 3
+        assert {
+            "image", "obs_embedding", "wm_action", "reward", "done", "is_terminal",
+        } <= set(ep[0])
+        assert float(ep[-1]["is_terminal"]) == 1.0
+        assert all(float(s["is_terminal"]) == 0.0 for s in ep[:-1])
+    # extractor.reset on every slot start (initial + each refill): 1 initial +
+    # 2 refills (after each of the 2 finished episodes) = 3 per slot.
+    assert extractors[0].resets == 3 and extractors[1].resets == 3
+
+
+def test_vectorized_rollout_train_hook_can_stop():
+    class _Replay:
+        sequence_length = 2
+
+        def add_episode(self, ep):
+            return None
+
+    runner = _make_min_runner()
+    vec = _FakeVec(num_envs=2, horizon=3, full_record_fn=_full_record)
+    extractors = [_FakeExtractor(), _FakeExtractor()]
+    calls = {"n": 0}
+
+    def hook(env_step):
+        calls["n"] += 1
+        return calls["n"] >= 3  # stop after 3 env-steps
+
+    runner._vectorized_cotrain_rollout(
+        vec=vec, extractors=extractors, replay=_Replay(),
+        num_envs=2, total_env_steps=1000, episode_horizon=3,
+        action_steps=1, image_size=64, task_ids=[0], train_hook=hook,
+    )
+    assert calls["n"] == 3  # returned promptly on the stop signal
