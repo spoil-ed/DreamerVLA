@@ -109,6 +109,26 @@ def build_cotrain_replay_transition(
     }
 
 
+def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -> None:
+    """Early validation for the online rollout knobs (RLinf-style fail-fast).
+
+    ``num_envs>1`` enables the vectorized egl path, which supports the OFT
+    ``action_hidden`` rollout only and a real render backend per child."""
+    if num_envs < 1:
+        raise ValueError(f"online_rollout.num_envs must be >= 1, got {num_envs}")
+    if num_envs > 1:
+        if render_backend not in ("egl", "osmesa"):
+            raise ValueError(
+                "online_rollout.render_backend must be 'egl' or 'osmesa' for "
+                f"num_envs>1, got {render_backend!r}"
+            )
+        if latent_type == "backbone_latent":
+            raise ValueError(
+                "vectorized rollout (num_envs>1) supports the OFT action_hidden "
+                "path only; backbone_latent requires num_envs=1"
+            )
+
+
 class OnlineCotrainRunner(DreamerVLARunner):
     """Hydra runner for the unified online cotrain pipeline (see module docstring)."""
 
@@ -561,6 +581,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
+        num_envs = int(OmegaConf.select(oc, "num_envs", default=1))
+        render_backend = str(OmegaConf.select(oc, "render_backend", default="egl"))
+        validate_rollout_cfg(
+            num_envs, render_backend, getattr(self, "_latent_type", "action_hidden")
+        )
 
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
             total_env_steps = int(OmegaConf.select(oc, "debug_total_env_steps", default=64))

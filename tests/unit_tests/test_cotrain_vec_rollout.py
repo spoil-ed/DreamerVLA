@@ -85,3 +85,31 @@ def test_build_transition_truncated_keeps_discount_one():
     assert float(tr["done"]) == 1.0
     assert bool(tr["is_terminal"]) is False
     assert float(tr["discount"]) == 1.0
+
+
+# --------------------------------------------------------------- Task 3
+def test_validate_rollout_cfg_rejects_bad_backend():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="render_backend"):
+        validate_rollout_cfg(num_envs=4, render_backend="vulkan", latent_type="action_hidden")
+
+
+def test_validate_rollout_cfg_rejects_multienv_backbone_latent():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="backbone_latent"):
+        validate_rollout_cfg(num_envs=4, render_backend="egl", latent_type="backbone_latent")
+
+
+def test_validate_rollout_cfg_accepts_singleenv_anything():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    validate_rollout_cfg(num_envs=1, render_backend="osmesa", latent_type="backbone_latent")
+
+
+def test_validate_rollout_cfg_rejects_zero_envs():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="num_envs"):
+        validate_rollout_cfg(num_envs=0, render_backend="egl", latent_type="action_hidden")
