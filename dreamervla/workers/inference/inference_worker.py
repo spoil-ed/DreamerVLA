@@ -112,13 +112,12 @@ class InferenceWorker(Worker):
             self.state[env_id]["prev_action"] = actions[idx : idx + 1].detach()
             self.state[env_id]["is_first"] = False
 
+        actions_np = actions.detach().cpu().numpy().astype(np.float32)
+        obs_embedding_np = obs_embedding.detach().cpu().numpy().astype(np.float32)
         return {
-            "actions": [
-                row.detach().cpu().numpy().astype(np.float32) for row in actions
-            ],
+            "actions": [actions_np[i] for i in range(actions_np.shape[0])],
             "obs_embedding": [
-                row.detach().cpu().numpy().astype(np.float32)
-                for row in obs_embedding
+                obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
             ],
             "timing": {
                 "encode_s": float(encode_s),
@@ -264,7 +263,9 @@ def _require_type(value: Any, expected: type) -> Any:
 
 
 def _cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
-    return {key: value.detach().cpu().clone() for key, value in module.state_dict().items()}
+    from dreamervla.hybrid_engines.weight_syncer.objectstore import _independent_cpu
+
+    return {key: _independent_cpu(value) for key, value in module.state_dict().items()}
 
 
 def _to_device_state(state_dict: dict[str, Any], device: torch.device) -> dict[str, torch.Tensor]:

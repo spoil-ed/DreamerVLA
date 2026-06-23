@@ -13,7 +13,10 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from dreamervla.hybrid_engines.fsdp import FSDPModelManager
-from dreamervla.hybrid_engines.weight_syncer.objectstore import ObjectStoreWeightSyncer
+from dreamervla.hybrid_engines.weight_syncer.objectstore import (
+    ObjectStoreWeightSyncer,
+    _independent_cpu,
+)
 from dreamervla.scheduler.worker import Worker
 
 
@@ -534,7 +537,7 @@ def dino_wmpo_outcome_step(**kwargs: Any) -> dict[str, float]:
 
 
 def _cpu_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
-    return {key: value.detach().cpu().clone() for key, value in module.state_dict().items()}
+    return {key: _independent_cpu(value) for key, value in module.state_dict().items()}
 
 
 def _to_device_state(state_dict: dict[str, Any], device: torch.device) -> dict[str, torch.Tensor]:

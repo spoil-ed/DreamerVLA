@@ -41,7 +41,7 @@ class DTypeTensorCompressor:
             if torch.is_floating_point(tensor):
                 payload = tensor.to(self.transport_dtype)
             packed[key] = PackedTensor(
-                tensor=payload.detach().cpu().clone(),
+                tensor=payload,
                 original_dtype=original_dtype,
             )
         return packed

@@ -65,7 +65,23 @@ class ObjectStoreWeightSyncer(WeightSyncer):
             return actor
 
 
+def _independent_cpu(tensor: torch.Tensor) -> torch.Tensor:
+    """Return an independent CPU copy of ``tensor``.
+
+    A CUDA→CPU ``.cpu()`` already allocates fresh CPU storage, so the result is
+    independent of the live parameter and no extra ``.clone()`` is needed. When
+    ``tensor`` is already on CPU, ``.cpu()`` is a no-op alias of the live storage,
+    so we ``.clone()`` to keep the weight-sync snapshot from being overwritten by a
+    later in-place optimizer step (the §4 weight-sync constraint).
+    """
+
+    cpu = tensor.detach().cpu()
+    if cpu.device == tensor.device:
+        return cpu.clone()
+    return cpu
+
+
 def _to_cpu_tensor(value: Any) -> torch.Tensor:
     if isinstance(value, torch.Tensor):
-        return value.detach().cpu().clone()
-    return torch.as_tensor(value).detach().cpu().clone()
+        return _independent_cpu(value)
+    return torch.as_tensor(value).detach().cpu()
