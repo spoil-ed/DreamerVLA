@@ -391,26 +391,27 @@ class DreamerV3PixelRunner(DreamerCkptResumeMixin, BaseRunner):
                     )
                     optimizer.step()
 
-                    row = {
-                        "global_step": self.global_step,
-                        "epoch": self.epoch,
-                        "lr": float(optimizer.param_groups[0]["lr"]),
-                        "grad_norm": float(grad_norm),
-                        **self._reduce_metrics(
-                            {
-                                k: float(v.detach().float().mean().cpu())
-                                for k, v in out.items()
-                                if k != "_loss"
-                            }
-                        ),
-                    }
-                    self.console_progress(self.global_step, total_steps, "train")
-                    if (
+                    should_log = (
                         self.is_main_process
                         and log_handle is not None
                         and log_every > 0
                         and self.global_step % log_every == 0
-                    ):
+                    )
+                    self.console_progress(self.global_step, total_steps, "train")
+                    if should_log:
+                        row = {
+                            "global_step": self.global_step,
+                            "epoch": self.epoch,
+                            "lr": float(optimizer.param_groups[0]["lr"]),
+                            "grad_norm": float(grad_norm),
+                            **self._reduce_metrics(
+                                {
+                                    k: float(v.detach().float().mean().cpu())
+                                    for k, v in out.items()
+                                    if k != "_loss"
+                                }
+                            ),
+                        }
                         log_handle.write(json.dumps(row) + "\n")
                         log_handle.flush()
                         self.log_metrics(row, step=self.global_step)
