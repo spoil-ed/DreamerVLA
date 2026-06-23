@@ -23,24 +23,26 @@ logs. This file is the only live open-items list.
 ## Open items — all gated on the RynnVLA online path
 
 The three remaining items all touch the **standalone RynnVLA `online_dreamervla` path**,
-whose behaviour-changing parts the **unit suite cannot verify** (no multi-GPU DDP test) and
-which **this box cannot run** (its WM/classifier ckpts — `outputs/worldmodel/
-rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt` + the outcome classifier — are
-absent). Per core-req#1 they were not shipped blind. The clean seams already exist (extracted
-2026-06-22, see history log): `_online_dreamervla_dist.py` and `_online_dreamervla_checkpoint.py`.
+whose behaviour-changing parts the **unit suite cannot verify** (no multi-GPU DDP test); verify
+them with a **multi-GPU RynnVLA save→resume run** on this box (the WM/classifier ckpts are
+regenerated here as needed; GPU is intermittently available). Per core-req#1 they were not shipped
+blind. The clean seams already exist (extracted 2026-06-22, see history log):
+`_online_dreamervla_dist.py` and `_online_dreamervla_checkpoint.py`.
 
-- [ ] **RUN-01 — route `online_dreamervla.main` DDP through the base helper.** Code-solvable:
-  online_dreamervla wraps each *whole* module → maps to `helper.wrap_trainable_module`
-  (not the per-child `wrap_world_model`). Needs **three default-off opt-ins** on
-  `NopretokenizeSFTDistributedHelper` to preserve genuine divergences (so the mainline OFT
-  callers stay byte-identical):
-  1. `find_unused_parameters` — `True` for world_model/policy/critic, `False` for the classifier
-     (helper currently hardcodes `False`).
-  2. `broadcast_buffers` — online_dreamervla uses the DDP default **`True`**; the helper's
-     `_wrap_module_with_ddp` hardcodes **`False`** (easy to miss — naive routing silently flips it).
-  3. NCCL **timeout** — `DVLA_DDP_TIMEOUT_SEC` (helper's `initialize` has none).
-  Keep the custom all-reduce error-wrapping (`_dist_all_reduce_flag/int`) — a deliberate divergence.
-  **Verify with a RynnVLA multi-GPU save→resume smoke** before relying on it; suite-green ≠ verified.
+- [ ] **RUN-01 — verify the helper-routed online DDP with a GPU smoke.** **Code landed (2026-06-23):**
+  the three default-off opt-ins are on `NopretokenizeSFTDistributedHelper` and unit-tested
+  (`tests/unit_tests/test_distributed_ddp_opt_ins.py`, 7 tests): `find_unused_parameters` +
+  `broadcast_buffers` as per-call kwargs on `wrap_trainable_module`/`_wrap_module_with_ddp`
+  (`None` → the historical hardcoded `False`), and `nccl_timeout_seconds` on `initialize`
+  (`None` → no timeout). `online_dreamervla.main` now routes init + wm/policy/critic/classifier
+  wrapping through the helper (FUP=`True` for wm/policy/critic, `False` for classifier;
+  `broadcast_buffers=True` to keep online's old DDP default; `DVLA_DDP_TIMEOUT_SEC` flows through
+  `initialize`). The custom all-reduce error-wrapping (`_dist_all_reduce_flag/int`) is kept; the
+  now-dead `_init_distributed` seam was removed. OFT callers stay byte-identical (guard tests pass).
+  **Open / GPU-gated:** run a RynnVLA multi-GPU save→resume smoke (suite-green ≠ verified) and confirm
+  the two flagged `WORLD_SIZE=1`-only divergences (helper builds no PG / skips DDP-wrap for a single
+  process, vs the old `LOCAL_RANK`-keyed `_init_distributed`) are acceptable — they don't affect the
+  real multi-GPU path.
 
 - [ ] **X-01 (②, format-breaking remainder) — unify `online_dreamervla.save_checkpoint`.**
   Collapse its `{format_version, env_step, update_step (top-level), cfg, state_dicts}` into the
@@ -70,15 +72,15 @@ key-routing) stay non-targets per `../ray_rlinf_alignment_todo.md` and are not l
 - [ ] **RLINF-01 (remainder) — multi-GPU RynnVLA save→resume bit-exact RNG smoke.** The RNG
   capture/restore + DreamerV3 consolidation landed 2026-06-22 (see
   `../history/2026-06-21-backlog-execution-log.md`). Two open follow-ups stay GPU-gated: (a) prove
-  the multi-GPU RynnVLA save→resume is bit-exact (this box lacks the ckpts — same gate as
-  RUN-01/X-01); (b) when **X-01** rewrites the envelope, fold `rng` into the canonical BaseRunner
+  the multi-GPU RynnVLA save→resume is bit-exact (same GPU gate as RUN-01/X-01); (b) when **X-01**
+  rewrites the envelope, fold `rng` into the canonical BaseRunner
   envelope.
 
 - [ ] **RLINF-02 (remainder) — wire `Timers`/`Profiler` into the training loops.** The helper
   `dreamervla/utils/timers.py` landed 2026-06-22 (see history log). Remaining (GPU/Ray-gated):
   reroute the scattered `f"time/..."` points (e.g. `online_cotrain_ray_runner.py`) through `Timers`
   (core-req#2) and add the default-off `Profiler` to the loop — every integration site is in the
-  GPU/Ray loops this box cannot run.
+  GPU/Ray loops (GPU intermittently available).
 
 ## Hydra-core decoupling roadmap
 
@@ -96,8 +98,8 @@ workers`, so it missed the `preprocess/` and `envs/` sites now folded into DECOU
   `runners/online_utils`, `runners/oft_collect_common`, `envs/train_env.py:694`, and
   `preprocess/preprocess_oft_action_hidden.py:273` + `preprocess/preprocess_rynn_pixel_hidden.py:430`;
   route through `instantiate(cfg.<x>)` and move the baked "contract" params into config. Deferred:
-  these run only on GPU/LIBERO and the box cannot E2E-verify; refactoring blind risks breaking real
-  training (core-req#1).
+  these run only on GPU/LIBERO and need a GPU run to E2E-verify (GPU intermittently available);
+  refactoring blind risks breaking real training (core-req#1).
 - [ ] **DECOUPLE-03 — action head injection.** `L1RegressionActionHead` is hardcoded in three
   actors + an encoder; inject via a protocol + config `_target_`. Deep model-internal, GPU-gated.
 - [ ] **DECOUPLE-04 — small impls.** `ReturnPercentileTracker` direct instantiation (low value);
