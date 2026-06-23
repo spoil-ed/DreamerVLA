@@ -153,6 +153,32 @@ workers`, so it missed the `preprocess/` and `envs/` sites now folded into DECOU
 - Won't-fix: `ChunkAwareDinoWMWorldModel(DinoWMWorldModel)` inheritance is code reuse and is
   already swappable via `world_model._target_` — not a coupling violation.
 
+## WMPO imagination memory (GPU-verified 2026-06-22)
+
+The online RL update (`dino_wmpo_outcome_step`) imagines the whole trajectory for the FULL
+effective batch (B_eff ≈ batch × rollout-starts, measured ~715) and holds it on GPU, then
+computes the loss — pinning an 80GB H100 (`video` gather alone ≈ 24GB). WM warmup is fixed
+(gradient checkpointing) and the real-env rollout already lives on host (`OnlineReplay`), but
+the imagination does not. Two open items:
+
+- [ ] **MEM-RL-01 — explicit, separate imagination replay buffer + micro-batch (immediate fix).**
+  The imagination data (`state/actor_feat, action, old_log_prob, advantage`) must live in its
+  OWN host buffer object, explicitly separate from `OnlineReplay` (which holds real-env
+  transitions): two distinct buffers, two distinct lifetimes (persistent real replay vs
+  per-update imagination buffer). The PPO update then samples that imagination buffer in
+  group-aligned micro-batches over B_eff (imagination → predict_success → GRPO advantage → PPO
+  loss, gradient-accumulated), moving one micro-batch to GPU at a time (RLinf
+  `split_dict_to_chunk` + `put_tensor_device`). Valid because PPO is score-function — gradient
+  flows only through the policy log-prob re-eval, NOT the WM dynamics (rollout is `no_grad`) —
+  so the imagination is pure data. Partial work landed (actor_feats/video offloaded to CPU,
+  predict_success micro-batched); the loss + imagination forward still run at full B_eff and
+  must be split, and the host data should be promoted to an explicit buffer abstraction.
+- [ ] **MEM-RL-02 — WM-as-env (structural, RLinf/WoVR alignment).** Make the world model a gym
+  env (cf. `RLinf/rlinf/envs/world_model/`), so WM-imagination becomes a normal rollout that
+  writes trajectories to a (separate) host replay buffer, and the policy update is a standard
+  micro-batched PPO sampling from it. This removes the in-update imagination entirely and
+  matches WoVR. Bigger refactor; do after MEM-RL-01.
+
 ## Won't-fix / intentional (record only)
 
 **DIAG-06** (16 doc-only diagnostics) and **MOD-07** (`official` OFT action-model) — kept by
