@@ -67,6 +67,185 @@ from dreamervla.models.critic.twohot_critic import soft_update
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
+def _dense_actor_backward_microbatched(
+    *,
+    policy: nn.Module,
+    ref_policy: nn.Module | None,
+    use_ref: bool,
+    actor_feats: list[torch.Tensor],
+    actions: list[torch.Tensor],
+    action_token_ids: list[torch.Tensor | None],
+    advantages: torch.Tensor,  # [B_eff] detached
+    old_log_prob_traj: torch.Tensor,  # [B_eff] detached
+    slice_bounds: list[tuple[int, int]],
+    b_eff: int,
+    algorithm_cfg: DictConfig,
+    clip_low: float,
+    clip_high: float,
+    clip_ratio_c: float | None,
+    clip_log_ratio: float | None,
+    entropy_coef: float,
+    actor_bc_ref_scale: float,
+    real_relabel_term: torch.Tensor,
+) -> dict[str, Any]:
+    """Run the dense PPO actor backward over group-aligned B_eff micro-batches.
+
+    The actor loss is ``mean_over_B_eff(ppo + entropy)`` plus a BC anchor that is
+    ``mean_over_bc_steps(mean_over_(B_eff,K,A))`` and a batch-independent
+    ``real_relabel_term``. Each slice backprops globally-normalized contributions
+    (``sum / B_eff`` for PPO/entropy; ``sum / (b_eff*K*A*bc_steps)`` for BC) so the
+    accumulated gradient equals the full-batch single backward bit-for-bit. The
+    ``real_relabel_term`` is independent of the imagined batch, so it is added once
+    (on the first slice). ``slice_bounds`` covering the whole batch in one slice
+    reproduces the original behavior. Returns assembled metric tensors/values.
+
+    The caller must have called ``actor_optimizer.zero_grad(...)`` before this.
+    """
+    ratio_records: list[torch.Tensor] = []
+    log_prob_records: list[torch.Tensor] = []
+    bc_value_sum = 0.0
+    pg_value_sum = 0.0
+    entropy_value_sum = 0.0
+    drift_raw_mses: list[torch.Tensor] = []
+    drift_env_mses: list[torch.Tensor] = []
+    drift_env_clip_mses: list[torch.Tensor] = []
+    drift_env_maes: list[torch.Tensor] = []
+    total_loss = 0.0
+    for slice_idx, (lo, hi) in enumerate(slice_bounds):
+        new_log_probs: list[torch.Tensor] = []
+        entropies: list[torch.Tensor] = []
+        bc_terms: list[torch.Tensor] = []
+        for actor_feat, action_detached, token_ids in zip(
+            actor_feats, actions, action_token_ids, strict=True
+        ):
+            af = actor_feat[lo:hi]
+            eval_batch = {
+                "mode": "evaluate",
+                "hidden": af,
+                "action": action_detached[lo:hi],
+            }
+            if token_ids is not None:
+                eval_batch["action_token_ids"] = token_ids[lo:hi]
+            log_prob_t, entropy_t, _ = policy(eval_batch)
+            new_log_probs.append(log_prob_t)
+            entropies.append(entropy_t)
+
+            _, _, extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": af,
+                    "deterministic": True,
+                    "return_chunk": True,
+                }
+            )
+            action_chunk = extra.get("action_chunk")
+            if use_ref:
+                if isinstance(action_chunk, torch.Tensor):
+                    with torch.no_grad():
+                        _, _, ref_extra = ref_policy(
+                            {
+                                "mode": "sample",
+                                "hidden": af,
+                                "deterministic": True,
+                                "return_chunk": True,
+                            }
+                        )
+                    ref_action_chunk = ref_extra.get("action_chunk")
+                    if isinstance(ref_action_chunk, torch.Tensor):
+                        action_chunk_f = action_chunk.float()
+                        ref_chunk_f = ref_action_chunk.detach().float()
+                        bc_terms.append((action_chunk_f - ref_chunk_f).square().sum())
+                        drift_raw_mses.append(
+                            (action_chunk_f.detach() - ref_chunk_f).square().mean()
+                        )
+                        action_env = _actor_action_to_env_scale(
+                            action_chunk_f.detach(), algorithm_cfg, clip=False
+                        )
+                        ref_env = _actor_action_to_env_scale(
+                            ref_chunk_f, algorithm_cfg, clip=False
+                        )
+                        action_env_clip = _actor_action_to_env_scale(
+                            action_chunk_f.detach(), algorithm_cfg, clip=True
+                        )
+                        ref_env_clip = _actor_action_to_env_scale(
+                            ref_chunk_f, algorithm_cfg, clip=True
+                        )
+                        drift_env_mses.append((action_env - ref_env).square().mean())
+                        drift_env_clip_mses.append(
+                            (action_env_clip - ref_env_clip).square().mean()
+                        )
+                        drift_env_maes.append((action_env - ref_env).abs().mean())
+            else:
+                reference_chunk = _policy_reference_action_chunk(policy, af)
+                if isinstance(action_chunk, torch.Tensor) and isinstance(
+                    reference_chunk, torch.Tensor
+                ):
+                    bc_terms.append(
+                        (action_chunk.float() - reference_chunk.detach().float())
+                        .square()
+                        .sum()
+                    )
+
+        log_prob_stack = torch.stack(new_log_probs, dim=1)  # [mb, horizon]
+        entropy_stack = torch.stack(entropies, dim=1)
+        log_prob_traj = log_prob_stack.sum(dim=1)  # [mb]
+        ratio = _ppo_ratio(
+            log_prob_traj, old_log_prob_traj[lo:hi], clip_log_ratio=clip_log_ratio
+        )
+        # Sum / global B_eff (NOT slice size) so per-slice grads sum to the
+        # full-batch `.mean()` gradient.
+        actor_pg_loss = (
+            _ppo_clip_term(
+                ratio, advantages[lo:hi], clip_low, clip_high, clip_ratio_c=clip_ratio_c
+            ).sum()
+            / b_eff
+        )
+        actor_entropy_loss = (
+            -(entropy_coef * entropy_stack.sum(dim=1)).sum() / b_eff
+            if entropy_coef
+            else actor_pg_loss.new_zeros(())
+        )
+        # BC anchor: original = mean over bc_steps of mean over (slice elements).
+        # Each ``bc_terms`` element is the per-step SUM of squared diffs over this
+        # slice's (mb, K, A); the global normalizer divides by the full count so
+        # the per-slice sums accumulate to the full-batch mean exactly. ``bc_steps``
+        # (the count of contributing horizon steps) is slice-invariant — validity
+        # depends on the policy/ref returning a chunk tensor, not on the batch slice.
+        if bc_terms:
+            bc_steps = len(bc_terms)
+            elems_per_step = action_chunk.float().reshape(action_chunk.shape[0], -1).shape[1]
+            bc_norm = float(b_eff) * float(elems_per_step) * float(bc_steps)
+            bc_loss = torch.stack(bc_terms).sum() / bc_norm
+            # Σ_slices bc_loss == the original ``stack(bc_ref_losses).mean()``.
+            bc_value_sum += float(bc_loss.detach().cpu())
+        else:
+            bc_loss = actor_pg_loss.new_zeros(())
+        slice_loss = actor_pg_loss + actor_entropy_loss + actor_bc_ref_scale * bc_loss
+        if slice_idx == 0:
+            slice_loss = slice_loss + real_relabel_term
+        slice_loss.backward()
+
+        # Σ_slices of each globally-normalized term == the full-batch term value.
+        pg_value_sum += float(actor_pg_loss.detach().cpu())
+        entropy_value_sum += float(actor_entropy_loss.detach().cpu())
+        total_loss += float(slice_loss.detach().cpu())
+        ratio_records.append(ratio.detach())
+        log_prob_records.append(log_prob_stack.detach())
+
+    return {
+        "actor_loss": total_loss,
+        "actor_pg_loss": pg_value_sum,
+        "actor_entropy_loss": entropy_value_sum,
+        "ratio": torch.cat(ratio_records, dim=0),
+        "log_prob_stack": torch.cat(log_prob_records, dim=0),
+        "bc_ref_loss_value": bc_value_sum,
+        "drift_raw_mses": drift_raw_mses,
+        "drift_env_mses": drift_env_mses,
+        "drift_env_clip_mses": drift_env_clip_mses,
+        "drift_env_maes": drift_env_maes,
+    }
+
+
 def dino_wmpo_dense_step(
     policy: nn.Module,
     world_model: nn.Module,
@@ -155,11 +334,6 @@ def dino_wmpo_dense_step(
     old_log_probs: list[torch.Tensor] = []
     rewards: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
-    bc_ref_losses: list[torch.Tensor] = []
-    drift_raw_mses: list[torch.Tensor] = []
-    drift_env_mses: list[torch.Tensor] = []
-    drift_env_clip_mses: list[torch.Tensor] = []
-    drift_env_maes: list[torch.Tensor] = []
 
     with _temporarily_freeze(world_model):
         for step in range(horizon):
@@ -218,81 +392,12 @@ def dino_wmpo_dense_step(
     if not actor_feats:
         raise RuntimeError("DINO-WM PPO requires at least one imagined actor step.")
 
-    new_log_probs: list[torch.Tensor] = []
-    entropies: list[torch.Tensor] = []
-    for actor_feat, action_detached, token_ids in zip(
-        actor_feats, actions, action_token_ids, strict=True
-    ):
-        eval_batch = {
-            "mode": "evaluate",
-            "hidden": actor_feat,
-            "action": action_detached,
-        }
-        if token_ids is not None:
-            eval_batch["action_token_ids"] = token_ids
-        log_prob_t, entropy_t, _ = policy(eval_batch)
-        new_log_probs.append(log_prob_t)
-        entropies.append(entropy_t)
-
-        _, _, extra = policy(
-            {
-                "mode": "sample",
-                "hidden": actor_feat,
-                "deterministic": True,
-                "return_chunk": True,
-            }
-        )
-        action_chunk = extra.get("action_chunk")
-        if use_ref:
-            if isinstance(action_chunk, torch.Tensor):
-                with torch.no_grad():
-                    _, _, ref_extra = ref_policy(
-                        {
-                            "mode": "sample",
-                            "hidden": actor_feat,
-                            "deterministic": True,
-                            "return_chunk": True,
-                        }
-                    )
-                ref_action_chunk = ref_extra.get("action_chunk")
-                if isinstance(ref_action_chunk, torch.Tensor):
-                    action_chunk_f = action_chunk.float()
-                    ref_chunk_f = ref_action_chunk.detach().float()
-                    bc_ref_losses.append((action_chunk_f - ref_chunk_f).square().mean())
-                    drift_raw_mses.append(
-                        (action_chunk_f.detach() - ref_chunk_f).square().mean()
-                    )
-                    action_env = _actor_action_to_env_scale(
-                        action_chunk_f.detach(), algorithm_cfg, clip=False
-                    )
-                    ref_env = _actor_action_to_env_scale(
-                        ref_chunk_f, algorithm_cfg, clip=False
-                    )
-                    action_env_clip = _actor_action_to_env_scale(
-                        action_chunk_f.detach(), algorithm_cfg, clip=True
-                    )
-                    ref_env_clip = _actor_action_to_env_scale(
-                        ref_chunk_f, algorithm_cfg, clip=True
-                    )
-                    drift_env_mses.append((action_env - ref_env).square().mean())
-                    drift_env_clip_mses.append(
-                        (action_env_clip - ref_env_clip).square().mean()
-                    )
-                    drift_env_maes.append((action_env - ref_env).abs().mean())
-        else:
-            reference_chunk = _policy_reference_action_chunk(policy, actor_feat)
-            if isinstance(action_chunk, torch.Tensor) and isinstance(
-                reference_chunk, torch.Tensor
-            ):
-                bc_ref_losses.append(
-                    (action_chunk.float() - reference_chunk.detach().float())
-                    .square()
-                    .mean()
-                )
-
-    log_prob_stack = torch.stack(new_log_probs, dim=1)
-    old_log_prob_stack = torch.stack(old_log_probs, dim=1)
-    entropy_stack = torch.stack(entropies, dim=1)
+    # The advantage is built from the imagined rewards (+ optional TD-MPC terminal
+    # value) ONLY — it never depends on the policy re-evaluation forwards — so we
+    # compute it first, then run the actor backward over group-aligned B_eff
+    # micro-batches (the forwards / loss / backward all live in
+    # ``_dense_actor_backward_microbatched``).
+    old_log_prob_traj = torch.stack(old_log_probs, dim=1).sum(dim=1).detach()  # [B_eff]
     reward_stack = torch.stack(rewards, dim=1)
     adjusted_reward = reward_stack
     kl_stack = None
@@ -354,22 +459,28 @@ def dino_wmpo_dense_step(
             )
     advantages = _group_advantage(traj_score.detach(), group_size, adv_eps)
 
-    log_prob_traj = log_prob_stack.sum(dim=1)
-    old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
-    ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
-    actor_pg_loss = _ppo_clip_term(
-        ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-    ).mean()
-    actor_entropy_loss = (
-        -(entropy_coef * entropy_stack.sum(dim=1)).mean()
-        if entropy_coef
-        else actor_pg_loss.new_zeros(())
+    # ─── group-aligned micro-batch slices (PERF-W6) ───────────────────────
+    # Bound the actor backward's peak memory to ONE group-aligned slice of B_eff
+    # instead of all `horizon` policy forwards for the full batch at once. GRPO
+    # groups are CONTIGUOUS `group_size` blocks (`_repeat_latent` =
+    # repeat_interleave); the advantage is computed ONCE on the full batch then
+    # detached, so slicing `advantages[lo:hi]` reproduces the exact per-rollout
+    # weights. Slices are in START units (one start = `group_size` rollouts). The
+    # PPO + entropy + BC loss are means over B_eff, so each slice backprops a
+    # global-B_eff-normalized contribution and the accumulated gradient equals the
+    # full-batch single backward bit-for-bit. `wmpo.update_micro_batch_starts`
+    # <= 0 or >= n_starts ⇒ ONE full-batch slice = the original behavior.
+    b_eff = int(advantages.shape[0])
+    n_starts = b_eff // group_size
+    mb_starts_cfg = int(
+        (algorithm_cfg.get("wmpo", {}) or {}).get("update_micro_batch_starts", 0)
     )
-    bc_ref_loss = (
-        torch.stack(bc_ref_losses).mean()
-        if bc_ref_losses
-        else actor_pg_loss.new_zeros(())
-    )
+    mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
+    slice_bounds = [
+        (s * group_size, min(s + mb_starts, n_starts) * group_size)
+        for s in range(0, n_starts, mb_starts)
+    ]
+
     real_relabel_loss, real_relabel_metrics = _real_relabel_anchor_loss(
         policy=policy,
         real_relabel_batch=real_relabel_batch,
@@ -379,14 +490,41 @@ def dino_wmpo_dense_step(
         clip_ratio_c=clip_ratio_c,
     )
     if real_relabel_loss is None or real_relabel_scale <= 0.0:
-        real_relabel_term = actor_pg_loss.new_zeros(())
+        real_relabel_term = traj_score.new_zeros(())
     else:
         real_relabel_term = float(real_relabel_scale) * real_relabel_loss
-    actor_loss = actor_pg_loss + actor_entropy_loss + actor_bc_ref_scale * bc_ref_loss
-    actor_loss = actor_loss + real_relabel_term
 
     actor_optimizer.zero_grad(set_to_none=zero_grad)
-    actor_loss.backward()
+    update_out = _dense_actor_backward_microbatched(
+        policy=policy,
+        ref_policy=ref_policy,
+        use_ref=use_ref,
+        actor_feats=actor_feats,
+        actions=actions,
+        action_token_ids=action_token_ids,
+        advantages=advantages,
+        old_log_prob_traj=old_log_prob_traj,
+        slice_bounds=slice_bounds,
+        b_eff=b_eff,
+        algorithm_cfg=algorithm_cfg,
+        clip_low=clip_low,
+        clip_high=clip_high,
+        clip_ratio_c=clip_ratio_c,
+        clip_log_ratio=clip_log_ratio,
+        entropy_coef=entropy_coef,
+        actor_bc_ref_scale=actor_bc_ref_scale,
+        real_relabel_term=real_relabel_term,
+    )
+    ratio = update_out["ratio"]
+    log_prob_stack = update_out["log_prob_stack"]
+    bc_ref_loss_value = update_out["bc_ref_loss_value"]
+    actor_loss_value = update_out["actor_loss"]
+    actor_pg_loss_value = update_out["actor_pg_loss"]
+    actor_entropy_loss_value = update_out["actor_entropy_loss"]
+    drift_raw_mses = update_out["drift_raw_mses"]
+    drift_env_mses = update_out["drift_env_mses"]
+    drift_env_clip_mses = update_out["drift_env_clip_mses"]
+    drift_env_maes = update_out["drift_env_maes"]
     actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
     actor_output_projection_grad_norm = _named_grad_norm(policy, "output_projection")
     actor_log_std_grad_norm = _named_grad_norm(policy, "log_std")
@@ -578,102 +716,6 @@ def dino_wmpo_dense_step(
             tdmpc_ac_applied = True
 
     for _update_epoch in range(1, update_epochs):
-        new_log_probs = []
-        entropies = []
-        bc_ref_losses = []
-        drift_raw_mses = []
-        drift_env_mses = []
-        drift_env_clip_mses = []
-        drift_env_maes = []
-        for actor_feat, action_detached, token_ids in zip(
-            actor_feats, actions, action_token_ids, strict=True
-        ):
-            eval_batch = {
-                "mode": "evaluate",
-                "hidden": actor_feat,
-                "action": action_detached,
-            }
-            if token_ids is not None:
-                eval_batch["action_token_ids"] = token_ids
-            log_prob_t, entropy_t, _ = policy(eval_batch)
-            new_log_probs.append(log_prob_t)
-            entropies.append(entropy_t)
-
-            _, _, extra = policy(
-                {
-                    "mode": "sample",
-                    "hidden": actor_feat,
-                    "deterministic": True,
-                    "return_chunk": True,
-                }
-            )
-            action_chunk = extra.get("action_chunk")
-            if use_ref:
-                if isinstance(action_chunk, torch.Tensor):
-                    with torch.no_grad():
-                        _, _, ref_extra = ref_policy(
-                            {
-                                "mode": "sample",
-                                "hidden": actor_feat,
-                                "deterministic": True,
-                                "return_chunk": True,
-                            }
-                        )
-                    ref_action_chunk = ref_extra.get("action_chunk")
-                    if isinstance(ref_action_chunk, torch.Tensor):
-                        action_chunk_f = action_chunk.float()
-                        ref_chunk_f = ref_action_chunk.detach().float()
-                        bc_ref_losses.append(
-                            (action_chunk_f - ref_chunk_f).square().mean()
-                        )
-                        drift_raw_mses.append(
-                            (action_chunk_f.detach() - ref_chunk_f).square().mean()
-                        )
-                        action_env = _actor_action_to_env_scale(
-                            action_chunk_f.detach(), algorithm_cfg, clip=False
-                        )
-                        ref_env = _actor_action_to_env_scale(
-                            ref_chunk_f, algorithm_cfg, clip=False
-                        )
-                        action_env_clip = _actor_action_to_env_scale(
-                            action_chunk_f.detach(), algorithm_cfg, clip=True
-                        )
-                        ref_env_clip = _actor_action_to_env_scale(
-                            ref_chunk_f, algorithm_cfg, clip=True
-                        )
-                        drift_env_mses.append((action_env - ref_env).square().mean())
-                        drift_env_clip_mses.append(
-                            (action_env_clip - ref_env_clip).square().mean()
-                        )
-                        drift_env_maes.append((action_env - ref_env).abs().mean())
-            else:
-                reference_chunk = _policy_reference_action_chunk(policy, actor_feat)
-                if isinstance(action_chunk, torch.Tensor) and isinstance(
-                    reference_chunk, torch.Tensor
-                ):
-                    bc_ref_losses.append(
-                        (action_chunk.float() - reference_chunk.detach().float())
-                        .square()
-                        .mean()
-                    )
-
-        log_prob_stack = torch.stack(new_log_probs, dim=1)
-        entropy_stack = torch.stack(entropies, dim=1)
-        log_prob_traj = log_prob_stack.sum(dim=1)
-        ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
-        actor_pg_loss = _ppo_clip_term(
-            ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-        ).mean()
-        actor_entropy_loss = (
-            -(entropy_coef * entropy_stack.sum(dim=1)).mean()
-            if entropy_coef
-            else actor_pg_loss.new_zeros(())
-        )
-        bc_ref_loss = (
-            torch.stack(bc_ref_losses).mean()
-            if bc_ref_losses
-            else actor_pg_loss.new_zeros(())
-        )
         real_relabel_loss, real_relabel_metrics = _real_relabel_anchor_loss(
             policy=policy,
             real_relabel_batch=real_relabel_batch,
@@ -683,18 +725,41 @@ def dino_wmpo_dense_step(
             clip_ratio_c=clip_ratio_c,
         )
         if real_relabel_loss is None or real_relabel_scale <= 0.0:
-            real_relabel_term = actor_pg_loss.new_zeros(())
+            real_relabel_term = traj_score.new_zeros(())
         else:
             real_relabel_term = float(real_relabel_scale) * real_relabel_loss
-        actor_loss = (
-            actor_pg_loss
-            + actor_entropy_loss
-            + actor_bc_ref_scale * bc_ref_loss
-            + real_relabel_term
-        )
 
         actor_optimizer.zero_grad(set_to_none=zero_grad)
-        actor_loss.backward()
+        update_out = _dense_actor_backward_microbatched(
+            policy=policy,
+            ref_policy=ref_policy,
+            use_ref=use_ref,
+            actor_feats=actor_feats,
+            actions=actions,
+            action_token_ids=action_token_ids,
+            advantages=advantages,
+            old_log_prob_traj=old_log_prob_traj,
+            slice_bounds=slice_bounds,
+            b_eff=b_eff,
+            algorithm_cfg=algorithm_cfg,
+            clip_low=clip_low,
+            clip_high=clip_high,
+            clip_ratio_c=clip_ratio_c,
+            clip_log_ratio=clip_log_ratio,
+            entropy_coef=entropy_coef,
+            actor_bc_ref_scale=actor_bc_ref_scale,
+            real_relabel_term=real_relabel_term,
+        )
+        ratio = update_out["ratio"]
+        log_prob_stack = update_out["log_prob_stack"]
+        bc_ref_loss_value = update_out["bc_ref_loss_value"]
+        actor_loss_value = update_out["actor_loss"]
+        actor_pg_loss_value = update_out["actor_pg_loss"]
+        actor_entropy_loss_value = update_out["actor_entropy_loss"]
+        drift_raw_mses = update_out["drift_raw_mses"]
+        drift_env_mses = update_out["drift_env_mses"]
+        drift_env_clip_mses = update_out["drift_env_clip_mses"]
+        drift_env_maes = update_out["drift_env_maes"]
         actor_adapter_grad_norm = _named_grad_norm(policy, "adapter")
         actor_output_projection_grad_norm = _named_grad_norm(
             policy, "output_projection"
@@ -711,14 +776,14 @@ def dino_wmpo_dense_step(
         return float(torch.stack(items).mean().detach().cpu())
 
     return {
-        "actor_loss": float(actor_loss.detach().cpu()),
-        "actor_pg_loss": float(actor_pg_loss.detach().cpu()),
-        "actor_entropy_loss": float(actor_entropy_loss.detach().cpu()),
-        "actor_bc_ref_loss": float(bc_ref_loss.detach().cpu()),
+        "actor_loss": float(actor_loss_value),
+        "actor_pg_loss": float(actor_pg_loss_value),
+        "actor_entropy_loss": float(actor_entropy_loss_value),
+        "actor_bc_ref_loss": float(bc_ref_loss_value),
         "actor_bc_ref_scale": float(actor_bc_ref_scale),
         "real_relabel_scale": float(real_relabel_scale),
         "real_relabel_term": float(real_relabel_term.detach().cpu()),
-        "actor_bc_loss": float(bc_ref_loss.detach().cpu()),
+        "actor_bc_loss": float(bc_ref_loss_value),
         "actor_bc_scale": float(actor_bc_ref_scale),
         "ppo_update_epochs": float(update_epochs),
         "critic_loss": float(tdmpc_critic_loss.detach().cpu()),

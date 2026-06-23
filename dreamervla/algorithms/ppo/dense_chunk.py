@@ -281,6 +281,28 @@ def dino_wmpo_dense_chunk_step(
         traj_score = discounted
 
     advantages = _group_advantage(traj_score.detach(), group_size, adv_eps)  # [B_eff]
+    old_log_prob_traj = torch.stack(old_log_probs, dim=1).sum(dim=1).detach()  # [B_eff]
+
+    # ─── group-aligned micro-batch slices (PERF-W6) ───────────────────────
+    # Bound the actor backward's peak memory to ONE group-aligned slice of the
+    # effective batch instead of all `horizon` policy forwards for the full
+    # B_eff at once. GRPO groups are CONTIGUOUS `group_size` blocks in B_eff
+    # (`_repeat_latent` = repeat_interleave); the advantage is computed ONCE on
+    # the full batch then detached, so slicing `advantages[lo:hi]` reproduces the
+    # exact per-rollout weights. We slice in START units (one start =
+    # `group_size` rollouts). The PPO + entropy loss is a plain mean over B_eff,
+    # so each slice backprops `term.sum() / B_eff` (global normalizer) and the
+    # accumulated gradient equals the full-batch `.mean()` backward bit-for-bit.
+    # `wmpo.update_micro_batch_starts` <= 0 or >= n_starts ⇒ one full-batch slice
+    # = the original single backward.
+    b_eff = int(advantages.shape[0])
+    n_starts = b_eff // group_size
+    mb_starts_cfg = int(wmpo_cfg.get("update_micro_batch_starts", 0))
+    mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
+    slice_bounds = [
+        (s * group_size, min(s + mb_starts, n_starts) * group_size)
+        for s in range(0, n_starts, mb_starts)
+    ]
 
     # PPO update — chunk-level log_prob, ratio aggregated over the horizon chunks.
     total_actor_loss = 0.0
@@ -288,52 +310,66 @@ def dino_wmpo_dense_chunk_step(
     grad_norm = torch.zeros((), device=device)
     ratio_last = torch.zeros((), device=device)
     for _ in range(update_epochs):
-        new_log_probs: list[torch.Tensor] = []
-        entropies: list[torch.Tensor] = []
-        for actor_feat, action_detached, token_ids in zip(
-            actor_feats, action_chunks, action_token_ids, strict=True
-        ):
-            # action_detached is [B_eff, K, A]; actor's evaluate path with ndim==3
-            # returns chunk-level log_prob and entropy summed over (K, action_dim),
-            # matching the chunk-level old_lp recorded above.
-            eval_batch = {
-                "mode": "evaluate",
-                "hidden": actor_feat,
-                "action": action_detached,
-            }
-            if token_ids is not None:
-                eval_batch["action_token_ids"] = token_ids
-            new_lp, entropy_t, _ = policy(eval_batch)
-            new_log_probs.append(new_lp)
-            entropies.append(entropy_t)
-
-        log_prob_stack = torch.stack(new_log_probs, dim=1)  # [B_eff, horizon]
-        old_log_prob_stack = torch.stack(old_log_probs, dim=1)
-        entropy_stack = torch.stack(entropies, dim=1)
-
-        log_prob_traj = log_prob_stack.sum(dim=1)
-        old_log_prob_traj = old_log_prob_stack.sum(dim=1).detach()
-        ratio = _ppo_ratio(log_prob_traj, old_log_prob_traj, clip_log_ratio=clip_log_ratio)
-        pg_loss = _ppo_clip_term(
-            ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-        ).mean()
-        ent_loss = (
-            -(entropy_coef * entropy_stack.sum(dim=1)).mean()
-            if entropy_coef
-            else pg_loss.new_zeros(())
-        )
-        loss = pg_loss + ent_loss
-
         actor_optimizer.zero_grad(set_to_none=zero_grad)
-        loss.backward()
+        epoch_loss = 0.0
+        epoch_entropy_sum = 0.0
+        ratio_records: list[torch.Tensor] = []
+        for lo, hi in slice_bounds:
+            new_log_probs: list[torch.Tensor] = []
+            entropies: list[torch.Tensor] = []
+            for actor_feat, action_detached, token_ids in zip(
+                actor_feats, action_chunks, action_token_ids, strict=True
+            ):
+                # action_detached is [B_eff, K, A]; actor's evaluate path with ndim==3
+                # returns chunk-level log_prob and entropy summed over (K, action_dim),
+                # matching the chunk-level old_lp recorded above.
+                eval_batch = {
+                    "mode": "evaluate",
+                    "hidden": actor_feat[lo:hi],
+                    "action": action_detached[lo:hi],
+                }
+                if token_ids is not None:
+                    eval_batch["action_token_ids"] = token_ids[lo:hi]
+                new_lp, entropy_t, _ = policy(eval_batch)
+                new_log_probs.append(new_lp)
+                entropies.append(entropy_t)
+
+            log_prob_stack = torch.stack(new_log_probs, dim=1)  # [mb, horizon]
+            entropy_stack = torch.stack(entropies, dim=1)
+
+            log_prob_traj = log_prob_stack.sum(dim=1)  # [mb]
+            ratio = _ppo_ratio(
+                log_prob_traj, old_log_prob_traj[lo:hi], clip_log_ratio=clip_log_ratio
+            )
+            # Sum / global B_eff (NOT slice size) so per-slice grads sum to the
+            # full-batch `.mean()` gradient.
+            pg_loss = (
+                _ppo_clip_term(
+                    ratio, advantages[lo:hi], clip_low, clip_high, clip_ratio_c=clip_ratio_c
+                ).sum()
+                / b_eff
+            )
+            ent_loss = (
+                -(entropy_coef * entropy_stack.sum(dim=1)).sum() / b_eff
+                if entropy_coef
+                else pg_loss.new_zeros(())
+            )
+            loss = pg_loss + ent_loss
+            loss.backward()
+
+            epoch_loss += float(loss.detach().cpu())
+            epoch_entropy_sum += float(entropy_stack.detach().sum().cpu())
+            ratio_records.append(ratio.detach())
+
         grad_norm = torch.nn.utils.clip_grad_norm_(
             policy.parameters(), max_norm=grad_clip
         )
         actor_optimizer.step()
 
-        total_actor_loss += float(loss.detach().cpu())
-        total_entropy += float(entropy_stack.detach().mean().cpu())
-        ratio_last = ratio.detach()
+        total_actor_loss += epoch_loss
+        # entropy_stack metric is a mean over (B_eff, horizon); reassemble from slices.
+        total_entropy += epoch_entropy_sum / max(1, b_eff * horizon)
+        ratio_last = torch.cat(ratio_records, dim=0)
 
     actor_loss_val = total_actor_loss / max(1, update_epochs)
     returns_mean = float(traj_score.detach().mean().cpu())
