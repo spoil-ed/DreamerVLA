@@ -67,57 +67,18 @@ single-machine scope; the deliberately-out-of-scope RLinf features (collocated/d
 hybrid placement modes, vLLM/SGLang, Megatron TP+PP, multi-node, VRAM auto-sizing, Channel
 key-routing) stay non-targets per `../ray_rlinf_alignment_todo.md` and are not listed here.
 
-- [x] **RLINF-01 — capture/restore RNG state on the online DreamerVLA checkpoint path.**
-  *Landed 2026-06-22 (TDD, suite green):* canonical `capture_rng_state()` / `restore_rng_state()`
-  in `dreamervla/utils/seed.py` (python `random` + torch + cuda; numpy is outside `set_seed`'s
-  contract) wired into `_online_dreamervla_checkpoint.save_checkpoint` (adds `payload["rng"]`) and
-  `load_training_checkpoint` (restored last, after all state-dict loads). **Additive +
-  backward-compatible** — old ckpts lack the key → restore is a no-op (core-req#1 preserved).
-  Unit cover: `tests/unit_tests/test_rng_checkpoint.py` (helper round-trip + bit-exact
-  save→load draws + None/partial tolerance).
-  *Consolidation (done 2026-06-22, core-req#2):* DreamerV3's inline RNG
-  (`_dreamer_runner_common.py` `_save_ckpt`/`_maybe_resume`) now routes through the same shared
-  helper. Two **flagged behaviour changes** (approved): DreamerV3 resume now (i) also restores
-  python `random` (it previously snapshotted torch+cuda only — strictly more deterministic) and
-  (ii) warns via `warnings.warn` instead of a `[tag]` log line on a CUDA-RNG restore failure.
-  Unit cover added (`test_dreamerv3_*` in the same file). RNG capture/restore is now single-source.
-  *Remaining (deferred):* (a) the multi-GPU RynnVLA save→resume bit-exact smoke is GPU-gated
-  (this box lacks the ckpts; same gate as RUN-01/X-01); (b) when **X-01** rewrites the envelope,
-  fold `rng` into the canonical BaseRunner envelope.
+- [ ] **RLINF-01 (remainder) — multi-GPU RynnVLA save→resume bit-exact RNG smoke.** The RNG
+  capture/restore + DreamerV3 consolidation landed 2026-06-22 (see
+  `../history/2026-06-21-backlog-execution-log.md`). Two open follow-ups stay GPU-gated: (a) prove
+  the multi-GPU RynnVLA save→resume is bit-exact (this box lacks the ckpts — same gate as
+  RUN-01/X-01); (b) when **X-01** rewrites the envelope, fold `rng` into the canonical BaseRunner
+  envelope.
 
-- [x] **RLINF-02 — structured `Timers` helper + opt-in `torch.profiler`.**
-  *Landed 2026-06-22 (TDD, suite green):* `dreamervla/utils/timers.py` — `Timers` (context-manager
-  timing, mean/sum/min/max reduction, `to_metrics(prefix="time")` namespacing, optional `cuda_sync`)
-  + `Profiler` (config-gated, **default-off** `torch.profiler` wrapper with schedule + chrome-trace
-  export; a safe no-op when disabled). Unit cover: `tests/unit_tests/test_timers.py` (6 tests, incl.
-  CPU trace emission). **Unblocks the deferred P5 "kernel tuning gated on benchmark data"** —
-  hotspot selection now has a profiler.
-  *Remaining (GPU-gated):* wire into the training loops — reroute the scattered `f"time/..."`
-  points (e.g. `online_cotrain_ray_runner.py`) through `Timers` (core-req#2) and add the default-off
-  `Profiler` to the loop. Deferred because every integration site is in the GPU/Ray-gated loops this
-  box cannot run; the helper is staged ahead of wiring (mirrors the `_online_dreamervla_*` seams).
-
-- [x] **RLINF-03 — add `.github/workflows/` CI.**
-  *Landed 2026-06-22:* `.github/workflows/ci.yml` — a `lint` job (`ruff check dreamervla tests`,
-  ruff pinned `0.15.14`) on push/PR. Made the tree repo-wide ruff-clean first: one pre-existing
-  `I001` import-sort in `tests/unit_tests/test_actor_file_split_imports.py` was auto-fixed
-  (behaviour-neutral). Lint command verified green locally.
-  *Intentionally scoped down (documented in the workflow):* the pytest suite is **not** run on
-  stock runners — it needs the hand-built `dreamervla` conda env (transformers 4.40.1 fork,
-  robosuite/third_party) that isn't reproducible from PyPI; `ruff format --check` (≈244 files are
-  historically unformatted) and the `__init__.py`-presence check (several PEP 420 namespace
-  packages by design) are omitted to avoid a false-red gate.
-
-- [x] **RLINF-04 — validate checkpoint `format_version` on load.**
-  *Landed 2026-06-22 (TDD, suite green):* `format_version` was written by every writer
-  (`_online_dreamervla_checkpoint`, `base_runner`) but **never checked**, so a newer-format ckpt
-  loaded by older code was silently mishandled. Added `_check_format_version` inside
-  `dreamervla/utils/hf_checkpoint.load_runner_payload` — the single chokepoint for all four
-  runner-payload consumers (online resume, BaseRunner, embodied eval, rynn preprocess). Only the
-  unsafe direction hard-fails (ckpt newer than code); missing/older versions stay loadable, so the
-  dual-read backward-compat contract holds (core-req#1). RLinf stores+validates its version on
-  load; CLAUDE.md calls for early resume-checkpoint validation. Unit cover:
-  `tests/unit_tests/test_checkpoint_version_guard.py` (future rejected / current + legacy accepted).
+- [ ] **RLINF-02 (remainder) — wire `Timers`/`Profiler` into the training loops.** The helper
+  `dreamervla/utils/timers.py` landed 2026-06-22 (see history log). Remaining (GPU/Ray-gated):
+  reroute the scattered `f"time/..."` points (e.g. `online_cotrain_ray_runner.py`) through `Timers`
+  (core-req#2) and add the default-off `Profiler` to the loop — every integration site is in the
+  GPU/Ray loops this box cannot run.
 
 ## Hydra-core decoupling roadmap
 
@@ -130,12 +91,6 @@ three antipattern classes (cross-module concrete imports, runtime `_target_` mut
 complete set. (The earlier Explore audit only scoped `models/dataset/runners/algorithms/
 workers`, so it missed the `preprocess/` and `envs/` sites now folded into DECOUPLE-02/04.)
 
-- [x] **DECOUPLE-01 — success classifier via a `_target_`-aware builder.** *Landed 2026-06-22
-  (TDD, suite green):* `dreamervla.models.reward.build_classifier` honors a Hydra `_target_`,
-  else falls back to the default `LatentSuccessClassifier` — byte-identical for legacy ckpts.
-  Routed the three hardcoded sites (`online_dreamervla`, `dreamervla_runner`,
-  `online_cotrain_runner`) through it; `latent_classifier_runner` already used the pattern.
-  Cover: `tests/unit_tests/test_build_classifier.py`.
 - [ ] **DECOUPLE-02 — env / encoder / policy construction (GPU-gated).** `OpenVLAOFTPolicy`,
   `RynnVLAEncoder`, `DreamerVLAOnlineTrainEnv` are built with hardcoded params across
   `runners/online_utils`, `runners/oft_collect_common`, `envs/train_env.py:694`, and
@@ -153,31 +108,29 @@ workers`, so it missed the `preprocess/` and `envs/` sites now folded into DECOU
 - Won't-fix: `ChunkAwareDinoWMWorldModel(DinoWMWorldModel)` inheritance is code reuse and is
   already swappable via `world_model._target_` — not a coupling violation.
 
-## WMPO imagination memory (GPU-verified 2026-06-22)
+## WMPO imagination memory
 
-The online RL update (`dino_wmpo_outcome_step`) imagines the whole trajectory for the FULL
-effective batch (B_eff ≈ batch × rollout-starts, measured ~715) and holds it on GPU, then
-computes the loss — pinning an 80GB H100 (`video` gather alone ≈ 24GB). WM warmup is fixed
-(gradient checkpointing) and the real-env rollout already lives on host (`OnlineReplay`), but
-the imagination does not. Two open items:
+The online RL update (`dino_wmpo_outcome_step`) imagined the whole trajectory for the FULL
+effective batch (B_eff ≈ batch × rollout-starts, measured ~715) and held it on GPU, then computed
+the loss — pinning an 80GB H100 (`video` gather alone ≈ 24GB). **MEM-RL-01's micro-batch immediate
+fix landed 2026-06-23 (`816dd33`, see `../history/2026-06-21-backlog-execution-log.md`):** the
+imagination forward + loss now run one group-aligned slice / one chunk at a time, streamed from a
+transient per-slice CPU host buffer, normalized by the global `B_eff` so the gradient is bit-for-bit
+the full-batch one (knob `update_micro_batch_starts`, default off). One structural item remains, plus
+the bigger refactor:
 
-- [ ] **MEM-RL-01 — explicit, separate imagination replay buffer + micro-batch (immediate fix).**
-  The imagination data (`state/actor_feat, action, old_log_prob, advantage`) must live in its
-  OWN host buffer object, explicitly separate from `OnlineReplay` (which holds real-env
-  transitions): two distinct buffers, two distinct lifetimes (persistent real replay vs
-  per-update imagination buffer). The PPO update then samples that imagination buffer in
-  group-aligned micro-batches over B_eff (imagination → predict_success → GRPO advantage → PPO
-  loss, gradient-accumulated), moving one micro-batch to GPU at a time (RLinf
-  `split_dict_to_chunk` + `put_tensor_device`). Valid because PPO is score-function — gradient
-  flows only through the policy log-prob re-eval, NOT the WM dynamics (rollout is `no_grad`) —
-  so the imagination is pure data. Partial work landed (actor_feats/video offloaded to CPU,
-  predict_success micro-batched); the loss + imagination forward still run at full B_eff and
-  must be split, and the host data should be promoted to an explicit buffer abstraction.
+- [ ] **MEM-RL-01 (remainder) — promote the imagination host data to an explicit buffer
+  abstraction.** The micro-batch immediate fix is done (above). What is NOT done: the imagination
+  data (`actor_feat, action, old_log_prob, advantage`) still lives in a local `slices` list inside
+  `dino_wmpo_outcome_step`, not in its OWN host buffer object explicitly separate from `OnlineReplay`
+  (two distinct buffers / lifetimes: persistent real replay vs per-update imagination buffer). This
+  structural promotion **overlaps MEM-RL-02** (which subsumes it) — do them together, or fold this
+  into MEM-RL-02.
 - [ ] **MEM-RL-02 — WM-as-env (structural, RLinf/WoVR alignment).** Make the world model a gym
   env (cf. `RLinf/rlinf/envs/world_model/`), so WM-imagination becomes a normal rollout that
   writes trajectories to a (separate) host replay buffer, and the policy update is a standard
   micro-batched PPO sampling from it. This removes the in-update imagination entirely and
-  matches WoVR. Bigger refactor; do after MEM-RL-01.
+  matches WoVR. Bigger refactor; subsumes the MEM-RL-01 remainder above.
 
 ## Won't-fix / intentional (record only)
 

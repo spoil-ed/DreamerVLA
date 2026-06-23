@@ -117,3 +117,57 @@ Moved here from the open TODO once completed + pushed (`e3edf4e..c309cf0`).
   checkpoint-relative. **Scheme-A `history` resolved = h1 (per-checkpoint, not a fixed scheme):**
   OFT `history` = `num_images_in_input ÷ #cameras`; all bundled OFT ckpts are 1-image (h1),
   derived from the single source `task.openvla_oft.expected_history`.
+
+## RLinf-alignment + decoupling (2026-06-22, landed)
+
+Moved here from the open TODO once completed. RLINF-01/02 landed their core but keep a
+**deferred remainder** (GPU-gated wiring), which stays in the open backlog.
+
+- **RLINF-01 — capture/restore RNG on the online DreamerVLA checkpoint path.** Canonical
+  `capture_rng_state()` / `restore_rng_state()` in `dreamervla/utils/seed.py` (python `random` +
+  torch + cuda) wired into `_online_dreamervla_checkpoint.save_checkpoint` (adds `payload["rng"]`)
+  and `load_training_checkpoint` (restored last). Additive + backward-compatible (old ckpts lack
+  the key → no-op). Cover: `tests/unit_tests/test_rng_checkpoint.py`. *Consolidation (core-req#2):*
+  DreamerV3's inline RNG now routes through the same helper — two flagged, approved behaviour
+  changes (also restores python `random`; warns via `warnings.warn` on CUDA-RNG restore failure).
+  *Remaining (open backlog):* (a) multi-GPU RynnVLA save→resume bit-exact smoke (GPU-gated);
+  (b) fold `rng` into the canonical envelope when X-01 rewrites it.
+- **RLINF-02 — structured `Timers` helper + opt-in `torch.profiler`.** `dreamervla/utils/timers.py`
+  — `Timers` (context-manager timing, mean/sum/min/max, `to_metrics(prefix="time")`, optional
+  `cuda_sync`) + `Profiler` (config-gated, default-off `torch.profiler` wrapper, no-op when
+  disabled). Cover: `tests/unit_tests/test_timers.py` (6 tests). Unblocks the deferred P5 kernel
+  tuning. *Remaining (open backlog, GPU-gated):* wire into the training loops — reroute the
+  scattered `f"time/..."` points through `Timers` and add the default-off `Profiler`.
+- **RLINF-03 — `.github/workflows/ci.yml`.** A `lint` job (`ruff check dreamervla tests`, ruff
+  pinned `0.15.14`) on push/PR. Made the tree repo-wide ruff-clean first (one pre-existing `I001`
+  auto-fixed, behaviour-neutral). Pytest intentionally not run on stock runners (needs the
+  hand-built `dreamervla` conda env); `ruff format --check` and the `__init__.py` check omitted to
+  avoid a false-red gate.
+- **RLINF-04 — validate checkpoint `format_version` on load.** Added `_check_format_version` inside
+  `dreamervla/utils/hf_checkpoint.load_runner_payload` (the single chokepoint for all four
+  runner-payload consumers). Only the unsafe direction hard-fails (ckpt newer than code);
+  missing/older versions stay loadable (dual-read backward-compat holds). Cover:
+  `tests/unit_tests/test_checkpoint_version_guard.py`.
+- **DECOUPLE-01 — success classifier via a `_target_`-aware builder.**
+  `dreamervla.models.reward.build_classifier` honors a Hydra `_target_`, else falls back to the
+  default `LatentSuccessClassifier` (byte-identical for legacy ckpts). Routed the three hardcoded
+  sites (`online_dreamervla`, `dreamervla_runner`, `online_cotrain_runner`) through it. Cover:
+  `tests/unit_tests/test_build_classifier.py`.
+
+## WMPO imagination memory (2026-06-23, landed)
+
+- **MEM-RL-01 (immediate fix) — group-aligned micro-batch of the WMPO outcome update.** Commit
+  `816dd33` (`feat(rl): micro-batch the WMPO outcome update to bound peak GPU memory`).
+  `dino_wmpo_outcome_step` now (Phase 1) imagines + scores each group-aligned start slice into a
+  transient per-slice CPU host buffer, (Phase 2) assembles the GLOBAL scoring tensors, then (Phase
+  3) runs the multi-epoch policy update streaming one slice / one chunk back to GPU at a time and
+  backprops chunk-by-chunk. Every slice is normalized by the GLOBAL `B_eff`
+  (`masked_mean_ratio_chunk_term(..., B_eff)`), so summing the per-slice gradients reproduces the
+  full-batch gradient exactly (incl. the BC anchor). Knob `algorithm.wmpo.update_micro_batch_starts`
+  (`<= 0` or `>= n_starts` ⇒ one full-batch slice = bit-for-bit the original path; default off).
+  Peak GPU measured ~82GB (full-batch OOM) → ~11GB at 96 rollouts/slice. Cover:
+  `tests/unit_tests/test_wmpo_microbatch_equivalence.py` (per-slice grad == full-batch grad incl. BC
+  anchor + unequal slices) and `test_wmpo_slice_latent.py`. *Remaining (open backlog):* the
+  imagination host data is still a local `slices` list, not promoted to an explicit
+  imagination-buffer abstraction separate from `OnlineReplay` — that structural step overlaps
+  MEM-RL-02 and stays open.
