@@ -393,10 +393,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         discretized_actions = np.clip(
             discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1
         )
-        # normalized_actions = self.bin_centers[discretized_actions]
-        normalized_actions = np.asarray(
-            [self.bin_centers[da] for da in discretized_actions]
-        )  # [B, dim]
+        normalized_actions = self.bin_centers[discretized_actions]  # [B, dim]
         normalized_actions = normalized_actions.reshape(-1, self.action_dim)
 
         # Unnormalize predicted actions

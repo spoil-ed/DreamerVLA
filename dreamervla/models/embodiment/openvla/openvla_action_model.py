@@ -696,9 +696,7 @@ class OpenVLAForRLActionPrediction(OpenVLAForBatchActionPrediction, BasePolicy):
         discretized_actions = np.clip(
             discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1
         )
-        normalized_actions = np.asarray(
-            [self.bin_centers[da] for da in discretized_actions]
-        )  # [B, dim]
+        normalized_actions = self.bin_centers[discretized_actions]  # [B, dim]
 
         # Unnormalize actions
         action_norm_stats = self._get_action_stats()
