@@ -207,12 +207,19 @@ class VLASFTHDF5Dataset(Dataset):
         )
 
     def _action_chunk(self, demo: h5py.Group, index: int) -> np.ndarray:
-        raw = np.asarray(demo["actions"], dtype=np.float32)
-        indices = np.minimum(
-            np.arange(index, index + self.action_horizon, dtype=np.int64),
-            raw.shape[0] - 1,
+        actions_ds = demo["actions"]
+        length = int(actions_ds.shape[0])
+        chunk = np.asarray(
+            actions_ds[index : index + self.action_horizon], dtype=np.float32
         )
-        actions = _libero_oft_action_transform(raw[indices])
+        if index + self.action_horizon > length:
+            # Repeat the last frame for the tail past the episode end, matching
+            # the previous `np.minimum(arange(...), length - 1)` clamping.
+            pad = self.action_horizon - chunk.shape[0]
+            chunk = np.concatenate(
+                [chunk, np.repeat(chunk[-1:], pad, axis=0)], axis=0
+            )
+        actions = _libero_oft_action_transform(chunk)
         return _normalize_bounds_q99(actions, self.dataset_statistics["action"])
 
     def _proprio(self, obs_group: h5py.Group, index: int) -> np.ndarray:

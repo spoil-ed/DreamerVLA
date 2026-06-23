@@ -173,14 +173,15 @@ class PixelSequenceDataset(BaseDataset):
             frames.append(tensor)
         images = self._resize_images(torch.cat(frames, dim=1)).contiguous()
 
-        raw_actions = np.asarray(demo["actions"], dtype=np.float32)
+        window = np.asarray(demo["actions"][start:end], dtype=np.float32)
         prev_actions = np.zeros(
-            (self.sequence_length, raw_actions.shape[-1]), dtype=np.float32
+            (self.sequence_length, window.shape[-1]), dtype=np.float32
         )
         if self.sequence_length > 1:
-            prev_actions[1:] = raw_actions[start : end - 1]
+            prev_actions[1:] = window[:-1]
         actions = torch.from_numpy(prev_actions)
-        current_actions = torch.from_numpy(raw_actions[start:end].copy())
+        # ``window`` is a fresh owned array (HDF5 slice read), so no .copy() needed.
+        current_actions = torch.from_numpy(window)
 
         rewards = torch.from_numpy(
             np.asarray(demo["rewards"][start:end], dtype=np.float32)
