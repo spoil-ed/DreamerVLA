@@ -68,6 +68,21 @@ algorithm:
     # chunk_size + classifier_min_steps are variant-specific.
     episode_max_steps: 300  # LIBERO official horizon
     filter_zero_variance_groups: true
+    # MEM-RL-01 — bound the outcome update's peak GPU memory. All numerically
+    # equivalent to the full-batch update (the imagination is pure data; the PPO
+    # gradient flows only through the policy re-eval). Defaults preserve the
+    # original full-batch behavior.
+    # update_micro_batch_starts: process the effective batch in group-aligned
+    #   slices of this many imagination START points (each = group_size rollouts);
+    #   <=0 ⇒ one full-batch slice. The PRIMARY memory bound — size it so one
+    #   slice fits (e.g. ~96 rollouts/slice on an 80GB H100).
+    update_micro_batch_starts: 0
+    # imagine_micro_batch: secondary bound on the WM predict_next_chunk forward
+    #   (rollouts per WM call within a slice); <=0 ⇒ the whole slice at once.
+    imagine_micro_batch: 0
+    # eval_micro_batch: rollouts per classifier predict_success sweep within a
+    #   slice (also the only bound for the full-batch fallback).
+    eval_micro_batch: 64
   actor_input_mode: pooled
   rssm_action_scale: env
   rssm_action_clip: true

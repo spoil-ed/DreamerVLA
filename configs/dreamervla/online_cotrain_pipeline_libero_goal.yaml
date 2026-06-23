@@ -190,6 +190,14 @@ algorithm:
     debug_episode_max_steps: 150
     classifier_min_steps: 4
     filter_zero_variance_groups: true
+    # MEM-RL-01 — bound the outcome update's peak GPU memory to one group-aligned
+    # slice of this many imagination START points (each = ppo_rollouts_per_start
+    # rollouts). Numerically equivalent to the full-batch update. Sized so a slice
+    # fits an 80GB GPU at the release batch_size=96 (n_starts=96*imag_last=384 →
+    # 24 starts = 96 rollouts/slice ≈ 11GB activations). <=0 ⇒ full batch (OOMs at
+    # release scale). Inner bounds eval_micro_batch (default 64) / imagine_micro_batch
+    # compose with this; tune down if the 610M WM + classifier co-residency is tight.
+    update_micro_batch_starts: 24
   actor_input_mode: pooled
   rssm_action_scale: env
   rssm_action_clip: true

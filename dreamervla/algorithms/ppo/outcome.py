@@ -47,6 +47,7 @@ _warned_missing_cfg: bool = False
 from dreamervla.algorithms.dreamervla import (
     _detach_latent,
     _flatten_strided_steps,
+    _latent_batch_dim,
     _latent_time_dim,
     _policy_reference_action_chunk,
     _temporarily_freeze,
@@ -59,6 +60,7 @@ from dreamervla.algorithms.ppo.grpo import (
     _ppo_clip_term,
     _ppo_ratio,
     _repeat_latent,
+    _slice_latent,
     masked_mean_ratio_chunk_term,
 )
 from dreamervla.utils.torch_utils import move_mapping_to_device
@@ -123,23 +125,188 @@ def _build_reward_tensor(
     return reward
 
 
-def _zip_lists(
-    actor_feats: list[torch.Tensor],
-    actions: list[torch.Tensor],
-    action_token_ids: list[torch.Tensor | None],
-    old_log_probs: list[torch.Tensor],
-    ref_kls: list[torch.Tensor] | None,
-):
-    if ref_kls is None:
-        for a, b, c, d in zip(
-            actor_feats, actions, action_token_ids, old_log_probs, strict=True
-        ):
-            yield a, b, c, d, None
-    else:
-        for a, b, c, d, e in zip(
-            actor_feats, actions, action_token_ids, old_log_probs, ref_kls, strict=True
-        ):
-            yield a, b, c, d, e
+def _predict_next_chunk_mb(
+    world_model: nn.Module, current: Any, action_chunk: torch.Tensor, micro_batch: int
+) -> dict[str, torch.Tensor]:
+    """Run the WM ``predict_next_chunk`` in micro-batches and concatenate.
+
+    The imagination forward is per-rollout independent, so slicing the batch and
+    concatenating the outputs is numerically identical to one full call — but the
+    attention activations are bounded to ``micro_batch`` rollouts. ``micro_batch
+    <= 0`` keeps the single full call. This is a SECONDARY bound inside a slice;
+    it is also the only bound on the WM forward for the full-batch fallback.
+    """
+    b = int(action_chunk.shape[0])
+    call = lambda cur, act: world_model(  # noqa: E731
+        {"mode": "predict_next_chunk", "latent": cur, "actions": act}
+    )
+    if micro_batch <= 0 or micro_batch >= b:
+        return call(current, action_chunk)
+    parts: list[dict[str, torch.Tensor]] = []
+    for lo in range(0, b, micro_batch):
+        hi = min(lo + micro_batch, b)
+        parts.append(call(_slice_latent(current, lo, hi), action_chunk[lo:hi]))
+    return {k: torch.cat([p[k] for p in parts], dim=0) for k in parts[0]}
+
+
+def _imagine_and_score_slice(
+    *,
+    policy: nn.Module,
+    chunk_world_model: nn.Module,
+    classifier_module: nn.Module,
+    classifier_threshold: float,
+    current: Any,
+    device: torch.device,
+    chunk_size: int,
+    num_chunks: int,
+    chunk_granular: bool,
+    chunk_pool: str | None,
+    finish_offset: int,
+    feat_dtype: torch.dtype,
+    use_ref: bool,
+    ref_policy: nn.Module | None,
+    imag_mb: int,
+    eval_micro_batch: int,
+    classifier_min_steps: int,
+) -> dict[str, Any]:
+    """Imagine ONE group-aligned start slice and score it — MEM-RL-01.
+
+    This is the transient "imagination buffer" for one slice. The imagination is
+    pure DATA: the PPO gradient flows only through the later ``policy.evaluate``
+    re-eval, never the WM dynamics (the rollout is ``no_grad``). So processing the
+    effective batch one group-aligned slice at a time is numerically identical to
+    the full-batch rollout — but the imagination forward + classifier sweep never
+    sit on GPU at full ``B_eff``. Per-chunk policy inputs are offloaded to CPU so
+    the multi-epoch update can stream them back one slice / one chunk at a time.
+
+    Returns per-chunk host buffers (``actor_feats`` on CPU; ``actions``,
+    ``action_token_ids``, ``old_log_probs``, ``ref_kls`` on device) plus this
+    slice's ``complete`` / ``finish_step`` (already mapped to env-step units).
+    """
+    K = int(chunk_size)
+    actor_feats: list[torch.Tensor] = []
+    actions: list[torch.Tensor] = []
+    action_token_ids: list[torch.Tensor | None] = []
+    old_log_probs: list[torch.Tensor] = []
+    ref_kls: list[torch.Tensor] = []
+    video_latents: list[torch.Tensor] = []
+
+    for _ in range(num_chunks):
+        actor_feat = (
+            _world_model_actor_input(chunk_world_model, current)
+            .detach()
+            .to(feat_dtype)
+        )
+        with torch.no_grad():
+            # Stochastic full action chunk — the PPO action unit for RynnVLA/WMPO:
+            # one policy decision emits K env actions.
+            action_chunk, old_lp, _sample_extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": actor_feat,
+                    "deterministic": False,
+                    "return_chunk": True,
+                }
+            )
+        if action_chunk.ndim != 3 or action_chunk.shape[1] != K:
+            raise ValueError(
+                f"action_chunk shape mismatch: got {tuple(action_chunk.shape)}, "
+                f"expected [B,K={K},action_dim]"
+            )
+        # Offload per-chunk policy inputs to CPU: detached (no graph), only re-read
+        # in the multi-epoch loss loop. Keeps GPU to ~1 chunk of this slice instead
+        # of all num_chunks. Streamed back to device just-in-time at the eval.
+        actor_feats.append(actor_feat.to("cpu"))
+        actions.append(action_chunk.detach())
+        sampled_token_ids = _sample_extra.get("action_token_ids")
+        action_token_ids.append(
+            sampled_token_ids.detach()
+            if isinstance(sampled_token_ids, torch.Tensor)
+            else None
+        )
+        old_log_probs.append(old_lp.detach())
+
+        if use_ref:
+            with torch.no_grad():
+                ref_eval_batch = {
+                    "mode": "evaluate",
+                    "hidden": actor_feat,
+                    "action": action_chunk.detach(),
+                }
+                if action_token_ids[-1] is not None:
+                    ref_eval_batch["action_token_ids"] = action_token_ids[-1]
+                ref_lp, _, _ = ref_policy(ref_eval_batch)
+            # k1 KL estimator (signed) — verl/DAPO convention: subtracted from the
+            # reward before GRPO normalization, not applied as a direct loss.
+            ref_kls.append((old_lp.detach() - ref_lp).detach())
+
+        with torch.no_grad():
+            next_seq = _predict_next_chunk_mb(
+                chunk_world_model, current, action_chunk.detach(), imag_mb
+            )
+            hidden_seq = next_seq["hidden_seq"]  # [b, K, ...] all K frames
+            if chunk_granular:
+                # Store ONE pooled frame per chunk (== classifier _chunk_aggregate
+                # over this chunk's K frames). 1/K memory.
+                if chunk_pool == "first":
+                    pooled = hidden_seq[:, 0]
+                elif chunk_pool == "mean":
+                    pooled = hidden_seq.mean(dim=1)
+                else:  # "last"
+                    pooled = hidden_seq[:, -1]
+                video_latents.append(pooled.unsqueeze(1).to("cpu"))  # [b, 1, ...]
+            else:
+                video_latents.append(hidden_seq.to("cpu"))
+            current = _detach_latent(
+                {
+                    "history": next_seq["history"],
+                    "actions": next_seq["actions"],
+                    "hidden": next_seq["hidden"],
+                }
+            )
+
+    # predict_success is a per-rollout temporal scan (no cross-rollout coupling),
+    # so even within this slice we sweep in ``eval_micro_batch`` sub-batches and
+    # never materialize the slice's full [b, num_chunks, latent_dim] video on GPU.
+    # Tokenized WMs emit a 4-D hidden_seq; flatten the trailing token axes to the
+    # flat [b, T, latent_dim] contract the classifier expects. ``pre_pooled`` only
+    # matters on the chunk path (we pooled each chunk while generating).
+    b = int(video_latents[0].shape[0])
+    mb = max(1, min(int(eval_micro_batch) if eval_micro_batch else b, b))
+    complete_parts: list[torch.Tensor] = []
+    finish_parts: list[torch.Tensor] = []
+    for s in range(0, b, mb):
+        e = min(s + mb, b)
+        video_s = torch.cat([v[s:e].to(device) for v in video_latents], dim=1)
+        if video_s.ndim > 3:
+            video_s = video_s.reshape(video_s.shape[0], video_s.shape[1], -1)
+        with torch.no_grad():
+            info_s = classifier_module.predict_success(
+                video_s,
+                threshold=float(classifier_threshold),
+                stride=1,
+                min_steps=classifier_min_steps,
+                **({"pre_pooled": True} if chunk_granular else {}),
+            )
+        complete_parts.append(info_s["complete"])
+        finish_parts.append(info_s["finish_step"])
+        del video_s
+    complete = torch.cat(complete_parts, dim=0)
+    finish_native = torch.cat(finish_parts, dim=0)
+    # Map finish_step from the classifier's NATIVE unit back to env-step units. For
+    # a chunk classifier finish_step is in chunks; convert at the boundary. Unfired
+    # entries already encode "T_scan - 1" → the last env-step of the last chunk.
+    finish_step = finish_native * K + finish_offset if chunk_granular else finish_native
+
+    return {
+        "actor_feats": actor_feats,
+        "actions": actions,
+        "action_token_ids": action_token_ids,
+        "old_log_probs": old_log_probs,
+        "ref_kls": ref_kls if use_ref else None,
+        "complete": complete,
+        "finish_step": finish_step,
+    }
 
 
 def dino_wmpo_outcome_step(
@@ -169,6 +336,9 @@ def dino_wmpo_outcome_step(
     num_chunks = T_max // K
     if num_chunks < 1:
         raise ValueError(f"episode_max_steps={T_max} too small for chunk_size={K}")
+    # Bound the imagination forward's activation memory to this many rollouts
+    # (per-rollout independent → numerically identical). 0 = full effective batch.
+    imag_mb = int(wmpo_cfg.get("imagine_micro_batch", 0))
     # min_steps for the classifier sliding-window sweep — windows ending before
     # this index are skipped.  Unit MUST match the classifier's native
     # granularity (read from ``classifier_module.cfg.granularity`` below):
@@ -235,12 +405,25 @@ def dino_wmpo_outcome_step(
             group_size,
         )
 
-    actor_feats: list[torch.Tensor] = []
-    actions: list[torch.Tensor] = []
-    action_token_ids: list[torch.Tensor | None] = []
-    old_log_probs: list[torch.Tensor] = []
-    ref_kls: list[torch.Tensor] = []
-    video_latents: list[torch.Tensor] = []
+    # ─── group-aligned micro-batch slices (MEM-RL-01) ─────────────────────
+    # Bound the update's peak GPU memory to ONE group-aligned slice instead of
+    # the full effective batch B_eff. GRPO groups are CONTIGUOUS blocks of
+    # group_size in the B_eff dim (``_repeat_latent`` = repeat_interleave), so a
+    # slice MUST cover whole groups for its group-relative advantage to match the
+    # full-batch one. We slice in START units: each slice is ``mb_starts`` real
+    # starts = mb_starts * group_size rollouts, the contiguous block
+    # ``[lo*g : hi*g]``. ``update_micro_batch_starts`` <= 0 or >= n_starts ⇒ one
+    # full-batch slice — bit-for-bit the original behavior.
+    n_starts = _latent_batch_dim(current) // group_size
+    B_eff = n_starts * group_size
+    mb_starts_cfg = int(wmpo_cfg.get("update_micro_batch_starts", 0))
+    mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
+    slice_bounds = [
+        (s, min(s + mb_starts, n_starts)) for s in range(0, n_starts, mb_starts)
+    ]
+    # Inner micro-batch for the classifier sweep (``eval_micro_batch``) — composes
+    # with the slice and is the only bound for the full-batch fallback.
+    eval_micro_batch = int(wmpo_cfg.get("eval_micro_batch", 64) or B_eff)
 
     # Classifier granularity drives BOTH (a) how we POOL the imagined frames we
     # store and (b) how finish_step is mapped back to env-steps. Detect it ONCE
@@ -295,116 +478,43 @@ def dino_wmpo_outcome_step(
         else torch.float32
     )
 
+    # ─── Phase 1: imagine each group-aligned slice into its (CPU) host buffer ──
+    # Pure no_grad data collection (the imagination is data; the PPO gradient
+    # flows only through the Phase-3 re-eval). The WM stays frozen for the sweep.
+    slices: list[dict[str, Any]] = []
     with _temporarily_freeze(chunk_world_model):
-        for _ in range(num_chunks):
-            actor_feat = (
-                _world_model_actor_input(chunk_world_model, current)
-                .detach()
-                .to(feat_dtype)
+        for s_lo, s_hi in slice_bounds:
+            slices.append(
+                _imagine_and_score_slice(
+                    policy=policy,
+                    chunk_world_model=chunk_world_model,
+                    classifier_module=classifier_module,
+                    classifier_threshold=classifier_threshold,
+                    current=_slice_latent(
+                        current, s_lo * group_size, s_hi * group_size
+                    ),
+                    device=device,
+                    chunk_size=K,
+                    num_chunks=num_chunks,
+                    chunk_granular=chunk_granular,
+                    chunk_pool=chunk_pool,
+                    finish_offset=finish_offset,
+                    feat_dtype=feat_dtype,
+                    use_ref=use_ref,
+                    ref_policy=ref_policy,
+                    imag_mb=imag_mb,
+                    eval_micro_batch=eval_micro_batch,
+                    classifier_min_steps=classifier_min_steps,
+                )
             )
-            with torch.no_grad():
-                # Stochastic full action chunk. This is the PPO action unit for
-                # RynnVLA/WMPO: one policy decision emits K env actions.
-                action_chunk, old_lp, _sample_extra = policy(
-                    {
-                        "mode": "sample",
-                        "hidden": actor_feat,
-                        "deterministic": False,
-                        "return_chunk": True,
-                    }
-                )
-            if action_chunk.ndim != 3 or action_chunk.shape[1] != K:
-                raise ValueError(
-                    f"action_chunk shape mismatch: got {tuple(action_chunk.shape)}, "
-                    f"expected [B,K={K},action_dim]"
-                )
-            actor_feats.append(actor_feat)
-            actions.append(action_chunk.detach())
-            sampled_token_ids = _sample_extra.get("action_token_ids")
-            action_token_ids.append(
-                sampled_token_ids.detach()
-                if isinstance(sampled_token_ids, torch.Tensor)
-                else None
-            )
-            old_log_probs.append(old_lp.detach())
 
-            if use_ref:
-                with torch.no_grad():
-                    ref_eval_batch = {
-                        "mode": "evaluate",
-                        "hidden": actor_feat,
-                        "action": action_chunk.detach(),
-                    }
-                    if action_token_ids[-1] is not None:
-                        ref_eval_batch["action_token_ids"] = action_token_ids[-1]
-                    ref_lp, _, _ = ref_policy(ref_eval_batch)
-                # k1 KL estimator (signed) — unbiased in expectation but
-                # can go negative on individual samples; this is the
-                # verl/DAPO convention used here (subtract from reward
-                # before GRPO normalization, not as a direct loss).
-                ref_kls.append((old_lp.detach() - ref_lp).detach())
-
-            with torch.no_grad():
-                next_seq = chunk_world_model(
-                    {
-                        "mode": "predict_next_chunk",
-                        "latent": current,
-                        "actions": action_chunk.detach(),
-                    }
-                )
-                hidden_seq = next_seq["hidden_seq"]  # [B_eff, K, ...] all K frames
-                if chunk_granular:
-                    # Store ONE pooled frame per chunk (== classifier
-                    # _chunk_aggregate over this chunk's K frames). 1/K memory.
-                    if chunk_pool == "first":
-                        pooled = hidden_seq[:, 0]
-                    elif chunk_pool == "mean":
-                        pooled = hidden_seq.mean(dim=1)
-                    else:  # "last"
-                        pooled = hidden_seq[:, -1]
-                    video_latents.append(pooled.unsqueeze(1))  # [B_eff, 1, ...]
-                else:
-                    video_latents.append(hidden_seq)
-                current = _detach_latent(
-                    {
-                        "history": next_seq["history"],
-                        "actions": next_seq["actions"],
-                        "hidden": next_seq["hidden"],
-                    }
-                )
-
-    # chunk classifier: [B_eff, num_chunks, latent_dim] (one pooled frame/chunk)
-    # action classifier: [B_eff, num_chunks * K, latent_dim] (every env-step)
-    video = torch.cat(video_latents, dim=1)
-    # Tokenized world models (e.g. OpenVLA-OFT action-hidden, [.,.,N_tokens,token_dim])
-    # emit a 4-D hidden_seq; flatten the trailing token axes to the flat
-    # [B, T, latent_dim] contract that predict_success / the classifier expect
-    # (matches how the classifier is trained on flat obs_embedding). RynnVLA
-    # latents are already flat, so this is a no-op there.
-    if video.ndim > 3:
-        video = video.reshape(video.shape[0], video.shape[1], -1)
-    B_eff = video.shape[0]
-    with torch.no_grad():
-        # ``pre_pooled`` only matters for a chunk classifier (we pooled each
-        # chunk while generating); pass it only on that path so action-granular
-        # classifiers / minimal mocks that predate the kwarg keep working.
-        success_info = classifier_module.predict_success(
-            video,
-            threshold=float(classifier_threshold),
-            stride=1,
-            min_steps=classifier_min_steps,
-            **({"pre_pooled": True} if chunk_granular else {}),
-        )
-    complete = success_info["complete"]
-    # Map finish_step from the classifier's NATIVE unit back to env-step units
-    # (``chunk_granular`` / ``finish_offset`` were resolved before the rollout).
-    # For a chunk classifier finish_step is in chunks; convert at the boundary.
-    # Unfired entries already encode "T_scan - 1" in chunk units → the last
-    # env-step of the last chunk (= T_max - 1).
-    if chunk_granular:
-        finish_step = success_info["finish_step"] * K + finish_offset
-    else:
-        finish_step = success_info["finish_step"]
+    # ─── Phase 2: assemble GLOBAL scoring tensors from the slices ──────────
+    # Concatenating the per-slice results reproduces the full-batch tensors
+    # exactly (slices are whole-group contiguous blocks), so the advantage and
+    # every scalar metric below are identical to the original full-batch path.
+    # finish_step is already mapped to env-step units inside the slice helper.
+    complete = torch.cat([d["complete"] for d in slices], dim=0)
+    finish_step = torch.cat([d["finish_step"] for d in slices], dim=0)
 
     reward_tensor = _build_reward_tensor(
         batch=B_eff,
@@ -431,8 +541,16 @@ def dino_wmpo_outcome_step(
     # ─── KL subtracted from reward (WMPO style) ────────────────────────────
     # WMPO compute_rewards: token_score - kl * kl_ratio, BEFORE GRPO advantage.
     # We compute total masked KL per rollout and subtract from the scalar return.
-    if use_ref and ref_kls:
-        ref_kl_stack = torch.stack(ref_kls, dim=0)  # [num_chunks, B_eff]
+    if use_ref:
+        # Stack ref_kls per chunk across the slices into the [num_chunks, B_eff]
+        # global layout (each slice holds num_chunks tensors of shape [mb]).
+        ref_kl_stack = torch.stack(
+            [
+                torch.cat([d["ref_kls"][c] for d in slices], dim=0)
+                for c in range(num_chunks)
+            ],
+            dim=0,
+        )  # [num_chunks, B_eff]
         kl_per_rollout = (ref_kl_stack * chunk_mask).sum(dim=0)  # [B_eff]
         returns_adjusted = returns - kl_coef * kl_per_rollout
     else:
@@ -507,6 +625,15 @@ def dino_wmpo_outcome_step(
     # pairs of the *final* epoch — sufficient for diagnosing clip pressure.
     last_epoch_ratio_records: list[torch.Tensor] = []  # each [n_valid] flat
 
+    # ─── Phase 3: multi-epoch, micro-batched policy update (RLinf pattern) ──
+    # Each epoch re-evaluates the SAME stored trajectory (fixed actions / old_lp)
+    # under the current params and accumulates per-slice gradients before ONE
+    # optimizer step — the standard RLinf/verl PPO epoch, here with one mini-batch
+    # = the whole effective batch spread over group-aligned micro-batches. The
+    # normalization passes the GLOBAL B_eff in every slice (per-rollout
+    # term/mask/count come from the slice), so summing the per-slice gradients
+    # reproduces the full-batch gradient exactly. The host buffer (Phase 1) keeps
+    # the rollout fixed across epochs while GPU only ever holds one slice / chunk.
     for epoch_idx in range(update_epochs):
         actor_optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
         epoch_actor_loss = 0.0
@@ -514,107 +641,102 @@ def dino_wmpo_outcome_step(
         epoch_bc_ref_count = 0
         if epoch_idx == update_epochs - 1:
             last_epoch_ratio_records = []
-        for c, (
-            actor_feat,
-            action_detached,
-            token_ids,
-            old_lp,
-            _ref_kl_unused,
-        ) in enumerate(
-            _zip_lists(
-                actor_feats,
-                actions,
-                action_token_ids,
-                old_log_probs,
-                ref_kls if use_ref else None,
-            )
-        ):
-            eval_batch = {
-                "mode": "evaluate",
-                "hidden": actor_feat,
-                "action": action_detached,
-            }
-            if token_ids is not None:
-                eval_batch["action_token_ids"] = token_ids
-            new_lp, entropy_t, _ = policy(eval_batch)
-            mask_c = chunk_mask[c]  # [B_eff], 0/1 per rollout
-            ratio = _ppo_ratio(new_lp, old_lp, clip_log_ratio=clip_log_ratio)
-            ppo_clip = _ppo_clip_term(
-                ratio, advantages, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-            )  # [B_eff]
-            # Backprop chunk-by-chunk instead of accumulating all chunk graphs.
-            # Long-imagine PPO has many actor forwards (T_max / K); holding them
-            # all until a single backward can exceed 80GB even for small batches.
-            # Note: kl_coef is no longer applied as a separate loss term — it
-            # has been folded into advantages via returns_adjusted above.
-            # RLinf masked_mean_ratio: per-rollout (episode-length) normalization
-            # so each rollout is weighted equally regardless of length.
-            ppo_term = masked_mean_ratio_chunk_term(
-                ppo_clip, mask_c, ppo_per_rollout_count, B_eff
-            )
-            ent_term = masked_mean_ratio_chunk_term(
-                entropy_t, mask_c, ppo_per_rollout_count, B_eff
-            )
-            loss_c = ppo_term - entropy_coef * ent_term
-            total_entropy_sum += float((entropy_t.detach() * mask_c).sum().item())
-
-            if epoch_idx == update_epochs - 1:
-                valid = mask_c > 0
-                if valid.any():
-                    last_epoch_ratio_records.append(ratio.detach()[valid].reshape(-1))
-
-            if actor_bc_ref_scale > 0.0:
-                _, _, extra = policy(
-                    {
-                        "mode": "sample",
-                        "hidden": actor_feat,
-                        "deterministic": True,
-                        "return_chunk": True,
-                    }
+        for slice_idx, (s_lo, s_hi) in enumerate(slice_bounds):
+            lo, hi = s_lo * group_size, s_hi * group_size
+            data = slices[slice_idx]
+            adv_slice = advantages[lo:hi]
+            ppo_count_slice = ppo_per_rollout_count[lo:hi]
+            bc_count_slice = bc_per_rollout_count[lo:hi]
+            for c in range(num_chunks):
+                actor_feat = data["actor_feats"][c].to(device)  # streamed from CPU
+                action_detached = data["actions"][c]
+                token_ids = data["action_token_ids"][c]
+                old_lp = data["old_log_probs"][c]
+                eval_batch = {
+                    "mode": "evaluate",
+                    "hidden": actor_feat,
+                    "action": action_detached,
+                }
+                if token_ids is not None:
+                    eval_batch["action_token_ids"] = token_ids
+                new_lp, entropy_t, _ = policy(eval_batch)
+                mask_c = chunk_mask[c, lo:hi]  # [mb], 0/1 per rollout
+                ratio = _ppo_ratio(new_lp, old_lp, clip_log_ratio=clip_log_ratio)
+                ppo_clip = _ppo_clip_term(
+                    ratio, adv_slice, clip_low, clip_high, clip_ratio_c=clip_ratio_c
+                )  # [mb]
+                # Backprop chunk-by-chunk (within a slice) instead of accumulating
+                # all chunk graphs. kl_coef is folded into advantages above.
+                # masked_mean_ratio passes the GLOBAL B_eff so the per-slice terms
+                # sum to the full-batch mean — each rollout weighted equally.
+                ppo_term = masked_mean_ratio_chunk_term(
+                    ppo_clip, mask_c, ppo_count_slice, B_eff
                 )
-                action_chunk = extra.get("action_chunk")
-                if isinstance(action_chunk, torch.Tensor):
-                    if ref_policy is not None:
-                        with torch.no_grad():
-                            _, _, ref_extra = ref_policy(
-                                {
-                                    "mode": "sample",
-                                    "hidden": actor_feat,
-                                    "deterministic": True,
-                                    "return_chunk": True,
-                                }
+                ent_term = masked_mean_ratio_chunk_term(
+                    entropy_t, mask_c, ppo_count_slice, B_eff
+                )
+                loss_c = ppo_term - entropy_coef * ent_term
+                total_entropy_sum += float((entropy_t.detach() * mask_c).sum().item())
+
+                if epoch_idx == update_epochs - 1:
+                    valid = mask_c > 0
+                    if valid.any():
+                        last_epoch_ratio_records.append(
+                            ratio.detach()[valid].reshape(-1)
+                        )
+
+                if actor_bc_ref_scale > 0.0:
+                    _, _, extra = policy(
+                        {
+                            "mode": "sample",
+                            "hidden": actor_feat,
+                            "deterministic": True,
+                            "return_chunk": True,
+                        }
+                    )
+                    action_chunk = extra.get("action_chunk")
+                    if isinstance(action_chunk, torch.Tensor):
+                        if ref_policy is not None:
+                            with torch.no_grad():
+                                _, _, ref_extra = ref_policy(
+                                    {
+                                        "mode": "sample",
+                                        "hidden": actor_feat,
+                                        "deterministic": True,
+                                        "return_chunk": True,
+                                    }
+                                )
+                            ref_action_chunk = ref_extra.get("action_chunk")
+                        else:
+                            ref_action_chunk = _policy_reference_action_chunk(
+                                policy, actor_feat
                             )
-                        ref_action_chunk = ref_extra.get("action_chunk")
-                    else:
-                        ref_action_chunk = _policy_reference_action_chunk(
-                            policy, actor_feat
-                        )
-                    if isinstance(ref_action_chunk, torch.Tensor):
-                        # BC anchor is masked by the FINISH-only mask
-                        # (``bc_chunk_mask``), not the post-variance-filter
-                        # PPO mask. This keeps BC active on zero-variance
-                        # groups (where it's still a valid regularizer) while
-                        # eliminating spurious BC signal on past-finish
-                        # chunks. Normalizer is per-rollout masked_mean_ratio
-                        # like PPO, so ``actor_bc_to_ref_scale`` carries the
-                        # literal relative weight against PPO inside the
-                        # active region.
-                        bc_mask_c = bc_chunk_mask[c]
-                        bc_per_rollout = (
-                            (action_chunk.float() - ref_action_chunk.detach().float())
-                            .square()
-                            .mean(dim=(-1, -2))
-                        )  # [B_eff]
-                        bc_term = masked_mean_ratio_chunk_term(
-                            bc_per_rollout, bc_mask_c, bc_per_rollout_count, B_eff
-                        )
-                        loss_c = loss_c + actor_bc_ref_scale * bc_term
-                        epoch_bc_ref_loss_sum += float(
-                            (bc_per_rollout * bc_mask_c).sum().detach().item()
-                        )
-                        epoch_bc_ref_count += int(bc_mask_c.sum().item())
-            loss_c.backward()
-            epoch_actor_loss += float(loss_c.detach().item())
+                        if isinstance(ref_action_chunk, torch.Tensor):
+                            # BC anchor is masked by the FINISH-only mask
+                            # (``bc_chunk_mask``), not the post-variance-filter
+                            # PPO mask. This keeps BC active on zero-variance
+                            # groups (where it's still a valid regularizer) while
+                            # eliminating spurious BC signal on past-finish
+                            # chunks. Normalizer is per-rollout masked_mean_ratio
+                            # like PPO, so ``actor_bc_to_ref_scale`` carries the
+                            # literal relative weight against PPO inside the
+                            # active region.
+                            bc_mask_c = bc_chunk_mask[c, lo:hi]
+                            bc_per_rollout = (
+                                (action_chunk.float() - ref_action_chunk.detach().float())
+                                .square()
+                                .mean(dim=(-1, -2))
+                            )  # [mb]
+                            bc_term = masked_mean_ratio_chunk_term(
+                                bc_per_rollout, bc_mask_c, bc_count_slice, B_eff
+                            )
+                            loss_c = loss_c + actor_bc_ref_scale * bc_term
+                            epoch_bc_ref_loss_sum += float(
+                                (bc_per_rollout * bc_mask_c).sum().detach().item()
+                            )
+                            epoch_bc_ref_count += int(bc_mask_c.sum().item())
+                loss_c.backward()
+                epoch_actor_loss += float(loss_c.detach().item())
         if should_step:
             grad_norm = float(
                 torch.nn.utils.clip_grad_norm_(
