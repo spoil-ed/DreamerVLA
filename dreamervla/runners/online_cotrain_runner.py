@@ -57,10 +57,56 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.runners.vectorized_collect import (
+    dreamer_image_from_record,
+    proprio_from_record,
+)
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
+
+
+def build_cotrain_replay_transition(
+    rec: dict[str, Any],
+    obs_embedding: np.ndarray,
+    wm_action: np.ndarray,
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    *,
+    task_id: int,
+    task_description: str,
+    step: int,
+    is_first: bool,
+    image_size: int,
+) -> dict[str, Any]:
+    """Replay transition rebuilt in the parent from a child ``full_record``.
+
+    Multi-env env instances live in child processes, so the parent cannot call
+    ``DreamerVLAOnlineTrainEnv.make_transition``. This rebuilds the same record
+    from the child's ``full_record`` + per-slot state and is numerically
+    equivalent to ``make_transition`` for the OFT ``action_hidden`` rollout
+    (env action scale == ``wm_action`` scale; ``info['wm_action']`` is the
+    executed env-scale action)."""
+    done = bool(terminated or truncated)
+    wm = np.asarray(wm_action, dtype=np.float32).reshape(-1)[:7]
+    return {
+        "image": dreamer_image_from_record(rec, image_size),
+        "state": proprio_from_record(rec),
+        "action": wm,
+        "wm_action": wm,
+        "obs_embedding": np.asarray(obs_embedding, dtype=np.float32),
+        "reward": np.float32(reward),
+        "done": np.float32(done),
+        "discount": np.float32(0.0 if terminated else 1.0),
+        "is_first": bool(is_first),
+        "is_terminal": bool(terminated),
+        "is_last": bool(done),
+        "task_id": int(task_id),
+        "step": int(step),
+        "task_description": str(task_description),
+    }
 
 
 class OnlineCotrainRunner(DreamerVLARunner):
