@@ -235,42 +235,38 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 flush=True,
             )
 
+    def _env_cfg_kwargs(self, cfg: DictConfig) -> dict[str, Any]:
+        """DreamerVLAOnlineTrainEnvConfig kwargs shared by the single-env builder and
+        the vectorized VecRolloutEnv children — one source of truth so both render
+        the same observations (action_input='normalized', same history/rotate/etc.)."""
+        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
+        task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
+        task_ids = tuple(int(x) for x in task_ids) if task_ids is not None else None
+        seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
+        return {
+            "task_suite_name": str(
+                OmegaConf.select(env_cfg, "task_suite_name", default="libero_goal")
+            ),
+            "task_id": int(task_ids[0]) if task_ids else 0,
+            "task_ids": task_ids,
+            "seed": seed,
+            "max_steps": int(OmegaConf.select(env_cfg, "episode_horizon", default=200)),
+            "action_input": "normalized",
+            "history_length": int(OmegaConf.select(env_cfg, "history_length", default=2)),
+            "include_state": bool(OmegaConf.select(env_cfg, "include_state", default=True)),
+            "vla_rotate_180": bool(OmegaConf.select(env_cfg, "vla_rotate_180", default=True)),
+            "obs_hidden_source": str(
+                OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
+            ),
+            "action_head_type": str(
+                OmegaConf.select(env_cfg, "action_head_type", default="legacy")
+            ),
+        }
+
     def _build_env(self, cfg: DictConfig) -> DreamerVLAOnlineTrainEnv:
         # MUJOCO_GL=osmesa is forced at module import (before robosuite loads); see
         # the top of this file. Setting it here would be too late (egl already locked).
-        env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
-        task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
-        task_ids = [int(x) for x in task_ids] if task_ids is not None else None
-        seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
-        return DreamerVLAOnlineTrainEnv(
-            {
-                "task_suite_name": str(
-                    OmegaConf.select(env_cfg, "task_suite_name", default="libero_goal")
-                ),
-                "task_id": int(task_ids[0]) if task_ids else 0,
-                "task_ids": task_ids,
-                "seed": seed,
-                "max_steps": int(
-                    OmegaConf.select(env_cfg, "episode_horizon", default=200)
-                ),
-                "action_input": "normalized",
-                "history_length": int(
-                    OmegaConf.select(env_cfg, "history_length", default=2)
-                ),
-                "include_state": bool(
-                    OmegaConf.select(env_cfg, "include_state", default=True)
-                ),
-                "vla_rotate_180": bool(
-                    OmegaConf.select(env_cfg, "vla_rotate_180", default=True)
-                ),
-                "obs_hidden_source": str(
-                    OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
-                ),
-                "action_head_type": str(
-                    OmegaConf.select(env_cfg, "action_head_type", default="legacy")
-                ),
-            }
-        )
+        return DreamerVLAOnlineTrainEnv(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
     def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
@@ -598,7 +594,6 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
         env_task_ids = OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]
         env_task_ids = tuple(int(x) for x in env_task_ids)
-        env = self._build_env(cfg)
         replay = OnlineReplay(
             capacity=buffer_size,
             sequence_length=seq_len,
@@ -637,6 +632,21 @@ class OnlineCotrainRunner(DreamerVLARunner):
         counters = {"n_episodes": 0, "n_success": 0}
         history: list[dict[str, float | str | int]] = []
 
+        if num_envs > 1:
+            return self._run_vectorized_cotrain(
+                cfg,
+                replay=replay,
+                num_envs=num_envs,
+                render_backend=render_backend,
+                total_env_steps=total_env_steps,
+                episode_horizon=episode_horizon,
+                env_task_ids=env_task_ids,
+                knobs=knobs,
+                counters=counters,
+                history=history,
+            )
+
+        env = self._build_env(cfg)
         obs, _info = env.reset()
         latent: Any = None
         prev_action: torch.Tensor | None = None
@@ -822,6 +832,93 @@ class OnlineCotrainRunner(DreamerVLARunner):
             self.global_step += 1
         return False
 
+    def _run_vectorized_cotrain(
+        self,
+        cfg: DictConfig,
+        *,
+        replay: OnlineReplay,
+        num_envs: int,
+        render_backend: str,
+        total_env_steps: int,
+        episode_horizon: int,
+        env_task_ids: tuple[int, ...],
+        knobs: dict[str, Any],
+        counters: dict[str, int],
+        history: list,
+    ) -> list:
+        """num_envs>1 path: spawn K VecRolloutEnv child envs (egl-isolated GL contexts)
+        and run the continuous vectorized rollout, interleaving the same training burst
+        per env-step. The legacy single-env osmesa path (num_envs==1) is untouched."""
+        from dreamervla.runners.vec_rollout_env import VecRolloutEnv
+
+        main_extractor = getattr(self, "_oft_action_hidden_extractor", None)
+        if main_extractor is None:
+            raise RuntimeError(
+                "vectorized cotrain (num_envs>1) requires an OFT action_hidden "
+                "extractor; none was built (non-OFT encoder?). Use num_envs=1."
+            )
+        # One extractor per slot (isolated history); reuse the main one for slot 0.
+        extractors = [main_extractor] + [
+            self._build_oft_action_hidden_extractor(cfg) for _ in range(num_envs - 1)
+        ]
+
+        # Children render with `render_backend` (egl isolated per child -> no robosuite
+        # read_pixels SIGABRT); spawn does not inherit runtime env edits, so pass them.
+        env_vars = {
+            k: os.environ[k]
+            for k in ("MUJOCO_GL", "PYOPENGL_PLATFORM", "DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
+            if k in os.environ
+        }
+        env_vars["MUJOCO_GL"] = render_backend
+        env_vars["PYOPENGL_PLATFORM"] = render_backend
+
+        image_size = int(OmegaConf.select(cfg, "env.image_size", default=64))
+        cfg_kwargs = {
+            **self._env_cfg_kwargs(cfg),
+            "full_record": True,
+            "image_size": image_size,
+        }
+        if self.distributed.is_main_process:
+            print(
+                f"[online-cotrain] vectorized rollout: {num_envs} envs, "
+                f"render_backend={render_backend}",
+                flush=True,
+            )
+        vec = VecRolloutEnv(num_envs=num_envs, cfg_kwargs=cfg_kwargs, env_vars=env_vars)
+        try:
+            def _train_hook(env_step: int) -> bool:
+                return self._run_training_bursts(
+                    env_step,
+                    total_env_steps,
+                    replay=replay,
+                    env_task_ids=env_task_ids,
+                    knobs=knobs,
+                    counters=counters,
+                    history=history,
+                )
+
+            self._vectorized_cotrain_rollout(
+                vec=vec,
+                extractors=extractors,
+                replay=replay,
+                num_envs=num_envs,
+                total_env_steps=total_env_steps,
+                episode_horizon=episode_horizon,
+                action_steps=None,  # full-chunk open-loop, matching the single-env path
+                image_size=image_size,
+                task_ids=env_task_ids,
+                train_hook=_train_hook,
+                counters=counters,
+            )
+        finally:
+            try:
+                vec.close()
+            except Exception:
+                pass
+        if self.distributed.is_main_process:
+            self._save_cotrain_ckpt()
+        return history
+
     @torch.no_grad()
     def _vectorized_cotrain_rollout(
         self,
@@ -832,7 +929,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         num_envs: int,
         total_env_steps: int,
         episode_horizon: int,
-        action_steps: int,
+        action_steps: int | None,
         image_size: int,
         task_ids,
         train_hook=None,
@@ -850,7 +947,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if counters is None:
             counters = {"n_episodes": 0, "n_success": 0}
         task_cycle = [int(t) for t in task_ids] or [0]
-        action_steps = max(1, int(action_steps))
+        if action_steps is not None:
+            action_steps = max(1, int(action_steps))
         action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
         episodes: list[list[dict[str, Any]]] = [[] for _ in range(num_envs)]
         slot_task = [-1] * num_envs
