@@ -716,6 +716,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
         legacy single-env loop and the vectorized (num_envs>1) rollout — the burst
         math is identical; only the rollout that fills ``replay`` differs."""
         # ---- training bursts (lockstep across ranks via global-ready flag)
+        # Readiness (and its per-step DDP all_reduce) is only consulted on
+        # train_every boundaries, so skip the replay scan + collective on the other
+        # steps — identical training cadence, fewer per-step scans/collectives. All
+        # ranks gate on the shared env_step, so the all_reduce stays in lockstep.
+        if env_step % knobs["train_every"] != 0:
+            return False
         _stats, _cov_ready, all_ready = get_replay_task_stats_global(
             replay,
             task_ids=env_task_ids,
@@ -725,9 +731,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             is_dist=knobs["is_dist"],
             world_size=self._world_size,
         )
-        num_updates = 0
-        if all_ready and env_step % knobs["train_every"] == 0:
-            num_updates = knobs["updates_per_train"]
+        num_updates = knobs["updates_per_train"] if all_ready else 0
         for _ in range(num_updates):
             if (
                 knobs["max_train_updates"] is not None
@@ -870,7 +874,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if k in os.environ
         }
         env_vars["MUJOCO_GL"] = render_backend
-        env_vars["PYOPENGL_PLATFORM"] = render_backend
+        # Do NOT force PYOPENGL_PLATFORM to egl: mujoco renders via its own EGL
+        # (MUJOCO_GL); forcing PyOpenGL to egl too conflicts and aborts robosuite
+        # read_pixels (SIGABRT). The collection path leaves it at the parent's
+        # osmesa and runs egl multi-env fine — match that.
 
         image_size = int(OmegaConf.select(cfg, "env.image_size", default=64))
         cfg_kwargs = {
