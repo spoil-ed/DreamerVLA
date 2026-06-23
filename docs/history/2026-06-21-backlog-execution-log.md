@@ -171,3 +171,20 @@ Moved here from the open TODO once completed. RLINF-01/02 landed their core but 
   imagination host data is still a local `slices` list, not promoted to an explicit
   imagination-buffer abstraction separate from `OnlineReplay` — that structural step overlaps
   MEM-RL-02 and stays open.
+
+## RUN-01 — online DDP routed through the shared distributed helper (2026-06-23, landed)
+
+- **RUN-01 (code) — `online_dreamervla.main` DDP now goes through `NopretokenizeSFTDistributedHelper`.**
+  Commit `85788fc` (`feat(distributed): add default-off DDP opt-ins; route online_dreamervla through
+  helper (RUN-01)`). Three default-off opt-ins were added to the shared helper so the standalone RynnVLA
+  online path stops hand-rolling its own DDP: `find_unused_parameters` + `broadcast_buffers` as per-call
+  kwargs on `wrap_trainable_module`/`_wrap_module_with_ddp` (`None` ⇒ the historical hardcoded `False`, so
+  every existing OFT caller stays byte-identical), and `nccl_timeout_seconds` on `initialize` (`None` ⇒ no
+  timeout). `main()` now builds the helper via `initialize(nccl_timeout_seconds=DVLA_DDP_TIMEOUT_SEC)` and
+  wraps wm/policy/critic (`find_unused_parameters=True`) and the classifier (`False`) with
+  `broadcast_buffers=True`, reproducing the old DDP kwargs on the multi-GPU path. The custom all-reduce
+  error-wrapping (`_dist_all_reduce_flag/int`) is kept; the now-dead `_init_distributed` seam and the
+  orphaned `DDP` import were removed. Cover: `tests/unit_tests/test_distributed_ddp_opt_ins.py` (7 tests,
+  TDD red→green); full suite 739 passed, zero regressions. *Remaining (open backlog):* a RynnVLA multi-GPU
+  save→resume GPU smoke (suite-green ≠ verified) + confirming the two flagged `WORLD_SIZE=1`-only
+  divergences — stays open as RUN-01 in the todo backlog.

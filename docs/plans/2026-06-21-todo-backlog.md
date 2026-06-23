@@ -2,7 +2,9 @@
 
 Open work only. Done items live in `../history/2026-06-21-backlog-execution-log.md`
 (passes 1–3 + the 2026-06-21→22 GPU-box execution) and the other `docs/history/`
-logs. This file is the only live open-items list.
+logs (incl. the per-item perf plans archived 2026-06-23). This file is the only live
+open-items list — it now also consolidates the open cotrain-throughput and
+performance-audit items, each linking to its detailed plan / the perf roadmap.
 
 ## Core requirements (核心思想 — govern every item below)
 
@@ -29,20 +31,12 @@ regenerated here as needed; GPU is intermittently available). Per core-req#1 the
 blind. The clean seams already exist (extracted 2026-06-22, see history log):
 `_online_dreamervla_dist.py` and `_online_dreamervla_checkpoint.py`.
 
-- [ ] **RUN-01 — verify the helper-routed online DDP with a GPU smoke.** **Code landed (2026-06-23):**
-  the three default-off opt-ins are on `NopretokenizeSFTDistributedHelper` and unit-tested
-  (`tests/unit_tests/test_distributed_ddp_opt_ins.py`, 7 tests): `find_unused_parameters` +
-  `broadcast_buffers` as per-call kwargs on `wrap_trainable_module`/`_wrap_module_with_ddp`
-  (`None` → the historical hardcoded `False`), and `nccl_timeout_seconds` on `initialize`
-  (`None` → no timeout). `online_dreamervla.main` now routes init + wm/policy/critic/classifier
-  wrapping through the helper (FUP=`True` for wm/policy/critic, `False` for classifier;
-  `broadcast_buffers=True` to keep online's old DDP default; `DVLA_DDP_TIMEOUT_SEC` flows through
-  `initialize`). The custom all-reduce error-wrapping (`_dist_all_reduce_flag/int`) is kept; the
-  now-dead `_init_distributed` seam was removed. OFT callers stay byte-identical (guard tests pass).
-  **Open / GPU-gated:** run a RynnVLA multi-GPU save→resume smoke (suite-green ≠ verified) and confirm
-  the two flagged `WORLD_SIZE=1`-only divergences (helper builds no PG / skips DDP-wrap for a single
-  process, vs the old `LOCAL_RANK`-keyed `_init_distributed`) are acceptable — they don't affect the
-  real multi-GPU path.
+- [ ] **RUN-01 — RynnVLA multi-GPU save→resume GPU smoke for the helper-routed online DDP.** The code
+  landed 2026-06-23 (`85788fc`: three default-off helper opt-ins + `online_dreamervla.main` rerouting +
+  7 unit tests — see `../history/2026-06-21-backlog-execution-log.md`). **Open / GPU-gated:** run the
+  RynnVLA multi-GPU save→resume smoke (suite-green ≠ verified) and confirm the two flagged
+  `WORLD_SIZE=1`-only divergences (helper builds no PG / skips DDP-wrap for a single process, vs the old
+  `LOCAL_RANK`-keyed `_init_distributed`) don't affect the real multi-GPU path.
 
 - [ ] **X-01 (②, format-breaking remainder) — unify `online_dreamervla.save_checkpoint`.**
   Collapse its `{format_version, env_step, update_step (top-level), cfg, state_dicts}` into the
@@ -133,6 +127,32 @@ the bigger refactor:
   writes trajectories to a (separate) host replay buffer, and the policy update is a standard
   micro-batched PPO sampling from it. This removes the in-update imagination entirely and
   matches WoVR. Bigger refactor; subsumes the MEM-RL-01 remainder above.
+
+## Cotrain online throughput (egl) — GPU-gated
+
+The vectorized cotrain rollout core landed and is osmesa-validated; the open part is the egl runtime
+verify on a free GPU. Detail plans: `2026-06-23-cotrain-vec-egl-rollout.md` and
+`2026-06-23-cotrain-readiness-gate-and-egl-wiring.md`.
+
+- [ ] **COTRAIN-EGL — verify the egl 4-env rollout on a free GPU.** W0/Option-1 vectorized rollout
+  (`d25d0fc`) + readiness-gate/egl-wiring (`0e68754`) merged and validated e2e under osmesa (~6.4 env/s,
+  warmup + RL bursts + ckpt, clean exit). **Open / GPU-gated:** run the egl path on a free GPU to confirm
+  the ~4× throughput and a clean exit (egl `read_pixels` was the original SIGABRT root cause).
+
+## Performance audit — open items
+
+Findings: `performance_optimization_audit.md`. Live status ledger + per-item detail (and links to the
+merged items now archived under `../history/`): `2026-06-23-perf-audit-execution-roadmap.md` (§2 table).
+The open work pulled up here:
+
+- [ ] **prompt-tokenize cache** (`rollout_hidden_extractor.py:230`) — agent in progress. Plan:
+  `2026-06-23-perf-prompt-tokenize-cache.md`.
+- [ ] **PERF not-started, CPU-doable next:** W8 (bf16 `inference_mode` for frozen eval-only submodules),
+  H3 (replay readiness incremental — marginal now the readiness-gate cut its call frequency), H6 (WM
+  KV-cache, follow-on to the merged H5 SDPA). See the roadmap §2/§5.
+- [ ] **PERF GPU-gated / parked:** W7 (dataloader `pin_memory`/`non_blocking`), H7 (autocast/GradScaler),
+  H2 (replay contiguous layout — host-mem/throughput check), W5 single-forward (OFT decode-equivalence
+  smoke), W2 caller-wiring (FSDP collective-ordering smoke). Each needs a GPU run; roadmap §5 has the why.
 
 ## Won't-fix / intentional (record only)
 
