@@ -167,6 +167,45 @@ class OFTRolloutHiddenExtractor:
         }
         # Lazily built on first step(); reused so the model handles / head mode are resolved once.
         self._decoder: OFTBatchedDecoder | None = None
+        # Single-slot cache of the prompt's tokenized text tensors, keyed by
+        # task_description (the prompt is invariant within a task).  Refreshed
+        # when the task changes; see _prompt_text_inputs.
+        self._prompt_cache: tuple[str, torch.Tensor, torch.Tensor] | None = None
+
+    def _prompt_text_inputs(
+        self, processor: Any, prompt: str, task_description: str, fallback_image: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the prompt's ``(input_ids, attention_mask)``, tokenized once per task.
+
+        The processor's text branch (``processor(prompt, img)["input_ids"/"attention_mask"]``)
+        is a pure function of ``prompt`` — itself a pure function of ``task_description`` — so
+        it is computed once and cached, then reused while the task is unchanged.  A fresh
+        ``task_description`` refreshes the cache.
+
+        On a cache MISS the canonical text tensors are taken from a full
+        ``processor(prompt, fallback_image)`` call (the same call path used today), so any
+        processor-specific text post-processing (e.g. the dreamervla subclass's left-padded
+        BOS normalization) is preserved exactly.  Cached tensors are cloned so downstream
+        device moves never mutate the cached copy.
+        """
+        if self._prompt_cache is not None and self._prompt_cache[0] == task_description:
+            return self._prompt_cache[1], self._prompt_cache[2]
+        full = processor(prompt, fallback_image)
+        input_ids = full["input_ids"].clone()
+        attention_mask = full["attention_mask"].clone()
+        self._prompt_cache = (task_description, input_ids, attention_mask)
+        return input_ids, attention_mask
+
+    @staticmethod
+    def _view_pixel_values(processor: Any, image: Any) -> torch.Tensor:
+        """Run only the processor's image branch for one view.
+
+        Byte-identical to ``processor(prompt, image)["pixel_values"]`` (the exact line
+        ``PrismaticProcessor.__call__`` uses, with the default ``return_tensors="pt"``),
+        so the prompt-cache change leaves image numerics untouched while skipping the
+        per-view tokenization that the old per-view ``processor(prompt, img)`` repeated.
+        """
+        return processor.image_processor(image, return_tensors="pt")["pixel_values"]
 
     def reset(self) -> None:
         """Clear the history buffer.  Call at the start of every episode."""
@@ -254,17 +293,18 @@ class OFTRolloutHiddenExtractor:
         processed_images = prepare_images_for_vla(all_raw_frames, cfg_for_prep)
 
         # ── 3. Build pixel_values tensor: primary + extra views ───────────────
+        # The prompt's text tokenization is invariant for a fixed task_description, so it is
+        # cached and reused across rollout steps; only the image branch runs per view/step.
+        # Numerically identical to the old per-view ``processor(prompt, img)`` calls.
         device = next(model.parameters()).device
-        primary_inputs = processor(prompt, processed_images[0]).to(
-            device, dtype=torch.bfloat16
+        input_ids, attention_mask = self._prompt_text_inputs(
+            processor, prompt, task_description, processed_images[0]
         )
-        input_ids = primary_inputs["input_ids"]
-        attention_mask = primary_inputs["attention_mask"]
-        pixel_values = primary_inputs["pixel_values"]
-
-        for img in processed_images[1:]:
-            extra = processor(prompt, img).to(device, dtype=torch.bfloat16)
-            pixel_values = torch.cat([pixel_values, extra["pixel_values"]], dim=1)
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+        pixel_values = torch.cat(
+            [self._view_pixel_values(processor, img) for img in processed_images], dim=1
+        ).to(device, dtype=torch.bfloat16)
 
         # ── 4. Proprio (same normalization as offline preprocess) ─────────────
         proprio = None
