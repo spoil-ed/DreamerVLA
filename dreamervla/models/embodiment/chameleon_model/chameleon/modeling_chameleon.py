@@ -1431,6 +1431,12 @@ class ChameleonModel(ChameleonPreTrainedModel):
         self.vqmodel = ChameleonVQVAE(config.vq_config)
         self.gradient_checkpointing = False
 
+        # H9: single-slot cache for `_update_causal_mask` (only the None-padding
+        # case, see `_update_causal_mask`).
+        self._causal_mask_cache_key = None
+        self._causal_mask_cache_value = None
+        self._causal_mask_cache_position = None
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1604,8 +1610,68 @@ class ChameleonModel(ChameleonPreTrainedModel):
             attentions=all_self_attns,
         )
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaModel._update_causal_mask
     def _update_causal_mask(
+        self,
+        attention_mask: torch.Tensor,
+        input_tensor: torch.Tensor,
+        cache_position: torch.Tensor,
+        past_key_values: Cache,
+        output_attentions: bool,
+    ):
+        # H9: cache the constructed causal mask and reuse it when every
+        # mask-determining input is unchanged. Only the `attention_mask is None`
+        # case is cached, so a stale padding-mask hit is impossible; any non-None
+        # `attention_mask` falls through to a fresh `_build_causal_mask` build.
+        if attention_mask is not None:
+            return self._build_causal_mask(
+                attention_mask,
+                input_tensor,
+                cache_position,
+                past_key_values,
+                output_attentions,
+            )
+
+        past_seen_tokens = (
+            past_key_values.get_seq_length() if past_key_values is not None else 0
+        )
+        using_static_cache = isinstance(past_key_values, StaticCache)
+        target_length = (
+            past_key_values.get_max_length() if using_static_cache else None
+        )
+        key = (
+            self.config._attn_implementation,
+            str(input_tensor.dtype),
+            str(input_tensor.device),
+            input_tensor.shape[1],
+            input_tensor.shape[0],
+            past_seen_tokens,
+            using_static_cache,
+            target_length,
+            bool(output_attentions),
+            bool(self.training),
+            int(cache_position.shape[0]),
+        )
+        if (
+            key == self._causal_mask_cache_key
+            and self._causal_mask_cache_position is not None
+            and torch.equal(cache_position, self._causal_mask_cache_position)
+        ):
+            return self._causal_mask_cache_value
+
+        causal_mask = self._build_causal_mask(
+            attention_mask,
+            input_tensor,
+            cache_position,
+            past_key_values,
+            output_attentions,
+        )
+        self._causal_mask_cache_key = key
+        self._causal_mask_cache_value = causal_mask
+        self._causal_mask_cache_position = cache_position
+        return causal_mask
+
+    # Copied from transformers.models.llama.modeling_llama.LlamaModel._update_causal_mask
+    def _build_causal_mask(
         self,
         attention_mask: torch.Tensor,
         input_tensor: torch.Tensor,
