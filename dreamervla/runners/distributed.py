@@ -210,7 +210,21 @@ class NopretokenizeSFTDistributedHelper:
         return float(tensor.item())
 
     def reduce_mean_dict(self, metrics: dict[str, float | int]) -> dict[str, float]:
-        return {key: self.reduce_mean(value) for key, value in metrics.items()}
+        keys = list(metrics.keys())
+        if not keys:
+            return {}
+        # Stack into one float32 tensor (matching per-key ``reduce_mean``'s
+        # float32 round-trip) so a single all_reduce + single D2H replaces one
+        # collective + ``.item()`` per key, while staying numerically identical.
+        values = torch.tensor(
+            [float(metrics[key]) for key in keys],
+            device=self._reduce_device(),
+            dtype=torch.float32,
+        )
+        if self.is_distributed:
+            dist.all_reduce(values, op=dist.ReduceOp.SUM)
+            values /= float(self.world_size)
+        return dict(zip(keys, values.detach().cpu().tolist(), strict=True))
 
     def broadcast_object(self, value: Any) -> Any:
         if not self.is_distributed:
