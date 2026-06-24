@@ -142,6 +142,12 @@ class EnvWorker(Worker):
         self.episode_id = 0
         self._proc: Any | None = None
         self._conn: Any | None = None
+        # egl spawn-child crash resilience (Phase 1b): remember the egl device so a
+        # dead child can be respawned, and cap respawns so a persistently-crashing
+        # env fails loudly instead of thrashing.
+        self._egl_device_id: int | None = None
+        self._respawn_count = 0
+        self._max_respawns = int(self.env_cfg.get("egl_max_respawns", 5))
 
     @property
     def _spawned(self) -> bool:
@@ -168,6 +174,7 @@ class EnvWorker(Worker):
         # LIBERO/robosuite/egl — a thundering herd of cold starts that thrashes CPU/disk and can
         # blow a tight init timeout. Stagger the spawns by rank (later ranks ride the warmed page
         # cache) and use a generous, configurable init timeout.
+        self._egl_device_id = int(egl_device_id)
         stagger_s = float(self.env_cfg.get("egl_spawn_stagger_s", 3.0)) * int(self.local_rank)
         if stagger_s > 0:
             time.sleep(stagger_s)
@@ -236,7 +243,13 @@ class EnvWorker(Worker):
     def _step_spawn(
         self, action: Any, obs_embedding: Any
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
-        transition, obs, done, info = self._rpc("step", (action, obs_embedding))
+        try:
+            transition, obs, done, info = self._rpc("step", (action, obs_embedding))
+        except (EOFError, OSError):
+            # The spawn child died (silent native crash under sustained concurrent
+            # egl). Drop the partial episode and respawn a clean child instead of
+            # killing the whole job.
+            return self._recover_from_child_death()
         self.episode.append(transition)
         self.obs = obs
         if done:
@@ -245,6 +258,41 @@ class EnvWorker(Worker):
             self.episode_id += 1
             return self.obs, True, dict(info or {})
         return self.obs, False, dict(info or {})
+
+    def _recover_from_child_death(
+        self,
+    ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+        """Respawn a dead egl child and return an episode boundary.
+
+        The crashed child's env state is gone, so the in-flight episode is discarded
+        (it never reaches the replay) and a fresh child is spawned with a clean reset.
+        Bounded by ``egl_max_respawns`` so a persistently-crashing env fails loudly
+        instead of thrashing forever.
+        """
+        self._respawn_count += 1
+        if self._respawn_count > self._max_respawns:
+            raise RuntimeError(
+                f"EnvWorker egl child died {self._respawn_count} times "
+                f"(rank={self.local_rank}); exceeded egl_max_respawns={self._max_respawns}"
+            )
+        print(
+            f"[EnvWorker] egl spawn child died (rank={self.local_rank}); "
+            f"respawn {self._respawn_count}/{self._max_respawns}, dropping partial episode",
+            flush=True,
+        )
+        self.episode = []
+        proc = self._proc
+        if proc is not None:
+            try:
+                if proc.is_alive():
+                    proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        self._proc = None
+        self._conn = None
+        self._init_spawn(self._egl_device_id)
+        self.episode_id += 1
+        return self.obs, True, {"env_crash_recovered": True}
 
     def _step_inproc(
         self, action: Any, obs_embedding: Any
