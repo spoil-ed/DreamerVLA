@@ -19,6 +19,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.dataset.collection_manifest import (
     format_collection_report,
+    quarantine_corrupt_shards,
     resume_plan,
     summarize_collection,
     write_manifest,
@@ -518,6 +519,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     target_episodes = cfg.get("collect_target_episodes")
     num_tasks = int(cfg.get("collect_num_tasks", 10) or 10)
     collect_cmd = list(plan.collect_cmd)
+    # Phase-1 integrity check: a crashed collect can leave a truncated shard that later
+    # breaks collection-append and warmup. Quarantine such shards (-> .corrupt/) up front,
+    # before either phase reads them. Runs even with skip_collect so warmup gets clean data.
+    quarantined = quarantine_corrupt_shards(plan.reward_dir, plan.hidden_dir)
+    if quarantined:
+        print(
+            f"[collect] quarantined {len(quarantined)} corrupt shard(s) -> .corrupt/: "
+            f"{', '.join(quarantined)}",
+            flush=True,
+        )
     run_collect = not bool(cfg.get("skip_collect", False))
     if run_collect:
         # Identify what is already collected and print it BEFORE deciding to collect,

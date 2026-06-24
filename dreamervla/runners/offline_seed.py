@@ -8,6 +8,7 @@ obs_embedding sidecar and converted to the per-step transition dicts that
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -59,20 +60,28 @@ def seed_replay_from_offline(
         raise FileNotFoundError(f"no reward HDF5 shards under {data_dir}")
     n_added = 0
     for shard in shards:
-        with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
-            for demo_key in rf["data"]:
-                demo = rf["data"][demo_key]
-                if "task_id" in demo.attrs:
-                    task_id = int(demo.attrs["task_id"])
-                elif default_task_id is not None:
-                    task_id = int(default_task_id)
-                else:
-                    raise ValueError(
-                        f"{shard}/{demo_key} has no task_id attr and no default_task_id "
-                        "was provided; re-collect with the identity-aware collector or "
-                        "set offline_warmup.task_id for single-task data."
-                    )
-                emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
-                if replay.add_episode(_demo_to_transitions(demo, emb, task_id)) is not None:
-                    n_added += 1
+        # Skip truncated/corrupt shards (e.g. a half-written file left by a crashed
+        # collect) so one bad shard does not abort warmup — mirrors the tolerant
+        # inspection in collection_manifest. A missing task_id is a real config error,
+        # so the ValueError below is NOT swallowed (it is not OSError/KeyError).
+        try:
+            with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
+                for demo_key in rf["data"]:
+                    demo = rf["data"][demo_key]
+                    if "task_id" in demo.attrs:
+                        task_id = int(demo.attrs["task_id"])
+                    elif default_task_id is not None:
+                        task_id = int(default_task_id)
+                    else:
+                        raise ValueError(
+                            f"{shard}/{demo_key} has no task_id attr and no default_task_id "
+                            "was provided; re-collect with the identity-aware collector or "
+                            "set offline_warmup.task_id for single-task data."
+                        )
+                    emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
+                    if replay.add_episode(_demo_to_transitions(demo, emb, task_id)) is not None:
+                        n_added += 1
+        except (OSError, KeyError) as exc:
+            warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
+            continue
     return n_added

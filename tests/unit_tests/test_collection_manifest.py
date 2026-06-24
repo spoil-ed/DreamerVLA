@@ -12,6 +12,7 @@ from dreamervla.dataset.collection_manifest import (
     count_episodes_per_task,
     format_collection_report,
     next_shard_index,
+    quarantine_corrupt_shards,
     read_manifest,
     resume_plan,
     summarize_collection,
@@ -145,3 +146,38 @@ def test_format_collection_report_mentions_counts_and_target(tmp_path):
     assert "10" in report  # target
     assert "7" in report  # remaining
     assert "task" in report.lower()
+
+
+def test_quarantine_moves_corrupt_shard_and_keeps_good(tmp_path):
+    reward = tmp_path / "reward"
+    hidden = tmp_path / "hidden"
+    reward.mkdir()
+    hidden.mkdir()
+    # valid shard in both dirs
+    _write_shard(reward / "r0_shard_000.hdf5", 2)
+    _write_shard(hidden / "r0_shard_000.hdf5", 2)
+    # truncated/corrupt shard (e.g. left by a crashed collect) in both dirs
+    (reward / "ray_shard_000.hdf5").write_bytes(b"\x00" * 96)
+    (hidden / "ray_shard_000.hdf5").write_bytes(b"\x00" * 96)
+
+    assert quarantine_corrupt_shards(reward, hidden) == ["ray_shard_000.hdf5"]
+
+    # corrupt moved to .corrupt/ in BOTH dirs; valid shard untouched
+    assert not (reward / "ray_shard_000.hdf5").exists()
+    assert not (hidden / "ray_shard_000.hdf5").exists()
+    assert (reward / ".corrupt" / "ray_shard_000.hdf5").exists()
+    assert (hidden / ".corrupt" / "ray_shard_000.hdf5").exists()
+    assert (reward / "r0_shard_000.hdf5").exists()
+    assert (hidden / "r0_shard_000.hdf5").exists()
+
+
+def test_quarantine_is_noop_when_all_shards_valid(tmp_path):
+    reward = tmp_path / "reward"
+    hidden = tmp_path / "hidden"
+    reward.mkdir()
+    hidden.mkdir()
+    _write_shard(reward / "r0_shard_000.hdf5", 1)
+    _write_shard(hidden / "r0_shard_000.hdf5", 1)
+
+    assert quarantine_corrupt_shards(reward, hidden) == []
+    assert not (reward / ".corrupt").exists()

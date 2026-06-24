@@ -66,6 +66,47 @@ def count_episodes_per_task(reward_dir: str | Path) -> dict[int, int]:
     return counts
 
 
+def quarantine_corrupt_shards(
+    reward_dir: str | Path, hidden_dir: str | Path
+) -> list[str]:
+    """Phase-1 integrity check: move truncated/unreadable shards out of the way.
+
+    A crashed collect can leave a half-written shard (e.g. a 96-byte truncated HDF5).
+    Readers that merely skip it stay alive, but the bad file lingers and re-breaks every
+    later read. Here we fail-fast at the source: open each reward shard, and on ``OSError``
+    move it AND its same-named hidden sidecar into a ``.corrupt/`` subdir (recoverable,
+    not deleted) so collection-append and warmup see only valid shards. ``.corrupt/`` is
+    not matched by the ``*.hdf5`` glob, so quarantined shards are not re-scanned. Returns
+    the quarantined shard names.
+    """
+    import h5py
+
+    reward = Path(reward_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser()
+    quarantined: list[str] = []
+    if not reward.is_dir():
+        return quarantined
+    for shard in sorted(reward.glob("*.hdf5")):
+        try:
+            with h5py.File(str(shard), "r"):
+                pass
+            continue
+        except OSError as exc:
+            reason = exc
+        for directory in (reward, hidden):
+            src = directory / shard.name
+            if src.exists():
+                dest_dir = directory / ".corrupt"
+                dest_dir.mkdir(exist_ok=True)
+                src.rename(dest_dir / src.name)
+        warnings.warn(
+            f"quarantined corrupt shard {shard.name} -> .corrupt/: {reason}",
+            stacklevel=2,
+        )
+        quarantined.append(shard.name)
+    return quarantined
+
+
 def summarize_collection(
     reward_dir: str | Path, *, target_total: int | None, num_tasks: int
 ) -> dict[str, Any]:
