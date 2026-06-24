@@ -86,6 +86,14 @@ if [[ "${INSTALL_OPENVLA_OFT_THIRD_PARTY}" == "1" && -d "${DVLA_ROOT}/third_part
   fi
   uv pip install --no-deps -e "${DVLA_ROOT}/third_party/openvla-oft"
   uv pip install --no-deps git+https://github.com/moojink/dlimp_openvla
+  # OFT and dlimp are installed --no-deps above so their large, pin-conflicting
+  # dependency trees do not override the curated env. That drops a few packages OFT
+  # genuinely needs at runtime, so re-add them explicitly with the pins declared in
+  # third_party/openvla-oft/pyproject.toml. tensorflow_datasets is what the RLDS data
+  # pipeline (prismatic/vla/datasets/rlds) imports; rich/future are pulled in by the
+  # OFT scripts and were missing on a clean --no-deps install.
+  uv pip install rich future \
+    tensorflow==2.15.0 tensorflow_datasets==4.9.3 tensorflow_graphics==2021.12.3
   # OpenVLA-OFT REQUIRES moojink's custom transformers fork: it patches the Llama
   # attention to bidirectional (is_causal=False) for OFT parallel action-chunk
   # decoding. Vanilla transformers yields 0% / garbage OFT actions even though BOTH

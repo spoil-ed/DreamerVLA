@@ -104,6 +104,24 @@ cp -r /path/to/fork/transformers-4.40.1.dist-info "$DST/transformers-4.40.1.dist
 > OFT/world-model centric (the WM is not a Llama), so the fork is the intended
 > env-wide transformers.
 
+### OpenVLA-OFT runtime deps restored after the `--no-deps` install
+
+`40_third_party.sh` installs `openvla-oft` and `dlimp_openvla` with `--no-deps`
+so their large, pin-conflicting dependency trees do not override the curated env.
+That drops a few packages OFT genuinely needs at runtime, so the installer
+re-adds them explicitly with the pins declared in
+`third_party/openvla-oft/pyproject.toml`:
+
+```bash
+uv pip install rich future \
+  tensorflow==2.15.0 tensorflow_datasets==4.9.3 tensorflow_graphics==2021.12.3
+```
+
+`tensorflow_datasets` is what the OFT RLDS data pipeline
+(`prismatic/vla/datasets/rlds`) imports; `rich` and `future` are pulled in by the
+OFT scripts and are missing on a clean `--no-deps` install. If you install OFT by
+hand instead of through `scripts/install_env.sh`, run the line above too.
+
 ## 2. Download Assets
 
 One-command download:
