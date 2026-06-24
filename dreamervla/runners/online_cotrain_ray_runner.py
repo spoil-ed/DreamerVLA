@@ -126,6 +126,16 @@ class OnlineCotrainRayRunner(BaseRunner):
         env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
             cluster, NodePlacementStrategy(num_envs)
         )
+        # Spread env workers across the configured task ids (round-robin) instead of
+        # pinning every env to task 0. A single hard task (e.g. libero_goal task 0, which
+        # the traj1 ckpt fails) yields a misleading 0% rollout success; sampling across
+        # tasks reflects the real policy success rate (matches the collector).
+        rollout_task_ids = self._rollout_task_ids()
+        if rollout_task_ids:
+            for env_index in range(num_envs):
+                tid = int(rollout_task_ids[env_index % len(rollout_task_ids)])
+                if tid != 0:
+                    env_group.execute_on(env_index).set_task(tid).wait()
 
         policy_cfg = self._cfg_from("policy.cfg", _default_policy_cfg())
         # Decouple the rollout from the concrete model: the inference worker class is
@@ -569,6 +579,22 @@ class OnlineCotrainRayRunner(BaseRunner):
             if value is not None:
                 return value
         return default
+
+    def _rollout_task_ids(self) -> list[int]:
+        """Concrete env task-id list to spread rollout envs across (round-robin).
+
+        Prefers ray_data.task_ids / env.task_ids; ignores non-list values like "all"."""
+        for path in ("ray_data.task_ids", "env.task_ids", "env.cfg.kwargs.task_ids"):
+            raw = OmegaConf.select(self.cfg, path, default=None)
+            if raw is None or isinstance(raw, str):
+                continue
+            try:
+                ids = [int(x) for x in raw]
+            except (TypeError, ValueError):
+                continue
+            if ids:
+                return ids
+        return []
 
     def _int_from(self, paths: tuple[str, ...], default: int) -> int:
         return int(self._select_first(paths, default))
