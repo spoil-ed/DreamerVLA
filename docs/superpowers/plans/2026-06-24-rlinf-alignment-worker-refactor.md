@@ -28,12 +28,14 @@ This matches the original analysis's own wording: Step 2 says extract Reward/Cri
 
 | Phase | Theme | Principle | Status | Deliverable |
 |------|-------|-----------|--------|-------------|
-| 1 | EnvWorker spawn isolation (egl crash fix) | env isolation | **DONE** | this doc §Phase 1 |
-| 2 | Swappable Reward + Verifier interfaces | responsibility separation | **THIS PLAN** (TDD) | this doc §Phase 2 |
-| 3 | Extract WM imagined-rollout interface | responsibility separation | design spec → own plan | this doc §Phase 3 |
-| 4 | Model/policy version + staleness management | explicit scheduling | design spec → own plan | this doc §Phase 4 |
-| 5 | Multi-EnvWorker + multi-PolicyWorker + hosted Reward/Verifier workers | explicit scheduling | design spec → own plan | this doc §Phase 5 |
-| 6 | Multi-Learner / FSDP / Megatron | explicit scheduling | design spec → own plan | this doc §Phase 6 |
+| 1 | EnvWorker spawn isolation (init fix) + 1b respawn resilience | env isolation | **DONE** (committed `1f42a2e`,`4f1bff2`) | this doc §Phase 1 |
+| 2 | Swappable Reward + Verifier interfaces | responsibility separation | **DONE** (committed `1fa6eaf`…`ce009e7`) | this doc §Phase 2 |
+| 3 | Extract WM imagined-rollout interface | responsibility separation | **DONE** (committed `17d8cf4`, golden-verified) | this doc §Phase 3 |
+| 4 | Model/policy version + staleness management | explicit scheduling | **DONE (CPU-tested)** (committed `2c69c45`; async e2e GPU-verify pending) | this doc §Phase 4 |
+| 5 | Multi-EnvWorker + per-GPU concurrency / SubprocVecEnv + hosted Reward/Verifier | explicit scheduling | design spec → own plan (egl-root lever, GPU-gated) | this doc §Phase 5 |
+| 6 | Multi-Learner / FSDP / Megatron | explicit scheduling | design spec → own plan (GPU-gated; learner not yet the bottleneck) | this doc §Phase 6 |
+
+> **egl crash characterization (2026-06-24, 3 GPU runs):** device alignment does NOT fix it (16 child-deaths/300 steps at 4-env/GPU); crash rate scales steeply with per-GPU egl concurrency (1-env/GPU → 1 death/200 steps); rooted in robosuite new-mujoco `EGLGLContext` vs RLinf's mujoco-py. Respawn (Phase 1b) keeps the job alive; `rollout/episodes=0` in short runs is mostly the short `rollout.steps` (episode needs ~300 env-steps), NOT respawn loss. **Practical working egl recipe = respawn + low per-GPU concurrency (1-2 envs/GPU) + long rollout.steps; or osmesa.** Phase 5's per-GPU-concurrency lever is the right fix for our stack.
 
 **Sequencing rule:** do not start a phase until its predecessor is merged and verified. Phases 3–6 get their own bite-sized plans (one per subsystem) authored from their design spec here, at the time they start.
 
