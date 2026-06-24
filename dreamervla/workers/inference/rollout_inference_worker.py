@@ -100,6 +100,16 @@ class RolloutInferenceWorker(Worker):
                 self._extractors[int(env_id)] = bundle.make_extractor()
             self._action_queues[int(env_id)] = []
 
+    def pull_weights(self, store_name: str, key: str, local_version: int) -> int | None:
+        """No-op weight sync for the async overlap loop.
+
+        OFT online cotrain drives the env with the fixed OFT base policy (open-loop
+        action chunk); the learned actor is trained only in imagination, so the rollout
+        policy is never updated and there is nothing to pull. Returning None leaves the
+        caller's local version unchanged.
+        """
+        return None
+
     def _require_bundle(self) -> Any:
         if self._bundle is None:
             raise RuntimeError("RolloutInferenceWorker.init() has not been called")

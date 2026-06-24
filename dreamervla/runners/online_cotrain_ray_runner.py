@@ -9,6 +9,7 @@ without changing the scheduler primitives.
 
 from __future__ import annotations
 
+import importlib
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,6 @@ from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.resource_metrics import collect_resource_metrics
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.env.env_worker import EnvWorker
-from dreamervla.workers.inference.inference_worker import InferenceWorker
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 
 
@@ -122,8 +122,20 @@ class OnlineCotrainRayRunner(BaseRunner):
         infer_cfg.setdefault("policy", policy_cfg)
         infer_cfg.setdefault("device", "cpu")
         infer_init_ckpt = self._load_init_ckpt("inference.init_ckpt")
+        # Decouple the rollout from the concrete model: the inference worker class is
+        # config-selectable. Default = RynnVLA encoder->WM->actor InferenceWorker; OFT
+        # selects RolloutInferenceWorker (model-agnostic OFTRolloutBundle producing
+        # action + obs_embedding), the same path the collect runner uses.
+        infer_worker_cls = _resolve_worker_cls(
+            str(
+                self._select_first(
+                    ("inference.worker_target", "inference.worker"),
+                    "dreamervla.workers.inference.inference_worker:InferenceWorker",
+                )
+            )
+        )
         infer_group = WorkerGroup(
-            InferenceWorker,
+            infer_worker_cls,
             infer_cfg,
             infer_init_ckpt,
             num_envs=num_envs,
@@ -701,6 +713,16 @@ def _uses_ray_worker_groups(groups: dict[str, Any]) -> bool:
         hasattr(groups.get(name), "workers")
         for name in ("envs", "infer", "replay", "learner")
     )
+
+
+def _resolve_worker_cls(target: str) -> type:
+    """Resolve a ``module:Class`` (or ``module.Class``) worker target to its class."""
+    text = str(target)
+    if ":" in text:
+        module_name, class_name = text.split(":", 1)
+    else:
+        module_name, class_name = text.rsplit(".", 1)
+    return getattr(importlib.import_module(module_name), class_name)
 
 
 def _load_runner_state_dicts(
