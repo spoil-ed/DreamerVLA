@@ -236,11 +236,26 @@ def build_pipeline_plan(
         *_render_overrides(mode_cfg["collect"], context),
         *_render_overrides(collect_profile_cfg, context),
     ]
+    # Ray env-worker parallelism scales with the GPU count so it is not stuck at the
+    # config default of a couple of CPU env workers (a throughput bottleneck on a
+    # multi-GPU box). Emitted BEFORE the controls so an explicit collect.num_workers
+    # still wins; noray sizes its env concurrency via collect.envs_per_gpu instead.
+    ray_env_scale: list[str] = []
+    if selected_mode == "ray":
+        collect_controls = _plain(cfg.get("collect", {}))
+        user_num_workers = (
+            collect_controls.get("num_workers")
+            if isinstance(collect_controls, Mapping)
+            else None
+        )
+        if user_num_workers is None:
+            ray_env_scale = [f"env.num_workers={max(1, selected_ngpu) * 4}"]
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
             f"task.openvla_oft.action_hidden_dir={hidden_dir}",
             f"training.out_dir={collect_out}",
+            *ray_env_scale,
             *_control_overrides(
                 cfg.get("collect"),
                 _collect_control_mapping(cfg, selected_mode),

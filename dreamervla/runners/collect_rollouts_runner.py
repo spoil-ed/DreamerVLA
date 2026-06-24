@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from omegaconf import OmegaConf
@@ -76,6 +77,15 @@ class CollectRolloutsRunner(BaseRunner):
             "chunk_size": int(oft.chunk_size),
             "resolution": int(cfg.task.image_resolution),
             "gpu_id": int(OmegaConf.select(cfg, "collect.gpu_id", default=0)),
+            "min_free_gpu_gb": float(OmegaConf.select(cfg, "collect.min_free_gpu_gb", default=18.0)),
+            # Shared (across ranks) dir for cross-process progress aggregation: rank 0
+            # renders ONE global bar by summing per-rank files here. training.out_dir is
+            # identical on every torchrun rank when launched via the e2e (fixed timestamp),
+            # so the ranks agree on this path; a direct run with a ${now} out_dir degrades
+            # to a per-rank bar.
+            "progress_dir": str(
+                Path(str(OmegaConf.select(cfg, "training.out_dir", default="."))) / ".progress"
+            ),
         }
 
     def run(self) -> object:

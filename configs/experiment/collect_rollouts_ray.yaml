@@ -21,7 +21,7 @@ collect:
   num_inference_workers: 1
 
 env:
-  num_workers: 2
+  num_workers: 8   # CPU env-stepping workers; the e2e launcher scales this with ngpu
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true

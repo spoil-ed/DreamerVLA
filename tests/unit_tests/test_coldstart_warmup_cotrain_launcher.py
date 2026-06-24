@@ -355,6 +355,35 @@ def test_launcher_forwards_demos_per_shard_to_collect(tmp_path, capsys, mode) ->
     assert "demos_per_shard" not in cotrain_line
 
 
+def test_ray_collect_scales_env_workers_with_ngpu(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python", ngpu=6)
+    # ray env-worker count scales with ngpu (6 * 4) instead of the small config default.
+    assert "env.num_workers=24" in plan.collect_cmd
+    # noray sizes env concurrency via envs_per_gpu, not env.num_workers.
+    noray = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python", ngpu=6)
+    assert not any(item.startswith("env.num_workers=") for item in noray.collect_cmd)
+
+
+def test_ray_explicit_num_workers_overrides_ngpu_scaling(tmp_path, capsys) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import main
+
+    exit_code = main(
+        [
+            "mode=ray",
+            f"run_root={tmp_path}",
+            "dry_run=true",
+            "collect.num_workers=3",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    collect_line = next(line for line in out.splitlines() if line.startswith("collect:"))
+    assert "env.num_workers=3" in collect_line
+    assert "env.num_workers=4" not in collect_line  # auto-scale suppressed by the override
+
+
 def test_launcher_aggregates_collection_after_collect(tmp_path, monkeypatch, capsys) -> None:
     import dreamervla.launchers.coldstart_warmup_cotrain as mod
 

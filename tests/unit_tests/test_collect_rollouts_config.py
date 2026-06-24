@@ -1,12 +1,38 @@
+from unittest import mock
+
 import pytest
 
 from dreamervla.runners.collect_parallel_rollouts import (
     _REQUIRED_COLLECT_KEYS,
+    _assert_gpu_free_memory,
     _assert_policy_mode_matches,
     _make_preprocess_config,
     _require_keys,
     _resolve_task_ids,
 )
+
+
+def test_gpu_preflight_raises_when_target_gpu_is_occupied():
+    # 6 GB free, need 18 GB -> clear, GPU-named error instead of a silent OOM.
+    with mock.patch(
+        "dreamervla.runners.collect_parallel_rollouts.torch.cuda.mem_get_info",
+        return_value=(6 * 1024**3, 80 * 1024**3),
+    ):
+        with pytest.raises(RuntimeError, match="GPU 3 has only"):
+            _assert_gpu_free_memory(3, 18.0, rank=3)
+
+
+def test_gpu_preflight_passes_with_enough_free_memory():
+    with mock.patch(
+        "dreamervla.runners.collect_parallel_rollouts.torch.cuda.mem_get_info",
+        return_value=(40 * 1024**3, 80 * 1024**3),
+    ):
+        _assert_gpu_free_memory(0, 18.0, rank=0)  # no raise
+
+
+def test_gpu_preflight_disabled_when_threshold_zero():
+    # min_free_gb=0 disables the check (never calls mem_get_info).
+    _assert_gpu_free_memory(0, 0.0, rank=0)
 
 
 def _discrete_cfg() -> dict:
@@ -111,6 +137,20 @@ def test_require_keys_passes_when_complete():
 )
 def test_resolve_task_ids(task_ids, expected):
     assert _resolve_task_ids(task_ids, num_tasks=3) == expected
+
+
+def test_build_work_list_fresh_collection_starts_at_zero():
+    from dreamervla.runners.collect_parallel_rollouts import _build_work_list
+
+    assert _build_work_list([0, 1], 2, {}) == [(0, 0), (0, 1), (1, 0), (1, 1)]
+
+
+def test_build_work_list_resume_continues_from_collected_count():
+    from dreamervla.runners.collect_parallel_rollouts import _build_work_list
+
+    # task 0 already has 2 episodes -> continue at 2,3; task 1 has 1 -> continue at 1,2.
+    # No init_state (episode_id) is re-collected.
+    assert _build_work_list([0, 1], 2, {0: 2, 1: 1}) == [(0, 2), (0, 3), (1, 1), (1, 2)]
 
 
 def test_collect_rollouts_missing_keys_raises_before_gpu():

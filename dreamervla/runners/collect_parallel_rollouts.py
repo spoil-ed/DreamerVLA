@@ -44,7 +44,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from dreamervla.dataset.collection_manifest import next_shard_index
+from dreamervla.dataset.collection_manifest import (
+    count_episodes_per_task,
+    next_shard_index,
+)
 from dreamervla.runners.oft_collect_common import (
     assert_policy_mode_matches,
     load_policy,
@@ -54,7 +57,7 @@ from dreamervla.runners.oft_collect_common import (
     vla_latent_spec,
 )
 from dreamervla.utils.paths import data_path, data_root
-from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.progress import AggregateProgress
 
 _assert_policy_mode_matches = assert_policy_mode_matches
 _load_policy = load_policy
@@ -98,6 +101,25 @@ def _shard_work(
     return [item for i, item in enumerate(work_list) if i % world_size == rank]
 
 
+def _build_work_list(
+    task_ids: list[int],
+    episodes_per_task: int,
+    collected_per_task: dict[int, int],
+) -> list[tuple[int, int]]:
+    """Resume-aware ``(task_id, episode_id)`` work list.
+
+    ``episode_id`` is the init_state selector (env reset uses
+    ``init_state = episode_id % num_init_states``), so each task CONTINUES from the count
+    already on disk instead of restarting at 0 — otherwise a resume re-collects the same
+    init_states. Built globally (before round-robin rank sharding) so ranks stay disjoint.
+    """
+    return [
+        (int(tid), int(collected_per_task.get(int(tid), 0)) + ep)
+        for tid in task_ids
+        for ep in range(int(episodes_per_task))
+    ]
+
+
 _REQUIRED_COLLECT_KEYS: tuple[str, ...] = (
     "model_path", "policy_mode", "unnorm_key", "task_suite_name", "task_ids",
     "episodes_per_task", "episode_horizon", "envs_per_gpu", "memory_fraction",
@@ -113,6 +135,25 @@ def _require_keys(cfg: dict[str, Any]) -> None:
     missing = [k for k in _REQUIRED_COLLECT_KEYS if k not in cfg]
     if missing:
         raise KeyError(f"collect_rollouts cfg missing required keys: {missing}")
+
+
+def _assert_gpu_free_memory(gpu_id: int, min_free_gb: float, *, rank: int) -> None:
+    """Fail fast if the rank's GPU lacks free memory for the OFT VLA (~16 GB).
+
+    On a shared box another job may already hold the per-rank GPU; without this preflight
+    the load OOMs silently and only the rank whose GPU happened to be free survives, which
+    reads as "only one GPU is working". ``min_free_gb <= 0`` disables the check.
+    """
+    if min_free_gb <= 0:
+        return
+    free_gb = torch.cuda.mem_get_info(gpu_id)[0] / 1024**3
+    if free_gb < min_free_gb:
+        raise RuntimeError(
+            f"[collector rank={rank}] GPU {gpu_id} has only {free_gb:.1f} GB free but the "
+            f"OFT VLA needs ~{min_free_gb:.0f} GB — it is likely occupied by another job. "
+            f"Point collection at free GPUs via CUDA_VISIBLE_DEVICES, or lower "
+            f"collect.min_free_gpu_gb (=0 disables this check)."
+        )
 
 
 def _make_dump_writer(
@@ -284,6 +325,8 @@ def _collect_vectorized_path(
     preprocess_config: dict[str, Any],
     task_suite_name: str,
     rank: int,
+    world_size: int,
+    progress_dir: str | None,
     history: int,
     rotate_images_180: bool,
     image_keys: list[str],
@@ -365,6 +408,8 @@ def _collect_vectorized_path(
                 preprocess_config=(preprocess_config if rank == 0 else None),
                 data_attrs=data_attrs,
                 rank=rank,
+                world_size=world_size,
+                progress_dir=progress_dir,
                 action_steps=int(preprocess_config["chunk_size"]),
                 on_episode=_vec_on_episode,
             )
@@ -450,6 +495,12 @@ def collect_rollouts(
     # continues from shard_idx, so next_shard_index picks up where this run left off).
     demos_per_shard = int(cfg.get("demos_per_shard", 0))
 
+    # Preflight the target GPU BEFORE loading the ~16 GB OFT VLA. On a shared box the
+    # per-rank GPU may already be occupied by another job; without this check the load
+    # silently OOMs and only the rank whose GPU happened to be free survives — looking
+    # like "only one GPU is working". Fail fast with the rank + GPU named instead.
+    _assert_gpu_free_memory(gpu_id, float(cfg.get("min_free_gpu_gb", 18.0)), rank=rank)
+
     policy = _load_policy(cfg, gpu_id)
     _assert_policy_mode_matches(cfg)
     if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
@@ -483,19 +534,39 @@ def collect_rollouts(
         num_tasks = _tmp_env.num_tasks
 
     task_ids = _resolve_task_ids(cfg["task_ids"], num_tasks)
-    full_work: list[tuple[int, int]] = [
-        (tid, ep) for tid in task_ids for ep in range(episodes_per_task)
-    ]
+    # Resume-aware work list: episode_id is the init_state selector (env reset uses
+    # init_state = episode_id % num_init_states), so continue each task from the count
+    # already on disk instead of restarting at 0 — otherwise a resume re-collects the
+    # SAME init_states. Counting the global per-task totals (across every rank's shards)
+    # before round-robin sharding keeps ranks disjoint on resume too.
+    # TODO(collect-attempts): this implements "continue to new init_states" (resume
+    # option 1). Deliberate N-attempts-per-init_state (re-rolling the same init_state for
+    # a stochastic policy) is NOT implemented — it would add a `collection_attempt` axis
+    # (target = num_init_states x attempts) and record attempt = episode_id // num_init.
+    collected_per_task = count_episodes_per_task(reward_dir)
+    full_work = _build_work_list(task_ids, episodes_per_task, collected_per_task)
     my_work = _shard_work(full_work, rank, world_size)
 
+    resume_note = (
+        f" resume_from={dict(sorted(collected_per_task.items()))}" if collected_per_task else ""
+    )
     print(
         f"[collector rank={rank}] task_suite={task_suite_name} "
-        f"total_work={len(full_work)} my_work={len(my_work)} shard={shard_name}",
+        f"total_work={len(full_work)} my_work={len(my_work)} shard={shard_name}{resume_note}",
         flush=True,
     )
     if not my_work:
         print(f"[collector rank={rank}] No work assigned. Exiting.", flush=True)
         return 0
+
+    # Print WHERE the collected data lands before the progress bar starts (rank 0).
+    # progress_dir (shared across ranks via the launcher's fixed out_dir) lets rank 0
+    # render ONE aggregated bar over all ranks; absent it, each rank shows its own bar.
+    progress_dir = cfg.get("progress_dir")
+    if rank == 0:
+        print("[collector] collected data ->", flush=True)
+        print(f"  reward : {reward_dir}", flush=True)
+        print(f"  hidden : {hidden_dir}", flush=True)
 
     t_collect_start = time.time()
     if envs_per_gpu > 1:
@@ -516,6 +587,8 @@ def collect_rollouts(
             preprocess_config=preprocess_config,
             task_suite_name=task_suite_name,
             rank=rank,
+            world_size=world_size,
+            progress_dir=progress_dir,
             history=history,
             rotate_images_180=rotate_images_180,
             image_keys=image_keys,
@@ -537,8 +610,9 @@ def collect_rollouts(
                         start_index=shard_idx,
                         demos_per_shard=demos_per_shard,
                     ) as writer, \
-                    ProgressReporter(
-                        len(my_work), "collect", unit="ep", enabled=(rank == 0)
+                    AggregateProgress(
+                        len(my_work), "collect", rank=rank, world_size=world_size,
+                        progress_dir=progress_dir, unit="ep",
                     ) as pbar:
                 current_task_id = -1
                 task_description = env.task_description
