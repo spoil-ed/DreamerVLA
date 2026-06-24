@@ -228,7 +228,17 @@ class LearnerWorker(Worker):
         }
 
     def _dreamervla_rl_update_once(self) -> dict[str, float]:
-        batch = self._replay_client().sample(int(self.train_cfg.get("batch_size", 2)))
+        # Phase 4 off-policy gating: drop replay samples older than
+        # ``staleness_threshold`` rollout-policy versions (None / <0 disables → the
+        # default, behaviour-preserving path). Graceful for fixed-base rollouts
+        # (OFT), where the replay falls back to all valid samples.
+        staleness_threshold = self.train_cfg.get("staleness_threshold", None)
+        batch = self._replay_client().sample(
+            int(self.train_cfg.get("batch_size", 2)),
+            staleness_threshold=(
+                None if staleness_threshold is None else int(staleness_threshold)
+            ),
+        )
         obs_for_update = {
             key: batch[key]
             for key in (

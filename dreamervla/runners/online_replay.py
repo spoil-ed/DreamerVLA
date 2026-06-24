@@ -42,6 +42,9 @@ class OnlineReplay:
         self.rank = int(rank)
         self.episodes_by_task: dict[int, deque[dict[str, Any]]] = {}
         self._transitions_by_task: Counter[int] = Counter()
+        # Off-policy staleness (Phase 4): episodes are stamped with the rollout
+        # policy version current at add time; the learner can gate stale samples.
+        self._current_policy_version = 0
         self._next_episode_id = 0
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
@@ -57,6 +60,10 @@ class OnlineReplay:
     @property
     def num_transitions(self) -> int:
         return int(sum(self._transitions_by_task.values()))
+
+    def set_policy_version(self, version: int) -> None:
+        """Set the rollout policy version stamped onto subsequently added episodes."""
+        self._current_policy_version = int(version)
 
     def _capacity_for_task(self, task_id: int) -> int:
         del task_id
@@ -87,6 +94,7 @@ class OnlineReplay:
             "success": success,
             "length": len(episode),
             "finish_step": finish_step,
+            "policy_version": int(self._current_policy_version),
         }
         bucket = self.episodes_by_task.setdefault(int(task_id), deque())
         bucket.append(record)
@@ -214,8 +222,27 @@ class OnlineReplay:
         counts = self.task_episode_counts()
         return all(counts[int(task_id)] >= min_eps for task_id in task_ids)
 
-    def _choose_records(self, batch_size: int) -> list[dict[str, Any]]:
+    def _choose_records(
+        self, batch_size: int, *, staleness_threshold: int | None = None
+    ) -> list[dict[str, Any]]:
         valid = self._valid_records()
+        if staleness_threshold is not None:
+            from dreamervla.algorithms.staleness import is_stale
+
+            fresh = [
+                record
+                for record in valid
+                if not is_stale(
+                    int(record.get("policy_version", 0)),
+                    self._current_policy_version,
+                    int(staleness_threshold),
+                )
+            ]
+            # Fall back to all valid records if gating empties the pool, so the
+            # learner is never starved (e.g. OFT, where the fixed-base rollout
+            # version stays 0 while the learner version climbs → all "stale").
+            if fresh:
+                valid = fresh
         if not valid:
             raise RuntimeError("online replay has no full sequences")
         if not self.task_balanced:
@@ -234,7 +261,9 @@ class OnlineReplay:
             for idx in range(int(batch_size))
         ]
 
-    def sample(self, batch_size: int) -> dict[str, torch.Tensor]:
+    def sample(
+        self, batch_size: int, *, staleness_threshold: int | None = None
+    ) -> dict[str, torch.Tensor]:
         windows = []
         task_ids: list[int] = []
         successes: list[bool] = []
@@ -245,7 +274,9 @@ class OnlineReplay:
         episode_lengths: list[int] = []
         sample_limits: list[int] = []
         source_ranks: list[int] = []
-        for record in self._choose_records(int(batch_size)):
+        for record in self._choose_records(
+            int(batch_size), staleness_threshold=staleness_threshold
+        ):
             episode = record["episode"]
             limit = self._sample_limit(record)
             start = random.randint(0, limit - self.sequence_length)

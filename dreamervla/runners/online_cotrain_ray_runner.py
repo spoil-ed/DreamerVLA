@@ -316,6 +316,9 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             policy_version += 1
+            # Stamp subsequently-added episodes with the new rollout policy version
+            # so the learner's staleness gate (Phase 4) can age replay samples.
+            replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
             self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
             self.log_metrics(update_metrics, step=learner_updates)
@@ -468,6 +471,9 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             policy_version += 1
+            # Stamp subsequently-added episodes with the new rollout policy version
+            # so the learner's staleness gate (Phase 4) can age replay samples.
+            replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
             self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
             self.log_metrics(update_metrics, step=learner_updates)

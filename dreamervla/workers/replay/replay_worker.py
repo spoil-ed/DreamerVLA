@@ -33,8 +33,15 @@ class ReplayWorker(Worker):
     def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
         return self._replay().add_episode(episode)
 
-    def sample(self, batch_size: int) -> dict[str, Any]:
-        return self._replay().sample(int(batch_size))
+    def set_policy_version(self, version: int) -> None:
+        self._replay().set_policy_version(int(version))
+
+    def sample(
+        self, batch_size: int, staleness_threshold: int | None = None
+    ) -> dict[str, Any]:
+        return self._replay().sample(
+            int(batch_size), staleness_threshold=staleness_threshold
+        )
 
     def sample_classifier_windows(
         self,
