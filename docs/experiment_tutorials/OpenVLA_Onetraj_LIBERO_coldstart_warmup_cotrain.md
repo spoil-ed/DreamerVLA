@@ -16,6 +16,12 @@ mkdir -p logs
 bash scripts/install/60_verify.sh
 ```
 
+`60_verify.sh` also asserts `peft==0.11.0`: a newer peft imports
+`transformers.EncoderDecoderCache`, which the OpenVLA-OFT transformers fork (4.40.1)
+lacks, so OFT policy load raises `ImportError` — and only surfaces deep inside a Ray
+inference worker. If it flags, run `pip install peft==0.11.0` (a stray openvla-oft
+install without `--no-deps` upgrades it past the pin).
+
 The only per-command env var is `CUDA_VISIBLE_DEVICES`; `MUJOCO_GL` defaults to osmesa
 (the runner sets it) and `NCCL_NVLS_ENABLE=0` is set inside the e2e scripts. Pick the
 render backend with the launcher knob `render_backend`, not an env var.
@@ -33,23 +39,40 @@ experiment entry: `online_rollout.render_backend`). Both write the same outputs 
 
 ## Run
 
-Default GPUs `0,1,2,3,4,5`; logs go to `logs/`.
+Default GPUs `0,1,2,3,4,5`; logs go to `logs/`. The four schemes are the cross of the
+**collect backend** (`noray` = pure torchrun vectorized collector, `ray` = worker
+fan-out) and the cotrain **rollout `render_backend`** (`osmesa` = CPU software,
+`egl` = GPU offscreen). Only the script name and `render_backend` differ — collect
+always renders osmesa; the DDP cotrain stage is identical across backends.
 
 ```bash
-# no-Ray (pure torchrun) — collect -> warmup -> cotrain, osmesa rollout
+# 1) no-Ray + osmesa
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=6 profile=multi_gpu \
   render_backend=osmesa > logs/cotrain_noray_osmesa.log 2>&1
 
-# egl rollout (RLinf-vendored): same command, render_backend=egl
+# 2) no-Ray + egl
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=6 profile=multi_gpu \
   render_backend=egl > logs/cotrain_noray_egl.log 2>&1
+
+# 3) Ray + osmesa
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
+  render_backend=osmesa > logs/cotrain_ray_osmesa.log 2>&1
+
+# 4) Ray + egl
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
+  render_backend=egl > logs/cotrain_ray_egl.log 2>&1
 ```
+
+Ray collect fans out `collect.num_inference_workers` policy workers (the `multi_gpu`
+profile sets 4); keep it **≤ the visible GPU count** — e.g. on two GPUs add
+`collect.num_inference_workers=2` (and `CUDA_VISIBLE_DEVICES=6,7 ngpu=2`).
 
 Variants (append the knob):
 
-- **Ray** collect + DDP cotrain: swap the script for `e2e_coldstart_warmup_cotrain_ray.sh`.
 - **smoke** (cotrain at tiny step counts; collect unchanged): `debug=true`.
 - **preview** the launch plan without running anything: `dry_run=true`.
 - **fewer collect episodes** for a quick real run: `collect.episodes_per_task=2`.

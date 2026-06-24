@@ -36,4 +36,27 @@ if not is_fork:
         "Re-run 40_third_party.sh (offline: set TRANSFORMERS_OFT_FORK_SRC). See SETUP.md section 1."
     )
 PY
+
+  # peft must stay compatible with the OFT transformers fork (4.40.1). peft>=0.12
+  # imports transformers.EncoderDecoderCache, which the fork lacks, so OFT policy load
+  # crashes (ImportError) inside collect/cotrain -- and only surfaces deep in a Ray
+  # inference worker. requirements.txt pins peft==0.11.0; a stray openvla-oft install
+  # WITHOUT --no-deps upgrades it (pyproject asks peft>=0.15). Catch it here.
+  echo "[install:60_verify] verifying peft is compatible with the OpenVLA-OFT transformers fork"
+  python - <<'PY'
+import sys
+try:
+    import peft
+    from peft import LoraConfig, get_peft_model  # noqa: F401  (the exact OFT import)
+except Exception as e:
+    print(f"[install:60_verify] peft import FAILED: {e!r}", file=sys.stderr)
+    sys.exit(
+        "[install:60_verify] FATAL: peft is incompatible with the OpenVLA-OFT transformers "
+        "fork (4.40.1). peft>=0.12 imports transformers.EncoderDecoderCache (absent in the "
+        "fork), so OFT policy load crashes in collect/cotrain (incl. Ray inference workers). "
+        "Pin it back: pip install peft==0.11.0  (requirements.txt pins this; a stray "
+        "openvla-oft install WITHOUT --no-deps upgrades it). See SETUP.md section 1."
+    )
+print(f"[install:60_verify] peft {peft.__version__} OK (compatible with OFT transformers fork)")
+PY
 fi
