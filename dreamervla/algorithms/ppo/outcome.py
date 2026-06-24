@@ -54,6 +54,7 @@ from dreamervla.algorithms.dreamervla import (
     _world_model_actor_input,
     _world_model_observe_sequence,
 )
+from dreamervla.algorithms.imagine.protocol import ImaginedRollout
 from dreamervla.algorithms.ppo.grpo import (
     _entropy_coef,
     _group_advantage,
@@ -199,7 +200,7 @@ def _imagine_and_score_slice(
     imag_mb: int,
     eval_micro_batch: int,
     classifier_min_steps: int,
-) -> dict[str, Any]:
+) -> ImaginedRollout:
     """Imagine ONE group-aligned start slice and score it — MEM-RL-01.
 
     This is the transient "imagination buffer" for one slice. The imagination is
@@ -329,15 +330,27 @@ def _imagine_and_score_slice(
     # entries already encode "T_scan - 1" → the last env-step of the last chunk.
     finish_step = finish_native * K + finish_offset if chunk_granular else finish_native
 
-    return {
-        "actor_feats": actor_feats,
-        "actions": actions,
-        "action_token_ids": action_token_ids,
-        "old_log_probs": old_log_probs,
-        "ref_kls": ref_kls if use_ref else None,
-        "complete": complete,
-        "finish_step": finish_step,
-    }
+    return ImaginedRollout(
+        actor_feats=actor_feats,
+        actions=actions,
+        action_token_ids=action_token_ids,
+        old_log_probs=old_log_probs,
+        ref_kls=ref_kls if use_ref else None,
+        complete=complete,
+        finish_step=finish_step,
+    )
+
+
+class WMPOImaginer:
+    """Default Imaginer: chunk-WM rollout scored by the success verifier.
+
+    Thin named seam over ``_imagine_and_score_slice`` so the imagination strategy is
+    a swappable component (World Model layer). Single implementation today; a registry
+    + config selector is deferred until a second imaginer exists.
+    """
+
+    def imagine_slice(self, **kwargs: Any) -> ImaginedRollout:
+        return _imagine_and_score_slice(**kwargs)
 
 
 def dino_wmpo_outcome_step(
@@ -512,11 +525,12 @@ def dino_wmpo_outcome_step(
     # ─── Phase 1: imagine each group-aligned slice into its (CPU) host buffer ──
     # Pure no_grad data collection (the imagination is data; the PPO gradient
     # flows only through the Phase-3 re-eval). The WM stays frozen for the sweep.
-    slices: list[dict[str, Any]] = []
+    slices: list[ImaginedRollout] = []
+    imaginer = WMPOImaginer()
     with _temporarily_freeze(chunk_world_model):
         for s_lo, s_hi in slice_bounds:
             slices.append(
-                _imagine_and_score_slice(
+                imaginer.imagine_slice(
                     policy=policy,
                     chunk_world_model=chunk_world_model,
                     classifier_module=classifier_module,
@@ -544,8 +558,8 @@ def dino_wmpo_outcome_step(
     # exactly (slices are whole-group contiguous blocks), so the advantage and
     # every scalar metric below are identical to the original full-batch path.
     # finish_step is already mapped to env-step units inside the slice helper.
-    complete = torch.cat([d["complete"] for d in slices], dim=0)
-    finish_step = torch.cat([d["finish_step"] for d in slices], dim=0)
+    complete = torch.cat([d.complete for d in slices], dim=0)
+    finish_step = torch.cat([d.finish_step for d in slices], dim=0)
 
     reward_tensor = _resolve_reward_tensor(
         wmpo_cfg=wmpo_cfg,
@@ -579,7 +593,7 @@ def dino_wmpo_outcome_step(
         # global layout (each slice holds num_chunks tensors of shape [mb]).
         ref_kl_stack = torch.stack(
             [
-                torch.cat([d["ref_kls"][c] for d in slices], dim=0)
+                torch.cat([d.ref_kls[c] for d in slices], dim=0)
                 for c in range(num_chunks)
             ],
             dim=0,
@@ -681,10 +695,10 @@ def dino_wmpo_outcome_step(
             ppo_count_slice = ppo_per_rollout_count[lo:hi]
             bc_count_slice = bc_per_rollout_count[lo:hi]
             for c in range(num_chunks):
-                actor_feat = data["actor_feats"][c].to(device)  # streamed from CPU
-                action_detached = data["actions"][c]
-                token_ids = data["action_token_ids"][c]
-                old_lp = data["old_log_probs"][c]
+                actor_feat = data.actor_feats[c].to(device)  # streamed from CPU
+                action_detached = data.actions[c]
+                token_ids = data.action_token_ids[c]
+                old_lp = data.old_log_probs[c]
                 eval_batch = {
                     "mode": "evaluate",
                     "hidden": actor_feat,
