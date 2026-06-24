@@ -71,6 +71,11 @@ class OnlineCotrainRayRunner(BaseRunner):
             groups = self._build_components(cluster)
             metrics = self._run_loop(groups)
             metrics["env/num_env_workers"] = int(groups["num_envs"])
+            # Expose ALL metrics in the log (stdout), independent of logger backend, so an
+            # async ray run's learner_updates / overlap_events / rollout episodes +
+            # success_rate / losses / timings are always visible in the captured log.
+            dump = " ".join(f"{k}={metrics[k]}" for k in sorted(metrics))
+            print(f"[ray-cotrain] FINAL METRICS: {dump}", flush=True)
             return metrics
         finally:
             cluster.shutdown()
@@ -113,7 +118,11 @@ class OnlineCotrainRayRunner(BaseRunner):
             },
         )
         env_cfg.setdefault("kwargs", {})
-        env_cfg["kwargs"].setdefault("horizon", horizon)
+        # `horizon` is a synthetic-test-env (CounterEnv) kwarg; the real
+        # DreamerVLAOnlineTrainEnv (use_from_config) rejects it and uses max_steps. Only
+        # inject horizon for the synthetic path so real OFT/RynnVLA envs build cleanly.
+        if not bool(env_cfg.get("use_from_config")):
+            env_cfg["kwargs"].setdefault("horizon", horizon)
         env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
             cluster, NodePlacementStrategy(num_envs)
         )
@@ -525,6 +534,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         return {
             "rollout/episodes": int(replay.size().wait()[0]),
             "rollout/steps": int(steps),
+            "rollout/success_rate": float(self.console_success_rate()),
             "train/learner_updates": int(learner_updates),
             # Compatibility for older smoke tests and dashboards.
             "train/ppo_updates": int(learner_updates),
