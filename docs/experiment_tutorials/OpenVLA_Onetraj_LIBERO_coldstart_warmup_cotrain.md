@@ -16,44 +16,43 @@ mkdir -p logs
 bash scripts/install/60_verify.sh
 ```
 
-Render and GPU env vars are passed **inline per command** (see [Run](#run)), not exported
-globally — so the same shell can launch either render backend without a stale `MUJOCO_GL`
-locking the backend.
+The only per-command env var is `CUDA_VISIBLE_DEVICES`; `MUJOCO_GL` defaults to osmesa
+(the runner sets it) and `NCCL_NVLS_ENABLE=0` is set inside the e2e scripts. Pick the
+render backend with the launcher knob `render_backend`, not an env var.
 
 ## Render backends
 
-The online cotrain rollout has two backends, switched with the launcher knob
-`render_backend` (the direct experiment entry is `online_rollout.render_backend`). Keep
-`MUJOCO_GL=osmesa` inline either way — collection always renders osmesa and the egl rollout
-forces egl inside each child. Both backends write the same outputs (see [Output](#output)).
+The online cotrain rollout has two backends, switched with `render_backend` (direct
+experiment entry: `online_rollout.render_backend`). Both write the same outputs (see
+[Output](#output)); collection always renders osmesa.
 
 | Backend | Select | Implementation |
 | --- | --- | --- |
-| **egl** — GPU, RLinf-vendored | `render_backend=egl`, `num_envs=K` | one spawn subprocess per env through RLinf's `SubprocVectorEnv` (`dreamervla/envs/rlinf_venv.py` → `OnlineEglVecEnv`); each child forces `MUJOCO_GL=egl` + its own `CUDA_VISIBLE_DEVICES`/`MUJOCO_EGL_DEVICE_ID` from the visible-GPU pool. Keep **1–2 envs per GPU**; action_hidden only (`backbone_latent` needs `num_envs=1`) |
+| **egl** — GPU, RLinf-vendored | `render_backend=egl`, `num_envs=K` | one spawn subprocess per env through RLinf's `SubprocVectorEnv` (`dreamervla/envs/rlinf_venv.py` → `OnlineEglVecEnv`); each child forces `MUJOCO_GL=egl` + its own GPU. Keep **1–2 envs per GPU**; action_hidden only (`backbone_latent` needs `num_envs=1`) |
 | **osmesa** — CPU, stable | `render_backend=osmesa` or `num_envs=1` | the validated `VecRolloutEnv`; use this if egl aborts |
 
 ## Run
 
-Env vars are inline; stdout/stderr go to `logs/`. Default GPUs `0,1,2,3,4,5`.
+Default GPUs `0,1,2,3,4,5`; logs go to `logs/`.
 
 ```bash
-# Ray collect + DDP cotrain, osmesa rollout
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 MUJOCO_GL=osmesa NCCL_NVLS_ENABLE=0 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
-  render_backend=osmesa > logs/cotrain_ray_osmesa.log 2>&1
+# no-Ray (pure torchrun) — collect -> warmup -> cotrain, osmesa rollout
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=6 profile=multi_gpu \
+  render_backend=osmesa > logs/cotrain_noray_osmesa.log 2>&1
 
-# same, egl rollout (RLinf-vendored)
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 MUJOCO_GL=osmesa NCCL_NVLS_ENABLE=0 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
-  render_backend=egl > logs/cotrain_ray_egl.log 2>&1
-
-# no-Ray variant: swap the script name e2e_coldstart_warmup_cotrain_noray.sh
-# fast end-to-end smoke (full pipeline, tiny step counts): add debug=true
-# preview the launch plan without running anything: add dry_run=true
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 MUJOCO_GL=osmesa NCCL_NVLS_ENABLE=0 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
-  debug=true > logs/cotrain_ray_smoke.log 2>&1
+# egl rollout (RLinf-vendored): same command, render_backend=egl
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=6 profile=multi_gpu \
+  render_backend=egl > logs/cotrain_noray_egl.log 2>&1
 ```
+
+Variants (append the knob):
+
+- **Ray** collect + DDP cotrain: swap the script for `e2e_coldstart_warmup_cotrain_ray.sh`.
+- **smoke** (cotrain at tiny step counts; collect unchanged): `debug=true`.
+- **preview** the launch plan without running anything: `dry_run=true`.
+- **fewer collect episodes** for a quick real run: `collect.episodes_per_task=2`.
 
 `multi_gpu` batch sizes are per-GPU (global = value × `ngpu`); lower them on OOM. Add
 `cotrain_engine=async` for the RLinf-style rollout⟂training overlap loop (Ray only).
