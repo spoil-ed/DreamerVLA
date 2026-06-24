@@ -737,6 +737,15 @@ def _load_component_state_dict(ckpt_path: str, component: str) -> dict[str, Any]
             value = payload.get(key)
             if isinstance(value, dict):
                 return value
+        # Pipeline warmup ckpts store the component under its own top-level key
+        # (wm_warmup.ckpt -> {"world_model": sd, "global_step": ...};
+        # classifier_warmup.ckpt -> {"classifier": sd, "classifier_threshold": ...}).
+        # Extract it so the ray async runner's component-mapping init_ckpt can consume the
+        # pipeline warmup files directly (the warmup -> async bridge). Must precede the
+        # all-string-keys catch-all, which would otherwise return the whole wrapper dict.
+        component_sd = payload.get(component)
+        if isinstance(component_sd, dict):
+            return component_sd
         if all(isinstance(key, str) for key in payload):
             return payload
     raise RuntimeError(
