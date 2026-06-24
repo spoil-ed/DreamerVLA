@@ -48,3 +48,27 @@ def test_rotates_every_n_demos():
         ]
         assert w.size() == 5
         assert [w.demos for w in _FakeWriter.instances] == [[0, 1], [0, 1], [0]]
+
+
+def test_start_shard_index_appends_on_resume():
+    _FakeWriter.created = []
+    _FakeWriter.instances = []
+    with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
+        # A relaunch that already has shards 000..002 starts rotation at 003.
+        w = dw.RolloutDumpWorker("r", "h", demos_per_shard=2, start_shard_index=3)
+        w.init()
+        for _ in range(3):
+            w.add_episode(_episode())
+        assert _FakeWriter.created == ["ray_shard_003.hdf5", "ray_shard_004.hdf5"]
+
+
+def test_start_shard_index_names_single_shard_on_resume():
+    _FakeWriter.created = []
+    _FakeWriter.instances = []
+    with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
+        # No rotation (demos_per_shard=0) still appends at the resume-aware name.
+        w = dw.RolloutDumpWorker("r", "h", "ray_shard_002.hdf5", demos_per_shard=0,
+                                 start_shard_index=2)
+        w.init()
+        w.add_episode(_episode())
+        assert _FakeWriter.created == ["ray_shard_002.hdf5"]

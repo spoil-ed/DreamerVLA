@@ -75,10 +75,15 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
             if cmd == "current_obs":
                 conn.send(("ok", cur_obs))
             elif cmd == "set_task":
-                cur_task = int(payload)
+                # payload is (task_id, start_episode_id) — resume/diversity continues the
+                # init_state from a caller-chosen episode_id instead of always 0. An int
+                # payload (legacy) starts at 0.
+                if isinstance(payload, tuple):
+                    cur_task, episode_id = int(payload[0]), int(payload[1])
+                else:
+                    cur_task, episode_id = int(payload), 0
                 if hasattr(env, "set_task"):
                     env.set_task(cur_task)
-                episode_id = 0
                 cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
                 conn.send(("ok", cur_obs))
             elif cmd == "step":
@@ -89,6 +94,8 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                     record_obs = dict(obs)
                     record_obs["_full_record"] = env.full_record()
                 next_obs, reward, terminated, truncated, info = env.step(action)
+                info = dict(info or {})
+                info["episode_id"] = episode_id  # current episode (before the done-increment)
                 if record_builder is not None:
                     transition = record_builder(
                         env, record_obs, action, reward, terminated, truncated, info, obs_embedding
@@ -230,18 +237,24 @@ class EnvWorker(Worker):
             raise RuntimeError("EnvWorker.init() has not been called")
         return self.obs
 
-    def set_task(self, task_id: int) -> dict[str, Any]:
+    def set_task(self, task_id: int, start_episode_id: int = 0) -> dict[str, Any]:
+        """Switch task and reset, starting from ``start_episode_id``.
+
+        episode_id is the init_state selector (env reset uses
+        init_state = episode_id % num_init_states), so a non-zero start lets the Ray
+        scheduler give each episode a DISTINCT init_state and continue past what is
+        already collected on resume (default 0 = legacy behaviour).
+        """
         self.task_id = int(task_id)
+        self.episode_id = int(start_episode_id)
         if self._spawned:
-            self.obs = self._rpc("set_task", self.task_id)
+            self.obs = self._rpc("set_task", (self.task_id, self.episode_id))
             self.episode = []
-            self.episode_id = 0
             return self.obs
         env = self._env()
         if hasattr(env, "set_task"):
             env.set_task(self.task_id)
         self.episode = []
-        self.episode_id = 0
         self.obs, _ = self._reset_env()
         return self.obs
 
@@ -318,6 +331,8 @@ class EnvWorker(Worker):
             record_obs = dict(obs)
             record_obs["_full_record"] = env.full_record()
         next_obs, reward, terminated, truncated, info = env.step(action)
+        info = dict(info or {})
+        info["episode_id"] = self.episode_id  # current episode (before the done-increment)
         if self._record_builder is not None:
             transition = self._record_builder(
                 env,

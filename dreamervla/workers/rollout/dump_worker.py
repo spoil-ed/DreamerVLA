@@ -21,6 +21,7 @@ class RolloutDumpWorker(Worker):
         preprocess_config: dict[str, Any] | None = None,
         data_attrs: dict[str, Any] | None = None,
         demos_per_shard: int = 0,
+        start_shard_index: int = 0,
     ) -> None:
         super().__init__()
         self.reward_dir = str(reward_dir)
@@ -31,7 +32,9 @@ class RolloutDumpWorker(Worker):
         self.demos_per_shard = int(demos_per_shard)
         self.writer: RolloutDumpWriter | None = None
         self.num_episodes = 0
-        self._shard_idx = 0
+        # Resume-aware: start rotation at the next free index so a relaunch appends new
+        # shards instead of overwriting ``ray_shard_000`` (mirrors the no-Ray collector).
+        self._shard_idx = int(start_shard_index)
         self._shard_demos = 0
 
     def _shard_name(self, idx: int) -> str:
@@ -40,7 +43,7 @@ class RolloutDumpWorker(Worker):
         return f"{base}_{idx:03d}.hdf5"
 
     def init(self) -> None:
-        first = self.shard_name if self.demos_per_shard <= 0 else self._shard_name(0)
+        first = self.shard_name if self.demos_per_shard <= 0 else self._shard_name(self._shard_idx)
         self.writer = RolloutDumpWriter(
             Path(self.reward_dir), Path(self.hidden_dir), first
         )

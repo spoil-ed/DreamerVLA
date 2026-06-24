@@ -7,6 +7,10 @@ from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.dataset.collection_manifest import (
+    count_episodes_per_task,
+    next_shard_index,
+)
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
@@ -216,14 +220,19 @@ class ColdStartRayCollectRunner(BaseRunner):
         episodes_per_task = int(collect_cfg.get("episodes_per_task", 1))
 
         dump_cfg = plan["dump"]
+        reward_dir = str(dump_cfg["reward_dir"])
+        # Resume-aware shard naming: append at the next free index instead of overwriting
+        # ray_shard_000 on a relaunch (the no-Ray collector does the same).
+        shard_start = next_shard_index(reward_dir, prefix="ray_shard")
         dump_group = WorkerGroup(
             RolloutDumpWorker,
-            str(dump_cfg["reward_dir"]),
+            reward_dir,
             str(dump_cfg["hidden_dir"]),
-            str(dump_cfg.get("shard_name", "ray_shard_000.hdf5")),
+            f"ray_shard_{shard_start:03d}.hdf5",
             dump_cfg["preprocess_config"],
             dump_cfg["data_attrs"],
             demos_per_shard,
+            shard_start,
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 
@@ -239,12 +248,19 @@ class ColdStartRayCollectRunner(BaseRunner):
         ).launch(cluster, NodePlacementStrategy(num_envs))
         env_task_ids: list[int | None] = [None] * num_envs
         task_counts = {int(task_id): 0 for task_id in task_ids}
+        # Resume-aware init_state diversity: each reserved episode gets episode_id =
+        # (already-collected for this task) + (this-pass index), so episodes use DISTINCT
+        # init_states and a resume continues past what is on disk instead of re-collecting
+        # init_state 0 every time.
+        offset_per_task = count_episodes_per_task(reward_dir)
         for env_id in range(num_envs):
-            task_id = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
-            if task_id is None:
+            reserved = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+            if reserved is None:
                 break
+            task_id, scheduled_index = reserved
             env_task_ids[env_id] = int(task_id)
-            env_group.execute_on(env_id).set_task(int(task_id)).wait()
+            start = _ray_start_episode_id(offset_per_task, task_id, scheduled_index)
+            env_group.execute_on(env_id).set_task(int(task_id), start).wait()
 
         gpu_id = int(collect_cfg.get("gpu_id", 0))
         num_infer = max(1, int(collect_cfg.get("num_inference_workers", 1)))
@@ -264,6 +280,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             "env_task_ids": env_task_ids,
             "task_counts": task_counts,
             "task_ids": task_ids,
+            "offset_per_task": offset_per_task,
             "episodes_per_task": episodes_per_task,
             "target_episodes": episodes_per_task * len(task_ids),
         }
@@ -281,6 +298,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         task_counts = dict(groups.get("task_counts", {}))
         task_ids = list(groups.get("task_ids", []))
+        offset_per_task = dict(groups.get("offset_per_task", {}))
         episodes_per_task = int(groups.get("episodes_per_task", 1))
         env_ids = (
             [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
@@ -371,11 +389,13 @@ class ColdStartRayCollectRunner(BaseRunner):
             if scheduled and done_envs:
                 set_task_calls = []
                 for env_id in done_envs:
-                    next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    reserved = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    next_task = None if reserved is None else reserved[0]
                     env_task_ids[int(env_id)] = next_task
-                    if next_task is not None:
+                    if reserved is not None:
+                        start = _ray_start_episode_id(offset_per_task, reserved[0], reserved[1])
                         set_task_calls.append(
-                            envs.execute_on(int(env_id)).set_task(int(next_task))
+                            envs.execute_on(int(env_id)).set_task(int(next_task), start)
                         )
                 wait_results(set_task_calls)
                 env_ids = [
@@ -430,6 +450,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         task_counts = dict(groups.get("task_counts", {}))
         task_ids = list(groups.get("task_ids", []))
+        offset_per_task = dict(groups.get("offset_per_task", {}))
         episodes_per_task = int(groups.get("episodes_per_task", 1))
         env_ids = (
             [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
@@ -512,12 +533,14 @@ class ColdStartRayCollectRunner(BaseRunner):
                 self.console_record_success(bool((_info or {}).get("success", False)))
                 infer.reset_states([int(env_id)]).wait()
                 if scheduled:
-                    next_task = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    reserved = _next_ray_task_id(task_ids, task_counts, episodes_per_task)
+                    next_task = None if reserved is None else reserved[0]
                     env_task_ids[int(env_id)] = next_task
-                    if next_task is None:
+                    if reserved is None:
                         return
+                    start = _ray_start_episode_id(offset_per_task, reserved[0], reserved[1])
                     next_obs = (
-                        envs.execute_on(int(env_id)).set_task(int(next_task)).wait()[0]
+                        envs.execute_on(int(env_id)).set_task(int(next_task), start).wait()[0]
                     )
             if not stop_launching:
                 ready_obs.append((int(env_id), next_obs))
@@ -729,8 +752,13 @@ def _next_ray_task_id(
     task_ids: list[int],
     task_counts: dict[int, int],
     episodes_per_task: int,
-) -> int | None:
-    """Reserve the next task id whose scheduled episode count is below target."""
+) -> tuple[int, int] | None:
+    """Reserve the next task below target; return ``(task_id, scheduled_index)``.
+
+    ``scheduled_index`` is this pass's 0-based episode index for the task (the count
+    before the increment). The caller adds the on-disk resume offset to turn it into the
+    episode_id / init_state, so every reserved episode gets a DISTINCT init_state.
+    """
     candidates = [
         (int(task_counts.get(int(task_id), 0)), index, int(task_id))
         for index, task_id in enumerate(task_ids)
@@ -740,7 +768,14 @@ def _next_ray_task_id(
         return None
     current, _index, task_id = min(candidates)
     task_counts[task_id] = current + 1
-    return task_id
+    return task_id, current
+
+
+def _ray_start_episode_id(
+    offset_per_task: dict[int, int], task_id: int, scheduled_index: int
+) -> int:
+    """init_state / episode_id for a reserved episode = resume offset + this-pass index."""
+    return int(offset_per_task.get(int(task_id), 0)) + int(scheduled_index)
 
 
 def _build_oft_dump_step(
@@ -770,6 +805,7 @@ def _build_oft_dump_step(
         done=done,
     )
     step["task_id"] = int(info.get("task_id", obs.get("task_id", 0)))
+    step["episode_id"] = int(info.get("episode_id", obs.get("episode_id", 0)))
     step["task_description"] = str(
         info.get("task_description", obs.get("task_description", ""))
     )

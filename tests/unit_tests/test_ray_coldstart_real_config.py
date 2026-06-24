@@ -127,8 +127,43 @@ def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
         _next_ray_task_id(task_ids, counts, episodes_per_task=2)
         for _ in range(7)
     ]
-    assert assigned == [0, 1, 2, 0, 1, 2, None]
+    # (task_id, scheduled_index): each task's index advances 0 then 1 across the rounds.
+    assert assigned == [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), None]
     assert counts == {0: 2, 1: 2, 2: 2}
+
+
+def test_ray_start_episode_id_adds_resume_offset_to_scheduled_index() -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import _ray_start_episode_id
+
+    # fresh: episode_id == scheduled index (distinct init_states 0,1,2,...)
+    assert [_ray_start_episode_id({}, 0, i) for i in range(3)] == [0, 1, 2]
+    # resume: task 0 already has 5 on disk -> continue at 5,6,7 (no init_state re-collect)
+    assert [_ray_start_episode_id({0: 5}, 0, i) for i in range(3)] == [5, 6, 7]
+
+
+def test_ray_dump_step_records_episode_id() -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import _build_oft_dump_step
+
+    class _Env:
+        def full_record(self):
+            import numpy as np
+
+            return {
+                "agentview_rgb": np.zeros((256, 256, 3), "uint8"),
+                "eye_in_hand_rgb": np.zeros((256, 256, 3), "uint8"),
+                "ee_pos": np.zeros(3), "ee_ori": np.zeros(3), "ee_states": np.zeros(6),
+                "gripper_states": np.zeros(2), "joint_states": np.zeros(7),
+                "robot_states": np.zeros(9), "states": np.zeros(45),
+            }
+
+    import numpy as np
+
+    step = _build_oft_dump_step(
+        _Env(), {}, np.ones(7), 0.0, True, False,
+        {"task_id": 1, "episode_id": 4, "success": True}, np.zeros(8, "float16"),
+    )
+    assert step["task_id"] == 1
+    assert step["episode_id"] == 4
 
 
 def test_wait_worker_results_batches_ray_get(monkeypatch) -> None:
