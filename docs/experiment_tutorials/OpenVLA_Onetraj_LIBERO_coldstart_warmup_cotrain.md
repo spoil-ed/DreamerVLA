@@ -55,6 +55,39 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa \
     warmup.wm_steps=16 warmup.classifier_steps=16
 ```
 
+## 1b. Multi-GPU (8× H100, single node)
+
+The cotrain stage (offline warmup + online RL) runs under torchrun DDP when
+`ngpu>1`; the `multi_gpu` profile sizes per-GPU batches for the 610M WM. With
+`ngpu>1` the no-Ray **collect** stage is also wrapped in torchrun (each rank
+shards the work list and binds `gpu_id=local_rank`); the Ray collect stage fans
+inference out over `collect.num_inference_workers` GPUs.
+
+```bash
+# Both modes: vectorized egl rollout + DDP cotrain
+export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl NCCL_NVLS_ENABLE=0
+
+# no-Ray full: collect (8-rank torchrun) + warmup + cotrain (8-rank DDP)
+bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=8 profile=multi_gpu
+
+# Ray full: ray collect (4 inference GPUs) + cotrain (8-rank DDP)
+export RAY_NUM_GPUS=8
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=8 profile=multi_gpu \
+  collect.num_inference_workers=4
+
+# Full-process smoke (only step counts shrink; num_envs/logger == production)
+bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=8 profile=multi_gpu debug=true
+# Cotrain-only smoke (assets already collected), single Hydra call:
+python -m dreamervla.train experiment=online_cotrain_pipeline_oft_action_hidden_smoke \
+  task=openvla_onetraj_coldstart_libero
+```
+
+> `dataloader.batch_size` / `training.classifier_batch_size` in `multi_gpu` are
+> **per-GPU** (global = value × ngpu); lower them if the OFT VLA + WM co-residency
+> OOMs. Ray multi-GPU collect inference (`collect.num_inference_workers>1`) is
+> logic/unit-tested but still needs a free-GPU verify before a long run, and the
+> overlap collector (`rollout.overlap=true`) does not support it.
+
 ## 2. Output layout
 
 The one-command e2e is just orchestration — the two parts stay on disk separately:

@@ -40,6 +40,7 @@ collect:
   max_steps: null
   envs_per_gpu: null   # no-Ray vectorized collector concurrency
   num_workers: null    # Ray EnvWorker concurrency
+  num_inference_workers: null   # Ray inference-worker count (multi-GPU collect; 1 = single GPU)
 
 warmup:
   wm_steps: null
@@ -60,6 +61,7 @@ control_overrides:
       envs_per_gpu: collect.envs_per_gpu
     ray:
       num_workers: env.num_workers
+      num_inference_workers: collect.num_inference_workers
   warmup:
     wm_steps: training.wm_warmup_steps
     classifier_steps: training.classifier_warmup_steps
@@ -119,7 +121,8 @@ cotrain:
   base:
     - experiment=online_cotrain_pipeline_oft_action_hidden
     - task={hydra_task}
-    - logger=tensorboard
+    # logger comes from the experiment default (tensorboard + wandb offline); do not
+    # force logger=tensorboard here or it would drop the W&B backend.
     - offline_warmup.data_dir={reward_dir}
     - offline_warmup.hidden_dir={hidden_dir}
     - offline_warmup.task_id=null
@@ -178,6 +181,7 @@ profiles:
       ray:
         - collect.episode_horizon=300
         - collect.memory_fraction=0.9
+        - collect.num_inference_workers=4
       noray:
         - collect.episode_horizon=300
         - collect.envs_per_gpu=32

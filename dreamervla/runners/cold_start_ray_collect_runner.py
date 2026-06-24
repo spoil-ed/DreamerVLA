@@ -19,6 +19,21 @@ from dreamervla.workers.inference.rollout_inference_worker import RolloutInferen
 from dreamervla.workers.rollout.dump_worker import RolloutDumpWorker
 
 
+def _shard_env_ids_by_worker(env_ids: list[int], num_workers: int) -> dict[int, list[int]]:
+    """Stable partition of env ids to inference workers (``env_id % num_workers``).
+
+    Each env id always maps to the same owner worker so the worker's per-env
+    extractor / action-queue state stays consistent across steps. Returns
+    ``{worker_rank: [env_id, ...]}`` preserving input order within each worker;
+    workers with no env ids are omitted. ``num_workers==1`` -> ``{0: env_ids}``.
+    """
+    num_workers = max(1, int(num_workers))
+    groups: dict[int, list[int]] = {}
+    for env_id in env_ids:
+        groups.setdefault(int(env_id) % num_workers, []).append(int(env_id))
+    return groups
+
+
 class ColdStartRayCollectRunner(BaseRunner):
     """Collect rollout episodes with Ray env actors and write HDF5 sidecars."""
 
@@ -232,14 +247,20 @@ class ColdStartRayCollectRunner(BaseRunner):
             env_group.execute_on(env_id).set_task(int(task_id)).wait()
 
         gpu_id = int(collect_cfg.get("gpu_id", 0))
+        num_infer = max(1, int(collect_cfg.get("num_inference_workers", 1)))
+        # Data-parallel inference across a contiguous GPU range [gpu_id, gpu_id+num_infer-1].
+        # Each worker is built with the full num_envs (per-env state indexed by env_id) but
+        # only ever serves its stable env-id shard (env_id % num_infer), so per-env state
+        # stays consistent. num_infer=1 -> single GPU at gpu_id (byte-identical to before).
         infer_group = WorkerGroup(RolloutInferenceWorker, plan["inference"], {}, num_envs=num_envs).launch(
-            cluster, PackedPlacementStrategy(gpu_id, gpu_id)
+            cluster, PackedPlacementStrategy(gpu_id, gpu_id + num_infer - 1, num_gpus_per_worker=1)
         )
         return {
             "dump": dump_group,
             "envs": env_group,
             "infer": infer_group,
             "num_envs": num_envs,
+            "num_infer": num_infer,
             "env_task_ids": env_task_ids,
             "task_counts": task_counts,
             "task_ids": task_ids,
@@ -255,6 +276,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         infer = groups["infer"]
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
+        num_infer = int(groups.get("num_infer", 1))
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         task_counts = dict(groups.get("task_counts", {}))
@@ -313,12 +335,24 @@ class ColdStartRayCollectRunner(BaseRunner):
                 )
             else:
                 obs_batch = wait_result(envs.current_obs())
-            infer_out = wait_result(infer.forward_batch(obs_batch, env_ids))[0]
+            # Data-parallel inference: route each env's obs to its stable owner worker
+            # (env_id % num_infer) so multi-GPU collection keeps per-env state consistent.
+            shards = _shard_env_ids_by_worker(env_ids, num_infer)
+            obs_by_env = dict(zip(env_ids, obs_batch, strict=True))
+            infer_calls = {
+                w: infer.execute_on(w).forward_batch([obs_by_env[e] for e in ids], ids)
+                for w, ids in shards.items()
+            }
+            out_by_env: dict[int, tuple[Any, Any]] = {}
+            for w, ids in shards.items():
+                out = wait_result(infer_calls[w])[0]
+                for e, action, hidden in zip(
+                    ids, out["actions"], out["obs_embedding"], strict=True
+                ):
+                    out_by_env[e] = (action, hidden)
             step_calls = [
-                envs.execute_on(rank).step(action, hidden)
-                for rank, action, hidden in zip(
-                    env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
-                )
+                envs.execute_on(env_id).step(out_by_env[env_id][0], out_by_env[env_id][1])
+                for env_id in env_ids
             ]
             driver_step_calls += len(step_calls)
             if step_calls:
@@ -330,7 +364,10 @@ class ColdStartRayCollectRunner(BaseRunner):
                     done_envs.append(env_id)
                     self.console_record_success(bool((_info or {}).get("success", False)))
             if done_envs:
-                wait_result(infer.reset_states(done_envs))
+                reset_shards = _shard_env_ids_by_worker(done_envs, num_infer)
+                wait_results(
+                    [infer.execute_on(w).reset_states(ids) for w, ids in reset_shards.items()]
+                )
             if scheduled and done_envs:
                 set_task_calls = []
                 for env_id in done_envs:
@@ -383,6 +420,12 @@ class ColdStartRayCollectRunner(BaseRunner):
         infer = groups["infer"]
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
+        if int(groups.get("num_infer", 1)) > 1:
+            raise NotImplementedError(
+                "multi-GPU inference (collect.num_inference_workers>1) is supported on the "
+                "default rollout loop only; set rollout.overlap=false (or "
+                "collect.num_inference_workers=1) for the overlap path."
+            )
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         task_counts = dict(groups.get("task_counts", {}))

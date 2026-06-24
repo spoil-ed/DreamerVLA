@@ -587,19 +587,25 @@ def test_coldstart_launcher_has_no_argparse_cli() -> None:
     assert "parse_args" not in text
 
 
-def test_multi_gpu_wraps_cotrain_in_torchrun_but_not_collect(tmp_path) -> None:
+def test_multi_gpu_torchrun_wrapping_by_mode(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
-    plan = build_pipeline_plan(
-        mode="noray", run_root=tmp_path, python="python", ngpu=4
-    )
+    # no-Ray multi-GPU: BOTH collect and cotrain run under torchrun DDP. The collector
+    # shards its work list by torchrun rank and binds gpu_id=local_rank.
+    noray = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python", ngpu=4)
+    assert "torch.distributed.run" in noray.cotrain_cmd
+    assert "--nproc-per-node=4" in noray.cotrain_cmd
+    assert noray.cotrain_cmd.count("dreamervla.train") == 1
+    assert "torch.distributed.run" in noray.collect_cmd
+    assert "--nproc-per-node=4" in noray.collect_cmd
+    assert noray.collect_cmd.count("dreamervla.train") == 1
 
-    # cotrain runs under torchrun DDP across the requested GPUs ...
-    assert "torch.distributed.run" in plan.cotrain_cmd
-    assert "--nproc-per-node=4" in plan.cotrain_cmd
-    assert plan.cotrain_cmd.count("dreamervla.train") == 1
-    # ... while collection stays single-process (vectorized / ray fan-out).
-    assert "torch.distributed.run" not in plan.collect_cmd
+    # Ray multi-GPU: cotrain uses torchrun DDP, but collection stays a Ray worker
+    # fan-out (no torchrun); inference scales via collect.num_inference_workers.
+    ray = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python", ngpu=4)
+    assert "torch.distributed.run" in ray.cotrain_cmd
+    assert "--nproc-per-node=4" in ray.cotrain_cmd
+    assert "torch.distributed.run" not in ray.collect_cmd
 
 
 def test_single_gpu_cotrain_has_no_torchrun(tmp_path) -> None:

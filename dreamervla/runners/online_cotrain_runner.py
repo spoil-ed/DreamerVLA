@@ -578,7 +578,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
-        num_envs = int(OmegaConf.select(oc, "num_envs", default=1))
+        # RLinf-aligned default: vectorized egl multi-env rollout (was 1 = legacy
+        # single-env osmesa). 4 matches the shipped cotrain pipeline config, so bare/
+        # ad-hoc runs no longer fall back to single-env osmesa. backbone_latent must
+        # override to 1 (validate_rollout_cfg rejects num_envs>1 for backbone_latent).
+        num_envs = int(OmegaConf.select(oc, "num_envs", default=4))
         render_backend = str(OmegaConf.select(oc, "render_backend", default="egl"))
         validate_rollout_cfg(
             num_envs, render_backend, getattr(self, "_latent_type", "action_hidden")

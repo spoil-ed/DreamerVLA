@@ -46,6 +46,7 @@ env:
 
 online_rollout:
   sequence_length: ${task.openvla_oft.wm_sequence_length}
+  num_envs: 1            # backbone_latent requires single-env (validate_rollout_cfg)
 
 # backbone (input-token) latent -> discrete OpenVLA action-token adapter.
 policy:

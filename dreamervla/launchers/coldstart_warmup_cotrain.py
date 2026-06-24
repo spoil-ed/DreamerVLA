@@ -204,9 +204,22 @@ def build_pipeline_plan(
         label=f"profile.{selected_profile}.collect",
     )
 
+    collect_launch = [python_cmd, "-m"]
+    if selected_mode == "noray" and distributed and selected_ngpu > 1:
+        # The no-Ray collector shards work by torchrun rank and binds gpu_id=local_rank
+        # (collect_parallel_rollouts.collect_rollouts), so wrapping the collect command
+        # in torch.distributed.run gives multi-GPU collection. Ray collection fans out
+        # via its own worker groups instead (no torchrun).
+        collect_launch += [
+            "torch.distributed.run",
+            "--standalone",
+            "--nnodes=1",
+            f"--nproc-per-node={selected_ngpu}",
+            f"--master_port={selected_master_port}",
+            "-m",
+        ]
     collect_cmd = [
-        python_cmd,
-        "-m",
+        *collect_launch,
         "dreamervla.train",
         *_render_overrides(mode_cfg["collect"], context),
         *_render_overrides(collect_profile_cfg, context),

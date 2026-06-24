@@ -1,0 +1,16 @@
+# @package _global_
+# Full-process low-cost smoke for the OFT action-hidden online-cotrain pipeline.
+# Differs from `online_cotrain_pipeline_oft_action_hidden` ONLY by step counts
+# (training.debug=true -> the runner's debug_* swap). Spans every phase:
+# offline WM+classifier warmup -> vectorized egl rollout (num_envs=4, == production)
+# -> >=1 wmpo_outcome (PPO-style) actor update + inline classifier -> checkpoint.
+# Requires the real OFT ckpt + action-hidden sidecar + LIBERO assets + a GPU.
+#   python -m dreamervla.train experiment=online_cotrain_pipeline_oft_action_hidden_smoke task=openvla_onetraj_coldstart_libero
+defaults:
+  - online_cotrain_pipeline_oft_action_hidden
+  - _self_
+
+training:
+  debug: true   # ONLY difference vs production: tiny debug_* step counts
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_pipeline_smoke/${now:%Y%m%d_%H%M%S}
+  checkpoint_every: 50   # exercise a checkpoint write within the smoke
