@@ -1,0 +1,74 @@
+"""build_rollout_vec_env — render_backend backend selection for cotrain (no GPU).
+
+Asserts the two user-chosen approaches are wired correctly without constructing a real
+vec env: egl -> the RLinf-vendored OnlineEglVecEnv (with a device pool from
+CUDA_VISIBLE_DEVICES and render env vars stripped); osmesa -> the proven VecRolloutEnv
+unchanged. The vec-env classes are monkeypatched to record their constructor kwargs.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from dreamervla.runners import online_cotrain_runner as ocr
+
+
+class _FakeEgl:
+    last: dict | None = None
+
+    def __init__(self, **kwargs):
+        type(self).last = kwargs
+
+
+class _FakeOsmesa:
+    last: dict | None = None
+
+    def __init__(self, **kwargs):
+        type(self).last = kwargs
+
+
+@pytest.fixture
+def patched(monkeypatch):
+    import dreamervla.envs.online_egl_venv as egl_mod
+    import dreamervla.runners.vec_rollout_env as vec_mod
+
+    _FakeEgl.last = None
+    _FakeOsmesa.last = None
+    monkeypatch.setattr(egl_mod, "OnlineEglVecEnv", _FakeEgl)
+    monkeypatch.setattr(vec_mod, "VecRolloutEnv", _FakeOsmesa)
+
+
+def test_egl_backend_uses_vendored_adapter_with_device_pool(patched, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+    out = ocr.build_rollout_vec_env(
+        render_backend="egl",
+        num_envs=3,
+        cfg_kwargs={"a": 1},
+        env_vars={"MUJOCO_GL": "egl", "PYOPENGL_PLATFORM": "egl", "LIBERO_CONFIG_PATH": "/x"},
+    )
+    assert isinstance(out, _FakeEgl)
+    assert _FakeEgl.last["num_envs"] == 3
+    assert _FakeEgl.last["cfg_kwargs"] == {"a": 1}
+    assert _FakeEgl.last["egl_device_pool"] == [4, 5]
+    # render env vars are stripped (the adapter applies the egl regime per child);
+    # non-render vars are forwarded.
+    assert _FakeEgl.last["env_vars"] == {"LIBERO_CONFIG_PATH": "/x"}
+
+
+def test_osmesa_backend_uses_vecrolloutenv_unchanged(patched, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+    env_vars = {"MUJOCO_GL": "osmesa", "PYOPENGL_PLATFORM": "osmesa"}
+    out = ocr.build_rollout_vec_env(
+        render_backend="osmesa", num_envs=2, cfg_kwargs={}, env_vars=env_vars
+    )
+    assert isinstance(out, _FakeOsmesa)
+    assert _FakeOsmesa.last["num_envs"] == 2
+    assert _FakeOsmesa.last["env_vars"] == env_vars  # osmesa path untouched
+
+
+def test_egl_empty_cuda_visible_devices_gives_empty_pool(patched, monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    ocr.build_rollout_vec_env(
+        render_backend="egl", num_envs=1, cfg_kwargs={}, env_vars={}
+    )
+    assert _FakeEgl.last["egl_device_pool"] == []

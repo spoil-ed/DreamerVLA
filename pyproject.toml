@@ -38,6 +38,10 @@ python_files = ["test_*.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Vendored verbatim from RLinf (Apache-2.0); kept faithful to upstream, not reformatted.
+extend-exclude = ["dreamervla/envs/rlinf_venv.py"]
+# Apply the exclude even when the file is passed explicitly (e.g. pre-commit hooks).
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

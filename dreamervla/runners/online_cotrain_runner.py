@@ -130,6 +130,53 @@ def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -
             )
 
 
+def build_rollout_vec_env(
+    *,
+    render_backend: str,
+    num_envs: int,
+    cfg_kwargs: dict[str, Any],
+    env_vars: dict[str, str],
+) -> Any:
+    """Select + construct the rollout vec env for the vectorized cotrain path.
+
+    Two backends (the user-chosen approaches):
+
+    * ``render_backend == "egl"`` -> ``OnlineEglVecEnv`` (approach 1): each env runs
+      through RLinf's vendored ``SubprocVectorEnv`` with RLinf's per-child egl device
+      regime. The physical-GPU pool is read from this process's
+      ``CUDA_VISIBLE_DEVICES`` (mirrors the ray runner's ``_egl_device_pool``; empty ->
+      egl device 0). The adapter applies ``MUJOCO_GL=egl`` + per-child CUDA/EGL device
+      vars itself, so the render env vars are stripped before forwarding.
+    * otherwise -> ``VecRolloutEnv`` (approach 2): the proven osmesa path, unchanged.
+
+    Module-level so the backend selection is unit-testable without a GPU / full runner.
+    """
+    # TODO(unify-vec-env): VecRolloutEnv (osmesa) and OnlineEglVecEnv (egl) are both
+    # SubprocVectorEnv-style send-all/recv-all wrappers over the SAME env protocol; the egl
+    # one only adds RLinf's vendored classes + the per-child device regime. They should
+    # collapse into ONE vec env taking the render backend as a parameter (osmesa = skip the
+    # egl device regime). Deferred until the egl path is GPU-verified at low per-GPU
+    # concurrency, so the merge can be validated against a known-good baseline.
+    if render_backend == "egl":
+        from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
+
+        cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        egl_device_pool = [int(x) for x in cvd.split(",") if x.strip().isdigit()]
+        adapter_env_vars = {
+            k: v for k, v in env_vars.items() if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
+        }
+        return OnlineEglVecEnv(
+            num_envs=num_envs,
+            cfg_kwargs=cfg_kwargs,
+            egl_device_pool=egl_device_pool,
+            env_vars=adapter_env_vars,
+        )
+
+    from dreamervla.runners.vec_rollout_env import VecRolloutEnv
+
+    return VecRolloutEnv(num_envs=num_envs, cfg_kwargs=cfg_kwargs, env_vars=env_vars)
+
+
 class OnlineCotrainRunner(DreamerVLARunner):
     """Hydra runner for the unified online cotrain pipeline (see module docstring)."""
 
@@ -854,11 +901,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         counters: dict[str, int],
         history: list,
     ) -> list:
-        """num_envs>1 path: spawn K VecRolloutEnv child envs (egl-isolated GL contexts)
-        and run the continuous vectorized rollout, interleaving the same training burst
-        per env-step. The legacy single-env osmesa path (num_envs==1) is untouched."""
-        from dreamervla.runners.vec_rollout_env import VecRolloutEnv
-
+        """num_envs>1 path: spawn K env children (egl-isolated GL contexts) and run the
+        continuous vectorized rollout, interleaving the same training burst per env-step.
+        The vec env backend is chosen by ``render_backend`` (``build_rollout_vec_env``):
+        egl -> RLinf-vendored ``OnlineEglVecEnv``, osmesa -> ``VecRolloutEnv``. The legacy
+        single-env osmesa path (num_envs==1) is untouched."""
         main_extractor = getattr(self, "_oft_action_hidden_extractor", None)
         if main_extractor is None:
             raise RuntimeError(
@@ -897,7 +944,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 f"render_backend={render_backend}",
                 flush=True,
             )
-        vec = VecRolloutEnv(num_envs=num_envs, cfg_kwargs=cfg_kwargs, env_vars=env_vars)
+        vec = build_rollout_vec_env(
+            render_backend=render_backend,
+            num_envs=num_envs,
+            cfg_kwargs=cfg_kwargs,
+            env_vars=env_vars,
+        )
         try:
             def _train_hook(env_step: int) -> bool:
                 return self._run_training_bursts(
