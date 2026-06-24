@@ -25,7 +25,7 @@ model (+ classifier) → DreamerVLA actor-critic / WMPO-outcome RL**.
 ## Code structure
 
 - **`dreamervla/`** — the package:
-  - `algorithms/` — PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic; actor/critic/reward heads; `registry.py` for actor-update routes.
+  - `algorithms/` — PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic; actor/critic/reward heads; `registry.py` for actor-update routes. WMPO reward is selectable via `algorithm.wmpo.reward_model` (registry in `algorithms/reward/`, default `sparse_outcome`); the success verifier (value source `V(e_t)=P(success)`) must satisfy `algorithms/verifier/SuccessVerifier` and is swapped via the `classifier` component's Hydra `_target_`.
   - `models/` — encoder, world model, VLA backbones (each behind a protocol).
   - `dataset/`, `preprocess/` — offline datasets + the Hydra-centered sidecar/hidden extraction pipelines.
   - `runners/` — `BaseRunner` + VLA SFT / WM / classifier / DreamerVLA / eval runners, DDP-FSDP helpers, standalone online/frozen tools, and optional Ray rollout/cotrain runners.
