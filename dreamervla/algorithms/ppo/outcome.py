@@ -127,6 +127,35 @@ def _build_reward_tensor(
     return reward
 
 
+def _resolve_reward_tensor(
+    *,
+    wmpo_cfg: Any,
+    batch: int,
+    max_steps: int,
+    chunk_size: int,
+    finish_step: torch.Tensor,
+    complete: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """Build the reward via the config-selected reward model (default sparse_outcome).
+
+    Imported lazily: ``dreamervla.algorithms.reward.sparse_outcome`` imports
+    ``_build_reward_tensor`` from THIS module, so a top-level import would cycle.
+    """
+    import dreamervla.algorithms.reward as reward_pkg
+
+    name = str(wmpo_cfg.get("reward_model", "sparse_outcome"))
+    model = reward_pkg.get_reward_model(name)
+    return model.build_reward(
+        batch=batch,
+        max_steps=max_steps,
+        chunk_size=chunk_size,
+        finish_step=finish_step,
+        complete=complete,
+        device=device,
+    )
+
+
 def _predict_next_chunk_mb(
     world_model: nn.Module, current: Any, action_chunk: torch.Tensor, micro_batch: int
 ) -> dict[str, torch.Tensor]:
@@ -518,13 +547,15 @@ def dino_wmpo_outcome_step(
     complete = torch.cat([d["complete"] for d in slices], dim=0)
     finish_step = torch.cat([d["finish_step"] for d in slices], dim=0)
 
-    reward_tensor = _build_reward_tensor(
+    reward_tensor = _resolve_reward_tensor(
+        wmpo_cfg=wmpo_cfg,
         batch=B_eff,
         max_steps=T_max,
         chunk_size=K,
         finish_step=finish_step,
         complete=complete,
-    ).to(device)
+        device=device,
+    )
     returns = reward_tensor.sum(dim=-1)  # for sparse 0/1 this equals float(complete)
 
     # ─── eos_mask, aligned with WMPO ───────────────────────────────────────
