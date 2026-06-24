@@ -88,6 +88,20 @@ python -m dreamervla.train experiment=online_cotrain_pipeline_oft_action_hidden_
 > logic/unit-tested but still needs a free-GPU verify before a long run, and the
 > overlap collector (`rollout.overlap=true`) does not support it.
 
+**Async cotrain (RLinf-style overlap).** `cotrain_engine=async` runs the cotrain stage as
+three sub-phases: (2a) the sync pipeline **warmup only** (`online_rollout.total_env_steps=0`,
+writes `wm_warmup.ckpt` + `classifier_warmup.ckpt`), (2b) consolidate those into one
+`ray_async_init.ckpt`, (2c) the **Ray async overlap** online loop
+(`OnlineCotrainRayRunner._run_loop_overlap`, rollout⟂training) initialized from it.
+`cotrain_async_experiment` selects the ray online experiment.
+
+```bash
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=4 cotrain_engine=async
+```
+
+> Async needs a Ray cluster and an OFT-structured ray experiment matching the warmup ckpt
+> architecture. The default sync engine (`cotrain_engine=sync`) stays the validated path.
+
 **Render backend (one knob).** The cotrain online rollout backend is a single launcher
 knob `render_backend` (default `egl`, GPU offscreen). Switch the whole cotrain to the
 stable CPU path with `render_backend=osmesa` — e.g.

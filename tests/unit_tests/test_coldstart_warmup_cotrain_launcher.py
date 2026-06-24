@@ -663,3 +663,52 @@ def test_launcher_debug_control_appends_training_debug_to_cotrain(tmp_path) -> N
     assert "training.debug=true" in plan_debug.cotrain_cmd
     # debug only affects cotrain, never the collect command.
     assert "training.debug=true" not in plan_debug.collect_cmd
+
+
+def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray", run_root=tmp_path, python="python", launcher_cfg=cfg
+    )
+
+    assert plan.cotrain_engine == "async"
+    # 2a: sync pipeline warmup, online RL disabled (total_env_steps=0).
+    assert "experiment=online_cotrain_pipeline_oft_action_hidden" in plan.cotrain_warmup_cmd
+    assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
+    # 2c: ray async overlap online, NOT torchrun, init from the consolidated warmup ckpt.
+    assert "experiment=online_cotrain_ray_oft" in plan.cotrain_online_cmd
+    assert "torch.distributed.run" not in plan.cotrain_online_cmd
+    assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
+    assert "inference.init_ckpt.path=null" in plan.cotrain_online_cmd
+    assert plan.ray_init_ckpt is not None
+
+
+def test_sync_cotrain_engine_has_no_async_subcommands(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    assert plan.cotrain_engine == "sync"
+    assert plan.cotrain_warmup_cmd == []
+    assert plan.cotrain_online_cmd == []
+
+
+def test_consolidate_warmup_state_dicts_merges_components(tmp_path) -> None:
+    import torch
+
+    from dreamervla.launchers.coldstart_warmup_cotrain import _consolidate_warmup_state_dicts
+
+    wm = tmp_path / "wm_warmup.ckpt"
+    cls = tmp_path / "classifier_warmup.ckpt"
+    out = tmp_path / "ray_async_init.ckpt"
+    torch.save({"global_step": 3, "world_model": {"w": torch.zeros(2)}}, wm)
+    torch.save({"classifier": {"b": torch.ones(1)}, "classifier_threshold": 0.5}, cls)
+
+    _consolidate_warmup_state_dicts(wm, cls, out)
+
+    payload = torch.load(out, map_location="cpu", weights_only=False)
+    assert set(payload["state_dicts"]) == {"world_model", "classifier"}
+    assert set(payload["state_dicts"]["world_model"]) == {"w"}
+    assert payload["classifier_threshold"] == 0.5

@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -43,6 +43,15 @@ class PipelinePlan:
     hidden_dir: Path
     collect_cmd: list[str]
     cotrain_cmd: list[str]
+    # Async cotrain (cotrain_engine=async): cotrain splits into a sync warmup-only phase
+    # then a ray async online phase initialized from the consolidated warmup ckpt. Empty
+    # for the default sync engine.
+    cotrain_engine: str = "sync"
+    cotrain_warmup_cmd: list[str] = field(default_factory=list)
+    cotrain_online_cmd: list[str] = field(default_factory=list)
+    warmup_wm_ckpt: Path | None = None
+    warmup_cls_ckpt: Path | None = None
+    ray_init_ckpt: Path | None = None
 
 
 def _normalize_mode(mode: str) -> PipelineMode:
@@ -268,6 +277,36 @@ def build_pipeline_plan(
     # takes over (small debug_* scale). Appended last so it wins in Hydra.
     if debug_enabled:
         cotrain_cmd.append("training.debug=true")
+
+    # cotrain_engine=async: run the sync pipeline warmup ONLY (writes wm/classifier warmup
+    # ckpts), consolidate them, then run the ray async overlap online loop initialized from
+    # that ckpt. The online phase is NOT wrapped in torchrun (Ray owns placement).
+    cotrain_engine = str(cfg.get("cotrain_engine", "sync")).strip().lower()
+    cotrain_warmup_cmd: list[str] = []
+    cotrain_online_cmd: list[str] = []
+    warmup_wm_ckpt = warmup_cls_ckpt = ray_init_ckpt = None
+    if cotrain_engine == "async":
+        async_exp = str(cfg.get("cotrain_async_experiment", "online_cotrain_ray_oft"))
+        ckpt_dir = cotrain_out / "ckpt"
+        warmup_wm_ckpt = ckpt_dir / "wm_warmup.ckpt"
+        warmup_cls_ckpt = ckpt_dir / "classifier_warmup.ckpt"
+        ray_init_ckpt = ckpt_dir / "ray_async_init.ckpt"
+        cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
+        cotrain_online_cmd = [
+            python_cmd,
+            "-m",
+            "dreamervla.train",
+            f"experiment={async_exp}",
+            f"task={task_spec['hydra_task']}",
+            f"training.out_dir={cotrain_out}",
+            f"init.warmup_ckpt_path={ray_init_ckpt}",
+            "inference.init_ckpt.path=null",
+            *common_overrides,
+            *cotrain_overrides,
+        ]
+        if debug_enabled:
+            cotrain_online_cmd.append("training.debug=true")
+
     return PipelinePlan(
         mode=selected_mode,
         profile=selected_profile,
@@ -278,6 +317,12 @@ def build_pipeline_plan(
         hidden_dir=hidden_dir,
         collect_cmd=collect_cmd,
         cotrain_cmd=cotrain_cmd,
+        cotrain_engine=cotrain_engine,
+        cotrain_warmup_cmd=cotrain_warmup_cmd,
+        cotrain_online_cmd=cotrain_online_cmd,
+        warmup_wm_ckpt=warmup_wm_ckpt,
+        warmup_cls_ckpt=warmup_cls_ckpt,
+        ray_init_ckpt=ray_init_ckpt,
     )
 
 
@@ -385,6 +430,26 @@ def _as_str_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _consolidate_warmup_state_dicts(wm_path: Path, cls_path: Path, out_path: Path) -> None:
+    """Merge the sync pipeline's per-component warmup ckpts into one runner-format file.
+
+    The pipeline writes wm_warmup.ckpt ({"world_model": sd, ...}) and classifier_warmup.ckpt
+    ({"classifier": sd, "classifier_threshold": ...}); the ray async runner loads a single
+    init.warmup_ckpt_path via _load_runner_state_dicts, which expects {"state_dicts": {...}}.
+    """
+    import torch  # local import: the launcher has no module-level torch dependency
+
+    wm = torch.load(wm_path, map_location="cpu", weights_only=False)
+    cls = torch.load(cls_path, map_location="cpu", weights_only=False)
+    payload: dict[str, Any] = {
+        "state_dicts": {"world_model": wm["world_model"], "classifier": cls["classifier"]}
+    }
+    if isinstance(cls, dict) and "classifier_threshold" in cls:
+        payload["classifier_threshold"] = float(cls["classifier_threshold"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(payload, out_path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     config_name, overrides = _parse_hydra_like_argv(
         list(sys.argv[1:] if argv is None else argv)
@@ -417,6 +482,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"hidden_dir: {plan.hidden_dir}")
     print(f"collect: {shlex.join(plan.collect_cmd)}")
     print(f"cotrain: {shlex.join(plan.cotrain_cmd)}")
+    if plan.cotrain_engine == "async":
+        print(f"cotrain_warmup: {shlex.join(plan.cotrain_warmup_cmd)}")
+        print(f"cotrain_online: {shlex.join(plan.cotrain_online_cmd)}")
     if bool(cfg.get("dry_run", False)):
         return 0
 
@@ -482,8 +550,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
     _write_collection_manifest(plan, target_episodes=target_episodes, num_tasks=num_tasks)
-    print("PHASE 2/2 START: offline-warmup online cotrain", flush=True)
-    subprocess.run(plan.cotrain_cmd, check=True)
+    if plan.cotrain_engine == "async":
+        print("PHASE 2a/3: offline warmup (sync, writes warmup ckpts)", flush=True)
+        subprocess.run(plan.cotrain_warmup_cmd, check=True)
+        print("PHASE 2b/3: consolidate warmup ckpts -> ray async init", flush=True)
+        _consolidate_warmup_state_dicts(
+            plan.warmup_wm_ckpt, plan.warmup_cls_ckpt, plan.ray_init_ckpt
+        )
+        print("PHASE 2c/3: async online cotrain (ray overlap)", flush=True)
+        subprocess.run(plan.cotrain_online_cmd, check=True)
+    else:
+        print("PHASE 2/2 START: offline-warmup online cotrain", flush=True)
+        subprocess.run(plan.cotrain_cmd, check=True)
     return 0
 
 
