@@ -226,4 +226,96 @@ class RolloutDumpWriter:
             pass
 
 
-__all__ = ["RolloutDumpWriter"]
+class RotatingRolloutDumpWriter:
+    """Drop-in ``RolloutDumpWriter`` that rolls a new shard every N demos.
+
+    Same ``write_demo`` / ``close`` / context-manager interface as
+    ``RolloutDumpWriter``, so callers swap one for the other without further
+    changes.  Shards are named ``{shard_prefix}_{NNN}.hdf5`` starting at
+    ``start_index``; the demo group restarts at ``demo_0`` in each shard (the
+    reader globs ``*.hdf5`` and iterates per-shard keys, so per-shard numbering
+    is what it expects).  ``preprocess_config`` / ``data_attrs`` are captured from
+    the first write that provides them and re-emitted on every shard's first demo
+    so each shard is independently readable — mirroring ``RolloutDumpWorker``'s
+    Ray-side rotation.  The caller's ``index`` argument is ignored (the wrapper
+    owns shard-local numbering).
+    """
+
+    def __init__(
+        self,
+        reward_dir: str | Path,
+        hidden_dir: str | Path,
+        *,
+        shard_prefix: str,
+        demos_per_shard: int,
+        start_index: int = 0,
+    ) -> None:
+        if int(demos_per_shard) <= 0:
+            raise ValueError("RotatingRolloutDumpWriter requires demos_per_shard > 0")
+        self.reward_dir = Path(reward_dir)
+        self.hidden_dir = Path(hidden_dir)
+        self.shard_prefix = str(shard_prefix)
+        self.demos_per_shard = int(demos_per_shard)
+        self._shard_idx = int(start_index)
+        self._shard_demos = 0
+        self._saved_config: dict[str, Any] | None = None
+        self._saved_attrs: dict[str, Any] | None = None
+        self._closed = False
+        self._writer = RolloutDumpWriter(
+            self.reward_dir, self.hidden_dir, self._shard_name(self._shard_idx)
+        )
+
+    def _shard_name(self, idx: int) -> str:
+        return f"{self.shard_prefix}_{idx:03d}.hdf5"
+
+    def write_demo(
+        self,
+        index: int,
+        steps: list[dict[str, Any]],
+        preprocess_config: dict[str, Any] | None = None,
+        data_attrs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not steps:
+            return
+        if preprocess_config is not None and self._saved_config is None:
+            self._saved_config = preprocess_config
+        if data_attrs is not None and self._saved_attrs is None:
+            self._saved_attrs = data_attrs
+        if self._shard_demos >= self.demos_per_shard:
+            self._writer.close()
+            self._shard_idx += 1
+            self._shard_demos = 0
+            self._writer = RolloutDumpWriter(
+                self.reward_dir, self.hidden_dir, self._shard_name(self._shard_idx)
+            )
+        first_in_shard = self._shard_demos == 0
+        self._writer.write_demo(
+            index=self._shard_demos,
+            steps=steps,
+            preprocess_config=self._saved_config if first_in_shard else None,
+            data_attrs=self._saved_attrs if first_in_shard else None,
+            **kwargs,
+        )
+        self._shard_demos += 1
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._writer.close()
+
+    def __enter__(self) -> RotatingRolloutDumpWriter:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+__all__ = ["RolloutDumpWriter", "RotatingRolloutDumpWriter"]

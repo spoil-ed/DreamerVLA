@@ -334,6 +334,49 @@ def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
     assert f"training.classifier_batch_size={classifier_batch_size}" in out
 
 
+@pytest.mark.parametrize("mode", ["noray", "ray"])
+def test_launcher_forwards_demos_per_shard_to_collect(tmp_path, capsys, mode) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import main
+
+    exit_code = main(
+        [
+            f"mode={mode}",
+            f"run_root={tmp_path}",
+            "dry_run=true",
+            "collect.demos_per_shard=25",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    # The slicing knob lands in the collect command (both backends read it), never cotrain.
+    collect_line = next(line for line in out.splitlines() if line.startswith("collect:"))
+    cotrain_line = next(line for line in out.splitlines() if line.startswith("cotrain:"))
+    assert "collect.demos_per_shard=25" in collect_line
+    assert "demos_per_shard" not in cotrain_line
+
+
+def test_launcher_aggregates_collection_after_collect(tmp_path, monkeypatch, capsys) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    monkeypatch.setattr(mod, "subprocess", _Recorder())
+
+    exit_code = mod.main(
+        [f"run_root={tmp_path}", f"data_root={tmp_path}", "skip_asset_check=true"]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    # A single aggregate summary follows the multi-process collect.
+    assert "PHASE 1/2 collected (aggregate across all processes):" in out
+
+
 def test_launcher_prints_phase_start_banners(tmp_path, monkeypatch, capsys) -> None:
     import dreamervla.launchers.coldstart_warmup_cotrain as mod
 

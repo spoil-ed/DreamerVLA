@@ -558,6 +558,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if run_collect:
         print("PHASE 1/2 START: cold-start collection", flush=True)
         subprocess.run(collect_cmd, check=True)
+        # Aggregate what every collect rank/worker wrote to disk into one report,
+        # so the multi-process collect ends in a summary rather than per-process noise.
+        post = summarize_collection(
+            plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
+        )
+        print("PHASE 1/2 collected (aggregate across all processes):", flush=True)
+        print(format_collection_report(post, root=plan.collected_root), flush=True)
     else:
         print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
     _write_collection_manifest(plan, target_episodes=target_episodes, num_tasks=num_tasks)

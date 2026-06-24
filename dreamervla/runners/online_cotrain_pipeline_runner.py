@@ -11,6 +11,7 @@ See docs/superpowers/specs/2026-06-17-offline-warmup-online-cotrain-pipeline-des
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -22,6 +23,29 @@ from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+
+
+def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
+    """Fail fast if the collected cold-start dump is missing — BEFORE loading models.
+
+    Warmup seeds the replay buffer from collected reward + hidden shards. Without
+    this guard, ``run()`` would build the heavy WM/encoder/classifier first and only
+    then crash inside ``seed_replay_from_offline``. Checking up front turns "load
+    everything, then fail" into an immediate, actionable error.
+    """
+    reward = Path(str(data_dir)).expanduser()
+    hidden = Path(str(hidden_dir)).expanduser()
+    if not reward.is_dir() or not any(reward.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"offline warmup needs collected reward shards but found none under {reward} — "
+            "run cold-start collection first, or set training.resume with existing warmup "
+            "checkpoints to skip seeding."
+        )
+    if not hidden.is_dir() or not any(hidden.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"offline warmup needs collected hidden sidecars but found none under {hidden} — "
+            "run cold-start collection first."
+        )
 
 
 class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
@@ -172,6 +196,19 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         if latent_type == "backbone_latent":
             OmegaConf.update(cfg, "env.obs_hidden_source", "input_token_embedding", force_add=True)
 
+        # Identify that the collected cold-start dump exists BEFORE loading the heavy
+        # WM/encoder/classifier. When warmup will seed from offline shards (i.e. no full
+        # warmup-ckpt resume), fail fast here instead of paying the model load only to
+        # crash in seeding. A full resume needs no seeding, so the check is skipped.
+        resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
+        need_wm = not (resume and (os.path.exists(self._wm_warmup_ckpt()) or os.path.isdir(self._wm_warmup_hf_dir())))
+        need_cls = not (resume and (os.path.exists(self._cls_warmup_ckpt()) or os.path.isdir(self._cls_warmup_hf_dir())))
+        if need_wm or need_cls:
+            _assert_offline_seed_present(
+                data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
+                hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
+            )
+
         self._build_components(cfg)
         if self.distributed.is_main_process:
             trainable = {
@@ -199,10 +236,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         buffer_size = int(OmegaConf.select(cfg, "online_rollout.buffer_size", default=20000))
         env_task_ids = tuple(int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]))
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
-        resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
-
-        need_wm = not (resume and (os.path.exists(self._wm_warmup_ckpt()) or os.path.isdir(self._wm_warmup_hf_dir())))
-        need_cls = not (resume and (os.path.exists(self._cls_warmup_ckpt()) or os.path.isdir(self._cls_warmup_hf_dir())))
+        # resume / need_wm / need_cls were computed above (before the heavy build) so the
+        # offline-data existence check could fail fast; reuse them here.
 
         warmup_replay = OnlineReplay(capacity=buffer_size, sequence_length=seq_len,
                                      task_ids=env_task_ids, rank=self._rank)

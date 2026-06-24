@@ -148,6 +148,13 @@ def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, to
     runner.distributed = _FakeDistributed()
     runner.device = torch.device("cpu")
 
+    # run() now identifies the collected dump before loading models; create a minimal
+    # shard in each offline dir so that existence check passes (seeding itself is faked).
+    for sub in ("offline_data", "offline_hidden"):
+        d = tmp_path / sub
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "shard_000.hdf5").touch()
+
     def fake_build_components(self, cfg):
         calls.append("build")
         self.world_model = torch.nn.Linear(2, 2)
@@ -217,6 +224,24 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch):
     ]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):
+    """No collected shards + no warmup-ckpt resume -> identify-before-load error,
+    raised BEFORE _build_components loads the heavy WM/encoder/classifier."""
+    import shutil
+
+    import pytest
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=1)
+    # Remove the offline dirs the helper created so the dump looks un-collected.
+    for sub in ("offline_data", "offline_hidden"):
+        shutil.rmtree(tmp_path / sub)
+
+    with pytest.raises(FileNotFoundError, match="cold-start collection"):
+        runner.run()
+    assert "build" not in calls  # never reached the model load
 
 
 def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch):

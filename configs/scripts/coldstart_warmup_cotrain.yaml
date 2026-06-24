@@ -47,6 +47,7 @@ collect:
   episode_horizon: null
   memory_fraction: null
   max_steps: null
+  demos_per_shard: null   # >0 slices collected data into N-demo shards (both backends)
   envs_per_gpu: null   # no-Ray vectorized collector concurrency
   num_workers: null    # Ray EnvWorker concurrency
   num_inference_workers: null   # Ray inference-worker count (multi-GPU collect; 1 = single GPU)
@@ -66,6 +67,7 @@ control_overrides:
       episode_horizon: collect.episode_horizon
       memory_fraction: collect.memory_fraction
       max_steps: rollout.max_steps
+      demos_per_shard: collect.demos_per_shard
     noray:
       envs_per_gpu: collect.envs_per_gpu
     ray:

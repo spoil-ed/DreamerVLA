@@ -12,6 +12,7 @@ collect:
   episodes_per_task: 50   # all LIBERO init states per task (one episode each)
   episode_horizon: 64
   envs_per_gpu: 2
+  demos_per_shard: 0      # 0 = one shard per job; >0 = roll a new shard every N demos
   memory_fraction: 0.8
   task_ids: all
   # Ray inference-worker count (multi-GPU collect; 1 = single GPU). Declared so the

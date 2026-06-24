@@ -94,9 +94,19 @@ def test_build_collect_cfg_maps_task_and_collect():
     assert cc["task_ids"] == "all"
     assert cc["envs_per_gpu"] == 1
     assert cc["memory_fraction"] == _fake_cfg().collect.memory_fraction
+    assert cc["demos_per_shard"] == 0  # default: one shard per rank
     # every required key present
     from dreamervla.runners.collect_parallel_rollouts import _require_keys
     _require_keys(cc)
+
+
+def test_build_collect_cfg_forwards_demos_per_shard():
+    from dreamervla.runners import CollectRolloutsRunner
+
+    cfg = _fake_cfg()
+    cfg.collect.demos_per_shard = 25
+    cc = CollectRolloutsRunner(cfg)._build_collect_cfg()
+    assert cc["demos_per_shard"] == 25
 
 
 def _record(t: int) -> dict:

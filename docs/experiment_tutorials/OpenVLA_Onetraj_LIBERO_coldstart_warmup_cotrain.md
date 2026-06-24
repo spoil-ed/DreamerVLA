@@ -76,6 +76,14 @@ Variants (append the knob):
 - **smoke** (cotrain at tiny step counts; collect unchanged): `debug=true`.
 - **preview** the launch plan without running anything: `dry_run=true`.
 - **fewer collect episodes** for a quick real run: `collect.episodes_per_task=2`.
+- **slice collected data** into shards of N episodes (both backends; default 0 = one
+  shard per rank/worker): `collect.demos_per_shard=N`. Sliced shards make a long collect
+  crash-resilient (a crash only loses the last small shard) and finer-grained to resume;
+  warmup globs `*.hdf5`, so loading is unchanged.
+
+Collection is quieter by design: each rank/worker no longer prints every episode — only
+rank 0 streams progress, and the launcher prints one **aggregate** summary
+(`PHASE 1/2 collected (aggregate across all processes)`) once collection finishes.
 
 `multi_gpu` batch sizes are per-GPU (global = value × `ngpu`); lower them on OOM. Add
 `cotrain_engine=async` for the RLinf-style rollout⟂training overlap loop (Ray only).
@@ -87,6 +95,8 @@ The e2e is orchestration only; the two stages stay on disk separately:
 - **collect** → `${DVLA_DATA_ROOT}/collected_rollouts/<suite>/` — a resumable per-suite
   space with `reward/` + `hidden/` HDF5 shards, `collection_manifest.json` (counts,
   target, status), and `resolved_config.yaml`. A relaunch tops up to
-  `collect_target_episodes=<N>` or skips collection when the target is met.
+  `collect_target_episodes=<N>` or skips collection when the target is met. With
+  `collect.demos_per_shard=N` the per-rank shard is sliced into N-episode files
+  (`r{rank}_shard_{NNN}.hdf5`); default 0 keeps one growing shard per rank.
 - **cotrain** → `${RUN_ROOT}/cotrain/` — warmup + online checkpoints and TensorBoard
   (the collect phase's own logs go to `${RUN_ROOT}/collect/`).

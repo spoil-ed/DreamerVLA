@@ -28,4 +28,5 @@ collect:
   episodes_per_task: 50    # all LIBERO init states per task (one episode each)
   episode_horizon: 64      # must be >= WM sequence_length (36 for discrete chunk WM)
   envs_per_gpu: 1          # K within-rank envs; >1 enables batched vectorized path
+  demos_per_shard: 0       # 0 = one shard per rank; >0 = slice demos into N-sized shards
   memory_fraction: 0.8     # PyTorch allocator cap for the collector process

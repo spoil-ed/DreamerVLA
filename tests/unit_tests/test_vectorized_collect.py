@@ -254,6 +254,38 @@ def test_records_pair_pre_step_state_with_its_embedding():
     assert [int(s["obs"]["ee_pos"][2]) for s in steps] == [0, 1, 2, 3]
 
 
+def test_rotating_writer_slices_demos_through_vectorized_loop(tmp_path):
+    """collect_vectorized only passes preprocess_config/data_attrs on the first demo;
+    the rotating writer must re-emit them per shard so every sliced shard is readable."""
+    import h5py
+
+    from dreamervla.dataset.rollout_dump_writer import RotatingRolloutDumpWriter
+
+    K = 2
+    work_list = [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]
+    vec = FakeVecEnv(K, lambda t, e: 2)
+    exts = [FakeExtractor() for _ in range(K)]
+    reward, hidden = tmp_path / "reward", tmp_path / "hidden"
+    writer = RotatingRolloutDumpWriter(
+        reward, hidden, shard_prefix="shard", demos_per_shard=2, start_index=0
+    )
+    n = collect_vectorized(
+        vec, exts, fake_infer, writer, work_list, episode_horizon=5,
+        preprocess_config={"hidden_key": "obs_embedding"},
+        data_attrs={"task_suite_name": "libero_goal", "env_name": "x"},
+    )
+    writer.close()
+
+    assert n == 5
+    shards = sorted(p.name for p in reward.glob("*.hdf5"))
+    assert shards == ["shard_000.hdf5", "shard_001.hdf5", "shard_002.hdf5"]
+    # data_attrs re-emitted on EACH shard (not just the very first demo).
+    for name in shards:
+        with h5py.File(str(reward / name), "r") as f:
+            assert f["data"].attrs["task_suite_name"] == "libero_goal"
+    assert (hidden / "preprocess_config.json").is_file()
+
+
 def test_executes_action_chunk_open_loop_before_using_next_chunk():
     """OpenVLA-OFT rollout must execute a full chunk before using a new chunk."""
     vec = FakeVecEnv(num_envs=1, term_at_fn=lambda _t, _e: 5)

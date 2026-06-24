@@ -58,6 +58,7 @@ class CollectRolloutsRunner(BaseRunner):
             "num_tasks": OmegaConf.select(cfg, "collect.num_tasks", default=None),
             "episode_horizon": int(cfg.collect.episode_horizon),
             "envs_per_gpu": int(cfg.collect.envs_per_gpu),
+            "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
             "memory_fraction": float(cfg.collect.memory_fraction),
             "reward_dir": str(oft.hdf5_reward_dir),
             "hidden_dir": str(oft.action_hidden_dir),

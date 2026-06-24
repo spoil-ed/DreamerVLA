@@ -115,6 +115,38 @@ def _require_keys(cfg: dict[str, Any]) -> None:
         raise KeyError(f"collect_rollouts cfg missing required keys: {missing}")
 
 
+def _make_dump_writer(
+    reward_dir: Path,
+    hidden_dir: Path,
+    shard_name: str,
+    *,
+    shard_prefix: str,
+    start_index: int,
+    demos_per_shard: int,
+) -> Any:
+    """Single growing shard, or a writer that slices demos into N-sized shards.
+
+    ``demos_per_shard <= 0`` returns the plain ``RolloutDumpWriter`` (one shard per
+    rank, byte-identical to before); ``> 0`` returns a ``RotatingRolloutDumpWriter``
+    that rolls a new ``{prefix}_{NNN}.hdf5`` shard every ``demos_per_shard`` demos
+    so a long collect is sliced (and a crash only loses the last small shard).
+    """
+    from dreamervla.dataset.rollout_dump_writer import (
+        RolloutDumpWriter,
+        RotatingRolloutDumpWriter,
+    )
+
+    if demos_per_shard and int(demos_per_shard) > 0:
+        return RotatingRolloutDumpWriter(
+            reward_dir,
+            hidden_dir,
+            shard_prefix=shard_prefix,
+            demos_per_shard=int(demos_per_shard),
+            start_index=start_index,
+        )
+    return RolloutDumpWriter(reward_dir, hidden_dir, shard_name)
+
+
 # ---------------------------------------------------------------------------
 # Episode runner
 # ---------------------------------------------------------------------------
@@ -221,11 +253,12 @@ def _run_episode(
         steps[-1]["dones"] = np.uint8(1)
         steps[-1]["sparse_rewards"] = np.uint8(1 if success else 0)
 
-    print(
-        f"  [rank={rank} episode {episode_id}] task_id={task_id} steps={len(steps)} "
-        f"success={success}",
-        flush=True,
-    )
+    if rank == 0:
+        print(
+            f"  [rank={rank} episode {episode_id}] task_id={task_id} steps={len(steps)} "
+            f"success={success}",
+            flush=True,
+        )
     return steps
 
 
@@ -245,6 +278,9 @@ def _collect_vectorized_path(
     reward_dir: Path,
     hidden_dir: Path,
     shard_name: str,
+    shard_prefix: str,
+    shard_idx: int,
+    demos_per_shard: int,
     preprocess_config: dict[str, Any],
     task_suite_name: str,
     rank: int,
@@ -259,7 +295,6 @@ def _collect_vectorized_path(
     observations are batched through one VLA forward (batched_forward).  Work is batched
     per task so every batch shares a prompt length.  See the migration spec §5.
     """
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.runners.rollout_hidden_extractor import (
         OFTBatchedDecoder,
         OFTRolloutHiddenExtractor,
@@ -274,10 +309,11 @@ def _collect_vectorized_path(
         if k in os.environ
     }
 
-    print(
-        f"[collector rank={rank}] Layer-2: spawning {num_envs} env subprocesses ...",
-        flush=True,
-    )
+    if rank == 0:
+        print(
+            f"[collector rank={rank}] Layer-2: spawning {num_envs} env subprocesses ...",
+            flush=True,
+        )
     vec_env = VecRolloutEnv(num_envs=num_envs, cfg_kwargs=env_cfg_kwargs, env_vars=env_vars)
     try:
         # One extractor per slot (isolated history); reuse the main one for slot 0.
@@ -303,14 +339,22 @@ def _collect_vectorized_path(
             return decoder.predict_batch(preps)
 
         def _vec_on_episode(tid: int, ep: int, ns: int, ok: bool) -> None:
-            print(
-                f"  [rank={rank} vec] task={tid} ep={ep} steps={ns} success={ok}",
-                flush=True,
-            )
+            if rank == 0:
+                print(
+                    f"  [rank={rank} vec] task={tid} ep={ep} steps={ns} success={ok}",
+                    flush=True,
+                )
             if on_episode is not None:
                 on_episode(tid, ep, ns, ok)
 
-        with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer:
+        with _make_dump_writer(
+            reward_dir,
+            hidden_dir,
+            shard_name,
+            shard_prefix=shard_prefix,
+            start_index=shard_idx,
+            demos_per_shard=demos_per_shard,
+        ) as writer:
             return collect_vectorized(
                 vec_env,
                 extractors,
@@ -376,7 +420,6 @@ def collect_rollouts(
     torch.cuda.set_device(gpu_id)
     torch.cuda.set_per_process_memory_fraction(memory_fraction, device=gpu_id)
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.envs.train_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
@@ -403,6 +446,9 @@ def collect_rollouts(
     shard_prefix = f"r{rank}_shard" if is_distributed else "shard"
     shard_idx = next_shard_index(reward_dir, prefix=shard_prefix)
     shard_name = f"{shard_prefix}_{shard_idx:03d}.hdf5"
+    # Optional slicing: >0 rolls a new shard every N demos (resumable: rotation
+    # continues from shard_idx, so next_shard_index picks up where this run left off).
+    demos_per_shard = int(cfg.get("demos_per_shard", 0))
 
     policy = _load_policy(cfg, gpu_id)
     _assert_policy_mode_matches(cfg)
@@ -464,6 +510,9 @@ def collect_rollouts(
             reward_dir=reward_dir,
             hidden_dir=hidden_dir,
             shard_name=shard_name,
+            shard_prefix=shard_prefix,
+            shard_idx=shard_idx,
+            demos_per_shard=demos_per_shard,
             preprocess_config=preprocess_config,
             task_suite_name=task_suite_name,
             rank=rank,
@@ -480,7 +529,14 @@ def collect_rollouts(
                 "task_suite_name": task_suite_name,
                 "env_name": env.task_description,
             }
-            with RolloutDumpWriter(reward_dir, hidden_dir, shard_name) as writer, \
+            with _make_dump_writer(
+                        reward_dir,
+                        hidden_dir,
+                        shard_name,
+                        shard_prefix=shard_prefix,
+                        start_index=shard_idx,
+                        demos_per_shard=demos_per_shard,
+                    ) as writer, \
                     ProgressReporter(
                         len(my_work), "collect", unit="ep", enabled=(rank == 0)
                     ) as pbar:
@@ -491,11 +547,12 @@ def collect_rollouts(
                         env.set_task(task_id)
                         current_task_id = task_id
                         task_description = env.task_description
-                        print(
-                            f"[collector rank={rank}] task_id={task_id} "
-                            f"description={task_description!r}",
-                            flush=True,
-                        )
+                        if rank == 0:
+                            print(
+                                f"[collector rank={rank}] task_id={task_id} "
+                                f"description={task_description!r}",
+                                flush=True,
+                            )
                     steps = _run_episode(
                         env=env,
                         extractor=extractor,
@@ -525,15 +582,17 @@ def collect_rollouts(
                     pbar.set(demo_index)
 
     t_collect = time.time() - t_collect_start
+    # One concise summary line per rank (so multi-rank collect stays an aggregate, not a
+    # per-episode flood); the path/GPU detail is rank-0 only.
     print(
-        f"\n[collector rank={rank}] Done. {demo_index} demos written "
+        f"[collector rank={rank}] Done. {demo_index} demos written "
         f"in {t_collect:.1f}s ({t_collect / max(demo_index, 1):.1f}s/demo)",
         flush=True,
     )
-    print(f"  shard      : {shard_name}", flush=True)
-    print(f"  reward dir : {reward_dir}", flush=True)
-    print(f"  hidden dir : {hidden_dir}", flush=True)
-    mem_alloc = torch.cuda.memory_allocated(gpu_id) / 1024**3
-    mem_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
-    print(f"  GPU {gpu_id} mem: allocated={mem_alloc:.2f}GB reserved={mem_reserved:.2f}GB", flush=True)
+    if rank == 0:
+        print(f"  reward dir : {reward_dir}", flush=True)
+        print(f"  hidden dir : {hidden_dir}", flush=True)
+        mem_alloc = torch.cuda.memory_allocated(gpu_id) / 1024**3
+        mem_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
+        print(f"  GPU {gpu_id} mem: allocated={mem_alloc:.2f}GB reserved={mem_reserved:.2f}GB", flush=True)
     return demo_index
