@@ -147,6 +147,18 @@ replay:
 policy:
   cfg: ${ray_components.policy}
 
+# GPU allocation = RLinf-style component placement, COLLOCATE: env rollout (egl rendering),
+# inference, and the learner all share the visible GPU pool. This is the efficient choice
+# for LIBERO OFT cotrain because the bottleneck is CPU env physics (env_step time >> learner
+# time) and the learner is light + infrequent — dedicating GPUs to it (disaggregate) would
+# leave them idle. The env workers render egl round-robin across the whole pool (runner
+# _egl_device_pool); a single inference worker (pool GPU 0) and a single learner (pool GPU 1)
+# time-share those GPUs with rendering. Indices are RELATIVE to the visible GPUs
+# (CUDA_VISIBLE_DEVICES), so the same config works on any 2+ GPU slice.
+#
+# DISAGGREGATE alternative (use for a HEAVY learner, e.g. large-model RL that would contend
+# with inference): give the learner its own GPUs — learner.placement start_gpu/end_gpu over a
+# dedicated range + num_gpus_per_worker>1 (FSDP) — and pin inference to the remaining GPUs.
 inference:
   worker_target: dreamervla.workers.inference.rollout_inference_worker:RolloutInferenceWorker
   placement:

@@ -10,6 +10,7 @@ without changing the scheduler primitives.
 from __future__ import annotations
 
 import importlib
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,12 @@ class OnlineCotrainRayRunner(BaseRunner):
         # inject horizon for the synthetic path so real OFT/RynnVLA envs build cleanly.
         if not bool(env_cfg.get("use_from_config")):
             env_cfg["kwargs"].setdefault("horizon", horizon)
+        # Default egl GPU rendering: inject the physical GPU pool so each CPU-placed env
+        # worker pins egl to a GPU (round-robin by rank) instead of CPU osmesa — removes the
+        # CPU-render bottleneck and uses the GPUs for rendering.
+        egl_pool = self._egl_device_pool()
+        if egl_pool:
+            env_cfg["egl_device_pool"] = egl_pool
         env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
             cluster, NodePlacementStrategy(num_envs)
         )
@@ -595,6 +602,17 @@ class OnlineCotrainRayRunner(BaseRunner):
             if ids:
                 return ids
         return []
+
+    def _egl_device_pool(self) -> list[int]:
+        """Physical GPU ids for egl env rendering (default backend). Read from the driver's
+        CUDA_VISIBLE_DEVICES; empty when the render backend is osmesa."""
+        backend = str(
+            self._select_first(("env.render_backend", "render_backend"), "egl")
+        ).lower()
+        if backend != "egl":
+            return []
+        cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        return [int(x) for x in cvd.split(",") if x.strip().isdigit()]
 
     def _int_from(self, paths: tuple[str, ...], default: int) -> int:
         return int(self._select_first(paths, default))

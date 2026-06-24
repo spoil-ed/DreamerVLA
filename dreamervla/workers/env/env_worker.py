@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any
 
 import numpy as np
@@ -32,12 +33,31 @@ class EnvWorker(Worker):
         self.episode_id = 0
 
     def init(self) -> None:
+        self._configure_egl_device()
         self.env = self._build_env(self.env_cfg)
         if hasattr(self.env, "set_task"):
             self.env.set_task(self.task_id)
         self.obs, _ = self._reset_env()
         self.episode = []
         self.episode_id = 0
+
+    def _configure_egl_device(self) -> None:
+        """Pin egl offscreen rendering to a physical GPU (round-robin by worker rank).
+
+        Ray env workers are CPU-placed (CUDA_VISIBLE_DEVICES blanked), so robosuite's egl
+        context parses an empty device id and crashes. eglQueryDevicesEXT enumerates ALL
+        physical GPUs regardless of CUDA_VISIBLE_DEVICES, so setting MUJOCO_EGL_DEVICE_ID to
+        a physical GPU from the injected pool renders on GPU instead of CPU (osmesa) — the
+        CPU-render bottleneck. No pool (e.g. the osmesa collector) leaves rendering unchanged.
+        """
+        pool = self.env_cfg.get("egl_device_pool")
+        if not pool:
+            return
+        os.environ.setdefault("MUJOCO_GL", "egl")
+        os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+        if str(os.environ.get("MUJOCO_GL", "")).lower() != "egl":
+            return
+        os.environ["MUJOCO_EGL_DEVICE_ID"] = str(int(pool[int(self.local_rank) % len(pool)]))
 
     def current_obs(self) -> dict[str, Any]:
         if self.obs is None:
