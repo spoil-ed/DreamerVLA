@@ -20,7 +20,7 @@ render_backend: egl
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
 cotrain_engine: sync
-cotrain_async_experiment: online_cotrain_ray_oft
+cotrain_async_experiment: online_cotrain_ray_oft_action_hidden
 master_port: 29500
 distributed: true
 dry_run: false

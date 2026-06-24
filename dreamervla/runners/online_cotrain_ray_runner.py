@@ -29,6 +29,7 @@ from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.resource_metrics import collect_resource_metrics
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.env.env_worker import EnvWorker
+from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 
 
@@ -118,10 +119,6 @@ class OnlineCotrainRayRunner(BaseRunner):
         )
 
         policy_cfg = self._cfg_from("policy.cfg", _default_policy_cfg())
-        infer_cfg = self._cfg_from("inference.cfg", _default_inference_cfg(policy_cfg))
-        infer_cfg.setdefault("policy", policy_cfg)
-        infer_cfg.setdefault("device", "cpu")
-        infer_init_ckpt = self._load_init_ckpt("inference.init_ckpt")
         # Decouple the rollout from the concrete model: the inference worker class is
         # config-selectable. Default = RynnVLA encoder->WM->actor InferenceWorker; OFT
         # selects RolloutInferenceWorker (model-agnostic OFTRolloutBundle producing
@@ -134,6 +131,23 @@ class OnlineCotrainRayRunner(BaseRunner):
                 )
             )
         )
+        if infer_worker_cls is RolloutInferenceWorker:
+            # OFT recipe: build the OFT rollout inference cfg via the SAME programmatic
+            # derivation the collect path uses (OFTRolloutBundle -> action + obs_embedding),
+            # not the RynnVLA encoder->WM->actor _default_inference_cfg. DRY: no hand-authored
+            # OFT field YAML. init_ckpt stays empty — the OFT base policy loads from the
+            # bundle's model_path; the learned actor trains only in imagination.
+            from dreamervla.runners.cold_start_ray_collect_runner import (
+                ColdStartRayCollectRunner,
+            )
+
+            infer_cfg = ColdStartRayCollectRunner.build_oft_worker_plan(self)["inference"]
+            infer_init_ckpt: dict[str, Any] = {}
+        else:
+            infer_cfg = self._cfg_from("inference.cfg", _default_inference_cfg(policy_cfg))
+            infer_cfg.setdefault("policy", policy_cfg)
+            infer_cfg.setdefault("device", "cpu")
+            infer_init_ckpt = self._load_init_ckpt("inference.init_ckpt")
         infer_group = WorkerGroup(
             infer_worker_cls,
             infer_cfg,

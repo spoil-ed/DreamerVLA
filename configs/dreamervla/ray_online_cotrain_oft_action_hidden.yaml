@@ -1,0 +1,210 @@
+# @package _global_
+# Single-node Ray async online cotrain route for OpenVLA-OFT action_hidden.
+#
+# Structural dims come from task.openvla_oft (matching the sync OFT pipeline +
+# the warmup ckpt shapes). The OFT inference is the model-agnostic
+# RolloutInferenceWorker (OFTRolloutBundle); its cfg is built programmatically by
+# the runner via the collect path's build_oft_worker_plan (no hand-authored OFT
+# field YAML), so this file only selects the worker + supplies the OFT structural
+# learner model_cfg and the warmup init.
+defaults:
+  - _self_
+  - /task: openvla_onetraj_coldstart_libero
+
+_target_: dreamervla.runners.OnlineCotrainRayRunner
+latent_type: action_hidden
+seed: 7
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+init:
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
+  warmup_ckpt_path: null
+
+ray_data:
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  replay_capacity: 20000
+  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  min_replay_episodes: 1
+
+# OFT structural components (== the sync OFT pipeline; shapes match the warmup ckpt).
+ray_components:
+  world_model:
+    target: ${task.openvla_oft.wm_target}
+    kwargs:
+      chunk_size: ${task.openvla_oft.chunk_size}
+      obs_dim: ${task.openvla_oft.wm_obs_dim}
+      action_dim: ${task.action_dim}
+      token_count: ${task.openvla_oft.token_count}
+      token_dim: ${task.openvla_oft.token_dim}
+      time_horizon: ${task.openvla_oft.time_horizon}
+      latent_stage: ${task.openvla_oft.latent_stage}
+      latent_source: ${task.openvla_oft.latent_source}
+      action_emb_dim: 10
+      num_action_repeat: 1
+      grad_checkpoint: true
+      model_dim: 4106
+      num_hist: 3
+      depth: 6
+      heads: 16
+      dim_head: 256
+      mlp_dim: 4096
+      dropout: 0.1
+      num_pred: 1
+      max_seq_len: 128
+      hidden_loss_scale: 1.0
+      cosine_loss_scale: 0.1
+      chunk_rollout_chunks: 4
+      chunk_rollout_loss_scale: 1.0
+      reward_head_type: binary
+      reward_loss_scale: 32.0
+      reward_hidden_dim: 1024
+      reward_init_logit: 0.0
+      reward_pos_weight: 1.0
+      return_predictions: false
+      freeze_backbone: true
+  policy:
+    target: ${task.openvla_oft.actor_target}
+    kwargs:
+      hidden_dim: null
+      action_hidden_dim: ${task.openvla_oft.token_dim}
+      action_dim: ${task.action_dim}
+      time_horizon: ${task.openvla_oft.chunk_size}
+      head_type: ${task.openvla_oft.actor_head_type}
+      adapter_type: ${task.openvla_oft.actor_adapter_type}
+      adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
+      freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
+      init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
+      vocab_size: ${task.openvla_oft.vocab_size}
+      action_token_bins: ${task.openvla_oft.action_token_bins}
+      min_action: ${task.openvla_oft.min_action}
+      max_action: ${task.openvla_oft.max_action}
+  classifier:
+    target: dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier
+    kwargs:
+      latent_dim: ${task.openvla_oft.token_dim}
+      action_dim: ${task.action_dim}
+      time_horizon: ${task.openvla_oft.chunk_size}
+      token_dim: ${task.openvla_oft.token_dim}
+      token_count: ${task.openvla_oft.token_count}
+      token_pool: mean
+      window: 8
+      hidden_dim: 1024
+      num_layers: 4
+      num_heads: 8
+      mlp_ratio: 4.0
+      dropout: 0.1
+      granularity: chunk
+      chunk_size: ${task.openvla_oft.chunk_size}
+      chunk_pool: last
+      head_type: transformer
+
+# Inputs build_oft_worker_plan / _build_collect_cfg read to derive the OFT
+# inference (OFTRolloutBundle) cfg programmatically.
+collect:
+  task_ids: all
+  episodes_per_task: 2
+  episode_horizon: 300
+  envs_per_gpu: 1
+  memory_fraction: 0.9
+  gpu_id: 0
+  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async/hidden
+
+env:
+  num_workers: 4
+  cfg:
+    target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
+    use_from_config: true
+    kwargs:
+      task_suite_name: ${task.suite}
+      task_id: 0
+      task_ids: ${ray_data.task_ids}
+      resolution: ${task.image_resolution}
+      image_size: ${task.image_size}
+      history_length: ${task.openvla_oft.expected_history}
+      include_state: ${task.openvla_oft.expected_include_state}
+      obs_hidden_source: ${task.openvla_oft.expected_obs_hidden_source}
+      action_head_type: ${task.openvla_oft.expected_action_head_type}
+      vla_rotate_180: ${task.openvla_oft.expected_rotate_images_180}
+      action_input: raw
+      max_steps: 300
+
+rollout:
+  steps: 200
+  min_replay_episodes: ${ray_data.min_replay_episodes}
+
+replay:
+  cfg:
+    capacity: ${ray_data.replay_capacity}
+    sequence_length: ${ray_data.sequence_length}
+    task_ids: ${ray_data.task_ids}
+    rank: 0
+
+policy:
+  cfg: ${ray_components.policy}
+
+inference:
+  worker_target: dreamervla.workers.inference.rollout_inference_worker:RolloutInferenceWorker
+  placement:
+    strategy: packed
+    gpu_id: 0
+
+learner:
+  placement:
+    strategy: packed
+    start_gpu: 1
+    end_gpu: 1
+    num_gpus_per_worker: 1
+  init_ckpt:
+    path: ${init.warmup_ckpt_path}
+    components: [world_model, classifier]
+  model_cfg:
+    policy: ${ray_components.policy}
+    world_model: ${ray_components.world_model}
+    classifier: ${ray_components.classifier}
+  train_cfg:
+    mode: dreamervla_cotrain
+    batch_size: 2
+    classifier_batch_size: 2
+    classifier_early_neg_stride: 8
+    classifier_threshold: 0.5
+    lr: 1.0e-4
+    device: auto
+    precision: bf16
+    algorithm_cfg:
+      ppo_rollouts_per_start: 1
+      ppo_update_epochs: 1
+      entropy_coef: 0.0
+      wmpo:
+        chunk_size: ${task.openvla_oft.chunk_size}
+        episode_max_steps: 300
+        classifier_min_steps: 4
+        filter_zero_variance_groups: true
+    optim_cfg:
+      grad_clip_norm: 1.0
+      zero_grad_set_to_none: true
+    optimizers:
+      world_model:
+        lr: 2.0e-6
+        weight_decay: 0.0
+      policy:
+        lr: 5.0e-7
+        weight_decay: 0.0
+      classifier:
+        lr: 1.0e-4
+        weight_decay: 0.0
+    syncer:
+      store_name: ray_cotrain_oft_action_hidden_weight_store
+
+sync:
+  weight_sync_every: 1
+
+training:
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
+  distributed_strategy: single
+  data_parallel: false
+  gradient_accumulate_every: 1

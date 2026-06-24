@@ -679,7 +679,7 @@ def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
     assert "experiment=online_cotrain_pipeline_oft_action_hidden" in plan.cotrain_warmup_cmd
     assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
     # 2c: ray async overlap online, NOT torchrun, init from the consolidated warmup ckpt.
-    assert "experiment=online_cotrain_ray_oft" in plan.cotrain_online_cmd
+    assert "experiment=online_cotrain_ray_oft_action_hidden" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd
     assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
     assert "inference.init_ckpt.path=null" in plan.cotrain_online_cmd

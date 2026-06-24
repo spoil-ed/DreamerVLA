@@ -1,0 +1,7 @@
+# @package _global_
+# Ray async online cotrain for OpenVLA-OFT action_hidden (the async counterpart of
+# online_cotrain_pipeline_oft_action_hidden). Used by the coldstart launcher's
+# cotrain_engine=async path: warmup ckpts feed init.warmup_ckpt_path.
+defaults:
+  - override /dreamervla: ray_online_cotrain_oft_action_hidden
+  - _self_
