@@ -170,6 +170,11 @@ class EnvWorker(Worker):
             self._init_inproc()
 
     def _init_inproc(self) -> None:
+        # The in-process (non-egl) path renders with CPU osmesa. Pin it before _build_env
+        # imports robosuite, so a Ray actor that did not inherit MUJOCO_GL does not fall
+        # back to egl with an empty CUDA_VISIBLE_DEVICES (robosuite egl_context int('')).
+        os.environ.setdefault("MUJOCO_GL", "osmesa")
+        os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
         self.env = self._build_env(self.env_cfg)
         if hasattr(self.env, "set_task"):
             self.env.set_task(self.task_id)
