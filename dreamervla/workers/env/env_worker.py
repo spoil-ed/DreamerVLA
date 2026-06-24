@@ -46,6 +46,15 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
     if egl_device_id is not None:
         os.environ["MUJOCO_EGL_DEVICE_ID"] = str(int(egl_device_id))
+        # RLinf-faithful device alignment: make CUDA visible on the SAME physical GPU
+        # the egl context renders to. RLinf's env procs set CUDA_VISIBLE_DEVICES +
+        # MUJOCO_EGL_DEVICE_ID together (nvidia_gpu.py); our CPU-placed EnvWorkers
+        # blank CUDA while egl renders on a physical GPU, and that CUDA-absent /
+        # egl-present mismatch is the likely robosuite read_pixels instability under
+        # sustained concurrency. Aligning them here mirrors RLinf without GPU-placing
+        # the Ray actor. Set before the env build (no CUDA/torch init has happened yet).
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(egl_device_id))
+        os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
     try:
         env = _build_env_from_cfg(env_cfg)
         cur_task = int(task_id)
