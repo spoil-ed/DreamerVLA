@@ -384,8 +384,18 @@ class ReplayClient:
     def __init__(self, replay: Any) -> None:
         self.replay = replay
 
-    def sample(self, batch_size: int) -> dict[str, Any]:
-        return self._call("sample", int(batch_size))
+    def sample(
+        self, batch_size: int, *, staleness_threshold: int | None = None
+    ) -> dict[str, Any]:
+        # Forward the Phase 4 staleness gate only when it is set, so the default
+        # path stays a byte-identical 1-arg call and minimal replay backends
+        # (e.g. test doubles) that don't know about staleness still work.
+        kwargs = (
+            {}
+            if staleness_threshold is None
+            else {"staleness_threshold": int(staleness_threshold)}
+        )
+        return self._call("sample", int(batch_size), **kwargs)
 
     def sample_classifier_windows(
         self,
