@@ -24,4 +24,7 @@ if command -v conda >/dev/null 2>&1; then
   conda activate "${CONDA_ENV_NAME}"
 fi
 
+# Multi-GPU DDP cotrain stability (harmless for single-GPU); override by exporting it.
+export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"
+
 python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray "$@"

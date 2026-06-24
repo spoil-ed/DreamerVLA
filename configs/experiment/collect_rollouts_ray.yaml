@@ -14,6 +14,10 @@ collect:
   envs_per_gpu: 2
   memory_fraction: 0.8
   task_ids: all
+  # Ray inference-worker count (multi-GPU collect; 1 = single GPU). Declared so the
+  # multi_gpu profile's `collect.num_inference_workers=4` is a valid struct override
+  # (the runner reads it via collect.get("num_inference_workers", 1)).
+  num_inference_workers: 1
 
 env:
   num_workers: 2
