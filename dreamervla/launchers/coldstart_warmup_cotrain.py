@@ -176,6 +176,7 @@ def build_pipeline_plan(
         cfg.get("master_port", 29500) if master_port is None else master_port
     )
     distributed = bool(cfg.get("distributed", True))
+    selected_render_backend = str(cfg.get("render_backend", "egl"))
     debug_enabled = bool(cfg.get("debug", False) if debug is None else debug)
     root = Path(run_root).expanduser()
     # Collected episodes live in a stable, per-suite UNIFIED space so reruns
@@ -195,6 +196,7 @@ def build_pipeline_plan(
         "hidden_dir": str(hidden_dir),
         "collect_out": str(collect_out),
         "cotrain_out": str(cotrain_out),
+        "render_backend": selected_render_backend,
     }
     mode_cfg = _select_mapping(dict(cfg["modes"]), selected_mode, label="mode")
     profile_cfg = _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")

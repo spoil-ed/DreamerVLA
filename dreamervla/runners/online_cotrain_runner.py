@@ -878,10 +878,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if k in os.environ
         }
         env_vars["MUJOCO_GL"] = render_backend
-        # Do NOT force PYOPENGL_PLATFORM to egl: mujoco renders via its own EGL
-        # (MUJOCO_GL); forcing PyOpenGL to egl too conflicts and aborts robosuite
-        # read_pixels (SIGABRT). The collection path leaves it at the parent's
-        # osmesa and runs egl multi-env fine — match that.
+        # PyOpenGL's platform must match mujoco's GL backend. The parent forces
+        # PYOPENGL_PLATFORM=osmesa at module import; a spawned egl child would inherit
+        # that osmesa and mujoco's egl init raises "Cannot use EGL rendering platform"
+        # (PYOPENGL_PLATFORM must be unset or 'egl'). Pair them — RLinf exports
+        # MUJOCO_GL=egl + PYOPENGL_PLATFORM=egl together.
+        env_vars["PYOPENGL_PLATFORM"] = render_backend
 
         image_size = int(OmegaConf.select(cfg, "env.image_size", default=64))
         cfg_kwargs = {

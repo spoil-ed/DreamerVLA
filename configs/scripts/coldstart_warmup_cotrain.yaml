@@ -12,6 +12,10 @@ python: python
 # fan-out via collect.num_workers). Under DDP, dataloader.batch_size is PER-GPU — tune
 # it with warmup.batch_size. Default 1 (single process); set ngpu=<N> for any N.
 ngpu: 1
+# One-knob render backend for the cotrain online rollout: egl (GPU offscreen, default)
+# or osmesa (CPU software, stable fallback if egl misbehaves). Threads into the cotrain
+# command as online_rollout.render_backend. Collection always renders osmesa.
+render_backend: egl
 master_port: 29500
 distributed: true
 dry_run: false
@@ -127,6 +131,7 @@ cotrain:
     - offline_warmup.hidden_dir={hidden_dir}
     - offline_warmup.task_id=null
     - env.task_ids=[0,1,2,3,4,5,6,7,8,9]
+    - online_rollout.render_backend={render_backend}
 
 profiles:
   smoke:

@@ -88,6 +88,13 @@ python -m dreamervla.train experiment=online_cotrain_pipeline_oft_action_hidden_
 > logic/unit-tested but still needs a free-GPU verify before a long run, and the
 > overlap collector (`rollout.overlap=true`) does not support it.
 
+**Render backend (one knob).** The cotrain online rollout backend is a single launcher
+knob `render_backend` (default `egl`, GPU offscreen). Switch the whole cotrain to the
+stable CPU path with `render_backend=osmesa` — e.g.
+`bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=4 render_backend=osmesa`.
+For the direct experiment entry it is `online_rollout.render_backend=egl|osmesa`. (egl
+pairs `MUJOCO_GL=egl` with `PYOPENGL_PLATFORM=egl` in each vectorized child.)
+
 ## 2. Output layout
 
 The one-command e2e is just orchestration — the two parts stay on disk separately:
