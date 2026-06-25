@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dreamervla.runners.vec_rollout_env import VecRolloutEnv
+from dreamervla.runners.vec_rollout_env import VecRolloutEnv, default_env_factory
 
 # ── module-level fakes (must be importable for spawn pickling) ────────────────
 
@@ -67,6 +67,12 @@ def _raising_factory(cfg_kwargs: dict):
 
 
 # ── tests ────────────────────────────────────────────────────────────────────
+
+
+def test_default_env_factory_instantiates_hydra_target():
+    env = default_env_factory({"_target_": "types.SimpleNamespace", "marker": 3})
+
+    assert env.marker == 3
 
 
 def test_parallel_step_scatters_actions_and_gathers_records():

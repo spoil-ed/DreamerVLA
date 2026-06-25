@@ -109,6 +109,7 @@ online_rollout:
   debug_episode_horizon: 50
 
 env:
+  _target_: dreamervla.envs.train_env.DreamerVLAOnlineTrainEnv
   task_suite_name: ${task.suite}
   task_ids: [0]
   episode_horizon: 200

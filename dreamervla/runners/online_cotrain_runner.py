@@ -41,7 +41,6 @@ os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.models.reward import build_classifier
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_dreamervla import (
@@ -56,6 +55,7 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.runners.vec_rollout_env import default_env_factory
 from dreamervla.runners.vectorized_collect import (
     dreamer_image_from_record,
     extractor_obs_from_record,
@@ -290,6 +290,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
         task_ids = tuple(int(x) for x in task_ids) if task_ids is not None else None
         seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
         return {
+            "_target_": str(
+                OmegaConf.select(
+                    env_cfg,
+                    "_target_",
+                    default="dreamervla.envs.train_env.DreamerVLAOnlineTrainEnv",
+                )
+            ),
             "task_suite_name": str(
                 OmegaConf.select(env_cfg, "task_suite_name", default="libero_goal")
             ),
@@ -309,10 +316,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
             ),
         }
 
-    def _build_env(self, cfg: DictConfig) -> DreamerVLAOnlineTrainEnv:
+    def _build_env(self, cfg: DictConfig) -> Any:
         # MUJOCO_GL=osmesa is forced at module import (before robosuite loads); see
         # the top of this file. Setting it here would be too late (egl already locked).
-        return DreamerVLAOnlineTrainEnv(self._env_cfg_kwargs(cfg))
+        return default_env_factory(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
     def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):

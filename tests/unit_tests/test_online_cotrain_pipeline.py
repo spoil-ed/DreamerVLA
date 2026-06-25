@@ -367,16 +367,17 @@ def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch)
     runner.distributed = _FakeDistributed()
     captured: dict[str, object] = {}
 
-    class FakeEnv:
-        def __init__(self, cfg):
-            captured.update(dict(cfg))
+    def fake_env_factory(cfg):
+        captured.update(dict(cfg))
+        return object()
 
-    monkeypatch.setattr(mod, "DreamerVLAOnlineTrainEnv", FakeEnv)
+    monkeypatch.setattr(mod, "default_env_factory", fake_env_factory)
 
     cfg = OmegaConf.create(
         {
             "seed": 7,
             "env": {
+                "_target_": "tests.fake.Env",
                 "task_suite_name": "libero_goal",
                 "task_ids": [0],
                 "episode_horizon": 64,
@@ -391,6 +392,7 @@ def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch)
 
     runner._build_env(cfg)
 
+    assert captured["_target_"] == "tests.fake.Env"
     assert captured["obs_hidden_source"] == "input_token_embedding"
     assert captured["action_head_type"] == "oft_discrete_token"
     assert captured["history_length"] == 1

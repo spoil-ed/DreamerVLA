@@ -34,15 +34,29 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 
+def _enter_if_supported(env: Any) -> Any:
+    enter = getattr(env, "__enter__", None)
+    return enter() if callable(enter) else env
+
+
 def default_env_factory(cfg_kwargs: dict[str, Any]) -> Any:
-    """Build and enter a ``DreamerVLAOnlineTrainEnv`` from config kwargs (in the child)."""
+    """Build and enter the online rollout env from Hydra-aware config kwargs."""
+    cfg = dict(cfg_kwargs)
+    target = cfg.pop("_target_", None)
+    if target:
+        import hydra
+
+        return _enter_if_supported(
+            hydra.utils.instantiate({"_target_": str(target), **cfg})
+        )
+
     from dreamervla.envs.train_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
     )
 
-    env = DreamerVLAOnlineTrainEnv(DreamerVLAOnlineTrainEnvConfig(**cfg_kwargs))
-    return env.__enter__()
+    env = DreamerVLAOnlineTrainEnv(DreamerVLAOnlineTrainEnvConfig(**cfg))
+    return _enter_if_supported(env)
 
 
 def _worker(
