@@ -45,6 +45,26 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     assert batch["obs_embedding"].shape[-1] == 16
 
 
+def test_seed_replay_marks_success_only_at_terminal_step(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    _write_fixture(rdir, hdir)
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
+
+    seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)
+
+    success_record = next(record for record in replay.episodes if record["task_id"] == 2)
+    assert success_record["success"] is True
+    assert success_record["finish_step"] == 6
+    assert [bool(step["success"]) for step in success_record["episode"]] == [
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
 def test_seed_replay_caps_episodes_per_task(tmp_path):
     # The online-replay seed caps per-task episodes so the bounded buffer gets coverage
     # without overflowing. 3 demos for task 2, 1 for task 5; cap=2 -> 2 + 1 = 3 added.

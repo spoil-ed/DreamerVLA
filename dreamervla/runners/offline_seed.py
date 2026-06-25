@@ -25,20 +25,33 @@ def _demo_to_transitions(
     sparse = np.asarray(demo["sparse_rewards"][...], dtype=np.float32)  # (T,)
     dones = np.asarray(demo["dones"][...], dtype=np.float32)            # (T,)
     images = np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8)
-    success = bool(demo.attrs.get("episode_success", bool((sparse > 0.5).any())))
+    success_hits = np.flatnonzero(sparse > 0.5)
+    attr_success = bool(demo.attrs.get("episode_success", bool(success_hits.size)))
+    success = bool(attr_success or success_hits.size)
+    if success_hits.size:
+        success_step = int(success_hits[0])
+    elif success:
+        done_hits = np.flatnonzero(dones > 0.5)
+        success_step = int(done_hits[0]) if done_hits.size else int(actions.shape[0]) - 1
+    else:
+        success_step = -1
     T = int(actions.shape[0])
     transitions: list[dict[str, Any]] = []
     for t in range(T):
+        step_success = bool(t == success_step)
+        reward = float(sparse[t])
+        if step_success and reward <= 0.0:
+            reward = 1.0
         transitions.append({
             "image": images[t],
             "obs_embedding": np.asarray(emb[t], dtype=np.float32),
-            "reward": float(sparse[t]),            # sparse reward = collector signal
+            "reward": reward,                      # sparse reward = collector signal
             "done": float(dones[t]),
             "is_last": float(dones[t]),
-            "is_terminal": float(sparse[t]),       # terminal-success marker
+            "is_terminal": float(step_success),    # terminal-success marker
             "wm_action": actions[t],               # collector stores env-scale wm_action
             "task_id": int(task_id),
-            "success": success,
+            "success": step_success,
         })
     return transitions
 
