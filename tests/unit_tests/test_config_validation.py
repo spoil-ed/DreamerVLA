@@ -268,6 +268,14 @@ def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
     assert cfg.world_model.heads == 16
     assert cfg.world_model.dim_head == 256
     assert cfg.world_model.mlp_dim == 4096
+    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+
+    runner = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
+    encoder_cfg = runner.build_encoder_cfg(cfg)
+    assert "tokenizer_path" not in encoder_cfg
+    assert "text_tokenizer_path" not in encoder_cfg
+    assert "chameleon_vqgan_config" not in encoder_cfg
+    assert "action_head_type" not in encoder_cfg
 
 
 def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() -> None:

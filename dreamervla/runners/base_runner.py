@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import math
 import numbers
@@ -291,7 +292,42 @@ class BaseRunner(ABC):
             and OmegaConf.select(encoder_cfg, "model_path") is None
         ):
             encoder_cfg.model_path = str(init_model_path)
-        return encoder_cfg
+        return self._target_compatible_cfg(encoder_cfg)
+
+    @staticmethod
+    def _target_compatible_cfg(component_cfg: DictConfig) -> DictConfig:
+        """Drop merge-leftover keys that the selected Hydra target cannot accept."""
+        target = OmegaConf.select(component_cfg, "_target_")
+        if target is None:
+            return component_cfg
+        try:
+            target_obj = hydra.utils.get_class(str(target))
+        except Exception:
+            return component_cfg
+        signature = inspect.signature(target_obj.__init__)
+        parameters = signature.parameters.values()
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters):
+            return component_cfg
+        allowed = {
+            p.name
+            for p in signature.parameters.values()
+            if p.name != "self"
+            and p.kind
+            in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
+        reserved = {"_target_", "_recursive_", "_convert_", "_partial_"}
+        raw = OmegaConf.to_container(component_cfg, resolve=False)
+        if not isinstance(raw, dict):
+            return component_cfg
+        filtered = {
+            key: value
+            for key, value in raw.items()
+            if key in reserved or key in allowed
+        }
+        return OmegaConf.create(filtered)
 
     def _resolve_vla_init_path(self) -> str:
         configured = OmegaConf.select(self.cfg, "init.vla_ckpt_path")
