@@ -22,8 +22,11 @@ def test_online_cotrain_actor_update_uses_registry():
     assert "get_actor_update_route" in loop_src
     assert "actor_update_route.step_fn" in burst_src
     assert "dino_wmpo_outcome_step(" not in burst_src
-    assert "rollout/episodes" in burst_src
-    assert "rollout/successes" in burst_src
+    assert "build_rollout_progress_metrics" in burst_src
+    helper_src = inspect.getsource(mod.build_rollout_progress_metrics)
+    assert "rollout/episodes" in helper_src
+    assert "rollout/successes" in helper_src
+    assert "rollout/success_rate_valid" in helper_src
 
 
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):

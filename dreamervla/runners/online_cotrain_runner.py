@@ -129,6 +129,50 @@ def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -
             )
 
 
+def build_rollout_progress_metrics(
+    *,
+    counters: dict[str, int],
+    env_step: int,
+    num_envs: int,
+    episode_horizon: int,
+    active_episode_steps: list[int] | tuple[int, ...] | None = None,
+) -> dict[str, float]:
+    """Episode-denominator and active-step rollout metrics.
+
+    ``rollout/success_rate`` is an episode-level metric. Before the first episode
+    completes it has no denominator, so ``rollout/success_rate_valid`` marks
+    whether the scalar is an actual completed-episode statistic.
+    """
+    n_episodes = int(counters.get("n_episodes", 0))
+    n_success = int(counters.get("n_success", 0))
+    success_rate = (n_success / n_episodes) if n_episodes > 0 else 0.0
+
+    if active_episode_steps is None:
+        steps = [int(env_step)]
+    else:
+        steps = [max(0, int(s)) for s in active_episode_steps]
+    if not steps:
+        steps = [0]
+    horizon = max(1, int(episode_horizon))
+    step_min = float(min(steps))
+    step_max = float(max(steps))
+    step_mean = float(sum(steps) / len(steps))
+
+    return {
+        "rollout/success_rate": float(success_rate),
+        "rollout/success_rate_valid": float(n_episodes > 0),
+        "rollout/episodes": float(n_episodes),
+        "rollout/successes": float(n_success),
+        "rollout/env_steps": float(env_step),
+        "rollout/num_envs": float(max(1, int(num_envs))),
+        "rollout/episode_horizon": float(horizon),
+        "rollout/active_episode_step_min": step_min,
+        "rollout/active_episode_step_mean": step_mean,
+        "rollout/active_episode_step_max": step_max,
+        "rollout/episode_progress_max": float(min(1.0, step_max / horizon)),
+    }
+
+
 def build_rollout_vec_env(
     *,
     render_backend: str,
@@ -686,6 +730,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 str(OmegaConf.select(algo, "update_type", default="wmpo_outcome"))
             ),
             "ckpt_every": ckpt_every,
+            "num_envs": num_envs,
+            "episode_horizon": episode_horizon,
         }
         counters = {"n_episodes": 0, "n_success": 0}
         history: list[dict[str, float | str | int]] = []
@@ -748,6 +794,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 knobs=knobs,
                 counters=counters,
                 history=history,
+                active_episode_steps=[len(episode)],
             )
 
         if self.distributed.is_main_process:
@@ -768,6 +815,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         knobs: dict[str, Any],
         counters: dict[str, int],
         history: list,
+        active_episode_steps: list[int] | tuple[int, ...] | None = None,
     ) -> bool:
         """Run the WM/classifier/RL training bursts for one env-step. Returns True
         when ``max_train_updates`` is reached (caller should stop). Shared by the
@@ -800,15 +848,17 @@ class OnlineCotrainRunner(DreamerVLARunner):
             metrics: dict[str, float | str | int] = {
                 "global_step": int(self.global_step),
                 "phase": "warmup" if in_warmup else "cotrain",
-                "rollout/success_rate": (
-                    (counters["n_success"] / counters["n_episodes"])
-                    if counters["n_episodes"]
-                    else 0.0
-                ),
-                "rollout/episodes": float(counters["n_episodes"]),
-                "rollout/successes": float(counters["n_success"]),
                 "buffer/size": float(replay.num_transitions),
             }
+            metrics.update(
+                build_rollout_progress_metrics(
+                    counters=counters,
+                    env_step=env_step,
+                    num_envs=int(knobs["num_envs"]),
+                    episode_horizon=int(knobs["episode_horizon"]),
+                    active_episode_steps=active_episode_steps,
+                )
+            )
             # Phase WM (always) — policy/actor frozen (eval + no policy optim step)
             self.world_model.train()
             self.policy.eval()
@@ -989,7 +1039,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
             env_vars=env_vars,
         )
         try:
-            def _train_hook(env_step: int) -> bool:
+            def _train_hook(
+                env_step: int,
+                active_episode_steps: list[int] | tuple[int, ...] | None = None,
+            ) -> bool:
                 return self._run_training_bursts(
                     env_step,
                     total_env_steps,
@@ -998,6 +1051,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     knobs=knobs,
                     counters=counters,
                     history=history,
+                    active_episode_steps=active_episode_steps,
                 )
 
             self._vectorized_cotrain_rollout(
@@ -1045,8 +1099,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
         the send-all/recv-all barrier; finished slots refill immediately (infinite
         episodes until ``total_env_steps``). Transitions are rebuilt in the parent
         from each child ``full_record`` (env lives in the child) and pushed to
-        ``replay``. ``train_hook(env_step) -> stop`` interleaves the training burst
-        per env-step exactly like the single-env loop; it is None in unit tests."""
+        ``replay``. ``train_hook(env_step, active_episode_steps) -> stop``
+        interleaves the training burst per env-step exactly like the single-env
+        loop; it is None in unit tests."""
         if counters is None:
             counters = {"n_episodes": 0, "n_success": 0}
         task_cycle = [int(t) for t in task_ids] or [0]
@@ -1149,7 +1204,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 # scoped to ``_rollout_action`` only.
                 if train_hook is not None:
                     with torch.enable_grad():
-                        stop = train_hook(env_step)
+                        stop = train_hook(env_step, list(slot_step))
                     if stop:
                         return
             self.console_progress(
