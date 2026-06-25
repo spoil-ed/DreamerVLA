@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.algorithms.ppo.outcome import dino_wmpo_outcome_step
+from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 
 
 class _TinyChunkWM(torch.nn.Module):
@@ -118,7 +118,7 @@ class _TinyPolicy(torch.nn.Module):
 def _cfg(reward_model: str = "sparse_outcome"):
     return OmegaConf.create(
         {
-            "wmpo": {
+            "lumos": {
                 "chunk_size": 2,
                 "episode_max_steps": 4,
                 "reward_model": reward_model,
@@ -142,7 +142,7 @@ def _run_step(classifier: torch.nn.Module, *, reward_model: str = "sparse_outcom
     policy = _TinyPolicy()
     optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
 
-    metrics = dino_wmpo_outcome_step(
+    metrics = dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=classifier,
@@ -189,9 +189,9 @@ def test_probability_reward_updates_when_threshold_outcomes_are_constant():
     assert abs(metrics["actor_loss"]) > 0.0
     assert metrics["actor_grad_norm"] > 0.0
     assert metrics["ppo_step_applied"] == 1.0
-    assert metrics["wmpo/success_rate"] == 0.0
+    assert metrics["LUMOS/success_rate"] == 0.0
     assert metrics["returns_std"] > 0.0
     assert metrics["advantage_std"] > 0.0
-    assert metrics["wmpo/group_var_keep_frac"] == 1.0
+    assert metrics["LUMOS/group_var_keep_frac"] == 1.0
     assert policy.action_value.grad is not None
     assert policy.action_value.grad.abs().item() > 0.0

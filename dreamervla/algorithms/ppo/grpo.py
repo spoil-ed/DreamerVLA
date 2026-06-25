@@ -26,7 +26,7 @@ def _repeat_latent(value: Any, repeats: int) -> Any:
 def _slice_latent(value: Any, lo: int, hi: int) -> Any:
     """Slice a latent (Tensor or nested dict of Tensors) along the batch dim [lo:hi].
 
-    Batch-dim companion to ``_repeat_latent``: lets the WMPO outcome step process
+    Batch-dim companion to ``_repeat_latent``: lets the LUMOS step process
     the effective batch in group-aligned micro-batches without materializing the
     whole imagination on GPU. Slice boundaries must be multiples of group_size so
     each slice holds whole GRPO groups (the advantage is group-relative).

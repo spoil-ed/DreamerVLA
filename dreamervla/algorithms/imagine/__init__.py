@@ -1,4 +1,4 @@
-"""WMPO imagination seam (World Model layer): typed output + Imaginer protocol."""
+"""LUMOS imagination seam (World Model layer): typed output + Imaginer protocol."""
 
 from dreamervla.algorithms.imagine.protocol import ImaginedRollout, Imaginer
 

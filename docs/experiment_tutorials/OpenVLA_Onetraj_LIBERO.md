@@ -87,7 +87,7 @@ bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk task=openvla_one
 ## 6. DreamerVLA
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_oft_discrete_token_dino_wm_wmpo_outcome \
+bash scripts/train_dreamervla.sh experiment=dreamervla_oft_discrete_token_dino_wm_lumos \
   task=openvla_onetraj_libero gpus=0 ngpu=1 batch_size=2 num_workers=2 -- \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"

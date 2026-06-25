@@ -31,7 +31,7 @@ Dot-prefixed local tool folders are ignored by this main structure map.
 
 ```text
 dreamervla/
-├── algorithms/           # PPO, GRPO, DINO-WMPO, TD-MPC, actor-critic steps
+├── algorithms/           # PPO, GRPO, DINO-LUMOS, TD-MPC, actor-critic steps
 ├── train.py              # Canonical Hydra train/eval entrypoint
 ├── dataset/              # Offline datasets and online rollout dumpers
 ├── diagnostics/          # Diagnostics, eval CLIs, smoke checks
@@ -87,8 +87,8 @@ World model / classifier:
 
 DreamerVLA:
   dreamervla_rynn_dino_wm_actor_critic
-  dreamervla_rynn_dino_wm_wmpo_outcome
-  dreamervla_oft_dino_wm_wmpo_outcome
+  dreamervla_rynn_dino_wm_lumos
+  dreamervla_oft_dino_wm_lumos
 
 Evaluation:
   eval_libero_vla

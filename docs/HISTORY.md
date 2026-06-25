@@ -17,7 +17,7 @@
   `train_wm.sh`, `train_dreamervla.sh`, `eval_libero_vla.sh`) forward `key=value`.
 - Active routes: VLA SFT (rynnvla / openvla_oft, full + one-trajectory), world-model
   (`*_dinowm_chunk`, input-token, discrete-token), classifiers, three `dreamervla_*` recipes
-  (actor_critic, rynn/oft WMPO-outcome), `eval_libero_vla`.
+  (actor_critic, rynn/oft LUMOS), `eval_libero_vla`.
 
 ## Ray backend — single-node RLinf alignment (opt-in; `ray_rlinf_alignment_implemented.md` has the full record)
 - **Scheduler** (`dreamervla/scheduler/`): idempotent single-node `Cluster`/`ray.init`,
@@ -70,7 +70,7 @@
 | readiness-gate + egl-wiring | skip per-step replay scan/all_reduce off `train_every`; drop forced `PYOPENGL_PLATFORM=egl` (SIGABRT cause) | `0e68754` |
 | W2 | atomic temp→rename checkpoint save (caller-wiring still open → TODO.md) | `4aa4346` |
 | H4/B | per-step grad-norm/cosine gated behind `optim.grad_diagnostics` (default OFF) | `889d3cb` |
-| W6 | PPO actor backward micro-batched over B_eff (`wmpo.update_micro_batch_starts`, default=original) | `016b900` |
+| W6 | PPO actor backward micro-batched over B_eff (`lumos.update_micro_batch_starts`, default=original) | `016b900` |
 | W3/W4 | manifest-first pretokenize index (guarded/dormant) + per-worker LRU frame cache | `6e09282` |
 | H5 | switchable DINO-WM SDPA (`attn_impl`, default `manual`=byte-identical) | `d4d857a` |
 | H9 | Chameleon `_update_causal_mask` cache (None-mask case) | `c69eb48` |
@@ -83,7 +83,7 @@
   base-checkpoint machinery.
 - **Train-console output**: 3-layer console (files / runtime logs / `===` banners + metric box) +
   per-loop VLA-improvement line (`SuccessTracker`); unified `BaseRunner.console_*` API across runners.
-- **MEM-RL-01** micro-batch WMPO outcome update (group-aligned, global-B_eff normalized = bit-for-bit
+- **MEM-RL-01** micro-batch LUMOS update (group-aligned, global-B_eff normalized = bit-for-bit
   full-batch gradient; knob `update_micro_batch_starts`, default off) — `816dd33`.
 - **RUN-01 DDP code landed** `85788fc`: three default-off helper opt-ins + `online_dreamervla.main`
   rerouting + 7 unit tests; dist/checkpoint seams extracted into `_online_dreamervla_dist.py` /

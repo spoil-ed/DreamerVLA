@@ -147,8 +147,8 @@ def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:
     _require_equal_if_present(
         cfg,
         "world_model.chunk_size",
-        "algorithm.wmpo.chunk_size",
-        message="WMPO chunk size must match the world-model chunk size.",
+        "algorithm.lumos.chunk_size",
+        message="LUMOS chunk size must match the world-model chunk size.",
     )
     _require_equal_if_present(
         cfg,

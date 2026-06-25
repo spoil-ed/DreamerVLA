@@ -1,4 +1,4 @@
-"""MEM-RL-01: latent slicing for group-aligned micro-batching of the WMPO update.
+"""MEM-RL-01: latent slicing for group-aligned micro-batching of the LUMOS update.
 
 `_slice_latent` is the batch-dim companion to `_repeat_latent`; it lets the outcome
 step process the effective batch in slices without materializing the whole

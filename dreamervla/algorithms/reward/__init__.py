@@ -1,4 +1,4 @@
-"""Swappable WMPO reward definitions (protocol + registry)."""
+"""Swappable LUMOS reward definitions (protocol + registry)."""
 
 # Import implementations for their registration side effect.
 from dreamervla.algorithms.reward import probability_outcome as _probability_outcome  # noqa: F401

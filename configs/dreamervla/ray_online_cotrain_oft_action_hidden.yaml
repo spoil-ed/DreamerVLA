@@ -191,7 +191,7 @@ learner:
       ppo_rollouts_per_start: 1
       ppo_update_epochs: 1
       entropy_coef: 0.0
-      wmpo:
+      lumos:
         chunk_size: ${task.openvla_oft.chunk_size}
         episode_max_steps: 300
         classifier_min_steps: 4

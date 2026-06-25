@@ -12,7 +12,7 @@ writes them to disk in the schema expected by ``WMReplayClassifierDataset``:
 
 These shards can be used as failure examples for LatentSuccessClassifier
 experiments. The dataset derives ``finish_step`` from ``dones`` and
-``complete`` from ``rewards`` per episode, matching WMPO's episode metadata
+``complete`` from ``rewards`` per episode, matching LUMOS's episode metadata
 semantics.
 
 Single GPU. Usage example::
@@ -20,7 +20,7 @@ Single GPU. Usage example::
     CUDA_VISIBLE_DEVICES=7 \\
         python -u \\
         python -m dreamervla.runners.collect_online_rollouts_for_classifier \\
-            --config configs/dreamervla/online_wmpo_outcome_libero_goal.yaml \\
+            --config configs/dreamervla/online_lumos_libero_goal.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
             --vla-ckpt-path ${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/VLA_model_256/libero_goal \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
         "--actor-ckpt",
         default=None,
         help="Optional separate actor/policy ckpt. Defaults to using the SFT init from the policy config "
-        "(matches WMPO's 'rollout SFT actor before RL').",
+        "(matches LUMOS's 'rollout SFT actor before RL').",
     )
     parser.add_argument(
         "--action-head-type",

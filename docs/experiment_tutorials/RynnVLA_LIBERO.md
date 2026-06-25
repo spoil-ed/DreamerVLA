@@ -74,7 +74,7 @@ bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=ryn
 ## 7. DreamerVLA
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=rynnvla_libero \
+bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_lumos task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=2 \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"

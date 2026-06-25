@@ -45,7 +45,7 @@ def test_ray_real_cotrain_smoke_reports_component_losses(tmp_path) -> None:
                 "learner.train_cfg.batch_size=1",
                 "learner.train_cfg.classifier_batch_size=1",
                 "learner.model_cfg.classifier.kwargs.window=1",
-                "learner.train_cfg.algorithm_cfg.wmpo.classifier_min_steps=1",
+                "learner.train_cfg.algorithm_cfg.lumos.classifier_min_steps=1",
             ],
         )
 

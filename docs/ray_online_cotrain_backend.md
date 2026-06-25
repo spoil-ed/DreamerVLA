@@ -306,7 +306,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl PYTHONPATH=. "${PYTHON}" -m dreamervla.trai
   learner.train_cfg.batch_size=1 \
   learner.train_cfg.classifier_batch_size=1 \
   learner.model_cfg.classifier.kwargs.window=1 \
-  learner.train_cfg.algorithm_cfg.wmpo.classifier_min_steps=1
+  learner.train_cfg.algorithm_cfg.lumos.classifier_min_steps=1
 ```
 
 The config keeps model and data concerns separate:

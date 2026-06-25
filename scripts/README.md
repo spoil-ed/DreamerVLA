@@ -182,7 +182,7 @@ Python modules:
 
 | Module | Purpose |
 | --- | --- |
-| `dreamervla.runners.online_dreamervla` | Online WMPO experiment loop |
+| `dreamervla.runners.online_dreamervla` | Online LUMOS experiment loop |
 | `dreamervla.runners.frozen_wm_actor_critic` | Frozen-WM actor-critic experiment |
 | `dreamervla.runners.collect_online_rollouts_for_classifier` | Collect online rollout shards for classifier experiments |
 

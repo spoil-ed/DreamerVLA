@@ -8,9 +8,9 @@ Routes (public interface):
         from ``dreamervla.algorithms.dreamervla``
 
   • PPO routes — distinguished by **reward form**:
-        ``dino_wmpo_dense_step``    (dense per-step state-reward)
-        ``dino_wmpo_outcome_step``  (verifier outcome reward selected by
-                                     algorithm.wmpo.reward_model, WMPO/verl)
+        ``dino_lumos_dense_step``    (dense per-step state-reward)
+        ``dino_lumos_step``  (verifier outcome reward selected by
+                                     algorithm.lumos.reward_model, LUMOS/verl)
         from ``dreamervla.algorithms.ppo``
 
   • TD-MPC MPC planner (eval-time): ``dreamervla.algorithms.tdmpc_mpc``
@@ -27,9 +27,9 @@ from .dreamervla import (
     world_model_pretrain_step,
 )
 from .ppo import (
-    dino_wmpo_dense_chunk_step,
-    dino_wmpo_dense_step,
-    dino_wmpo_outcome_step,
+    dino_lumos_dense_chunk_step,
+    dino_lumos_dense_step,
+    dino_lumos_step,
 )
 from .registry import ActorUpdateRoute, actor_update_names, get_actor_update_route
 
@@ -40,9 +40,9 @@ __all__ = [
     "compute_lambda_returns",
     "compute_replay_lambda_returns",
     # PPO routes (distinguished by reward form).
-    "dino_wmpo_dense_step",
-    "dino_wmpo_dense_chunk_step",
-    "dino_wmpo_outcome_step",
+    "dino_lumos_dense_step",
+    "dino_lumos_dense_chunk_step",
+    "dino_lumos_step",
     "ActorUpdateRoute",
     "actor_update_names",
     "get_actor_update_route",

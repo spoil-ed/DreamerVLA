@@ -1,13 +1,13 @@
 """Build webdataset shards for the LatentSuccessClassifier from precomputed
 LIBERO demo action-hiddens.
 
-Schema per sample (matches WMPO's reward_model/videomae.py expectations):
+Schema per sample (matches LUMOS's reward_model/videomae.py expectations):
     <key>.latent.npy  shape [T, latent_dim] (float16)
     <key>.meta.json   {"finish_step": T-1, "complete": true, "task_id": int, "demo_id": int}
 
 All demo episodes are successful, so this is a v1 dataset of positives.
 Same-episode earlier-window negatives are sampled at classifier-training
-time by the shard reader (LatentSuccessShardDataset), mirroring WMPO's
+time by the shard reader (LatentSuccessShardDataset), mirroring LUMOS's
 SuccessWindowDataset scheme.
 
 To add failure-class negatives, a follow-up script must run pi0 SFT in

@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from dreamervla.algorithms.ppo import (
-    dino_wmpo_dense_chunk_step,
-    dino_wmpo_dense_step,
-    dino_wmpo_outcome_step,
+    dino_lumos_dense_chunk_step,
+    dino_lumos_dense_step,
+    dino_lumos_step,
 )
 
 ActorUpdateStep = Callable[..., dict[str, Any]]
@@ -85,8 +85,8 @@ def actor_update_names() -> tuple[str, ...]:
 
 register_actor_update_route(
     ActorUpdateRoute(
-        name="wmpo_outcome",
-        step_fn=dino_wmpo_outcome_step,
+        name="LUMOS",
+        step_fn=dino_lumos_step,
         world_model_arg="chunk_world_model",
         requires_classifier=True,
     ),
@@ -95,22 +95,22 @@ register_actor_update_route(
 
 register_actor_update_route(
     ActorUpdateRoute(
-        name="wmpo_dense_chunk",
-        step_fn=dino_wmpo_dense_chunk_step,
+        name="LUMOS_DENSE_CHUNK",
+        step_fn=dino_lumos_dense_chunk_step,
         world_model_arg="chunk_world_model",
     ),
-    aliases=("dense_chunk", "wmpo_chunk"),
+    aliases=("dense_chunk",),
 )
 
 register_actor_update_route(
     ActorUpdateRoute(
-        name="wmpo_dense",
-        step_fn=dino_wmpo_dense_step,
+        name="LUMOS_DENSE",
+        step_fn=dino_lumos_dense_step,
         world_model_arg="world_model",
         uses_critic=True,
         uses_real_relabel=True,
     ),
-    aliases=("wmpo_ppo", "ppo", "grpo"),
+    aliases=("ppo", "grpo"),
 )
 
 

@@ -1,4 +1,4 @@
-"""Protocol for swappable WMPO reward definitions."""
+"""Protocol for swappable LUMOS reward definitions."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class RewardModel(Protocol):
 
     The verifier emits ``(complete, finish_step)`` plus optional continuous
     ``(score, score_step)`` values; a ``RewardModel`` turns those into the
-    ``[batch, max_steps]`` reward the WMPO advantage consumes. The default
+    ``[batch, max_steps]`` reward the LUMOS advantage consumes. The default
     sparse-outcome form places ``float(complete)`` at ``finish_step``; dense /
     verifier-shaped forms may return a per-step signal instead.
     """

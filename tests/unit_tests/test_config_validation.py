@@ -182,8 +182,8 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
     route_names = [
         "world_model_dinowm_chunk",
         "oft_world_model_dinowm_chunk",
-        "dreamervla_rynn_dino_wm_wmpo_outcome",
-        "dreamervla_oft_dino_wm_wmpo_outcome",
+        "dreamervla_rynn_dino_wm_lumos",
+        "dreamervla_oft_dino_wm_lumos",
     ]
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):

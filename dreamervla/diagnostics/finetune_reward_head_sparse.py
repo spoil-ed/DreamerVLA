@@ -2,7 +2,7 @@
 # ruff: noqa: E402
 """Fine-tune ONLY the WM reward head as a terminal-success classifier.
 
-WMPO-style recipe:
+LUMOS-style recipe:
   * Each training batch is 50/50 positive (window ending at terminal of a
     successful demo) and negative (window NOT touching terminal).
   * Targets are sparse_rewards (0 everywhere except a single 1 at the terminal
@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument(
         "--config",
-        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_wmpo_outcome.yaml"),
+        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_lumos.yaml"),
     )
     p.add_argument("--world-model-ckpt", required=True)
     p.add_argument("--out-dir", required=True)
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
         default="per_window",
         help=(
             "per_step_sparse: original (sparse 0/1 per step, collapses); "
-            "per_window: WMPO-style single label at last latent (BinaryRewardHead, BCE); "
+            "per_window: LUMOS-style single label at last latent (BinaryRewardHead, BCE); "
             "reward_diffusion: gamma^(W-1-t) decay on positive windows, 0 on negatives."
         ),
     )

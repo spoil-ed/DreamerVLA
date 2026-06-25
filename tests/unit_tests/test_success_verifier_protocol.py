@@ -16,7 +16,7 @@ def test_stub_satisfies_verifier_protocol():
 
 
 def test_latent_success_classifier_declares_predict_success():
-    # Contract smoke test: the default verifier exposes the method the WMPO loop
+    # Contract smoke test: the default verifier exposes the method the LUMOS loop
     # calls (outcome.py). Assert the attribute exists without constructing the
     # (heavyweight) model so the test stays a fast unit test.
     from dreamervla.models.reward.latent_success_classifier import (

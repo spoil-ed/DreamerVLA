@@ -1,19 +1,19 @@
 # ruff: noqa: E402
-"""Outcome-reward WMPO PPO route.
+"""Outcome-reward LUMOS PPO route.
 
-**Reward form**: selected by ``algorithm.wmpo.reward_model``. After imagining a
+**Reward form**: selected by ``algorithm.lumos.reward_model``. After imagining a
 full episode in the world model, ``LatentSuccessClassifier.predict_success``
 scores the imagined latent video and emits sparse ``(complete, finish_step)``
 plus optional continuous ``(score, score_step)`` tensors. ``sparse_outcome``
 places ``float(complete)`` at ``finish_step``; ``probability_outcome`` places
 the verifier's best ``p(success)`` at ``score_step``.
 
-This is the DreamerVLA-side reproduction of the WMPO/verl PPO loop. The
+This is the DreamerVLA-side reproduction of the LUMOS/verl PPO loop. The
 rollout drives the WM in chunk mode (``ChunkAwareDinoWMWorldModel.
 predict_next_chunk``) so one WM call advances ``action_chunks_len`` env
 steps in lockstep with the RynnVLA actor's K-step action chunk.
 
-Contrast with ``dino_wmpo_dense_step`` (``ppo/dense.py``), which decodes a
+Contrast with ``dino_lumos_dense_step`` (``ppo/dense.py``), which decodes a
 dense per-step state-reward from the WM hidden at every imagined env-step.
 
     real start frame
@@ -74,7 +74,7 @@ def build_valid_chunk_count(
     chunk_size: int,
     num_chunks: int,
 ) -> torch.Tensor:
-    """Number of valid actor chunks per rollout, aligned with WMPO's eos_mask.
+    """Number of valid actor chunks per rollout, aligned with LUMOS's eos_mask.
 
     A chunk c spans env-steps ``[c*K, (c+1)*K)``. The chunk that contains
     ``finish_step`` is ``finish_step // K``. We INCLUDE that chunk (the actor's
@@ -109,7 +109,7 @@ def _build_reward_tensor(
         batch: B_eff (B * group_size after repeat).
         max_steps: T_max (episode horizon in env-step units, not chunks).
         chunk_size: K. Currently unused for placement (env-step units), kept for
-            API parity with WMPO's RobRewardManager which uses action_token_len.
+            API parity with LUMOS's RobRewardManager which uses action_token_len.
         finish_step: [B] env-step indices.
         complete: [B] bool.
 
@@ -132,7 +132,7 @@ def _build_reward_tensor(
 
 def _resolve_reward_tensor(
     *,
-    wmpo_cfg: Any,
+    lumos_cfg: Any,
     batch: int,
     max_steps: int,
     chunk_size: int,
@@ -149,7 +149,7 @@ def _resolve_reward_tensor(
     """
     import dreamervla.algorithms.reward as reward_pkg
 
-    name = str(wmpo_cfg.get("reward_model", "sparse_outcome"))
+    name = str(lumos_cfg.get("reward_model", "sparse_outcome"))
     model = reward_pkg.get_reward_model(name)
     return model.build_reward(
         batch=batch,
@@ -237,7 +237,7 @@ def _imagine_and_score_slice(
             .to(feat_dtype)
         )
         with torch.no_grad():
-            # Stochastic full action chunk — the PPO action unit for RynnVLA/WMPO:
+            # Stochastic full action chunk — the PPO action unit for RynnVLA/LUMOS:
             # one policy decision emits K env actions.
             action_chunk, old_lp, _sample_extra = policy(
                 {
@@ -368,7 +368,7 @@ def _imagine_and_score_slice(
     )
 
 
-class WMPOImaginer:
+class LumosImaginer:
     """Default Imaginer: chunk-WM rollout scored by the success verifier.
 
     Thin named seam over ``_imagine_and_score_slice`` so the imagination strategy is
@@ -380,7 +380,7 @@ class WMPOImaginer:
         return _imagine_and_score_slice(**kwargs)
 
 
-def dino_wmpo_outcome_step(
+def dino_lumos_step(
     policy: nn.Module,
     chunk_world_model: nn.Module,
     classifier: nn.Module,
@@ -392,39 +392,39 @@ def dino_wmpo_outcome_step(
     optim_cfg: DictConfig,
     ref_policy: nn.Module | None = None,
 ) -> dict[str, float]:
-    """One WMPO PPO step.
+    """One LUMOS PPO step.
 
     Shape conventions:
-        K       = algorithm_cfg.wmpo.chunk_size (RynnVLA actor time_horizon, default 5)
-        T_max   = algorithm_cfg.wmpo.episode_max_steps (libero_goal: 300)
+        K       = algorithm_cfg.lumos.chunk_size (RynnVLA actor time_horizon, default 5)
+        T_max   = algorithm_cfg.lumos.episode_max_steps (libero_goal: 300)
         num_chunks = T_max // K
         group_size = algorithm_cfg.ppo_rollouts_per_start
         B_eff   = B * group_size
     """
-    wmpo_cfg = algorithm_cfg.get("wmpo", {})
-    K = int(wmpo_cfg.get("chunk_size", 5))
-    T_max = int(wmpo_cfg.get("episode_max_steps", 300))
+    lumos_cfg = algorithm_cfg.get("lumos", {})
+    K = int(lumos_cfg.get("chunk_size", 5))
+    T_max = int(lumos_cfg.get("episode_max_steps", 300))
     num_chunks = T_max // K
     if num_chunks < 1:
         raise ValueError(f"episode_max_steps={T_max} too small for chunk_size={K}")
     # Bound the imagination forward's activation memory to this many rollouts
     # (per-rollout independent → numerically identical). 0 = full effective batch.
-    imag_mb = int(wmpo_cfg.get("imagine_micro_batch", 0))
+    imag_mb = int(lumos_cfg.get("imagine_micro_batch", 0))
     # min_steps for the classifier sliding-window sweep — windows ending before
     # this index are skipped.  Unit MUST match the classifier's native
     # granularity (read from ``classifier_module.cfg.granularity`` below):
     # action classifier → env-step, chunk classifier → chunk.  Default below
     # is in chunk units (~num_chunks/15: e.g. 60/15=4 for libero_goal at K=5,
     # 37/15=2 for K=8). For an action-granularity classifier the YAML MUST
-    # set ``algorithm.wmpo.classifier_min_steps`` explicitly in env-step units.
+    # set ``algorithm.lumos.classifier_min_steps`` explicitly in env-step units.
     classifier_min_steps = int(
-        wmpo_cfg.get("classifier_min_steps", max(1, num_chunks // 15))
+        lumos_cfg.get("classifier_min_steps", max(1, num_chunks // 15))
     )
     # Drop GRPO groups with no variance in returns (all-success or all-fail in
     # the same prompt's rollouts). Their normalized advantage is 0 anyway, so
-    # this is purely a compute optimization; matches WMPO ray_trainer filter().
+    # this is purely a compute optimization; matches LUMOS ray_trainer filter().
     filter_zero_variance_groups = bool(
-        wmpo_cfg.get("filter_zero_variance_groups", True)
+        lumos_cfg.get("filter_zero_variance_groups", True)
     )
 
     group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
@@ -487,14 +487,14 @@ def dino_wmpo_outcome_step(
     # full-batch slice — bit-for-bit the original behavior.
     n_starts = _latent_batch_dim(current) // group_size
     B_eff = n_starts * group_size
-    mb_starts_cfg = int(wmpo_cfg.get("update_micro_batch_starts", 0))
+    mb_starts_cfg = int(lumos_cfg.get("update_micro_batch_starts", 0))
     mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
     slice_bounds = [
         (s, min(s + mb_starts, n_starts)) for s in range(0, n_starts, mb_starts)
     ]
     # Inner micro-batch for the classifier sweep (``eval_micro_batch``) — composes
     # with the slice and is the only bound for the full-batch fallback.
-    eval_micro_batch = int(wmpo_cfg.get("eval_micro_batch", 64) or B_eff)
+    eval_micro_batch = int(lumos_cfg.get("eval_micro_batch", 64) or B_eff)
 
     # Classifier granularity drives BOTH (a) how we POOL the imagined frames we
     # store and (b) how finish_step is mapped back to env-steps. Detect it ONCE
@@ -505,15 +505,15 @@ def dino_wmpo_outcome_step(
     # the classifier's internal ``_chunk_aggregate`` (same chunk_pool), so
     # success detection is unchanged — see predict_success(pre_pooled=...).
     classifier_cfg = getattr(classifier_module, "cfg", None)
-    cfg_override = wmpo_cfg.get("classifier_granularity", None)
+    cfg_override = lumos_cfg.get("classifier_granularity", None)
     if classifier_cfg is None and cfg_override is None:
         global _warned_missing_cfg
         if not _warned_missing_cfg:
             _warned_missing_cfg = True
             _logger.warning(
-                "dino_wmpo_outcome_step: classifier_module has no `.cfg`; "
+                "dino_lumos_step: classifier_module has no `.cfg`; "
                 "defaulting granularity='action'. If the classifier is "
-                "chunk-granular, set `algorithm.wmpo.classifier_granularity: "
+                "chunk-granular, set `algorithm.lumos.classifier_granularity: "
                 "chunk` (and optionally `chunk_pool`) to avoid silent "
                 "off-by-K reward placement."
             )
@@ -525,7 +525,7 @@ def dino_wmpo_outcome_step(
     chunk_granular = cls_gran == "chunk"
     if chunk_granular:
         chunk_pool = str(
-            wmpo_cfg.get("classifier_chunk_pool", None)
+            lumos_cfg.get("classifier_chunk_pool", None)
             or getattr(classifier_cfg, "chunk_pool", "last")
         )
         finish_offset = (
@@ -553,7 +553,7 @@ def dino_wmpo_outcome_step(
     # Pure no_grad data collection (the imagination is data; the PPO gradient
     # flows only through the Phase-3 re-eval). The WM stays frozen for the sweep.
     slices: list[ImaginedRollout] = []
-    imaginer = WMPOImaginer()
+    imaginer = LumosImaginer()
     with _temporarily_freeze(chunk_world_model):
         for s_lo, s_hi in slice_bounds:
             slices.append(
@@ -604,7 +604,7 @@ def dino_wmpo_outcome_step(
     )
 
     reward_tensor = _resolve_reward_tensor(
-        wmpo_cfg=wmpo_cfg,
+        lumos_cfg=lumos_cfg,
         batch=B_eff,
         max_steps=T_max,
         chunk_size=K,
@@ -616,8 +616,8 @@ def dino_wmpo_outcome_step(
     )
     returns = reward_tensor.sum(dim=-1)  # for sparse 0/1 this equals float(complete)
 
-    # ─── eos_mask, aligned with WMPO ───────────────────────────────────────
-    # WMPO masks PPO loss past finish_step. We do the chunk-level equivalent:
+    # ─── eos_mask, aligned with LUMOS ───────────────────────────────────────
+    # LUMOS masks PPO loss past finish_step. We do the chunk-level equivalent:
     # chunk c spans env-steps [c*K, (c+1)*K). Chunk containing success is
     # ``finish_step // K`` (included). For failed episodes (complete=0,
     # finish_step = T_max-1) every chunk is valid (uniform mask).
@@ -629,8 +629,8 @@ def dino_wmpo_outcome_step(
         chunk_indices_t < valid_chunk_count.unsqueeze(0)
     ).float()  # [num_chunks, B_eff]
 
-    # ─── KL subtracted from reward (WMPO style) ────────────────────────────
-    # WMPO compute_rewards: token_score - kl * kl_ratio, BEFORE GRPO advantage.
+    # ─── KL subtracted from reward (LUMOS style) ────────────────────────────
+    # LUMOS compute_rewards: token_score - kl * kl_ratio, BEFORE GRPO advantage.
     # We compute total masked KL per rollout and subtract from the scalar return.
     if use_ref:
         # Stack ref_kls per chunk across the slices into the [num_chunks, B_eff]
@@ -649,7 +649,7 @@ def dino_wmpo_outcome_step(
         returns_adjusted = returns
 
     # ─── Group-relative advantage, then zero-variance filter ──────────────
-    # WMPO's ray_trainer filters out groups where every rollout has the same
+    # LUMOS's ray_trainer filters out groups where every rollout has the same
     # return (no within-group variance) — those produce zero advantage anyway
     # and waste compute on policy forwards. We mark them via a per-rollout
     # mask and multiply into chunk_mask so the entire group is skipped.
@@ -878,7 +878,7 @@ def dino_wmpo_outcome_step(
     # Sentinel = -1.0 when no rollouts complete. Avoids float('nan'), which
     # propagates through the workspace's ``reduce_mean_dict`` (all_reduce
     # SUM) and contaminates the metric on every rank.  Readers should pair
-    # this with ``wmpo/success_rate``: success_rate==0 ⇒ metric is the
+    # this with ``LUMOS/success_rate``: success_rate==0 ⇒ metric is the
     # sentinel and should be ignored.
     complete_bool = complete.detach().bool()
     if complete_bool.any():
@@ -962,41 +962,41 @@ def dino_wmpo_outcome_step(
         "continue_mean": 1.0,
         "ref_kl_mean": total_kl / max(1, update_epochs),
         "kl_coef": float(kl_coef),
-        # Namespaced detail — WMPO-specific diagnostics.
-        "wmpo/actor_loss": actor_loss_val,
-        "wmpo/actor_bc_ref_loss": bc_ref_loss_val,
-        "wmpo/actor_bc_ref_scale": actor_bc_ref_scale,
-        "wmpo/avg_entropy": avg_entropy_val,
-        "wmpo/avg_kl": total_kl / max(1, update_epochs),
-        "wmpo/grad_norm": grad_norm,
-        "wmpo/success_rate": float(complete.float().mean().item()),
-        "wmpo/score_mean": score_mean,
-        "wmpo/score_std": score_std,
+        # Namespaced detail — LUMOS-specific diagnostics.
+        "LUMOS/actor_loss": actor_loss_val,
+        "LUMOS/actor_bc_ref_loss": bc_ref_loss_val,
+        "LUMOS/actor_bc_ref_scale": actor_bc_ref_scale,
+        "LUMOS/avg_entropy": avg_entropy_val,
+        "LUMOS/avg_kl": total_kl / max(1, update_epochs),
+        "LUMOS/grad_norm": grad_norm,
+        "LUMOS/success_rate": float(complete.float().mean().item()),
+        "LUMOS/score_mean": score_mean,
+        "LUMOS/score_std": score_std,
         # Failure-aware: average finish step ONLY over completed rollouts.
         # The prior all-rollouts average pinned this metric near T_max when
         # most episodes failed (finish_step = T_max-1 for failures).
-        "wmpo/mean_finish_step": mean_finish_step_complete,
-        "wmpo/mean_finish_step_all": float(finish_step.float().mean().item()),
-        "wmpo/num_chunks": float(num_chunks),
-        "wmpo/T_max": float(T_max),
-        "wmpo/start_points_per_window": float(T_hist),
-        "wmpo/classifier_min_steps": float(classifier_min_steps),
-        "wmpo/valid_chunk_frac": float(
+        "LUMOS/mean_finish_step": mean_finish_step_complete,
+        "LUMOS/mean_finish_step_all": float(finish_step.float().mean().item()),
+        "LUMOS/num_chunks": float(num_chunks),
+        "LUMOS/T_max": float(T_max),
+        "LUMOS/start_points_per_window": float(T_hist),
+        "LUMOS/classifier_min_steps": float(classifier_min_steps),
+        "LUMOS/valid_chunk_frac": float(
             chunk_mask.sum().item() / max(1, num_chunks * B_eff)
         ),
-        "wmpo/group_var_keep_frac": float(per_rollout_group_mask.mean().item()),
+        "LUMOS/group_var_keep_frac": float(per_rollout_group_mask.mean().item()),
         # ── per-group breakdown for ppo_groups.jsonl log ─────────────────
-        "wmpo/group_size": float(group_size),
-        "wmpo/num_groups": float(num_groups),
-        "wmpo/num_all_success_groups": float(num_all_success),
-        "wmpo/num_all_fail_groups": float(num_all_fail),
-        "wmpo/num_mixed_groups": float(num_mixed),
-        "wmpo/group_success_rates": group_success_rates,
-        "wmpo/group_success_counts": group_success_counts,
-        "wmpo/group_rollout_successes": group_rollout_successes,
-        "wmpo/group_finish_steps": group_finish_steps,
-        "wmpo/group_has_variance": group_has_variance_bool,
+        "LUMOS/group_size": float(group_size),
+        "LUMOS/num_groups": float(num_groups),
+        "LUMOS/num_all_success_groups": float(num_all_success),
+        "LUMOS/num_all_fail_groups": float(num_all_fail),
+        "LUMOS/num_mixed_groups": float(num_mixed),
+        "LUMOS/group_success_rates": group_success_rates,
+        "LUMOS/group_success_counts": group_success_counts,
+        "LUMOS/group_rollout_successes": group_rollout_successes,
+        "LUMOS/group_finish_steps": group_finish_steps,
+        "LUMOS/group_has_variance": group_has_variance_bool,
     }
 
 
-__all__ = ["dino_wmpo_outcome_step", "build_valid_chunk_count", "_build_reward_tensor"]
+__all__ = ["dino_lumos_step", "build_valid_chunk_count", "_build_reward_tensor"]

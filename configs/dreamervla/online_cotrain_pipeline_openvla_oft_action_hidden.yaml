@@ -92,5 +92,5 @@ classifier:
   token_count: ${task.openvla_oft.token_count}
 
 algorithm:
-  wmpo:
+  lumos:
     chunk_size: ${task.openvla_oft.chunk_size}

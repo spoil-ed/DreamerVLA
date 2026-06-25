@@ -7,7 +7,7 @@ LIBERO HDF5
   -> no-op 过滤和 reward 标注
   -> RynnVLA / OpenVLA-OFT action-hidden sidecar
   -> DINO-style chunk world model
-  -> DreamerVLA actor-critic 或 WMPO outcome
+  -> DreamerVLA actor-critic 或 LUMOS
   -> LIBERO rollout 评估
 ```
 

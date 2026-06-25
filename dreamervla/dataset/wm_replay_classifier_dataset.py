@@ -21,12 +21,12 @@ Two-stage usage:
 ``__iter__`` consumes the cached trajectories and is CPU-only, so
 ``num_workers > 0`` is safe after caching.
 
-WMPO finish_step alignment
+LUMOS finish_step alignment
 --------------------------
 Each demo's HDF5 carries ``dones`` and ``rewards`` arrays. We derive:
     finish_step (input coords) = argmax(dones)+1 if dones.any() else T_common
     complete                   = rewards.sum() > 0
-matching WMPO/reward_model/videomae.py::SuccessWindowDataset's
+matching upstream reward_model/videomae.py::SuccessWindowDataset's
 ``meta["finish_step"]`` / ``meta["complete"]``. The "end" window of every
 trajectory is anchored at finish_step rather than at the full imagined
 length — for offline LIBERO demos these usually coincide, but they
@@ -46,7 +46,7 @@ Three optional data sources can be combined freely:
 3. ``rollout_raw_dir`` / ``rollout_hidden_dir`` (optional) — real
    policy SFT / online rollouts with MIXED outcomes. label and
    finish_step are derived per-demo from rewards/dones. This is the
-   closest analog to WMPO's SFT-rollout corpus.
+   closest analog to LUMOS's SFT-rollout corpus.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ class WMReplayClassifierDataset(IterableDataset):
         # Optional FAILURE data source (e.g., pi0 SFT sim rollouts that didn't
         # solve the task). When provided, each failure demo is imagined through
         # the chunk WM and contributes (end_window, label=0) + (earlier_window,
-        # label=0) — matching WMPO's SuccessWindowDataset windowing for failed
+        # label=0) — matching LUMOS's SuccessWindowDataset windowing for failed
         # episodes. Real failures are MORE INFORMATIVE than swap-perturbed
         # negatives because they capture the true distribution of "trajectories
         # that look plausible but don't reach the goal."
@@ -125,7 +125,7 @@ class WMReplayClassifierDataset(IterableDataset):
         # real policy (pi0 SFT inference, online RL exploration, ...). Each
         # demo's label and finish_step are derived per-episode from the
         # HDF5's ``rewards``/``dones`` arrays. This is the closest analog to
-        # WMPO's training corpus (one episode = one real rollout, naturally
+        # LUMOS's training corpus (one episode = one real rollout, naturally
         # mixed success/failure).
         rollout_raw_dir: str | Path | None = None,
         rollout_hidden_dir: str | Path | None = None,
@@ -183,7 +183,7 @@ class WMReplayClassifierDataset(IterableDataset):
 
         # Filled by imagine_all(). For every list of imagined trajectories we
         # carry a parallel list of (complete, finish_step_imag) — both used by
-        # the window yielder so that the "end" window matches WMPO's
+        # the window yielder so that the "end" window matches LUMOS's
         # meta["finish_step"] semantics rather than the full imagined length.
         self._pos_trajs: list[np.ndarray] | None = None  # imagined from success demos
         self._pos_meta: list[tuple[bool, int]] = []
@@ -209,7 +209,7 @@ class WMReplayClassifierDataset(IterableDataset):
     ) -> tuple[np.ndarray, np.ndarray, int, bool]:
         """Load (obs_embedding, actions, finish_step_input, complete).
 
-        ``finish_step_input`` follows WMPO's Python-slicing convention: it is
+        ``finish_step_input`` follows LUMOS's Python-slicing convention: it is
         one past the last index to include, derived from the first ``dones==1``
         entry. If ``dones`` is missing or all-zero we fall back to the full
         common length, which preserves the prior behaviour. ``complete`` is
@@ -498,10 +498,10 @@ class WMReplayClassifierDataset(IterableDataset):
     ) -> Iterable:
         """Per-episode 2 windows: (end, label=int(complete)) + (random earlier, label=0).
 
-        Mirrors WMPO/reward_model/videomae.py SuccessWindowDataset._windows
+        Mirrors upstream reward_model/videomae.py SuccessWindowDataset._windows
         exactly: the end window is positive iff the episode succeeded, every
         earlier window is labeled negative regardless of success. The "end"
-        anchor is the WMPO ``finish_step`` (in imagined-traj coords), not the
+        anchor is the LUMOS ``finish_step`` (in imagined-traj coords), not the
         full imagined length.
         """
         W, S = self.W, self.stride

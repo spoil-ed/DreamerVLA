@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.algorithms.ppo.outcome import dino_wmpo_outcome_step
+from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 
 
 class _TinyChunkWM(torch.nn.Module):
@@ -101,7 +101,7 @@ def test_outcome_step_applies_bc_anchor_to_reference_policy():
 
     cfg = OmegaConf.create(
         {
-            "wmpo": {
+            "lumos": {
                 "chunk_size": 2,
                 "episode_max_steps": 2,
                 "classifier_min_steps": 1,
@@ -122,7 +122,7 @@ def test_outcome_step_applies_bc_anchor_to_reference_policy():
     optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
 
     before = float(policy.action_value.detach())
-    metrics = dino_wmpo_outcome_step(
+    metrics = dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=_AlwaysSuccessClassifier(),
@@ -145,7 +145,7 @@ def test_outcome_step_optimizes_full_action_chunks_not_only_first_action():
     policy = _TinyChunkPolicy()
     cfg = OmegaConf.create(
         {
-            "wmpo": {
+            "lumos": {
                 "chunk_size": 2,
                 "episode_max_steps": 2,
                 "classifier_min_steps": 1,
@@ -164,7 +164,7 @@ def test_outcome_step_optimizes_full_action_chunks_not_only_first_action():
         {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
     )
 
-    dino_wmpo_outcome_step(
+    dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=_AlwaysSuccessClassifier(),

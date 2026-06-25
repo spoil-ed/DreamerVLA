@@ -4,7 +4,7 @@
 
 This script is deliberately offline/diagnostic. It does not modify datasets,
 checkpoints, or the active training loop. It runs real LIBERO closed-loop
-rollouts, records WMPO-style outcome fields (`complete`, `finish_step`, `acc`),
+rollouts, records LUMOS-style outcome fields (`complete`, `finish_step`, `acc`),
 and exports sparse real-outcome labels that can later be used as hard positives
 or hard negatives for reward correction.
 """
@@ -79,7 +79,7 @@ def _finish_sparse_rewards(
     return rewards
 
 
-def _wmpo_group_filter(
+def _lumos_group_filter(
     records: list[dict[str, Any]], lower: float, upper: float
 ) -> dict[str, Any]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -175,7 +175,7 @@ def _aggregate_records(
         if records
         else 0.0,
         "by_policy_mode": by_mode,
-        "wmpo_style_filter": _wmpo_group_filter(
+        "lumos_style_filter": _lumos_group_filter(
             records,
             lower=float(args.accuracy_lower_bound),
             upper=float(args.accuracy_upper_bound),
@@ -623,7 +623,7 @@ def main() -> None:
                             )
                             if records
                             else 0.0,
-                            "filter": _wmpo_group_filter(
+                            "filter": _lumos_group_filter(
                                 records,
                                 lower=float(args.accuracy_lower_bound),
                                 upper=float(args.accuracy_upper_bound),
@@ -633,7 +633,7 @@ def main() -> None:
                             json.dumps(partial, indent=2, default=_json_default)
                         )
 
-    filter_summary = _wmpo_group_filter(
+    filter_summary = _lumos_group_filter(
         records,
         lower=float(args.accuracy_lower_bound),
         upper=float(args.accuracy_upper_bound),
@@ -698,7 +698,7 @@ def main() -> None:
         if records
         else 0.0,
         "by_policy_mode": by_mode,
-        "wmpo_style_filter": filter_summary,
+        "lumos_style_filter": filter_summary,
         "records_jsonl": str(records_path),
         "elapsed_sec": float(time.time() - t0),
         "mismatch_high_reward_failures": mismatch_rows,

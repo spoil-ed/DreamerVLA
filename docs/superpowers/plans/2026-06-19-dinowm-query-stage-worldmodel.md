@@ -150,9 +150,9 @@ Expected: chunk WM tests pass.
 - Modify: `configs/worldmodel/rynnvla_input_token_chunk.yaml`
 - Modify: `configs/worldmodel/openvla_oft_action_chunk.yaml`
 - Modify: `configs/worldmodel/openvla_oft_input_token_chunk.yaml`
-- Modify: `configs/dreamervla/rynnvla_wmpo_outcome.yaml`
-- Modify: `configs/dreamervla/openvla_oft_wmpo_outcome.yaml`
-- Modify: `configs/dreamervla/*input_token*_wmpo_outcome.yaml`
+- Modify: `configs/dreamervla/rynnvla_lumos.yaml`
+- Modify: `configs/dreamervla/openvla_oft_lumos.yaml`
+- Modify: `configs/dreamervla/*input_token*_lumos.yaml`
 - Modify: `configs/dreamervla/online_cotrain_pipeline_openvla_oft_action_hidden.yaml`
 - Modify: `configs/experiment/online_cotrain_oft_backbone_latent.yaml`
 - Modify: `dreamervla/config.py`
@@ -658,19 +658,19 @@ predictor sizing without re-recording the ceiling.
 ## Task 15: Discrete bridge + online wiring for query_before — IMPLEMENTED 2026-06-19
 
 Not needed for the offline ceiling probe (Tasks 9-13 use no actor). This enables
-the query_before route in the **online** WMPO actor-critic loop with a discrete
+the query_before route in the **online** LUMOS actor-critic loop with a discrete
 VLA. As of 2026-06-19 it is **implemented in code** (Steps 1-3 below done):
 `LatentToOpenVLADiscreteTokenActor` (`dreamervla/models/actor/latent_to_openvla_discrete_token_actor.py`,
 extends `OpenVLADiscreteTokenActor`) provides the discrete LM-head bridge;
 `obs_to_input_token_embedding` + the `backbone_latent` branch in `OnlineCotrainRunner`
 wire the online env (`env.obs_hidden_source=input_token_embedding`); and
-`configs/dreamervla/openvla_oft_input_token_wmpo_outcome.yaml` now uses
+`configs/dreamervla/openvla_oft_input_token_lumos.yaml` now uses
 `head_type: oft_discrete_token`. Remaining: Step 4 (dedicated tests).
 
 **Files:**
 - Modify: `dreamervla/models/actor/latent_to_action_hidden_actor.py`
 - Modify: the online env (`DreamerVLAOnlineTrainEnv`) + `dreamervla/runners/online_utils.py`
-- Modify: `configs/dreamervla/openvla_oft_input_token_wmpo_outcome.yaml`
+- Modify: `configs/dreamervla/openvla_oft_input_token_lumos.yaml`
 - Test: `tests/unit_tests/` actor + an online query_before smoke
 
 - [x] **Step 1: Add a discrete LM-head bridge.** Done as a dedicated class
@@ -679,7 +679,7 @@ wire the online env (`env.obs_hidden_source=input_token_embedding`); and
   LM-head categorical decoder maps it to action tokens (no L1 head). (The older L1
   adapter `LatentToActionHiddenActor` is left intact for L1 checkpoints.)
 
-- [x] **Step 2: Config** `configs/dreamervla/openvla_oft_input_token_wmpo_outcome.yaml`
+- [x] **Step 2: Config** `configs/dreamervla/openvla_oft_input_token_lumos.yaml`
   now uses `_target_: LatentToOpenVLADiscreteTokenActor`, `head_type: oft_discrete_token`,
   `init_lm_head_ckpt`, `vocab_size`, `action_token_bins`. Composes + `validate_cfg` OK.
 
@@ -691,7 +691,7 @@ wire the online env (`env.obs_hidden_source=input_token_embedding`); and
 - [x] **Step 4: Tests** — `tests/unit_tests/test_latent_to_openvla_discrete_token_actor.py`
   (4 tests, all pass): the discrete bridge builds and decodes a backbone latent to
   `[B, time_horizon, action_dim]` (flat + tokenized inputs), exposes an OpenVLA LM
-  head with no L1 head, and the `openvla_oft_input_token_wmpo_outcome` route wires
+  head with no L1 head, and the `openvla_oft_input_token_lumos` route wires
   the discrete actor + lean ~313M WM + the online input-token obs source
   (`obs_to_input_token_embedding`) — i.e. no more `NotImplementedError`.
 

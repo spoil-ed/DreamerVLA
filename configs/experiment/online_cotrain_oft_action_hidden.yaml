@@ -1,13 +1,13 @@
 # @package _global_
 # Online cotrain — Scheme 2: ACTION-HIDDEN world model (WM after the Action Query,
 # before the Action Head). Predicts future action-hidden; classifier scores
-# imagined latent windows; actor trained by wmpo_outcome.  Single Hydra call:
+# imagined latent windows; actor trained by lumos.  Single Hydra call:
 #   python -m dreamervla.train --config-name online_cotrain_oft_action_hidden
 #
 # NOTE the online env-rollout policy is the RynnVLA one-trajectory VLA (the ~40%
 # success seed) because DreamerVLAOnlineTrainEnv emits the action_query latent
 # via RynnVLAEncoder. The OFT one-trajectory checkpoint is handled by the OFFLINE
-# OFT action-hidden path (experiment=dreamervla_oft_dino_wm_wmpo_outcome); see the
+# OFT action-hidden path (experiment=dreamervla_oft_dino_wm_lumos); see the
 # tutorial doc. This is a policy/action-latent WM, NOT the original pixel DINO-WM.
 defaults:
   - /task: libero_goal
@@ -179,8 +179,8 @@ classifier:
   chunk_pool: last
 
 algorithm:
-  update_type: wmpo_outcome
-  wmpo:
+  update_type: LUMOS
+  lumos:
     chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
     classifier_min_steps: 4

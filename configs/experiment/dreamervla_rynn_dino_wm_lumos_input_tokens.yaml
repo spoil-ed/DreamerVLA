@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: rynnvla_input_token_lumos
+  - _self_

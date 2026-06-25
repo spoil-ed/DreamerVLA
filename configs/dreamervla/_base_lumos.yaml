@@ -1,9 +1,9 @@
 # @package _global_
-# CFG-05: shared base for the *_wmpo_outcome dreamervla configs.
-# Holds the content common to openvla_oft_wmpo_outcome and rynnvla_wmpo_outcome
+# CFG-05: shared base for the *_lumos dreamervla configs.
+# Holds the content common to openvla_oft_lumos and rynnvla_lumos
 # (and, by inheritance, their input-token / discrete-token / online children).
 # Each variant deep-merges only its divergent keys (out_dir, ckpt paths, dataset,
-# world_model dims, policy, algorithm.wmpo.chunk_size/classifier_min_steps, and the
+# world_model dims, policy, algorithm.lumos.chunk_size/classifier_min_steps, and the
 # rynnvla-only real_rollout_relabel block).
 _target_: dreamervla.runners.JointDreamerVLARunner
 seed: 7
@@ -63,8 +63,8 @@ critic:
   bin_max: 20.0
 
 algorithm:
-  update_type: wmpo_outcome
-  wmpo:
+  update_type: LUMOS
+  lumos:
     # chunk_size + classifier_min_steps are variant-specific.
     episode_max_steps: 300  # LIBERO official horizon
     filter_zero_variance_groups: true

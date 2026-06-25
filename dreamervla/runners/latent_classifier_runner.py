@@ -1,10 +1,10 @@
-"""LatentSuccessClassifier training runner (WMPO-aligned).
+"""LatentSuccessClassifier training runner (LUMOS-aligned).
 
 Launch path:
     bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk
         → python -m dreamervla.train --config-name train experiment=latent_classifier_libero_goal_chunk
             → dreamervla.runners.LatentClassifierRunner.run()
-                → dreamervla.dataset.wmpo_aligned_latent_dataset
+                → dreamervla.dataset.lumos_aligned_latent_dataset
                 → dreamervla.models.reward.LatentSuccessClassifier
 
 Why a dedicated runner, not another standalone script:
@@ -18,11 +18,11 @@ Why a dedicated runner, not another standalone script:
 The training loop is epoch-based:
   * Resampled train loader → ``cfg.training.num_epochs`` passes, default 20
   * Eval every ``cfg.training.eval_every`` steps; window F1 + (optional) episode F1
-  * Best ckpt saved by val window F1 (sigmoid + threshold sweep, WMPO protocol)
+  * Best ckpt saved by val window F1 (sigmoid + threshold sweep, LUMOS protocol)
   * Final ckpt saved after the last epoch
 
-Window-level F1 uses sigmoid + threshold sweep to mirror WMPO's
-``_evaluate_terminal_model`` (note: WMPO sweep is [0.3, 1.0]; we expose the bounds
+Window-level F1 uses sigmoid + threshold sweep to mirror LUMOS's
+``_evaluate_terminal_model`` (note: LUMOS sweep is [0.3, 1.0]; we expose the bounds
 via cfg). Episode-level F1 mirrors ``predict_success`` (stride-1 sliding window +
 ``any-positive`` aggregation).
 
@@ -45,9 +45,9 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 
-from dreamervla.dataset.wmpo_aligned_latent_dataset import (
-    WMPOAlignedLatentTrainDataset,
-    WMPOAlignedLatentValDataset,
+from dreamervla.dataset.lumos_aligned_latent_dataset import (
+    LumosAlignedLatentTrainDataset,
+    LumosAlignedLatentValDataset,
 )
 from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamervla.runners.base_runner import BaseRunner
@@ -73,8 +73,8 @@ class LatentClassifierRunner(BaseRunner):
         self.device = torch.device(
             str(OmegaConf.select(self.cfg, "training.device") or "cuda")
         )
-        self.train_ds: WMPOAlignedLatentTrainDataset | None = None
-        self.val_ds: WMPOAlignedLatentValDataset | None = None
+        self.train_ds: LumosAlignedLatentTrainDataset | None = None
+        self.val_ds: LumosAlignedLatentValDataset | None = None
         self.train_loader: DataLoader | None = None
         self.val_loader: DataLoader | None = None
         self.model: LatentSuccessClassifier | None = None
@@ -116,7 +116,7 @@ class LatentClassifierRunner(BaseRunner):
         # (action) granularity for backwards compatibility.
         chunk_subsample = int(OmegaConf.select(d, "chunk_subsample") or 1)
         chunk_pool = str(OmegaConf.select(d, "chunk_pool") or "last")
-        self.train_ds = WMPOAlignedLatentTrainDataset(
+        self.train_ds = LumosAlignedLatentTrainDataset(
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
             failure_dir_raw=OmegaConf.select(d, "failure_dir_raw"),
@@ -127,7 +127,7 @@ class LatentClassifierRunner(BaseRunner):
             chunk_subsample=chunk_subsample,
             chunk_pool=chunk_pool,
         )
-        self.val_ds = WMPOAlignedLatentValDataset(
+        self.val_ds = LumosAlignedLatentValDataset(
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
             failure_dir_raw=OmegaConf.select(d, "failure_dir_raw"),
@@ -239,7 +239,7 @@ class LatentClassifierRunner(BaseRunner):
         )
         label_smoothing = float(OmegaConf.select(tr, "label_smoothing") or 0.0)
 
-        # class-balanced CE (matches WMPO `nn.CrossEntropyLoss()` *unweighted* by
+        # class-balanced CE (matches LUMOS `nn.CrossEntropyLoss()` *unweighted* by
         # default; user can flip via cfg.training.class_balanced)
         class_balanced = bool(OmegaConf.select(tr, "class_balanced") or False)
         if class_balanced:
@@ -368,9 +368,9 @@ class LatentClassifierRunner(BaseRunner):
     def _evaluate_window_level(self) -> dict[str, Any]:
         """Sigmoid + threshold sweep over softmax(logits)[:, 1].
 
-        Mirrors WMPO's _evaluate_terminal_model: P(success) = sigmoid(logit_class_1).
+        Mirrors LUMOS's _evaluate_terminal_model: P(success) = sigmoid(logit_class_1).
         (Equivalent decision boundary at high thresholds to softmax-based, but
-        we use sigmoid here for 1:1 parity with WMPO's eval protocol.)
+        we use sigmoid here for 1:1 parity with LUMOS's eval protocol.)
         """
         assert self.model is not None and self.val_loader is not None
         self.model.eval()
@@ -379,7 +379,7 @@ class LatentClassifierRunner(BaseRunner):
         for xs, ys, _ in self.val_loader:
             xs = xs.to(self.device, non_blocking=True)
             logits = self.model(xs)
-            # WMPO uses sigmoid(logits)[:, 1] — see WMPO/verl/.../fsdp_workers.py:847
+            # LUMOS uses sigmoid(logits)[:, 1] — see LUMOS/verl/.../fsdp_workers.py:847
             probs = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
             probs_l.extend(probs.tolist())
             ys_l.extend(ys.tolist())
@@ -396,7 +396,7 @@ class LatentClassifierRunner(BaseRunner):
 
     @torch.no_grad()
     def _evaluate_episode_level(self) -> dict[str, Any]:
-        """WMPO predict_success protocol — stride-1 sliding + any-positive.
+        """LUMOS predict_success protocol — stride-1 sliding + any-positive.
 
         For each demo, scan stride-1 windows over the full trajectory (from
         ``min_steps + W`` to ``finish_step``). Use ``max`` over windows as the
@@ -489,9 +489,9 @@ class LatentClassifierRunner(BaseRunner):
     # --------------------------- io helpers ----------------------------
 
     def _save_named(self, name: str, *, extra: dict | None = None) -> None:
-        """Save in the format consumed by the online WMPO training script.
+        """Save in the format consumed by the online LUMOS training script.
 
-        Schema (matches the old v2/v3 trainer + WMPO predict_success consumer):
+        Schema (matches the old v2/v3 trainer + LUMOS predict_success consumer):
             model      : nn.Module.state_dict()
             threshold  : float — best operating point from the val sweep
             f1         : float — F1 at that threshold

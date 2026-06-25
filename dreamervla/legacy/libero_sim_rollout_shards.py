@@ -1,6 +1,6 @@
 """Iterable dataset over legacy libero_goal classifier shards.
 
-Mirrors WMPO/reward_model/videomae.py::SuccessWindowDataset windowing
+Mirrors upstream reward_model/videomae.py::SuccessWindowDataset windowing
 semantics: per episode emit 1 positive (last W frames) and 1 random
 earlier-window negative. Validation: positive at end, all earlier windows
 labeled negative at stride.

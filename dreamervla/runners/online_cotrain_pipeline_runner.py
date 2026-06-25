@@ -165,7 +165,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
             ("algorithm.imagination_horizon", "algorithm.debug_imagination_horizon", 3),
             ("algorithm.ppo_rollouts_per_start", "algorithm.debug_ppo_rollouts_per_start", 2),
-            ("algorithm.wmpo.episode_max_steps", "algorithm.wmpo.debug_episode_max_steps", 150),
+            ("algorithm.lumos.episode_max_steps", "algorithm.lumos.debug_episode_max_steps", 150),
         ]
         for full_key, debug_key, fallback in swaps:
             value = OmegaConf.select(cfg, debug_key, default=fallback)

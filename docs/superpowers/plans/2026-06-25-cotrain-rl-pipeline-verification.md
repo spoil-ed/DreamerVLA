@@ -81,16 +81,16 @@ def test_constant_outcomes_give_zero_advantage():
 
 ---
 
-### Task A2：WMPO 整条 actor 更新——判别分类器 → `actor_loss>0`、`grad>0`
+### Task A2：LUMOS 整条 actor 更新——判别分类器 → `actor_loss>0`、`grad>0`
 
-> 用 tiny 真 WM + tiny 真 actor + **stub 分类器**（直接控制想象 rollout 的成功/失败结果），跑 `dino_wmpo_outcome_step`，验证整条链路在"分类器能判别"时真的产出非零 actor 梯度，并复现"退化分类器→零"。
+> 用 tiny 真 WM + tiny 真 actor + **stub 分类器**（直接控制想象 rollout 的成功/失败结果），跑 `dino_lumos_step`，验证整条链路在"分类器能判别"时真的产出非零 actor 梯度，并复现"退化分类器→零"。
 
 **Files：**
-- 目标：`dreamervla/algorithms/ppo/outcome.py:356` `dino_wmpo_outcome_step(policy, chunk_world_model, classifier, classifier_threshold, actor_optimizer, obs, device, algorithm_cfg, optim_cfg, ref_policy=None)` → 返回含 `actor_loss`/`returns_mean`/`actor_grad_norm` 的 dict。
-- Test（新建）：`tests/unit_tests/test_wmpo_outcome_signal.py`
+- 目标：`dreamervla/algorithms/ppo/outcome.py:356` `dino_lumos_step(policy, chunk_world_model, classifier, classifier_threshold, actor_optimizer, obs, device, algorithm_cfg, optim_cfg, ref_policy=None)` → 返回含 `actor_loss`/`returns_mean`/`actor_grad_norm` 的 dict。
+- Test（新建）：`tests/unit_tests/test_lumos_signal.py`
 
 - [ ] **Step 1：先读这些以构造合法输入**
-  - `outcome.py` 里 `obs` 用到哪些键（应为 `obs_embedding/actions/rewards/dones/is_first/is_terminal/is_last`，形状 `[B, T, ...]`）、`algorithm_cfg.wmpo`（`chunk_size`/`episode_max_steps`/`ppo_rollouts_per_start`/`filter_zero_variance_groups`/`classifier_min_steps`）。
+  - `outcome.py` 里 `obs` 用到哪些键（应为 `obs_embedding/actions/rewards/dones/is_first/is_terminal/is_last`，形状 `[B, T, ...]`）、`algorithm_cfg.lumos`（`chunk_size`/`episode_max_steps`/`ppo_rollouts_per_start`/`filter_zero_variance_groups`/`classifier_min_steps`）。
   - `chunk_world_model` 在想象时被调用的 `mode`（如 `imagine`/`actor_input`/`observe_next`），`policy({"mode":"sample",...})` 的返回 `(action_chunk, logp, extra)`。
   - `classifier`：被 `predict_success(...)` 调用（`latent_success_classifier.py:186`）；**stub 一个 `predict_success` 让你能精确控制每条想象 rollout 的成功标签**。
 
@@ -113,7 +113,7 @@ class _DegenerateClassifier(nn.Module):
 
 def test_discriminative_classifier_gives_nonzero_actor_gradient():
     policy, wm, opt, obs, ac, oc = _tiny_setup(torch.device("cpu"))
-    m = dino_wmpo_outcome_step(policy, wm, _DiscriminativeClassifier(),
+    m = dino_lumos_step(policy, wm, _DiscriminativeClassifier(),
                                classifier_threshold=0.5, actor_optimizer=opt,
                                obs=obs, device=torch.device("cpu"),
                                algorithm_cfg=ac, optim_cfg=oc, ref_policy=None)
@@ -124,12 +124,12 @@ def test_discriminative_classifier_gives_nonzero_actor_gradient():
 
 def test_degenerate_classifier_gives_zero_signal():
     policy, wm, opt, obs, ac, oc = _tiny_setup(torch.device("cpu"))
-    m = dino_wmpo_outcome_step(policy, wm, _DegenerateClassifier(), 0.5, opt,
+    m = dino_lumos_step(policy, wm, _DegenerateClassifier(), 0.5, opt,
                                obs, torch.device("cpu"), ac, oc, None)
     assert m["actor_loss"] == 0.0 and m["actor_grad_norm"] == 0.0   # 复现上次现象
 ```
 
-- [ ] **Step 3**：`pytest -q tests/unit_tests/test_wmpo_outcome_signal.py`，期望 PASS。
+- [ ] **Step 3**：`pytest -q tests/unit_tests/test_lumos_signal.py`，期望 PASS。
 - 解读：
   - `discriminative` 测试过 → **整条 actor 更新链路是对的**，只要给它一个能判别的分类器就会学。
   - `degenerate` 测试过 → 精确复现并定位上次 `actor_loss=0` = 分类器退化（无方差→`filter_zero_variance_groups` 全过滤）。

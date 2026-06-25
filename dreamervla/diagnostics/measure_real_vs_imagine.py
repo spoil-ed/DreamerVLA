@@ -47,7 +47,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "--config",
-        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_wmpo_outcome.yaml"),
+        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_lumos.yaml"),
     )
     p.add_argument(
         "--ckpt",

@@ -14,7 +14,7 @@
 
 The generic RL framing — "split `RewardWorker` and `CriticWorker` out of `LearnerWorker`" — does **not** map 1:1 onto DreamerVLA, and the plan corrects for it. Verified against the code:
 
-1. **Reward and value are NOT inside `LearnerWorker`.** `LearnerWorker.update()` (`dreamervla/workers/actor/learner_worker.py:94-104`) dispatches to a registered **algorithm route**; the RL step `_dreamervla_rl_update_once` (`:230-262`) calls `dino_wmpo_outcome_step`. Reward (`_build_reward_tensor`, `dreamervla/algorithms/ppo/outcome.py:95-127`) and the value/success signal (`classifier.predict_success`, invoked inside `_imagine_and_score_slice`, `outcome.py:286-294`) already live in the **algorithms layer**, not the learner.
+1. **Reward and value are NOT inside `LearnerWorker`.** `LearnerWorker.update()` (`dreamervla/workers/actor/learner_worker.py:94-104`) dispatches to a registered **algorithm route**; the RL step `_dreamervla_rl_update_once` (`:230-262`) calls `dino_lumos_step`. Reward (`_build_reward_tensor`, `dreamervla/algorithms/ppo/outcome.py:95-127`) and the value/success signal (`classifier.predict_success`, invoked inside `_imagine_and_score_slice`, `outcome.py:286-294`) already live in the **algorithms layer**, not the learner.
 
 2. **There is no separate critic network on the outcome route.** DreamerVLA's `V(e_t)=P(future success)` **is** the `LatentSuccessClassifier` (`dreamervla/models/reward/latent_success_classifier.py`). A scalar critic (`TDMPCCritic`) exists *only* on the dense route (`registry.py:110`, `uses_critic=True`). The classifier is **light** and sits on the **imagination critical path** (imagine chunk → classify → reward → GRPO advantage, per RL update).
 
@@ -174,7 +174,7 @@ def test_respawn_cap_eventually_raises(monkeypatch):
 - `dreamervla/algorithms/reward/sparse_outcome.py` — `SparseOutcomeReward` delegating to `_build_reward_tensor`.
 - `dreamervla/algorithms/verifier/__init__.py` — re-export the protocol.
 - `dreamervla/algorithms/verifier/protocol.py` — `SuccessVerifier` Protocol (typing contract; selection stays via the classifier component's Hydra `_target_`, so **no registry needed**).
-- Modify `dreamervla/algorithms/ppo/outcome.py` — `dino_wmpo_outcome_step` resolves the reward model from `algorithm_cfg.wmpo.reward_model` (default `"sparse_outcome"`) via a **function-local** import (breaks the import cycle, since `sparse_outcome` imports `_build_reward_tensor` from this module).
+- Modify `dreamervla/algorithms/ppo/outcome.py` — `dino_lumos_step` resolves the reward model from `algorithm_cfg.lumos.reward_model` (default `"sparse_outcome"`) via a **function-local** import (breaks the import cycle, since `sparse_outcome` imports `_build_reward_tensor` from this module).
 - Tests: `tests/unit_tests/test_reward_registry.py`, `tests/unit_tests/test_reward_sparse_outcome.py`, `tests/unit_tests/test_success_verifier_protocol.py`.
 
 > Run all test commands with `conda run -n dreamervla python -m pytest …` from repo root `/mnt/data/spoil/workspace/DreamerVLA`.
@@ -220,7 +220,7 @@ Expected: FAIL — `ModuleNotFoundError: dreamervla.algorithms.reward`
 
 ```python
 # dreamervla/algorithms/reward/protocol.py
-"""Protocol for swappable WMPO reward definitions."""
+"""Protocol for swappable LUMOS reward definitions."""
 
 from __future__ import annotations
 
@@ -234,7 +234,7 @@ class RewardModel(Protocol):
     """Maps an imagined rollout's success outcome to a per-step reward tensor.
 
     The verifier emits ``(complete, finish_step)``; a ``RewardModel`` turns that
-    into the ``[batch, max_steps]`` reward the WMPO advantage consumes. The default
+    into the ``[batch, max_steps]`` reward the LUMOS advantage consumes. The default
     sparse-outcome form places ``float(complete)`` at ``finish_step``; dense /
     verifier-shaped forms may return a per-step signal instead.
     """
@@ -259,7 +259,7 @@ Also create an empty package marker so the import resolves:
 
 ```python
 # dreamervla/algorithms/reward/__init__.py
-"""Swappable WMPO reward definitions (protocol + registry)."""
+"""Swappable LUMOS reward definitions (protocol + registry)."""
 
 from dreamervla.algorithms.reward.protocol import RewardModel
 
@@ -275,7 +275,7 @@ Expected: PASS (1 passed)
 
 ```bash
 git add dreamervla/algorithms/reward/__init__.py dreamervla/algorithms/reward/protocol.py tests/unit_tests/test_reward_registry.py
-git commit --signoff -m "feat: add RewardModel protocol for swappable WMPO reward"
+git commit --signoff -m "feat: add RewardModel protocol for swappable LUMOS reward"
 ```
 
 ---
@@ -329,7 +329,7 @@ Expected: FAIL — `ModuleNotFoundError: …reward.registry`
 
 ```python
 # dreamervla/algorithms/reward/registry.py
-"""Registry for swappable WMPO reward models (mirrors the actor-update registry)."""
+"""Registry for swappable LUMOS reward models (mirrors the actor-update registry)."""
 
 from __future__ import annotations
 
@@ -464,9 +464,9 @@ from dreamervla.algorithms.reward.registry import register_reward_model
 
 
 class SparseOutcomeReward:
-    """Wraps the canonical ``_build_reward_tensor`` so the default WMPO numerics are
+    """Wraps the canonical ``_build_reward_tensor`` so the default LUMOS numerics are
     bit-for-bit unchanged; exists so the reward DEFINITION is selectable via
-    ``algorithm.wmpo.reward_model`` alongside future dense / verifier-shaped forms.
+    ``algorithm.lumos.reward_model`` alongside future dense / verifier-shaped forms.
     """
 
     name = "sparse_outcome"
@@ -497,7 +497,7 @@ Wire auto-registration in the package init:
 
 ```python
 # dreamervla/algorithms/reward/__init__.py
-"""Swappable WMPO reward definitions (protocol + registry)."""
+"""Swappable LUMOS reward definitions (protocol + registry)."""
 
 from dreamervla.algorithms.reward.protocol import RewardModel
 from dreamervla.algorithms.reward.registry import (
@@ -534,7 +534,7 @@ git commit --signoff -m "feat: SparseOutcomeReward default reward model (numeric
 ### Task 4: Route the outcome step through the reward registry
 
 **Files:**
-- Modify: `dreamervla/algorithms/ppo/outcome.py:521-527` (the `_build_reward_tensor(...)` call inside `dino_wmpo_outcome_step`)
+- Modify: `dreamervla/algorithms/ppo/outcome.py:521-527` (the `_build_reward_tensor(...)` call inside `dino_lumos_step`)
 - Test: `tests/unit_tests/test_outcome_reward_model_selection.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -571,7 +571,7 @@ def test_outcome_step_resolves_reward_model_from_cfg(monkeypatch):
     finish_step = torch.tensor([0, 1])
     complete = torch.tensor([True, False])
     out = _resolve_reward_tensor(
-        wmpo_cfg={"reward_model": "spy"},
+        lumos_cfg={"reward_model": "spy"},
         batch=2,
         max_steps=4,
         chunk_size=2,
@@ -597,7 +597,7 @@ def test_outcome_default_reward_model_is_sparse_outcome(monkeypatch):
     from dreamervla.algorithms.ppo.outcome import _resolve_reward_tensor
 
     _resolve_reward_tensor(
-        wmpo_cfg={},
+        lumos_cfg={},
         batch=2,
         max_steps=4,
         chunk_size=2,
@@ -615,14 +615,14 @@ Expected: FAIL — `ImportError: cannot import name '_resolve_reward_tensor'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add the resolution seam to `outcome.py` (function-local import of the package breaks the `sparse_outcome → outcome` import cycle), then call it from `dino_wmpo_outcome_step`.
+Add the resolution seam to `outcome.py` (function-local import of the package breaks the `sparse_outcome → outcome` import cycle), then call it from `dino_lumos_step`.
 
 Add near the other module-level helpers in `dreamervla/algorithms/ppo/outcome.py` (e.g. after `_build_reward_tensor`, ~line 128):
 
 ```python
 def _resolve_reward_tensor(
     *,
-    wmpo_cfg: Any,
+    lumos_cfg: Any,
     batch: int,
     max_steps: int,
     chunk_size: int,
@@ -637,7 +637,7 @@ def _resolve_reward_tensor(
     """
     import dreamervla.algorithms.reward as reward_pkg
 
-    name = str(wmpo_cfg.get("reward_model", "sparse_outcome"))
+    name = str(lumos_cfg.get("reward_model", "sparse_outcome"))
     model = reward_pkg.get_reward_model(name)
     return model.build_reward(
         batch=batch,
@@ -649,11 +649,11 @@ def _resolve_reward_tensor(
     )
 ```
 
-Then replace the hardcoded call in `dino_wmpo_outcome_step` (`outcome.py:521-527`):
+Then replace the hardcoded call in `dino_lumos_step` (`outcome.py:521-527`):
 
 ```python
     reward_tensor = _resolve_reward_tensor(
-        wmpo_cfg=wmpo_cfg,
+        lumos_cfg=lumos_cfg,
         batch=B_eff,
         max_steps=T_max,
         chunk_size=K,
@@ -679,7 +679,7 @@ Expected: PASS (unchanged counts)
 
 ```bash
 git add dreamervla/algorithms/ppo/outcome.py tests/unit_tests/test_outcome_reward_model_selection.py
-git commit --signoff -m "feat: select WMPO reward via algorithm.wmpo.reward_model (default unchanged)"
+git commit --signoff -m "feat: select LUMOS reward via algorithm.lumos.reward_model (default unchanged)"
 ```
 
 ---
@@ -713,7 +713,7 @@ def test_stub_satisfies_verifier_protocol():
 
 
 def test_latent_success_classifier_declares_predict_success():
-    # Contract smoke test: the default verifier exposes the method the WMPO loop
+    # Contract smoke test: the default verifier exposes the method the LUMOS loop
     # calls (outcome.py:286). We assert the attribute exists without constructing
     # the (heavyweight) model so the test stays a fast unit test.
     from dreamervla.models.reward.latent_success_classifier import (
@@ -732,7 +732,7 @@ Expected: FAIL — `ModuleNotFoundError: dreamervla.algorithms.verifier`
 
 ```python
 # dreamervla/algorithms/verifier/protocol.py
-"""Protocol for the WMPO success verifier — DreamerVLA's value source."""
+"""Protocol for the LUMOS success verifier — DreamerVLA's value source."""
 
 from __future__ import annotations
 
@@ -766,7 +766,7 @@ class SuccessVerifier(Protocol):
 
 ```python
 # dreamervla/algorithms/verifier/__init__.py
-"""WMPO success-verifier contract (the value source)."""
+"""LUMOS success-verifier contract (the value source)."""
 
 from dreamervla.algorithms.verifier.protocol import SuccessVerifier
 
@@ -782,7 +782,7 @@ Expected: PASS (2 passed)
 
 ```bash
 git add dreamervla/algorithms/verifier/ tests/unit_tests/test_success_verifier_protocol.py
-git commit --signoff -m "feat: add SuccessVerifier protocol (WMPO value-source contract)"
+git commit --signoff -m "feat: add SuccessVerifier protocol (LUMOS value-source contract)"
 ```
 
 ---
@@ -790,7 +790,7 @@ git commit --signoff -m "feat: add SuccessVerifier protocol (WMPO value-source c
 ### Task 6: Phase-2 regression gate + docs note
 
 **Files:**
-- Modify: `AGENTS.md` (or `docs/HISTORY.md`) — one-line pointer that reward is selectable via `algorithm.wmpo.reward_model` and the verifier contract is `SuccessVerifier`.
+- Modify: `AGENTS.md` (or `docs/HISTORY.md`) — one-line pointer that reward is selectable via `algorithm.lumos.reward_model` and the verifier contract is `SuccessVerifier`.
 
 - [ ] **Step 1: Run the full unit suite + a ray cotrain smoke**
 
@@ -807,7 +807,7 @@ Expected: no errors.
 
 - [ ] **Step 3: Add the docs pointer + commit**
 
-Add to `AGENTS.md` near the algorithms/registry guidance: "Reward definition is selectable via `algorithm.wmpo.reward_model` (registry: `dreamervla/algorithms/reward/`); the success verifier (value source) must satisfy `dreamervla.algorithms.verifier.SuccessVerifier`."
+Add to `AGENTS.md` near the algorithms/registry guidance: "Reward definition is selectable via `algorithm.lumos.reward_model` (registry: `dreamervla/algorithms/reward/`); the success verifier (value source) must satisfy `dreamervla.algorithms.verifier.SuccessVerifier`."
 
 ```bash
 git add AGENTS.md
@@ -822,7 +822,7 @@ git commit --signoff -m "docs: note reward_model selector + SuccessVerifier cont
 
 **Current coupling:** `_imagine_and_score_slice` (`outcome.py:154-311`) interleaves (a) WM chunk rollout, (b) policy sampling + ref-KL, (c) classifier scoring, and (d) host-buffer layout for the multi-epoch PPO re-eval. It returns PPO-shaped buffers (`actor_feats`, `old_log_probs`, `ref_kls`, `complete`, `finish_step`), not a clean trajectory.
 
-**Approach:** Define an `ImaginedRollout` dataclass (latents/actions/old_log_probs/ref_kls + verifier outputs) and an `Imaginer` protocol `imagine(current, policy, world_model, verifier, cfg) -> ImaginedRollout`. Keep `_imagine_and_score_slice` as the default `WMPOImaginer` implementation. The MEM-RL-01 slice/micro-batch logic stays inside it.
+**Approach:** Define an `ImaginedRollout` dataclass (latents/actions/old_log_probs/ref_kls + verifier outputs) and an `Imaginer` protocol `imagine(current, policy, world_model, verifier, cfg) -> ImaginedRollout`. Keep `_imagine_and_score_slice` as the default `LumosImaginer` implementation. The MEM-RL-01 slice/micro-batch logic stays inside it.
 
 **Why deferred:** higher blast radius (touches the PPO re-eval contract + numerics) and depends on Phase 2's verifier protocol existing. Author its own TDD plan once Phase 2 merges. **Verification target:** golden-value test that the refactored imaginer yields bit-identical `complete`/`finish_step`/`old_log_probs` on a fixed seed vs. the pre-refactor path.
 
@@ -868,6 +868,6 @@ git commit --signoff -m "docs: note reward_model selector + SuccessVerifier cont
 
 **Placeholder scan:** Phase 2 tasks contain complete code + exact run commands + expected output; Phases 3–6 are explicitly marked design-spec → own plan (not bite-sized tasks), with a concrete verification target each.
 
-**Type consistency:** `RewardModel.build_reward(*, batch, max_steps, chunk_size, finish_step, complete, device)` is identical across protocol/registry/impl/seam/tests; `_resolve_reward_tensor` keyword args match `dino_wmpo_outcome_step`'s locals (`B_eff`, `T_max`, `K`, `finish_step`, `complete`, `device`); `SuccessVerifier.predict_success` signature matches the call at `outcome.py:286-292` (`threshold`, `stride`, `min_steps`, `pre_pooled` via `**kwargs`).
+**Type consistency:** `RewardModel.build_reward(*, batch, max_steps, chunk_size, finish_step, complete, device)` is identical across protocol/registry/impl/seam/tests; `_resolve_reward_tensor` keyword args match `dino_lumos_step`'s locals (`B_eff`, `T_max`, `K`, `finish_step`, `complete`, `device`); `SuccessVerifier.predict_success` signature matches the call at `outcome.py:286-292` (`threshold`, `stride`, `min_steps`, `pre_pooled` via `**kwargs`).
 
 **Correction surfaced:** the "split into separate workers now" framing is replaced with "extract interfaces now (Phase 2), host as workers when heavy (Phase 5)" — with the bottleneck evidence (`learner_wait≈3.6s` vs `env_step_wait≈1405s`) justifying the ordering.

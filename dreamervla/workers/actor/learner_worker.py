@@ -253,7 +253,7 @@ class LearnerWorker(Worker):
             if key in batch
         }
         with self._precision().context():
-            raw = dino_wmpo_outcome_step(
+            raw = dino_lumos_step(
                 policy=self._required_module("policy"),
                 chunk_world_model=self._required_module("world_model"),
                 classifier=self._required_module("classifier"),
@@ -548,10 +548,10 @@ def online_classifier_update_step(**kwargs: Any) -> dict[str, Any]:
     return _impl(**kwargs)
 
 
-def dino_wmpo_outcome_step(**kwargs: Any) -> dict[str, float]:
+def dino_lumos_step(**kwargs: Any) -> dict[str, float]:
     """Lazy import wrapper preserving optional-Ray import isolation."""
 
-    from dreamervla.algorithms.ppo import dino_wmpo_outcome_step as _impl
+    from dreamervla.algorithms.ppo import dino_lumos_step as _impl
 
     return _impl(**kwargs)
 

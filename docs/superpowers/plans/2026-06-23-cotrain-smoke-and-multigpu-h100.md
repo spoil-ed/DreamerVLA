@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use `- [ ]` checkboxes.
 
-**Goal:** Ship a low-cost full-process smoke for the OFT action-hidden online-cotrain pipeline (warmup → egl rollout → ≥1 wmpo_outcome/PPO update), flip the mainline cotrain defaults (logger → tensorboard+wandb offline; env layer → egl multi-env), and make BOTH the noray and ray coldstart→warmup→cotrain paths usable on a single-node 8× H100 box (cotrain already multi-GPU via torchrun DDP; this adds multi-GPU **collection**).
+**Goal:** Ship a low-cost full-process smoke for the OFT action-hidden online-cotrain pipeline (warmup → egl rollout → ≥1 LUMOS/PPO update), flip the mainline cotrain defaults (logger → tensorboard+wandb offline; env layer → egl multi-env), and make BOTH the noray and ray coldstart→warmup→cotrain paths usable on a single-node 8× H100 box (cotrain already multi-GPU via torchrun DDP; this adds multi-GPU **collection**).
 
 **Architecture:** Config-first. The smoke is a thin experiment over `online_cotrain_pipeline_oft_action_hidden` differing from production ONLY by step counts (`training.debug=true`). Defaults flip in the pipeline base config + the runner code default. noray collection becomes multi-GPU by wrapping the launcher's collect command in `torch.distributed.run` (the collect runner already shards work by torchrun rank and binds `gpu_id=local_rank`). ray collection becomes multi-GPU by launching N inference workers over a GPU range and routing each env to a stable owner worker (`env_id % N`); N=1 is byte-identical to today.
 
@@ -38,7 +38,7 @@ The smoke composes the production pipeline and differs ONLY by step counts (`tra
 # Differs from `online_cotrain_pipeline_oft_action_hidden` ONLY by step counts
 # (training.debug=true -> the runner's debug_* swap). Spans every phase:
 # offline WM+classifier warmup -> vectorized egl rollout (num_envs=4, == production)
-# -> >=1 wmpo_outcome (PPO-style) actor update + inline classifier -> checkpoint.
+# -> >=1 lumos (PPO-style) actor update + inline classifier -> checkpoint.
 # Requires the real OFT ckpt + action-hidden sidecar + LIBERO assets + a GPU.
 #   python -m dreamervla.train experiment=online_cotrain_pipeline_oft_action_hidden_smoke task=...
 defaults:

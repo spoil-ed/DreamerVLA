@@ -83,7 +83,7 @@ def test_input_token_sidecar_dims_use_current_frame_patch_tokens() -> None:
     assert flat_dim == 512 * 4096
 
 
-def test_oft_preprocess_uses_wmpo_prismatic_constants() -> None:
+def test_oft_preprocess_uses_lumos_prismatic_constants() -> None:
     source = _project_path(
         "dreamervla/preprocess/preprocess_oft_action_hidden.py"
     ).read_text(encoding="utf-8")

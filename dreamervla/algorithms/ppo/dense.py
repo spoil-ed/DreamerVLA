@@ -1,4 +1,4 @@
-"""Dense-reward WMPO / PPO / GRPO route.
+"""Dense-reward LUMOS / PPO / GRPO route.
 
 **Reward form**: dense per-step state-reward. For each imagined env-step we
 decode a scalar reward from the world-model hidden state and sum the
@@ -12,14 +12,14 @@ and run one (or more) PPO clip updates with GRPO group-relative advantages.
 The current rollout loop drives the WM with the single-frame ``predict_next``
 call (one latent in → one latent out).
 
-Contrast with ``dino_wmpo_outcome_step`` (``ppo/outcome.py``), which produces
+Contrast with ``dino_lumos_step`` (``ppo/outcome.py``), which produces
 a single sparse outcome reward from a ``LatentSuccessClassifier`` scoring the
 imagined latent video at success/finish, and which drives the WM in chunk
 mode (``predict_next_chunk``) to align with the actor's K-step action chunk.
 
 Optional add-ons:
   * ``ref_policy``: KL penalty against a fixed reference (subtracted from the
-    pre-advantage return, matching the WMPO/verl convention).
+    pre-advantage return, matching the LUMOS/verl convention).
   * ``actor_bc_to_ref_scale``: behavior-cloning anchor on the deterministic
     action chunk, drawn either against the ref policy or against
     ``policy.reference_action_chunk``.
@@ -246,7 +246,7 @@ def _dense_actor_backward_microbatched(
     }
 
 
-def dino_wmpo_dense_step(
+def dino_lumos_dense_step(
     policy: nn.Module,
     world_model: nn.Module,
     actor_optimizer: torch.optim.Optimizer,
@@ -468,12 +468,12 @@ def dino_wmpo_dense_step(
     # weights. Slices are in START units (one start = `group_size` rollouts). The
     # PPO + entropy + BC loss are means over B_eff, so each slice backprops a
     # global-B_eff-normalized contribution and the accumulated gradient equals the
-    # full-batch single backward bit-for-bit. `wmpo.update_micro_batch_starts`
+    # full-batch single backward bit-for-bit. `lumos.update_micro_batch_starts`
     # <= 0 or >= n_starts ⇒ ONE full-batch slice = the original behavior.
     b_eff = int(advantages.shape[0])
     n_starts = b_eff // group_size
     mb_starts_cfg = int(
-        (algorithm_cfg.get("wmpo", {}) or {}).get("update_micro_batch_starts", 0)
+        (algorithm_cfg.get("lumos", {}) or {}).get("update_micro_batch_starts", 0)
     )
     mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
     slice_bounds = [
@@ -849,4 +849,4 @@ def dino_wmpo_dense_step(
     }
 
 
-__all__ = ["dino_wmpo_dense_step"]
+__all__ = ["dino_lumos_dense_step"]

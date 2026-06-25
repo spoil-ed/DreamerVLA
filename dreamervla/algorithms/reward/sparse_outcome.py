@@ -9,9 +9,9 @@ from dreamervla.algorithms.reward.registry import register_reward_model
 
 
 class SparseOutcomeReward:
-    """Wraps the canonical ``_build_reward_tensor`` so the default WMPO numerics are
+    """Wraps the canonical ``_build_reward_tensor`` so the default LUMOS numerics are
     bit-for-bit unchanged; exists so the reward DEFINITION is selectable via
-    ``algorithm.wmpo.reward_model`` alongside future dense / verifier-shaped forms.
+    ``algorithm.lumos.reward_model`` alongside future dense / verifier-shaped forms.
     """
 
     name = "sparse_outcome"

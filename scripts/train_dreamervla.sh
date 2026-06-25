@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hydra entrypoint: DreamerVLA actor-critic / WMPO routes.
+# Hydra entrypoint: DreamerVLA actor-critic / LUMOS routes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

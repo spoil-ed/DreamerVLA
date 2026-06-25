@@ -1,4 +1,4 @@
-"""Registry for swappable WMPO reward models (mirrors the actor-update registry)."""
+"""Registry for swappable LUMOS reward models (mirrors the actor-update registry)."""
 
 from __future__ import annotations
 

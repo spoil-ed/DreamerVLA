@@ -33,8 +33,8 @@ overridable directly.
 | `experiment/` | top-level recipe (VLA SFT / world-model / classifier / DreamerVLA / eval / online cotrain / collect) |
 | `VLA/` | VLA backbone + finetune strategy (rynnvla / openvla_oft, full / one-trajectory) |
 | `worldmodel/` | DINO-WM architecture + input mode (action-chunk / input-token / discrete-token) |
-| `classifier/` | latent success classifier (outcome-reward WMPO) |
-| `dreamervla/` | actor-critic / WMPO-outcome training (all inherit `_base_wmpo_outcome`) |
+| `classifier/` | latent success classifier (outcome-reward LUMOS) |
+| `dreamervla/` | actor-critic / LUMOS training (all inherit `_base_lumos`) |
 | `evaluation/` | LIBERO rollout eval (`libero_vla`) |
 | `task/` | LIBERO suite + dataset/checkpoint paths (snake_case `task=` token) |
 | `logger/` | `tensorboard` / `wandb` / `tensorboard_wandb` |
@@ -57,7 +57,7 @@ overridable directly.
 | `training.lr_scheduler` | `cosine` (DreamerVLA) / `constant` (OFT VLA) | LR schedule |
 | `training.lr_warmup_steps` | `500` (DreamerVLA) | warmup steps |
 | `training.run_wm_phase` | `true` | run the WM supervised phase (DreamerVLA) |
-| `training.run_actor_critic_phase` | `true` | run the actor-critic / WMPO phase (DreamerVLA) |
+| `training.run_actor_critic_phase` | `true` | run the actor-critic / LUMOS phase (DreamerVLA) |
 | `training.use_ema` | `false` | EMA of weights |
 
 ## `dataloader.*` — data loading
@@ -103,15 +103,15 @@ match the WM checkpoint being loaded.
 | `world_model.chunk_rollout_chunks` | 4 | 4 | anti-drift rollout depth |
 | `world_model.freeze_backbone` | `true` | `true` | freeze the DINO image backbone |
 
-## `algorithm.*` — RL (WMPO / actor-critic)
+## `algorithm.*` — RL (LUMOS / actor-critic)
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `algorithm.update_type` | `wmpo_outcome` | route: `wmpo_outcome` / `dreamer` / others in the registry |
-| `algorithm.wmpo.episode_max_steps` | `300` | imagined env-steps per outcome rollout (LIBERO horizon) |
-| `algorithm.wmpo.chunk_size` | `${task...chunk_size}` | K; must equal `world_model.chunk_size` and `policy.time_horizon` |
-| `algorithm.wmpo.classifier_min_steps` | 3 (OFT) / 4 (RynnVLA) | min chunk index for the classifier sweep |
-| `algorithm.wmpo.filter_zero_variance_groups` | `true` | skip GRPO groups with no within-group variance |
+| `algorithm.update_type` | `LUMOS` | route: `LUMOS` / `dreamer` / others in the registry |
+| `algorithm.lumos.episode_max_steps` | `300` | imagined env-steps per outcome rollout (LIBERO horizon) |
+| `algorithm.lumos.chunk_size` | `${task...chunk_size}` | K; must equal `world_model.chunk_size` and `policy.time_horizon` |
+| `algorithm.lumos.classifier_min_steps` | 3 (OFT) / 4 (RynnVLA) | min chunk index for the classifier sweep |
+| `algorithm.lumos.filter_zero_variance_groups` | `true` | skip GRPO groups with no within-group variance |
 | `algorithm.imag_last` | `4` | replay start states per window (a memory dial) |
 | `algorithm.imagination_horizon` | `5` | imagined frames |
 | `algorithm.lam` | `0.95` | λ-return trace |
@@ -209,7 +209,7 @@ Chameleon action-token start id (a vocab constant; override the per-route
 
 ## Key interdependencies
 
-- `world_model.chunk_size` == `algorithm.wmpo.chunk_size` == `policy.time_horizon` (= K).
+- `world_model.chunk_size` == `algorithm.lumos.chunk_size` == `policy.time_horizon` (= K).
 - `world_model.obs_dim` = `time_horizon × action_dim × token_dim`.
 - `world_model.model_dim` must match the WM checkpoint loaded via `init.world_model_state_ckpt`.
 - `dataset.sequence_length` = `H + N*K + 1` (H imagination horizon, N rollout chunks).

@@ -59,7 +59,7 @@ bash scripts/install/60_verify.sh
 
 `scripts/install/40_third_party.sh` clones LIBERO and the pinned robosuite
 family, then installs vendored OpenSora and OpenVLA-OFT components in the same
-style as the related WMPO installer. `scripts/install/50_special_packages.sh`
+style as the related LUMOS installer. `scripts/install/50_special_packages.sh`
 handles flash-attn, egl_probe, and optional apex / TensorNVMe.
 
 Launch scripts write `${DVLA_DATA_ROOT}/.libero/config.yaml` and point LIBERO

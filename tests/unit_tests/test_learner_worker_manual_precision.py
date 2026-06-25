@@ -100,7 +100,7 @@ def _cotrain_train_cfg() -> dict[str, Any]:
         "lr": 0.01,
         "optim_cfg": {"grad_clip_norm": 1.0, "zero_grad_set_to_none": True},
         "algorithm_cfg": {
-            "wmpo": {"chunk_size": 1, "episode_max_steps": 2},
+            "lumos": {"chunk_size": 1, "episode_max_steps": 2},
             "ppo_rollouts_per_start": 1,
         },
         "syncer": {"store_name": "learner_worker_cotrain_store"},
@@ -145,7 +145,7 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
     monkeypatch.setattr(mod, "online_classifier_update_step", fake_classifier_step)
-    monkeypatch.setattr(mod, "dino_wmpo_outcome_step", fake_rl_step)
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
 
     replay = _DirectReplay()
     learner = LearnerWorker(_cotrain_model_cfg(), {}, _cotrain_train_cfg(), replay)

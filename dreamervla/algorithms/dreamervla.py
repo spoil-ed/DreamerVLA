@@ -584,7 +584,7 @@ def imagine_actor_critic_step(
             "success_return_shaping_discount", algorithm_cfg.get("ppo_gamma", 1.0)
         )
     )
-    # WMPO-style second KL: π_new vs π_prev (snapshot before previous update step).
+    # LUMOS-style second KL: π_new vs π_prev (snapshot before previous update step).
     prev_kl_coef = float(algorithm_cfg.get("prev_kl_coef", 0.0))
     use_ref_kl = (ref_policy is not None) and (kl_coef > 0.0)
     use_prev_kl = (prev_policy is not None) and (prev_kl_coef > 0.0)

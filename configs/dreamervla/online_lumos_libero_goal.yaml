@@ -1,13 +1,13 @@
 # @package _global_
-# DreamerVLA — online WMPO outcome route.
+# DreamerVLA — online LUMOS route.
 #
 # Driven by:
-#   python -m dreamervla.train experiment=online_wmpo_outcome_libero_goal
+#   python -m dreamervla.train experiment=online_lumos_libero_goal
 #
-# Differences vs configs/dreamervla/rynnvla_wmpo_outcome.yaml:
+# Differences vs configs/dreamervla/rynnvla_lumos.yaml:
 #   * all data paths live under the data root via ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 #   * world_model_state_ckpt points at a pinned ChunkAware checkpoint
-#   * classifier_state_ckpt points at the WMPO outcome classifier
+#   * classifier_state_ckpt points at the LUMOS classifier
 
 _target_: dreamervla.runners.JointDreamerVLARunner
 seed: 7
@@ -22,7 +22,7 @@ trainer:
   debug: false
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_wmpo_outcome/default/run
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_LUMOS/default/run
   debug: false
   resume: false
   distributed_strategy: ddp
@@ -44,7 +44,7 @@ init:
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
   world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
-  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/libero_goal/wmpo_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
+  classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/libero_goal/lumos_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
   load_dreamervla_critic: false
@@ -159,8 +159,8 @@ critic:
   bin_max: 20.0
 
 algorithm:
-  update_type: wmpo_outcome
-  wmpo:
+  update_type: LUMOS
+  lumos:
     chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
     classifier_min_steps: 4  # CHUNK units (was 20 env-step / K=5, ceil → 4)

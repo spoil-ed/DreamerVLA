@@ -1,4 +1,4 @@
-"""Regression tests for the optimizer-step guard in dino_wmpo_outcome_step.
+"""Regression tests for the optimizer-step guard in dino_lumos_step.
 
 Pins the contract that the actor optimizer does NOT step when there is no
 gradient signal (all-fail batch + zero-variance filter ON + BC disabled),
@@ -11,7 +11,7 @@ from __future__ import annotations
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.algorithms.ppo.outcome import dino_wmpo_outcome_step
+from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 
 
 class _TinyChunkWM(torch.nn.Module):
@@ -78,7 +78,7 @@ class _TinyPolicy(torch.nn.Module):
 
 def _base_cfg():
     return OmegaConf.create({
-        "wmpo": {
+        "lumos": {
             "chunk_size": 2,
             "episode_max_steps": 4,
             "classifier_min_steps": 1,
@@ -103,7 +103,7 @@ def test_outcome_step_skips_optimizer_when_all_groups_zero_variance():
     before = float(policy.action_value.detach())
     optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
 
-    metrics = dino_wmpo_outcome_step(
+    metrics = dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=_AlwaysFailClassifier(),
@@ -127,10 +127,10 @@ def test_outcome_step_skips_optimizer_when_all_groups_zero_variance():
 
 
 def test_outcome_step_reports_finite_finish_step_when_no_rollouts_complete():
-    """``wmpo/mean_finish_step`` must be finite (no NaN) to survive
+    """``LUMOS/mean_finish_step`` must be finite (no NaN) to survive
     ``reduce_mean_dict``'s all_reduce(SUM) across DDP ranks."""
     policy = _TinyPolicy()
-    metrics = dino_wmpo_outcome_step(
+    metrics = dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=_AlwaysFailClassifier(),
@@ -143,13 +143,13 @@ def test_outcome_step_reports_finite_finish_step_when_no_rollouts_complete():
         ref_policy=None,
     )
 
-    finish = metrics["wmpo/mean_finish_step"]
+    finish = metrics["LUMOS/mean_finish_step"]
     import math
     assert math.isfinite(finish), f"mean_finish_step must be finite, got {finish}"
     assert finish == -1.0, (
         f"Expected sentinel -1.0 when no rollouts complete, got {finish}"
     )
-    assert metrics["wmpo/success_rate"] == 0.0
+    assert metrics["LUMOS/success_rate"] == 0.0
 
 
 def test_outcome_step_reports_real_ratio_stats_in_dict():
@@ -157,7 +157,7 @@ def test_outcome_step_reports_real_ratio_stats_in_dict():
     even when ``ppo_update_epochs=1`` (ratio≡1) — they used to be silent
     1.0/0.0 stubs synthesized by the workspace via ``.get(..., 1.0)``."""
     policy = _TinyPolicy()
-    metrics = dino_wmpo_outcome_step(
+    metrics = dino_lumos_step(
         policy=policy,
         chunk_world_model=_TinyChunkWM(),
         classifier=_AlwaysFailClassifier(),

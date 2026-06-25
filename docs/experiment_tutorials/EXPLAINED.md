@@ -69,7 +69,7 @@ profile values live in the `worldmodel/` configs.
 
 ## Memory / OOM (online cotrain)
 
-The WMPO RL update imagines an **effective batch** through the world model at once:
+The LUMOS RL update imagines an **effective batch** through the world model at once:
 
 ```
 B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start
@@ -80,7 +80,7 @@ B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_p
 1. `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 2. a sane `algorithm.imag_last` (start states per replay window; default 4, diverse
    strided selection)
-3. cap `algorithm.wmpo.episode_max_steps` / `algorithm.ppo_rollouts_per_start`
+3. cap `algorithm.lumos.episode_max_steps` / `algorithm.ppo_rollouts_per_start`
 
 With `batch_size=12, imag_last=4` the action-hidden route fits an 80GB GPU at ~66.7 GB.
 The OFT latent is large; shrink `B_eff` first (chunk-granular video, sliced `lm_head`).
@@ -112,7 +112,7 @@ separate TensorFlow backend.
 
 ## Classifier corpora
 
-Classifier and WMPO training need both **success and failure** rollout corpora. The
+Classifier and LUMOS training need both **success and failure** rollout corpora. The
 standard LIBERO download gives success demos. Without failure demos + matching
 sidecars, stop after WM training or use the actor-critic route where applicable.
 

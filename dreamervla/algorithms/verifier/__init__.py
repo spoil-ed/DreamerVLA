@@ -1,4 +1,4 @@
-"""WMPO success-verifier contract (the value source)."""
+"""LUMOS success-verifier contract (the value source)."""
 
 from dreamervla.algorithms.verifier.protocol import SuccessVerifier
 

@@ -233,7 +233,7 @@ def test_oft_cotrain_recipe_derives_structure_from_task_vla_config(task_name) ->
     assert cfg.classifier._target_ == oft.classifier_target
     assert cfg.classifier.latent_dim == oft.token_dim
     assert cfg.classifier.chunk_size == oft.chunk_size
-    assert cfg.algorithm.wmpo.chunk_size == oft.chunk_size
+    assert cfg.algorithm.lumos.chunk_size == oft.chunk_size
 
 
 def test_launcher_dry_run_prints_both_commands(tmp_path, capsys) -> None:

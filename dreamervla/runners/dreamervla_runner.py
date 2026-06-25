@@ -1476,9 +1476,9 @@ class DreamerVLARunner(BaseRunner):
             raise ValueError("`optim.critic` must be configured.")
         self.critic_optimizer = build_optimizer(self.critic, critic_optim_cfg)
 
-        # ── classifier (only needed by the wmpo_outcome route) ─────────
+        # ── classifier (only needed by the lumos route) ─────────
         # Loaded frozen — provides the outcome reward (LatentSuccessClassifier
-        # over the imagined latent video). Skipped when update_type != wmpo_outcome.
+        # over the imagined latent video). Skipped when update_type != LUMOS.
         self.classifier = None
         self.classifier_threshold = 0.5
         actor_update_kind = str(
@@ -1515,7 +1515,7 @@ class DreamerVLARunner(BaseRunner):
             self.classifier.load_state_dict(cls_payload["model"])
             freeze_module(self.classifier)
             override_thresh = OmegaConf.select(
-                cfg, "algorithm.wmpo.classifier_threshold", default=None
+                cfg, "algorithm.lumos.classifier_threshold", default=None
             )
             self.classifier_threshold = float(
                 override_thresh

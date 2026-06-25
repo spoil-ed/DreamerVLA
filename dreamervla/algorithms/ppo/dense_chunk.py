@@ -1,13 +1,13 @@
-"""Dense-reward WMPO PPO route driven by the chunk WM.
+"""Dense-reward LUMOS PPO route driven by the chunk WM.
 
-Same **reward form** as ``dino_wmpo_dense_step`` (dense per-step state-reward
+Same **reward form** as ``dino_lumos_dense_step`` (dense per-step state-reward
 decoded from the WM hidden at every imagined env-step), but the rollout is
 driven by ``ChunkAwareDinoWMWorldModel.predict_next_chunk`` so each
 actor decision produces a K-step action chunk that the WM consumes in one
 call.
 
 Semantics:
-    K       = wmpo.chunk_size (RynnVLA actor time_horizon, default 5)
+    K       = lumos.chunk_size (RynnVLA actor time_horizon, default 5)
     horizon = imagination_horizon, redefined as **number of chunk decisions**
               (one actor call per chunk). Total imagined env-steps = horizon * K.
     group_size = ppo_rollouts_per_start
@@ -23,13 +23,13 @@ the chunk), and the return is the γ-discounted sum of all horizon * K
 per-frame rewards. GRPO group-relative advantage is broadcast across all
 chunks of a rollout.
 
-Contrast with ``dino_wmpo_dense_step`` (``ppo/dense.py``) which calls the
+Contrast with ``dino_lumos_dense_step`` (``ppo/dense.py``) which calls the
 single-frame WM per env-step and the actor per env-step (wasting the actor's
-K-1 chunk outputs), and with ``dino_wmpo_outcome_step`` (``ppo/outcome.py``)
+K-1 chunk outputs), and with ``dino_lumos_step`` (``ppo/outcome.py``)
 which uses the same chunk WM but a sparse outcome reward from a classifier.
 
 Optional ``ref_policy``: KL penalty against a fixed reference, subtracted
-from the chunk-level return before GRPO (WMPO/verl convention).
+from the chunk-level return before GRPO (LUMOS/verl convention).
 
 Not yet wired (raise if requested for explicit failure):
   * TD-MPC critic terminal bootstrap + side-update
@@ -67,7 +67,7 @@ from dreamervla.algorithms.ppo.grpo import (
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
-def dino_wmpo_dense_chunk_step(
+def dino_lumos_dense_chunk_step(
     policy: nn.Module,
     chunk_world_model: nn.Module,
     actor_optimizer: torch.optim.Optimizer,
@@ -90,19 +90,19 @@ def dino_wmpo_dense_chunk_step(
         > 0.0
     ):
         raise NotImplementedError(
-            "dino_wmpo_dense_chunk_step: real_rollout_relabel not yet wired; "
-            "use dino_wmpo_dense_step or set real_rollout_relabel.loss_scale=0."
+            "dino_lumos_dense_chunk_step: real_rollout_relabel not yet wired; "
+            "use dino_lumos_dense_step or set real_rollout_relabel.loss_scale=0."
         )
     if (
         critic is not None or target_critic is not None or critic_optimizer is not None
     ) and bool((algorithm_cfg.get("tdmpc_ac", {}) or {}).get("enabled", False)):
         raise NotImplementedError(
-            "dino_wmpo_dense_chunk_step: TD-MPC critic side-update not yet wired; "
-            "use dino_wmpo_dense_step or set tdmpc_ac.enabled=false."
+            "dino_lumos_dense_chunk_step: TD-MPC critic side-update not yet wired; "
+            "use dino_lumos_dense_step or set tdmpc_ac.enabled=false."
         )
 
-    wmpo_cfg = algorithm_cfg.get("wmpo", {})
-    K = int(wmpo_cfg.get("chunk_size", 5))
+    lumos_cfg = algorithm_cfg.get("lumos", {})
+    K = int(lumos_cfg.get("chunk_size", 5))
     horizon = int(algorithm_cfg.get("imagination_horizon", 5))  # NOW: number of chunks
     if horizon < 1 or K < 1:
         raise ValueError(f"horizon={horizon}, K={K}; both must be >= 1")
@@ -269,7 +269,7 @@ def dino_wmpo_dense_chunk_step(
     ).view(horizon, K)
     discounted = (reward_stack * discounts.unsqueeze(0)).sum(dim=(1, 2))  # [B_eff]
 
-    # KL-into-reward (WMPO/verl): subtract chunk-level KL sum from the return.
+    # KL-into-reward (LUMOS/verl): subtract chunk-level KL sum from the return.
     if use_ref and ref_kls and kl_coef > 0.0:
         kl_per_chunk = torch.stack(ref_kls, dim=1).to(
             dtype=reward_stack.dtype
@@ -293,11 +293,11 @@ def dino_wmpo_dense_chunk_step(
     # `group_size` rollouts). The PPO + entropy loss is a plain mean over B_eff,
     # so each slice backprops `term.sum() / B_eff` (global normalizer) and the
     # accumulated gradient equals the full-batch `.mean()` backward bit-for-bit.
-    # `wmpo.update_micro_batch_starts` <= 0 or >= n_starts ⇒ one full-batch slice
+    # `lumos.update_micro_batch_starts` <= 0 or >= n_starts ⇒ one full-batch slice
     # = the original single backward.
     b_eff = int(advantages.shape[0])
     n_starts = b_eff // group_size
-    mb_starts_cfg = int(wmpo_cfg.get("update_micro_batch_starts", 0))
+    mb_starts_cfg = int(lumos_cfg.get("update_micro_batch_starts", 0))
     mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
     slice_bounds = [
         (s * group_size, min(s + mb_starts, n_starts) * group_size)
@@ -445,4 +445,4 @@ def dino_wmpo_dense_chunk_step(
     }
 
 
-__all__ = ["dino_wmpo_dense_chunk_step"]
+__all__ = ["dino_lumos_dense_chunk_step"]

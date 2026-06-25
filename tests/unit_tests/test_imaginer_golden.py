@@ -1,11 +1,11 @@
 """Phase 3 characterization gate: extracting the Imaginer seam must not change the
-WMPO outcome-step numerics. Golden values were captured from the pre-refactor
-``dino_wmpo_outcome_step`` via the deterministic harness in
-``test_wmpo_microbatch_equivalence`` (same mocks).
+LUMOS numerics. Golden values were captured from the pre-refactor
+``dino_lumos_step`` via the deterministic harness in
+``test_lumos_microbatch_equivalence`` (same mocks).
 """
 
 import torch
-from test_wmpo_microbatch_equivalence import _run_update
+from test_lumos_microbatch_equivalence import _run_update
 
 from dreamervla.algorithms.imagine import ImaginedRollout, Imaginer
 
@@ -28,10 +28,10 @@ def test_outcome_step_multiepoch_param_matches_golden():
     ), param.item()
 
 
-def test_wmpo_imaginer_satisfies_protocol():
-    from dreamervla.algorithms.ppo.outcome import WMPOImaginer
+def test_lumos_imaginer_satisfies_protocol():
+    from dreamervla.algorithms.ppo.outcome import LumosImaginer
 
-    assert isinstance(WMPOImaginer(), Imaginer)
+    assert isinstance(LumosImaginer(), Imaginer)
 
 
 def test_imagined_rollout_fields():

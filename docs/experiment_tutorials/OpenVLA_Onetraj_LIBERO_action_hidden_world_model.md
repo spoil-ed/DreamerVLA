@@ -48,10 +48,10 @@ bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk task=openvla_one
   gpus=0 batch_size=8 num_workers=4
 ```
 
-## 4. DreamerVLA (wmpo_outcome)
+## 4. DreamerVLA (lumos)
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_wmpo_outcome task=openvla_onetraj_libero \
+bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_lumos task=openvla_onetraj_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 -- \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
@@ -114,16 +114,16 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.tr
   task.openvla_oft.hdf5_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
   data.success_dir_raw=$RW data.success_dir_hidden=$SC
 
-# DreamerVLA wmpo_outcome smoke (memory-bounded imagination)
+# DreamerVLA lumos smoke (memory-bounded imagination)
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
-  experiment=dreamervla_oft_dino_wm_wmpo_outcome task=openvla_onetraj_libero logger=tensorboard \
+  experiment=dreamervla_oft_dino_wm_lumos task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_dvla_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 dataloader.multiprocessing_context=null dataloader.persistent_workers=false \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
   dataset.hdf5_dir=$RW dataset.hidden_dir=$SC dataset.expected_model_path=$MP \
   dataset.max_files=1 dataset.max_demos_per_file=3 dataset.balanced_length=4 \
-  algorithm.wmpo.episode_max_steps=40 algorithm.ppo_rollouts_per_start=2 algorithm.imag_last=2 \
+  algorithm.lumos.episode_max_steps=40 algorithm.ppo_rollouts_per_start=2 algorithm.imag_last=2 \
   init.world_model_state_ckpt=/tmp/oft_onetraj_wm_smoke/ckpt/latest.ckpt \
   init.classifier_state_ckpt=/tmp/oft_onetraj_cls_smoke/best_format.ckpt
 ```

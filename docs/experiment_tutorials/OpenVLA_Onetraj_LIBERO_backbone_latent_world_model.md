@@ -27,7 +27,7 @@ bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk_input_tokens \
   task=openvla_onetraj_libero gpus=0 batch_size=8
 
 # 4. DreamerVLA actor (discrete bridge over backbone latent)
-bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_wmpo_outcome_input_tokens \
+bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_lumos_input_tokens \
   task=openvla_onetraj_libero gpus=0 ngpu=1 batch_size=2 -- \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"

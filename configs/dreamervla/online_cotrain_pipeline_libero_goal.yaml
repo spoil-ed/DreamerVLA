@@ -196,8 +196,8 @@ classifier:
   chunk_pool: last
 
 algorithm:
-  update_type: wmpo_outcome
-  wmpo:
+  update_type: LUMOS
+  lumos:
     chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
     debug_episode_max_steps: 150

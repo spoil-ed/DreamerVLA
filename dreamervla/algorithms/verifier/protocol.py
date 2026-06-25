@@ -1,4 +1,4 @@
-"""Protocol for the WMPO success verifier — DreamerVLA's value source."""
+"""Protocol for the LUMOS success verifier — DreamerVLA's value source."""
 
 from __future__ import annotations
 

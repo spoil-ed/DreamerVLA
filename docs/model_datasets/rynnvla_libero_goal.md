@@ -52,7 +52,7 @@ bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
-`dreamervla_rynn_dino_wm_wmpo_outcome` / `_actor_critic` · Eval:
+`dreamervla_rynn_dino_wm_lumos` / `_actor_critic` · Eval:
 `bash scripts/eval_libero_vla.sh`.
 
 ## Workflow verification (2026-06-12, CPU interface level)

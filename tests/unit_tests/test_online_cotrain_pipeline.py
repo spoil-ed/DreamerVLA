@@ -21,7 +21,7 @@ def test_online_cotrain_actor_update_uses_registry():
 
     assert "get_actor_update_route" in loop_src
     assert "actor_update_route.step_fn" in burst_src
-    assert "dino_wmpo_outcome_step(" not in burst_src
+    assert "dino_lumos_step(" not in burst_src
     assert "build_rollout_progress_metrics" in burst_src
     helper_src = inspect.getsource(mod.build_rollout_progress_metrics)
     assert "rollout/episodes" in helper_src
@@ -46,7 +46,7 @@ def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     monkeypatch.setattr(mod, "build_optimizer", lambda module, cfg: object())
     cfg = OmegaConf.create(
         {
-            "algorithm": {"wmpo": {"classifier_threshold": 0.5}},
+            "algorithm": {"lumos": {"classifier_threshold": 0.5}},
             "classifier": {
                 "_target_": "tests.fake.CustomSuccessVerifier",
                 "latent_dim": 3,

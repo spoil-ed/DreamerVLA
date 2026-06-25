@@ -1,7 +1,7 @@
 import numpy as np
 
+from dreamervla.dataset.lumos_aligned_latent_dataset import _load_demo
 from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-from dreamervla.dataset.wmpo_aligned_latent_dataset import _load_demo
 
 
 def _steps(T, success, emb_dim=16):

@@ -54,11 +54,11 @@ def _episode(length: int = 5) -> list[dict]:
 def _model_cfg() -> dict:
     return {
         "policy": {
-            "target": "dreamervla.workers.actor._test_models:TinyWMPOPolicy",
+            "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 7, "chunk_size": 1},
         },
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyWMPOWorldModel",
+            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "classifier": {
@@ -80,7 +80,7 @@ def _train_cfg(store_name: str) -> dict:
             "ppo_rollouts_per_start": 1,
             "ppo_update_epochs": 1,
             "entropy_coef": 0.0,
-            "wmpo": {
+            "lumos": {
                 "chunk_size": 1,
                 "episode_max_steps": 2,
                 "classifier_min_steps": 1,

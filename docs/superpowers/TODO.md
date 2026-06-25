@@ -62,7 +62,7 @@
 
 ## Structural refactors
 - **MEM-RL-01 remainder + MEM-RL-02** — promote in-update imagination data (currently a local `slices`
-  list in `dino_wmpo_outcome_step`) to its own explicit host buffer; then **WM-as-env** (RLinf/WoVR
+  list in `dino_lumos_step`) to its own explicit host buffer; then **WM-as-env** (RLinf/WoVR
   alignment): make the world model a gym env so imagination is a normal rollout into a separate replay +
   standard micro-batched PPO. Do together — MEM-RL-02 subsumes the remainder.
 - **`online_dreamervla.main()` split (P3)** — dist+checkpoint seams already extracted (1861→1679);

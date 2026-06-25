@@ -1,6 +1,6 @@
-"""MEM-RL-01: micro-batching the WMPO outcome update must not change the math.
+"""MEM-RL-01: micro-batching the LUMOS update must not change the math.
 
-Safety gate: running `dino_wmpo_outcome_step` with the whole effective batch in one
+Safety gate: running `dino_lumos_step` with the whole effective batch in one
 slice vs split into group-aligned micro-batches must produce the SAME policy gradient.
 Uses deterministic mocks (no RNG) and a parity classifier so GRPO groups have non-zero
 within-group variance deterministically, independent of slicing.
@@ -9,7 +9,7 @@ within-group variance deterministically, independent of slicing.
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.algorithms.ppo.outcome import dino_wmpo_outcome_step
+from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 
 
 class _DetWM(torch.nn.Module):
@@ -79,7 +79,7 @@ class _DetPolicy(torch.nn.Module):
 
 def _cfg(micro_batch_starts, update_epochs=1):
     return OmegaConf.create({
-        "wmpo": {
+        "lumos": {
             "chunk_size": 2, "episode_max_steps": 4, "classifier_min_steps": 1,
             "classifier_granularity": "action", "filter_zero_variance_groups": False,
             "update_micro_batch_starts": micro_batch_starts,
@@ -92,7 +92,7 @@ def _cfg(micro_batch_starts, update_epochs=1):
 
 
 def _run_update(micro_batch_starts, update_epochs=1, lr=0.0):
-    """Run one WMPO outcome step; return (policy .grad, final param) after it.
+    """Run one LUMOS step; return (policy .grad, final param) after it.
 
     lr=0 freezes params so ``.grad`` is read directly; lr>0 lets params move
     between PPO epochs so the final param value exercises the multi-epoch path.
@@ -101,7 +101,7 @@ def _run_update(micro_batch_starts, update_epochs=1, lr=0.0):
     policy = _DetPolicy()
     opt = torch.optim.SGD(policy.parameters(), lr=lr)
     obs = {"obs_embedding": torch.arange(4 * 4 * 1, dtype=torch.float32).reshape(4, 4, 1)}
-    dino_wmpo_outcome_step(
+    dino_lumos_step(
         policy=policy, chunk_world_model=_DetWM(), classifier=_ParityClassifier(),
         classifier_threshold=0.5, actor_optimizer=opt, obs=obs, device=torch.device("cpu"),
         algorithm_cfg=_cfg(micro_batch_starts, update_epochs),

@@ -8,7 +8,7 @@ LIBERO HDF5
   -> no-op filtering and reward labels
   -> RynnVLA / OpenVLA-OFT action-hidden sidecar
   -> DINO-style chunk world model
-  -> DreamerVLA actor-critic or WMPO outcome
+  -> DreamerVLA actor-critic or LUMOS
   -> LIBERO rollout evaluation
 ```
 
@@ -65,7 +65,7 @@ docs/               setup and data-layout reference
 | One-trajectory VLA | `bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal` |
 | World model | `bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal` |
 | Classifier | `bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk` |
-| DreamerVLA | `bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_wmpo_outcome task=libero_goal` |
+| DreamerVLA | `bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_lumos task=libero_goal` |
 | Eval | `bash scripts/eval_libero_vla.sh gpus=0 eval.ckpt_path=<ckpt> eval.ckpt_kind=vla` |
 
 Common overrides:
@@ -90,7 +90,7 @@ storage path when that is more convenient.
 - `task.hdf5_reward_dir`: reward-labeled HDF5 directory.
 - `task.rynnvla_action_hidden_dir`: action-hidden sidecar.
 - `init.world_model_state_ckpt`: DreamerVLA world-model checkpoint.
-- `init.classifier_state_ckpt`: WMPO outcome classifier checkpoint.
+- `init.classifier_state_ckpt`: LUMOS classifier checkpoint.
 
 ## Verify
 

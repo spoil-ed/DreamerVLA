@@ -23,7 +23,7 @@ replay:
 
 policy:
   cfg:
-    target: dreamervla.workers.actor._test_models:TinyWMPOPolicy
+    target: dreamervla.workers.actor._test_models:TinyLumosPolicy
     kwargs:
       hidden_dim: 4
       action_dim: 7
@@ -34,7 +34,7 @@ inference:
     encoder:
       target: dreamervla.workers.inference._test_models:TinyEncoder
     world_model:
-      target: dreamervla.workers.actor._test_models:TinyWMPOWorldModel
+      target: dreamervla.workers.actor._test_models:TinyLumosWorldModel
       kwargs:
         hidden_dim: 4
         action_dim: 7
@@ -43,13 +43,13 @@ inference:
 learner:
   model_cfg:
     policy:
-      target: dreamervla.workers.actor._test_models:TinyWMPOPolicy
+      target: dreamervla.workers.actor._test_models:TinyLumosPolicy
       kwargs:
         hidden_dim: 4
         action_dim: 7
         chunk_size: 1
     world_model:
-      target: dreamervla.workers.actor._test_models:TinyWMPOWorldModel
+      target: dreamervla.workers.actor._test_models:TinyLumosWorldModel
       kwargs:
         hidden_dim: 4
         action_dim: 7
@@ -71,7 +71,7 @@ learner:
       ppo_rollouts_per_start: 1
       ppo_update_epochs: 1
       entropy_coef: 0.0
-      wmpo:
+      lumos:
         chunk_size: 1
         episode_max_steps: 2
         classifier_min_steps: 1

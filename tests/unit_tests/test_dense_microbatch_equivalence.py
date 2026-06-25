@@ -1,19 +1,19 @@
 """PERF-W6: micro-batching the dense / dense-chunk PPO update must not change the math.
 
-Safety gate: running ``dino_wmpo_dense_step`` / ``dino_wmpo_dense_chunk_step`` with the
+Safety gate: running ``dino_lumos_dense_step`` / ``dino_lumos_dense_chunk_step`` with the
 whole effective batch in one slice vs split into group-aligned micro-batches must produce
 the SAME policy gradient (and the same multi-epoch param trajectory). Uses deterministic
 mocks (no RNG); the action-dependent reward gives each rollout a distinct return so the
 GRPO within-group advantage variance is non-zero and the gradient is non-trivial.
 
-Modeled on ``tests/unit_tests/test_wmpo_microbatch_equivalence.py``.
+Modeled on ``tests/unit_tests/test_lumos_microbatch_equivalence.py``.
 """
 
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.algorithms.ppo.dense import dino_wmpo_dense_step
-from dreamervla.algorithms.ppo.dense_chunk import dino_wmpo_dense_chunk_step
+from dreamervla.algorithms.ppo.dense import dino_lumos_dense_step
+from dreamervla.algorithms.ppo.dense_chunk import dino_lumos_dense_chunk_step
 
 GROUP_SIZE = 2
 N_STARTS = 3  # B_eff = 6 rollouts; mb_starts=1 -> three group-aligned slices
@@ -105,7 +105,7 @@ class _DetPolicy(torch.nn.Module):
 def _base_cfg(micro_batch_starts, update_epochs, *, bc_scale=0.0):
     return OmegaConf.create(
         {
-            "wmpo": {
+            "lumos": {
                 "chunk_size": K,
                 "update_micro_batch_starts": micro_batch_starts,
             },
@@ -140,7 +140,7 @@ def _run_dense(micro_batch_starts, *, update_epochs=1, lr=0.0, bc_scale=0.0, wit
         for p in ref_policy.parameters():
             p.requires_grad = False
     opt = torch.optim.SGD(policy.parameters(), lr=lr)
-    dino_wmpo_dense_step(
+    dino_lumos_dense_step(
         policy=policy,
         world_model=_DetWM(),
         actor_optimizer=opt,
@@ -159,7 +159,7 @@ def _run_dense_chunk(micro_batch_starts, *, update_epochs=1, lr=0.0):
     torch.manual_seed(0)
     policy = _DetPolicy()
     opt = torch.optim.SGD(policy.parameters(), lr=lr)
-    dino_wmpo_dense_chunk_step(
+    dino_lumos_dense_chunk_step(
         policy=policy,
         chunk_world_model=_DetWM(),
         actor_optimizer=opt,

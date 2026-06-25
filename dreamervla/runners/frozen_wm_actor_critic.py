@@ -111,7 +111,7 @@ def parse_args() -> argparse.Namespace:
         "--prev-kl-coef",
         type=float,
         default=None,
-        help="WMPO-style KL(π_now ‖ π_prev) penalty coef (reward shaping). "
+        help="LUMOS-style KL(π_now ‖ π_prev) penalty coef (reward shaping). "
         "π_prev is an EMA-tracked snapshot of the policy. Overrides cfg.algorithm.prev_kl_coef.",
     )
     parser.add_argument(
@@ -175,14 +175,14 @@ def parse_args() -> argparse.Namespace:
         help="Bypass the silent-freeze guard. By default the script aborts if the policy has "
         "<=1k trainable params (almost certainly the identity+freeze_output_projection bug).",
     )
-    # ── WMPO-style reward labelling for the WM reward head ─────────────────
+    # ── LUMOS-style reward labelling for the WM reward head ─────────────────
     parser.add_argument(
         "--reward-target-mode",
         choices=("raw", "per_window", "diffusion"),
         default="raw",
         help=(
             "raw: use rewards as-is from the batch (legacy). "
-            "per_window: WMPO-style binary label, BCE on the LAST latent only. "
+            "per_window: LUMOS-style binary label, BCE on the LAST latent only. "
             "diffusion: rewrite rewards to gamma^(W-1-t) on positive windows, 0 elsewhere."
         ),
     )
@@ -208,7 +208,7 @@ def parse_args() -> argparse.Namespace:
         "--wm-lr",
         type=float,
         default=None,
-        help="Override cfg.optim.world_model.lr (WMPO uses 1e-4 for reward model).",
+        help="Override cfg.optim.world_model.lr (LUMOS uses 1e-4 for reward model).",
     )
     parser.add_argument(
         "--wm-weight-decay",
@@ -234,7 +234,7 @@ def build_offline_loader(
     cfg.dataloader.shuffle = True
     if args.max_offline_windows is not None:
         cfg.dataset.max_windows = int(args.max_offline_windows)
-    # If WMPO-style balanced sampler requested, swap dataset class to the
+    # If LUMOS-style balanced sampler requested, swap dataset class to the
     # terminal-aware variant that exposes positive_indices / negative_indices.
     if bool(getattr(args, "use_balanced_sampler", False)):
         cfg.dataset._target_ = "dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset"
@@ -381,7 +381,7 @@ def main() -> None:
         cfg.optim.policy.lr = float(args.policy_lr)
     if bool(args.freeze_log_std):
         cfg.policy.freeze_log_std = True
-    # WM optimizer overrides (WMPO-style reward-head fine-tune wants lr=1e-4)
+    # WM optimizer overrides (LUMOS-style reward-head fine-tune wants lr=1e-4)
     if args.wm_lr is not None:
         cfg.optim.world_model.lr = float(args.wm_lr)
     if args.wm_weight_decay is not None:
@@ -440,7 +440,7 @@ def main() -> None:
             )
         ),
     )
-    # WMPO-style: only update reward_head, freeze everything else of the WM.
+    # LUMOS-style: only update reward_head, freeze everything else of the WM.
     if bool(args.freeze_non_reward_head):
         n_train = 0
         for name, p in world_model.named_parameters():
@@ -485,7 +485,7 @@ def main() -> None:
 
     policy = hydra.utils.instantiate(cfg.policy).to(device)
 
-    # WMPO-style frozen reference policy snapshot. Built BEFORE any resume load,
+    # LUMOS-style frozen reference policy snapshot. Built BEFORE any resume load,
     # so the ref always reflects the SFT init (init_action_head_ckpt), not a
     # resumed RL state. Only kept in memory; not saved with the checkpoint.
     import copy as _copy
@@ -495,7 +495,7 @@ def main() -> None:
         _p.requires_grad = False
     ref_policy.eval()
 
-    # WMPO-style "previous policy" snapshot for the second KL term:
+    # LUMOS-style "previous policy" snapshot for the second KL term:
     # KL(π_now ‖ π_prev) where π_prev is the policy BEFORE the most recent
     # gradient update. Refreshed after each imagine_actor_critic_step.
     prev_policy = _copy.deepcopy(policy)
@@ -658,7 +658,7 @@ def main() -> None:
                 last_rew = torch.as_tensor(rewards_t)[..., -1]
             is_positive_window = (last_rew > 0.5).to(dtype=torch.float32)  # [B]
 
-            # Apply WMPO-style reward-target transformation BEFORE WM training.
+            # Apply LUMOS-style reward-target transformation BEFORE WM training.
             if args.reward_target_mode == "diffusion":
                 W = int(args.sequence_length)
                 gamma_t = float(args.diffusion_gamma)

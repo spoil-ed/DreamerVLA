@@ -69,6 +69,6 @@ bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goa
 ```
 
 Classifier: `oft_latent_classifier_chunk` · DreamerVLA:
-`dreamervla_oft_dino_wm_wmpo_outcome` · Eval:
+`dreamervla_oft_dino_wm_lumos` · Eval:
 `scripts/eval/launch_openvla_oft_official_libero_eval.sh` (policy mode
 auto-detected the same way).

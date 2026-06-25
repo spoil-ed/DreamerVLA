@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         default=str(
-            PROJECT_ROOT / "configs/dreamervla/online_wmpo_outcome_libero_goal.yaml"
+            PROJECT_ROOT / "configs/dreamervla/online_lumos_libero_goal.yaml"
         ),
     )
     parser.add_argument("--out-dir", required=True)
@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
         "--max-train-updates",
         type=int,
         default=None,
-        help="Optional training budget in optimizer updates, similar to WMPO total_training_steps.",
+        help="Optional training budget in optimizer updates, similar to LUMOS total_training_steps.",
     )
     parser.add_argument(
         "--episode-horizon",
@@ -237,18 +237,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--actor-update-kind",
         default="dreamer",
-        choices=["dreamer", "dense_chunk", "outcome"],
+        choices=["dreamer", "LUMOS", "LUMOS_DENSE_CHUNK", "outcome", "dense_chunk"],
         help="Actor update style. 'dreamer' = Dreamer-style lambda-return imagine_actor_critic_step "
-        "(default, back-compat). 'dense_chunk' = chunk-WM PPO with dense per-step state-reward "
+        "(default, back-compat). 'LUMOS_DENSE_CHUNK' = chunk-WM PPO with dense per-step state-reward "
         "(NOT recommended — WM reward head is per-window indicator, signal collapses). "
-        "'outcome' = full WMPO/verl PPO: chunk-WM rollout + LatentSuccessClassifier outcome reward "
+        "'LUMOS' = full LUMOS PPO: chunk-WM rollout + LatentSuccessClassifier outcome reward "
         "+ eos_mask + zero-variance group filter. Requires --classifier-ckpt and ChunkAware WM.",
     )
     parser.add_argument(
         "--classifier-ckpt",
         default=None,
         help="Path to LatentSuccessClassifier .ckpt (with 'model'+'threshold'+'config' keys). "
-        "Required when --actor-update-kind=outcome.",
+        "Required when --actor-update-kind=LUMOS.",
     )
     parser.add_argument(
         "--classifier-threshold",
@@ -271,7 +271,7 @@ def parse_args() -> argparse.Namespace:
         "--classifier-early-neg-stride",
         type=int,
         default=8,
-        help="Stride for choosing the WMPO-style earlier negative window from an online episode.",
+        help="Stride for choosing the LUMOS-style earlier negative window from an online episode.",
     )
     parser.add_argument(
         "--freeze-log-std",
@@ -296,7 +296,7 @@ def parse_args() -> argparse.Namespace:
         help="Bypass the silent-freeze guard. By default the script aborts if the policy has "
         "<=1k trainable params (almost certainly the identity+freeze_output_projection bug).",
     )
-    # ── piggy-back online rollouts to disk for the WMPO classifier corpus ──
+    # ── piggy-back online rollouts to disk for the LUMOS classifier corpus ──
     parser.add_argument(
         "--dump-rollouts-raw-dir",
         default=None,
@@ -553,7 +553,7 @@ def main() -> None:
             )
     policy = hydra.utils.instantiate(cfg.policy).to(device)
 
-    # WMPO-style frozen reference policy snapshot. Built BEFORE any resume load,
+    # LUMOS-style frozen reference policy snapshot. Built BEFORE any resume load,
     # so the ref always reflects the SFT init (init_action_head_ckpt), not a
     # resumed RL state. Only kept in memory; not saved with the checkpoint.
     import copy as _copy
@@ -1016,8 +1016,8 @@ def main() -> None:
                             "is_terminal": batch["is_terminal"],
                             "is_last": batch["is_last"],
                         }
-                        if args.actor_update_kind == "outcome":
-                            # WMPO/verl-style PPO: chunk-WM rollout + LatentSuccessClassifier
+                        if actor_update_route is not None and actor_update_route.requires_classifier:
+                            # LUMOS PPO: chunk-WM rollout + LatentSuccessClassifier
                             # outcome reward + eos_mask + zero-variance group filter.
 
                             # ── Snapshot policy params for drift measurement ─────────
@@ -1068,11 +1068,11 @@ def main() -> None:
                                 _drift_rel = _drift_l2 / max(_prev_norm, 1e-12)
                                 _start_points_per_window = int(
                                     ac_metrics.get(
-                                        "wmpo/start_points_per_window",
+                                        "LUMOS/start_points_per_window",
                                         int(batch["obs_embedding"].shape[1]),
                                     )
                                 )
-                                _num_groups = int(ac_metrics.get("wmpo/num_groups", 0))
+                                _num_groups = int(ac_metrics.get("LUMOS/num_groups", 0))
                                 _batch_episode_ids = (
                                     batch["episode_ids"].detach().cpu().tolist()
                                 )
@@ -1165,38 +1165,38 @@ def main() -> None:
                                         update_step + 1
                                     ),  # this update hasn't bumped yet
                                     "success_rate_all_rollouts": float(
-                                        ac_metrics.get("wmpo/success_rate", 0.0)
+                                        ac_metrics.get("LUMOS/success_rate", 0.0)
                                     ),
                                     "num_groups": _num_groups,
                                     "group_size": int(
-                                        ac_metrics.get("wmpo/group_size", 0)
+                                        ac_metrics.get("LUMOS/group_size", 0)
                                     ),
                                     "start_points_per_window": _start_points_per_window,
                                     "num_all_success_groups": int(
-                                        ac_metrics.get("wmpo/num_all_success_groups", 0)
+                                        ac_metrics.get("LUMOS/num_all_success_groups", 0)
                                     ),
                                     "num_all_fail_groups": int(
-                                        ac_metrics.get("wmpo/num_all_fail_groups", 0)
+                                        ac_metrics.get("LUMOS/num_all_fail_groups", 0)
                                     ),
                                     "num_mixed_groups": int(
-                                        ac_metrics.get("wmpo/num_mixed_groups", 0)
+                                        ac_metrics.get("LUMOS/num_mixed_groups", 0)
                                     ),
                                     "group_success_rates": list(
-                                        ac_metrics.get("wmpo/group_success_rates", [])
+                                        ac_metrics.get("LUMOS/group_success_rates", [])
                                     ),
                                     "group_success_counts": list(
-                                        ac_metrics.get("wmpo/group_success_counts", [])
+                                        ac_metrics.get("LUMOS/group_success_counts", [])
                                     ),
                                     "group_rollout_successes": list(
                                         ac_metrics.get(
-                                            "wmpo/group_rollout_successes", []
+                                            "LUMOS/group_rollout_successes", []
                                         )
                                     ),
                                     "group_finish_steps": list(
-                                        ac_metrics.get("wmpo/group_finish_steps", [])
+                                        ac_metrics.get("LUMOS/group_finish_steps", [])
                                     ),
                                     "group_has_variance": list(
-                                        ac_metrics.get("wmpo/group_has_variance", [])
+                                        ac_metrics.get("LUMOS/group_has_variance", [])
                                     ),
                                     "sample_episode_ids": _batch_episode_ids,
                                     "sample_collection_indices": _batch_collection_indices,
@@ -1245,8 +1245,11 @@ def main() -> None:
                                     ppo_log_rank0_compat_f.write(line)
                                     ppo_log_rank0_compat_f.flush()
                                 del _prev_params_flat, _curr_params_flat, _delta
-                        elif args.actor_update_kind == "dense_chunk":
-                            # WMPO chunk-WM PPO with dense per-step state-reward.
+                        elif (
+                            actor_update_route is not None
+                            and actor_update_route.name == "LUMOS_DENSE_CHUNK"
+                        ):
+                            # LUMOS chunk-WM PPO with dense per-step state-reward.
                             # No critic — TD-MPC/relabel side losses not yet wired.
                             if actor_update_route is None:
                                 raise RuntimeError(

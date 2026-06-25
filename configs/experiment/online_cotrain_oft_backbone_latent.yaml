@@ -108,6 +108,6 @@ algorithm:
   # imagined horizon + a single GRPO rollout to keep it within GPU memory
   # (scale these up on larger GPUs / with token subsampling).
   ppo_rollouts_per_start: 1
-  wmpo:
+  lumos:
     chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
     episode_max_steps: 10

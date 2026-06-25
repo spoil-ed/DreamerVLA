@@ -1,6 +1,6 @@
 """Transformer classifier over a window of DINO/VLA-hidden latent frames.
 
-Mirrors the VideoMAE classifier in WMPO/reward_model/videomae.py at the
+Mirrors the VideoMAE classifier in upstream reward_model/videomae.py at the
 interface level — sliding W-frame window over a [T, latent_dim] sequence,
 earliest window with p(success) >= threshold defines finish_step.
 """
@@ -31,7 +31,7 @@ class LatentSuccessClassifierConfig:
     # hidden (CLAUDE.md). "mlp2" is a 2-layer GELU MLP between the two.
     head_type: str = "transformer"
     # Time granularity at which the classifier consumes its window:
-    #   "action": W consecutive env-step hiddens (the original WMPO setup).
+    #   "action": W consecutive env-step hiddens (the original LUMOS setup).
     #   "chunk":  W consecutive chunk-aggregated hiddens, where each chunk
     #             covers ``chunk_size`` env-steps.  Aggregation is controlled
     #             by ``chunk_pool``: "last" (chunk-boundary frame), "first"
@@ -218,7 +218,7 @@ class LatentSuccessClassifier(nn.Module):
                               (``T_scan = T // chunk_size`` for chunk,
                                ``T`` for action).
             ``score``       : ``[B]`` float — max ``p(success)`` seen by the
-                              sliding scan. This gives WMPO a continuous value
+                              sliding scan. This gives LUMOS a continuous value
                               source when sparse threshold outcomes are
                               all-success or all-fail inside a GRPO group.
             ``score_step``  : ``[B]`` long — window-end index for ``score`` in
@@ -229,7 +229,7 @@ class LatentSuccessClassifier(nn.Module):
         device = latent_video.device
         gran = str(getattr(self.cfg, "granularity", "action"))
         # ``pre_pooled``: caller already aggregated the video to the classifier's
-        # native granularity (e.g. WMPO imagination pools each chunk as it is
+        # native granularity (e.g. LUMOS imagination pools each chunk as it is
         # generated, storing 1/K the frames). Skip the internal aggregate so we
         # don't pool twice. Pooling at generation time with the same chunk_pool
         # is identical to ``_chunk_aggregate`` here, so the scan is unchanged.

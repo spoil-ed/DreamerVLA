@@ -6,9 +6,9 @@
 
 **Architecture:** Two stages.
 - **Stage 1 (wiring):** add `cotrain_engine=sync|async` to the launcher. `async` runs (a) the existing sync **pipeline warmup-only** (WM+classifier → ckpts), then (b) the existing async **`OnlineCotrainRayRunner._run_loop_overlap`** online loop initialized from those ckpts. Bridge the warmup ckpt format → the ray runner's `init_ckpt` format.
-- **Stage 2 (RLinf correctness):** add version tracking (rollout stamps the policy version on each trajectory), staleness throttling (block generation when too far ahead of the learner), and off-policy logprob interpolation (alpha) in the wmpo/PPO actor update. Modeled on RLinf `rlinf/algorithms/losses.py:66-86`, `async_huggingface_worker.py:86-143`, `async_ppo_embodied_runner.py:107-152`.
+- **Stage 2 (RLinf correctness):** add version tracking (rollout stamps the policy version on each trajectory), staleness throttling (block generation when too far ahead of the learner), and off-policy logprob interpolation (alpha) in the LUMOS/PPO actor update. Modeled on RLinf `rlinf/algorithms/losses.py:66-86`, `async_huggingface_worker.py:86-143`, `async_ppo_embodied_runner.py:107-152`.
 
-**Tech stack:** Ray WorkerGroup + PackedPlacementStrategy, torch, Hydra, the existing `OnlineCotrainRayRunner` overlap loop, the wmpo_outcome actor update.
+**Tech stack:** Ray WorkerGroup + PackedPlacementStrategy, torch, Hydra, the existing `OnlineCotrainRayRunner` overlap loop, the lumos actor update.
 
 ---
 
@@ -80,7 +80,7 @@ RLinf refs: version stamping `huggingface_worker.py:420-424`; staleness `async_h
 
 ### Task 2.1: off-policy logprob interpolation (pure, unit-tested)
 
-**Files:** add to the wmpo loss module (find via `dino_wmpo_outcome_step`); Test new unit test.
+**Files:** add to the lumos loss module (find via `dino_lumos_step`); Test new unit test.
 
 Pure function modeled on RLinf:
 ```python
@@ -90,7 +90,7 @@ def proximal_logprobs(old_lp, cur_lp, behav_v, theta_v):
     alpha = min(max((theta_v - 1 - behav_v) / denom, 0.0), 1.0)
     return old_lp + alpha * (cur_lp - old_lp)
 ```
-Unit-test: behav_v==theta_v → alpha clamps (on-policy → old); larger gap → alpha→1 (use current). Wire into the wmpo actor update's ratio computation (guarded by a flag `algorithm.async_offpolicy.enabled`, default off → numerics unchanged for sync). **Confirm at impl time** the exact ratio site in `dino_wmpo_outcome_step`.
+Unit-test: behav_v==theta_v → alpha clamps (on-policy → old); larger gap → alpha→1 (use current). Wire into the lumos actor update's ratio computation (guarded by a flag `algorithm.async_offpolicy.enabled`, default off → numerics unchanged for sync). **Confirm at impl time** the exact ratio site in `dino_lumos_step`.
 
 ### Task 2.2: version stamping on trajectories
 
@@ -126,5 +126,5 @@ Add `algorithm.staleness_threshold: 1`, `algorithm.async_offpolicy.enabled: true
 - Offline warmup still runs SYNC (single/DDP) before the async online phase; warmup itself is not async.
 - Multi-GPU async learner is via Ray placement (packed/flexible); FSDP under Ray not wired.
 - The async overlap loop is under-tested (no overlap-metric assertions today); add at least one.
-- Full correctness of off-policy wmpo needs GPU validation; keep `async_offpolicy.enabled` default-off until validated so sync numerics are untouched.
+- Full correctness of off-policy lumos needs GPU validation; keep `async_offpolicy.enabled` default-off until validated so sync numerics are untouched.
 - Generation backend: DreamerVLA uses HF/torch (OFT), NOT SGLang/vLLM — skip RLinf's vLLM weight-syncer specifics.

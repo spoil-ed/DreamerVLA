@@ -5,7 +5,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import _actor_action_for_world_model
-from dreamervla.algorithms.ppo.outcome import dino_wmpo_outcome_step
+from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 from dreamervla.envs.train_env import unnormalize_libero_action
 
 
@@ -77,7 +77,7 @@ class _AlwaysFailClassifier(torch.nn.Module):
         }
 
 
-def test_wmpo_imagination_feeds_world_model_env_scale_actions():
+def test_lumos_imagination_feeds_world_model_env_scale_actions():
     actor_chunk = torch.tensor(
         [
             [0.2, -0.4, 0.0, 0.6, -0.8, 0.1, 1.0],
@@ -88,7 +88,7 @@ def test_wmpo_imagination_feeds_world_model_env_scale_actions():
     policy = _FixedChunkPolicy(actor_chunk)
     cfg = OmegaConf.create(
         {
-            "wmpo": {
+            "lumos": {
                 "chunk_size": 2,
                 "episode_max_steps": 2,
                 "classifier_min_steps": 1,
@@ -108,7 +108,7 @@ def test_wmpo_imagination_feeds_world_model_env_scale_actions():
         }
     )
 
-    dino_wmpo_outcome_step(
+    dino_lumos_step(
         policy=policy,
         chunk_world_model=world_model,
         classifier=_AlwaysFailClassifier(),

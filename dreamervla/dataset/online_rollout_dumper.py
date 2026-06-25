@@ -14,7 +14,7 @@ to ``replay.add_episode(episode)`` and rollouts get persisted to disk for free
 — no extra GPU time, no separate collection pass.
 
 The dataset derives ``finish_step`` from ``dones`` and ``complete`` from
-``rewards.sum() > 0``, matching WMPO's ``meta["finish_step"]`` /
+``rewards.sum() > 0``, matching LUMOS's ``meta["finish_step"]`` /
 ``meta["complete"]`` semantics. The dumper writes ``dones[-1] = 1`` for every
 episode (terminal OR timeout); successful episodes additionally carry positive
 ``rewards`` at the success step, so ``complete`` will be True iff the rollout

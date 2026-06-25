@@ -81,7 +81,7 @@ class EmbodiedEvalExportMixin:
             "successes": successes,
             "success_rate": float(success_rate),
             "records_jsonl": str(getattr(self, "_real_relabel_jsonl_path", "")),
-            "wmpo_style_filter": {
+            "lumos_style_filter": {
                 "accuracy_lower_bound": 0.01,
                 "accuracy_upper_bound": 0.99,
                 "num_prompt_groups": len(group_rows),

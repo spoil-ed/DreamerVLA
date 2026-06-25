@@ -6,7 +6,7 @@ For each demo of length T, a window starting at s spans [s, s+W). We call:
 
 The dataset also rewrites the ``rewards`` field with ``sparse_rewards`` (typically
 0 everywhere except a single 1 at the terminal step) so the WM reward head can
-be retrained as a "success-terminal classifier" in the WMPO style.
+be retrained as a "success-terminal classifier" in the LUMOS style.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class BalancedTerminalDataset(PixelHiddenSequenceDataset):
 
     reward_mode controls how ``rewards`` is rewritten:
       * ``"sparse"`` (default): use HDF5 ``sparse_rewards`` slice (≈ only 1 at terminal).
-      * ``"per_window_dense"``: WMPO-style. If window ends at episode terminal,
+      * ``"per_window_dense"``: LUMOS-style. If window ends at episode terminal,
         ALL ``W`` steps get reward=1; otherwise all 0. Gives 8× denser positive
         signal so the reward_head sees "I am within W steps of success" as
         positive, not just "I am the terminal frame".
@@ -108,7 +108,7 @@ class BalancedTerminalDataset(PixelHiddenSequenceDataset):
         else:
             sparse_rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
         if self.reward_mode == "per_window_dense":
-            # WMPO-style: every step in a positive window labeled 1; negative window all 0
+            # LUMOS-style: every step in a positive window labeled 1; negative window all 0
             rewards = np.full(
                 (self.sequence_length,), float(is_positive), dtype=np.float32
             )

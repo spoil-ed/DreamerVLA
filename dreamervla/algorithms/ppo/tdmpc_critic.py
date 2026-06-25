@@ -1,5 +1,5 @@
 """TD-MPC actor-critic helpers used as an optional terminal-value bootstrap
-on top of WMPO/PPO over imagined trajectories.
+on top of LUMOS/PPO over imagined trajectories.
 
 The state-action variant feeds (z, a) into a critic to predict Q(z, a); the
 plain ``state`` variant predicts V(z). Both share the same underlying critic

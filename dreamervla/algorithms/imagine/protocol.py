@@ -1,4 +1,4 @@
-"""Protocol + typed output for the WMPO imagination (the World Model layer seam)."""
+"""Protocol + typed output for the LUMOS imagination (the World Model layer seam)."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class ImaginedRollout:
 class Imaginer(Protocol):
     """Imagines + scores ONE group-aligned start slice in the world model.
 
-    Default = ``WMPOImaginer`` (chunk-WM rollout scored by the success verifier).
+    Default = ``LumosImaginer`` (chunk-WM rollout scored by the success verifier).
     A different rollout/scoring strategy can be swapped in as long as it returns an
     ``ImaginedRollout`` with the same contract.
     """

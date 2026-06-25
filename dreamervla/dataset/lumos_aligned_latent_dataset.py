@@ -1,21 +1,21 @@
-"""WMPO-aligned latent W-frame classifier dataset.
+"""LUMOS-aligned latent W-frame classifier dataset.
 
-Mirrors ``WMPO/reward_model/videomae.py::SuccessWindowDataset`` exactly,
+Mirrors ``upstream reward_model/videomae.py::SuccessWindowDataset`` exactly,
 but operates on **precomputed real RynnVLA action-hidden sidecar HDF5** instead
 of raw video frames. The positive/negative protocol is intentionally
-identical so that downstream eval thresholds (``WMPO/reward_model/find_thre.py``,
-``WMPO/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
+identical so that downstream eval thresholds (``upstream reward_model/find_thre.py``,
+``LUMOS/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
 
 Per-demo (``finish_step = T``, ``complete ∈ {True, False}``, ``W = window``, ``S = stride``):
 
-    Train (mirrors WMPO ``_windows``)
+    Train (mirrors LUMOS ``_windows``)
       * 1 "end" window  : ``obs[T-W : T]``, label = ``int(complete)``
       * 1 random earlier window from ``range(T-S, W-1, -S)``, label = 0
       * (success demo  → 1 pos + 1 neg ;
          failure demo  → 0 pos + 2 neg : the end window is label=0 because
                                           int(complete)=0)
 
-    Val (mirrors WMPO ``_windows_val``)
+    Val (mirrors LUMOS ``_windows_val``)
       * 1 "end" window  : ``obs[T-W : T]``, label = ``int(complete)``
       * All earlier stride-S windows: label = 0
       * Deterministic, map-style indexing for reproducible eval.
@@ -107,7 +107,7 @@ def _load_all(
             continue
         out.append(rec)
     print(
-        f"[wmpo-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True
+        f"[lumos-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True
     )
     return out
 
@@ -117,10 +117,10 @@ def _load_all(
 # ---------------------------------------------------------------------------
 
 
-class WMPOAlignedLatentTrainDataset(IterableDataset):
+class LumosAlignedLatentTrainDataset(IterableDataset):
     """Train-mode latent dataset. Each demo yields 1 end + 1 random earlier window.
 
-    Stream is **infinite** (resampled, like WMPO's ``ResampledShards``). The
+    Stream is **infinite** (resampled, like LUMOS's ``ResampledShards``). The
     runner defines an epoch as one pass over the expected per-demo windows.
     """
 
@@ -164,7 +164,7 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
 
         if verbose:
             print(
-                f"[wmpo-latent:train] success pairs={len(succ_pairs)} "
+                f"[lumos-latent:train] success pairs={len(succ_pairs)} "
                 f"failure pairs={len(fail_pairs)} "
                 f"granularity={'chunk' if self.K > 1 else 'action'} "
                 f"W={self.W} K={self.K} pool={self.chunk_pool}",
@@ -175,7 +175,7 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
             succ_pairs, min_T=self.window_env, label="train-succ"
         ) + _load_all(fail_pairs, min_T=self.window_env, label="train-fail")
         if not self._demos:
-            raise RuntimeError("WMPOAlignedLatentTrainDataset: no demos loaded")
+            raise RuntimeError("LumosAlignedLatentTrainDataset: no demos loaded")
 
         # composition summary — exact pos/neg windows per epoch
         # success demo: 1 pos (end) + 1 neg (random earlier)
@@ -187,7 +187,7 @@ class WMPOAlignedLatentTrainDataset(IterableDataset):
         self._epoch_windows = n_pos_windows + n_neg_windows
         if verbose:
             print(
-                f"[wmpo-latent:train] per-epoch windows: "
+                f"[lumos-latent:train] per-epoch windows: "
                 f"pos={n_pos_windows}  neg={n_neg_windows}  "
                 f"ratio={n_pos_windows}:{n_neg_windows}",
                 flush=True,
@@ -273,15 +273,15 @@ class _ValSlot:
     is_end_window: bool
 
 
-class WMPOAlignedLatentValDataset(Dataset):
+class LumosAlignedLatentValDataset(Dataset):
     """Val-mode latent dataset (map-style, deterministic indexing).
 
     Each demo emits 1 "end" window (label = int(complete)) + all earlier
-    stride-S windows (label = 0), matching WMPO's ``_windows_val``.
+    stride-S windows (label = 0), matching LUMOS's ``_windows_val``.
 
     ``self.demos`` is also exposed for **episode-level F1** eval: the
     workspace can slide stride-1 windows over each demo and aggregate
-    with "any-positive over threshold" (the WMPO ``predict_success``
+    with "any-positive over threshold" (the LUMOS ``predict_success``
     protocol). See ``trajectories()`` for that hook.
     """
 
@@ -314,7 +314,7 @@ class WMPOAlignedLatentValDataset(Dataset):
             fail_pairs = _find_demo_pairs(failure_dir_raw, failure_dir_hidden)
         if verbose:
             print(
-                f"[wmpo-latent:val] success pairs={len(succ_pairs)} "
+                f"[lumos-latent:val] success pairs={len(succ_pairs)} "
                 f"failure pairs={len(fail_pairs)} "
                 f"granularity={'chunk' if self.K > 1 else 'action'} "
                 f"W={self.W} K={self.K} pool={self.chunk_pool}",
@@ -325,7 +325,7 @@ class WMPOAlignedLatentValDataset(Dataset):
             succ_pairs, min_T=self.window_env, label="val-succ"
         ) + _load_all(fail_pairs, min_T=self.window_env, label="val-fail")
         if not self._demos:
-            raise RuntimeError("WMPOAlignedLatentValDataset: no demos loaded")
+            raise RuntimeError("LumosAlignedLatentValDataset: no demos loaded")
 
         # Precompute deterministic window slots
         slots: list[_ValSlot] = []
@@ -342,7 +342,7 @@ class WMPOAlignedLatentValDataset(Dataset):
             n_pos = sum(1 for s in slots if s.label == 1)
             n_neg = len(slots) - n_pos
             print(
-                f"[wmpo-latent:val] total windows={len(slots)}  "
+                f"[lumos-latent:val] total windows={len(slots)}  "
                 f"pos={n_pos}  neg={n_neg}",
                 flush=True,
             )
@@ -375,7 +375,7 @@ class WMPOAlignedLatentValDataset(Dataset):
         x = torch.from_numpy(np.ascontiguousarray(window)).float()
         return x, int(slot.label), meta
 
-    # ---- episode-level hook for WMPO predict_success eval --------------
+    # ---- episode-level hook for LUMOS predict_success eval --------------
 
     def trajectories(self) -> Iterator[tuple[np.ndarray, bool, int, str]]:
         """Yield ``(obs[T,L], complete, finish_step, eid)`` per demo.
@@ -402,6 +402,6 @@ class WMPOAlignedLatentValDataset(Dataset):
 
 
 __all__ = [
-    "WMPOAlignedLatentTrainDataset",
-    "WMPOAlignedLatentValDataset",
+    "LumosAlignedLatentTrainDataset",
+    "LumosAlignedLatentValDataset",
 ]

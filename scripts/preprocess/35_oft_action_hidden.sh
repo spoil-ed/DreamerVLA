@@ -45,8 +45,8 @@ try:
 except ModuleNotFoundError as exc:
     print(
         "[35_oft_action_hidden] OpenVLA-OFT dependency import failed. "
-        "Run this step in the WMPO/OpenVLA-OFT environment or install the "
-        "WMPO OpenVLA-OFT dependencies into the active Python environment. "
+        "Run this step in the LUMOS/OpenVLA-OFT environment or install the "
+        "LUMOS OpenVLA-OFT dependencies into the active Python environment. "
         f"Missing module: {exc.name}",
         file=sys.stderr,
     )

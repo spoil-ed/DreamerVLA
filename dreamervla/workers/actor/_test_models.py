@@ -32,8 +32,8 @@ class TinySharedPolicy(TinyTrainablePolicy):
         return super().forward(batch.float())
 
 
-class TinyWMPOPolicy(nn.Module):
-    """Tiny policy implementing the WMPO sample/evaluate protocol."""
+class TinyLumosPolicy(nn.Module):
+    """Tiny policy implementing the LUMOS sample/evaluate protocol."""
 
     def __init__(
         self,
@@ -68,7 +68,7 @@ class TinyWMPOPolicy(nn.Module):
             log_prob = -((action - mean) ** 2).mean(dim=(1, 2))
             entropy = torch.ones_like(log_prob) * 0.5
             return log_prob, entropy, {}
-        raise ValueError(f"unknown TinyWMPOPolicy mode {mode!r}")
+        raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")
 
 
 class TinyCheckpointPolicy(TinyTrainablePolicy):
@@ -99,7 +99,7 @@ class TinyTrainableWorldModel(TinyScalarModel):
     """Small trainable world-model stand-in for learner routing tests."""
 
 
-class TinyWMPOWorldModel(nn.Module):
+class TinyLumosWorldModel(nn.Module):
     """Tiny world model implementing the production DreamerVLA step protocol."""
 
     def __init__(self, hidden_dim: int = 4, action_dim: int = 7) -> None:
@@ -144,7 +144,7 @@ class TinyWMPOWorldModel(nn.Module):
                 "actions": actions,
                 "hidden": hidden_seq[:, -1],
             }
-        raise ValueError(f"unknown TinyWMPOWorldModel mode {mode!r}")
+        raise ValueError(f"unknown TinyLumosWorldModel mode {mode!r}")
 
     @staticmethod
     def _latent_hidden(latent) -> torch.Tensor:

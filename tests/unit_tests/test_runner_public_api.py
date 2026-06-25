@@ -43,29 +43,29 @@ EXPERIMENT_MODULES = {
         "dreamervla",
         "rynnvla_actor_critic",
     ),
-    "dreamervla_rynn_dino_wm_wmpo_outcome": (
+    "dreamervla_rynn_dino_wm_lumos": (
         "dreamervla",
-        "rynnvla_wmpo_outcome",
+        "rynnvla_lumos",
     ),
-    "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": (
+    "dreamervla_rynn_dino_wm_lumos_input_tokens": (
         "dreamervla",
-        "rynnvla_input_token_wmpo_outcome",
+        "rynnvla_input_token_lumos",
     ),
-    "dreamervla_oft_dino_wm_wmpo_outcome": (
+    "dreamervla_oft_dino_wm_lumos": (
         "dreamervla",
-        "openvla_oft_wmpo_outcome",
+        "openvla_oft_lumos",
     ),
-    "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": (
+    "dreamervla_oft_discrete_token_dino_wm_lumos": (
         "dreamervla",
-        "openvla_oft_discrete_token_wmpo_outcome",
+        "openvla_oft_discrete_token_lumos",
     ),
-    "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": (
+    "dreamervla_oft_dino_wm_lumos_input_tokens": (
         "dreamervla",
-        "openvla_oft_input_token_wmpo_outcome",
+        "openvla_oft_input_token_lumos",
     ),
-    "online_wmpo_outcome_libero_goal": (
+    "online_lumos_libero_goal": (
         "dreamervla",
-        "online_wmpo_outcome_libero_goal",
+        "online_lumos_libero_goal",
     ),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
@@ -161,8 +161,8 @@ def test_removed_route_files_are_absent() -> None:
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal.yaml",
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml",
         "configs/semantic_bottleneck_wm_libero_goal.yaml",
-        "dreamervla/algorithms/dino_wmpo.py",
-        "dreamervla/algorithms/dino_wmpo_chunk.py",
+        "dreamervla/algorithms/dino_lumos.py",
+        "dreamervla/algorithms/dino_lumos_chunk.py",
         "scripts/diagnose_wm.sh",
         "scripts/eval_wm.sh",
         "scripts/prepare_latent_data.sh",
@@ -220,11 +220,11 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "dreamervla_rynn_dino_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_discrete_token_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
         "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
@@ -260,7 +260,7 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         default_cfg = _compose_experiment("world_model_dinowm_chunk")
         wandb_cfg = _compose_experiment(
-            "dreamervla_rynn_dino_wm_wmpo_outcome",
+            "dreamervla_rynn_dino_wm_lumos",
             extra_overrides=["logger=wandb"],
         )
 
@@ -296,7 +296,7 @@ def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         discrete_wm = _compose_experiment("oft_discrete_token_world_model_dinowm_chunk")
         discrete = _compose_experiment(
-            "dreamervla_oft_discrete_token_dino_wm_wmpo_outcome"
+            "dreamervla_oft_discrete_token_dino_wm_lumos"
         )
 
     assert discrete.policy._target_ == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
@@ -335,10 +335,10 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
         rynn_wm = _compose_experiment("world_model_dinowm_chunk_input_tokens")
         oft_wm = _compose_experiment("oft_world_model_dinowm_chunk_input_tokens")
         rynn_dreamer = _compose_experiment(
-            "dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens"
+            "dreamervla_rynn_dino_wm_lumos_input_tokens"
         )
         oft_dreamer = _compose_experiment(
-            "dreamervla_oft_dino_wm_wmpo_outcome_input_tokens"
+            "dreamervla_oft_dino_wm_lumos_input_tokens"
         )
 
     assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"

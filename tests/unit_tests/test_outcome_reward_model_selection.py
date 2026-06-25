@@ -37,7 +37,7 @@ def test_outcome_step_resolves_reward_model_from_cfg(monkeypatch):
     complete = torch.tensor([True, False])
     score = torch.tensor([0.75, 0.25])
     out = _resolve_reward_tensor(
-        wmpo_cfg={"reward_model": "spy"},
+        lumos_cfg={"reward_model": "spy"},
         batch=2,
         max_steps=4,
         chunk_size=2,
@@ -65,7 +65,7 @@ def test_outcome_default_reward_model_is_sparse_outcome(monkeypatch):
     from dreamervla.algorithms.ppo.outcome import _resolve_reward_tensor
 
     _resolve_reward_tensor(
-        wmpo_cfg={},
+        lumos_cfg={},
         batch=2,
         max_steps=4,
         chunk_size=2,

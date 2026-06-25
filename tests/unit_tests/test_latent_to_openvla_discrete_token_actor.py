@@ -68,7 +68,7 @@ def test_actor_is_discrete_with_no_l1_head() -> None:
 
 
 def test_backbone_latent_online_route_wires_discrete_actor() -> None:
-    # The query_before (backbone-latent) online WMPO route uses the discrete bridge,
+    # The query_before (backbone-latent) online LUMOS route uses the discrete bridge,
     # the lean ~313M WM, and the online input-token obs source — i.e. it is wired
     # end-to-end and no longer raises NotImplementedError.
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -76,7 +76,7 @@ def test_backbone_latent_online_route_wires_discrete_actor() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "dreamervla=openvla_oft_input_token_wmpo_outcome",
+                "dreamervla=openvla_oft_input_token_lumos",
                 "task=openvla_onetraj_libero",
             ],
         )

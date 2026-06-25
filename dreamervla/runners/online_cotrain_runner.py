@@ -257,7 +257,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         """Build a TRAINABLE LatentSuccessClassifier + optimizer (warm-start from
         init.classifier_state_ckpt when given, else fresh from cfg.classifier)."""
         self.classifier_threshold = float(
-            OmegaConf.select(cfg, "algorithm.wmpo.classifier_threshold", default=0.5)
+            OmegaConf.select(cfg, "algorithm.lumos.classifier_threshold", default=0.5)
             or 0.5
         )
         cls_blob = OmegaConf.select(cfg, "classifier", default=None)
@@ -738,7 +738,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "optim_cfg": optim_cfg,
             "algo": algo,
             "actor_update_route": get_actor_update_route(
-                str(OmegaConf.select(algo, "update_type", default="wmpo_outcome"))
+                str(OmegaConf.select(algo, "update_type", default="LUMOS"))
             ),
             "ckpt_every": ckpt_every,
             "num_envs": num_envs,
@@ -966,13 +966,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     ac_metrics.get("ppo_step_applied", 0.0)
                 )
                 for key in (
-                    "wmpo/success_rate",
-                    "wmpo/score_mean",
-                    "wmpo/score_std",
-                    "wmpo/group_var_keep_frac",
-                    "wmpo/num_mixed_groups",
-                    "wmpo/num_all_success_groups",
-                    "wmpo/num_all_fail_groups",
+                    "LUMOS/success_rate",
+                    "LUMOS/score_mean",
+                    "LUMOS/score_std",
+                    "LUMOS/group_var_keep_frac",
+                    "LUMOS/num_mixed_groups",
+                    "LUMOS/num_all_success_groups",
+                    "LUMOS/num_all_fail_groups",
                 ):
                     metrics[key] = float(ac_metrics.get(key, 0.0))
 

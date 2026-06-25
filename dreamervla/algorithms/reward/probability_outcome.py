@@ -13,7 +13,7 @@ class ProbabilityOutcomeReward:
     Sparse threshold outcomes are useful for final success accounting, but during
     cold-start PPO a GRPO group can easily be all below or all above threshold.
     In that case the sparse return has zero within-group variance and the actor
-    update is correctly skipped. This reward keeps the same verifier and WMPO
+    update is correctly skipped. This reward keeps the same verifier and LUMOS
     rollout path while using the continuous probability score as the return.
     """
 

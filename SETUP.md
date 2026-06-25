@@ -421,7 +421,7 @@ DreamerVLA:
 
 ```bash
 bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_wmpo_outcome \
+  experiment=dreamervla_rynn_dino_wm_lumos \
   task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=4 \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
@@ -430,7 +430,7 @@ bash scripts/train_dreamervla.sh \
 
 # Scheme B uses a bridge actor from frame tokens to action slots:
 bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_wmpo_outcome_input_tokens \
+  experiment=dreamervla_rynn_dino_wm_lumos_input_tokens \
   task=libero_goal \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
