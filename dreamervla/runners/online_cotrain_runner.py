@@ -219,6 +219,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
             cls_kwargs.get("token_pool", "flat")
         ) != "mean":
             cls_kwargs["latent_dim"] = int(OmegaConf.select(cfg, "world_model.obs_dim"))
+        self._classifier_target = str(
+            cls_kwargs.get("_target_") or "dreamervla.models.reward.LatentSuccessClassifier"
+        )
         self._classifier_cls_kwargs = {
             key: value for key, value in cls_kwargs.items() if key != "_target_"
         }
@@ -411,36 +414,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         return self._online_cotrain_loop(cfg)
 
     def build_encoder_cfg(self, cfg: DictConfig) -> DictConfig:
-        """Return the frozen-encoder cfg, swapping in a CLEAN OpenVLAOFTPolicy cfg
-        for the OFT action_hidden route.
-
-        The composed ``encoder:`` node for this route is ``RynnVLAEncoder`` (inherited
-        from the base pipeline), and OmegaConf deep-merges any overlay onto it, so the
-        RynnVLA-only keys (tokenizer_path, chameleon_*, ...) would leak into
-        ``OpenVLAOFTPolicy.__init__``. Detect the route via ``latent_type=="action_hidden"``
-        plus a present ``task.openvla_oft`` block and build a fresh OFT encoder cfg from
-        ``task.openvla_oft.*`` (mirrors the backbone_latent encoder block)."""
-        latent_type = str(
-            getattr(self, "_latent_type", OmegaConf.select(cfg, "latent_type", default="action_hidden"))
-        )
-        oft = OmegaConf.select(cfg, "task.openvla_oft", default=None)
-        if latent_type == "action_hidden" and oft is not None:
-            return OmegaConf.create(
-                {
-                    "_target_": "dreamervla.models.encoder.OpenVLAOFTPolicy",
-                    "model_path": oft.ckpt_path,
-                    "component_ckpt_dir": oft.component_ckpt_dir,
-                    "resume_step": oft.resume_step,
-                    "torch_dtype": "bf16",
-                    "num_images_in_input": oft.num_images_in_input,
-                    "use_lora": False,
-                    "use_l1_regression": oft.use_l1_regression,
-                    "use_diffusion": False,
-                    "use_proprio": oft.use_proprio,
-                    "use_film": False,
-                    "freeze_vla_backbone": True,
-                }
-            )
+        """Return the frozen encoder config declared by Hydra."""
         return super().build_encoder_cfg(cfg)
 
     def _build_components(self, cfg: DictConfig) -> None:
@@ -1212,6 +1186,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
         save_module_pretrained(
             _unwrap(self.classifier),
             str(ckpt_dir / f"{stem}_hf_classifier"),
-            target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
+            target=str(
+                getattr(
+                    self,
+                    "_classifier_target",
+                    "dreamervla.models.reward.LatentSuccessClassifier",
+                )
+            ),
             init_args=getattr(self, "_classifier_cls_kwargs", {}),
         )

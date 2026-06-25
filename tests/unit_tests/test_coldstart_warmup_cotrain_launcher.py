@@ -210,6 +210,9 @@ def test_oft_cotrain_recipe_derives_structure_from_task_vla_config(task_name) ->
     oft = cfg.task.openvla_oft
 
     assert cfg.env.task_suite_name == cfg.task.suite
+    assert cfg.encoder._target_ == "dreamervla.models.encoder.OpenVLAOFTPolicy"
+    assert cfg.encoder.model_path == oft.ckpt_path
+    assert cfg.encoder.num_images_in_input == oft.num_images_in_input
     assert cfg.world_model._target_ == oft.wm_target
     assert cfg.world_model.obs_dim == oft.wm_obs_dim
     assert cfg.world_model.token_count == oft.token_count

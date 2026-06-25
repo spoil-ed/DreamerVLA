@@ -134,7 +134,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             save_module_pretrained(
                 _unwrap(self.classifier),
                 self._cls_warmup_hf_dir(),
-                target="dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier",
+                target=str(
+                    getattr(
+                        self,
+                        "_classifier_target",
+                        "dreamervla.models.reward.LatentSuccessClassifier",
+                    )
+                ),
                 init_args=cls_kwargs,
             )
 

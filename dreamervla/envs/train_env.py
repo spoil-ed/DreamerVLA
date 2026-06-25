@@ -22,6 +22,7 @@ from libero.libero import benchmark as libero_benchmark
 from PIL import Image
 
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.envs.image_utils import resize_hwc_uint8
 from dreamervla.envs.libero_env import (
     TASK_MAX_STEPS,
     get_libero_dummy_action,
@@ -512,16 +513,7 @@ class DreamerVLAOnlineTrainEnv:
 
     @staticmethod
     def _resize_hwc_uint8(image: np.ndarray, size: int) -> np.ndarray:
-        if image.shape[0] == size and image.shape[1] == size:
-            return np.ascontiguousarray(image)
-        try:
-            resample = Image.Resampling.BILINEAR
-        except AttributeError:
-            resample = Image.BILINEAR
-        return np.asarray(
-            Image.fromarray(image).resize((size, size), resample=resample),
-            dtype=np.uint8,
-        )
+        return resize_hwc_uint8(image, size)
 
     def _format_obs(
         self,

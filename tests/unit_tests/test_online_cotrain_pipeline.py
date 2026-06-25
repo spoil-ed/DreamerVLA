@@ -11,6 +11,69 @@ def test_online_cotrain_runner_has_extracted_methods():
     assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
 
 
+def test_trainable_classifier_preserves_hydra_target(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = _FakeDistributed()
+
+    monkeypatch.setattr(
+        mod,
+        "build_classifier",
+        lambda cfg: torch.nn.Linear(int(cfg["latent_dim"]), 2),
+    )
+    monkeypatch.setattr(mod, "build_optimizer", lambda module, cfg: object())
+    cfg = OmegaConf.create(
+        {
+            "algorithm": {"wmpo": {"classifier_threshold": 0.5}},
+            "classifier": {
+                "_target_": "tests.fake.CustomSuccessVerifier",
+                "latent_dim": 3,
+                "window": 2,
+            },
+            "world_model": {"obs_dim": 3},
+            "init": {"classifier_state_ckpt": None},
+            "optim": {"classifier": {"lr": 1.0e-4}},
+        }
+    )
+
+    runner._build_trainable_classifier(cfg)
+
+    assert runner._classifier_target == "tests.fake.CustomSuccessVerifier"
+    assert runner._classifier_cls_kwargs == {"latent_dim": 3, "window": 2}
+
+
+def test_classifier_warmup_hf_sidecar_uses_config_target(tmp_path, monkeypatch):
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    captured: dict[str, object] = {}
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.global_step = 0
+    runner.classifier = torch.nn.Linear(3, 2)
+    runner.classifier_threshold = 0.5
+    runner._classifier_target = "tests.fake.CustomSuccessVerifier"
+    runner._classifier_cls_kwargs = {"latent_dim": 3, "window": 2}
+    runner.checkpoint_save_torch = lambda: False
+    runner.checkpoint_save_hf = lambda: True
+    runner._cls_warmup_hf_dir = lambda: tmp_path / "classifier_hf"
+
+    def fake_save(module, save_dir, *, target, init_args):
+        captured["module"] = module
+        captured["save_dir"] = save_dir
+        captured["target"] = target
+        captured["init_args"] = init_args
+
+    monkeypatch.setattr(mod, "save_module_pretrained", fake_save)
+
+    runner._save_cls_warmup()
+
+    assert captured["target"] == "tests.fake.CustomSuccessVerifier"
+    assert captured["init_args"] == {"latent_dim": 3, "window": 2}
+
+
 # --------------------------------------------------------------------------
 # Local fixture helpers (kept local on purpose: do NOT import from
 # tests.runners.test_offline_seed — that path is fragile / wrong). The shape

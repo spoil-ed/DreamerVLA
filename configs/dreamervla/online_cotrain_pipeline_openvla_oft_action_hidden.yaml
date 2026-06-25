@@ -15,6 +15,20 @@ offline_warmup:
 init:
   vla_ckpt_path: ${task.openvla_oft.ckpt_path}
 
+encoder:
+  _target_: dreamervla.models.encoder.OpenVLAOFTPolicy
+  model_path: ${task.openvla_oft.ckpt_path}
+  component_ckpt_dir: ${task.openvla_oft.component_ckpt_dir}
+  resume_step: ${task.openvla_oft.resume_step}
+  torch_dtype: bf16
+  num_images_in_input: ${task.openvla_oft.num_images_in_input}
+  use_lora: false
+  use_l1_regression: ${task.openvla_oft.use_l1_regression}
+  use_diffusion: false
+  use_proprio: ${task.openvla_oft.use_proprio}
+  use_film: false
+  freeze_vla_backbone: true
+
 online_rollout:
   sequence_length: ${task.openvla_oft.wm_sequence_length}
 
