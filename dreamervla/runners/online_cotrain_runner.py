@@ -39,7 +39,7 @@ os.environ.setdefault("MUJOCO_GL", "osmesa")
 os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
-from dreamervla.algorithms.ppo import dino_wmpo_outcome_step
+from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.reward import build_classifier
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
@@ -682,6 +682,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "batch_size": batch_size,
             "optim_cfg": optim_cfg,
             "algo": algo,
+            "actor_update_route": get_actor_update_route(
+                str(OmegaConf.select(algo, "update_type", default="wmpo_outcome"))
+            ),
             "ckpt_every": ckpt_every,
         }
         counters = {"n_episodes": 0, "n_success": 0}
@@ -861,7 +864,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
                         "is_first", "is_terminal", "is_last",
                     )
                 }
-                ac_metrics = dino_wmpo_outcome_step(
+                actor_update_route = knobs["actor_update_route"]
+                if actor_update_route.world_model_arg != "chunk_world_model":
+                    raise ValueError(
+                        "online cotrain requires a chunk-world-model actor update "
+                        f"route, got {actor_update_route.name!r}"
+                    )
+                ac_metrics = actor_update_route.step_fn(
                     policy=self.policy,
                     chunk_world_model=self.world_model,
                     classifier=_unwrap(self.classifier),  # predict_success: DDP wrapper hides it

@@ -11,6 +11,19 @@ def test_online_cotrain_runner_has_extracted_methods():
     assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
 
 
+def test_online_cotrain_actor_update_uses_registry():
+    import inspect
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    loop_src = inspect.getsource(mod.OnlineCotrainRunner._online_cotrain_loop)
+    burst_src = inspect.getsource(mod.OnlineCotrainRunner._run_training_bursts)
+
+    assert "get_actor_update_route" in loop_src
+    assert "actor_update_route.step_fn" in burst_src
+    assert "dino_wmpo_outcome_step(" not in burst_src
+
+
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     from omegaconf import OmegaConf
 
