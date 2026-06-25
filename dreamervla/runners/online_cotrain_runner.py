@@ -146,6 +146,11 @@ def build_rollout_progress_metrics(
     n_episodes = int(counters.get("n_episodes", 0))
     n_success = int(counters.get("n_success", 0))
     success_rate = (n_success / n_episodes) if n_episodes > 0 else 0.0
+    current_episodes = int(counters.get("current_episodes", 0))
+    current_success = int(counters.get("current_success", 0))
+    current_success_rate = (
+        current_success / current_episodes if current_episodes > 0 else 0.0
+    )
 
     if active_episode_steps is None:
         steps = [int(env_step)]
@@ -161,6 +166,12 @@ def build_rollout_progress_metrics(
     return {
         "rollout/success_rate": float(success_rate),
         "rollout/success_rate_valid": float(n_episodes > 0),
+        "rollout/current_success_rate": float(current_success_rate),
+        "rollout/current_success_rate_valid": float(current_episodes > 0),
+        "rollout/current_episodes": float(current_episodes),
+        "rollout/current_successes": float(current_success),
+        "rollout/avg_success_rate": float(success_rate),
+        "rollout/avg_success_rate_valid": float(n_episodes > 0),
         "rollout/episodes": float(n_episodes),
         "rollout/successes": float(n_success),
         "rollout/env_steps": float(env_step),
@@ -733,7 +744,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "num_envs": num_envs,
             "episode_horizon": episode_horizon,
         }
-        counters = {"n_episodes": 0, "n_success": 0}
+        counters = {
+            "n_episodes": 0,
+            "n_success": 0,
+            "current_episodes": 0,
+            "current_success": 0,
+        }
         history: list[dict[str, float | str | int]] = []
 
         if num_envs > 1:
@@ -781,6 +797,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     counters["n_episodes"] += 1
                     success = bool(rec["success"])
                     counters["n_success"] += int(success)
+                    counters["current_episodes"] += 1
+                    counters["current_success"] += int(success)
                     self.console_record_success(success)
                 episode = []
                 obs, _info = env.reset()
@@ -966,6 +984,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if self.distributed.is_main_process:
                 self.log_metrics(metrics, step=int(self.global_step))
             history.append(metrics)
+            counters["current_episodes"] = 0
+            counters["current_success"] = 0
             if (
                 self.distributed.is_main_process
                 and knobs["ckpt_every"] > 0
@@ -1103,7 +1123,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
         interleaves the training burst per env-step exactly like the single-env
         loop; it is None in unit tests."""
         if counters is None:
-            counters = {"n_episodes": 0, "n_success": 0}
+            counters = {
+                "n_episodes": 0,
+                "n_success": 0,
+                "current_episodes": 0,
+                "current_success": 0,
+            }
         task_cycle = [int(t) for t in task_ids] or [0]
         episodes: list[list[dict[str, Any]]] = [[] for _ in range(num_envs)]
         slot_task = [-1] * num_envs
@@ -1196,6 +1221,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
                         counters["n_episodes"] += 1
                         success = bool(rec_added["success"])
                         counters["n_success"] += int(success)
+                        counters["current_episodes"] += 1
+                        counters["current_success"] += int(success)
                         self.console_record_success(success)
                     recs[k] = _start_slot(k)
                 # The rollout runs under the method-level no_grad, but the training

@@ -154,6 +154,30 @@ def test_rollout_progress_metrics_marks_success_rate_valid_after_episode():
     assert metrics["rollout/successes"] == 1.0
 
 
+def test_rollout_progress_metrics_reports_current_and_average_success_rates():
+    from dreamervla.runners.online_cotrain_runner import build_rollout_progress_metrics
+
+    metrics = build_rollout_progress_metrics(
+        counters={
+            "n_episodes": 4,
+            "n_success": 1,
+            "current_episodes": 2,
+            "current_success": 1,
+        },
+        env_step=1208,
+        num_envs=4,
+        episode_horizon=300,
+        active_episode_steps=[2, 2, 2, 2],
+    )
+
+    assert metrics["rollout/current_success_rate"] == 0.5
+    assert metrics["rollout/current_success_rate_valid"] == 1.0
+    assert metrics["rollout/current_episodes"] == 2.0
+    assert metrics["rollout/current_successes"] == 1.0
+    assert metrics["rollout/avg_success_rate"] == 0.25
+    assert metrics["rollout/avg_success_rate_valid"] == 1.0
+
+
 # --------------------------------------------------------------- Task 4
 class _FakeVec:
     """Stand-in for VecRolloutEnv: canned full_records, done after `horizon` steps."""
