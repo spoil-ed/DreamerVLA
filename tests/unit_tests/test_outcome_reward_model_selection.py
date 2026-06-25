@@ -9,7 +9,19 @@ def test_outcome_step_resolves_reward_model_from_cfg(monkeypatch):
     class _Spy:
         name = "spy"
 
-        def build_reward(self, *, batch, max_steps, chunk_size, finish_step, complete, device):
+        def build_reward(
+            self,
+            *,
+            batch,
+            max_steps,
+            chunk_size,
+            finish_step,
+            complete,
+            device,
+            score=None,
+            score_step=None,
+        ):
+            del finish_step, complete, score, score_step
             seen["called_with"] = (batch, max_steps, chunk_size)
             return torch.zeros((batch, max_steps), device=device)
 
@@ -23,6 +35,7 @@ def test_outcome_step_resolves_reward_model_from_cfg(monkeypatch):
 
     finish_step = torch.tensor([0, 1])
     complete = torch.tensor([True, False])
+    score = torch.tensor([0.75, 0.25])
     out = _resolve_reward_tensor(
         wmpo_cfg={"reward_model": "spy"},
         batch=2,
@@ -30,6 +43,8 @@ def test_outcome_step_resolves_reward_model_from_cfg(monkeypatch):
         chunk_size=2,
         finish_step=finish_step,
         complete=complete,
+        score=score,
+        score_step=finish_step,
         device=torch.device("cpu"),
     )
     assert seen["name"] == "spy"

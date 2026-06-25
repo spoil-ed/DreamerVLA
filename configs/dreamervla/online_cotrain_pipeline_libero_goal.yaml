@@ -201,6 +201,7 @@ algorithm:
     chunk_size: ${task.legacy_action_hidden.chunk_size}
     episode_max_steps: 300
     debug_episode_max_steps: 150
+    reward_model: probability_outcome
     classifier_min_steps: 4
     filter_zero_variance_groups: true
     # MEM-RL-01 — bound the outcome update's peak GPU memory to one group-aligned

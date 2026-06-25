@@ -11,8 +11,9 @@ import torch
 class RewardModel(Protocol):
     """Maps an imagined rollout's success outcome to a per-step reward tensor.
 
-    The verifier emits ``(complete, finish_step)``; a ``RewardModel`` turns that
-    into the ``[batch, max_steps]`` reward the WMPO advantage consumes. The default
+    The verifier emits ``(complete, finish_step)`` plus optional continuous
+    ``(score, score_step)`` values; a ``RewardModel`` turns those into the
+    ``[batch, max_steps]`` reward the WMPO advantage consumes. The default
     sparse-outcome form places ``float(complete)`` at ``finish_step``; dense /
     verifier-shaped forms may return a per-step signal instead.
     """
@@ -28,6 +29,8 @@ class RewardModel(Protocol):
         finish_step: torch.Tensor,
         complete: torch.Tensor,
         device: torch.device,
+        score: torch.Tensor | None = None,
+        score_step: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return a ``[batch, max_steps]`` float32 reward tensor on ``device``."""
         ...

@@ -1,11 +1,12 @@
 # ruff: noqa: E402
 """Outcome-reward WMPO PPO route.
 
-**Reward form**: sparse outcome reward. After imagining a full episode in
-the world model, ``LatentSuccessClassifier.predict_success`` scores the
-imagined latent video and emits ``(complete, finish_step)``. We place
-``float(complete)`` at ``finish_step`` and zero elsewhere — one positive
-signal per successful rollout, none otherwise.
+**Reward form**: selected by ``algorithm.wmpo.reward_model``. After imagining a
+full episode in the world model, ``LatentSuccessClassifier.predict_success``
+scores the imagined latent video and emits sparse ``(complete, finish_step)``
+plus optional continuous ``(score, score_step)`` tensors. ``sparse_outcome``
+places ``float(complete)`` at ``finish_step``; ``probability_outcome`` places
+the verifier's best ``p(success)`` at ``score_step``.
 
 This is the DreamerVLA-side reproduction of the WMPO/verl PPO loop. The
 rollout drives the WM in chunk mode (``ChunkAwareDinoWMWorldModel.
@@ -23,8 +24,8 @@ dense per-step state-reward from the WM hidden at every imagined env-step.
               chunk WM (chunk-input)     → next K latent frames
               accumulate K latents to a video buffer
         → LatentSuccessClassifier.predict_success on the video
-            → (complete[B], finish_step[B])
-        → reward[i, finish_step[i]] = float(complete[i])
+            → complete[B], finish_step[B], optional score[B], score_step[B]
+        → reward model builds per-step reward tensor from that verifier output
         → GRPO group-relative advantage, broadcast across all chunks
         → PPO clip + KL-to-ref + entropy loss
         → actor update
@@ -138,6 +139,8 @@ def _resolve_reward_tensor(
     finish_step: torch.Tensor,
     complete: torch.Tensor,
     device: torch.device,
+    score: torch.Tensor | None = None,
+    score_step: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Build the reward via the config-selected reward model (default sparse_outcome).
 
@@ -155,6 +158,8 @@ def _resolve_reward_tensor(
         finish_step=finish_step,
         complete=complete,
         device=device,
+        score=score,
+        score_step=score_step,
     )
 
 
@@ -312,6 +317,8 @@ def _imagine_and_score_slice(
     mb = max(1, min(int(eval_micro_batch) if eval_micro_batch else b, b))
     complete_parts: list[torch.Tensor] = []
     finish_parts: list[torch.Tensor] = []
+    score_parts: list[torch.Tensor] = []
+    score_step_parts: list[torch.Tensor] = []
     for s in range(0, b, mb):
         e = min(s + mb, b)
         video_s = torch.cat([v[s:e].to(device) for v in video_latents], dim=1)
@@ -327,13 +334,26 @@ def _imagine_and_score_slice(
             )
         complete_parts.append(info_s["complete"])
         finish_parts.append(info_s["finish_step"])
+        score_s = info_s.get("score")
+        score_step_s = info_s.get("score_step")
+        if not isinstance(score_s, torch.Tensor):
+            score_s = info_s["complete"].float()
+        if not isinstance(score_step_s, torch.Tensor):
+            score_step_s = info_s["finish_step"]
+        score_parts.append(score_s)
+        score_step_parts.append(score_step_s)
         del video_s
     complete = torch.cat(complete_parts, dim=0)
     finish_native = torch.cat(finish_parts, dim=0)
+    score = torch.cat(score_parts, dim=0)
+    score_step_native = torch.cat(score_step_parts, dim=0)
     # Map finish_step from the classifier's NATIVE unit back to env-step units. For
     # a chunk classifier finish_step is in chunks; convert at the boundary. Unfired
     # entries already encode "T_scan - 1" → the last env-step of the last chunk.
     finish_step = finish_native * K + finish_offset if chunk_granular else finish_native
+    score_step = (
+        score_step_native * K + finish_offset if chunk_granular else score_step_native
+    )
 
     return ImaginedRollout(
         actor_feats=actor_feats,
@@ -343,6 +363,8 @@ def _imagine_and_score_slice(
         ref_kls=ref_kls if use_ref else None,
         complete=complete,
         finish_step=finish_step,
+        score=score,
+        score_step=score_step,
     )
 
 
@@ -566,6 +588,20 @@ def dino_wmpo_outcome_step(
     # finish_step is already mapped to env-step units inside the slice helper.
     complete = torch.cat([d.complete for d in slices], dim=0)
     finish_step = torch.cat([d.finish_step for d in slices], dim=0)
+    score = torch.cat(
+        [
+            d.score if d.score is not None else d.complete.float()
+            for d in slices
+        ],
+        dim=0,
+    )
+    score_step = torch.cat(
+        [
+            d.score_step if d.score_step is not None else d.finish_step
+            for d in slices
+        ],
+        dim=0,
+    )
 
     reward_tensor = _resolve_reward_tensor(
         wmpo_cfg=wmpo_cfg,
@@ -575,6 +611,8 @@ def dino_wmpo_outcome_step(
         finish_step=finish_step,
         complete=complete,
         device=device,
+        score=score,
+        score_step=score_step,
     )
     returns = reward_tensor.sum(dim=-1)  # for sparse 0/1 this equals float(complete)
 
@@ -828,9 +866,9 @@ def dino_wmpo_outcome_step(
     bc_ref_loss_val = total_bc_ref_loss / max(1, update_epochs)
     returns_mean = float(returns_adjusted.detach().mean().item())
     returns_std = float(returns_adjusted.detach().std(unbiased=False).item())
-    reward_mean = float(
-        returns.detach().mean().item()
-    )  # imagined success rate per rollout
+    reward_mean = float(returns.detach().mean().item())
+    score_mean = float(score.detach().float().mean().item())
+    score_std = float(score.detach().float().std(unbiased=False).item())
 
     # mean_finish_step averaged ONLY over completed rollouts — the prior
     # implementation averaged finish_step over all rollouts including
@@ -860,10 +898,12 @@ def dino_wmpo_outcome_step(
     # Used by the JSONL ppo_groups log: timestamp + per-group success rate +
     # whether the group has variance (i.e. is actually useful for GRPO).
     if B_eff >= group_size and B_eff % group_size == 0:
-        groups_returns = returns.detach().reshape(-1, group_size)  # [G, K]
+        groups_returns = returns_adjusted.detach().reshape(-1, group_size)  # [G, K]
         groups_complete = complete.detach().bool().reshape(-1, group_size)
         groups_finish_step = finish_step.detach().long().reshape(-1, group_size)
-        group_success_rates: list[float] = groups_returns.mean(dim=-1).cpu().tolist()
+        group_success_rates: list[float] = (
+            groups_complete.float().mean(dim=-1).cpu().tolist()
+        )
         group_success_counts: list[int] = groups_complete.sum(dim=-1).cpu().tolist()
         group_rollout_successes: list[list[bool]] = groups_complete.cpu().tolist()
         group_finish_steps: list[list[int]] = groups_finish_step.cpu().tolist()
@@ -871,8 +911,8 @@ def dino_wmpo_outcome_step(
             (groups_returns.std(dim=-1, unbiased=False) > adv_eps).cpu().tolist()
         )
         num_groups = int(groups_returns.shape[0])
-        num_all_success = int((groups_returns.sum(dim=-1) == group_size).sum().item())
-        num_all_fail = int((groups_returns.sum(dim=-1) == 0).sum().item())
+        num_all_success = int(groups_complete.all(dim=-1).sum().item())
+        num_all_fail = int((~groups_complete).all(dim=-1).sum().item())
         num_mixed = num_groups - num_all_success - num_all_fail
     else:
         group_success_rates = []
@@ -906,6 +946,8 @@ def dino_wmpo_outcome_step(
         "advantage_mag": float(advantages.detach().abs().mean().item()),
         "return_scale": 1.0,
         "reward_mean": reward_mean,
+        "score_mean": score_mean,
+        "score_std": score_std,
         "value_mean": 0.0,
         "actor_grad_norm": grad_norm,
         "critic_grad_norm": 0.0,
@@ -928,6 +970,8 @@ def dino_wmpo_outcome_step(
         "wmpo/avg_kl": total_kl / max(1, update_epochs),
         "wmpo/grad_norm": grad_norm,
         "wmpo/success_rate": float(complete.float().mean().item()),
+        "wmpo/score_mean": score_mean,
+        "wmpo/score_std": score_std,
         # Failure-aware: average finish step ONLY over completed rollouts.
         # The prior all-rollouts average pinned this metric near T_max when
         # most episodes failed (finish_step = T_max-1 for failures).

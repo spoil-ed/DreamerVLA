@@ -44,4 +44,6 @@ def test_imagined_rollout_fields():
         "ref_kls",
         "complete",
         "finish_step",
+        "score",
+        "score_step",
     }

@@ -217,6 +217,12 @@ class LatentSuccessClassifier(nn.Module):
                               NATIVE unit; ``T_scan - 1`` if no window fired
                               (``T_scan = T // chunk_size`` for chunk,
                                ``T`` for action).
+            ``score``       : ``[B]`` float — max ``p(success)`` seen by the
+                              sliding scan. This gives WMPO a continuous value
+                              source when sparse threshold outcomes are
+                              all-success or all-fail inside a GRPO group.
+            ``score_step``  : ``[B]`` long — window-end index for ``score`` in
+                              the classifier's NATIVE unit.
         """
         B, T, _ = latent_video.shape
         W = self.cfg.window
@@ -236,19 +242,36 @@ class LatentSuccessClassifier(nn.Module):
         T_scan = scan_video.shape[1]
         complete = torch.zeros(B, dtype=torch.bool, device=device)
         finish_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
+        score = torch.zeros(B, dtype=torch.float32, device=device)
+        score_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
 
         first_end = max(W, int(min_steps) + W)
         for end in range(first_end, T_scan + 1, stride):
             window = scan_video[:, end - W : end]
             logits = self.forward(window)
             probs = torch.softmax(logits, dim=-1)[:, 1]
+            better = probs > score
+            if better.any():
+                score = torch.where(better, probs.float(), score)
+                score_step = torch.where(
+                    better,
+                    torch.full_like(score_step, end - 1),
+                    score_step,
+                )
             hit = (probs >= threshold) & (~complete)
             if hit.any():
-                finish_step = torch.where(hit, torch.full_like(finish_step, end - 1), finish_step)
+                finish_step = torch.where(
+                    hit,
+                    torch.full_like(finish_step, end - 1),
+                    finish_step,
+                )
                 complete = complete | hit
-                if complete.all():
-                    break
-        return {"complete": complete, "finish_step": finish_step}
+        return {
+            "complete": complete,
+            "finish_step": finish_step,
+            "score": score,
+            "score_step": score_step,
+        }
 
 
 __all__ = ["LatentSuccessClassifier", "LatentSuccessClassifierConfig"]

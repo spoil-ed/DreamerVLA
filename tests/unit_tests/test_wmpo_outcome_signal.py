@@ -55,6 +55,36 @@ class _DegenerateClassifier(torch.nn.Module):
         }
 
 
+class _ProbabilityClassifier(torch.nn.Module):
+    """No threshold success, but verifier probability varies within each group."""
+
+    def predict_success(self, video, threshold, stride=1, min_steps=1):
+        del threshold, stride, min_steps
+        batch = int(video.shape[0])
+        idx = torch.arange(batch, device=video.device)
+        score = torch.where(
+            idx % 2 == 0,
+            torch.full((batch,), 0.8, device=video.device),
+            torch.full((batch,), 0.2, device=video.device),
+        )
+        return {
+            "complete": torch.zeros(batch, dtype=torch.bool, device=video.device),
+            "finish_step": torch.full(
+                (batch,),
+                3,
+                dtype=torch.long,
+                device=video.device,
+            ),
+            "score": score,
+            "score_step": torch.full(
+                (batch,),
+                3,
+                dtype=torch.long,
+                device=video.device,
+            ),
+        }
+
+
 class _TinyPolicy(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -85,12 +115,13 @@ class _TinyPolicy(torch.nn.Module):
         raise ValueError(batch["mode"])
 
 
-def _cfg():
+def _cfg(reward_model: str = "sparse_outcome"):
     return OmegaConf.create(
         {
             "wmpo": {
                 "chunk_size": 2,
                 "episode_max_steps": 4,
+                "reward_model": reward_model,
                 "classifier_min_steps": 1,
                 "classifier_granularity": "action",
                 "filter_zero_variance_groups": True,
@@ -107,7 +138,7 @@ def _cfg():
     )
 
 
-def _run_step(classifier: torch.nn.Module):
+def _run_step(classifier: torch.nn.Module, *, reward_model: str = "sparse_outcome"):
     policy = _TinyPolicy()
     optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
 
@@ -119,7 +150,7 @@ def _run_step(classifier: torch.nn.Module):
         actor_optimizer=optimizer,
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
-        algorithm_cfg=_cfg(),
+        algorithm_cfg=_cfg(reward_model=reward_model),
         optim_cfg=OmegaConf.create(
             {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
         ),
@@ -147,3 +178,20 @@ def test_degenerate_classifier_gives_zero_signal():
     assert metrics["ppo_step_applied"] == 0.0
     assert metrics["returns_mean"] == 0.0
     assert policy.action_value.grad is None or policy.action_value.grad.abs().item() == 0.0
+
+
+def test_probability_reward_updates_when_threshold_outcomes_are_constant():
+    policy, metrics = _run_step(
+        _ProbabilityClassifier(),
+        reward_model="probability_outcome",
+    )
+
+    assert abs(metrics["actor_loss"]) > 0.0
+    assert metrics["actor_grad_norm"] > 0.0
+    assert metrics["ppo_step_applied"] == 1.0
+    assert metrics["wmpo/success_rate"] == 0.0
+    assert metrics["returns_std"] > 0.0
+    assert metrics["advantage_std"] > 0.0
+    assert metrics["wmpo/group_var_keep_frac"] == 1.0
+    assert policy.action_value.grad is not None
+    assert policy.action_value.grad.abs().item() > 0.0

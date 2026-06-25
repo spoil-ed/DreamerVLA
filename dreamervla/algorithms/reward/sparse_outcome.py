@@ -25,7 +25,10 @@ class SparseOutcomeReward:
         finish_step: torch.Tensor,
         complete: torch.Tensor,
         device: torch.device,
+        score: torch.Tensor | None = None,
+        score_step: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        del score, score_step
         return _build_reward_tensor(
             batch=batch,
             max_steps=max_steps,

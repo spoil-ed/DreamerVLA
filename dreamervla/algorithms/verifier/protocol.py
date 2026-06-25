@@ -26,5 +26,5 @@ class SuccessVerifier(Protocol):
         min_steps: int = 1,
         **kwargs: Any,
     ) -> dict[str, torch.Tensor]:
-        """Return ``{"complete": [B] bool, "finish_step": [B] long}``."""
+        """Return sparse outcome plus optional continuous score tensors."""
         ...

@@ -14,8 +14,9 @@ class ImaginedRollout:
 
     Per-chunk policy inputs are kept as host buffers (``actor_feats`` on CPU; the
     rest on device) so the multi-epoch PPO loss can stream them back one chunk at a
-    time. ``complete`` / ``finish_step`` (env-step units) are the verifier outcome
-    that drives the reward + GRPO advantage.
+    time. ``complete`` / ``finish_step`` (env-step units) are the verifier's sparse
+    threshold outcome. ``score`` / ``score_step`` are an optional continuous value
+    source from the same verifier, also in env-step units.
     """
 
     actor_feats: list[torch.Tensor]
@@ -25,6 +26,8 @@ class ImaginedRollout:
     ref_kls: list[torch.Tensor] | None
     complete: torch.Tensor
     finish_step: torch.Tensor
+    score: torch.Tensor | None = None
+    score_step: torch.Tensor | None = None
 
 
 @runtime_checkable

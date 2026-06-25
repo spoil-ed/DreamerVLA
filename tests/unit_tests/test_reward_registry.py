@@ -7,7 +7,19 @@ def test_reward_model_protocol_runtime_checkable():
     class _Stub:
         name = "stub"
 
-        def build_reward(self, *, batch, max_steps, chunk_size, finish_step, complete, device):
+        def build_reward(
+            self,
+            *,
+            batch,
+            max_steps,
+            chunk_size,
+            finish_step,
+            complete,
+            device,
+            score=None,
+            score_step=None,
+        ):
+            del chunk_size, finish_step, complete, score, score_step
             return torch.zeros((batch, max_steps), device=device)
 
     assert isinstance(_Stub(), RewardModel)
@@ -28,7 +40,19 @@ def test_register_and_get_roundtrip():
     class _Stub:
         name = "stub_route"
 
-        def build_reward(self, *, batch, max_steps, chunk_size, finish_step, complete, device):
+        def build_reward(
+            self,
+            *,
+            batch,
+            max_steps,
+            chunk_size,
+            finish_step,
+            complete,
+            device,
+            score=None,
+            score_step=None,
+        ):
+            del chunk_size, finish_step, complete, score, score_step
             return torch.zeros((batch, max_steps), device=device)
 
     stub = _Stub()

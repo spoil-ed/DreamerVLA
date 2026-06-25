@@ -901,7 +901,27 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 )
                 metrics["rl/actor_loss"] = float(ac_metrics.get("actor_loss", 0.0))
                 metrics["rl/returns_mean"] = float(ac_metrics.get("returns_mean", 0.0))
+                metrics["rl/returns_std"] = float(ac_metrics.get("returns_std", 0.0))
+                metrics["rl/advantage_std"] = float(
+                    ac_metrics.get("advantage_std", 0.0)
+                )
+                metrics["rl/advantage_mag"] = float(
+                    ac_metrics.get("advantage_mag", 0.0)
+                )
                 metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
+                metrics["rl/ppo_step_applied"] = float(
+                    ac_metrics.get("ppo_step_applied", 0.0)
+                )
+                for key in (
+                    "wmpo/success_rate",
+                    "wmpo/score_mean",
+                    "wmpo/score_std",
+                    "wmpo/group_var_keep_frac",
+                    "wmpo/num_mixed_groups",
+                    "wmpo/num_all_success_groups",
+                    "wmpo/num_all_fail_groups",
+                ):
+                    metrics[key] = float(ac_metrics.get(key, 0.0))
 
             self.console_metrics(
                 f"{metrics['phase']} · env {env_step}/{total_env_steps} "
