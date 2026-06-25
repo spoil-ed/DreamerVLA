@@ -92,7 +92,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             )
             last_acc = float(m["acc"])
             if i % 50 == 0:
-                print(f"[pipeline][cls-warmup] step={i}/{steps} loss={float(m['loss']):.4f} acc={last_acc:.3f}", flush=True)
+                print(
+                    f"[pipeline][cls-warmup] step={i}/{steps} "
+                    f"loss={float(m['loss']):.4f} acc={last_acc:.3f} "
+                    f"f1={float(m.get('f1', 0.0)):.3f} "
+                    f"pos={float(m.get('pos_frac', 0.0)):.3f}",
+                    flush=True,
+                )
         return last_acc
 
     # ------------------------------------------------------------ split ckpts

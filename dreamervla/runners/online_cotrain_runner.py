@@ -866,6 +866,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 metrics["cls/loss"] = float(cls_metrics["loss"])
                 metrics["cls/acc"] = float(cls_metrics["acc"])
                 metrics["cls/f1"] = float(cls_metrics["f1"])
+                metrics["cls/pos_frac"] = float(cls_metrics.get("pos_frac", 0.0))
+                metrics["cls/prob_mean"] = float(cls_metrics.get("prob_mean", 0.0))
+                metrics["cls/grad_norm"] = float(cls_metrics.get("grad_norm", 0.0))
 
             # Phase RL (cotrain only) — WM + classifier frozen; slow policy
             if (not in_warmup) and knobs["train_actor_after"]:
