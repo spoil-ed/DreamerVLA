@@ -805,6 +805,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     if counters["n_episodes"]
                     else 0.0
                 ),
+                "rollout/episodes": float(counters["n_episodes"]),
+                "rollout/successes": float(counters["n_success"]),
                 "buffer/size": float(replay.num_transitions),
             }
             # Phase WM (always) — policy/actor frozen (eval + no policy optim step)
