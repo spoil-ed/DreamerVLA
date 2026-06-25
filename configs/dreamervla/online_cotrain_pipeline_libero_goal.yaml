@@ -176,6 +176,7 @@ critic:
   bin_max: 20.0
 
 classifier:
+  _target_: dreamervla.models.reward.LatentSuccessClassifier
   latent_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.legacy_action_hidden.chunk_size}

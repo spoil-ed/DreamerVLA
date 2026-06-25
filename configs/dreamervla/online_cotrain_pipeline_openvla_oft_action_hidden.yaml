@@ -70,6 +70,7 @@ policy:
   max_action: ${task.openvla_oft.max_action}
 
 classifier:
+  _target_: ${task.openvla_oft.classifier_target}
   latent_dim: ${task.openvla_oft.token_dim}
   chunk_size: ${task.openvla_oft.chunk_size}
   token_dim: ${task.openvla_oft.token_dim}

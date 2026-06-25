@@ -227,6 +227,7 @@ def test_oft_cotrain_recipe_derives_structure_from_task_vla_config(task_name) ->
     assert cfg.policy.action_token_bins == oft.action_token_bins
     assert cfg.policy.min_action == oft.min_action
     assert cfg.policy.max_action == oft.max_action
+    assert cfg.classifier._target_ == oft.classifier_target
     assert cfg.classifier.latent_dim == oft.token_dim
     assert cfg.classifier.chunk_size == oft.chunk_size
     assert cfg.algorithm.wmpo.chunk_size == oft.chunk_size
