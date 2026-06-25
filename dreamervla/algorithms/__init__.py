@@ -9,8 +9,8 @@ Routes (public interface):
 
   • PPO routes — distinguished by **reward form**:
         ``dino_wmpo_dense_step``    (dense per-step state-reward)
-        ``dino_wmpo_outcome_step``  (sparse outcome reward from
-                                     LatentSuccessClassifier, WMPO/verl)
+        ``dino_wmpo_outcome_step``  (verifier outcome reward selected by
+                                     algorithm.wmpo.reward_model, WMPO/verl)
         from ``dreamervla.algorithms.ppo``
 
   • TD-MPC MPC planner (eval-time): ``dreamervla.algorithms.tdmpc_mpc``
@@ -39,7 +39,7 @@ __all__ = [
     "world_model_pretrain_step",
     "compute_lambda_returns",
     "compute_replay_lambda_returns",
-    # PPO routes (new names, distinguished by reward form).
+    # PPO routes (distinguished by reward form).
     "dino_wmpo_dense_step",
     "dino_wmpo_dense_chunk_step",
     "dino_wmpo_outcome_step",

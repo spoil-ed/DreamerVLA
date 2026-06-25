@@ -9,11 +9,12 @@ differ in the **reward form** seen by the actor:
       Per-step actor + per-step WM (``predict_next``).
       Implementation: ``dreamervla.algorithms.ppo.dense``.
 
-  • ``dino_wmpo_outcome_step``     (sparse outcome reward)
-      A single ``LatentSuccessClassifier`` score over the imagined latent
-      video produces ``(complete, finish_step)``. Per-chunk actor +
-      per-chunk WM (``predict_next_chunk``), eos_mask truncation,
-      KL-into-reward, zero-variance group filtering.
+  • ``dino_wmpo_outcome_step``     (verifier outcome reward)
+      A success verifier scores the imagined latent video and emits sparse
+      ``(complete, finish_step)`` plus optional continuous score tensors.
+      ``algorithm.wmpo.reward_model`` selects how that verifier output becomes
+      reward. Per-chunk actor + per-chunk WM (``predict_next_chunk``),
+      eos_mask truncation, KL-into-reward, zero-variance group filtering.
       Implementation: ``dreamervla.algorithms.ppo.outcome``.
 
   • ``dino_wmpo_dense_chunk_step`` (dense reward + chunk rollout)
