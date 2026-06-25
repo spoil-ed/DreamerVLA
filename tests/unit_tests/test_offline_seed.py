@@ -45,6 +45,52 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     assert batch["obs_embedding"].shape[-1] == 16
 
 
+def test_seed_replay_caps_episodes_per_task(tmp_path):
+    # The online-replay seed caps per-task episodes so the bounded buffer gets coverage
+    # without overflowing. 3 demos for task 2, 1 for task 5; cap=2 -> 2 + 1 = 3 added.
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
+        w.write_demo(index=0, steps=_demo_steps(6, success=True), task_id=2, episode_id=0)
+        w.write_demo(index=1, steps=_demo_steps(6, success=False), task_id=2, episode_id=1)
+        w.write_demo(index=2, steps=_demo_steps(6, success=True), task_id=2, episode_id=2)
+        w.write_demo(index=3, steps=_demo_steps(6, success=False), task_id=5, episode_id=0)
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
+    n = seed_replay_from_offline(
+        replay, data_dir=rdir, hidden_dir=hdir, max_episodes_per_task=2
+    )
+    assert n == 3  # task 2 capped at 2, task 5 has 1
+
+
+def test_seeded_replay_is_training_ready(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
+        index = 0
+        for task_id in range(10):
+            for episode_id in range(3):
+                w.write_demo(
+                    index=index,
+                    steps=_demo_steps(16, success=(episode_id % 2 == 0)),
+                    task_id=task_id,
+                    episode_id=episode_id,
+                )
+                index += 1
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=tuple(range(10)), rank=0)
+
+    n = seed_replay_from_offline(
+        replay,
+        data_dir=rdir,
+        hidden_dir=hdir,
+        max_episodes_per_task=3,
+    )
+
+    assert n == 30
+    assert replay.ready_for_training(
+        min_transitions=432,
+        task_ids=tuple(range(10)),
+        min_episodes_per_task=1,
+    ) is True
+
+
 def test_seed_replay_task_id_fallback(tmp_path):
     # Demo without task_id attr -> use provided default.
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"

@@ -124,6 +124,7 @@ class _FakeVec:
         self.h = horizon
         self._fr = full_record_fn
         self._step = [0] * num_envs
+        self.actions_seen = []
 
     def set_task(self, task_ids, env_ids=None):
         return [f"task {t}" for t in task_ids]
@@ -136,6 +137,7 @@ class _FakeVec:
 
     def step(self, actions, env_ids=None):
         ids = list(range(self.num_envs)) if env_ids is None else list(env_ids)
+        self.actions_seen.extend(np.asarray(action, dtype=np.float32).copy() for action in actions)
         out = []
         for k in ids:
             self._step[k] += 1
@@ -157,12 +159,42 @@ class _FakeExtractor:
         return ([np.zeros(7, np.float32)], torch.zeros(8))
 
 
+class _FakeWorldModel:
+    """Minimal WM stub for the actor-driven rollout: carries the action_hidden as the
+    'latent' and returns an actor-input feature; the actor produces the env action."""
+
+    def __call__(self, batch):
+        import torch
+
+        mode = batch["mode"]
+        if mode in ("encode_latent", "observe_next"):
+            return {"latent": batch["hidden"]}
+        if mode == "actor_input":
+            return torch.zeros(1, 6)
+        raise AssertionError(mode)
+
+
+class _FakePolicy:
+    def __call__(self, batch):
+        import torch
+
+        # sample mode -> (action_chunk[1, chunk, 7], logp, extra)
+        return torch.full((1, 2, 7), 0.25), None, None
+
+
 def _make_min_runner():
+    import torch
+
     from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 
     r = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
     r.console_progress = lambda *a, **k: None
     r.console_record_success = lambda *a, **k: None
+    # The rollout is now driven by the trained actor (WM latent -> policy sample), so the
+    # runner needs a world_model + policy + device (was: frozen OFT base via the extractor).
+    r.world_model = _FakeWorldModel()
+    r.policy = _FakePolicy()
+    r.device = torch.device("cpu")
     return r
 
 
@@ -196,6 +228,9 @@ def test_vectorized_rollout_isolated_queues_and_episode_grouping():
     # extractor.reset on every slot start (initial + each refill): 1 initial +
     # 2 refills (after each of the 2 finished episodes) = 3 per slot.
     assert extractors[0].resets == 3 and extractors[1].resets == 3
+    assert vec.actions_seen
+    for action in vec.actions_seen:
+        np.testing.assert_array_equal(action, np.full(7, 0.25, dtype=np.float32))
 
 
 def test_vectorized_rollout_train_hook_can_stop():

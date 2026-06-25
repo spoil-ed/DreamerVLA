@@ -45,6 +45,7 @@ _logger = logging.getLogger(__name__)
 _warned_missing_cfg: bool = False
 
 from dreamervla.algorithms.dreamervla import (
+    _actor_action_for_world_model,
     _detach_latent,
     _flatten_strided_steps,
     _latent_batch_dim,
@@ -200,6 +201,7 @@ def _imagine_and_score_slice(
     imag_mb: int,
     eval_micro_batch: int,
     classifier_min_steps: int,
+    algorithm_cfg: DictConfig,
 ) -> ImaginedRollout:
     """Imagine ONE group-aligned start slice and score it — MEM-RL-01.
 
@@ -273,8 +275,11 @@ def _imagine_and_score_slice(
             ref_kls.append((old_lp.detach() - ref_lp).detach())
 
         with torch.no_grad():
+            wm_action_chunk = _actor_action_for_world_model(
+                action_chunk.detach(), algorithm_cfg
+            )
             next_seq = _predict_next_chunk_mb(
-                chunk_world_model, current, action_chunk.detach(), imag_mb
+                chunk_world_model, current, wm_action_chunk, imag_mb
             )
             hidden_seq = next_seq["hidden_seq"]  # [b, K, ...] all K frames
             if chunk_granular:
@@ -550,6 +555,7 @@ def dino_wmpo_outcome_step(
                     imag_mb=imag_mb,
                     eval_micro_batch=eval_micro_batch,
                     classifier_min_steps=classifier_min_steps,
+                    algorithm_cfg=algorithm_cfg,
                 )
             )
 

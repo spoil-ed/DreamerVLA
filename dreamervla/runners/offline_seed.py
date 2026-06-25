@@ -49,15 +49,24 @@ def seed_replay_from_offline(
     data_dir: str | Path,
     hidden_dir: str | Path,
     default_task_id: int | None = None,
+    max_episodes_per_task: int | None = None,
 ) -> int:
-    """Add every demo in data_dir's reward shards to ``replay``. Returns the
-    number of episodes actually added (demos shorter than sequence_length are
-    skipped by add_episode)."""
+    """Add demos from data_dir's reward shards to ``replay``. Returns the number of
+    episodes actually added (demos shorter than sequence_length are skipped by
+    add_episode).
+
+    ``max_episodes_per_task`` caps how many episodes are added per task_id. The full-warmup
+    seeding passes None (add everything); the online-replay seed passes a small cap so the
+    bounded online buffer gets just enough per-task coverage to be training-ready (every
+    task present) without evicting the room reserved for fresh online experience.
+    """
     data_dir = Path(data_dir).expanduser().resolve()
     hidden_dir = Path(hidden_dir).expanduser().resolve()
     shards = sorted(p.name for p in data_dir.glob("*.hdf5"))
     if not shards:
         raise FileNotFoundError(f"no reward HDF5 shards under {data_dir}")
+    cap = None if max_episodes_per_task is None else int(max_episodes_per_task)
+    per_task: dict[int, int] = {}
     n_added = 0
     for shard in shards:
         # Skip truncated/corrupt shards (e.g. a half-written file left by a crashed
@@ -78,9 +87,12 @@ def seed_replay_from_offline(
                             "was provided; re-collect with the identity-aware collector or "
                             "set offline_warmup.task_id for single-task data."
                         )
+                    if cap is not None and per_task.get(task_id, 0) >= cap:
+                        continue
                     emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
                     if replay.add_episode(_demo_to_transitions(demo, emb, task_id)) is not None:
                         n_added += 1
+                        per_task[task_id] = per_task.get(task_id, 0) + 1
         except (OSError, KeyError) as exc:
             warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
             continue

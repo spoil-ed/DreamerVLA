@@ -44,7 +44,6 @@ from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
 from dreamervla.models.reward import build_classifier
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
-from dreamervla.runners.oft_collect_common import oft_open_loop_action
 from dreamervla.runners.online_dreamervla import (
     _unwrap,
     online_classifier_update_step,
@@ -316,61 +315,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
         return DreamerVLAOnlineTrainEnv(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
-    def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
-        """One env-step action + the WM-input latent (``obs_embedding``) for this
-        frame. Returns (action[7], obs_embedding, latent_or_None).
+    def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):
+        """WM-latent step + trained-actor sample from an ``action_hidden`` embedding.
 
-        UNIFIED with the collector rollout (``collect_parallel_rollouts``): when an
-        OFT extractor is present the env is driven by the OFT policy's OWN action
-        chunk — executed open-loop and gripper-post-processed via
-        ``process_action`` — NOT the RL actor head or a WM-latent rollout. The
-        actor is optimized purely in imagination (``dino_wmpo_outcome_step``); the
-        env rollout only needs on-distribution states + a per-step
-        ``obs_embedding`` for WM / classifier training, so re-using the proven
-        collector action path keeps the simulation stable. The actor-head +
-        WM-latent path is kept only as a fallback for encoder-based setups without
-        an OFT extractor.
-
-        ``obs_embedding`` is the post-Action-Query action-hidden
-        (``action_hidden``) or the pre-Action-Query backbone input-token latent
-        (``backbone_latent``)."""
-        is_first = bool(obs.get("is_first", False))
-        if is_first or not hasattr(self, "_rollout_action_queue"):
-            self._rollout_action_queue = []
-        task_desc = str(obs.get("task_description", ""))
-        backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
-        if not backbone:
-            # action_hidden recipe (the OFT cotrain default): drive the env with the
-            # OFT policy's OWN action chunk via the SHARED collector path
-            # (oft_open_loop_action) — no actor head / WM latent. The actor is
-            # trained only in imagination (dino_wmpo_outcome_step), so re-using the
-            # proven collector action path keeps the simulation stable.
-            extractor = getattr(self, "_oft_action_hidden_extractor", None)
-            if extractor is not None:
-                if is_first and hasattr(extractor, "reset"):
-                    extractor.reset()
-                action, flat_hidden = oft_open_loop_action(
-                    extractor, obs, task_desc, self._rollout_action_queue
-                )
-                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
-                return np.asarray(action, dtype=np.float32).reshape(-1)[:7], obs_embedding, None
-            obs_embedding = obs_to_action_hidden(
-                self.encoder, processor, obs, self.device, target_token_id
-            )
-        else:
-            # backbone_latent recipe: the OFT input-token extractor supplies the
-            # WM-input latent, but the action still comes from the WM-latent + actor
-            # head (deliberate, distinct from the action_hidden path above).
-            extractor = getattr(self, "_oft_input_token_extractor", None)
-            if extractor is not None:
-                if is_first and hasattr(extractor, "reset"):
-                    extractor.reset()
-                _chunk, flat_hidden = extractor.step(obs, task_desc)
-                obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
-            else:
-                obs_embedding = obs_to_input_token_embedding(
-                    self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
-                )
+        Returns ``(action[7], new_latent)``. The KL/BC-anchored RL actor (an adapter split
+        out of the VLA, init from the OFT head so it starts ≈ base) DRIVES the env: this
+        both deploys the policy PPO is optimizing and collects on-policy data for the WM,
+        instead of freezing the base. Runs in the caller's no_grad scope."""
         if latent is None or is_first:
             latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
         else:
@@ -388,7 +339,44 @@ class OnlineCotrainRunner(DreamerVLARunner):
             {"mode": "sample", "hidden": feat, "deterministic": False, "return_chunk": True}
         )
         chunk = action_chunk.reshape(-1, action_chunk.shape[-1]).detach().cpu().float().numpy()
-        return np.asarray(chunk[0][:7], dtype=np.float32), obs_embedding, latent
+        return np.asarray(chunk[0][:7], dtype=np.float32), latent
+
+    def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
+        """One env-step action + the WM-input latent (``obs_embedding``) for this
+        frame. Returns (action[7], obs_embedding, latent).
+
+        The env is driven by the TRAINED actor (``_actor_action_and_latent``): the OFT
+        extractor supplies only the ``action_hidden`` / backbone latent (the per-step
+        ``obs_embedding`` the WM + classifier consume); the action itself comes from the
+        WM-latent + actor sample. The actor is an adapter split out of the VLA, KL/BC-anchored
+        to a frozen ≈base reference, so deploying it is safe and closes the on-policy loop
+        (earlier this path froze the base, which left the optimized actor undeployed and made
+        rollout success unmovable by PPO).
+
+        ``obs_embedding`` is the post-Action-Query action-hidden (``action_hidden``) or the
+        pre-Action-Query backbone input-token latent (``backbone_latent``)."""
+        is_first = bool(obs.get("is_first", False))
+        task_desc = str(obs.get("task_description", ""))
+        backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
+        extractor_attr = "_oft_input_token_extractor" if backbone else "_oft_action_hidden_extractor"
+        extractor = getattr(self, extractor_attr, None)
+        if extractor is not None:
+            if is_first and hasattr(extractor, "reset"):
+                extractor.reset()
+            _chunk, flat_hidden = extractor.step(obs, task_desc)
+            obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
+        elif backbone:
+            obs_embedding = obs_to_input_token_embedding(
+                self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
+            )
+        else:
+            obs_embedding = obs_to_action_hidden(
+                self.encoder, processor, obs, self.device, target_token_id
+            )
+        action, latent = self._actor_action_and_latent(
+            world_model, policy, obs_embedding, latent, prev_action, is_first
+        )
+        return action, obs_embedding, latent
 
     # ------------------------------------------------------------------ main
     def run(self) -> list[dict[str, float | str | int]]:  # noqa: C901
@@ -652,6 +640,37 @@ class OnlineCotrainRunner(DreamerVLARunner):
             rank=self._rank,
         )
         is_dist = self._world_size > 1
+        # Seed the online replay from the warmup data so RL starts RIGHT AFTER the offline
+        # warmup instead of idling through a cold-start refill. The training burst is gated
+        # on ready_for_training (>= min_episodes_per_task for EVERY task on EVERY rank); with
+        # a fresh empty buffer that gate stays false until the online rollout re-covers all
+        # tasks (slow at horizon=300), so WM/classifier/actor sit idle and never imagine. A
+        # small per-task seed makes the gate pass at warmup end while leaving buffer room for
+        # fresh online experience. Skipped when no offline warmup data is configured (a bare
+        # standalone online run).
+        seed_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
+        if seed_dir is not None:
+            seed_cap = int(
+                OmegaConf.select(oc, "warmup_seed_episodes_per_task", default=max(min_eps + 2, 3))
+            )
+            if seed_cap > 0:
+                from dreamervla.runners.offline_seed import seed_replay_from_offline
+
+                seed_task = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
+                n_seed = seed_replay_from_offline(
+                    replay,
+                    data_dir=seed_dir,
+                    hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
+                    default_task_id=(int(seed_task) if seed_task is not None else None),
+                    max_episodes_per_task=seed_cap,
+                )
+                if self.distributed.is_main_process:
+                    print(
+                        f"[online-cotrain] seeded online replay with {n_seed} warmup episodes "
+                        f"(<= {seed_cap}/task) -> {replay.num_transitions} transitions; "
+                        "RL starts at warmup end",
+                        flush=True,
+                    )
         if self.distributed.is_main_process:
             print(
                 f"[online-cotrain] warmup_steps={warmup_steps} "
@@ -1012,14 +1031,16 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if counters is None:
             counters = {"n_episodes": 0, "n_success": 0}
         task_cycle = [int(t) for t in task_ids] or [0]
-        if action_steps is not None:
-            action_steps = max(1, int(action_steps))
-        action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
         episodes: list[list[dict[str, Any]]] = [[] for _ in range(num_envs)]
         slot_task = [-1] * num_envs
         slot_desc = [""] * num_envs
         slot_ep = [-1] * num_envs
         slot_step = [0] * num_envs
+        # Per-slot WM belief + last executed action: the trained actor drives the env via
+        # the WM latent (sequential observe_next), so each slot carries its own latent and
+        # previous action (mirrors the single-env loop's latent/prev_action threading).
+        slot_latent: list[Any] = [None] * num_envs
+        slot_prev_action: list[Any] = [None] * num_envs
         ep_counter = 0
 
         def _start_slot(k: int) -> dict[str, Any]:
@@ -1032,10 +1053,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 slot_task[k] = tid
             rec = vec.reset([tid], [ep], env_ids=[k])[0]
             extractors[k].reset()
-            action_queues[k].clear()
             episodes[k] = []
             slot_ep[k] = ep
             slot_step[k] = 0
+            slot_latent[k] = None       # fresh WM belief at episode start (is_first)
+            slot_prev_action[k] = None
             return rec
 
         recs: list[Any] = [None] * num_envs
@@ -1045,29 +1067,33 @@ class OnlineCotrainRunner(DreamerVLARunner):
         env_step = 0
         ids = list(range(num_envs))
         while env_step < total_env_steps:
-            outs = [
-                oft_open_loop_action(
-                    extractors[k],
-                    extractor_obs_from_record(recs[k]),
-                    slot_desc[k],
-                    action_queues[k],
-                    action_steps,
+            # Per slot: the OFT extractor supplies the action_hidden (the obs_embedding the
+            # WM + classifier consume); the TRAINED actor produces the EXECUTED action from
+            # the WM latent. (Was: the frozen OFT base action — which left the actor PPO
+            # optimizes undeployed.)
+            obs_embs: list[Any] = [None] * num_envs
+            actions = []
+            for k in ids:
+                _chunk, flat_hidden = extractors[k].step(
+                    extractor_obs_from_record(recs[k]), slot_desc[k]
                 )
-                for k in ids
-            ]  # (action, flat_hidden) per slot
-            actions = [
-                np.asarray(outs[k][0], dtype=np.float32).reshape(-1)[:7] for k in ids
-            ]
+                obs_embs[k] = flat_hidden.reshape(1, -1).to(self.device).float()
+                act, slot_latent[k] = self._actor_action_and_latent(
+                    self.world_model,
+                    self.policy,
+                    obs_embs[k],
+                    slot_latent[k],
+                    slot_prev_action[k],
+                    is_first=(slot_step[k] == 0),
+                )
+                actions.append(act)
             step_results = vec.step(actions, env_ids=ids)
             for k in ids:
-                _action, flat_hidden = outs[k]
                 reward, terminated, truncated, info, rec_after = step_results[k]
                 wm_action = np.asarray(
                     info.get("wm_action", actions[k]), dtype=np.float32
                 ).reshape(-1)[:7]
-                emb = flat_hidden.reshape(-1)
-                if hasattr(emb, "detach"):
-                    emb = emb.detach().cpu().float().numpy()
+                emb = obs_embs[k].reshape(-1).detach().cpu().float().numpy()
                 tr = build_cotrain_replay_transition(
                     recs[k],
                     np.asarray(emb, dtype=np.float32),
@@ -1082,6 +1108,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     image_size=image_size,
                 )
                 episodes[k].append(tr)
+                # The next WM observe_next for this slot uses the action just executed.
+                slot_prev_action[k] = (
+                    torch.from_numpy(wm_action).to(self.device, dtype=obs_embs[k].dtype).unsqueeze(0)
+                )
                 slot_step[k] += 1
                 env_step += 1
                 recs[k] = rec_after
