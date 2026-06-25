@@ -609,6 +609,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
         total_env_steps = int(OmegaConf.select(oc, "total_env_steps", default=200000))
         max_train_updates = OmegaConf.select(oc, "max_train_updates", default=None)
         buffer_size = int(OmegaConf.select(oc, "buffer_size", default=20000))
+        replay_capacity_mode = str(
+            OmegaConf.select(oc, "replay_capacity_mode", default="per_task")
+        )
         episode_horizon = int(OmegaConf.select(cfg, "env.episode_horizon", default=200))
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
@@ -637,6 +640,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             capacity=buffer_size,
             sequence_length=seq_len,
             task_ids=env_task_ids,
+            capacity_mode=replay_capacity_mode,
             rank=self._rank,
         )
         is_dist = self._world_size > 1

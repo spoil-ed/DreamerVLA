@@ -137,11 +137,25 @@ class _FakeDistributed:
         return module
 
 
-def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, total_env_steps=None):
+def _make_orchestration_runner(
+    tmp_path,
+    monkeypatch,
+    calls,
+    *,
+    resume=False,
+    total_env_steps=None,
+    cfg_updates=None,
+    seed_capture=None,
+):
     import dreamervla.runners.online_cotrain_pipeline_runner as mod
 
     runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
     runner.cfg = _orchestration_cfg(tmp_path, resume=resume, total_env_steps=total_env_steps)
+    if cfg_updates:
+        from omegaconf import OmegaConf
+
+        for key, value in cfg_updates.items():
+            OmegaConf.update(runner.cfg, key, value, force_add=True)
     runner.config = runner.cfg
     runner._output_dir = str(tmp_path)
     runner.global_step = 0
@@ -163,8 +177,19 @@ def _make_orchestration_runner(tmp_path, monkeypatch, calls, *, resume=False, to
         self.classifier = torch.nn.Linear(2, 2)
         self.classifier_threshold = 0.5
 
-    def fake_seed(replay, *, data_dir, hidden_dir, default_task_id=None):
+    def fake_seed(
+        replay,
+        *,
+        data_dir,
+        hidden_dir,
+        default_task_id=None,
+        max_episodes_per_task=None,
+    ):
         calls.append("seed")
+        if seed_capture is not None:
+            seed_capture["capacity_mode"] = replay.capacity_mode
+            seed_capture["capacity"] = replay.capacity
+            seed_capture["max_episodes_per_task"] = max_episodes_per_task
         # add a tiny real episode so num_transitions > 0 (run() guards on it)
         episode = [
             {"image": np.zeros((4, 4, 3), np.uint8), "obs_embedding": np.zeros(8, np.float32),
@@ -224,6 +249,31 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch):
     ]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monkeypatch):
+    calls: list[str] = []
+    seed_capture: dict[str, object] = {}
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        total_env_steps=0,
+        cfg_updates={
+            "online_rollout.buffer_size": 321,
+            "online_rollout.replay_capacity_mode": "total_sharded",
+            "offline_warmup.max_episodes_per_task": 7,
+        },
+        seed_capture=seed_capture,
+    )
+
+    runner.run()
+
+    assert seed_capture == {
+        "capacity_mode": "total_sharded",
+        "capacity": 321,
+        "max_episodes_per_task": 7,
+    }
 
 
 def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):

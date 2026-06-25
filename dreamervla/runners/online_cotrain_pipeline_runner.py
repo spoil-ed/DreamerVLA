@@ -234,22 +234,44 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         grad_clip = float(OmegaConf.select(optim_cfg, "grad_clip_norm", default=1.0))
         seq_len = int(OmegaConf.select(cfg, "online_rollout.sequence_length", default=24))
         buffer_size = int(OmegaConf.select(cfg, "online_rollout.buffer_size", default=20000))
+        replay_capacity_mode = str(
+            OmegaConf.select(cfg, "online_rollout.replay_capacity_mode", default="per_task")
+        )
         env_task_ids = tuple(int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]))
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
+        max_seed_eps = OmegaConf.select(cfg, "offline_warmup.max_episodes_per_task", default=None)
         # resume / need_wm / need_cls were computed above (before the heavy build) so the
         # offline-data existence check could fail fast; reuse them here.
 
-        warmup_replay = OnlineReplay(capacity=buffer_size, sequence_length=seq_len,
-                                     task_ids=env_task_ids, rank=self._rank)
+        warmup_replay = OnlineReplay(
+            capacity=buffer_size,
+            sequence_length=seq_len,
+            task_ids=env_task_ids,
+            capacity_mode=replay_capacity_mode,
+            rank=self._rank,
+        )
         if need_wm or need_cls:
             n = seed_replay_from_offline(
                 warmup_replay,
                 data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
                 hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
                 default_task_id=(int(default_task_id) if default_task_id is not None else None),
+                max_episodes_per_task=(
+                    int(max_seed_eps) if max_seed_eps is not None else None
+                ),
             )
             if self.distributed.is_main_process:
-                print(f"[pipeline] seeded {n} offline episodes, {warmup_replay.num_transitions} transitions", flush=True)
+                cap_msg = (
+                    "all"
+                    if max_seed_eps is None
+                    else f"<= {int(max_seed_eps)}/task"
+                )
+                print(
+                    f"[pipeline] seeded {n} offline episodes ({cap_msg}), "
+                    f"{warmup_replay.num_transitions} transitions, "
+                    f"capacity_mode={replay_capacity_mode}",
+                    flush=True,
+                )
             if n == 0 or warmup_replay.num_transitions == 0:
                 raise RuntimeError("offline seeding produced an empty replay buffer")
             # The frozen encoder is idle during warmup — park it off-GPU to reclaim

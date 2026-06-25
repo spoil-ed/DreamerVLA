@@ -28,6 +28,7 @@ offline_warmup:
   data_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
   hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2_hidden
   task_id: null              # set for single-task data lacking per-demo task_id attr
+  max_episodes_per_task: 10
   debug_wm_warmup_steps: 2
   debug_classifier_warmup_steps: 2
 
@@ -83,6 +84,7 @@ encoder:
 
 online_rollout:
   buffer_size: 20000
+  replay_capacity_mode: total_sharded
   sequence_length: 24
   min_replay: 2000
   min_episodes_per_task: 1
@@ -90,6 +92,7 @@ online_rollout:
   updates_per_train: 1
   total_env_steps: 200000
   rollout_policy_source: dreamer_actor
+  warmup_seed_episodes_per_task: 3
   classifier_early_neg_stride: 8
   # Option 1 — vectorized egl rollout. num_envs>1 routes the online rollout to K
   # parallel VecRolloutEnv child processes rendering with `render_backend` (egl in
