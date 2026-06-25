@@ -6,14 +6,14 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+import hydra
 import torch
 
-from dreamervla.models.encoder import RynnVLAEncoder
 from dreamervla.utils.paths import checkpoints_path
 from dreamervla.utils.torch_utils import freeze_module
 
 
-def load_encoder_state(encoder: RynnVLAEncoder, ckpt_path: str) -> None:
+def load_encoder_state(encoder: torch.nn.Module, ckpt_path: str) -> None:
     path = Path(ckpt_path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"encoder state ckpt not found: {path}")
@@ -33,32 +33,41 @@ def load_encoder_state(encoder: RynnVLAEncoder, ckpt_path: str) -> None:
     )
 
 
-def build_encoder(args: argparse.Namespace, device: torch.device) -> RynnVLAEncoder:
+def build_encoder(args: argparse.Namespace, device: torch.device) -> torch.nn.Module:
     action_head_type = str(getattr(args, "action_head_type", None) or "legacy")
+    encoder_target = str(
+        getattr(args, "encoder_target", None)
+        or "dreamervla.models.encoder.RynnVLAEncoder"
+    )
     print(
-        f"[init] encoder source: model_path={args.vla_ckpt_path} "
+        f"[init] encoder source: target={encoder_target} model_path={args.vla_ckpt_path} "
         f"encoder_state_ckpt={getattr(args, 'encoder_state_ckpt', None) or '<none>'} "
         f"action_head_type={action_head_type}",
         flush=True,
     )
-    encoder = RynnVLAEncoder(
-        model_path=args.vla_ckpt_path,
-        tokenizer_path=str(checkpoints_path("models--Alpha-VLLM--Lumina-mGPT-7B-768")),
-        text_tokenizer_path=str(
-            checkpoints_path("chameleon", "tokenizer", "text_tokenizer.json")
-        ),
-        chameleon_vqgan_config=str(
-            checkpoints_path("chameleon", "tokenizer", "vqgan.yaml")
-        ),
-        chameleon_vqgan_ckpt=str(
-            checkpoints_path("chameleon", "tokenizer", "vqgan.ckpt")
-        ),
-        resolution=256,
-        action_dim=7,
-        time_horizon=5,
-        action_head_type=action_head_type,
-        pool="mean",
-        freeze_backbone=True,
+    encoder = hydra.utils.instantiate(
+        {
+            "_target_": encoder_target,
+            "model_path": args.vla_ckpt_path,
+            "tokenizer_path": str(
+                checkpoints_path("models--Alpha-VLLM--Lumina-mGPT-7B-768")
+            ),
+            "text_tokenizer_path": str(
+                checkpoints_path("chameleon", "tokenizer", "text_tokenizer.json")
+            ),
+            "chameleon_vqgan_config": str(
+                checkpoints_path("chameleon", "tokenizer", "vqgan.yaml")
+            ),
+            "chameleon_vqgan_ckpt": str(
+                checkpoints_path("chameleon", "tokenizer", "vqgan.ckpt")
+            ),
+            "resolution": 256,
+            "action_dim": 7,
+            "time_horizon": 5,
+            "action_head_type": action_head_type,
+            "pool": "mean",
+            "freeze_backbone": True,
+        }
     ).to(device)
     enc_ckpt = getattr(args, "encoder_state_ckpt", None)
     if enc_ckpt:
@@ -142,7 +151,7 @@ def load_world_model_state(
 
 @torch.no_grad()
 def obs_to_action_hidden(
-    encoder: RynnVLAEncoder,
+    encoder: torch.nn.Module,
     processor: Any,
     obs: dict[str, Any],
     device: torch.device,
@@ -189,7 +198,7 @@ def obs_to_action_hidden(
 
 
 def obs_to_input_token_embedding(
-    encoder: RynnVLAEncoder,
+    encoder: torch.nn.Module,
     processor: Any,
     obs: dict[str, Any],
     device: torch.device,
@@ -212,7 +221,7 @@ def obs_to_input_token_embedding(
 
 @torch.no_grad()
 def obs_batch_to_action_hidden(
-    encoder: RynnVLAEncoder,
+    encoder: torch.nn.Module,
     processor: Any,
     obs_batch: list[dict[str, Any]],
     device: torch.device,
