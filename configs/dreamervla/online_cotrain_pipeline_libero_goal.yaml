@@ -52,6 +52,7 @@ training:
   replay_warmup_log_every: 1
   warmup_replay_epochs: 1  # one pass over sampleable replay windows
   warmup_replay_max_steps: 0  # 0 disables cap; keep 1 replay epoch as full coverage
+  warmup_checkpoint_every: 0  # 0 disables mid-warmup component checkpoint writes
   warmup_steps: 0            # online RL starts immediately (WM/classifier already warm)
   train_actor_after_warmup: true
   train_classifier_inline: true

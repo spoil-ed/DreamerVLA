@@ -33,6 +33,7 @@ def test_pipeline_config_uses_full_replay_epoch_warmup():
 
     assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 1
     assert OmegaConf.select(cfg, "training.warmup_replay_max_steps") == 0
+    assert OmegaConf.select(cfg, "training.warmup_checkpoint_every") == 0
     assert OmegaConf.select(cfg, "training.replay_warmup_log_every") == 1
 
 
