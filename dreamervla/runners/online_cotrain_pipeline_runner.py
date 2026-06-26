@@ -539,18 +539,22 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 "[1/3] REPLAY WARMUP",
                 subtitle=f"wm={wm_steps} cls={cls_steps} learner updates",
             )
-            wm_last, cls_last = self._offline_warmup_alternating(
+            wm_last = self._offline_warmup_wm(
                 warmup_replay,
-                wm_steps=wm_steps,
-                cls_steps=cls_steps,
-                wm_batch_size=bs,
-                cls_batch_size=cls_bs,
+                steps=wm_steps,
+                batch_size=bs,
                 optim_cfg=optim_cfg,
+            )
+            if self.distributed.is_main_process:
+                self._save_wm_warmup()
+            cls_last = self._offline_warmup_classifier(
+                warmup_replay,
+                steps=cls_steps,
+                batch_size=cls_bs,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
             )
             if self.distributed.is_main_process:
-                self._save_wm_warmup()
                 self._save_cls_warmup()
                 self.console_banner(
                     "[1/3] REPLAY WARMUP",

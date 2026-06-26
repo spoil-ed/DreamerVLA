@@ -925,9 +925,9 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, c
     assert "[pipeline][replay] loading offline shards" in out
     assert "[pipeline][replay] loaded complete episodes=1" in out
     assert "[pipeline][warmup] resolved replay warmup" in out
-    # order: build -> seed -> alternating replay warmup -> save both -> online
+    # order: build -> seed -> WM warmup/checkpoint -> classifier warmup/checkpoint -> online
     assert calls == [
-        "build", "seed", "alternating_warmup", "save_wm", "save_cls", "online"
+        "build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls", "online"
     ]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
@@ -1001,7 +1001,7 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     history = runner.run()
 
     assert history == []
-    assert calls == ["build", "seed", "alternating_warmup", "save_wm", "save_cls"]
+    assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
 
