@@ -78,6 +78,24 @@ def test_online_replay_can_sample_without_images() -> None:
     assert batch["obs_embedding"].shape == (2, 3, 2)
 
 
+def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    episode = _episode(task_id=2, length=3, success=True)
+    for idx, step in enumerate(episode):
+        step["proprio"] = np.full((8,), float(idx), dtype=np.float32)
+        step["lang_emb"] = np.arange(6, dtype=np.float32) + 0.25
+    replay.add_episode(episode)
+
+    batch = replay.sample(1, include_images=False)
+
+    assert batch["proprio"].shape == (1, 3, 8)
+    assert batch["proprio"].dtype == torch.float32
+    assert batch["lang_emb"].shape == (1, 6)
+    assert batch["lang_emb"].dtype == torch.float32
+    assert torch.allclose(batch["proprio"][0, :, 0], torch.tensor([0.0, 1.0, 2.0]))
+    assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
+
+
 def test_online_replay_training_readiness_requires_each_task() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=3)
 

@@ -454,6 +454,27 @@ class OnlineReplay:
                 )
         is_first = np.zeros((len(windows), self.sequence_length), dtype=np.bool_)
         is_first[:, 0] = True
+        proprio = None
+        if all("proprio" in step for window in windows for step in window):
+            proprio = np.stack(
+                [
+                    [
+                        np.asarray(step["proprio"], dtype=np.float32).reshape(-1)
+                        for step in window
+                    ]
+                    for window in windows
+                ],
+                axis=0,
+            )
+        lang_emb = None
+        if all("lang_emb" in step for window in windows for step in window):
+            lang_emb = np.stack(
+                [
+                    np.asarray(window[0]["lang_emb"], dtype=np.float32).reshape(-1)
+                    for window in windows
+                ],
+                axis=0,
+            )
         batch = {
             "obs_embedding": torch.from_numpy(obs_embedding),
             "actions": torch.from_numpy(actions),
@@ -476,6 +497,10 @@ class OnlineReplay:
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
             "replay_source_ids": torch.tensor(replay_source_ids, dtype=torch.long),
         }
+        if proprio is not None:
+            batch["proprio"] = torch.from_numpy(proprio.astype(np.float32, copy=False))
+        if lang_emb is not None:
+            batch["lang_emb"] = torch.from_numpy(lang_emb.astype(np.float32, copy=False))
         if bool(include_images):
             images = np.stack(
                 [[step["image"] for step in window] for window in windows], axis=0

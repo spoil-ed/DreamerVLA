@@ -19,8 +19,11 @@ import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runners.base_runner import _atomic_torch_save, _materialize_checkpoint_copy
+from dreamervla.runners.base_runner import (
+    BaseRunner,
+    _atomic_torch_save,
+    _materialize_checkpoint_copy,
+)
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
     FlexiblePlacementStrategy,
@@ -318,14 +321,20 @@ class OnlineCotrainRayRunner(BaseRunner):
             hidden_batch = list(infer_out.get("obs_embedding", [None] * len(active_env_ids)))
             if len(hidden_batch) < len(active_env_ids):
                 hidden_batch.extend([None] * (len(active_env_ids) - len(hidden_batch)))
-            for rank, action, hidden in zip(
+            lang_batch = list(infer_out.get("lang_emb", [None] * len(active_env_ids)))
+            if len(lang_batch) < len(active_env_ids):
+                lang_batch.extend([None] * (len(active_env_ids) - len(lang_batch)))
+            for rank, action, hidden, lang_emb in zip(
                 active_env_ids,
                 infer_out["actions"],
                 hidden_batch,
+                lang_batch,
                 strict=True,
             ):
                 env_step_start = time.perf_counter()
-                step_results.extend(envs.execute_on(rank).step(action, hidden).wait())
+                step_results.extend(
+                    envs.execute_on(rank).step(action, hidden, lang_emb).wait()
+                )
                 env_step_wait_s += time.perf_counter() - env_step_start
                 env_steps += 1
             rollout_end = time.perf_counter()
@@ -629,13 +638,17 @@ class OnlineCotrainRayRunner(BaseRunner):
             hidden_batch = list(infer_out.get("obs_embedding", [None] * len(batch_env_ids)))
             if len(hidden_batch) < len(batch_env_ids):
                 hidden_batch.extend([None] * (len(batch_env_ids) - len(hidden_batch)))
-            for env_id, action, hidden in zip(
+            lang_batch = list(infer_out.get("lang_emb", [None] * len(batch_env_ids)))
+            if len(lang_batch) < len(batch_env_ids):
+                lang_batch.extend([None] * (len(batch_env_ids) - len(lang_batch)))
+            for env_id, action, hidden, lang_emb in zip(
                 batch_env_ids,
                 infer_out["actions"],
                 hidden_batch,
+                lang_batch,
                 strict=True,
             ):
-                result = envs.execute_on(int(env_id)).step(action, hidden)
+                result = envs.execute_on(int(env_id)).step(action, hidden, lang_emb)
                 pending_steps[result.refs[0]] = (
                     int(env_id),
                     result,
@@ -938,26 +951,30 @@ class OnlineCotrainRayRunner(BaseRunner):
         infer = (
             groups["infer"]
             if groups is not None
-            else getattr(self, "_fake_policy_worker")
+            else self._fake_policy_worker
         )
         envs = (
             groups["envs"]
             if groups is not None
-            else getattr(self, "_fake_env_group")
+            else self._fake_env_group
         )
         infer_out = _wait_first(infer.forward_batch(obs_batch, env_ids))
         hidden = list(infer_out.get("obs_embedding", [None] * len(env_ids)))
         if len(hidden) < len(env_ids):
             hidden.extend([None] * (len(env_ids) - len(hidden)))
+        lang = list(infer_out.get("lang_emb", [None] * len(env_ids)))
+        if len(lang) < len(env_ids):
+            lang.extend([None] * (len(env_ids) - len(lang)))
         step_results = []
-        for env_id, action, obs_embedding in zip(
+        for env_id, action, obs_embedding, lang_emb in zip(
             env_ids,
             infer_out["actions"],
             hidden,
+            lang,
             strict=True,
         ):
             step_results.extend(
-                envs.execute_on(int(env_id)).step(action, obs_embedding).wait()
+                envs.execute_on(int(env_id)).step(action, obs_embedding, lang_emb).wait()
             )
         return step_results
 

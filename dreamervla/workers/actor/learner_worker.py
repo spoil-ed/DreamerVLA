@@ -255,6 +255,8 @@ class LearnerWorker(Worker):
                 "is_first",
                 "is_terminal",
                 "is_last",
+                "proprio",
+                "lang_emb",
             )
             if key in batch
         }

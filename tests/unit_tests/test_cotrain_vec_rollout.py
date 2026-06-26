@@ -54,9 +54,11 @@ def test_build_transition_has_replay_keys_and_dtypes():
     rec = _full_record()
     emb = np.arange(229376, dtype=np.float32)
     wm = np.arange(7, dtype=np.float32)
+    lang_emb = np.arange(6, dtype=np.float32)
     tr = build_cotrain_replay_transition(
         rec, emb, wm, reward=1.5, terminated=True, truncated=False,
         task_id=3, task_description="pick up the bowl", step=4, is_first=False, image_size=64,
+        lang_emb=lang_emb,
     )
     # keys OnlineReplay.sample / add_episode require
     for k in (
@@ -66,6 +68,8 @@ def test_build_transition_has_replay_keys_and_dtypes():
         assert k in tr
     np.testing.assert_array_equal(tr["image"], dreamer_image_from_record(rec, 64))
     np.testing.assert_array_equal(tr["state"], proprio_from_record(rec))
+    np.testing.assert_array_equal(tr["proprio"], proprio_from_record(rec))
+    np.testing.assert_array_equal(tr["lang_emb"], lang_emb)
     np.testing.assert_array_equal(tr["wm_action"], wm)
     assert tr["reward"].dtype == np.float32 and float(tr["reward"]) == 1.5
     assert float(tr["done"]) == 1.0 and bool(tr["is_terminal"]) is True

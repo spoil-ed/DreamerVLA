@@ -80,6 +80,31 @@ def test_env_worker_pushes_completed_episode_to_remote_replay(monkeypatch) -> No
     assert worker.episode_id == 1
 
 
+def test_env_worker_copies_state_to_proprio_for_replay() -> None:
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    cfg = {
+        "target": "dreamervla.workers.env._test_envs:CounterEnv",
+        "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
+    }
+
+    class _Sink:
+        def add_episode(self, ep):
+            return None
+
+    worker = EnvWorker(cfg, task_id=0, replay=_Sink())
+    worker.init()
+    worker.step(
+        np.zeros(7, np.float32),
+        np.zeros(4, np.float32),
+        np.arange(6, dtype=np.float32),
+    )
+
+    transition = worker.episode[0]
+    np.testing.assert_array_equal(transition["proprio"], transition["state"])
+    np.testing.assert_array_equal(transition["lang_emb"], np.arange(6, dtype=np.float32))
+
+
 def test_env_worker_passes_pre_step_full_record_to_record_builder() -> None:
     from dreamervla.workers.env.env_worker import EnvWorker
 

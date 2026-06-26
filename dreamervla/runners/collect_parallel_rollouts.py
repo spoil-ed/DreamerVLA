@@ -356,6 +356,7 @@ def _collect_vectorized_path(
     history: int,
     rotate_images_180: bool,
     image_keys: list[str],
+    obs_hidden_source: str,
     on_episode: Callable[[int, int, int, bool], None] | None = None,
 ) -> int:
     """Drive K env subprocesses with batched VLA inference; returns demos written.
@@ -394,6 +395,7 @@ def _collect_vectorized_path(
                 rotate_images_180=bool(rotate_images_180),
                 center_crop=True,
                 unnorm_key=unnorm_key,
+                obs_hidden_source=str(obs_hidden_source),
             )
             for _ in range(num_envs - 1)
         ]
@@ -402,7 +404,12 @@ def _collect_vectorized_path(
         data_attrs = {"task_suite_name": task_suite_name, "env_name": first_desc}
 
         # Build the batched decoder ONCE (resolves model handles / head mode a single time).
-        decoder = OFTBatchedDecoder(policy, unnorm_key)
+        decoder = OFTBatchedDecoder(
+            policy,
+            unnorm_key,
+            obs_hidden_source=str(obs_hidden_source),
+            image_keys=list(image_keys),
+        )
 
         def infer_fn(preps: list[dict[str, Any]]) -> list[tuple[list[Any], Any]]:
             return decoder.predict_batch(preps)
@@ -616,6 +623,7 @@ def collect_rollouts(
             history=history,
             rotate_images_180=rotate_images_180,
             image_keys=image_keys,
+            obs_hidden_source=str(cfg["expected_obs_hidden_source"]),
             on_episode=on_episode,
         )
     else:

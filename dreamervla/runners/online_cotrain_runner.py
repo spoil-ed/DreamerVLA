@@ -85,6 +85,7 @@ def build_cotrain_replay_transition(
     step: int,
     is_first: bool,
     image_size: int,
+    lang_emb: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Replay transition rebuilt in the parent from a child ``full_record``.
 
@@ -96,9 +97,11 @@ def build_cotrain_replay_transition(
     executed env-scale action)."""
     done = bool(terminated or truncated)
     wm = np.asarray(wm_action, dtype=np.float32).reshape(-1)[:7]
-    return {
+    proprio = proprio_from_record(rec)
+    transition = {
         "image": dreamer_image_from_record(rec, image_size),
-        "state": proprio_from_record(rec),
+        "state": proprio,
+        "proprio": proprio,
         "action": wm,
         "wm_action": wm,
         "obs_embedding": np.asarray(obs_embedding, dtype=np.float32),
@@ -112,6 +115,9 @@ def build_cotrain_replay_transition(
         "step": int(step),
         "task_description": str(task_description),
     }
+    if lang_emb is not None:
+        transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
+    return transition
 
 
 def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -> None:
@@ -477,10 +483,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
         backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
         extractor_attr = "_oft_input_token_extractor" if backbone else "_oft_action_hidden_extractor"
         extractor = getattr(self, extractor_attr, None)
+        self._last_rollout_lang_emb = None
         if extractor is not None:
             if is_first and hasattr(extractor, "reset"):
                 extractor.reset()
-            _chunk, hidden_state = extractor.step(obs, task_desc)
+            result = extractor.step(obs, task_desc)
+            self._last_rollout_lang_emb = getattr(result, "lang_emb", None)
+            _chunk, hidden_state = result
             return self._extractor_hidden_to_obs_embedding(hidden_state, backbone=backbone)
         if backbone:
             return obs_to_input_token_embedding(
@@ -925,6 +934,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
             transition["obs_embedding"] = (
                 obs_embedding.squeeze(0).detach().cpu().numpy().astype(np.float32)
             )
+            if "state" in transition:
+                transition["proprio"] = np.asarray(
+                    transition["state"], dtype=np.float32
+                ).reshape(-1)
+            lang_emb = getattr(self, "_last_rollout_lang_emb", None)
+            if lang_emb is not None:
+                transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
             episode.append(transition)
             prev_action = torch.from_numpy(wm_action).to(self.device, dtype=obs_embedding.dtype).unsqueeze(0)
 
@@ -1109,7 +1125,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     for k in (
                         "obs_embedding", "actions", "rewards", "dones",
                         "is_first", "is_terminal", "is_last",
+                        "proprio", "lang_emb",
                     )
+                    if k in rl_batch
                 }
                 actor_update_route = knobs["actor_update_route"]
                 if actor_update_route.world_model_arg != "chunk_world_model":
@@ -1358,11 +1376,14 @@ class OnlineCotrainRunner(DreamerVLARunner):
             # the WM latent. (Was: the frozen OFT base action — which left the actor PPO
             # optimizes undeployed.)
             obs_embs: list[Any] = [None] * num_envs
+            lang_embs: list[Any] = [None] * num_envs
             actions = []
             for k in ids:
-                _chunk, hidden_state = extractors[k].step(
+                result = extractors[k].step(
                     extractor_obs_from_record(recs[k]), slot_desc[k]
                 )
+                lang_embs[k] = getattr(result, "lang_emb", None)
+                _chunk, hidden_state = result
                 backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
                 obs_embs[k] = self._extractor_hidden_to_obs_embedding(
                     hidden_state, backbone=backbone
@@ -1400,6 +1421,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     step=slot_step[k],
                     is_first=(slot_step[k] == 0),
                     image_size=image_size,
+                    lang_emb=lang_embs[k],
                 )
                 episodes[k].append(tr)
                 # The next WM observe_next for this slot uses the action just executed.

@@ -51,12 +51,16 @@ def test_wm_pretrain_batch_accepts_action_hidden_without_images():
         "dones": torch.zeros(2, 24),
         "is_first": torch.zeros(2, 24, dtype=torch.bool),
         "task_ids": torch.zeros(2, dtype=torch.long),
+        "proprio": torch.zeros(2, 24, 8),
+        "lang_emb": torch.zeros(2, 4096),
     }
 
     wm_batch = runner._build_wm_pretrain_batch(batch)
 
     assert wm_batch is not None
     assert wm_batch["obs_embedding"].dtype == torch.float16
+    assert wm_batch["proprio"].shape == (2, 24, 8)
+    assert wm_batch["lang_emb"].shape == (2, 4096)
     assert "images" not in wm_batch
 
 
@@ -1241,7 +1245,14 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
 
         def step(self, obs, task_description):
             calls.append(f"step:{task_description}")
-            return [], torch.arange(4, dtype=torch.float16)
+            class DecodeOutput:
+                lang_emb = torch.arange(6, dtype=torch.float16)
+
+                def __iter__(self):
+                    yield []
+                    yield torch.arange(4, dtype=torch.float16).reshape(1, 4)
+
+            return DecodeOutput()
 
     class FakeWorldModel:
         def __call__(self, batch):
@@ -1275,12 +1286,13 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
     )
 
     assert action.shape == (7,)
-    assert obs_embedding.shape == (1, 4)
-    assert latent["hidden"].shape == (1, 4)
+    assert obs_embedding.shape == (1, 1, 4)
+    assert latent["hidden"].shape == (1, 1, 4)
+    assert torch.equal(runner._last_rollout_lang_emb, torch.arange(6, dtype=torch.float16))
     assert calls == [
         "reset",
         "step:Pick up the block",
-        "encode:(1, 4)",
+        "encode:(1, 1, 4)",
         "actor_input",
         "policy:(1, 6)",
     ]

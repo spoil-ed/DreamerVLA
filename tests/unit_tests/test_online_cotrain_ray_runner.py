@@ -42,8 +42,8 @@ class _EnvGroup:
         assert rank == 0
         return self
 
-    def step(self, action, hidden) -> _Ready:
-        del action, hidden
+    def step(self, action, hidden, lang_emb=None) -> _Ready:
+        del action, hidden, lang_emb
         return _Ready([({"step": 1, "env_id": 0}, False, {})])
 
 
@@ -143,8 +143,8 @@ class _CountingEnvGroup:
         self._rank = int(rank)
         return self
 
-    def step(self, action, hidden) -> _Ready:
-        del action, hidden
+    def step(self, action, hidden, lang_emb=None) -> _Ready:
+        del action, hidden, lang_emb
         self.step_ranks.append(self._rank)
         return _Ready([({"step": len(self.step_ranks), "env_id": self._rank}, False, {})])
 
@@ -157,8 +157,8 @@ class _DoneEnvGroup:
         assert rank == 0
         return self
 
-    def step(self, action, hidden) -> _Ready:
-        del action, hidden
+    def step(self, action, hidden, lang_emb=None) -> _Ready:
+        del action, hidden, lang_emb
         return _Ready([({"step": 1, "env_id": 0}, True, {"success": True})])
 
 
@@ -201,8 +201,8 @@ class _TaskSwitchEnvGroup:
             ]
         )
 
-    def step(self, action, hidden) -> _Ready:
-        del action, hidden
+    def step(self, action, hidden, lang_emb=None) -> _Ready:
+        del action, hidden, lang_emb
         self.step_ranks.append(self._rank)
         return _Ready(
             [
@@ -312,8 +312,8 @@ class _BoundaryEnvGroup:
         self._rank = int(rank)
         return self
 
-    def step(self, action, hidden=None):
-        del action, hidden
+    def step(self, action, hidden=None, lang_emb=None):
+        del action, hidden, lang_emb
         self.step_calls_by_worker[self._rank] += 1
         return _Ready([({"env_id": self._rank}, False, {})])
 
@@ -464,6 +464,55 @@ def test_runner_dispatches_rollout_work_to_worker_groups() -> None:
     assert runner._fake_policy_worker.forward_batch_calls == 1
     assert runner._fake_env_group.step_calls_by_worker == [1, 1, 1]
     assert runner._fake_learner.optimizer_step_calls == 0
+
+
+def test_runner_dispatches_language_sidecars_to_env_workers() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    class LangPolicyWorker:
+        def forward_batch(self, obs_batch, env_ids):
+            del obs_batch
+            return _Ready(
+                [
+                    {
+                        "actions": [[float(env_id)] * 7 for env_id in env_ids],
+                        "obs_embedding": [[float(env_id), 1.0] for env_id in env_ids],
+                        "lang_emb": [[float(env_id), 2.0, 3.0] for env_id in env_ids],
+                    }
+                ]
+            )
+
+    class LangEnvGroup:
+        def __init__(self) -> None:
+            self._rank = 0
+            self.calls: list[tuple[int, list[float], list[float]]] = []
+
+        def execute_on(self, rank: int):
+            self._rank = int(rank)
+            return self
+
+        def step(self, action, hidden=None, lang_emb=None):
+            del action
+            self.calls.append((self._rank, list(hidden), list(lang_emb)))
+            return _Ready([({"env_id": self._rank}, False, {})])
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    runner._fake_policy_worker = LangPolicyWorker()
+    runner._fake_env_group = LangEnvGroup()
+    runner._fake_learner = _BoundaryLearner()
+
+    runner._dispatch_rollout_round(
+        obs_batch=[{"env_id": 0}, {"env_id": 1}],
+        env_ids=[0, 1],
+    )
+
+    assert runner._fake_env_group.calls == [
+        (0, [0.0, 1.0], [0.0, 2.0, 3.0]),
+        (1, [1.0, 1.0], [1.0, 2.0, 3.0]),
+    ]
 
 
 def test_ray_runner_rollout_steps_count_real_env_steps() -> None:
@@ -1038,6 +1087,17 @@ def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> N
     assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
     assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
     assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
+    assert cfg.ray_data.sequence_length == 12
+    assert cfg.ray_components.world_model.kwargs.model_dim == 4148
+    assert cfg.ray_components.world_model.kwargs.proprio_dim == 8
+    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 10
+    assert cfg.ray_components.world_model.kwargs.num_proprio_repeat == 1
+    assert cfg.ray_components.world_model.kwargs.lang_dim == 4096
+    assert cfg.ray_components.world_model.kwargs.lang_emb_dim == 32
+    assert cfg.ray_components.world_model.kwargs.num_lang_repeat == 1
+    assert cfg.ray_components.world_model.kwargs.cosine_loss_scale == 0.0
+    assert cfg.ray_components.world_model.kwargs.chunk_rollout_chunks == 1
+    assert cfg.ray_components.world_model.kwargs.chunk_rollout_loss_scale == 0.0
     assert (
         cfg.ray_components.policy.target
         == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
@@ -1125,6 +1185,7 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
 
     from hydra import compose, initialize_config_dir
     from omegaconf import OmegaConf
+
     from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
 
     config_dir = str(Path(__file__).resolve().parents[2] / "configs")

@@ -29,7 +29,7 @@ init:
 ray_data:
   task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   replay_capacity: 20000
-  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  sequence_length: 12
   min_replay_episodes: 1
 
 # OFT query-before structural components. These shapes do not match the old
@@ -49,8 +49,14 @@ ray_components:
       latent_source: ${task.openvla_oft.input_tokens.latent_source}
       action_emb_dim: 10
       num_action_repeat: 1
+      proprio_dim: 8
+      proprio_emb_dim: 10
+      num_proprio_repeat: 1
+      lang_dim: 4096
+      lang_emb_dim: 32
+      num_lang_repeat: 1
       grad_checkpoint: true
-      model_dim: 4106
+      model_dim: 4148
       num_hist: 3
       depth: 6
       heads: 16
@@ -60,9 +66,9 @@ ray_components:
       num_pred: 1
       max_seq_len: 128
       hidden_loss_scale: 1.0
-      cosine_loss_scale: 0.1
-      chunk_rollout_chunks: 4
-      chunk_rollout_loss_scale: 1.0
+      cosine_loss_scale: 0.0
+      chunk_rollout_chunks: 1
+      chunk_rollout_loss_scale: 0.0
       reward_head_type: binary
       reward_loss_scale: 32.0
       reward_hidden_dim: 1024

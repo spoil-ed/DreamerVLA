@@ -18,8 +18,24 @@ import numpy as np
 from dreamervla.runners.online_replay import OnlineReplay
 
 
+def _demo_proprio_at(demo: h5py.Group, t: int) -> np.ndarray:
+    obs = demo["obs"]
+    return np.concatenate(
+        [
+            np.asarray(obs["ee_pos"][t], dtype=np.float32).reshape(-1),
+            np.asarray(obs["ee_ori"][t], dtype=np.float32).reshape(-1),
+            np.asarray(obs["gripper_states"][t], dtype=np.float32).reshape(-1),
+        ],
+        axis=0,
+    ).astype(np.float32, copy=False)
+
+
 def _demo_to_transitions(
-    demo: h5py.Group, emb: np.ndarray, task_id: int
+    demo: h5py.Group,
+    emb: np.ndarray,
+    task_id: int,
+    *,
+    lang_emb: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     actions = np.asarray(demo["actions"][...], dtype=np.float32)        # (T, 7)
     sparse = np.asarray(demo["sparse_rewards"][...], dtype=np.float32)  # (T,)
@@ -42,9 +58,10 @@ def _demo_to_transitions(
         reward = float(sparse[t])
         if step_success and reward <= 0.0:
             reward = 1.0
-        transitions.append({
+        step = {
             "image": images[t],
             "obs_embedding": np.asarray(emb[t]),
+            "proprio": _demo_proprio_at(demo, t),
             "reward": reward,                      # sparse reward = collector signal
             "done": float(dones[t]),
             "is_last": float(dones[t]),
@@ -52,7 +69,10 @@ def _demo_to_transitions(
             "wm_action": actions[t],               # collector stores env-scale wm_action
             "task_id": int(task_id),
             "success": step_success,
-        })
+        }
+        if lang_emb is not None:
+            step["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
+        transitions.append(step)
     return transitions
 
 
@@ -102,10 +122,21 @@ def seed_replay_from_offline(
                         )
                     if cap is not None and per_task.get(task_id, 0) >= cap:
                         continue
-                    emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
+                    hidden_demo = hf["data"][demo_key]
+                    emb = np.asarray(hidden_demo["obs_embedding"][...])
+                    lang_emb = (
+                        np.asarray(hidden_demo["lang_emb"][...], dtype=np.float32)
+                        if "lang_emb" in hidden_demo
+                        else None
+                    )
                     if (
                         replay.add_episode(
-                            _demo_to_transitions(demo, emb, task_id),
+                            _demo_to_transitions(
+                                demo,
+                                emb,
+                                task_id,
+                                lang_emb=lang_emb,
+                            ),
                             source="coldstart",
                         )
                         is not None

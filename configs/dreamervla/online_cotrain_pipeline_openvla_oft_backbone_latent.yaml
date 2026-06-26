@@ -82,7 +82,7 @@ encoder:
 online_rollout:
   buffer_size: 20000
   replay_capacity_mode: total_sharded
-  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  sequence_length: 12
   min_replay: 2000
   min_episodes_per_task: 1
   min_sampleable_windows: 0
@@ -142,8 +142,14 @@ world_model:
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
+  proprio_dim: 8
+  proprio_emb_dim: 10
+  num_proprio_repeat: 1
+  lang_dim: 4096
+  lang_emb_dim: 32
+  num_lang_repeat: 1
   grad_checkpoint: true
-  model_dim: 4106
+  model_dim: 4148
   num_hist: 3
   depth: 6
   heads: 16
@@ -153,9 +159,9 @@ world_model:
   num_pred: 1
   max_seq_len: 128
   hidden_loss_scale: 1.0
-  cosine_loss_scale: 0.1
-  chunk_rollout_chunks: 4
-  chunk_rollout_loss_scale: 1.0
+  cosine_loss_scale: 0.0
+  chunk_rollout_chunks: 1
+  chunk_rollout_loss_scale: 0.0
   reward_head_type: binary
   reward_loss_scale: 32.0
   reward_hidden_dim: 1024

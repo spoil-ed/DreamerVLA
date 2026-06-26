@@ -152,6 +152,10 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                     transition = env.make_transition(
                         obs, action, reward, terminated, truncated, info
                     )
+                    if "proprio" not in transition and "state" in transition:
+                        transition["proprio"] = np.asarray(
+                            transition["state"], dtype=np.float32
+                        ).reshape(-1)
                     if obs_embedding is not None:
                         transition["obs_embedding"] = np.asarray(
                             obs_embedding, dtype=np.float32
@@ -434,6 +438,10 @@ class EnvWorker(Worker):
             )
         elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
+            if "proprio" not in transition and "state" in transition:
+                transition["proprio"] = np.asarray(
+                    transition["state"], dtype=np.float32
+                ).reshape(-1)
             if obs_embedding is not None:
                 transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
             if lang_emb is not None:
@@ -526,6 +534,8 @@ class EnvWorker(Worker):
         }
         if lang_emb is not None:
             transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
+        if isinstance(obs, dict) and "state" in obs:
+            transition["proprio"] = np.asarray(obs["state"], dtype=np.float32).reshape(-1)
         return transition
 
     def _env(self) -> Any:

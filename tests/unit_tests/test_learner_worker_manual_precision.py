@@ -45,6 +45,8 @@ class _DirectReplay:
             "is_first": torch.zeros(int(batch_size), 3, dtype=torch.bool),
             "is_terminal": torch.zeros(int(batch_size), 3),
             "is_last": torch.zeros(int(batch_size), 3),
+            "proprio": torch.full((int(batch_size), 3, 8), 0.5),
+            "lang_emb": torch.full((int(batch_size), 6), 0.25),
         }
 
     def sample_classifier_windows(
@@ -117,6 +119,8 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
         assert kwargs["world_model"] is learner.world_model
         assert kwargs["optimizer"] is learner.world_model_optimizer
         assert "obs_embedding" in kwargs["batch"]
+        assert kwargs["batch"]["proprio"].shape == (2, 3, 8)
+        assert kwargs["batch"]["lang_emb"].shape == (2, 6)
         return {
             "loss": 1.25,
             "hidden_rec_loss": 0.25,
@@ -144,6 +148,8 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
             "is_first",
             "is_terminal",
             "is_last",
+            "proprio",
+            "lang_emb",
         }
         return {"actor_loss": 0.75, "returns_mean": 0.25, "actor_grad_norm": 0.125}
 
