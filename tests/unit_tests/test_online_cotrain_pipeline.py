@@ -206,6 +206,100 @@ def test_training_bursts_env_step_trigger_keeps_train_every_gate(monkeypatch):
     assert calls == [1]
 
 
+def test_training_bursts_rl_samples_without_images(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = _FakeDistributed()
+    runner.global_step = 0
+    runner.world_model = torch.nn.Linear(1, 1)
+    runner.world_model_optimizer = object()
+    runner.policy = torch.nn.Linear(1, 1)
+    runner.policy_optimizer = object()
+    runner.critic = torch.nn.Linear(1, 1)
+    runner.classifier = torch.nn.Linear(1, 1)
+    runner.classifier_threshold = 0.5
+    runner.ref_policy = None
+    runner._build_wm_pretrain_batch = lambda batch: batch
+    runner.console_metrics = lambda *_args, **_kwargs: None
+    runner.log_metrics = lambda *_args, **_kwargs: None
+
+    sample_kwargs = []
+
+    class Replay:
+        num_transitions = 128
+
+        def sample(self, batch_size, **kwargs):
+            del batch_size
+            sample_kwargs.append(dict(kwargs))
+            return {
+                "obs_embedding": torch.zeros(2, 3, 4),
+                "actions": torch.zeros(2, 3, 7),
+                "current_actions": torch.zeros(2, 3, 7),
+                "rewards": torch.zeros(2, 3),
+                "dones": torch.zeros(2, 3),
+                "is_first": torch.zeros(2, 3, dtype=torch.bool),
+                "is_terminal": torch.zeros(2, 3),
+                "is_last": torch.zeros(2, 3),
+            }
+
+    def fake_ready(*_args, **_kwargs):
+        return {}, True, True
+
+    def fake_wm_step(**kwargs):
+        assert "images" not in kwargs["batch"]
+        return {"loss": 0.1}
+
+    def fake_actor_step(**kwargs):
+        assert "images" not in kwargs["obs"]
+        return {"actor_loss": 0.2, "returns_mean": 0.3}
+
+    monkeypatch.setattr(mod, "get_replay_task_stats_global", fake_ready)
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+
+    actor_route = SimpleNamespace(
+        name="test-route",
+        world_model_arg="chunk_world_model",
+        step_fn=fake_actor_step,
+    )
+
+    runner._run_training_bursts(
+        env_step=1,
+        total_env_steps=10,
+        replay=Replay(),
+        env_task_ids=(0,),
+        knobs={
+            "train_trigger": "env_step",
+            "train_every": 1,
+            "updates_per_train": 1,
+            "min_replay": 0,
+            "min_eps": 0,
+            "min_sampleable_windows": 0,
+            "require_classifier_evidence": False,
+            "is_dist": False,
+            "batch_size": 2,
+            "max_train_updates": None,
+            "warmup_steps": 0,
+            "train_actor_after": True,
+            "train_cls_inline": False,
+            "optim_cfg": OmegaConf.create({}),
+            "actor_update_route": actor_route,
+            "algo": OmegaConf.create({}),
+            "num_envs": 1,
+            "episode_horizon": 10,
+            "ckpt_every": 0,
+        },
+        counters={},
+        history=[],
+        episode_added=False,
+    )
+
+    assert sample_kwargs == [{"include_images": False}, {"include_images": False}]
+
+
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     from omegaconf import OmegaConf
 

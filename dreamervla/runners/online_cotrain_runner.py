@@ -1087,7 +1087,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 _unwrap(self.classifier).eval()
                 assert not _unwrap(self.world_model).training, "WM must be frozen in RL phase"
                 assert not _unwrap(self.classifier).training, "classifier must be frozen in RL phase"
-                rl_batch = replay.sample(knobs["batch_size"])
+                rl_batch = replay.sample(knobs["batch_size"], include_images=False)
                 # raw replay fields (tokenized obs_embedding [B,T,N,D] kept as-is);
                 # mirrors online_dreamervla (do NOT route through the offline
                 # _build_actor_critic_batch, which expects flat [B,T,D]).
