@@ -183,6 +183,7 @@ def test_launcher_profiles_do_not_override_model_structure() -> None:
         "training.classifier_warmup_steps",
         "training.warmup_replay_epochs",
         "training.warmup_replay_max_steps",
+        "training.warmup_checkpoint_every",
         "training.classifier_batch_size",
         "dataloader.batch_size",
         "online_rollout.buffer_size",
@@ -737,8 +738,15 @@ def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
     assert "training.debug=false" in cotrain
     assert "online_rollout.total_env_steps=200000" in cotrain
     assert "training.wm_warmup_steps=1200" in cotrain
-    assert "training.classifier_warmup_steps=1200" in cotrain
-    assert "training.warmup_replay_epochs=1" in cotrain
+    if profile == "release":
+        assert "training.classifier_warmup_steps=1200" in cotrain
+        assert "training.warmup_replay_epochs=1" in cotrain
+    else:
+        assert "training.classifier_warmup_steps=42" in cotrain
+        assert "training.warmup_replay_epochs=0" in cotrain
+        assert "training.warmup_checkpoint_every=200" in cotrain
+        assert "training.classifier_batch_size=12" in cotrain
+        assert "dataloader.batch_size=12" in cotrain
     assert not any(
         item.startswith("training.warmup_replay_max_steps=") for item in cotrain
     )

@@ -419,6 +419,7 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
         "classifier_warmup_steps",
         "warmup_replay_epochs",
         "warmup_replay_max_steps",
+        "warmup_checkpoint_every",
     ):
         val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
         if val < 0:

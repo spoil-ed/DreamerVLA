@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from omegaconf import OmegaConf
@@ -77,7 +77,37 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             return
         print(message, flush=True)
 
-    def _offline_warmup_wm(self, replay, *, steps: int, batch_size: int, optim_cfg) -> float:
+    def _maybe_warmup_checkpoint(
+        self,
+        *,
+        current: int,
+        total: int,
+        every: int,
+        checkpoint_fn: Callable[[], None] | None,
+        label: str,
+    ) -> None:
+        """Save an optional mid-warmup component checkpoint."""
+        if checkpoint_fn is None or int(every) <= 0:
+            return
+        current_i = int(current)
+        total_i = int(total)
+        if current_i >= total_i or current_i % int(every) != 0:
+            return
+        checkpoint_fn()
+        self._print_pipeline_event(
+            f"[pipeline][{label}] checkpoint saved step={current_i}/{total_i}"
+        )
+
+    def _offline_warmup_wm(
+        self,
+        replay,
+        *,
+        steps: int,
+        batch_size: int,
+        optim_cfg,
+        checkpoint_every: int = 0,
+        checkpoint_fn: Callable[[], None] | None = None,
+    ) -> float:
         self.world_model.train()
         last = 0.0
         for i in range(int(steps)):
@@ -102,11 +132,27 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     step=i,
                 )
                 print(f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}", flush=True)
+            self._maybe_warmup_checkpoint(
+                current=i + 1,
+                total=int(steps),
+                every=checkpoint_every,
+                checkpoint_fn=checkpoint_fn,
+                label="wm-warmup",
+            )
             self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
         return last
 
     def _offline_warmup_classifier(
-        self, replay, *, steps: int, batch_size: int, early_neg_stride: int, grad_clip: float
+        self,
+        replay,
+        *,
+        steps: int,
+        batch_size: int,
+        early_neg_stride: int,
+        grad_clip: float,
+        log_step_offset: int = 0,
+        checkpoint_every: int = 0,
+        checkpoint_fn: Callable[[], None] | None = None,
     ) -> float:
         last_acc = 0.0
         for i in range(int(steps)):
@@ -128,7 +174,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                         "train/classifier_warmup_f1": float(m.get("f1", 0.0)),
                         "train/classifier_warmup_pos_frac": float(m.get("pos_frac", 0.0)),
                     },
-                    step=i,
+                    step=int(log_step_offset) + i,
                 )
                 print(
                     f"[pipeline][cls-warmup] step={i}/{steps} "
@@ -137,6 +183,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     f"pos={float(m.get('pos_frac', 0.0)):.3f}",
                     flush=True,
                 )
+            self._maybe_warmup_checkpoint(
+                current=i + 1,
+                total=int(steps),
+                every=checkpoint_every,
+                checkpoint_fn=checkpoint_fn,
+                label="classifier-warmup",
+            )
             self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
         return last_acc
 
@@ -423,6 +476,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         warmup_replay_max_steps = int(
             OmegaConf.select(cfg, "training.warmup_replay_max_steps", default=0) or 0
         )
+        warmup_checkpoint_every = int(
+            OmegaConf.select(cfg, "training.warmup_checkpoint_every", default=0) or 0
+        )
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
         optim_cfg = OmegaConf.select(cfg, "optim")
@@ -544,6 +600,10 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 steps=wm_steps,
                 batch_size=bs,
                 optim_cfg=optim_cfg,
+                checkpoint_every=warmup_checkpoint_every,
+                checkpoint_fn=(
+                    self._save_wm_warmup if self.distributed.is_main_process else None
+                ),
             )
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
@@ -553,6 +613,11 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch_size=cls_bs,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
+                log_step_offset=wm_steps,
+                checkpoint_every=warmup_checkpoint_every,
+                checkpoint_fn=(
+                    self._save_cls_warmup if self.distributed.is_main_process else None
+                ),
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
@@ -563,7 +628,16 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 )
         elif need_wm:
             self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
-            wm_last = self._offline_warmup_wm(warmup_replay, steps=wm_steps, batch_size=bs, optim_cfg=optim_cfg)
+            wm_last = self._offline_warmup_wm(
+                warmup_replay,
+                steps=wm_steps,
+                batch_size=bs,
+                optim_cfg=optim_cfg,
+                checkpoint_every=warmup_checkpoint_every,
+                checkpoint_fn=(
+                    self._save_wm_warmup if self.distributed.is_main_process else None
+                ),
+            )
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
@@ -577,8 +651,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
 
         if need_cls and not need_wm:
             self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
-            cls_last = self._offline_warmup_classifier(warmup_replay, steps=cls_steps, batch_size=cls_bs,
-                                            early_neg_stride=early_neg_stride, grad_clip=grad_clip)
+            cls_last = self._offline_warmup_classifier(
+                warmup_replay,
+                steps=cls_steps,
+                batch_size=cls_bs,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+                log_step_offset=wm_steps,
+                checkpoint_every=warmup_checkpoint_every,
+                checkpoint_fn=(
+                    self._save_cls_warmup if self.distributed.is_main_process else None
+                ),
+            )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
                 self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True)

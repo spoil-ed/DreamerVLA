@@ -367,6 +367,7 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
 
     replay = _seeded_replay(tmp_path)
     calls = {"wm": 0, "cls": 0}
+    checkpoints = {"wm": 0, "cls": 0}
     logged = []
     progress = []
 
@@ -404,9 +405,26 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
         )
     )
 
-    runner._offline_warmup_wm(replay, steps=3, batch_size=2, optim_cfg=None)
-    runner._offline_warmup_classifier(replay, steps=5, batch_size=2, early_neg_stride=8, grad_clip=1.0)
+    runner._offline_warmup_wm(
+        replay,
+        steps=3,
+        batch_size=2,
+        optim_cfg=None,
+        checkpoint_every=2,
+        checkpoint_fn=lambda: checkpoints.__setitem__("wm", checkpoints["wm"] + 1),
+    )
+    runner._offline_warmup_classifier(
+        replay,
+        steps=5,
+        batch_size=2,
+        early_neg_stride=8,
+        grad_clip=1.0,
+        log_step_offset=3,
+        checkpoint_every=2,
+        checkpoint_fn=lambda: checkpoints.__setitem__("cls", checkpoints["cls"] + 1),
+    )
     assert calls == {"wm": 3, "cls": 5}
+    assert checkpoints == {"wm": 1, "cls": 2}
     assert progress == [
         (1, 3, "wm-warmup", "update"),
         (2, 3, "wm-warmup", "update"),
@@ -418,6 +436,7 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
         (5, 5, "classifier-warmup", "update"),
     ]
     logged_keys = {key for metrics, _step in logged for key in metrics}
+    assert [step for _metrics, step in logged] == list(range(8))
     assert "train/wm_warmup_loss" in logged_keys
     assert "train/classifier_warmup_loss" in logged_keys
     assert "train/classifier_warmup_acc" in logged_keys
@@ -862,11 +881,13 @@ def _make_orchestration_runner(
         replay.add_episode(episode)
         return 1
 
-    def fake_wm_warmup(self, replay, *, steps, batch_size, optim_cfg):
+    def fake_wm_warmup(self, replay, *, steps, batch_size, optim_cfg, **_kwargs):
         calls.append("wm_warmup")
         return 0.0  # run() formats the returned loss into the warmup banner
 
-    def fake_cls_warmup(self, replay, *, steps, batch_size, early_neg_stride, grad_clip):
+    def fake_cls_warmup(
+        self, replay, *, steps, batch_size, early_neg_stride, grad_clip, **_kwargs
+    ):
         calls.append("cls_warmup")
         return 0.0  # run() formats the returned acc into the warmup banner
 

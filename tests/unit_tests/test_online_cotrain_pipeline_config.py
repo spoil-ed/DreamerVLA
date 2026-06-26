@@ -91,6 +91,17 @@ def test_validate_cfg_warmup(tmp_path):
     })
     with pytest.raises(Exception, match="warmup_replay_max_steps"):
         validate_cfg(neg_replay_max)
+    neg_ckpt_every = OmegaConf.create({
+        "_target_": "dreamervla.runners.OnlineCotrainPipelineRunner",
+        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+        "training": {
+            "wm_warmup_steps": 10,
+            "classifier_warmup_steps": 10,
+            "warmup_checkpoint_every": -1,
+        },
+    })
+    with pytest.raises(Exception, match="warmup_checkpoint_every"):
+        validate_cfg(neg_ckpt_every)
     bad_log_every = OmegaConf.create({
         "_target_": "dreamervla.runners.OnlineCotrainPipelineRunner",
         "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
