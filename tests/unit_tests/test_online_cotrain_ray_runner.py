@@ -548,6 +548,7 @@ def test_ray_runner_uses_learner_global_step_for_progress_and_checkpoint(tmp_pat
     )
     runner.console_banner = lambda *_args, **_kwargs: None
     runner.console_metrics = lambda *_args, **_kwargs: None
+    runner.console_metric_table = lambda *_args, **_kwargs: None
 
     learner = _MultiUpdateLearner()
     history = runner._run_loop(
@@ -618,6 +619,68 @@ def test_ray_runner_progress_status_summarizes_rollout_and_training_state() -> N
     assert "cls_acc=0.750" in status
 
 
+def test_ray_runner_metric_table_maps_cotrain_metrics() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    table_calls: list[dict] = []
+    runner.console_success_rate = lambda: 0.25
+    runner.console_metric_table = lambda **kwargs: table_calls.append(kwargs)
+
+    runner._console_cotrain_metric_table(
+        global_step=7,
+        target_global_steps=1000,
+        start_global_step=0,
+        train_start_t=0.0,
+        env_steps=172,
+        target_env_steps=200000,
+        infer_batches=43,
+        episode_count=8,
+        episode_successes=2,
+        last_episode_success=1,
+        metrics={
+            "rl/returns_mean": 0.5,
+            "rl/actor_loss": 0.12,
+            "rl/kl": 0.01,
+            "cls/acc": 0.75,
+            "cls/f1": 0.8,
+            "wm/loss": 0.33,
+            "wm/recon_loss": 0.44,
+            "train/rl_loss": 0.45,
+        },
+        timing={
+            "time/infer_wait_s": 2.0,
+            "time/env_step_wait_s": 3.0,
+            "time/learner_wait_s": 1.2,
+            "time/weight_sync_wait_s": 0.4,
+            "time/infer_encode_s": 9.9,
+        },
+    )
+
+    call = table_calls[-1]
+    assert call["step"] == 6
+    assert call["total_steps"] == 1000
+    metrics = call["metrics"]
+    assert metrics["rollout/env_steps"] == 172.0
+    assert metrics["rollout/returns_mean"] == 0.5
+    assert metrics["train/actor/actor_loss"] == 0.12
+    assert metrics["train/classifier/acc"] == 0.75
+    assert metrics["train/world_model/loss"] == 0.33
+    assert metrics["train/rl_loss"] == 0.45
+    assert metrics["env/success_once"] == 0.25
+    assert metrics["time/infer_wait_s"] == 2.0
+    assert metrics["time/env_step_wait_s"] == 3.0
+    assert metrics["time/learner_wait_s"] == 1.2
+    assert metrics["time/weight_sync_wait_s"] == 0.4
+    assert "time/infer_encode_s" not in metrics
+    assert "train/actor/kl" not in metrics
+    assert "train/classifier/f1" not in metrics
+    assert "train/world_model/recon_loss" not in metrics
+
+
 def test_ray_runner_rotates_task_pool_on_episode_done() -> None:
     from omegaconf import OmegaConf
 
@@ -639,6 +702,7 @@ def test_ray_runner_rotates_task_pool_on_episode_done() -> None:
     runner.console_progress = lambda *_args, **_kwargs: None
     runner.console_banner = lambda *_args, **_kwargs: None
     runner.console_metrics = lambda *_args, **_kwargs: None
+    runner.console_metric_table = lambda *_args, **_kwargs: None
     envs = _TaskSwitchEnvGroup(num_envs=4)
 
     history = runner._run_loop(
@@ -747,6 +811,84 @@ def test_ray_runner_rejects_multinode_cluster_before_launch(monkeypatch) -> None
     with pytest.raises(RuntimeError, match="single-node"):
         runner.run()
     assert cluster.shutdown_called is True
+
+
+def test_ray_runner_top_level_render_backend_is_canonical(monkeypatch) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {"render_backend": "osmesa", "env": {"render_backend": "egl"}}
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+
+    assert runner._egl_device_pool() == []
+
+
+def test_online_cotrain_ray_oft_experiment_accepts_render_backend_override() -> None:
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_ray_oft_action_hidden",
+                "render_backend=osmesa",
+            ],
+        )
+
+    assert cfg.render_backend == "osmesa"
+
+
+def test_ray_oft_rollout_env_cfg_reuses_collect_plan(monkeypatch) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "ray_rollout": {"mode": "oft_fixed_base"},
+            "render_backend": "osmesa",
+            "env": {
+                "cfg": {
+                    "target": "hand.authored.Env",
+                    "kwargs": {"task_ids": [0, 1, 2], "task_id": 0},
+                }
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        ColdStartRayCollectRunner,
+        "build_oft_worker_plan",
+        lambda _self: {
+            "env": {
+                "target": "collect.path.Env",
+                "use_from_config": True,
+                "kwargs": {
+                    "task_ids": [1],
+                    "task_id": 1,
+                    "full_record": True,
+                    "init_state_sampling": "sequential",
+                    "validate_canonical": False,
+                },
+            }
+        },
+    )
+
+    env_cfg = runner._rollout_env_cfg()
+
+    assert env_cfg["target"] == "collect.path.Env"
+    assert env_cfg["kwargs"]["task_ids"] == [1]
+    assert env_cfg["kwargs"]["full_record"] is True
+    assert "egl_device_pool" not in env_cfg
 
 
 def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:

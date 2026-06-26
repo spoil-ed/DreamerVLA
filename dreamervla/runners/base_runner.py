@@ -24,7 +24,12 @@ from torch.utils.data import DataLoader
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.online_utils import SuccessTracker
-from dreamervla.utils.console import fmt_value, metric_box, phase_banner
+from dreamervla.utils.console import (
+    fmt_value,
+    format_metric_table,
+    metric_box,
+    phase_banner,
+)
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
@@ -1029,6 +1034,9 @@ class BaseRunner(ABC):
                 "progress_every_s": float(
                     OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
                 ),
+                "metric_table_width": int(
+                    OmegaConf.select(self.cfg, "console.metric_table_width", default=120)
+                ),
                 "counter": 0,
                 "tracker": None,
                 "progress": {},
@@ -1112,6 +1120,31 @@ class BaseRunner(ABC):
         print(metric_box(header, rows, width=st["width"]), flush=True)
         if tr is not None:
             tr.mark_printed()
+
+    def console_metric_table(
+        self,
+        *,
+        step: int,
+        total_steps: int,
+        elapsed_s: float,
+        metrics: dict,
+        start_step: int = 0,
+    ) -> None:
+        """Print an RLinf-style grouped metric table on the main process."""
+        if not self.is_main_process:
+            return
+        st = self._console_state_get()
+        print(
+            format_metric_table(
+                step=int(step),
+                total_steps=int(total_steps),
+                elapsed_s=float(elapsed_s),
+                metrics=metrics,
+                start_step=int(start_step),
+                width=int(st["metric_table_width"]),
+            ),
+            flush=True,
+        )
 
     def console_success_rate(self) -> float:
         st = self._console_state_get()

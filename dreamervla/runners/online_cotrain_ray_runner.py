@@ -119,39 +119,6 @@ class OnlineCotrainRayRunner(BaseRunner):
         )
         replay = replay_group.workers[0]
 
-        env_cfg = self._cfg_from(
-            "env.cfg",
-            {
-                "target": "dreamervla.workers.env._test_envs:CounterEnv",
-                "kwargs": {"horizon": horizon, "image_shape": (4, 4, 3), "embedding_dim": 4},
-            },
-        )
-        env_cfg.setdefault("kwargs", {})
-        # `horizon` is a synthetic-test-env (CounterEnv) kwarg; the real
-        # DreamerVLAOnlineTrainEnv (use_from_config) rejects it and uses max_steps. Only
-        # inject horizon for the synthetic path so real OFT/RynnVLA envs build cleanly.
-        if not bool(env_cfg.get("use_from_config")):
-            env_cfg["kwargs"].setdefault("horizon", horizon)
-        # Default egl GPU rendering: inject the physical GPU pool so each CPU-placed env
-        # worker pins egl to a GPU (round-robin by rank) instead of CPU osmesa — removes the
-        # CPU-render bottleneck and uses the GPUs for rendering.
-        egl_pool = self._egl_device_pool()
-        if egl_pool:
-            env_cfg["egl_device_pool"] = egl_pool
-        env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
-            cluster, NodePlacementStrategy(num_envs)
-        )
-        # Spread env workers across the configured task ids (round-robin) instead of
-        # pinning every env to task 0. A single hard task (e.g. libero_goal task 0, which
-        # the traj1 ckpt fails) yields a misleading 0% rollout success; sampling across
-        # tasks reflects the real policy success rate (matches the collector).
-        rollout_task_ids = self._rollout_task_ids()
-        if rollout_task_ids:
-            for env_index in range(num_envs):
-                tid = int(rollout_task_ids[env_index % len(rollout_task_ids)])
-                if tid != 0:
-                    env_group.execute_on(env_index).set_task(tid).wait()
-
         policy_cfg = self._cfg_from("policy.cfg", _default_policy_cfg())
         # Decouple the rollout from the concrete model: the inference worker class is
         # config-selectable. Default = RynnVLA encoder->WM->actor InferenceWorker; OFT
@@ -165,17 +132,34 @@ class OnlineCotrainRayRunner(BaseRunner):
                 )
             )
         )
+        oft_plan = self._oft_worker_plan() if infer_worker_cls is RolloutInferenceWorker else None
+
+        env_cfg = self._rollout_env_cfg(
+            oft_plan=oft_plan,
+            horizon=horizon,
+            use_oft_collect_path=infer_worker_cls is RolloutInferenceWorker,
+        )
+        env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
+            cluster, NodePlacementStrategy(num_envs)
+        )
+        # Spread env workers across the configured task ids (round-robin) instead of
+        # pinning every env to task 0. The env config itself now comes from the collect
+        # plan for OFT, so the external set_task calls mirror collect scheduling rather
+        # than compensating for hand-authored env defaults.
+        rollout_task_ids = self._rollout_task_ids()
+        if rollout_task_ids:
+            for env_index in range(num_envs):
+                tid = int(rollout_task_ids[env_index % len(rollout_task_ids)])
+                if tid != 0:
+                    env_group.execute_on(env_index).set_task(tid).wait()
+
         if infer_worker_cls is RolloutInferenceWorker:
             # OFT recipe: build the OFT rollout inference cfg via the SAME programmatic
             # derivation the collect path uses (OFTRolloutBundle -> action + obs_embedding),
             # not the RynnVLA encoder->WM->actor _default_inference_cfg. DRY: no hand-authored
             # OFT field YAML. init_ckpt stays empty — the OFT base policy loads from the
             # bundle's model_path; the learned actor trains only in imagination.
-            from dreamervla.runners.cold_start_ray_collect_runner import (
-                ColdStartRayCollectRunner,
-            )
-
-            infer_cfg = ColdStartRayCollectRunner.build_oft_worker_plan(self)["inference"]
+            infer_cfg = dict((oft_plan or self._oft_worker_plan())["inference"])
             infer_init_ckpt: dict[str, Any] = {}
         else:
             infer_cfg = self._cfg_from("inference.cfg", _default_inference_cfg(policy_cfg))
@@ -251,6 +235,8 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         learner_updates = int(getattr(self, "global_step", 0) or 0)
         self.global_step = learner_updates
+        start_global_step = int(learner_updates)
+        train_start_t = time.perf_counter()
         policy_version = 0
         local_infer_version = 0
         last_loss = 0.0
@@ -377,7 +363,29 @@ class OnlineCotrainRayRunner(BaseRunner):
                     self.global_step = learner_updates
                     policy_version += 1
                     update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-                    self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+                    self._console_cotrain_metric_table(
+                        global_step=learner_updates,
+                        target_global_steps=target_global_steps,
+                        start_global_step=start_global_step,
+                        train_start_t=train_start_t,
+                        env_steps=env_steps,
+                        target_env_steps=target_env_steps,
+                        infer_batches=infer_batches,
+                        episode_count=episode_count,
+                        episode_successes=episode_successes,
+                        last_episode_success=last_episode_success,
+                        metrics=update_metrics,
+                        replay_metrics=self._replay_metric_snapshot(
+                            replay, replay_ready_kwargs, ready=True
+                        ),
+                        timing={
+                            "time/infer_wait_s": float(infer_wait_s),
+                            "time/env_step_wait_s": float(env_step_wait_s),
+                            "time/learner_wait_s": float(learner_wait_s),
+                            "time/weight_sync_wait_s": float(weight_sync_wait_s),
+                            **infer_stage_timing,
+                        },
+                    )
                     self.log_metrics(update_metrics, step=learner_updates)
                     sync_start = time.perf_counter()
                     learner.sync_weights("policy", policy_version).wait()
@@ -415,7 +423,29 @@ class OnlineCotrainRayRunner(BaseRunner):
             # so the learner's staleness gate (Phase 4) can age replay samples.
             replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-            self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+            self._console_cotrain_metric_table(
+                global_step=learner_updates,
+                target_global_steps=target_global_steps,
+                start_global_step=start_global_step,
+                train_start_t=train_start_t,
+                env_steps=env_steps,
+                target_env_steps=target_env_steps,
+                infer_batches=infer_batches,
+                episode_count=episode_count,
+                episode_successes=episode_successes,
+                last_episode_success=last_episode_success,
+                metrics=update_metrics,
+                replay_metrics=self._replay_metric_snapshot(
+                    replay, replay_ready_kwargs, ready=True
+                ),
+                timing={
+                    "time/infer_wait_s": float(infer_wait_s),
+                    "time/env_step_wait_s": float(env_step_wait_s),
+                    "time/learner_wait_s": float(learner_wait_s),
+                    "time/weight_sync_wait_s": float(weight_sync_wait_s),
+                    **infer_stage_timing,
+                },
+            )
             self.log_metrics(update_metrics, step=learner_updates)
             self._maybe_save_ray_checkpoint(
                 groups,
@@ -498,6 +528,8 @@ class OnlineCotrainRayRunner(BaseRunner):
         infer_batches = 0
         learner_updates = int(getattr(self, "global_step", 0) or 0)
         self.global_step = learner_updates
+        start_global_step = int(learner_updates)
+        train_start_t = time.perf_counter()
         policy_version = 0
         local_infer_version = 0
         last_loss = 0.0
@@ -659,7 +691,30 @@ class OnlineCotrainRayRunner(BaseRunner):
             # so the learner's staleness gate (Phase 4) can age replay samples.
             replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
-            self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
+            self._console_cotrain_metric_table(
+                global_step=learner_updates,
+                target_global_steps=target_global_steps,
+                start_global_step=start_global_step,
+                train_start_t=train_start_t,
+                env_steps=env_steps,
+                target_env_steps=target_env_steps,
+                infer_batches=infer_batches,
+                episode_count=episode_count,
+                episode_successes=episode_successes,
+                last_episode_success=last_episode_success,
+                metrics=update_metrics,
+                replay_metrics=self._replay_metric_snapshot(
+                    replay, replay_ready_kwargs, ready=True
+                ),
+                timing={
+                    "time/infer_wait_s": float(infer_wait_s),
+                    "time/env_step_wait_s": float(env_step_wait_s),
+                    "time/learner_wait_s": float(learner_wait_s),
+                    "time/weight_sync_wait_s": float(weight_sync_wait_s),
+                    "time/ray_wait_s": float(ray_wait_s),
+                    **infer_stage_timing,
+                },
+            )
             self.log_metrics(update_metrics, step=learner_updates)
 
             sync_start = time.perf_counter()
@@ -851,6 +906,120 @@ class OnlineCotrainRayRunner(BaseRunner):
             "rollout/recent_success_rate": float(recent_success_rate),
             "rollout/recent_success_rate_valid": float(int(episode_count) > 0),
         }
+
+    def _console_cotrain_metric_table(
+        self,
+        *,
+        global_step: int,
+        target_global_steps: int | None,
+        start_global_step: int,
+        train_start_t: float,
+        env_steps: int,
+        target_env_steps: int,
+        infer_batches: int,
+        episode_count: int,
+        episode_successes: int,
+        last_episode_success: int,
+        metrics: dict[str, Any],
+        replay_metrics: dict[str, Any] | None = None,
+        timing: dict[str, Any] | None = None,
+    ) -> None:
+        """Print an RLinf-style metric table for one learner update."""
+        core_timing_keys = {
+            "time/infer_wait_s",
+            "time/env_step_wait_s",
+            "time/learner_wait_s",
+            "time/weight_sync_wait_s",
+            "time/ray_wait_s",
+        }
+        core_metric_map = {
+            "rl/returns_mean": "rollout/returns_mean",
+            "rl/actor_loss": "train/actor/actor_loss",
+            "rl/critic_loss": "train/critic/critic_loss",
+            "rl/value_loss": "train/critic/value_loss",
+            "cls/loss": "train/classifier/loss",
+            "cls/acc": "train/classifier/acc",
+            "wm/loss": "train/world_model/loss",
+            "train/rl_loss": "train/rl_loss",
+            "train/actor/actor_loss": "train/actor/actor_loss",
+            "train/critic/critic_loss": "train/critic/critic_loss",
+            "train/classifier/loss": "train/classifier/loss",
+            "train/classifier/acc": "train/classifier/acc",
+            "train/world_model/loss": "train/world_model/loss",
+        }
+        display_metrics: dict[str, Any] = {}
+        for key, value in dict(timing or {}).items():
+            if key in core_timing_keys:
+                display_metrics[key] = value
+        display_metrics.update(
+            {
+                "rollout/env_steps": float(env_steps),
+                "train/learner_updates": float(global_step),
+            }
+        )
+        rollout_success = self._rollout_success_metrics(
+            episode_count=episode_count,
+            episode_successes=episode_successes,
+            last_episode_success=last_episode_success,
+        )
+        for key in ("rollout/episodes", "rollout/success_rate", "rollout/recent_success_rate"):
+            display_metrics[key] = rollout_success[key]
+        display_metrics.update(replay_metrics or {})
+        if int(episode_count) > 0:
+            display_metrics["env/success_once"] = float(episode_successes) / max(
+                1, int(episode_count)
+            )
+            display_metrics["env/num_trajectories"] = float(episode_count)
+            display_metrics["env/last_success"] = float(last_episode_success)
+
+        for key, value in dict(metrics).items():
+            if isinstance(value, str):
+                continue
+            out_key = core_metric_map.get(str(key))
+            if out_key is not None:
+                display_metrics[out_key] = value
+
+        total_steps = (
+            int(target_global_steps)
+            if target_global_steps is not None
+            else max(int(global_step), 1)
+        )
+        self.console_metric_table(
+            step=max(0, int(global_step) - 1),
+            total_steps=total_steps,
+            elapsed_s=time.perf_counter() - float(train_start_t),
+            metrics=display_metrics,
+            start_step=int(start_global_step),
+        )
+
+    def _replay_metric_snapshot(
+        self,
+        replay: Any,
+        replay_ready_kwargs: dict[str, Any],
+        *,
+        ready: bool,
+    ) -> dict[str, Any]:
+        """Return compact replay-buffer fields for the RLinf-style table."""
+        metrics: dict[str, Any] = {
+            "replay_buffer/ready": float(bool(ready)),
+            "replay_buffer/min_episodes": float(
+                replay_ready_kwargs.get("min_episodes_per_task", 0)
+            ),
+            "replay_buffer/min_transitions": float(
+                replay_ready_kwargs.get("min_transitions", 0)
+            ),
+        }
+        try:
+            metrics["replay_buffer/size"] = float(replay.size().wait()[0])
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            pass
+        try:
+            metrics["replay_buffer/transitions"] = float(
+                replay.num_transitions().wait()[0]
+            )
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            pass
+        return metrics
 
     def _checkpoint_cfg(self) -> dict[str, Any]:
         raw = OmegaConf.select(self.cfg, "checkpoint", default={}) or {}
@@ -1147,12 +1316,56 @@ class OnlineCotrainRayRunner(BaseRunner):
         """Physical GPU ids for egl env rendering (default backend). Read from the driver's
         CUDA_VISIBLE_DEVICES; empty when the render backend is osmesa."""
         backend = str(
-            self._select_first(("env.render_backend", "render_backend"), "egl")
+            self._select_first(("render_backend", "env.render_backend"), "egl")
         ).lower()
         if backend != "egl":
             return []
         cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         return [int(x) for x in cvd.split(",") if x.strip().isdigit()]
+
+    def _oft_worker_plan(self) -> dict[str, Any]:
+        from dreamervla.runners.cold_start_ray_collect_runner import (
+            ColdStartRayCollectRunner,
+        )
+
+        return ColdStartRayCollectRunner.build_oft_worker_plan(self)
+
+    def _rollout_env_cfg(
+        self,
+        *,
+        oft_plan: dict[str, Any] | None = None,
+        horizon: int | None = None,
+        use_oft_collect_path: bool | None = None,
+    ) -> dict[str, Any]:
+        use_collect_plan = (
+            self._ray_rollout_mode() == "oft_fixed_base"
+            if use_oft_collect_path is None
+            else bool(use_oft_collect_path)
+        )
+        if use_collect_plan:
+            plan = oft_plan if oft_plan is not None else self._oft_worker_plan()
+            env_cfg = _plain(plan["env"])
+        else:
+            env_cfg = self._cfg_from(
+                "env.cfg",
+                {
+                    "target": "dreamervla.workers.env._test_envs:CounterEnv",
+                    "kwargs": {
+                        "horizon": int(horizon or 3),
+                        "image_shape": (4, 4, 3),
+                        "embedding_dim": 4,
+                    },
+                },
+            )
+        env_cfg.setdefault("kwargs", {})
+        # `horizon` is a synthetic-test-env (CounterEnv) kwarg; the real
+        # DreamerVLAOnlineTrainEnv (use_from_config) rejects it and uses max_steps.
+        if not bool(env_cfg.get("use_from_config")):
+            env_cfg["kwargs"].setdefault("horizon", int(horizon or 3))
+        egl_pool = self._egl_device_pool()
+        if egl_pool:
+            env_cfg["egl_device_pool"] = egl_pool
+        return env_cfg
 
     def _int_from(self, paths: tuple[str, ...], default: int) -> int:
         return int(self._select_first(paths, default))

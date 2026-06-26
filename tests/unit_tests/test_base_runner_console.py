@@ -10,7 +10,7 @@ def _runner(cfg, *, main=True):
     obj.cfg = cfg
     obj.is_main_process = main
     for name in ("console_banner", "console_record_success", "console_metrics",
-                 "_console_state_get", "console_success_rate"):
+                 "console_metric_table", "_console_state_get", "console_success_rate"):
         setattr(obj, name, types.MethodType(getattr(BaseRunner, name), obj))
     return obj
 
@@ -53,6 +53,36 @@ def test_console_metrics_force_bypasses_throttle(capsys):
     out = capsys.readouterr().out
     assert out.strip() != "", "force=True must print regardless of throttle"
     r.console_metrics("step 2", {"train/loss": 0.4})  # call #2, not a multiple of 5 -> no print
+    assert capsys.readouterr().out == ""
+
+
+def test_console_metric_table_prints_rlinf_style_table(capsys):
+    cfg = OmegaConf.create({"console": {"metric_table_width": 120}})
+    r = _runner(cfg)
+
+    r.console_metric_table(
+        step=2,
+        total_steps=5,
+        elapsed_s=12.0,
+        metrics={"env/success_once": 0.5, "train/actor/loss": 0.25},
+        start_step=0,
+    )
+
+    out = capsys.readouterr().out
+    assert "Metric Table" in out
+    assert "Global Step:    3/5" in out
+    assert "Environment" in out and "success_once=0.500" in out
+    assert "Training/Actor" in out and "actor/loss=0.250" in out
+
+
+def test_console_metric_table_guarded_on_non_main(capsys):
+    cfg = OmegaConf.create({"console": {"metric_table_width": 120}})
+    _runner(cfg, main=False).console_metric_table(
+        step=0,
+        total_steps=1,
+        elapsed_s=1.0,
+        metrics={"train/loss": 0.5},
+    )
     assert capsys.readouterr().out == ""
 
 

@@ -120,3 +120,35 @@ def test_format_progress_line_hour_duration_and_zero_total():
     s = format_progress_line("train", 0, 0, elapsed_s=3725.0, eta_s=0.0, rate=0.0)
     # total<=0 is treated as open-ended (no pct/eta); duration rolls to h:mm:ss
     assert s == "train 0 · 1:02:05 · 0.0 it/s"
+
+
+def test_format_metric_table_groups_metrics_like_rlinf():
+    table = console.format_metric_table(
+        step=4,
+        total_steps=10,
+        elapsed_s=20.0,
+        metrics={
+            "time/env/step": 1.234,
+            "env/success_once": 0.5,
+            "rollout/returns_mean": 1.0,
+            "eval/success_rate": 0.25,
+            "train/actor/loss": 0.1234,
+            "train/critic/loss": 123.456,
+            "train/replay_buffer/qsize": 7,
+            "train/rl_loss": 0.2222,
+        },
+        start_step=0,
+        width=120,
+    )
+
+    assert "Metric Table" in table
+    assert "Global Step:    5/10" in table
+    assert "Progress:" in table and "50.0%" in table
+    assert "Elapsed: 00:20" in table and "ETA: 00:20" in table
+    assert "Environment" in table and "success_once=0.500" in table
+    assert "Rollout" in table and "returns_mean=1.000" in table
+    assert "Evaluation" in table and "success_rate=0.250" in table
+    assert "Replay Buffer" in table and "qsize=7" in table
+    assert "Training/Actor" in table and "actor/loss=0.123" in table
+    assert "Training/Critic" in table and "critic/loss=123.5" in table
+    assert "Training/Other" in table and "rl_loss=0.222" in table
