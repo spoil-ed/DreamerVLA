@@ -492,7 +492,7 @@ def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monk
     runner.policy = object()
     runner.classifier = torch.nn.Module()
     runner.classifier_optimizer = object()
-    runner._log_replay_warmup_metrics = lambda metrics, step: logged.append(dict(metrics))
+    runner._log_replay_warmup_metrics = lambda metrics, step: logged.append((dict(metrics), int(step)))
     runner.console_progress = (
         lambda current, total, desc, **kwargs: progress.append(
             (int(current), int(total), str(desc), kwargs.get("unit"))
@@ -518,7 +518,8 @@ def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monk
     ]
     assert wm_last == 3.0
     assert cls_last == 0.5
-    logged_keys = {key for metrics in logged for key in metrics}
+    assert [step for _metrics, step in logged] == [0, 1, 2]
+    logged_keys = {key for metrics, _step in logged for key in metrics}
     assert "train/classifier_warmup_loss" in logged_keys
     assert "train/classifier_warmup_f1" in logged_keys
     assert "train/classifier_warmup_pos_frac" in logged_keys

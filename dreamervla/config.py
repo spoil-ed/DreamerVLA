@@ -423,6 +423,9 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
         val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
         if val < 0:
             raise ValueError(f"training.{key} must be >= 0, got {val}")
+    log_every = int(OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1))
+    if log_every < 1:
+        raise ValueError(f"training.replay_warmup_log_every must be >= 1, got {log_every}")
 
 
 def _validate_model_registry_refs(cfg: DictConfig) -> None:

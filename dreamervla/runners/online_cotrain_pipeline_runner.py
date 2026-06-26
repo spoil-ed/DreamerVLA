@@ -62,6 +62,14 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         if hasattr(self, "log_metrics"):
             self.log_metrics(metrics, step=int(step))
 
+    def _replay_warmup_log_every(self) -> int:
+        """Return the configured replay-warmup metric cadence in learner updates."""
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 1
+        value = OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1)
+        return max(1, int(value))
+
     def _print_pipeline_event(self, message: str) -> None:
         """Print one pipeline progress line from rank 0 only."""
         distributed = getattr(self, "distributed", None)
@@ -88,7 +96,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 optim_cfg=optim_cfg,
             )
             last = float(m.get("loss", 0.0))
-            if i % 50 == 0:
+            if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(
                     {"train/wm_warmup_loss": last},
                     step=i,
@@ -112,7 +120,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 grad_clip=grad_clip,
             )
             last_acc = float(m["acc"])
-            if i % 50 == 0:
+            if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(
                     {
                         "train/classifier_warmup_loss": float(m["loss"]),
@@ -247,7 +255,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 cls_last = float(cls_metrics["acc"])
                 cls_f1 = float(cls_metrics.get("f1", 0.0))
                 cls_pos_frac = float(cls_metrics.get("pos_frac", 0.0))
-            if i % 50 == 0:
+            if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(
                     {
                         "train/wm_warmup_loss": wm_last,

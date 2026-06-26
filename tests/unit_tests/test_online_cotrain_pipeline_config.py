@@ -33,6 +33,7 @@ def test_pipeline_config_uses_full_replay_epoch_warmup():
 
     assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 1
     assert OmegaConf.select(cfg, "training.warmup_replay_max_steps") == 0
+    assert OmegaConf.select(cfg, "training.replay_warmup_log_every") == 1
 
 
 def test_pipeline_smoke_config_uses_fixed_step_warmup():
@@ -90,3 +91,14 @@ def test_validate_cfg_warmup(tmp_path):
     })
     with pytest.raises(Exception, match="warmup_replay_max_steps"):
         validate_cfg(neg_replay_max)
+    bad_log_every = OmegaConf.create({
+        "_target_": "dreamervla.runners.OnlineCotrainPipelineRunner",
+        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+        "training": {
+            "wm_warmup_steps": 10,
+            "classifier_warmup_steps": 10,
+            "replay_warmup_log_every": 0,
+        },
+    })
+    with pytest.raises(Exception, match="replay_warmup_log_every"):
+        validate_cfg(bad_log_every)

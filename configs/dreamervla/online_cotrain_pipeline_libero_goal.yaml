@@ -49,6 +49,7 @@ training:
   checkpoint_every: 2000
   wm_warmup_steps: 1200
   classifier_warmup_steps: 1200
+  replay_warmup_log_every: 1
   warmup_replay_epochs: 1  # one pass over sampleable replay windows
   warmup_replay_max_steps: 0  # 0 disables cap; keep 1 replay epoch as full coverage
   warmup_steps: 0            # online RL starts immediately (WM/classifier already warm)
