@@ -1,0 +1,124 @@
+# @package _global_
+defaults:
+  - _self_
+
+_target_: dreamervla.runners.OnlineCotrainRayRunner
+runner_name: online_cotrain_ray
+seed: 7
+render_backend: osmesa
+
+ray_rollout:
+  mode: oft_fixed_base
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+env:
+  num_workers: 2
+  world_model_env: true
+  cfg:
+    target: dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv
+    use_from_config: true
+    kwargs:
+      latent_dim: 4
+      action_dim: 7
+      max_episode_steps: 3
+      success_threshold: 10.0
+      image_shape: [4, 4, 3]
+      device: cpu
+      world_model:
+        target: dreamervla.workers.actor._test_models:TinyLumosWorldModel
+        kwargs:
+          hidden_dim: 4
+          action_dim: 7
+      classifier:
+        target: dreamervla.workers.actor._test_models:TinySuccessClassifier
+        kwargs:
+          hidden_dim: 4
+          window: 3
+
+rollout:
+  steps: 9
+  min_replay_episodes: 1
+  min_replay_transitions: 3
+  min_sampleable_windows: 1
+  require_classifier_evidence: false
+
+replay:
+  cfg:
+    capacity: 100
+    sequence_length: 3
+    task_ids: [0]
+    rank: 0
+
+policy:
+  cfg:
+    target: dreamervla.workers.actor._test_models:TinyLumosPolicy
+    kwargs:
+      hidden_dim: 4
+      action_dim: 7
+      chunk_size: 1
+
+inference:
+  cfg:
+    encoder:
+      target: dreamervla.workers.inference._test_models:TinyEncoder
+    world_model:
+      target: dreamervla.workers.actor._test_models:TinyLumosWorldModel
+      kwargs:
+        hidden_dim: 4
+        action_dim: 7
+    device: cpu
+    emit_hidden_sidecar: false
+
+learner:
+  model_cfg:
+    policy:
+      target: dreamervla.workers.actor._test_models:TinyLumosPolicy
+      kwargs:
+        hidden_dim: 4
+        action_dim: 7
+        chunk_size: 1
+    world_model:
+      target: dreamervla.workers.actor._test_models:TinyLumosWorldModel
+      kwargs:
+        hidden_dim: 4
+        action_dim: 7
+    classifier:
+      target: dreamervla.workers.actor._test_models:TinySuccessClassifier
+      kwargs:
+        hidden_dim: 4
+        window: 3
+  train_cfg:
+    mode: dreamervla_cotrain
+    batch_size: 2
+    classifier_batch_size: 2
+    classifier_early_neg_stride: 1
+    classifier_threshold: 0.5
+    lr: 0.01
+    device: cpu
+    precision: fp32
+    algorithm_cfg:
+      ppo_rollouts_per_start: 1
+      ppo_update_epochs: 1
+      entropy_coef: 0.0
+      lumos:
+        chunk_size: 1
+        episode_max_steps: 2
+        classifier_min_steps: 1
+        filter_zero_variance_groups: false
+    optim_cfg:
+      grad_clip_norm: 1.0
+      zero_grad_set_to_none: true
+    syncer:
+      store_name: ray_cotrain_world_model_env_tiny_weight_store
+
+sync:
+  weight_sync_every: 1
+  world_model_env: true
+
+training:
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_world_model_env_tiny
+  gradient_accumulate_every: 1

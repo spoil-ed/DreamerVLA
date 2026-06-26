@@ -116,6 +116,10 @@ class TinyLumosWorldModel(nn.Module):
     def forward(self, batch: dict) -> dict[str, torch.Tensor] | torch.Tensor:  # type: ignore[override]
         mode = batch.get("mode")
         if mode is None:
+            if "latent" in batch and "action" in batch:
+                latent = self._latent_hidden(batch["latent"])
+                action_signal = self.action_proj(batch["action"].float())
+                return latent + action_signal
             obs = batch["obs_embedding"].float()
             pred = self.obs_proj(obs)
             target = batch["current_actions"].float().mean(dim=-1, keepdim=True)
@@ -173,7 +177,10 @@ class TinySuccessClassifier(nn.Module):
         nn.init.zeros_(self.linear.bias)
 
     def forward(self, windows: torch.Tensor) -> torch.Tensor:
-        hidden = windows.float().mean(dim=1)
+        if windows.ndim == 2:
+            hidden = windows.float()
+        else:
+            hidden = windows.float().mean(dim=1)
         return self.linear(hidden)
 
     def predict_success(

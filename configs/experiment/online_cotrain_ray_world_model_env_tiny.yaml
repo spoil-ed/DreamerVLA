@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: ray_online_cotrain_world_model_env_tiny
+  - _self_

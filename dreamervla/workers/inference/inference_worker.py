@@ -31,6 +31,7 @@ class InferenceWorker(Worker):
         if configured_device.lower() in {"", "auto"}:
             configured_device = self.device
         self.torch_device = torch.device(configured_device)
+        self.emit_hidden_sidecar = bool(self.model_cfg.get("emit_hidden_sidecar", True))
         self.encoder: Any | None = None
         self.world_model: torch.nn.Module | None = None
         self.policy: torch.nn.Module | None = None
@@ -149,7 +150,7 @@ class InferenceWorker(Worker):
         policy_s = time.perf_counter() - policy_start
 
         actions_np: list[np.ndarray] = []
-        for idx, env_id_raw in enumerate(env_ids):
+        for _idx, env_id_raw in enumerate(env_ids):
             env_id = int(env_id_raw)
             action_np = self.action_queues[env_id].pop()
             actions_np.append(action_np.astype(np.float32, copy=False))
@@ -160,13 +161,14 @@ class InferenceWorker(Worker):
             self.state[env_id]["is_first"] = False
 
         obs_embedding_np = obs_embedding.detach().cpu().numpy().astype(np.float32)
+        sidecars = {}
+        if self.emit_hidden_sidecar:
+            sidecars["obs_embedding"] = [
+                obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
+            ]
         out = RolloutBatchOutput(
             actions=actions_np,
-            sidecars={
-                "obs_embedding": [
-                    obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
-                ]
-            },
+            sidecars=sidecars,
         ).to_legacy_dict()
         out["timing"] = {
             "encode_s": float(encode_s),

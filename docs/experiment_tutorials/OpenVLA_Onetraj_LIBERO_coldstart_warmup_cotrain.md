@@ -138,6 +138,44 @@ rank 0 streams progress, and the launcher prints one **aggregate** summary
 `multi_gpu` batch sizes are per-GPU (global = value × `ngpu`); lower them on OOM. Add
 `cotrain_engine=async` for the RLinf-style rollout⟂training overlap loop (Ray only).
 
+### Ray async control plane and WorldModelEnv
+
+Ray async cotrain still uses the normal Dreamer-VLA Runner lifecycle. The
+`OnlineCotrainRayRunner` is the control plane: it starts ReplayWorker,
+EnvWorker, inference/policy worker, and LearnerWorker; schedules rollout rounds;
+tracks `policy`, `world_model`, and `classifier` versions; and synchronizes those
+versions only at rollout boundaries.
+
+There are two EnvWorker backends:
+
+- Real environment backend: `RolloutWorker/Runner -> EnvWorker(real env)`, where
+  the env returns LIBERO observations and rewards.
+- World model backend: `RolloutWorker/Runner -> EnvWorker(WorldModelEnv)`, where
+  `LatentWorldModelEnv` computes `next_obs, reward, done, info` from the current
+  world model and classifier/verifier snapshot.
+
+Policy hidden outputs are optional. The policy worker's required contract is
+action selection from observations; hidden sidecars are only emitted when the
+active route asks for them. The tiny route
+`experiment=online_cotrain_ray_world_model_env_tiny` sets
+`inference.cfg.emit_hidden_sidecar=false` and proves that sampling can complete
+because `WorldModelEnv` constructs replay fields from its own latent state.
+
+Use this low-cost smoke before running large LIBERO cotrain changes:
+
+```bash
+PYTHONPATH=. WANDB_MODE=offline HYDRA_FULL_ERROR=1 \
+python -m dreamervla.train \
+  experiment=online_cotrain_ray_world_model_env_tiny \
+  logger=tensorboard \
+  training.out_dir=/tmp/dvla_world_model_env_smoke \
+  rollout.steps=9
+```
+
+Expected final metrics include `sync/policy_version`, `sync/wm_version`, and
+`sync/classifier_version`. These versions are published by LearnerWorker after
+learning and applied by the Runner at the next sampling boundary.
+
 ## Output
 
 The e2e is orchestration only; the two stages stay on disk separately:

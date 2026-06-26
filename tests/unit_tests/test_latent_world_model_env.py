@@ -54,3 +54,31 @@ def test_latent_world_model_env_loads_independent_versions():
 
     assert env.wm_version == 5
     assert env.classifier_version == 7
+
+
+def test_latent_world_model_env_config_modules_make_replay_transition():
+    env = LatentWorldModelEnv(
+        world_model={
+            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+            "kwargs": {"hidden_dim": 4, "action_dim": 7},
+        },
+        classifier={
+            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "kwargs": {"hidden_dim": 4, "window": 3},
+        },
+        latent_dim=4,
+        action_dim=7,
+        image_shape=(4, 4, 3),
+        max_episode_steps=3,
+    )
+
+    obs, _info = env.reset(task_id=3, episode_id=4)
+    action = np.zeros(7, dtype=np.float32)
+    _next_obs, reward, terminated, truncated, info = env.step(action)
+    transition = env.make_transition(obs, action, reward, terminated, truncated, info)
+
+    assert transition["obs_embedding"].shape == (4,)
+    assert transition["wm_action"].shape == (7,)
+    assert transition["image"].shape == (4, 4, 3)
+    assert transition["task_id"] == 3
+    assert transition["episode_id"] == 4

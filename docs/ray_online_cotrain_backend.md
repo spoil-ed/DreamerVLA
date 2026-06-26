@@ -151,6 +151,46 @@ This route uses tiny WM / classifier / actor modules but exercises the
 `dreamervla_cotrain` learner phases and the same weight-sync boundary as the
 real route.
 
+### WorldModelEnv Smoke Route
+
+世界模型环境路由用于验证“真实 EnvWorker 后端”和“世界模型 EnvWorker 后端”
+共享同一套 Runner 控制平面：
+
+```bash
+PYTHONPATH=. WANDB_MODE=offline HYDRA_FULL_ERROR=1 \
+"${PYTHON}" -m dreamervla.train \
+  experiment=online_cotrain_ray_world_model_env_tiny \
+  logger=tensorboard \
+  training.out_dir=/tmp/dvla_world_model_env_smoke \
+  rollout.steps=9
+```
+
+关键语义如下：
+
+- `OnlineCotrainRayRunner` 是控制平面，只负责启动 worker、派发 rollout
+  round、记录版本号、在边界同步权重；它不直接持有环境状态，也不直接执行模型推理。
+- `InferenceWorker` / policy worker 根据观测产出 action；`obs_embedding`
+  这类 hidden sidecar 是可选输出。该 smoke route 明确设置
+  `inference.cfg.emit_hidden_sidecar=false`，采样仍由 `WorldModelEnv` 自己
+  生成 replay 所需的 `obs_embedding`。
+- `WorldModelEnv` 是 `EnvWorker` 的一种后端：
+  `EnvWorker.step(action)` 内部调用
+  `LatentWorldModelEnv.step(action)`，返回 `next_obs, reward, done, info`，
+  并由 env 自身构造 `OnlineReplay` 需要的 transition。
+- classifier/verifier 随 world model 一起放在 `WorldModelEnv` 推理快照里；
+  env 的 reward/done/info 来自当前快照，不从 Runner 旁路读取。
+- `LearnerWorker` 更新 policy / WM / classifier 后发布对应版本；
+  Runner 在 rollout 边界把 policy 拉到 inference worker，并把 WM/classifier
+  state_dict 推到 `WorldModelEnv`，避免单个 rollout episode 内混用多版快照。
+
+期望 final metrics 至少包含：
+
+```text
+sync/policy_version=1
+sync/wm_version=1
+sync/classifier_version=1
+```
+
 ## What The Overlap Does
 
 The runner uses Ray `ObjectRef` handles, not Python `async/await`.

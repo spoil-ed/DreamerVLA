@@ -104,7 +104,10 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                     transition = env.make_transition(
                         obs, action, reward, terminated, truncated, info
                     )
-                    transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+                    if obs_embedding is not None:
+                        transition["obs_embedding"] = np.asarray(
+                            obs_embedding, dtype=np.float32
+                        )
                 done = bool(terminated or truncated)
                 if done:
                     episode_id += 1
@@ -378,7 +381,8 @@ class EnvWorker(Worker):
             )
         elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
-            transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+            if obs_embedding is not None:
+                transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
         else:
             transition = self._make_generic_transition(
                 obs,
@@ -429,7 +433,7 @@ class EnvWorker(Worker):
     def _add_episode_to_replay(self) -> None:
         if self.replay is None:
             return
-        add_episode = getattr(self.replay, "add_episode")
+        add_episode = self.replay.add_episode
         remote = getattr(add_episode, "remote", None)
         if remote is not None:
             ray.get(remote(list(self.episode)))
