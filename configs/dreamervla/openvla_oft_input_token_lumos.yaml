@@ -1,50 +1,93 @@
 # @package _global_
-# Scheme B: DreamerVLA over OpenVLA-OFT frame-level projected vision tokens.
+# DreamerVLA over OpenVLA-OFT query-before hidden states.
 defaults:
-  - openvla_oft_lumos
+  - _base_lumos
   - _self_
+  - /task: libero_goal
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/oft_lumos_input_tokens/${task.name}/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/oft_lumos_hidden_state/${task.name}/${now:%Y%m%d_%H%M%S}}
 
 init:
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
   world_model_state_ckpt: null
   classifier_state_ckpt: null
 
 dataset:
+  _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
+  hdf5_dir: ${task.openvla_oft.hdf5_reward_dir}
   hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  expected_model_path: ${task.openvla_oft.ckpt_path}
+  expected_encoder_state_ckpt: null
+  expected_time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   expected_action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
   expected_obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
   expected_prompt_style: ${task.openvla_oft.input_tokens.expected_prompt_style}
   expected_history: ${task.openvla_oft.input_tokens.expected_history}
   expected_include_state: ${task.openvla_oft.input_tokens.expected_include_state}
   expected_rotate_images_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
+  reward_mode: per_window_dense
+  balanced_length: 50000
+  balanced_seed: 0
+  sequence_length: 36
+  image_size: ${task.image_size}
+  image_keys: ${task.image_keys}
+  hidden_key: ${task.hidden_key}
+  load_actor_sequence: false
+  stride: 1
+  max_files: null
+  max_demos_per_file: null
+  max_windows: null
+
+dataloader:
+  batch_size: 2
+  num_workers: 2
+  shuffle: true
+  drop_last: true
+  pin_memory: false
+  persistent_workers: true
+  prefetch_factor: 1
+  multiprocessing_context: forkserver
 
 world_model:
+  _target_: ${task.openvla_oft.wm_target}
   chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
   obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+  action_dim: ${task.action_dim}
   token_count: ${task.openvla_oft.input_tokens.token_count}
   token_dim: ${task.openvla_oft.input_tokens.token_dim}
-  time_horizon: ${task.openvla_oft.time_horizon}
+  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  # DINO-WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
-  # half-width attention inner = 2048 = 0.5*model_dim, lean FFN mlp_dim = 2048. ~313M.
-  # Matches the offline query_before WM so all OpenVLA query_before routes share it.
   depth: 6
   heads: 16
   dim_head: 128
   mlp_dim: 2048
+  dropout: 0.1
+  num_hist: 3
+  num_pred: 1
+  max_seq_len: 128
+  hidden_loss_scale: 1.0
+  cosine_loss_scale: 0.1
+  chunk_rollout_chunks: 4
+  chunk_rollout_loss_scale: 1.0
+  reward_head_type: binary
+  reward_loss_scale: 32.0
+  reward_hidden_dim: 1024
+  reward_init_logit: 0.0
+  reward_pos_weight: 1.0
+  return_predictions: false
+  freeze_backbone: true
 
 policy:
-  _target_: dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor
+  _target_: dreamervla.models.actor.LatentToOpenVLAHiddenStateActor
   hidden_dim: null
   source_token_count: ${task.openvla_oft.input_tokens.token_count}
   source_token_dim: ${task.openvla_oft.input_tokens.token_dim}
-  action_hidden_dim: ${task.openvla_oft.input_tokens.action_hidden_dim}
+  hidden_state_dim: ${task.openvla_oft.input_tokens.hidden_state_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   head_type: oft_discrete_token
@@ -62,8 +105,10 @@ policy:
   bridge_dropout: 0.1
 
 critic:
+  _target_: ${task.openvla_oft.critic_target}
   hidden_dim: ${task.openvla_oft.input_tokens.token_dim}
 
 algorithm:
   lumos:
     chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+    classifier_min_steps: 3

@@ -15,16 +15,39 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+_REWARD_DATASETS = (
+    "actions",
+    "dones",
+    "rewards",
+    "sparse_rewards",
+    "robot_states",
+    "states",
+)
+_OBS_DATASETS = (
+    "agentview_rgb",
+    "eye_in_hand_rgb",
+    "ee_pos",
+    "ee_ori",
+    "ee_states",
+    "gripper_states",
+    "joint_states",
+)
+
 MANIFEST_NAME = "collection_manifest.json"
 
 
-def count_collected_episodes(reward_dir: str | Path) -> int:
+def count_collected_episodes(
+    reward_dir: str | Path, hidden_dir: str | Path | None = None
+) -> int:
     """Total episodes already on disk, summed across reward shards.
 
     A shard that cannot be opened (partial/corrupt, e.g. an interrupted run) is
     skipped with a warning rather than crashing — it simply does not count, so the
     resume top-up will re-collect those episodes.
     """
+    if hidden_dir is not None:
+        return sum(len(ids) for ids in complete_episode_ids_per_task(reward_dir, hidden_dir).values())
+
     import h5py
 
     directory = Path(reward_dir).expanduser()
@@ -44,8 +67,16 @@ def count_collected_episodes(reward_dir: str | Path) -> int:
     return total
 
 
-def count_episodes_per_task(reward_dir: str | Path) -> dict[int, int]:
+def count_episodes_per_task(
+    reward_dir: str | Path, hidden_dir: str | Path | None = None
+) -> dict[int, int]:
     """Episodes already on disk bucketed by their ``task_id`` demo attr."""
+    if hidden_dir is not None:
+        return {
+            task_id: len(ids)
+            for task_id, ids in complete_episode_ids_per_task(reward_dir, hidden_dir).items()
+        }
+
     import h5py
 
     directory = Path(reward_dir).expanduser()
@@ -64,6 +95,98 @@ def count_episodes_per_task(reward_dir: str | Path) -> dict[int, int]:
         except (OSError, KeyError) as exc:
             warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
     return counts
+
+
+def complete_episode_ids_per_task(
+    reward_dir: str | Path, hidden_dir: str | Path
+) -> dict[int, set[int]]:
+    """Complete ``episode_id`` values bucketed by ``task_id``.
+
+    A complete collected episode must have a readable reward demo and a matching
+    hidden sidecar demo in the same shard. ``complete=False`` on either side,
+    missing required reward fields, missing ``obs_embedding``, or a hidden length
+    shorter than the reward length makes the episode incomplete and therefore
+    eligible for re-collection.
+    """
+    import h5py
+
+    reward = Path(reward_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser()
+    complete: dict[int, set[int]] = {}
+    if not reward.is_dir() or not hidden.is_dir():
+        return complete
+    fallback_index: dict[int, int] = {}
+    for shard in sorted(reward.glob("*.hdf5")):
+        hidden_shard = hidden / shard.name
+        if not hidden_shard.is_file():
+            continue
+        try:
+            with h5py.File(str(shard), "r") as rf, h5py.File(str(hidden_shard), "r") as hf:
+                reward_data = rf.get("data")
+                hidden_data = hf.get("data")
+                if reward_data is None or hidden_data is None:
+                    continue
+                for demo_key in sorted(reward_data.keys()):
+                    reward_demo = reward_data[demo_key]
+                    hidden_demo = hidden_data.get(demo_key)
+                    if hidden_demo is None:
+                        continue
+                    length = _complete_reward_length(reward_demo)
+                    if length is None:
+                        continue
+                    if not _complete_hidden_demo(hidden_demo, length):
+                        continue
+                    task_id = int(reward_demo.attrs.get("task_id", -1))
+                    if task_id < 0:
+                        continue
+                    if "episode_id" in reward_demo.attrs:
+                        episode_id = int(reward_demo.attrs["episode_id"])
+                    else:
+                        episode_id = fallback_index.get(task_id, 0)
+                        fallback_index[task_id] = episode_id + 1
+                    complete.setdefault(task_id, set()).add(episode_id)
+        except (OSError, KeyError) as exc:
+            warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
+    return complete
+
+
+def _attr_is_complete(group: Any) -> bool:
+    return bool(group.attrs.get("complete", True))
+
+
+def _complete_reward_length(demo: Any) -> int | None:
+    if not _attr_is_complete(demo):
+        return None
+    for key in _REWARD_DATASETS:
+        if key not in demo:
+            return None
+    obs = demo.get("obs")
+    if obs is None:
+        return None
+    for key in _OBS_DATASETS:
+        if key not in obs:
+            return None
+    try:
+        length = int(demo.attrs.get("num_samples", demo["actions"].shape[0]))
+    except (TypeError, ValueError):
+        return None
+    if length <= 0:
+        return None
+    for key in _REWARD_DATASETS:
+        if int(demo[key].shape[0]) < length:
+            return None
+    for key in _OBS_DATASETS:
+        if int(obs[key].shape[0]) < length:
+            return None
+    return length
+
+
+def _complete_hidden_demo(demo: Any, length: int) -> bool:
+    if not _attr_is_complete(demo):
+        return False
+    if "obs_embedding" not in demo:
+        return False
+    return int(demo["obs_embedding"].shape[0]) >= int(length)
 
 
 def quarantine_corrupt_shards(
@@ -107,11 +230,60 @@ def quarantine_corrupt_shards(
     return quarantined
 
 
+def quarantine_incomplete_shards(
+    reward_dir: str | Path, hidden_dir: str | Path
+) -> list[str]:
+    """Move unreadable or unpaired reward shards to ``.incomplete/``.
+
+    This handles shard-level incompleteness such as a missing hidden sidecar.
+    Per-demo gaps are intentionally left in place and ignored by
+    ``complete_episode_ids_per_task`` so complete demos in the same shard remain
+    reusable.
+    """
+    import h5py
+
+    reward = Path(reward_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser()
+    moved: list[str] = []
+    if not reward.is_dir():
+        return moved
+    for shard in sorted(reward.glob("*.hdf5")):
+        hidden_shard = hidden / shard.name
+        reason: str | None = None
+        if not hidden_shard.is_file():
+            reason = "missing hidden sidecar"
+        else:
+            try:
+                with h5py.File(str(shard), "r") as rf, h5py.File(str(hidden_shard), "r") as hf:
+                    if rf.get("data") is None or hf.get("data") is None:
+                        reason = "missing data group"
+            except OSError as exc:
+                reason = str(exc)
+        if reason is None:
+            continue
+        for directory in (reward, hidden):
+            src = directory / shard.name
+            if src.exists():
+                dest = directory / ".incomplete"
+                dest.mkdir(exist_ok=True)
+                src.rename(dest / src.name)
+        warnings.warn(
+            f"quarantined incomplete shard {shard.name} -> .incomplete/: {reason}",
+            stacklevel=2,
+        )
+        moved.append(shard.name)
+    return moved
+
+
 def summarize_collection(
-    reward_dir: str | Path, *, target_total: int | None, num_tasks: int
+    reward_dir: str | Path,
+    hidden_dir: str | Path | None = None,
+    *,
+    target_total: int | None,
+    num_tasks: int,
 ) -> dict[str, Any]:
     """Inspect existing collected data and report progress toward the target."""
-    per_task = count_episodes_per_task(reward_dir)
+    per_task = count_episodes_per_task(reward_dir, hidden_dir)
     total = sum(per_task.values())
     remaining: int | None = None
     target_per_task: int | None = None

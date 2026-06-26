@@ -91,7 +91,7 @@ openvla_oft:
     token_count: 512
     token_dim: 4096
     chunk_size: ${task.openvla_oft.chunk_size}
-    action_hidden_dim: 4096
+    hidden_state_dim: 4096
     latent_stage: query_before
     latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy

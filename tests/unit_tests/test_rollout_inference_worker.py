@@ -79,3 +79,15 @@ def test_forward_batch_executes_action_chunk_open_loop() -> None:
     third = w.forward_batch([{"seed": 20}], [0])
 
     assert [int(out["actions"][0][0]) for out in (first, second, third)] == [0, 1, 2]
+
+
+def test_forward_batch_can_disable_hidden_sidecar() -> None:
+    cfg = _cfg()
+    cfg["emit_hidden_sidecar"] = False
+    w = RolloutInferenceWorker(cfg, {}, num_envs=1)
+    w.init()
+
+    out = w.forward_batch([{"seed": 10}], [0])
+
+    assert set(out) == {"actions"}
+    assert out["actions"][0].shape == (7,)

@@ -278,12 +278,10 @@ class OnlineReplay:
     ) -> list[dict[str, Any]]:
         valid = self._valid_records()
         if staleness_threshold is not None:
-            from dreamervla.algorithms.staleness import is_stale
-
             fresh = [
                 record
                 for record in valid
-                if not is_stale(
+                if not _is_stale(
                     int(record.get("policy_version", 0)),
                     self._current_policy_version,
                     int(staleness_threshold),
@@ -703,3 +701,9 @@ def get_replay_task_stats_global(
         min_episodes_per_task=min_episodes_per_task,
         min_sampleable_windows=min_sampleable_windows,
     )
+
+
+def _is_stale(record_version: int, current_version: int, threshold: int) -> bool:
+    if int(threshold) < 0:
+        return False
+    return max(0, int(current_version) - int(record_version)) > int(threshold)

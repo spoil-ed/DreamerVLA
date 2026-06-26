@@ -45,7 +45,7 @@ import numpy as np
 import torch
 
 from dreamervla.dataset.collection_manifest import (
-    count_episodes_per_task,
+    complete_episode_ids_per_task,
     next_shard_index,
 )
 from dreamervla.runners.oft_collect_common import (
@@ -117,6 +117,26 @@ def _build_work_list(
         (int(tid), int(collected_per_task.get(int(tid), 0)) + ep)
         for tid in task_ids
         for ep in range(int(episodes_per_task))
+    ]
+
+
+def _build_resume_work_list(
+    task_ids: list[int],
+    target_episodes_per_task: int,
+    complete_episode_ids_by_task: dict[int, set[int]],
+) -> list[tuple[int, int]]:
+    """Return missing ``(task_id, episode_id)`` pairs below a per-task target.
+
+    Unlike ``_build_work_list``, this preserves holes: if episode ids 0 and 2 are
+    complete and the target is 4, only 1 and 3 are scheduled. Incomplete or absent
+    ids are therefore re-collected, while complete ids are skipped.
+    """
+    target = int(target_episodes_per_task)
+    return [
+        (int(tid), int(ep))
+        for tid in task_ids
+        for ep in range(target)
+        if ep not in complete_episode_ids_by_task.get(int(tid), set())
     ]
 
 
@@ -534,21 +554,17 @@ def collect_rollouts(
         num_tasks = _tmp_env.num_tasks
 
     task_ids = _resolve_task_ids(cfg["task_ids"], num_tasks)
-    # Resume-aware work list: episode_id is the init_state selector (env reset uses
-    # init_state = episode_id % num_init_states), so continue each task from the count
-    # already on disk instead of restarting at 0 — otherwise a resume re-collects the
-    # SAME init_states. Counting the global per-task totals (across every rank's shards)
-    # before round-robin sharding keeps ranks disjoint on resume too.
-    # TODO(collect-attempts): this implements "continue to new init_states" (resume
-    # option 1). Deliberate N-attempts-per-init_state (re-rolling the same init_state for
-    # a stochastic policy) is NOT implemented — it would add a `collection_attempt` axis
-    # (target = num_init_states x attempts) and record attempt = episode_id // num_init.
-    collected_per_task = count_episodes_per_task(reward_dir)
-    full_work = _build_work_list(task_ids, episodes_per_task, collected_per_task)
+    # Resume-aware work list: episode_id is the init_state selector. Complete
+    # reward/hidden pairs are skipped; missing or incomplete ids below the per-task
+    # target are re-collected into new shards.
+    complete_ids = complete_episode_ids_per_task(reward_dir, hidden_dir)
+    full_work = _build_resume_work_list(task_ids, episodes_per_task, complete_ids)
     my_work = _shard_work(full_work, rank, world_size)
 
     resume_note = (
-        f" resume_from={dict(sorted(collected_per_task.items()))}" if collected_per_task else ""
+        f" resume_complete={{{', '.join(f'{k}: {len(v)}' for k, v in sorted(complete_ids.items()))}}}"
+        if complete_ids
+        else ""
     )
     print(
         f"[collector rank={rank}] task_suite={task_suite_name} "

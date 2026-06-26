@@ -20,7 +20,10 @@ EXPERIMENT_MODULES = {
         "worldmodel",
         "rynnvla_input_token_chunk",
     ),
-    "oft_world_model_dinowm_chunk": ("worldmodel", "openvla_oft_action_chunk"),
+    "oft_world_model_dinowm_chunk": (
+        "worldmodel",
+        "openvla_oft_input_token_chunk",
+    ),
     "oft_discrete_token_world_model_dinowm_chunk": (
         "worldmodel",
         "openvla_oft_discrete_token_action_chunk",
@@ -34,7 +37,10 @@ EXPERIMENT_MODULES = {
         "classifier",
         "rynnvla_input_token_chunk",
     ),
-    "oft_latent_classifier_chunk": ("classifier", "openvla_oft_action_chunk"),
+    "oft_latent_classifier_chunk": (
+        "classifier",
+        "openvla_oft_input_token_chunk",
+    ),
     "oft_latent_classifier_chunk_input_tokens": (
         "classifier",
         "openvla_oft_input_token_chunk",
@@ -53,7 +59,7 @@ EXPERIMENT_MODULES = {
     ),
     "dreamervla_oft_dino_wm_lumos": (
         "dreamervla",
-        "openvla_oft_lumos",
+        "openvla_oft_input_token_lumos",
     ),
     "dreamervla_oft_discrete_token_dino_wm_lumos": (
         "dreamervla",
@@ -76,6 +82,20 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
     if extra_overrides is not None:
         overrides.extend(extra_overrides)
     return compose(config_name="train", overrides=overrides)
+
+
+def test_openvla_oft_lumos_main_route_uses_input_tokens() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = _compose_experiment("dreamervla_oft_dino_wm_lumos")
+
+    assert cfg.dataset.hidden_dir == cfg.task.openvla_oft.input_token_hidden_dir
+    assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
+    assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
+    assert cfg.world_model.token_count == cfg.task.openvla_oft.input_tokens.token_count
+    assert cfg.policy._target_ == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
+    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
+    assert "action_hidden_dim" not in cfg.policy
 
 
 def test_runner_public_api_exports_route_specific_names() -> None:
@@ -310,23 +330,31 @@ def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
     assert discrete_wm.dataset.hidden_dir.endswith("_h1")
 
 
-def test_openvla_oft_action_hidden_defaults_match_preprocess_output() -> None:
+def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     suites = ("libero_goal", "libero_object", "libero_spatial", "libero_10")
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfgs = [
+        wm_cfgs = [
             _compose_experiment(
                 "oft_world_model_dinowm_chunk",
                 extra_overrides=[f"task={suite}"],
             )
             for suite in suites
         ]
+        classifier = _compose_experiment(
+            "oft_latent_classifier_chunk",
+            extra_overrides=["task=libero_goal"],
+        )
 
-    for cfg in cfgs:
-        expected = f"{cfg.task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2"
-        assert cfg.task.openvla_oft.action_hidden_dir == expected
+    for cfg in wm_cfgs:
+        expected = f"{cfg.task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2"
+        assert cfg.task.openvla_oft.input_token_hidden_dir == expected
         assert cfg.dataset.hidden_dir == expected
+        assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
+        assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
+
+    assert classifier.data.success_dir_hidden == classifier.task.openvla_oft.input_token_hidden_dir
 
 
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
@@ -357,10 +385,11 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
 
     assert (
         oft_dreamer.policy._target_
-        == "dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor"
+        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
     )
     assert oft_dreamer.policy.source_token_count == 512
-    assert oft_dreamer.policy.action_hidden_dim == 4096
+    assert oft_dreamer.policy.hidden_state_dim == 4096
+    assert "action_hidden_dim" not in oft_dreamer.policy
     assert oft_dreamer.policy.head_type == "oft_discrete_token"
     assert oft_dreamer.policy.init_lm_head_ckpt == oft_dreamer.task.openvla_oft.ckpt_path
 

@@ -153,6 +153,15 @@ def test_build_work_list_resume_continues_from_collected_count():
     assert _build_work_list([0, 1], 2, {0: 2, 1: 1}) == [(0, 2), (0, 3), (1, 1), (1, 2)]
 
 
+def test_build_resume_work_list_reaches_target_without_recollecting_complete_ids():
+    from dreamervla.runners.collect_parallel_rollouts import _build_resume_work_list
+
+    assert _build_resume_work_list([0], 4, {0: {0, 2}}) == [
+        (0, 1),
+        (0, 3),
+    ]
+
+
 def test_collect_rollouts_missing_keys_raises_before_gpu():
     from dreamervla.runners.collect_parallel_rollouts import collect_rollouts
 

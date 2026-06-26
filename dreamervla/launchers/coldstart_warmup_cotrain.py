@@ -20,6 +20,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from dreamervla.dataset.collection_manifest import (
     format_collection_report,
     quarantine_corrupt_shards,
+    quarantine_incomplete_shards,
     read_manifest,
     resume_plan,
     summarize_collection,
@@ -347,7 +348,9 @@ def build_pipeline_plan(
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
-            f"task.openvla_oft.action_hidden_dir={hidden_dir}",
+            f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
+            f"++collect.hdf5_reward_dir={reward_dir}",
+            f"++collect.hidden_dir={hidden_dir}",
             f"training.out_dir={collect_out}",
             *ray_env_scale,
             *_control_overrides(
@@ -589,6 +592,89 @@ def _consolidate_warmup_state_dicts(wm_path: Path, cls_path: Path, out_path: Pat
     torch.save(payload, out_path)
 
 
+def collect_resume(
+    plan: PipelinePlan,
+    *,
+    target_episodes: int | None,
+    num_tasks: int,
+    skip_collect: bool,
+) -> dict[str, Any]:
+    """Inspect collected data, resume missing episodes, and write the manifest.
+
+    Resume is episode-level: only complete reward/hidden pairs count. Missing
+    or incomplete ``(task_id, episode_id)`` entries below the per-task target are
+    collected into new shards by the downstream collector.
+    """
+    target = (
+        _derive_collect_target_from_cmd(plan.collect_cmd, num_tasks=num_tasks)
+        if target_episodes is None
+        else int(target_episodes)
+    )
+    quarantined = quarantine_corrupt_shards(plan.reward_dir, plan.hidden_dir)
+    quarantined += quarantine_incomplete_shards(plan.reward_dir, plan.hidden_dir)
+    if quarantined:
+        print(
+            f"[collect] quarantined {len(quarantined)} incomplete/corrupt shard(s): "
+            f"{', '.join(quarantined)}",
+            flush=True,
+        )
+
+    if skip_collect:
+        print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
+        _write_collection_manifest(plan, target_episodes=target, num_tasks=num_tasks)
+        return {"ran_collect": False, "target_episodes": target}
+
+    summary = summarize_collection(
+        plan.reward_dir,
+        plan.hidden_dir,
+        target_total=target,
+        num_tasks=num_tasks,
+    )
+    print(format_collection_report(summary, root=plan.collected_root), flush=True)
+    if summary["complete"]:
+        print(f"PHASE 1/2 SKIPPED: target {target} already collected", flush=True)
+        _write_collection_manifest(plan, target_episodes=target, num_tasks=num_tasks)
+        return {"ran_collect": False, "target_episodes": target}
+
+    collect_cmd = list(plan.collect_cmd)
+    target_per_task = int(summary["target_per_task"] or 0)
+    if target_per_task > 0:
+        collect_cmd.append(f"collect.episodes_per_task={target_per_task}")
+    rp = resume_plan(
+        target_total=int(target),
+        num_tasks=int(num_tasks),
+        collected=int(summary["total"]),
+    )
+    print(
+        f"[resume] topping up {rp['remaining']} episodes "
+        f"({target_per_task}/task target, appending shards)",
+        flush=True,
+    )
+    print("PHASE 1/2 START: cold-start collection", flush=True)
+    subprocess.run(collect_cmd, check=True)
+    post = summarize_collection(
+        plan.reward_dir,
+        plan.hidden_dir,
+        target_total=target,
+        num_tasks=num_tasks,
+    )
+    print("PHASE 1/2 collected (aggregate across all processes):", flush=True)
+    print(format_collection_report(post, root=plan.collected_root), flush=True)
+    _write_collection_manifest(plan, target_episodes=target, num_tasks=num_tasks)
+    return {"ran_collect": True, "target_episodes": target}
+
+
+def _derive_collect_target_from_cmd(cmd: Sequence[str], *, num_tasks: int) -> int:
+    episodes_per_task: int | None = None
+    for item in cmd:
+        text = str(item)
+        if text.startswith("collect.episodes_per_task="):
+            episodes_per_task = int(text.split("=", 1)[1])
+    if episodes_per_task is None:
+        raise ValueError("cannot derive collect target: collect.episodes_per_task is absent")
+    return int(episodes_per_task) * int(num_tasks)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     config_name, overrides = _parse_hydra_like_argv(
         list(sys.argv[1:] if argv is None else argv)
@@ -660,56 +746,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     target_episodes = cfg.get("collect_target_episodes")
     num_tasks = int(cfg.get("collect_num_tasks", 10) or 10)
-    collect_cmd = list(plan.collect_cmd)
-    # Phase-1 integrity check: a crashed collect can leave a truncated shard that later
-    # breaks collection-append and warmup. Quarantine such shards (-> .corrupt/) up front,
-    # before either phase reads them. Runs even with skip_collect so warmup gets clean data.
-    quarantined = quarantine_corrupt_shards(plan.reward_dir, plan.hidden_dir)
-    if quarantined:
-        print(
-            f"[collect] quarantined {len(quarantined)} corrupt shard(s) -> .corrupt/: "
-            f"{', '.join(quarantined)}",
-            flush=True,
-        )
-    run_collect = not bool(cfg.get("skip_collect", False)) and plan.cotrain_phase != "online"
-    if run_collect:
-        # Identify what is already collected and print it BEFORE deciding to collect,
-        # resume, or skip — never load blindly.
-        summary = summarize_collection(
-            plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
-        )
-        print(format_collection_report(summary, root=plan.collected_root), flush=True)
-        if target_episodes is not None and summary["complete"]:
-            print(
-                f"PHASE 1/2 SKIPPED: target {target_episodes} already collected",
-                flush=True,
-            )
-            run_collect = False
-        elif target_episodes is not None:
-            rp = resume_plan(
-                target_total=int(target_episodes),
-                num_tasks=num_tasks,
-                collected=summary["total"],
-            )
-            collect_cmd.append(f"collect.episodes_per_task={rp['episodes_per_task']}")
-            print(
-                f"[resume] topping up {rp['remaining']} episodes "
-                f"({rp['episodes_per_task']}/task, appending shards)",
-                flush=True,
-            )
-    if run_collect:
-        print("PHASE 1/2 START: cold-start collection", flush=True)
-        subprocess.run(collect_cmd, check=True)
-        # Aggregate what every collect rank/worker wrote to disk into one report,
-        # so the multi-process collect ends in a summary rather than per-process noise.
-        post = summarize_collection(
-            plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
-        )
-        print("PHASE 1/2 collected (aggregate across all processes):", flush=True)
-        print(format_collection_report(post, root=plan.collected_root), flush=True)
-    else:
-        print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
-    _write_collection_manifest(plan, target_episodes=target_episodes, num_tasks=num_tasks)
+    collect_resume(
+        plan,
+        target_episodes=target_episodes,
+        num_tasks=num_tasks,
+        skip_collect=bool(cfg.get("skip_collect", False)) or plan.cotrain_phase == "online",
+    )
     if plan.cotrain_phase == "warmup":
         print("PHASE 2/2 START: offline warmup only", flush=True)
         subprocess.run(plan.cotrain_warmup_cmd, check=True)
@@ -741,7 +783,10 @@ def _write_collection_manifest(
 ) -> None:
     """Write metadata + config next to the unified collected_rollouts data."""
     summary = summarize_collection(
-        plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
+        plan.reward_dir,
+        plan.hidden_dir,
+        target_total=target_episodes,
+        num_tasks=num_tasks,
     )
     existing = read_manifest(plan.collected_root) or {}
     shards = (

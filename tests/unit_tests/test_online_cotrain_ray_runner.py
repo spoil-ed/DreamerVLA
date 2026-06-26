@@ -258,6 +258,105 @@ class _MetricLoggerSpy:
         self.calls.append((dict(metrics), step))
 
 
+class _BoundaryReplay:
+    def __init__(self) -> None:
+        self.transitions: list[dict] = []
+
+    @property
+    def last_transition(self) -> dict:
+        return self.transitions[-1]
+
+    def add_transition(self, transition: dict) -> None:
+        self.transitions.append(dict(transition))
+
+
+class _BoundaryPolicyWorker:
+    def __init__(self) -> None:
+        self.forward_batch_calls = 0
+        self.pull_calls: list[int] = []
+
+    def forward_batch(self, obs_batch, env_ids):
+        self.forward_batch_calls += 1
+        return _Ready([{"actions": [[0.0] * 7 for _ in env_ids], "obs_embedding": []}])
+
+    def pull_weights(self, store_name: str, what: str, local_version: int):
+        del store_name, local_version
+        assert what == "policy"
+        self.pull_calls.append(1)
+        return _Ready([1])
+
+
+class _BoundaryEnvWorker:
+    def __init__(self) -> None:
+        self.wm_sync_calls: list[int] = []
+        self.classifier_sync_calls: list[int] = []
+
+    def load_world_model_state(self, state_dict, version: int):
+        del state_dict
+        self.wm_sync_calls.append(int(version))
+        return _Ready([None])
+
+    def load_classifier_state(self, state_dict, version: int):
+        del state_dict
+        self.classifier_sync_calls.append(int(version))
+        return _Ready([None])
+
+
+class _BoundaryEnvGroup:
+    def __init__(self, num_env_workers: int = 1) -> None:
+        self.workers = [_BoundaryEnvWorker() for _ in range(int(num_env_workers))]
+        self.step_calls_by_worker = [0 for _ in self.workers]
+        self._rank = 0
+
+    def execute_on(self, rank: int):
+        self._rank = int(rank)
+        return self
+
+    def step(self, action, hidden=None):
+        del action, hidden
+        self.step_calls_by_worker[self._rank] += 1
+        return _Ready([({"env_id": self._rank}, False, {})])
+
+    def load_world_model_state(self, state_dict, version: int):
+        for worker in self.workers:
+            worker.load_world_model_state(state_dict, version)
+        return _Ready([None for _ in self.workers])
+
+    def load_classifier_state(self, state_dict, version: int):
+        for worker in self.workers:
+            worker.load_classifier_state(state_dict, version)
+        return _Ready([None for _ in self.workers])
+
+    @property
+    def wm_sync_calls(self) -> list[int]:
+        return self.workers[0].wm_sync_calls
+
+    @property
+    def classifier_sync_calls(self) -> list[int]:
+        return self.workers[0].classifier_sync_calls
+
+
+class _BoundaryLearner:
+    def __init__(self) -> None:
+        self.synced: list[tuple[str, int]] = []
+        self.optimizer_step_calls = 0
+
+    def sync_weights(self, what: str, version: int):
+        self.synced.append((str(what), int(version)))
+        return _Ready([None])
+
+    def state_dicts(self):
+        return _Ready(
+            [
+                {
+                    "policy": {},
+                    "world_model": {},
+                    "classifier": {},
+                }
+            ]
+        )
+
+
 def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     from omegaconf import OmegaConf
 
@@ -296,6 +395,75 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     assert history["time/infer_encode_s"] == 0.1
     assert history["time/infer_world_model_s"] == 0.2
     assert history["time/infer_policy_s"] == 0.3
+
+
+def test_runner_syncs_snapshots_only_at_rollout_boundary() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    runner._policy_version = 0
+    runner._wm_version = 0
+    runner._classifier_version = 0
+    runner._fake_replay = _BoundaryReplay()
+    policy_worker = _BoundaryPolicyWorker()
+    env_group = _BoundaryEnvGroup()
+    learner = _BoundaryLearner()
+    groups = {
+        "infer": policy_worker,
+        "envs": env_group,
+        "learner": learner,
+        "store_name": "boundary_store",
+    }
+
+    runner._begin_rollout_round()
+    runner._record_transition({"obs": 1, "action": 2})
+
+    assert policy_worker.pull_calls == []
+    assert env_group.wm_sync_calls == []
+    assert runner._fake_replay.last_transition["policy_version"] == 0
+    assert runner._fake_replay.last_transition["wm_version"] == 0
+    assert runner._fake_replay.last_transition["classifier_version"] == 0
+
+    runner._mark_learner_update_result(
+        {
+            "policy": {"updated": True},
+            "world_model": {"updated": True},
+            "classifier": {"updated": True},
+        }
+    )
+    runner._sync_after_rollout_boundary(groups)
+
+    assert runner._policy_version == 1
+    assert runner._wm_version == 1
+    assert runner._classifier_version == 1
+    assert learner.synced == [("policy", 1), ("world_model", 1), ("classifier", 1)]
+    assert policy_worker.pull_calls == [1]
+    assert env_group.wm_sync_calls == [1]
+    assert env_group.classifier_sync_calls == [1]
+
+
+def test_runner_dispatches_rollout_work_to_worker_groups() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    runner._fake_policy_worker = _BoundaryPolicyWorker()
+    runner._fake_env_group = _BoundaryEnvGroup(num_env_workers=3)
+    runner._fake_learner = _BoundaryLearner()
+
+    runner._dispatch_rollout_round(
+        obs_batch=[{"env_id": 0}, {"env_id": 1}, {"env_id": 2}],
+        env_ids=[0, 1, 2],
+    )
+
+    assert runner._fake_policy_worker.forward_batch_calls == 1
+    assert runner._fake_env_group.step_calls_by_worker == [1, 1, 1]
+    assert runner._fake_learner.optimizer_step_calls == 0
 
 
 def test_ray_runner_rollout_steps_count_real_env_steps() -> None:
@@ -726,6 +894,7 @@ def test_ray_runner_rotates_task_pool_on_episode_done() -> None:
     "path",
     [
         "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
+        "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
         "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
@@ -845,6 +1014,66 @@ def test_online_cotrain_ray_oft_experiment_accepts_render_backend_override() -> 
     assert cfg.render_backend == "osmesa"
 
 
+def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> None:
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=online_cotrain_ray_oft_backbone_latent"],
+        )
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+    plan = runner._oft_worker_plan()
+
+    task_spec = cfg.task.openvla_oft.input_tokens
+    assert cfg.latent_type == "backbone_latent"
+    assert cfg.ray_components.world_model.kwargs.latent_stage == "query_before"
+    assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
+    assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
+    assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
+    assert (
+        cfg.ray_components.policy.target
+        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
+    )
+    assert cfg.ray_components.policy.kwargs.source_token_count == task_spec.token_count
+    assert cfg.ray_components.policy.kwargs.hidden_state_dim == task_spec.hidden_state_dim
+    assert "action_hidden_dim" not in cfg.ray_components.policy.kwargs
+    assert cfg.ray_components.classifier.kwargs.token_count == task_spec.token_count
+    assert cfg.env.cfg.kwargs.obs_hidden_source == "input_token_embedding"
+    assert plan["collect"]["expected_obs_hidden_source"] == "input_token_embedding"
+    assert plan["collect"]["token_count"] == task_spec.token_count
+    assert plan["collect"]["hidden_dim"] == task_spec.wm_obs_dim
+    assert plan["env"]["kwargs"]["obs_hidden_source"] == "input_token_embedding"
+    assert (
+        plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"]
+        == "input_token_embedding"
+    )
+    assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "input_token_embedding"
+    assert plan["dump"]["preprocess_config"]["token_count"] == task_spec.token_count
+    assert plan["dump"]["preprocess_config"]["hidden_dim"] == task_spec.wm_obs_dim
+
+
+def test_online_cotrain_ray_oft_alias_uses_backbone_latent_route() -> None:
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name="train", overrides=["experiment=online_cotrain_ray_oft"])
+
+    assert cfg.latent_type == "backbone_latent"
+    assert cfg.env.cfg.kwargs.obs_hidden_source == "input_token_embedding"
+    assert cfg.ray_components.world_model.kwargs.latent_stage == "query_before"
+
+
 def test_ray_oft_rollout_env_cfg_reuses_collect_plan(monkeypatch) -> None:
     from omegaconf import OmegaConf
 
@@ -896,6 +1125,7 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
 
     from hydra import compose, initialize_config_dir
     from omegaconf import OmegaConf
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
 
     config_dir = str(Path(__file__).resolve().parents[2] / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
@@ -907,7 +1137,11 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
     assert cfg.ray_components.world_model.target == cfg.learner.model_cfg.world_model.target
     assert cfg.ray_components.classifier.target == cfg.learner.model_cfg.classifier.target
     assert cfg.ray_data.sequence_length == cfg.replay.cfg.sequence_length
-    assert cfg.learner.model_cfg.policy.target == "dreamervla.models.actor.RynnVLAActionHiddenActor"
+    task_spec = cfg.task.openvla_oft.input_tokens
+    assert (
+        cfg.learner.model_cfg.policy.target
+        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
+    )
     assert (
         cfg.learner.model_cfg.world_model.target
         == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
@@ -916,33 +1150,39 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
         cfg.learner.model_cfg.classifier.target
         == "dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier"
     )
-    assert cfg.inference.cfg.encoder.target == "dreamervla.models.encoder.RynnVLAEncoder"
-    assert cfg.inference.cfg.policy.kwargs.time_horizon == cfg.learner.model_cfg.policy.kwargs.time_horizon
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+    plan = runner._oft_worker_plan()
+    assert cfg.ray_rollout.mode == "oft_fixed_base"
+    assert plan["collect"]["model_path"] == cfg.task.openvla_oft.ckpt_path
+    assert plan["inference"]["decoder"]["target"].endswith("OFTRolloutBundle")
+    assert (
+        cfg.ray_components.policy.kwargs.time_horizon
+        == cfg.learner.model_cfg.policy.kwargs.time_horizon
+    )
     assert cfg.replay.cfg.sequence_length >= cfg.learner.model_cfg.classifier.kwargs.window
 
-    task_spec = cfg.task.legacy_action_hidden
-    assert cfg.inference.cfg.action_dim == cfg.task.action_dim
-    assert cfg.inference.cfg.action_steps == task_spec.chunk_size
-    assert task_spec.token_count == task_spec.chunk_size * cfg.task.action_dim
+    assert plan["collect"]["action_dim"] == cfg.task.action_dim
+    assert plan["inference"]["action_steps"] == task_spec.chunk_size
     assert task_spec.wm_obs_dim == task_spec.token_count * task_spec.token_dim
     assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
     assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
     assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
     assert cfg.ray_components.world_model.kwargs.chunk_size == task_spec.chunk_size
-    assert cfg.ray_components.policy.kwargs.action_hidden_dim == task_spec.token_dim
+    assert cfg.ray_components.policy.kwargs.hidden_state_dim == task_spec.hidden_state_dim
+    assert "action_hidden_dim" not in cfg.ray_components.policy.kwargs
     assert cfg.ray_components.policy.kwargs.time_horizon == task_spec.chunk_size
-    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.wm_obs_dim
+    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.token_dim
     assert cfg.learner.model_cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
-    assert cfg.inference.cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
 
     unresolved_wm = OmegaConf.to_yaml(cfg.ray_components.world_model.kwargs, resolve=False)
     unresolved_policy = OmegaConf.to_yaml(cfg.ray_components.policy.kwargs, resolve=False)
     unresolved_classifier = OmegaConf.to_yaml(cfg.ray_components.classifier.kwargs, resolve=False)
-    assert "${task.legacy_action_hidden.wm_obs_dim}" in unresolved_wm
-    assert "${task.legacy_action_hidden.token_count}" in unresolved_wm
-    assert "${task.legacy_action_hidden.token_dim}" in unresolved_wm
-    assert "${task.legacy_action_hidden.token_dim}" in unresolved_policy
-    assert "${task.legacy_action_hidden.wm_obs_dim}" in unresolved_classifier
+    assert "${task.openvla_oft.input_tokens.wm_obs_dim}" in unresolved_wm
+    assert "${task.openvla_oft.input_tokens.token_count}" in unresolved_wm
+    assert "${task.openvla_oft.input_tokens.token_dim}" in unresolved_wm
+    assert "${task.openvla_oft.input_tokens.hidden_state_dim}" in unresolved_policy
+    assert "${task.openvla_oft.input_tokens.token_dim}" in unresolved_classifier
 
 
 def test_ray_runner_loads_init_ckpt_by_component_name(tmp_path) -> None:

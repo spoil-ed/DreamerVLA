@@ -8,11 +8,13 @@ the target episode count by appending new shards instead of overwriting.
 import h5py
 
 from dreamervla.dataset.collection_manifest import (
+    complete_episode_ids_per_task,
     count_collected_episodes,
     count_episodes_per_task,
     format_collection_report,
     next_shard_index,
     quarantine_corrupt_shards,
+    quarantine_incomplete_shards,
     read_manifest,
     resume_plan,
     summarize_collection,
@@ -35,6 +37,52 @@ def _write_shard_with_task_ids(path, task_ids) -> None:
         for i, tid in enumerate(task_ids):
             grp = data.create_group(f"demo_{i}")
             grp.attrs["task_id"] = int(tid)
+
+
+def _write_reward_hidden_pair(
+    reward_path,
+    hidden_path,
+    episodes,
+) -> None:
+    import numpy as np
+
+    reward_path.parent.mkdir(parents=True, exist_ok=True)
+    hidden_path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(str(reward_path), "w") as rf, h5py.File(str(hidden_path), "w") as hf:
+        rdata = rf.create_group("data")
+        hdata = hf.create_group("data")
+        for idx, spec in enumerate(episodes):
+            key = f"demo_{idx}"
+            length = int(spec.get("length", 3))
+            rgrp = rdata.create_group(key)
+            rgrp.create_dataset("actions", data=np.zeros((length, 7), dtype=np.float32))
+            rgrp.create_dataset("dones", data=np.zeros((length,), dtype=np.uint8))
+            rgrp.create_dataset("rewards", data=np.zeros((length,), dtype=np.float32))
+            rgrp.create_dataset("sparse_rewards", data=np.zeros((length,), dtype=np.uint8))
+            rgrp.create_dataset("robot_states", data=np.zeros((length, 9), dtype=np.float32))
+            rgrp.create_dataset("states", data=np.zeros((length, 5), dtype=np.float32))
+            obs = rgrp.create_group("obs")
+            obs.create_dataset("agentview_rgb", data=np.zeros((length, 4, 4, 3), dtype=np.uint8))
+            obs.create_dataset("eye_in_hand_rgb", data=np.zeros((length, 4, 4, 3), dtype=np.uint8))
+            obs.create_dataset("ee_pos", data=np.zeros((length, 3), dtype=np.float32))
+            obs.create_dataset("ee_ori", data=np.zeros((length, 3), dtype=np.float32))
+            obs.create_dataset("ee_states", data=np.zeros((length, 6), dtype=np.float32))
+            obs.create_dataset("gripper_states", data=np.zeros((length, 2), dtype=np.float32))
+            obs.create_dataset("joint_states", data=np.zeros((length, 7), dtype=np.float32))
+            rgrp.attrs["num_samples"] = str(length)
+            rgrp.attrs["task_id"] = int(spec["task_id"])
+            rgrp.attrs["episode_id"] = int(spec["episode_id"])
+            if "complete" in spec:
+                rgrp.attrs["complete"] = bool(spec["complete"])
+            if spec.get("hidden", True):
+                hgrp = hdata.create_group(key)
+                hidden_length = int(spec.get("hidden_length", length))
+                hgrp.create_dataset(
+                    "obs_embedding",
+                    data=np.zeros((hidden_length, 8), dtype=np.float16),
+                )
+        rdata.attrs["num_demos"] = len(episodes)
+        hdata.attrs["num_demos"] = len(episodes)
 
 
 def test_count_collected_episodes_sums_num_demos_across_shards(tmp_path):
@@ -123,7 +171,14 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    _write_shard_with_task_ids(reward_dir / "shard_000.hdf5", [0, 1])
+    _write_reward_hidden_pair(
+        reward_dir / "shard_000.hdf5",
+        hidden_dir / "shard_000.hdf5",
+        [
+            {"task_id": 0, "episode_id": 0, "complete": True},
+            {"task_id": 1, "episode_id": 0, "complete": True},
+        ],
+    )
     plan = SimpleNamespace(
         task="openvla_onetraj_coldstart_libero",
         mode="full",
@@ -169,6 +224,41 @@ def test_count_episodes_per_task_buckets_by_task_id_attr(tmp_path):
     _write_shard_with_task_ids(tmp_path / "shard_000.hdf5", [0, 0, 1])
     _write_shard_with_task_ids(tmp_path / "shard_001.hdf5", [1, 2])
     assert count_episodes_per_task(tmp_path) == {0: 2, 1: 2, 2: 1}
+
+
+def test_complete_episode_counts_require_matching_hidden_sidecar(tmp_path):
+    reward = tmp_path / "reward"
+    hidden = tmp_path / "hidden"
+    _write_reward_hidden_pair(
+        reward / "shard_000.hdf5",
+        hidden / "shard_000.hdf5",
+        [
+            {"task_id": 0, "episode_id": 0, "complete": True},
+            {"task_id": 0, "episode_id": 1, "complete": True, "hidden": False},
+            {"task_id": 1, "episode_id": 0, "complete": False},
+            {"task_id": 1, "episode_id": 1, "complete": True, "hidden_length": 1},
+        ],
+    )
+
+    assert count_collected_episodes(reward, hidden) == 1
+    assert count_episodes_per_task(reward, hidden) == {0: 1}
+    assert complete_episode_ids_per_task(reward, hidden) == {0: {0}}
+
+
+def test_complete_episode_ids_preserve_gaps_for_resume(tmp_path):
+    reward = tmp_path / "reward"
+    hidden = tmp_path / "hidden"
+    _write_reward_hidden_pair(
+        reward / "shard_000.hdf5",
+        hidden / "shard_000.hdf5",
+        [
+            {"task_id": 0, "episode_id": 0, "complete": True},
+            {"task_id": 0, "episode_id": 1, "complete": False},
+            {"task_id": 0, "episode_id": 2, "complete": True},
+        ],
+    )
+
+    assert complete_episode_ids_per_task(reward, hidden) == {0: {0, 2}}
 
 
 def test_summarize_collection_reports_totals_per_task_and_remaining(tmp_path):
@@ -248,3 +338,18 @@ def test_quarantine_is_noop_when_all_shards_valid(tmp_path):
 
     assert quarantine_corrupt_shards(reward, hidden) == []
     assert not (reward / ".corrupt").exists()
+
+
+def test_quarantine_incomplete_moves_reward_shard_when_hidden_sidecar_missing(tmp_path):
+    reward = tmp_path / "reward"
+    hidden = tmp_path / "hidden"
+    _write_reward_hidden_pair(
+        reward / "ray_shard_000.hdf5",
+        hidden / "ray_shard_000.hdf5",
+        [{"task_id": 0, "episode_id": 0, "complete": True}],
+    )
+    (hidden / "ray_shard_000.hdf5").unlink()
+
+    assert quarantine_incomplete_shards(reward, hidden) == ["ray_shard_000.hdf5"]
+    assert not (reward / "ray_shard_000.hdf5").exists()
+    assert (reward / ".incomplete" / "ray_shard_000.hdf5").exists()

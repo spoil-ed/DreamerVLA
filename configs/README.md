@@ -125,9 +125,9 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | OpenVLA-OFT one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory` | `openvla_oft_hdf5_one_trajectory` |
 | OpenVLA-OFT L1 one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1` | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM training | `scripts/train_wm.sh` | `world_model_dinowm_chunk` |
-| OpenVLA discrete-token WM training | `scripts/train_wm.sh experiment=oft_discrete_token_world_model_dinowm_chunk` | `oft_discrete_token_world_model_dinowm_chunk` |
+| OpenVLA hidden_state WM training | `scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk` | `oft_world_model_dinowm_chunk` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_dino_wm_lumos` |
-| OpenVLA discrete-token DreamerVLA | `scripts/train_dreamervla.sh experiment=dreamervla_oft_discrete_token_dino_wm_lumos` | `dreamervla_oft_discrete_token_dino_wm_lumos` |
+| OpenVLA hidden_state DreamerVLA | `scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_lumos` | `dreamervla_oft_dino_wm_lumos` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Experiments
@@ -141,16 +141,16 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `openvla_oft_hdf5_one_trajectory_l1` | `VLA/openvla_oft_l1_one_trajectory` |
 | `world_model_dinowm_step` | `worldmodel/rynnvla_action_step` |
 | `world_model_dinowm_chunk` | `worldmodel/rynnvla_action_chunk` |
-| `oft_world_model_dinowm_chunk` | `worldmodel/openvla_oft_action_chunk` |
+| `oft_world_model_dinowm_chunk` | `worldmodel/openvla_oft_input_token_chunk` |
 | `oft_discrete_token_world_model_dinowm_chunk` | `worldmodel/openvla_oft_discrete_token_action_chunk` |
 | `latent_classifier_libero_goal_chunk` | `classifier/rynnvla_action_chunk` |
-| `oft_latent_classifier_chunk` | `classifier/openvla_oft_action_chunk` |
+| `oft_latent_classifier_chunk` | `classifier/openvla_oft_input_token_chunk` |
 | `dreamervla_rynn_dino_wm_actor_critic` | `dreamervla/rynnvla_actor_critic` |
 | `dreamervla_rynn_dino_wm_lumos` | `dreamervla/rynnvla_lumos` |
-| `dreamervla_oft_dino_wm_lumos` | `dreamervla/openvla_oft_lumos` |
+| `dreamervla_oft_dino_wm_lumos` | `dreamervla/openvla_oft_input_token_lumos` |
 | `dreamervla_oft_discrete_token_dino_wm_lumos` | `dreamervla/openvla_oft_discrete_token_lumos` |
 | `online_lumos_libero_goal` | `dreamervla/online_lumos_libero_goal` |
-| `online_cotrain_ray_oft` | `dreamervla/ray_online_cotrain_rynn_action_hidden` |
+| `online_cotrain_ray_oft` | `dreamervla/ray_online_cotrain_oft_backbone_latent` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 
 Module configs use Hydra defaults to include the task config:
@@ -191,6 +191,10 @@ bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_spatial
 bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero
 bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero
 ```
+
+OpenVLA-OFT DreamerVLA/WM defaults use DINO-WM-style query-before
+`hidden_state` tensors from the `input_token_embedding` sidecar. Action-hidden
+groups are legacy-only and are not the default route.
 
 `rynnvla_libero` and `openvla_onetraj_libero` are pipeline task aliases over
 the raw `libero_goal` benchmark suite. Their preprocessing artifact names append

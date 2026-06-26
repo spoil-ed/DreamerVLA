@@ -50,6 +50,44 @@ def _override_key(override: str) -> str:
     return override.split("=", 1)[0].removeprefix("+")
 
 
+def _write_complete_collected_pair(reward, hidden, shard_name: str, task_ids: list[int]) -> None:
+    import h5py
+    import numpy as np
+
+    reward.mkdir(parents=True, exist_ok=True)
+    hidden.mkdir(parents=True, exist_ok=True)
+    with h5py.File(str(reward / shard_name), "w") as rf, h5py.File(
+        str(hidden / shard_name), "w"
+    ) as hf:
+        rdata = rf.create_group("data")
+        hdata = hf.create_group("data")
+        for idx, tid in enumerate(task_ids):
+            demo = rdata.create_group(f"demo_{idx}")
+            demo.attrs["task_id"] = int(tid)
+            demo.attrs["episode_id"] = int(idx)
+            demo.attrs["num_samples"] = "1"
+            demo.attrs["complete"] = True
+            demo.create_dataset("actions", data=np.zeros((1, 7), dtype=np.float32))
+            demo.create_dataset("dones", data=np.ones((1,), dtype=np.uint8))
+            demo.create_dataset("rewards", data=np.zeros((1,), dtype=np.float32))
+            demo.create_dataset("sparse_rewards", data=np.zeros((1,), dtype=np.uint8))
+            demo.create_dataset("robot_states", data=np.zeros((1, 9), dtype=np.float32))
+            demo.create_dataset("states", data=np.zeros((1, 5), dtype=np.float32))
+            obs = demo.create_group("obs")
+            obs.create_dataset("agentview_rgb", data=np.zeros((1, 1, 1, 3), dtype=np.uint8))
+            obs.create_dataset("eye_in_hand_rgb", data=np.zeros((1, 1, 1, 3), dtype=np.uint8))
+            obs.create_dataset("ee_pos", data=np.zeros((1, 3), dtype=np.float32))
+            obs.create_dataset("ee_ori", data=np.zeros((1, 3), dtype=np.float32))
+            obs.create_dataset("ee_states", data=np.zeros((1, 6), dtype=np.float32))
+            obs.create_dataset("gripper_states", data=np.zeros((1, 2), dtype=np.float32))
+            obs.create_dataset("joint_states", data=np.zeros((1, 7), dtype=np.float32))
+            hdemo = hdata.create_group(f"demo_{idx}")
+            hdemo.create_dataset("obs_embedding", data=np.zeros((1, 8), dtype=np.float16))
+            hdemo.attrs["complete"] = True
+        rdata.attrs["num_demos"] = len(task_ids)
+        hdata.attrs["num_demos"] = len(task_ids)
+
+
 def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
@@ -59,7 +97,8 @@ def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path)
 
     assert plan.mode == "ray"
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.action_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.input_token_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
     _assert_items_in_command(
@@ -128,7 +167,8 @@ def test_noray_launcher_plan_uses_pure_hydra_collector(tmp_path) -> None:
     assert plan.mode == "noray"
     assert "experiment=collect_rollouts_ray" not in plan.collect_cmd
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.action_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.input_token_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
     _assert_items_in_command(
@@ -523,8 +563,6 @@ def test_plan_uses_unified_collected_rollouts_space(tmp_path, monkeypatch) -> No
 
 
 def test_launcher_resume_skips_collection_and_writes_manifest(tmp_path, monkeypatch, capsys) -> None:
-    import h5py
-
     import dreamervla.launchers.coldstart_warmup_cotrain as mod
     from dreamervla.dataset.collection_manifest import read_manifest
 
@@ -539,12 +577,13 @@ def test_launcher_resume_skips_collection_and_writes_manifest(tmp_path, monkeypa
     monkeypatch.setattr(mod, "subprocess", rec)
 
     reward = tmp_path / "collected_rollouts" / "libero_goal" / "reward"
-    reward.mkdir(parents=True)
-    with h5py.File(str(reward / "shard_000.hdf5"), "w") as f:
-        data = f.create_group("data")
-        data.attrs["num_demos"] = 6
-        for i in range(6):
-            data.create_group(f"demo_{i}")
+    hidden = tmp_path / "collected_rollouts" / "libero_goal" / "hidden"
+    _write_complete_collected_pair(
+        reward,
+        hidden,
+        "shard_000.hdf5",
+        [0, 1, 0, 1, 0, 1],
+    )
 
     exit_code = mod.main(
         [
@@ -568,8 +607,6 @@ def test_launcher_resume_skips_collection_and_writes_manifest(tmp_path, monkeypa
 
 
 def test_launcher_prints_inspection_report_then_resumes(tmp_path, monkeypatch, capsys) -> None:
-    import h5py
-
     import dreamervla.launchers.coldstart_warmup_cotrain as mod
 
     class _Recorder:
@@ -583,12 +620,8 @@ def test_launcher_prints_inspection_report_then_resumes(tmp_path, monkeypatch, c
     monkeypatch.setattr(mod, "subprocess", rec)
 
     reward = tmp_path / "collected_rollouts" / "libero_goal" / "reward"
-    reward.mkdir(parents=True)
-    with h5py.File(str(reward / "shard_000.hdf5"), "w") as f:
-        data = f.create_group("data")
-        data.attrs["num_demos"] = 2
-        for i, tid in enumerate([0, 1]):
-            data.create_group(f"demo_{i}").attrs["task_id"] = tid
+    hidden = tmp_path / "collected_rollouts" / "libero_goal" / "hidden"
+    _write_complete_collected_pair(reward, hidden, "shard_000.hdf5", [0, 1])
 
     exit_code = mod.main(
         [
@@ -608,7 +641,122 @@ def test_launcher_prints_inspection_report_then_resumes(tmp_path, monkeypatch, c
     assert "collected: 2 / 10" in out
     assert "task0=1" in out and "task1=1" in out
     assert "[resume] topping up 8" in out
+    assert "collect.episodes_per_task=5" in rec.calls[0]
     assert len(rec.calls) == 2  # not complete -> collect + cotrain both run
+
+
+def test_collect_resume_function_handles_skip_and_manifest(tmp_path, monkeypatch, capsys) -> None:
+    import h5py
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+    from dreamervla.dataset.collection_manifest import read_manifest
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+    monkeypatch.setenv("DVLA_DATA_ROOT", str(tmp_path))
+
+    plan = mod.build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "run",
+        python="python",
+        launcher_cfg=_launcher_cfg(),
+    )
+    reward = plan.reward_dir
+    hidden = plan.hidden_dir
+    reward.mkdir(parents=True)
+    hidden.mkdir(parents=True)
+    with h5py.File(str(reward / "ray_shard_000.hdf5"), "w") as rf, h5py.File(
+        str(hidden / "ray_shard_000.hdf5"), "w"
+    ) as hf:
+        rdata = rf.create_group("data")
+        hdata = hf.create_group("data")
+        for idx in range(2):
+            demo = rdata.create_group(f"demo_{idx}")
+            demo.attrs["task_id"] = idx
+            demo.attrs["episode_id"] = 0
+            demo.attrs["num_samples"] = "1"
+            demo.create_dataset("actions", data=[[0, 0, 0, 0, 0, 0, 0]])
+            demo.create_dataset("dones", data=[1])
+            demo.create_dataset("rewards", data=[0])
+            demo.create_dataset("sparse_rewards", data=[0])
+            demo.create_dataset("robot_states", data=[[0] * 9])
+            demo.create_dataset("states", data=[[0] * 5])
+            obs = demo.create_group("obs")
+            obs.create_dataset("agentview_rgb", data=[[[[0, 0, 0]]]])
+            obs.create_dataset("eye_in_hand_rgb", data=[[[[0, 0, 0]]]])
+            obs.create_dataset("ee_pos", data=[[0, 0, 0]])
+            obs.create_dataset("ee_ori", data=[[0, 0, 0]])
+            obs.create_dataset("ee_states", data=[[0] * 6])
+            obs.create_dataset("gripper_states", data=[[0] * 2])
+            obs.create_dataset("joint_states", data=[[0] * 7])
+            hdata.create_group(f"demo_{idx}").create_dataset("obs_embedding", data=[[0] * 8])
+        rdata.attrs["num_demos"] = 2
+        hdata.attrs["num_demos"] = 2
+
+    result = mod.collect_resume(
+        plan,
+        target_episodes=2,
+        num_tasks=2,
+        skip_collect=False,
+    )
+    out = capsys.readouterr().out
+
+    assert result["ran_collect"] is False
+    assert "target 2 already collected" in out
+    assert rec.calls == []
+    manifest = read_manifest(plan.collected_root)
+    assert manifest["status"] == "complete"
+    assert manifest["collected_episodes"] == 2
+
+
+def test_collect_resume_derives_target_from_collect_command_when_target_is_null(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+    monkeypatch.setenv("DVLA_DATA_ROOT", str(tmp_path))
+
+    plan = mod.build_pipeline_plan(
+        mode="ray",
+        profile="smoke",
+        run_root=tmp_path / "run",
+        python="python",
+        launcher_cfg=_launcher_cfg(),
+    )
+    _write_complete_collected_pair(
+        plan.reward_dir,
+        plan.hidden_dir,
+        "ray_shard_000.hdf5",
+        [0, 1, 0, 1],
+    )
+
+    result = mod.collect_resume(
+        plan,
+        target_episodes=None,
+        num_tasks=2,
+        skip_collect=False,
+    )
+    out = capsys.readouterr().out
+
+    assert result["ran_collect"] is False
+    assert "target 4 already collected" in out
+    assert rec.calls == []
 
 
 def test_asset_validation_reports_missing_inputs(tmp_path) -> None:
@@ -802,10 +950,10 @@ def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
 
     assert plan.cotrain_engine == "async"
     # 2a: sync pipeline warmup, online RL disabled (total_env_steps=0).
-    assert "experiment=online_cotrain_pipeline_oft_action_hidden" in plan.cotrain_warmup_cmd
+    assert "experiment=online_cotrain_pipeline_oft_backbone_latent" in plan.cotrain_warmup_cmd
     assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
     # 2c: ray async overlap online, NOT torchrun, init from the consolidated warmup ckpt.
-    assert "experiment=online_cotrain_ray_oft_action_hidden" in plan.cotrain_online_cmd
+    assert "experiment=online_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd
     assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
     assert "inference.init_ckpt.path=null" not in plan.cotrain_online_cmd

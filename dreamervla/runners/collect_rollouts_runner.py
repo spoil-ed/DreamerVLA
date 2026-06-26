@@ -39,7 +39,10 @@ class CollectRolloutsRunner(BaseRunner):
     def _build_collect_cfg(self) -> dict[str, Any]:
         cfg = self.cfg
         oft = cfg.task.openvla_oft
-        expected_history = int(oft.expected_history)
+        latent_spec = OmegaConf.select(cfg, "collect.oft_latent_spec", default=None)
+        input_tokens = OmegaConf.select(cfg, "task.openvla_oft.input_tokens", default=None)
+        latent = latent_spec if latent_spec is not None else (input_tokens or oft)
+        expected_history = int(latent.expected_history)
         num_images_in_input = resolve_num_images_in_input(cfg.collect)
         image_keys = select_vla_image_keys(
             list(cfg.task.image_keys),
@@ -49,7 +52,16 @@ class CollectRolloutsRunner(BaseRunner):
         task_ids = cfg.collect.task_ids
         if OmegaConf.is_config(task_ids):
             task_ids = OmegaConf.to_container(task_ids, resolve=True)
-        return {
+        reward_dir = OmegaConf.select(cfg, "collect.hdf5_reward_dir", default=oft.hdf5_reward_dir)
+        hidden_default = oft.action_hidden_dir
+        if str(latent.expected_obs_hidden_source) == "input_token_embedding":
+            hidden_default = OmegaConf.select(
+                cfg,
+                "task.openvla_oft.input_token_hidden_dir",
+                default=hidden_default,
+            )
+        hidden_dir = OmegaConf.select(cfg, "collect.hidden_dir", default=hidden_default)
+        collect_cfg = {
             "model_path": str(oft.ckpt_path),
             "policy_mode": str(OmegaConf.select(cfg, "collect.policy_mode", default="auto")),
             "unnorm_key": str(oft.dataset_statistics_key),
@@ -61,20 +73,22 @@ class CollectRolloutsRunner(BaseRunner):
             "envs_per_gpu": int(cfg.collect.envs_per_gpu),
             "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
             "memory_fraction": float(cfg.collect.memory_fraction),
-            "reward_dir": str(oft.hdf5_reward_dir),
-            "hidden_dir": str(oft.action_hidden_dir),
+            "reward_dir": str(reward_dir),
+            "hidden_dir": str(hidden_dir),
             "image_keys": image_keys,
             "expected_history": expected_history,
             "num_images_in_input": num_images_in_input,
-            "expected_action_head_type": str(oft.expected_action_head_type),
-            "expected_include_state": bool(oft.expected_include_state),
-            "expected_obs_hidden_source": str(oft.expected_obs_hidden_source),
-            "expected_prompt_style": str(oft.expected_prompt_style),
-            "expected_rotate_images_180": bool(oft.expected_rotate_images_180),
-            "time_horizon": int(oft.time_horizon),
-            "token_dim": int(oft.token_dim),
+            "expected_action_head_type": str(latent.expected_action_head_type),
+            "expected_include_state": bool(latent.expected_include_state),
+            "expected_obs_hidden_source": str(latent.expected_obs_hidden_source),
+            "expected_prompt_style": str(latent.expected_prompt_style),
+            "expected_rotate_images_180": bool(latent.expected_rotate_images_180),
+            "time_horizon": int(
+                OmegaConf.select(latent, "time_horizon", default=latent.chunk_size)
+            ),
+            "token_dim": int(latent.token_dim),
             "action_dim": int(cfg.task.action_dim),
-            "chunk_size": int(oft.chunk_size),
+            "chunk_size": int(latent.chunk_size),
             "resolution": int(cfg.task.image_resolution),
             "gpu_id": int(OmegaConf.select(cfg, "collect.gpu_id", default=0)),
             "min_free_gpu_gb": float(OmegaConf.select(cfg, "collect.min_free_gpu_gb", default=18.0)),
@@ -87,6 +101,18 @@ class CollectRolloutsRunner(BaseRunner):
                 Path(str(OmegaConf.select(cfg, "training.out_dir", default="."))) / ".progress"
             ),
         }
+        token_count = OmegaConf.select(latent, "token_count", default=None)
+        hidden_dim = OmegaConf.select(latent, "wm_obs_dim", default=None)
+        if token_count is not None:
+            collect_cfg["token_count"] = int(token_count)
+        if hidden_dim is not None:
+            collect_cfg["hidden_dim"] = int(hidden_dim)
+        num_inference_workers = OmegaConf.select(
+            cfg, "collect.num_inference_workers", default=None
+        )
+        if num_inference_workers is not None:
+            collect_cfg["num_inference_workers"] = int(num_inference_workers)
+        return collect_cfg
 
     def run(self) -> object:
         rank, world_size, local_rank = _get_dist_info()

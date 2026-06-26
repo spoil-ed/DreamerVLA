@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - /task: openvla_onetraj_coldstart_libero
+  - override /dreamervla: online_cotrain_pipeline_openvla_oft_backbone_latent
+  - _self_
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline
+    wandb_proxy: null

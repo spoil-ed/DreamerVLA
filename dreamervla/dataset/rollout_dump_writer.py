@@ -187,6 +187,7 @@ class RolloutDumpWriter:
             demo_grp.attrs["episode_success"] = bool(episode_success)
         if episode_horizon is not None:
             demo_grp.attrs["episode_horizon"] = int(episode_horizon)
+        demo_grp.attrs["complete"] = True
         for key, value in _episode_attrs(
             preprocess_config=preprocess_config,
             data_attrs=data_attrs,
@@ -200,6 +201,12 @@ class RolloutDumpWriter:
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)
         hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
+        hidden_demo_grp.attrs["num_samples"] = str(T)
+        if task_id is not None:
+            hidden_demo_grp.attrs["task_id"] = int(task_id)
+        if episode_id is not None:
+            hidden_demo_grp.attrs["episode_id"] = int(episode_id)
+        hidden_demo_grp.attrs["complete"] = True
 
         self._num_demos += 1
 

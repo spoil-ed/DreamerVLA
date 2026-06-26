@@ -446,9 +446,9 @@ def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path:
         [
             "bash",
             "scripts/train_wm.sh",
-            "experiment=oft_latent_classifier_chunk",
+            "experiment=oft_latent_classifier_chunk_input_tokens",
             "task=openvla_onetraj_libero",
-            f"task.openvla_oft.action_hidden_dir={hidden_dir}",
+            f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
             "dry_run=true",
         ],
         cwd=root,
@@ -460,7 +460,7 @@ def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path:
 
     assert result.returncode == 0, result.stderr
     assert "task=openvla_onetraj_libero" in result.stdout
-    assert f"task.openvla_oft.action_hidden_dir={hidden_dir}" in result.stdout
+    assert f"task.openvla_oft.input_token_hidden_dir={hidden_dir}" in result.stdout
 
 
 def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:

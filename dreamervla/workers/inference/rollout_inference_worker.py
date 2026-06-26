@@ -15,6 +15,7 @@ import torch
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.oft_collect_common import process_action
 from dreamervla.scheduler.worker import Worker
+from dreamervla.workers.inference.rollout_contract import RolloutBatchOutput
 
 
 def _build_from_cfg(cfg: dict[str, Any]) -> Any:
@@ -40,6 +41,7 @@ class RolloutInferenceWorker(Worker):
         self._num_envs = int(num_envs)
         self._action_dim = int(self._cfg.get("action_dim", 7))
         self._action_steps = max(1, int(self._cfg.get("action_steps", 1)))
+        self._emit_hidden_sidecar = bool(self._cfg.get("emit_hidden_sidecar", True))
         self._bundle: Any | None = None
         self._extractors: list[Any] = []
         self._action_queues = [
@@ -88,7 +90,8 @@ class RolloutInferenceWorker(Worker):
             )
             actions.append(action)
             hidden.append(obs_embedding.astype(np.float16, copy=False))
-        return {"actions": actions, "obs_embedding": hidden}
+        sidecars = {"obs_embedding": hidden} if self._emit_hidden_sidecar else {}
+        return RolloutBatchOutput(actions=actions, sidecars=sidecars).to_legacy_dict()
 
     def reset_states(self, env_ids: list[int]) -> None:
         bundle = self._require_bundle()

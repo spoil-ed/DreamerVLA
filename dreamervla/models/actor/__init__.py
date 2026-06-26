@@ -1,5 +1,8 @@
 from dreamervla.models.actor.base_actor import BaseActor
 from dreamervla.models.actor.latent_to_action_hidden_actor import LatentToActionHiddenActor
+from dreamervla.models.actor.latent_to_openvla_hidden_state_actor import (
+    LatentToOpenVLAHiddenStateActor,
+)
 from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
     LatentToOpenVLADiscreteTokenActor,
 )
@@ -11,6 +14,7 @@ from dreamervla.models.actor.vla_policy import SharedObservationEmbedding, VLAPo
 __all__ = [
     "BaseActor",
     "LatentToActionHiddenActor",
+    "LatentToOpenVLAHiddenStateActor",
     "LatentToOpenVLADiscreteTokenActor",
     "OpenVLADiscreteTokenActor",
     "RynnVLAActionHiddenActor",

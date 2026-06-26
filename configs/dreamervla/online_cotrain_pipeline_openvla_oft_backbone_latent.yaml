@@ -1,10 +1,9 @@
 # @package _global_
-# Online cotrain over OpenVLA-OFT query-before hidden states.
+# Offline-warmup cotrain pipeline for OpenVLA-OFT query-before hidden states.
 defaults:
-  - /task: openvla_onetraj_libero
   - _self_
 
-_target_: dreamervla.runners.OnlineCotrainRunner
+_target_: dreamervla.runners.OnlineCotrainPipelineRunner
 latent_type: backbone_latent
 seed: 7
 
@@ -17,10 +16,20 @@ trainer:
   device: cuda
   debug: false
 
+offline_warmup:
+  data_dir: ${task.openvla_oft.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  task_id: null
+  max_episodes_per_task: null
+  debug_warmup_replay_epochs: 0
+  debug_wm_warmup_steps: 2
+  debug_classifier_warmup_steps: 2
+
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_hidden_state/${now:%Y%m%d_%H%M%S}
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/online_cotrain_pipeline_hidden_state/${now:%Y%m%d_%H%M%S}
   debug: false
   resume: false
+  checkpoint_format: both
   distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: true
@@ -30,7 +39,13 @@ training:
   lr_warmup_steps: 0
   use_ema: false
   checkpoint_every: 2000
-  warmup_steps: 5000
+  wm_warmup_steps: 1200
+  classifier_warmup_steps: 1200
+  replay_warmup_log_every: 1
+  warmup_replay_epochs: 1
+  warmup_replay_max_steps: 0
+  warmup_checkpoint_every: 0
+  warmup_steps: 0
   train_actor_after_warmup: true
   train_classifier_inline: true
   classifier_batch_size: 16
@@ -66,9 +81,12 @@ encoder:
 
 online_rollout:
   buffer_size: 20000
+  replay_capacity_mode: total_sharded
   sequence_length: ${task.openvla_oft.wm_sequence_length}
   min_replay: 2000
   min_episodes_per_task: 1
+  min_sampleable_windows: 0
+  require_classifier_evidence: true
   train_trigger: episode_end
   train_every: 8
   updates_per_train: 1
@@ -84,15 +102,23 @@ online_rollout:
       coldstart_anchor: 0.2
   total_env_steps: 200000
   rollout_policy_source: dreamer_actor
+  warmup_seed_episodes_per_task: 3
   classifier_early_neg_stride: 8
   num_envs: 1
+  render_backend: egl
   debug_total_env_steps: 160
   debug_warmup_steps: 2
   debug_min_replay: 48
   debug_max_train_updates: 4
   debug_episode_horizon: 50
 
+task_conditioning:
+  enabled: false
+  num_tasks: 10
+  embedding_dim: 64
+
 env:
+  _target_: dreamervla.envs.train_env.DreamerVLAOnlineTrainEnv
   task_suite_name: ${task.suite}
   task_ids: [0]
   episode_horizon: 200
@@ -102,6 +128,7 @@ env:
   obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
   action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
   image_keys: [agentview_rgb]
+  target_token_id: 10004
 
 world_model:
   _target_: ${task.openvla_oft.wm_target}
@@ -115,13 +142,14 @@ world_model:
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
+  grad_checkpoint: true
   model_dim: 4106
+  num_hist: 3
   depth: 6
   heads: 16
   dim_head: 128
   mlp_dim: 2048
   dropout: 0.1
-  num_hist: 3
   num_pred: 1
   max_seq_len: 128
   hidden_loss_scale: 1.0
@@ -135,6 +163,7 @@ world_model:
   reward_pos_weight: 1.0
   return_predictions: false
   freeze_backbone: true
+  task_conditioning: ${task_conditioning}
 
 policy:
   _target_: dreamervla.models.actor.LatentToOpenVLAHiddenStateActor
@@ -187,21 +216,26 @@ classifier:
   granularity: chunk
   chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
   chunk_pool: last
+  task_conditioning: ${task_conditioning}
 
 algorithm:
   update_type: LUMOS
   lumos:
     chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
-    episode_max_steps: 10
+    episode_max_steps: 300
+    debug_episode_max_steps: 150
+    reward_model: probability_outcome
     classifier_min_steps: 3
     filter_zero_variance_groups: true
     ppo_rollouts_per_start_min: 1
     ppo_rollouts_per_start_max: 4
+    update_micro_batch_starts: 24
   actor_input_mode: pooled
   rssm_action_scale: env
   rssm_action_clip: true
   imag_last: 4
   imagination_horizon: 5
+  debug_imagination_horizon: 3
   horizon: 333
   contdisc: true
   lam: 0.95
@@ -210,6 +244,7 @@ algorithm:
   kl_penalty_kind: kl
   actor_bc_to_ref_scale: 0.1
   ppo_rollouts_per_start: 1
+  debug_ppo_rollouts_per_start: 1
   ppo_update_epochs: 1
   ppo_gamma: 1.0
   clip_ratio_low: 0.2
@@ -233,6 +268,7 @@ algorithm:
     eps: 1.0e-6
 
 optim:
+  precision: bf16
   grad_clip_norm: 1.0
   zero_grad_set_to_none: true
   world_model:
@@ -262,6 +298,10 @@ optim:
 
 dataloader:
   batch_size: 4
+  debug_batch_size: 2
+
+collect:
+  demos_per_shard: 0
 
 runner:
   logger:

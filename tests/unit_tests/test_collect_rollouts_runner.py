@@ -109,6 +109,15 @@ def test_build_collect_cfg_forwards_demos_per_shard():
     assert cc["demos_per_shard"] == 25
 
 
+def test_build_collect_cfg_forwards_num_inference_workers():
+    from dreamervla.runners import CollectRolloutsRunner
+
+    cfg = _fake_cfg()
+    cfg.collect.num_inference_workers = 2
+    cc = CollectRolloutsRunner(cfg)._build_collect_cfg()
+    assert cc["num_inference_workers"] == 2
+
+
 def _record(t: int) -> dict:
     return {
         "agentview_rgb": np.zeros((4, 4, 3), dtype=np.uint8),

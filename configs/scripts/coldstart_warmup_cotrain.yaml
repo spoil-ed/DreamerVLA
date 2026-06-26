@@ -20,7 +20,7 @@ render_backend: egl
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
 cotrain_engine: sync
-cotrain_async_experiment: online_cotrain_ray_oft_action_hidden
+cotrain_async_experiment: online_cotrain_ray_oft_backbone_latent
 # Cotrain phase: all (default), warmup (write warmup ckpts only), or online
 # (resume from warmup ckpts under run_root/cotrain and run the online phase only).
 cotrain_phase: all
@@ -35,8 +35,8 @@ skip_asset_check: false
 # Episode-level resume for the unified data/collected_rollouts/<suite> space.
 # When collect_target_episodes is set, a relaunch counts what is already on disk
 # and tops up to that TOTAL (spread over collect_num_tasks tasks) by appending new
-# shards; collection is skipped once the target is reached. Left null = no resume
-# planning (each run still appends + writes the manifest).
+# shards; collection is skipped once the target is reached. Left null = derive the
+# target from the final collect.episodes_per_task override times collect_num_tasks.
 collect_target_episodes: null
 collect_num_tasks: 10
 common_overrides: []
@@ -126,6 +126,16 @@ modes:
       - logger=tensorboard
       - collect.task_ids=all
       - collect.episodes_per_task=50
+      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.input_tokens.expected_action_head_type}}
+      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.input_tokens.expected_obs_hidden_source}}
+      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.input_tokens.expected_prompt_style}}
+      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.input_tokens.expected_history}}
+      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.input_tokens.expected_include_state}}
+      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.input_tokens.expected_rotate_images_180}}
+      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.input_tokens.token_dim}}
+      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.input_tokens.token_count}}
+      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.input_tokens.wm_obs_dim}}
+      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.input_tokens.chunk_size}}
   noray:
     collect:
       - experiment=collect_rollouts_onetraj
@@ -134,10 +144,20 @@ modes:
       - collect.task_ids=all
       - collect.episodes_per_task=50
       - collect.gpu_id=0
+      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.input_tokens.expected_action_head_type}}
+      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.input_tokens.expected_obs_hidden_source}}
+      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.input_tokens.expected_prompt_style}}
+      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.input_tokens.expected_history}}
+      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.input_tokens.expected_include_state}}
+      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.input_tokens.expected_rotate_images_180}}
+      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.input_tokens.token_dim}}
+      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.input_tokens.token_count}}
+      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.input_tokens.wm_obs_dim}}
+      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.input_tokens.chunk_size}}
 
 cotrain:
   base:
-    - experiment=online_cotrain_pipeline_oft_action_hidden
+    - experiment=online_cotrain_pipeline_oft_backbone_latent
     - task={hydra_task}
     # logger comes from the experiment default (tensorboard + wandb offline); do not
     # force logger=tensorboard here or it would drop the W&B backend.

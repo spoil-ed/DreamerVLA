@@ -301,8 +301,10 @@ def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() 
     assert cfg.env.action_head_type == "oft_discrete_token"
     assert (
         cfg.policy._target_
-        == "dreamervla.models.actor.LatentToOpenVLADiscreteTokenActor"
+        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
     )
+    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
+    assert "action_hidden_dim" not in cfg.policy
     assert cfg.policy.head_type == "oft_discrete_token"
     assert cfg.world_model.latent_stage == "query_before"
     assert cfg.world_model.token_count == 512

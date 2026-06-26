@@ -115,6 +115,20 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                 else:
                     cur_obs = next_obs
                     conn.send(("step", (transition, cur_obs, False, dict(info or {}))))
+            elif cmd == "load_world_model_state":
+                state_dict, version = payload
+                if not hasattr(env, "load_world_model_state"):
+                    conn.send(("error", "active env does not support world model state sync"))
+                else:
+                    env.load_world_model_state(state_dict, int(version))
+                    conn.send(("ok", None))
+            elif cmd == "load_classifier_state":
+                state_dict, version = payload
+                if not hasattr(env, "load_classifier_state"):
+                    conn.send(("error", "active env does not support classifier state sync"))
+                else:
+                    env.load_classifier_state(state_dict, int(version))
+                    conn.send(("ok", None))
             else:
                 conn.send(("error", f"unknown cmd {cmd!r}"))
     except EOFError:
@@ -261,11 +275,29 @@ class EnvWorker(Worker):
     def step(
         self,
         action: Any,
-        obs_embedding: Any,
+        obs_embedding: Any = None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         if self._spawned:
             return self._step_spawn(action, obs_embedding)
         return self._step_inproc(action, obs_embedding)
+
+    def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
+        if self._spawned:
+            self._rpc("load_world_model_state", (state_dict, int(version)))
+            return
+        env = self._env()
+        if not hasattr(env, "load_world_model_state"):
+            raise RuntimeError("active env does not support world model state sync")
+        env.load_world_model_state(state_dict, int(version))
+
+    def load_classifier_state(self, state_dict: dict[str, Any], version: int) -> None:
+        if self._spawned:
+            self._rpc("load_classifier_state", (state_dict, int(version)))
+            return
+        env = self._env()
+        if not hasattr(env, "load_classifier_state"):
+            raise RuntimeError("active env does not support classifier state sync")
+        env.load_classifier_state(state_dict, int(version))
 
     def _step_spawn(
         self, action: Any, obs_embedding: Any
@@ -280,7 +312,7 @@ class EnvWorker(Worker):
         self.episode.append(transition)
         self.obs = obs
         if done:
-            ray.get(self.replay.add_episode.remote(list(self.episode)))
+            self._add_episode_to_replay()
             self.episode = []
             self.episode_id += 1
             return self.obs, True, dict(info or {})
@@ -344,14 +376,25 @@ class EnvWorker(Worker):
                 info,
                 obs_embedding,
             )
-        else:
+        elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
             transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+        else:
+            transition = self._make_generic_transition(
+                obs,
+                next_obs,
+                action,
+                reward,
+                terminated,
+                truncated,
+                info,
+                obs_embedding,
+            )
         self.episode.append(transition)
 
         done = bool(terminated or truncated)
         if done:
-            ray.get(self.replay.add_episode.remote(list(self.episode)))
+            self._add_episode_to_replay()
             self.episode = []
             self.episode_id += 1
             self.obs, reset_info = self._reset_env()
@@ -382,6 +425,44 @@ class EnvWorker(Worker):
     def _reset_env(self) -> tuple[dict[str, Any], dict[str, Any]]:
         env = self._env()
         return env.reset(task_id=self.task_id, episode_id=self.episode_id)
+
+    def _add_episode_to_replay(self) -> None:
+        if self.replay is None:
+            return
+        add_episode = getattr(self.replay, "add_episode")
+        remote = getattr(add_episode, "remote", None)
+        if remote is not None:
+            ray.get(remote(list(self.episode)))
+        else:
+            add_episode(list(self.episode))
+
+    @staticmethod
+    def _make_generic_transition(
+        obs: dict[str, Any],
+        next_obs: dict[str, Any],
+        action: Any,
+        reward: float,
+        terminated: bool,
+        truncated: bool,
+        info: dict[str, Any],
+        obs_embedding: Any,
+    ) -> dict[str, Any]:
+        return {
+            "obs": obs,
+            "next_obs": next_obs,
+            "actions": np.asarray(action, dtype=np.float32),
+            "rewards": float(reward),
+            "dones": bool(terminated or truncated),
+            "is_terminal": bool(terminated),
+            "is_last": bool(terminated or truncated),
+            "is_first": bool(obs.get("is_first", False)) if isinstance(obs, dict) else False,
+            "info": dict(info or {}),
+            "obs_embedding": (
+                None
+                if obs_embedding is None
+                else np.asarray(obs_embedding, dtype=np.float32)
+            ),
+        }
 
     def _env(self) -> Any:
         if self.env is None:

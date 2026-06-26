@@ -28,4 +28,4 @@ python -m dreamervla.preprocess.validate_libero_data_prep \
   his=1 \
   action_horizon=1 \
   image_resolution=256 \
-  check_action_hidden=true
+  check_action_hidden=false

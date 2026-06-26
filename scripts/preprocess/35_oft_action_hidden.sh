@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Extract OpenVLA-OFT Scheme-A action-hidden and/or Scheme-B input-token sidecars.
+# Extract OpenVLA-OFT hidden_state sidecars by default; action-hidden is legacy.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -19,7 +19,7 @@ if [[ "${ARTIFACT_NAME}" == "${TASK_NAME}" && "${TASK_NAME}" != "${LIBERO_SUITE}
 fi
 OFT_CKPT="${OFT_CKPT:-${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT/${LIBERO_SUITE}}"
 OFT_POLICY_MODE="${OFT_POLICY_MODE:-auto}"
-OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-action_hidden}"
+OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-input_tokens}"
 OFT_HISTORY="${OFT_HISTORY:-2}"
 OFT_IMAGE_KEYS="${OFT_IMAGE_KEYS:-agentview_rgb eye_in_hand_rgb}"
 OFT_IMAGE_KEYS_LIST="[${OFT_IMAGE_KEYS// /,}]"

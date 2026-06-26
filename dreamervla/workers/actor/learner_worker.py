@@ -203,8 +203,6 @@ class LearnerWorker(Worker):
                 device=self.torch_device,
                 optim_cfg=self._optim_cfg(),
             )
-        from dreamervla.algorithms.dreamervla import namespaced_world_model_metrics
-
         return namespaced_world_model_metrics(raw)
 
     def _dreamervla_classifier_update_once(self) -> dict[str, float]:
@@ -597,6 +595,18 @@ def world_model_pretrain_step(**kwargs: Any) -> dict[str, float]:
     from dreamervla.algorithms.dreamervla import world_model_pretrain_step as _impl
 
     return _impl(**kwargs)
+
+
+def namespaced_world_model_metrics(metrics: dict[str, Any]) -> dict[str, float]:
+    """Return world-model metrics without importing the heavy algorithm package."""
+
+    out: dict[str, float] = {}
+    for key, value in dict(metrics).items():
+        name = str(key)
+        if name.startswith("_"):
+            continue
+        out[name if name.startswith("wm/") else f"wm/{name}"] = float(value)
+    return out
 
 
 def online_classifier_update_step(**kwargs: Any) -> dict[str, Any]:

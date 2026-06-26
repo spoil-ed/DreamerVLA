@@ -11,6 +11,7 @@ import torch
 
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.scheduler.worker import Worker
+from dreamervla.workers.inference.rollout_contract import RolloutBatchOutput
 
 
 class InferenceWorker(Worker):
@@ -159,17 +160,20 @@ class InferenceWorker(Worker):
             self.state[env_id]["is_first"] = False
 
         obs_embedding_np = obs_embedding.detach().cpu().numpy().astype(np.float32)
-        return {
-            "actions": actions_np,
-            "obs_embedding": [
-                obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
-            ],
-            "timing": {
-                "encode_s": float(encode_s),
-                "world_model_s": float(world_model_s),
-                "policy_s": float(policy_s),
+        out = RolloutBatchOutput(
+            actions=actions_np,
+            sidecars={
+                "obs_embedding": [
+                    obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
+                ]
             },
+        ).to_legacy_dict()
+        out["timing"] = {
+            "encode_s": float(encode_s),
+            "world_model_s": float(world_model_s),
+            "policy_s": float(policy_s),
         }
+        return out
 
     def update_weights(
         self,

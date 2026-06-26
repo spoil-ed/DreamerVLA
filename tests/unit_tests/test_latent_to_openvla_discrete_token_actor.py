@@ -5,7 +5,11 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from hydra import compose, initialize_config_dir
+import pytest
 
+from dreamervla.models.actor.latent_to_openvla_hidden_state_actor import (
+    LatentToOpenVLAHiddenStateActor,
+)
 from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
     LatentToOpenVLADiscreteTokenActor,
 )
@@ -28,6 +32,59 @@ def _tiny_actor() -> LatentToOpenVLADiscreteTokenActor:
         init_lm_head_ckpt=None,
         head_type="oft_discrete_token",
     )
+
+
+def _tiny_hidden_state_actor() -> LatentToOpenVLAHiddenStateActor:
+    return LatentToOpenVLAHiddenStateActor(
+        source_token_count=5,
+        source_token_dim=4,
+        hidden_state_dim=4,
+        action_dim=2,
+        time_horizon=3,
+        bridge_hidden_dim=4,
+        num_bridge_layers=1,
+        num_bridge_heads=2,
+        vocab_size=32,
+        action_token_bins=8,
+        adapter_type="identity",
+        init_lm_head_ckpt=None,
+        head_type="oft_discrete_token",
+    )
+
+
+def test_hidden_state_actor_uses_hidden_state_dim_only() -> None:
+    actor = _tiny_hidden_state_actor()
+    assert actor.hidden_state_dim == 4
+    assert not hasattr(actor, "action_hidden_dim")
+
+
+def test_hidden_state_actor_rejects_action_hidden_dim_alias() -> None:
+    with pytest.raises(TypeError, match="action_hidden_dim"):
+        LatentToOpenVLAHiddenStateActor(
+            source_token_count=5,
+            source_token_dim=4,
+            hidden_state_dim=4,
+            action_hidden_dim=4,
+            action_dim=2,
+            time_horizon=3,
+            bridge_hidden_dim=4,
+            num_bridge_layers=1,
+            num_bridge_heads=2,
+            vocab_size=32,
+            action_token_bins=8,
+            adapter_type="identity",
+            init_lm_head_ckpt=None,
+            head_type="oft_discrete_token",
+        )
+
+
+def test_hidden_state_actor_decodes_backbone_latent_to_action_chunk() -> None:
+    torch.manual_seed(0)
+    actor = _tiny_hidden_state_actor()
+    hidden = torch.randn(2, 5, 4)
+
+    chunk = actor.reference_action_chunk(hidden)
+    assert chunk.shape == (2, actor.time_horizon, actor.action_dim)
 
 
 def test_actor_decodes_backbone_latent_to_action_chunk() -> None:
@@ -81,7 +138,9 @@ def test_backbone_latent_online_route_wires_discrete_actor() -> None:
             ],
         )
 
-    assert cfg.policy._target_.endswith("LatentToOpenVLADiscreteTokenActor")
+    assert cfg.policy._target_.endswith("LatentToOpenVLAHiddenStateActor")
+    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
+    assert "action_hidden_dim" not in cfg.policy
     assert cfg.policy.head_type == "oft_discrete_token"
     # Lean-debottlenecked query_before WM profile (~313M).
     assert cfg.world_model.latent_stage == "query_before"

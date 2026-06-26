@@ -57,8 +57,8 @@ family, create `download/NN_name.sh`, write outputs only under
 | `preprocess/process_all_libero_data.sh` | Compatibility wrapper for the pretokenized-dataset step across suites |
 | `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
 | `preprocess/20_pretokenize_dataset.sh` | Build image/state trees, conv JSONs, token records, manifests, and YAML configs |
-| `preprocess/30_action_hidden.sh` | Extract legacy RynnVLA action-hidden sidecars |
-| `preprocess/35_oft_action_hidden.sh` | Extract OpenVLA-OFT Scheme-A action-hidden sidecars (L1 or discrete checkpoints) |
+| `preprocess/30_action_hidden.sh` | Legacy RynnVLA action-hidden sidecar extraction |
+| `preprocess/35_oft_action_hidden.sh` | OpenVLA-OFT hidden_state sidecar extraction; `OFT_LATENT_SCHEME=input_tokens` is the active route, `action_hidden` is legacy-only |
 | `preprocess/40_validate.sh` | Validate generated LIBERO preprocessing artifacts |
 | `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |
@@ -72,7 +72,7 @@ Python modules:
 | `dreamervla.preprocess.preprocess_remaining_steps_reward` | Remaining-steps reward labels |
 | `dreamervla.preprocess.validate_libero_data_prep` | Structural validation for HDF5, conv, token, record, manifest, and config counts |
 | `dreamervla.preprocess.preprocess_rynn_pixel_hidden` | RynnVLA action-hidden sidecar extraction |
-| `dreamervla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT action-hidden sidecar extraction |
+| `dreamervla.preprocess.preprocess_oft_action_hidden` | OpenVLA-OFT sidecar extraction; input-token output is treated as the active `hidden_state` route |
 
 Common launcher flags stay intentionally small:
 
@@ -86,7 +86,7 @@ Common launcher flags stay intentionally small:
 LIBERO preprocessing GPU and worker controls:
 
 - `gpus=0` selects visible GPUs and is passed through as `CUDA_VISIBLE_DEVICES`.
-- `ngpu=1` controls the action-hidden extraction `torchrun --nproc-per-node`
+- `ngpu=1` controls the GPU hidden-state extraction `torchrun --nproc-per-node`
   count. For multi-GPU extraction, keep it aligned with the number of selected
   GPUs.
 - `num_procs=8` controls CPU worker processes for pretokenization. It is not
@@ -107,7 +107,7 @@ Run only the CPU pretokenization step:
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
       only='[20_pretokenize_dataset]' gpus=0 num_procs=8
 
-Run only the RynnVLA action-hidden extraction step:
+Run only the legacy RynnVLA action-hidden extraction step:
 
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
       only='[30_action_hidden]' gpus=0,1 ngpu=2
@@ -158,6 +158,14 @@ direct Hydra keys on the launcher: `collect.episodes_per_task`,
 `warmup.total_env_steps`. The release default keeps
 `warmup.total_env_steps=0`; raise it only when you intentionally opt into online
 cotrain.
+
+Collected OpenVLA-OFT hidden sidecars use `input_token_embedding` by default.
+Check resume completeness before a long run with:
+
+    python -m dreamervla.diagnostics.check_collection_completeness \
+      --reward-dir data/collected_rollouts/libero_goal/reward \
+      --hidden-dir data/collected_rollouts/libero_goal/hidden \
+      --target-episodes 500 --num-tasks 10 --json
 
     bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
     bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true

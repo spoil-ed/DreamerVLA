@@ -239,6 +239,13 @@ class OnlineCotrainRayRunner(BaseRunner):
         train_start_t = time.perf_counter()
         policy_version = 0
         local_infer_version = 0
+        self._policy_version = int(policy_version)
+        self._wm_version = 0
+        self._classifier_version = 0
+        self._pending_component_updates = set()
+        self._begin_rollout_round()
+        local_versions = {"policy": int(local_infer_version)}
+        sync_world_model_env = self._world_model_env_sync_enabled()
         last_loss = 0.0
         last_metrics: dict[str, float] = {}
         infer_stage_timing: dict[str, float] = {}
@@ -308,10 +315,13 @@ class OnlineCotrainRayRunner(BaseRunner):
                     metric_key, 0.0
                 ) + float(value)
             step_results = []
+            hidden_batch = list(infer_out.get("obs_embedding", [None] * len(active_env_ids)))
+            if len(hidden_batch) < len(active_env_ids):
+                hidden_batch.extend([None] * (len(active_env_ids) - len(hidden_batch)))
             for rank, action, hidden in zip(
                 active_env_ids,
                 infer_out["actions"],
-                infer_out["obs_embedding"],
+                hidden_batch,
                 strict=True,
             ):
                 env_step_start = time.perf_counter()
@@ -361,7 +371,6 @@ class OnlineCotrainRayRunner(BaseRunner):
                     last_loss = _learner_loss(metrics)
                     learner_updates += 1
                     self.global_step = learner_updates
-                    policy_version += 1
                     update_metrics = {"train/rl_loss": last_loss, **last_metrics}
                     self._console_cotrain_metric_table(
                         global_step=learner_updates,
@@ -388,13 +397,17 @@ class OnlineCotrainRayRunner(BaseRunner):
                     )
                     self.log_metrics(update_metrics, step=learner_updates)
                     sync_start = time.perf_counter()
-                    learner.sync_weights("policy", policy_version).wait()
-                    if policy_version % weight_sync_every == 0:
-                        pulled = infer.pull_weights(
-                            groups["store_name"], "policy", local_infer_version
-                        ).wait()[0]
-                        if pulled is not None:
-                            local_infer_version = int(pulled)
+                    self._mark_learner_update_result(metrics)
+                    local_versions = self._sync_after_rollout_boundary(
+                        groups,
+                        local_versions=local_versions,
+                        weight_sync_every=weight_sync_every,
+                        sync_world_model_env=sync_world_model_env,
+                    )
+                    policy_version = int(self._policy_version)
+                    local_infer_version = int(local_versions.get("policy", local_infer_version))
+                    self._set_replay_policy_version(replay, policy_version)
+                    self._begin_rollout_round()
                     weight_sync_wait_s += time.perf_counter() - sync_start
                     if (
                         pending_learn_start < rollout_end
@@ -418,10 +431,6 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             self.global_step = learner_updates
-            policy_version += 1
-            # Stamp subsequently-added episodes with the new rollout policy version
-            # so the learner's staleness gate (Phase 4) can age replay samples.
-            replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
             self._console_cotrain_metric_table(
                 global_step=learner_updates,
@@ -447,6 +456,19 @@ class OnlineCotrainRayRunner(BaseRunner):
                 },
             )
             self.log_metrics(update_metrics, step=learner_updates)
+            sync_start = time.perf_counter()
+            self._mark_learner_update_result(metrics)
+            local_versions = self._sync_after_rollout_boundary(
+                groups,
+                local_versions=local_versions,
+                weight_sync_every=weight_sync_every,
+                sync_world_model_env=sync_world_model_env,
+            )
+            policy_version = int(self._policy_version)
+            local_infer_version = int(local_versions.get("policy", local_infer_version))
+            self._set_replay_policy_version(replay, policy_version)
+            self._begin_rollout_round()
+            weight_sync_wait_s += time.perf_counter() - sync_start
             self._maybe_save_ray_checkpoint(
                 groups,
                 env_steps=env_steps,
@@ -454,7 +476,6 @@ class OnlineCotrainRayRunner(BaseRunner):
                 policy_version=policy_version,
                 metrics=update_metrics,
             )
-            learner.sync_weights("policy", policy_version).wait()
 
         rollout_success = self._rollout_success_metrics(
             episode_count=episode_count,
@@ -481,6 +502,8 @@ class OnlineCotrainRayRunner(BaseRunner):
             # Compatibility for older smoke tests and dashboards.
             "train/ppo_updates": int(learner_updates),
             "sync/policy_version": int(policy_version),
+            "sync/wm_version": int(self._wm_version),
+            "sync/classifier_version": int(self._classifier_version),
             "time/overlap_events": int(overlap_events),
             "time/rollout_overlap_events": 0,
             "time/rollout_infer_ready_batches": int(infer_batches),
@@ -532,6 +555,13 @@ class OnlineCotrainRayRunner(BaseRunner):
         train_start_t = time.perf_counter()
         policy_version = 0
         local_infer_version = 0
+        self._policy_version = int(policy_version)
+        self._wm_version = 0
+        self._classifier_version = 0
+        self._pending_component_updates = set()
+        self._begin_rollout_round()
+        local_versions = {"policy": int(local_infer_version)}
+        sync_world_model_env = self._world_model_env_sync_enabled()
         last_loss = 0.0
         last_metrics: dict[str, float] = {}
         infer_stage_timing: dict[str, float] = {}
@@ -596,10 +626,13 @@ class OnlineCotrainRayRunner(BaseRunner):
             infer_batches += 1
 
         def launch_steps(batch_env_ids: list[int], infer_out: dict[str, Any]) -> None:
+            hidden_batch = list(infer_out.get("obs_embedding", [None] * len(batch_env_ids)))
+            if len(hidden_batch) < len(batch_env_ids):
+                hidden_batch.extend([None] * (len(batch_env_ids) - len(hidden_batch)))
             for env_id, action, hidden in zip(
                 batch_env_ids,
                 infer_out["actions"],
-                infer_out["obs_embedding"],
+                hidden_batch,
                 strict=True,
             ):
                 result = envs.execute_on(int(env_id)).step(action, hidden)
@@ -671,7 +704,7 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         def finish_learner(*, block: bool) -> None:
             nonlocal pending_learn, pending_learn_start, pending_learn_overlapped
-            nonlocal learner_updates, policy_version, local_infer_version
+            nonlocal learner_updates, policy_version, local_infer_version, local_versions
             nonlocal last_loss, last_metrics, learner_wait_s, weight_sync_wait_s
             nonlocal overlap_events
             if pending_learn is None:
@@ -686,10 +719,6 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_loss = _learner_loss(metrics)
             learner_updates += 1
             self.global_step = learner_updates
-            policy_version += 1
-            # Stamp subsequently-added episodes with the new rollout policy version
-            # so the learner's staleness gate (Phase 4) can age replay samples.
-            replay.set_policy_version(policy_version).wait()
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
             self._console_cotrain_metric_table(
                 global_step=learner_updates,
@@ -718,13 +747,17 @@ class OnlineCotrainRayRunner(BaseRunner):
             self.log_metrics(update_metrics, step=learner_updates)
 
             sync_start = time.perf_counter()
-            learner.sync_weights("policy", policy_version).wait()
-            if policy_version % weight_sync_every == 0:
-                pulled = infer.pull_weights(
-                    groups["store_name"], "policy", local_infer_version
-                ).wait()[0]
-                if pulled is not None:
-                    local_infer_version = int(pulled)
+            self._mark_learner_update_result(metrics)
+            local_versions = self._sync_after_rollout_boundary(
+                groups,
+                local_versions=local_versions,
+                weight_sync_every=weight_sync_every,
+                sync_world_model_env=sync_world_model_env,
+            )
+            policy_version = int(self._policy_version)
+            local_infer_version = int(local_versions.get("policy", local_infer_version))
+            self._set_replay_policy_version(replay, policy_version)
+            self._begin_rollout_round()
             weight_sync_wait_s += time.perf_counter() - sync_start
 
             if pending_learn_overlapped and pending_learn_start <= time.perf_counter():
@@ -853,6 +886,8 @@ class OnlineCotrainRayRunner(BaseRunner):
             # Compatibility for older smoke tests and dashboards.
             "train/ppo_updates": int(learner_updates),
             "sync/policy_version": int(policy_version),
+            "sync/wm_version": int(self._wm_version),
+            "sync/classifier_version": int(self._classifier_version),
             "time/overlap_events": int(overlap_events),
             "time/rollout_overlap_events": int(rollout_overlap_events),
             "time/rollout_strict_overlap_events": int(rollout_strict_overlap_events),
@@ -869,6 +904,175 @@ class OnlineCotrainRayRunner(BaseRunner):
             **rollout_success,
             **collect_resource_metrics(prefix="time"),
         }
+
+    def _begin_rollout_round(self) -> None:
+        self._ensure_version_state()
+        self._rollout_policy_version = int(self._policy_version)
+        self._rollout_wm_version = int(self._wm_version)
+        self._rollout_classifier_version = int(self._classifier_version)
+
+    def _record_transition(self, transition: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_version_state()
+        stamped = dict(transition)
+        stamped.setdefault("policy_version", int(self._rollout_policy_version))
+        stamped.setdefault("wm_version", int(self._rollout_wm_version))
+        stamped.setdefault("classifier_version", int(self._rollout_classifier_version))
+        replay = getattr(self, "_fake_replay", None)
+        if replay is not None and hasattr(replay, "add_transition"):
+            replay.add_transition(stamped)
+        return stamped
+
+    def _mark_learner_update_result(self, metrics: dict[str, Any]) -> set[str]:
+        self._ensure_version_state()
+        pending = self._updated_components_from_metrics(metrics)
+        self._pending_component_updates.update(pending)
+        return set(pending)
+
+    def _dispatch_rollout_round(
+        self,
+        *,
+        obs_batch: list[dict[str, Any]],
+        env_ids: list[int],
+        groups: dict[str, Any] | None = None,
+    ) -> list[Any]:
+        infer = (
+            groups["infer"]
+            if groups is not None
+            else getattr(self, "_fake_policy_worker")
+        )
+        envs = (
+            groups["envs"]
+            if groups is not None
+            else getattr(self, "_fake_env_group")
+        )
+        infer_out = _wait_first(infer.forward_batch(obs_batch, env_ids))
+        hidden = list(infer_out.get("obs_embedding", [None] * len(env_ids)))
+        if len(hidden) < len(env_ids):
+            hidden.extend([None] * (len(env_ids) - len(hidden)))
+        step_results = []
+        for env_id, action, obs_embedding in zip(
+            env_ids,
+            infer_out["actions"],
+            hidden,
+            strict=True,
+        ):
+            step_results.extend(
+                envs.execute_on(int(env_id)).step(action, obs_embedding).wait()
+            )
+        return step_results
+
+    def _sync_after_rollout_boundary(
+        self,
+        groups: dict[str, Any],
+        *,
+        local_versions: dict[str, int] | None = None,
+        weight_sync_every: int = 1,
+        sync_world_model_env: bool = True,
+    ) -> dict[str, int]:
+        self._ensure_version_state()
+        local = dict(local_versions or {})
+        pending = set(self._pending_component_updates)
+        self._pending_component_updates.clear()
+        if not pending:
+            return local
+
+        learner = groups["learner"]
+        envs = groups.get("envs")
+        infer = groups.get("infer")
+        store_name = str(groups.get("store_name", ""))
+        state_dicts: dict[str, Any] | None = None
+        for component in ("policy", "world_model", "classifier"):
+            if component not in pending:
+                continue
+            version_attr = self._version_attr(component)
+            version = int(getattr(self, version_attr)) + 1
+            setattr(self, version_attr, version)
+            if component != "policy" and not bool(sync_world_model_env):
+                continue
+            sync = getattr(learner, "sync_weights", None)
+            if sync is not None:
+                _wait_all(sync(component, version))
+            if component == "policy":
+                if infer is not None and version % max(1, int(weight_sync_every)) == 0:
+                    pull = getattr(infer, "pull_weights", None)
+                    if pull is not None:
+                        pulled = _wait_first(
+                            pull(store_name, "policy", int(local.get("policy", 0)))
+                        )
+                        if pulled is not None:
+                            local["policy"] = int(pulled)
+                continue
+            if envs is None:
+                continue
+            method_name = (
+                "load_world_model_state"
+                if component == "world_model"
+                else "load_classifier_state"
+            )
+            sync_env = getattr(envs, method_name, None)
+            if sync_env is None:
+                continue
+            if state_dicts is None:
+                state_dicts = dict(_wait_first(learner.state_dicts()))
+            _wait_all(sync_env(dict(state_dicts.get(component, {})), version))
+        return local
+
+    def _world_model_env_sync_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(self.cfg, "sync.world_model_env", default=False)
+            or OmegaConf.select(self.cfg, "env.world_model_env", default=False)
+        )
+
+    @staticmethod
+    def _set_replay_policy_version(replay: Any, version: int) -> None:
+        setter = getattr(replay, "set_policy_version", None)
+        if setter is None:
+            return
+        _wait_all(setter(int(version)))
+
+    @staticmethod
+    def _version_attr(component: str) -> str:
+        if component == "policy":
+            return "_policy_version"
+        if component == "world_model":
+            return "_wm_version"
+        if component == "classifier":
+            return "_classifier_version"
+        raise ValueError(f"unknown component {component!r}")
+
+    def _ensure_version_state(self) -> None:
+        if not hasattr(self, "_policy_version"):
+            self._policy_version = 0
+        if not hasattr(self, "_wm_version"):
+            self._wm_version = 0
+        if not hasattr(self, "_classifier_version"):
+            self._classifier_version = 0
+        if not hasattr(self, "_rollout_policy_version"):
+            self._rollout_policy_version = int(self._policy_version)
+        if not hasattr(self, "_rollout_wm_version"):
+            self._rollout_wm_version = int(self._wm_version)
+        if not hasattr(self, "_rollout_classifier_version"):
+            self._rollout_classifier_version = int(self._classifier_version)
+        if not hasattr(self, "_pending_component_updates"):
+            self._pending_component_updates: set[str] = set()
+
+    @staticmethod
+    def _updated_components_from_metrics(metrics: dict[str, Any]) -> set[str]:
+        updates: set[str] = set()
+        raw = dict(metrics or {})
+        for component in ("policy", "world_model", "classifier"):
+            value = raw.get(component)
+            if isinstance(value, dict) and bool(value.get("updated", False)):
+                updates.add(component)
+        for key in raw:
+            name = str(key)
+            if name.startswith("rl/") or name in {"train/rl_loss", "policy_loss"}:
+                updates.add("policy")
+            elif name.startswith("wm/") or name.startswith("train/world_model/"):
+                updates.add("world_model")
+            elif name.startswith("cls/") or name.startswith("train/classifier/"):
+                updates.add("classifier")
+        return updates
 
     def _record_rollout_episode(
         self, *, episode: int, success: bool, successes: int
@@ -1684,3 +1888,14 @@ def _float_metrics(metrics: dict[str, Any]) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _wait_all(result: Any) -> list[Any]:
+    if hasattr(result, "wait"):
+        return list(result.wait())
+    return [result]
+
+
+def _wait_first(result: Any) -> Any:
+    values = _wait_all(result)
+    return values[0] if values else None
