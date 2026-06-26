@@ -198,6 +198,11 @@ profiles:
   # launcher debug=true for a tiny smoke, and lower dataloader.batch_size if the 7B VLA
   # + WM co-residency OOMs.
   multi_gpu:
+    online_rollout_envs_per_gpu: 2
+    ray_online_egl_spawn:
+      stagger_s: 2.0
+      init_timeout_s: 900
+      max_respawns: 5
     collect:
       ray:
         - collect.episode_horizon=300

@@ -107,6 +107,14 @@ def _render_overrides(items: Sequence[Any], context: dict[str, Any]) -> list[str
     return [str(item).format(**context) for item in items]
 
 
+def _override_key(item: str) -> str:
+    return str(item).split("=", 1)[0].lstrip("+~")
+
+
+def _has_override(overrides: Sequence[str], key: str) -> bool:
+    return any(_override_key(item) == key for item in overrides)
+
+
 def _format_hydra_value(value: Any) -> str:
     if value is None:
         return "null"
@@ -170,6 +178,74 @@ def _warmup_control_mapping(cfg: dict[str, Any]) -> dict[str, Any]:
         return {}
     warmup_controls = _plain(controls.get("warmup", {}))
     return dict(warmup_controls) if isinstance(warmup_controls, Mapping) else {}
+
+
+def _scaled_profile_count(
+    profile_cfg: Mapping[str, Any],
+    key: str,
+    *,
+    ngpu: int,
+) -> int | None:
+    raw = _plain(profile_cfg).get(key)
+    if raw is None:
+        return None
+    per_gpu = int(raw)
+    if per_gpu < 1:
+        raise ValueError(f"profile.{key} must be >= 1 when set")
+    return max(1, int(ngpu)) * per_gpu
+
+
+def _sync_cotrain_scale_overrides(
+    profile_cfg: Mapping[str, Any],
+    *,
+    ngpu: int,
+    explicit_overrides: Sequence[str],
+) -> list[str]:
+    if _has_override(explicit_overrides, "online_rollout.num_envs"):
+        return []
+    num_envs = _scaled_profile_count(
+        profile_cfg,
+        "online_rollout_envs_per_gpu",
+        ngpu=ngpu,
+    )
+    return [] if num_envs is None else [f"online_rollout.num_envs={num_envs}"]
+
+
+def _ray_online_scale_overrides(
+    profile_cfg: Mapping[str, Any],
+    *,
+    ngpu: int,
+    render_backend: str,
+    explicit_overrides: Sequence[str],
+) -> list[str]:
+    overrides: list[str] = []
+    num_workers = _scaled_profile_count(
+        profile_cfg,
+        "online_rollout_envs_per_gpu",
+        ngpu=ngpu,
+    )
+    if num_workers is not None and not _has_override(explicit_overrides, "env.num_workers"):
+        overrides.append(f"env.num_workers={num_workers}")
+    if not _has_override(explicit_overrides, "render_backend"):
+        overrides.append(f"render_backend={render_backend}")
+
+    if render_backend.strip().lower() != "egl":
+        return overrides
+
+    egl_cfg = _plain(profile_cfg).get("ray_online_egl_spawn", {})
+    if not isinstance(egl_cfg, Mapping):
+        return overrides
+    egl_targets = {
+        "stagger_s": "env.cfg.egl_spawn_stagger_s",
+        "init_timeout_s": "env.cfg.egl_spawn_init_timeout_s",
+        "max_respawns": "env.cfg.egl_max_respawns",
+    }
+    for source_key, target_key in egl_targets.items():
+        value = egl_cfg.get(source_key)
+        if value is None or _has_override(explicit_overrides, target_key):
+            continue
+        overrides.append(f"++{target_key}={_format_hydra_value(value)}")
+    return overrides
 
 
 def build_pipeline_plan(
@@ -299,6 +375,11 @@ def build_pipeline_plan(
         *_render_overrides(cfg["cotrain"]["base"], context),
         f"training.out_dir={cotrain_out}",
         *_render_overrides(profile_cfg["cotrain"], context),
+        *_sync_cotrain_scale_overrides(
+            profile_cfg,
+            ngpu=selected_ngpu,
+            explicit_overrides=[*common_overrides, *cotrain_overrides],
+        ),
         *_control_overrides(
             cfg.get("warmup"),
             _warmup_control_mapping(cfg),
@@ -338,6 +419,12 @@ def build_pipeline_plan(
             f"task={task_spec['hydra_task']}",
             f"training.out_dir={cotrain_out}",
             f"init.warmup_ckpt_path={ray_init_ckpt}",
+            *_ray_online_scale_overrides(
+                profile_cfg,
+                ngpu=selected_ngpu,
+                render_backend=selected_render_backend,
+                explicit_overrides=[*common_overrides, *cotrain_overrides],
+            ),
             *common_overrides,
             *cotrain_overrides,
         ]

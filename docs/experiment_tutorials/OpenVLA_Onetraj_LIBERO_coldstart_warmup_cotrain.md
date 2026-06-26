@@ -67,6 +67,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   render_backend=egl > logs/cotrain_ray_egl.log 2>&1
 ```
 
+With `profile=multi_gpu ngpu=6`, the launcher expands the Hydra concurrency from
+the profile: sync cotrain gets `online_rollout.num_envs=12`; Ray async online
+(`cotrain_engine=async`) gets `env.num_workers=12` plus EGL spawn guards when
+`render_backend=egl`.
+
 ### Run Stages Separately
 
 Use one stable `RUN_ROOT` when debugging the later phases. The warmup stage writes
@@ -111,67 +116,6 @@ CUDA_VISIBLE_DEVICES=6,7 \
   skip_collect=true cotrain_phase=online run_root="${RUN_ROOT}" \
   > logs/cotrain_goal_g67_online.log 2>&1
 ```
-
-### Six-GPU Ray online cotrain
-
-Use this after warmup when you already have a reusable Ray init checkpoint
-containing the `world_model` and `classifier` components. The current Ray OFT
-online route has one OFT inference worker and one learner worker; six-GPU
-throughput comes from running EGL env subprocesses across all visible GPUs and
-raising `env.num_workers`. Do not expect extra GPUs to be used if you only make
-them visible while keeping `render_backend=osmesa`.
-
-```bash
-export RUN_TAG="ray_6g_egl_$(date +%Y%m%d_%H%M%S)"
-export OUT_DIR="${DVLA_DATA_ROOT}/outputs/ray_egl_10task_6g/${RUN_TAG}"
-# Set RUN_ROOT from the warmup run, or pre-set WARMUP_CKPT to a merged
-# ray_async_init.ckpt containing world_model + classifier.
-export WARMUP_CKPT="${WARMUP_CKPT:-${RUN_ROOT:?set RUN_ROOT from warmup, or set WARMUP_CKPT}/cotrain/ckpt/ray_async_init.ckpt}"
-mkdir -p logs
-
-tmux new-session -d -s dvla-10task-ray-6g-egl \
-  "cd $(pwd -P) && \
-  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
-  MUJOCO_GL=egl \
-  PYOPENGL_PLATFORM=egl \
-  RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1 \
-  HYDRA_FULL_ERROR=1 \
-  WANDB_MODE=offline \
-  python -m dreamervla.train \
-    experiment=online_cotrain_ray_oft_action_hidden \
-    task=openvla_onetraj_coldstart_libero \
-    training.out_dir=${OUT_DIR} \
-    training.max_steps=1000 \
-    checkpoint.save_interval=20 \
-    rollout.steps=200000 \
-    rollout.min_replay_episodes=1 \
-    rollout.require_classifier_evidence=false \
-    render_backend=egl \
-    env.num_workers=12 \
-    ++env.cfg.egl_spawn_stagger_s=2.0 \
-    ++env.cfg.egl_spawn_init_timeout_s=900 \
-    ++env.cfg.egl_max_respawns=5 \
-    inference.placement.gpu_id=0 \
-    learner.placement.start_gpu=1 \
-    learner.placement.end_gpu=1 \
-    learner.placement.num_gpus_per_worker=1 \
-    'ray_data.task_ids=[0,1,2,3,4,5,6,7,8,9]' \
-    'replay.cfg.task_ids=[0,1,2,3,4,5,6,7,8,9]' \
-    init.warmup_ckpt_path=${WARMUP_CKPT} \
-    > logs/ray_egl_10task_6g_${RUN_TAG}.log 2>&1"
-```
-
-Attach and monitor:
-
-```bash
-tmux attach -t dvla-10task-ray-6g-egl
-tail -f "logs/ray_egl_10task_6g_${RUN_TAG}.log"
-```
-
-If EGL is unstable on the machine, keep the same command but change
-`render_backend=egl` to `render_backend=osmesa` and remove the three
-`++env.cfg.egl_*` overrides. That is the stable fallback, but it is not true
-six-GPU rollout acceleration because OSMesa renders on CPU.
 
 Ray collect fans out `collect.num_inference_workers` policy workers (the `multi_gpu`
 profile sets 4); keep it **≤ the visible GPU count** — e.g. on two GPUs add
