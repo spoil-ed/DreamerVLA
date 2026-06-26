@@ -10,6 +10,7 @@ The osmesa / synthetic-test path (no egl pool) stays in-process and unchanged.
 from __future__ import annotations
 
 import importlib
+import inspect
 import multiprocessing as mp
 import os
 import time
@@ -35,6 +36,40 @@ def _build_env_from_cfg(env_cfg: dict[str, Any]) -> Any:
     if hasattr(env_cls, "from_config") and env_cfg.get("use_from_config", False):
         return env_cls.from_config(kwargs)
     return env_cls(**kwargs)
+
+
+def _record_builder_accepts_lang(record_builder: Any) -> bool:
+    try:
+        sig = inspect.signature(record_builder)
+    except (TypeError, ValueError):
+        return False
+    params = list(sig.parameters.values())
+    if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params):
+        return True
+    positional = [
+        p
+        for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 9
+
+
+def _call_record_builder(
+    record_builder: Any,
+    env: Any,
+    obs: dict[str, Any],
+    action: Any,
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    info: dict[str, Any],
+    obs_embedding: Any,
+    lang_emb: Any | None,
+) -> dict[str, Any]:
+    args = (env, obs, action, reward, terminated, truncated, info, obs_embedding)
+    if _record_builder_accepts_lang(record_builder):
+        return record_builder(*args, lang_emb)
+    return record_builder(*args)
 
 
 def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):  # noqa: ANN001
@@ -87,7 +122,11 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                 cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
                 conn.send(("ok", cur_obs))
             elif cmd == "step":
-                action, obs_embedding = payload
+                if isinstance(payload, tuple) and len(payload) == 3:
+                    action, obs_embedding, lang_emb = payload
+                else:
+                    action, obs_embedding = payload
+                    lang_emb = None
                 obs = cur_obs
                 record_obs = obs
                 if record_builder is not None and hasattr(env, "full_record"):
@@ -97,8 +136,17 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                 info = dict(info or {})
                 info["episode_id"] = episode_id  # current episode (before the done-increment)
                 if record_builder is not None:
-                    transition = record_builder(
-                        env, record_obs, action, reward, terminated, truncated, info, obs_embedding
+                    transition = _call_record_builder(
+                        record_builder,
+                        env,
+                        record_obs,
+                        action,
+                        reward,
+                        terminated,
+                        truncated,
+                        info,
+                        obs_embedding,
+                        lang_emb,
                     )
                 else:
                     transition = env.make_transition(
@@ -108,6 +156,8 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                         transition["obs_embedding"] = np.asarray(
                             obs_embedding, dtype=np.float32
                         )
+                    if lang_emb is not None:
+                        transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
                 done = bool(terminated or truncated)
                 if done:
                     episode_id += 1
@@ -279,10 +329,11 @@ class EnvWorker(Worker):
         self,
         action: Any,
         obs_embedding: Any = None,
+        lang_emb: Any | None = None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         if self._spawned:
-            return self._step_spawn(action, obs_embedding)
-        return self._step_inproc(action, obs_embedding)
+            return self._step_spawn(action, obs_embedding, lang_emb)
+        return self._step_inproc(action, obs_embedding, lang_emb)
 
     def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
         if self._spawned:
@@ -303,10 +354,10 @@ class EnvWorker(Worker):
         env.load_classifier_state(state_dict, int(version))
 
     def _step_spawn(
-        self, action: Any, obs_embedding: Any
+        self, action: Any, obs_embedding: Any, lang_emb: Any | None
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         try:
-            transition, obs, done, info = self._rpc("step", (action, obs_embedding))
+            transition, obs, done, info = self._rpc("step", (action, obs_embedding, lang_emb))
         except (EOFError, OSError):
             # The spawn child died (silent native crash under sustained concurrent
             # egl). Drop the partial episode and respawn a clean child instead of
@@ -357,7 +408,7 @@ class EnvWorker(Worker):
         return self.obs, True, {"env_crash_recovered": True}
 
     def _step_inproc(
-        self, action: Any, obs_embedding: Any
+        self, action: Any, obs_embedding: Any, lang_emb: Any | None
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         env = self._env()
         obs = self.current_obs()
@@ -369,7 +420,8 @@ class EnvWorker(Worker):
         info = dict(info or {})
         info["episode_id"] = self.episode_id  # current episode (before the done-increment)
         if self._record_builder is not None:
-            transition = self._record_builder(
+            transition = _call_record_builder(
+                self._record_builder,
                 env,
                 record_obs,
                 action,
@@ -378,11 +430,14 @@ class EnvWorker(Worker):
                 truncated,
                 info,
                 obs_embedding,
+                lang_emb,
             )
         elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
             if obs_embedding is not None:
                 transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+            if lang_emb is not None:
+                transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
         else:
             transition = self._make_generic_transition(
                 obs,
@@ -393,6 +448,7 @@ class EnvWorker(Worker):
                 truncated,
                 info,
                 obs_embedding,
+                lang_emb,
             )
         self.episode.append(transition)
 
@@ -450,8 +506,9 @@ class EnvWorker(Worker):
         truncated: bool,
         info: dict[str, Any],
         obs_embedding: Any,
+        lang_emb: Any | None = None,
     ) -> dict[str, Any]:
-        return {
+        transition = {
             "obs": obs,
             "next_obs": next_obs,
             "actions": np.asarray(action, dtype=np.float32),
@@ -467,6 +524,9 @@ class EnvWorker(Worker):
                 else np.asarray(obs_embedding, dtype=np.float32)
             ),
         }
+        if lang_emb is not None:
+            transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
+        return transition
 
     def _env(self) -> Any:
         if self.env is None:

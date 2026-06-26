@@ -179,4 +179,7 @@ def test_fake_oft_components_write_structural_sidecars(tmp_path: Path) -> None:
         assert demo["action_hidden_states"].shape == (length, 2 * 3, 8)
     with h5py.File(out_input, "r") as handle:
         assert bool(handle.attrs["complete"])
-        assert handle["data"]["demo_0"]["obs_embedding"].shape == (length, 2 * 2, 8)
+        demo = handle["data"]["demo_0"]
+        assert demo["obs_embedding"].shape == (length, 2 * 2, 8)
+        assert demo["lang_emb"].shape == (8,)
+        assert demo["lang_emb"].dtype == np.dtype("float32")

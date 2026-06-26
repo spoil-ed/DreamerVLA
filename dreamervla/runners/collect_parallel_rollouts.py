@@ -54,6 +54,7 @@ from dreamervla.runners.oft_collect_common import (
     make_preprocess_config,
     oft_open_loop_action,
     resolve_model_path,
+    sidecar_to_numpy,
     vla_latent_spec,
 )
 from dreamervla.utils.paths import data_path, data_root
@@ -279,15 +280,16 @@ def _run_episode(
         # implementation also used by the online cotrain rollout
         # (oft_open_loop_action). process_action (inside it) does the LIBERO
         # gripper binarize/invert required before env.step.
-        action, hidden_state = oft_open_loop_action(
+        step_out = oft_open_loop_action(
             extractor, extractor_obs, task_description, action_queue, action_steps
         )
+        action, hidden_state = step_out
 
         obs, reward, terminated, truncated, info = env.step(action)
         done = bool(terminated or truncated)
         success = bool(info.get("success", terminated))
 
-        steps.append({
+        step = {
             "actions": np.asarray(info.get("wm_action", info.get("env_action", action)), dtype=np.float64),
             "rewards": np.float32(0.0),
             "sparse_rewards": np.uint8(0),
@@ -303,8 +305,12 @@ def _run_episode(
                 "gripper_states": rec["gripper_states"].astype(np.float64),
                 "joint_states": rec["joint_states"].astype(np.float64),
             },
-            "obs_embedding": hidden_state.numpy(),
-        })
+            "obs_embedding": sidecar_to_numpy(hidden_state),
+        }
+        lang_emb = sidecar_to_numpy(getattr(step_out, "lang_emb", None), dtype=np.float32)
+        if lang_emb is not None:
+            step["lang_emb"] = lang_emb.reshape(-1)
+        steps.append(step)
         t += 1
 
     # Post-episode: set dones and sparse_rewards on terminal step.

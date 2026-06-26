@@ -28,6 +28,53 @@ def test_forward_batch_returns_action_and_hidden() -> None:
     assert float(out["obs_embedding"][2][0]) == 30.0
 
 
+class _DecodeResult:
+    def __init__(self, action_chunk, hidden_state, lang_emb):
+        self.action_chunk = action_chunk
+        self.hidden_state = hidden_state
+        self.lang_emb = lang_emb
+
+    def __iter__(self):
+        yield self.action_chunk
+        yield self.hidden_state
+
+
+class _LangExtractor:
+    def prepare(self, obs, task_description):
+        return {"seed": int(obs.get("seed", 0))}
+
+    def reset(self):
+        return None
+
+
+class _LangBundle:
+    def make_extractor(self):
+        return _LangExtractor()
+
+    def predict_batch(self, preps):
+        out = []
+        for prep in preps:
+            seed = int(prep["seed"])
+            action_chunk = [np.full((7,), float(seed), dtype=np.float32) for _ in range(8)]
+            hidden_state = np.full((HIDDEN_DIM,), float(seed), dtype=np.float16)
+            lang_emb = np.full((6,), float(seed + 1), dtype=np.float32)
+            out.append(_DecodeResult(action_chunk, hidden_state, lang_emb))
+        return out
+
+
+def test_forward_batch_returns_language_sidecar_when_decoder_provides_it() -> None:
+    w = RolloutInferenceWorker(_cfg(), {}, num_envs=2)
+    w._bundle = _LangBundle()
+    w._extractors = [w._bundle.make_extractor() for _ in range(2)]
+
+    out = w.forward_batch([{"seed": 10}, {"seed": 20}], [0, 1])
+
+    assert len(out["lang_emb"]) == 2
+    assert out["lang_emb"][0].shape == (6,)
+    assert out["lang_emb"][0].dtype == np.float16
+    assert float(out["lang_emb"][1][0]) == 21.0
+
+
 def test_reset_states_clears_only_named_envs() -> None:
     w = RolloutInferenceWorker(_cfg(), {}, num_envs=2)
     w.init()

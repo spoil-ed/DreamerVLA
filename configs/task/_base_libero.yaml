@@ -96,6 +96,8 @@ openvla_oft:
     hidden_state_dim: 4096
     latent_stage: query_before
     latent_source: OpenVLA-OFT current-frame projected vision patch tokens [num_images_in_input*patches_per_image,4096]
+    proprio_keys: [ee_pos, ee_ori, gripper_states]
+    lang_emb_dir: ${task.openvla_oft.input_token_hidden_dir}
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel

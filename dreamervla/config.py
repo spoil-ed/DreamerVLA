@@ -338,10 +338,39 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
                 "ChunkAwareDinoWMWorldModel transformer sizing"
             )
 
+    if (
+        key == "world_model"
+        and _looks_oft_input_token_cfg(cfg)
+        and _select_str(cfg, "_target_") == "dreamervla.runners.LatentWMRunner"
+    ):
+        for required_key in (
+            "proprio_dim",
+            "proprio_emb_dim",
+            "num_proprio_repeat",
+            "lang_dim",
+            "lang_emb_dim",
+            "num_lang_repeat",
+        ):
+            if _select_int(cfg, f"{key}.{required_key}") is None:
+                raise ValueError(
+                    f"{key}.{required_key} must be set for OpenVLA-OFT "
+                    "input-token query_before proprio/language conditioning"
+                )
+        for required_key in ("dataset.proprio_keys", "dataset.lang_emb_dir"):
+            if OmegaConf.select(cfg, required_key, default=None) in (None, ""):
+                raise ValueError(
+                    f"{required_key} must be set for OpenVLA-OFT input-token "
+                    "query_before proprio/language conditioning"
+                )
+
     model_dim = _select_int(cfg, f"{key}.model_dim")
     token_dim = _select_int(cfg, f"{key}.token_dim")
     action_emb_dim = _select_int(cfg, f"{key}.action_emb_dim")
     num_action_repeat = _select_int(cfg, f"{key}.num_action_repeat")
+    proprio_emb_dim = _select_int(cfg, f"{key}.proprio_emb_dim")
+    num_proprio_repeat = _select_int(cfg, f"{key}.num_proprio_repeat")
+    lang_emb_dim = _select_int(cfg, f"{key}.lang_emb_dim")
+    num_lang_repeat = _select_int(cfg, f"{key}.num_lang_repeat")
     if model_dim is None or token_dim is None:
         return
     if action_emb_dim is None:
@@ -357,14 +386,46 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
         raise ValueError(
             f"{key}.num_action_repeat must be > 0, got {num_action_repeat}"
         )
-    expected_model_dim = token_dim + action_emb_dim * num_action_repeat
+    if proprio_emb_dim is None:
+        proprio_emb_dim = 0
+    if proprio_emb_dim < 0:
+        raise ValueError(
+            f"{key}.proprio_emb_dim must be >= 0, got {proprio_emb_dim}"
+        )
+    if num_proprio_repeat is None:
+        num_proprio_repeat = 1
+    if num_proprio_repeat < 1:
+        raise ValueError(
+            f"{key}.num_proprio_repeat must be > 0, got {num_proprio_repeat}"
+        )
+    if lang_emb_dim is None:
+        lang_emb_dim = 0
+    if lang_emb_dim < 0:
+        raise ValueError(f"{key}.lang_emb_dim must be >= 0, got {lang_emb_dim}")
+    if num_lang_repeat is None:
+        num_lang_repeat = 1
+    if num_lang_repeat < 1:
+        raise ValueError(
+            f"{key}.num_lang_repeat must be > 0, got {num_lang_repeat}"
+        )
+    expected_model_dim = (
+        token_dim
+        + proprio_emb_dim * num_proprio_repeat
+        + lang_emb_dim * num_lang_repeat
+        + action_emb_dim * num_action_repeat
+    )
     if model_dim == expected_model_dim:
         return
     raise ValueError(
         f"{key}.model_dim must equal {key}.token_dim + "
+        f"{key}.proprio_emb_dim * {key}.num_proprio_repeat + "
+        f"{key}.lang_emb_dim * {key}.num_lang_repeat + "
         f"{key}.action_emb_dim * {key}.num_action_repeat for "
         "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning "
-        f"({model_dim} != {token_dim} + {action_emb_dim} * {num_action_repeat})"
+        f"({model_dim} != {token_dim} + "
+        f"{proprio_emb_dim} * {num_proprio_repeat} + "
+        f"{lang_emb_dim} * {num_lang_repeat} + "
+        f"{action_emb_dim} * {num_action_repeat})"
     )
 
 

@@ -292,9 +292,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         num_infer = int(groups.get("num_infer", 1))
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
-        task_ids = list(groups.get("task_ids", []))
         pending_work = list(groups.get("pending_work", []))
-        episodes_per_task = int(groups.get("episodes_per_task", 1))
         env_ids = (
             [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
             if scheduled
@@ -356,15 +354,20 @@ class ColdStartRayCollectRunner(BaseRunner):
                 w: infer.execute_on(w).forward_batch([obs_by_env[e] for e in ids], ids)
                 for w, ids in shards.items()
             }
-            out_by_env: dict[int, tuple[Any, Any]] = {}
+            out_by_env: dict[int, tuple[Any, Any, Any | None]] = {}
             for w, ids in shards.items():
                 out = wait_result(infer_calls[w])[0]
-                for e, action, hidden in zip(
-                    ids, out["actions"], out["obs_embedding"], strict=True
+                lang_emb = out.get("lang_emb") or [None] * len(ids)
+                for e, action, hidden, lang in zip(
+                    ids, out["actions"], out["obs_embedding"], lang_emb, strict=True
                 ):
-                    out_by_env[e] = (action, hidden)
+                    out_by_env[e] = (action, hidden, lang)
             step_calls = [
-                envs.execute_on(env_id).step(out_by_env[env_id][0], out_by_env[env_id][1])
+                envs.execute_on(env_id).step(
+                    out_by_env[env_id][0],
+                    out_by_env[env_id][1],
+                    out_by_env[env_id][2],
+                )
                 for env_id in env_ids
             ]
             driver_step_calls += len(step_calls)
@@ -441,12 +444,10 @@ class ColdStartRayCollectRunner(BaseRunner):
                 "multi-GPU inference (collect.num_inference_workers>1) is supported on the "
                 "default rollout loop only; set rollout.overlap=false (or "
                 "collect.num_inference_workers=1) for the overlap path."
-            )
+        )
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
-        task_ids = list(groups.get("task_ids", []))
         pending_work = list(groups.get("pending_work", []))
-        episodes_per_task = int(groups.get("episodes_per_task", 1))
         env_ids = (
             [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
             if scheduled
@@ -510,13 +511,15 @@ class ColdStartRayCollectRunner(BaseRunner):
             steps += 1
 
         def launch_steps(batch_env_ids: list[int], infer_out: dict[str, Any]) -> None:
-            for env_id, action, hidden in zip(
+            lang_emb = infer_out.get("lang_emb") or [None] * len(batch_env_ids)
+            for env_id, action, hidden, lang in zip(
                 batch_env_ids,
                 infer_out["actions"],
                 infer_out["obs_embedding"],
+                lang_emb,
                 strict=True,
             ):
-                result = envs.execute_on(int(env_id)).step(action, hidden)
+                result = envs.execute_on(int(env_id)).step(action, hidden, lang)
                 pending_steps[result.refs[0]] = (int(env_id), result, time.perf_counter())
 
         def handle_step_result(
@@ -783,6 +786,7 @@ def _build_oft_dump_step(
     truncated: bool,
     info: dict[str, Any],
     obs_embedding: Any,
+    lang_emb: Any | None = None,
 ) -> dict[str, Any]:
     from dreamervla.workers.rollout.record_adapter import build_dump_step
 
@@ -795,6 +799,7 @@ def _build_oft_dump_step(
     step = build_dump_step(
         full_record=full_record,
         obs_embedding=obs_embedding,
+        lang_emb=lang_emb,
         action=wm_action,
         reward=0.0,
         sparse_reward=(1 if done and success else 0),

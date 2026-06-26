@@ -102,3 +102,37 @@ def test_env_worker_passes_pre_step_full_record_to_record_builder() -> None:
     worker.init()
     worker.step(np.zeros(7, np.float32), np.zeros(4, np.float32))
     assert captured["record_step"] == 0
+
+
+def test_env_worker_passes_language_embedding_to_record_builder() -> None:
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    captured = {}
+
+    def fake_builder(
+        env, obs, action, reward, terminated, truncated, info, obs_embedding, lang_emb
+    ):
+        captured["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
+        return {
+            "obs_embedding": np.asarray(obs_embedding, np.float16),
+            "lang_emb": np.asarray(lang_emb, np.float32),
+        }
+
+    cfg = {
+        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
+    }
+
+    class _Sink:
+        def add_episode(self, ep):
+            return None
+
+    worker = EnvWorker(cfg, task_id=0, replay=_Sink(), record_builder=fake_builder)
+    worker.init()
+    worker.step(
+        np.zeros(7, np.float32),
+        np.zeros(4, np.float32),
+        np.arange(6, dtype=np.float32),
+    )
+
+    assert np.array_equal(captured["lang_emb"], np.arange(6, dtype=np.float32))

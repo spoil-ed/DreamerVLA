@@ -225,8 +225,26 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
     validate_cfg(oft_cfg, world_size=1)
     assert oft_cfg.world_model.latent_stage == "query_before"
     assert oft_cfg.world_model.token_dim == 4096
+    assert oft_cfg.world_model.proprio_dim == 8
+    assert oft_cfg.world_model.proprio_emb_dim == 10
+    assert oft_cfg.world_model.num_proprio_repeat == 1
+    assert oft_cfg.world_model.lang_dim == 4096
+    assert oft_cfg.world_model.lang_emb_dim == 32
+    assert oft_cfg.world_model.num_lang_repeat == 1
     assert oft_cfg.world_model.action_emb_dim == 10
-    assert oft_cfg.world_model.model_dim == 4106
+    assert oft_cfg.world_model.model_dim == 4148
+    assert oft_cfg.world_model.model_dim == (
+        oft_cfg.world_model.token_dim
+        + oft_cfg.world_model.proprio_emb_dim * oft_cfg.world_model.num_proprio_repeat
+        + oft_cfg.world_model.lang_emb_dim * oft_cfg.world_model.num_lang_repeat
+        + oft_cfg.world_model.action_emb_dim * oft_cfg.world_model.num_action_repeat
+    )
+    assert oft_cfg.world_model.cosine_loss_scale == 0.0
+    assert oft_cfg.world_model.chunk_rollout_chunks == 1
+    assert oft_cfg.world_model.chunk_rollout_loss_scale == 0.0
+    assert oft_cfg.dataset.sequence_length == 12
+    assert oft_cfg.dataset.proprio_keys == ["ee_pos", "ee_ori", "gripper_states"]
+    assert oft_cfg.dataset.lang_emb_dir == oft_cfg.task.openvla_oft.input_token_hidden_dir
     assert oft_cfg.world_model.depth == 6
     assert oft_cfg.world_model.heads == 16
     assert oft_cfg.world_model.dim_head == 128

@@ -20,14 +20,15 @@ Schema (reward HDF5, per demo at data/demo_<i>/):
 
     Sidecar (same filename, separate dir):
         data/demo_<i>/obs_embedding  (T, D) legacy or (T, N, D) input-token float16
+        data/demo_<i>/lang_emb       (D_lang,) optional demo-level float16
 
 preprocess_config.json is written once to hidden_dir/preprocess_config.json.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,7 @@ class RolloutDumpWriter:
                 gripper_states   (2,)              float64
                 joint_states     (7,)              float64
             obs_embedding   array-like (D,) legacy or (N,D) input-token float16
+            lang_emb         optional array-like (D_lang,) demo-level language embedding
 
         ``preprocess_config`` is written to hidden_dir/preprocess_config.json
         on the first call that provides a non-None value.
@@ -139,6 +141,9 @@ class RolloutDumpWriter:
         obs_embedding = np.stack(
             [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
         )  # (T, D) legacy or (T, N, D) input-token
+        lang_emb = None
+        if steps[0].get("lang_emb") is not None:
+            lang_emb = np.asarray(steps[0]["lang_emb"], dtype=np.float16).reshape(-1)
 
         # obs sub-fields
         obs_keys_dtypes = {
@@ -201,6 +206,8 @@ class RolloutDumpWriter:
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)
         hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
+        if lang_emb is not None:
+            hidden_demo_grp.create_dataset("lang_emb", data=lang_emb)
         hidden_demo_grp.attrs["num_samples"] = str(T)
         if task_id is not None:
             hidden_demo_grp.attrs["task_id"] = int(task_id)

@@ -162,6 +162,12 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         grad_checkpoint: bool = False,
         action_emb_dim: int = 10,
         num_action_repeat: int = 1,
+        proprio_dim: int = 0,
+        proprio_emb_dim: int = 0,
+        num_proprio_repeat: int = 1,
+        lang_dim: int = 0,
+        lang_emb_dim: int = 0,
+        num_lang_repeat: int = 1,
         dim_head: int = 64,
         attn_impl: str = "manual",
         task_conditioning: dict | None = None,
@@ -193,15 +199,64 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             raise ValueError(
                 f"num_action_repeat must be >= 1, got {num_action_repeat}"
             )
-        expected_model_dim = self.token_dim + self.action_condition_dim
+        self.proprio_dim = int(proprio_dim)
+        self.proprio_emb_dim = int(proprio_emb_dim)
+        self.num_proprio_repeat = int(num_proprio_repeat)
+        if self.proprio_emb_dim < 0:
+            raise ValueError(
+                f"proprio_emb_dim must be >= 0, got {proprio_emb_dim}"
+            )
+        if self.num_proprio_repeat < 1:
+            raise ValueError(
+                f"num_proprio_repeat must be >= 1, got {num_proprio_repeat}"
+            )
+        self.proprio_condition_dim = self.proprio_emb_dim * self.num_proprio_repeat
+        if self.proprio_condition_dim > 0:
+            if self.proprio_dim < 1:
+                raise ValueError("proprio_emb_dim>0 requires proprio_dim>=1")
+            self.proprio_encoder: nn.Module | None = nn.Sequential(
+                nn.LayerNorm(self.proprio_dim),
+                nn.Linear(self.proprio_dim, self.proprio_emb_dim),
+            )
+        else:
+            self.proprio_encoder = None
+        self.obs_token_dim = self.token_dim + self.proprio_condition_dim
+
+        self.lang_dim = int(lang_dim)
+        self.lang_emb_dim = int(lang_emb_dim)
+        self.num_lang_repeat = int(num_lang_repeat)
+        if self.lang_emb_dim < 0:
+            raise ValueError(f"lang_emb_dim must be >= 0, got {lang_emb_dim}")
+        if self.num_lang_repeat < 1:
+            raise ValueError(f"num_lang_repeat must be >= 1, got {num_lang_repeat}")
+        self.lang_condition_dim = self.lang_emb_dim * self.num_lang_repeat
+        if self.lang_condition_dim > 0:
+            if self.lang_dim < 1:
+                raise ValueError("lang_emb_dim>0 requires lang_dim>=1")
+            self.lang_proj: nn.Module | None = nn.Sequential(
+                nn.LayerNorm(self.lang_dim),
+                nn.Linear(self.lang_dim, self.lang_emb_dim),
+            )
+        else:
+            self.lang_proj = None
+
+        expected_model_dim = (
+            self.obs_token_dim + self.lang_condition_dim + self.action_condition_dim
+        )
         if requested_model_dim is None:
             requested_model_dim = expected_model_dim
         self.model_dim = int(requested_model_dim)
         if self.model_dim != expected_model_dim:
             raise ValueError(
                 "ChunkAwareDinoWMWorldModel uses DINO-WM concat conditioning; "
-                "set model_dim == token_dim + action_emb_dim * num_action_repeat, "
+                "set model_dim == token_dim + proprio_emb_dim * num_proprio_repeat "
+                "+ lang_emb_dim * num_lang_repeat + action_emb_dim * "
+                "num_action_repeat, "
                 f"got model_dim={self.model_dim}, token_dim={self.token_dim}, "
+                f"proprio_emb_dim={self.proprio_emb_dim}, "
+                f"num_proprio_repeat={self.num_proprio_repeat}, "
+                f"lang_emb_dim={self.lang_emb_dim}, "
+                f"num_lang_repeat={self.num_lang_repeat}, "
                 f"action_emb_dim={self.action_emb_dim}, "
                 f"num_action_repeat={self.num_action_repeat}"
             )
@@ -255,6 +310,26 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             nn.LayerNorm(self.action_dim),
             nn.Linear(self.action_dim, self.action_emb_dim),
         )
+        if self.reward_enabled:
+            self.reward_norm = nn.LayerNorm(self.obs_token_dim)
+            self.reward_head = nn.Sequential(
+                nn.Linear(self.obs_token_dim, self.reward_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.reward_hidden_dim, 1),
+            )
+            final = self.reward_head[-1]
+            if isinstance(final, nn.Linear):
+                nn.init.constant_(final.bias, self.reward_init_logit)
+        if self.success_return_enabled:
+            self.success_return_norm = nn.LayerNorm(self.obs_token_dim)
+            self.success_return_head = nn.Sequential(
+                nn.Linear(self.obs_token_dim, self.success_return_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.success_return_hidden_dim, 1),
+            )
+            final = self.success_return_head[-1]
+            if isinstance(final, nn.Linear):
+                nn.init.constant_(final.bias, self.success_return_init_logit)
         self.pos_embedding = nn.Parameter(
             torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim)
             * 0.02
@@ -300,28 +375,94 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             task_emb = task_emb.unsqueeze(1)
         return obs_tokens + task_emb.to(obs_tokens.dtype)
 
+    def _obs_tokens_from_obs(
+        self, obs: dict[str, torch.Tensor] | torch.Tensor
+    ) -> torch.Tensor:
+        """Normalize raw vision tokens or expanded observation tokens."""
+        obs_embedding = self._obs_embedding_from_obs(obs)
+        if obs_embedding.ndim == 3 and obs_embedding.shape[1:] == (
+            self.token_count,
+            self.obs_token_dim,
+        ):
+            tokens = obs_embedding[:, None]
+        elif obs_embedding.ndim == 4 and obs_embedding.shape[-2] == self.token_count:
+            if obs_embedding.shape[-1] not in {self.token_dim, self.obs_token_dim}:
+                raise ValueError(
+                    "tokenized observation width mismatch: got "
+                    f"{obs_embedding.shape[-1]}, expected {self.token_dim} "
+                    f"or {self.obs_token_dim}"
+                )
+            tokens = obs_embedding
+        else:
+            tokens = self.obs_to_tokens(obs_embedding)
+        if int(tokens.shape[1]) > self.max_seq_len:
+            raise ValueError(
+                f"sequence length {tokens.shape[1]} exceeds max_seq_len={self.max_seq_len}"
+            )
+        return tokens.to(device=self._module_device(), dtype=self._module_dtype())
+
+    def _observation_tokens(
+        self,
+        vision_tokens: torch.Tensor,
+        proprio_raw: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Fold encoded proprio into every observation token channel."""
+        if self.proprio_condition_dim == 0:
+            return vision_tokens
+        if proprio_raw is None:
+            raise ValueError("proprio is required when proprio_emb_dim>0")
+        if self.proprio_encoder is None:
+            raise RuntimeError("proprio encoder is missing")
+        proprio = proprio_raw.to(device=self._module_device(), dtype=self._module_dtype())
+        emb = self.proprio_encoder(proprio)
+        if self.num_proprio_repeat > 1:
+            emb = emb.repeat(1, 1, self.num_proprio_repeat)
+        tiled = emb[:, :, None, :].expand(-1, -1, vision_tokens.shape[2], -1)
+        return torch.cat([vision_tokens, tiled], dim=-1)
+
     def _condition_tokens(
         self,
         obs_tokens: torch.Tensor,
-        actions: torch.Tensor,
+        lang_emb: torch.Tensor | None,
+        actions: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        obs_tokens = self.obs_to_tokens(obs_tokens)
+        if actions is None:
+            actions = lang_emb
+            lang_emb = None
+        if actions is None:
+            raise ValueError("actions are required for DINO-WM conditioning")
         actions = self._validate_actions(actions, int(obs_tokens.shape[1]))
+        parts = [obs_tokens]
+        if self.lang_condition_dim > 0:
+            if lang_emb is None:
+                raise ValueError("lang_emb is required when lang_emb_dim>0")
+            if self.lang_proj is None:
+                raise RuntimeError("language projection is missing")
+            lang = lang_emb.to(device=self._module_device(), dtype=self._module_dtype())
+            le = self.lang_proj(lang)
+            if self.num_lang_repeat > 1:
+                le = le.repeat(1, self.num_lang_repeat)
+            lang_tokens = le[:, None, None, :].expand(
+                -1, obs_tokens.shape[1], obs_tokens.shape[2], -1
+            )
+            parts.append(lang_tokens)
         action_emb = self.action_proj(actions)
         if self.num_action_repeat > 1:
             action_emb = action_emb.repeat(1, 1, self.num_action_repeat)
         action_tokens = action_emb[:, :, None, :].expand(
-            -1, -1, self.token_count, -1
+            -1, -1, obs_tokens.shape[2], -1
         )
-        return torch.cat([obs_tokens, action_tokens], dim=-1)
+        parts.append(action_tokens)
+        return torch.cat(parts, dim=-1)
 
     def encode(
         self,
         obs: dict[str, torch.Tensor] | torch.Tensor,
         act: torch.Tensor,
+        lang: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        obs_tokens = self.obs_to_tokens(self._obs_embedding_from_obs(obs))
-        z = self._condition_tokens(obs_tokens, act)
+        obs_tokens = self._obs_tokens_from_obs(obs)
+        z = self._condition_tokens(obs_tokens, lang, act)
         bsz, steps, slots, dim = z.shape
         flat = z.reshape(bsz, steps * slots, dim)
         if flat.shape[1] > self.pos_embedding.shape[1]:
@@ -339,17 +480,59 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         z: torch.Tensor,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         visual = z[..., : self.token_dim]
-        act_emb = z[..., self.token_dim :].mean(dim=2)
-        proprio = visual.new_zeros(visual.shape[0], visual.shape[1], 0)
-        return {"visual": visual, "proprio": proprio}, act_emb
+        proprio = z[..., self.token_dim : self.obs_token_dim]
+        cond_emb = z[..., self.obs_token_dim :].mean(dim=2)
+        return {"visual": visual, "proprio": proprio}, cond_emb
 
     def replace_actions_from_z(
         self,
         z: torch.Tensor,
         act: torch.Tensor,
+        lang: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        obs_tokens = z[..., : self.token_dim]
-        return self._condition_tokens(obs_tokens, act)
+        obs_tokens = z[..., : self.obs_token_dim]
+        return self._condition_tokens(obs_tokens, lang, act)
+
+    def _latent_lang(
+        self, latent: dict[str, torch.Tensor] | torch.Tensor
+    ) -> torch.Tensor | None:
+        if isinstance(latent, dict) and isinstance(latent.get("lang"), torch.Tensor):
+            return latent["lang"]
+        return None
+
+    def _latent_hidden(
+        self, latent: dict[str, torch.Tensor] | torch.Tensor
+    ) -> torch.Tensor:
+        if isinstance(latent, torch.Tensor):
+            return self._obs_tokens_from_obs(latent)[:, -1]
+        hidden = latent.get("hidden") if isinstance(latent, dict) else None
+        if isinstance(hidden, torch.Tensor):
+            return self._obs_tokens_from_obs(hidden)[:, -1]
+        history = latent.get("history") if isinstance(latent, dict) else None
+        if isinstance(history, torch.Tensor):
+            if history.ndim == 5:
+                history = history[:, -1]
+            if history.ndim == 4 and history.shape[-1] == self.obs_dim:
+                history = history[:, -1]
+            return self._obs_tokens_from_obs(history)[:, -1]
+        raise KeyError("Rynn-DINO latent must contain `hidden` or `history`.")
+
+    def _latent_history(
+        self, latent: dict[str, torch.Tensor] | torch.Tensor
+    ) -> torch.Tensor:
+        if isinstance(latent, dict) and isinstance(latent.get("history"), torch.Tensor):
+            history = latent["history"]
+            if history.ndim == 5:
+                history = history[:, -1]
+            elif history.ndim == 4 and history.shape[-1] == self.obs_dim:
+                history = history[:, -1]
+            tokens = self._obs_tokens_from_obs(history)
+        else:
+            tokens = self._obs_tokens_from_obs(self._latent_hidden(latent))
+        if tokens.shape[1] >= self.num_hist:
+            return tokens[:, -self.num_hist :]
+        pad = tokens[:, :1].expand(-1, self.num_hist - tokens.shape[1], -1, -1)
+        return torch.cat([pad, tokens], dim=1)
 
     def predict_next(
         self,
@@ -358,6 +541,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
     ) -> dict[str, torch.Tensor]:
         history = self._latent_history(latent)
         bsz = int(history.shape[0])
+        lang = self._latent_lang(latent)
         action = actions[:, 0] if actions.ndim == 3 else actions
         if action.ndim != 2 or action.shape[-1] != self.action_dim:
             raise ValueError(
@@ -368,10 +552,9 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         action_history[:, -1] = action.to(
             device=action_history.device, dtype=action_history.dtype
         )
-        z = self.encode(history, action_history)
+        z = self.encode(history, action_history, lang)
         pred_z = self.predict(z)
-        pred_obs, _ = self.separate_emb(pred_z[:, -1:])
-        next_hidden = pred_obs["visual"][:, -1]
+        next_hidden = pred_z[:, -1][..., : self.obs_token_dim]
 
         if self.num_hist > 1:
             next_history = torch.cat([history[:, 1:], next_hidden[:, None]], dim=1)
@@ -389,6 +572,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "hidden": next_hidden,
             "history": next_history,
             "actions": next_action_history,
+            "lang": lang,
         }
 
     def _predict_next_step(
@@ -406,16 +590,19 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         if not (self.grad_checkpoint and self.training and torch.is_grad_enabled()):
             return self.predict_next(cur, action)
 
+        lang = cur.get("lang")
+
         def _fn(hidden, history, actions, act):
             out = self.predict_next(
-                {"hidden": hidden, "history": history, "actions": actions}, act
+                {"hidden": hidden, "history": history, "actions": actions, "lang": lang},
+                act,
             )
             return out["hidden"], out["history"], out["actions"]
 
         hidden, history, actions = checkpoint(
             _fn, cur["hidden"], cur["history"], cur["actions"], action, use_reentrant=False
         )
-        return {"hidden": hidden, "history": history, "actions": actions}
+        return {"hidden": hidden, "history": history, "actions": actions, "lang": lang}
 
     def predict_next_chunk(
         self,
@@ -449,6 +636,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
 
         history = self._latent_history(latent)
         action_history = self._latent_actions(latent, bsz).clone()
+        lang = self._latent_lang(latent)
 
         device = self._module_device()
         dtype = self._module_dtype()
@@ -457,6 +645,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "hidden": history[:, -1],
             "history": history,
             "actions": action_history,
+            "lang": lang,
         }
         preds: list[torch.Tensor] = []
         for step in range(K):
@@ -469,6 +658,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "hidden_seq": hidden_seq,
             "history": cur["history"],
             "actions": cur["actions"],
+            "lang": cur.get("lang"),
         }
 
     # ------------------------------------------------------------------ #
@@ -489,8 +679,12 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         actions = batch["actions"]
         H = self.num_hist
         K = self.chunk_size
-        obs_tokens = self.obs_to_tokens(obs)
-        obs_tokens = self._apply_task_conditioning(obs_tokens, batch.get("task_ids"))
+        vision_tokens = self.obs_to_tokens(obs)
+        vision_tokens = self._apply_task_conditioning(
+            vision_tokens, batch.get("task_ids")
+        )
+        obs_tokens = self._observation_tokens(vision_tokens, batch.get("proprio"))
+        lang_emb = batch.get("lang_emb")
         T = int(obs_tokens.shape[1])
         if T < H + K:
             raise ValueError(f"chunk_loss requires T >= H+K = {H + K}, got T={T}")
@@ -521,9 +715,11 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "hidden": history[:, -1],
             "history": history,
             "actions": action_history,
+            "lang": lang_emb,
         }
         out = self.predict_next_chunk(latent, chunk_actions)
         hidden_pred = out["hidden_seq"]
+        self._last_hidden_target_width = int(hidden_target.shape[-1])
 
         loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
             hidden_pred, hidden_target
@@ -545,6 +741,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
                 "hidden": out["hidden"],
                 "history": out["history"],
                 "actions": out["actions"],
+                "lang": lang_emb,
             }
             rollout_preds: list[torch.Tensor] = []
             for c in range(1, N):
@@ -555,6 +752,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
                     "hidden": out_c["hidden"],
                     "history": out_c["history"],
                     "actions": out_c["actions"],
+                    "lang": lang_emb,
                 }
             rollout_pred = torch.cat(rollout_preds, dim=1)
             rollout_target = obs_tokens[:, H + K : H + N * K].detach()
@@ -649,6 +847,18 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             )
         return out_dict
 
+    def reward_logits(self, obs_embedding: torch.Tensor) -> torch.Tensor:
+        self._require_reward_head()
+        tokens = self._obs_tokens_from_obs(obs_embedding)
+        pooled = self.reward_norm(tokens).mean(dim=2)
+        return self.reward_head(pooled).squeeze(-1)
+
+    def success_return_logits(self, obs_embedding: torch.Tensor) -> torch.Tensor:
+        self._require_success_return_head()
+        tokens = self._obs_tokens_from_obs(obs_embedding)
+        pooled = self.success_return_norm(tokens).mean(dim=2)
+        return self.success_return_head(pooled).squeeze(-1)
+
     def _slice_per_frame_signal(self, signal: torch.Tensor, T: int) -> torch.Tensor:
         """Slice a per-frame signal (rewards / success_to_go) to the K target frames h_1..h_K.
 
@@ -732,6 +942,12 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             "latent_source",
             "action_emb_dim",
             "num_action_repeat",
+            "proprio_dim",
+            "proprio_emb_dim",
+            "num_proprio_repeat",
+            "lang_dim",
+            "lang_emb_dim",
+            "num_lang_repeat",
             "dim_head",
             "depth",
             "heads",

@@ -9,6 +9,9 @@ training:
 
 dataset:
   hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  proprio_keys: ${task.openvla_oft.input_tokens.proprio_keys}
+  lang_emb_dir: ${task.openvla_oft.input_tokens.lang_emb_dir}
+  sequence_length: 12  # H + N*K + 1 = 3 + 1*8 + 1; multi-chunk rollout is off.
   expected_action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
   expected_obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
   expected_prompt_style: ${task.openvla_oft.input_tokens.expected_prompt_style}
@@ -26,7 +29,16 @@ world_model:
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
   action_emb_dim: 10
   num_action_repeat: 1
-  model_dim: 4106
+  proprio_dim: 8
+  proprio_emb_dim: 10
+  num_proprio_repeat: 1
+  lang_dim: 4096
+  lang_emb_dim: 32
+  num_lang_repeat: 1
+  model_dim: 4148
+  cosine_loss_scale: 0.0
+  chunk_rollout_chunks: 1
+  chunk_rollout_loss_scale: 0.0
   # DINO-WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
   # half-width attention inner = heads*dim_head = 2048 = 0.5*model_dim (8x the old
   # compact inner=256), lean FFN mlp_dim = 2048. ~313M total. The 1536-token sequence

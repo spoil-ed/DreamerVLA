@@ -39,7 +39,10 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         sequence_length: int = 32,
         image_size: int = 256,
         image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
+        proprio_keys: Sequence[str] | None = None,
         hidden_key: str = DEFAULT_HIDDEN_KEY,
+        lang_emb_dir: str | Path | None = None,
+        lang_emb_key: str = "lang_emb",
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
         max_windows: int | None = None,
@@ -66,6 +69,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             sequence_length=sequence_length,
             image_size=image_size,
             image_keys=image_keys,
+            proprio_keys=proprio_keys,
             max_files=max_files,
             max_demos_per_file=max_demos_per_file,
             max_windows=max_windows,
@@ -77,6 +81,14 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
                 f"Hidden sidecar directory does not exist: {self.hidden_dir}"
             )
         self.hidden_key = str(hidden_key)
+        self.lang_emb_dir = (
+            self.resolve_project_path(lang_emb_dir) if lang_emb_dir is not None else None
+        )
+        if self.lang_emb_dir is not None and not self.lang_emb_dir.exists():
+            raise FileNotFoundError(
+                f"Language sidecar directory does not exist: {self.lang_emb_dir}"
+            )
+        self.lang_emb_key = str(lang_emb_key)
         self.load_actor_sequence = bool(load_actor_sequence)
         self.actor_sequence_length = (
             int(actor_sequence_length) if actor_sequence_length is not None else None
@@ -86,6 +98,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         self.actor_attention_mask_key = str(actor_attention_mask_key)
         self.actor_seq_lens_key = str(actor_seq_lens_key)
         self._hidden_file_cache: dict[str, h5py.File] = {}
+        self._lang_emb_file_cache: dict[str, h5py.File] = {}
         sidecar_config = self._validate_hidden_sidecar(
             expected_model_path=expected_model_path,
             expected_encoder_state_ckpt=expected_encoder_state_ckpt,
@@ -331,6 +344,24 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             self._hidden_file_cache[key] = handle
         return handle
 
+    def _lang_emb_path_for_source(self, source_path: str | Path) -> Path:
+        if self.lang_emb_dir is None:
+            raise RuntimeError("lang_emb_dir is not configured")
+        return self.lang_emb_dir / Path(source_path).name
+
+    def _lang_emb_file(self, source_path: str | Path) -> h5py.File:
+        lang_path = self._lang_emb_path_for_source(source_path)
+        key = str(lang_path)
+        handle = self._lang_emb_file_cache.get(key)
+        if handle is None:
+            if not lang_path.is_file():
+                raise FileNotFoundError(
+                    f"Missing language sidecar for {source_path}: {lang_path}"
+                )
+            handle = h5py.File(lang_path, mode="r", swmr=True, libver="latest")
+            self._lang_emb_file_cache[key] = handle
+        return handle
+
     @staticmethod
     def _pad_or_truncate_array(
         array: np.ndarray,
@@ -369,6 +400,21 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             )
         hidden = np.asarray(dset[start:end])
         item["obs_embedding"] = torch.from_numpy(hidden)
+        if self.lang_emb_dir is not None:
+            lang_handle = self._lang_emb_file(entry.file_path)
+            try:
+                lang_dset = lang_handle["data"][entry.demo_key][self.lang_emb_key]
+            except KeyError as exc:
+                raise KeyError(
+                    f"{self._lang_emb_path_for_source(entry.file_path)}:{entry.demo_key} "
+                    f"missing {self.lang_emb_key}"
+                ) from exc
+            lang_emb = np.asarray(lang_dset[...], dtype=np.float32)
+            if lang_emb.ndim != 1:
+                raise ValueError(
+                    f"{self.lang_emb_key} must be a per-demo vector, got {lang_emb.shape}"
+                )
+            item["lang_emb"] = torch.from_numpy(lang_emb)
         if self.load_actor_sequence:
             demo = handle["data"][entry.demo_key]
             try:

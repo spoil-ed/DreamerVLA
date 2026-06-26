@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,23 +51,59 @@ def pop_open_loop_action(
     return process_action(action_queue.pop(0))
 
 
+@dataclass(frozen=True)
+class OFTOpenLoopStep:
+    """Tuple-compatible rollout step output with optional sidecars."""
+
+    action: np.ndarray
+    hidden_state: Any
+    lang_emb: Any | None = None
+
+    def __iter__(self):
+        yield self.action
+        yield self.hidden_state
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> Any:
+        return (self.action, self.hidden_state)[index]
+
+
+def sidecar_to_numpy(value: Any, dtype: Any | None = None) -> np.ndarray | None:
+    """Convert a torch/numpy/list sidecar to a CPU numpy array."""
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        arr = value.detach().cpu().numpy()
+    elif hasattr(value, "numpy"):
+        arr = value.numpy()
+    else:
+        arr = np.asarray(value)
+    if dtype is not None:
+        arr = arr.astype(dtype, copy=False)
+    return arr
+
+
 def oft_open_loop_action(
     extractor: Any,
     extractor_obs: Any,
     task_description: str,
     action_queue: list,
     action_steps: int | None = None,
-) -> tuple[np.ndarray, Any]:
+) -> OFTOpenLoopStep:
     """One SINGLE-ENV OFT open-loop rollout step — the shared implementation used
     by the collector (``collect_parallel_rollouts``) and the online cotrain rollout
     (``OnlineCotrainRunner._rollout_action``) so the two can never drift. Runs the
     OFT forward (``extractor.step``) for this frame's hidden state (= the
     ``obs_embedding`` the WM/classifier consume), then takes the open-loop action
     via ``pop_open_loop_action`` (the same core the batched vectorized collector
-    uses). Returns ``(action, hidden_state)``."""
-    action_chunk, hidden_state = extractor.step(extractor_obs, task_description)
+    uses). Returns a tuple-compatible ``(action, hidden_state)`` with optional
+    ``lang_emb``."""
+    decoded = extractor.step(extractor_obs, task_description)
+    action_chunk, hidden_state = decoded
     action = pop_open_loop_action(action_chunk, action_queue, action_steps)
-    return action, hidden_state
+    return OFTOpenLoopStep(action, hidden_state, getattr(decoded, "lang_emb", None))
 
 
 def resolve_model_path(model_path: str) -> str:

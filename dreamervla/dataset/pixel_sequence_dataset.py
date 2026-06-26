@@ -20,9 +20,11 @@ class PixelSequenceSpec:
     num_windows: int
     sequence_length: int
     action_dim: int
+    proprio_dim: int
     image_size: int
     image_channels: int
     image_keys: tuple[str, ...]
+    proprio_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class PixelSequenceDataset(BaseDataset):
         sequence_length: int = 32,
         image_size: int = 64,
         image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
+        proprio_keys: Sequence[str] | None = None,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
         max_windows: int | None = None,
@@ -69,6 +72,7 @@ class PixelSequenceDataset(BaseDataset):
         self.sequence_length = int(sequence_length)
         self.image_size = int(image_size)
         self.image_keys = tuple(str(k) for k in image_keys)
+        self.proprio_keys = tuple(str(k) for k in (proprio_keys or ()))
         self.stride = max(int(stride), 1)
         self._hdf5_open_kwargs = {"mode": "r", "swmr": True, "libver": "latest"}
         self._file_cache: dict[str, h5py.File] = {}
@@ -81,6 +85,7 @@ class PixelSequenceDataset(BaseDataset):
 
         self._entries: list[_WindowEntry] = []
         self.action_dim = 0
+        self.proprio_dim = 0
         stop = False
         for file_path in files:
             with h5py.File(file_path, **self._hdf5_open_kwargs) as handle:
@@ -99,6 +104,14 @@ class PixelSequenceDataset(BaseDataset):
                     for key in self.image_keys:
                         if key not in obs_group:
                             raise KeyError(f"{file_path}:{demo_key} missing obs/{key}")
+                    for key in self.proprio_keys:
+                        if key not in obs_group:
+                            raise KeyError(f"{file_path}:{demo_key} missing obs/{key}")
+                    if self.proprio_keys and self.proprio_dim == 0:
+                        self.proprio_dim = sum(
+                            int(np.prod(obs_group[key].shape[1:], dtype=np.int64))
+                            for key in self.proprio_keys
+                        )
                     last_start = episode_length - self.sequence_length
                     for start in range(0, last_start + 1, self.stride):
                         self._entries.append(
@@ -128,9 +141,11 @@ class PixelSequenceDataset(BaseDataset):
             num_windows=len(self._entries),
             sequence_length=self.sequence_length,
             action_dim=self.action_dim,
+            proprio_dim=self.proprio_dim,
             image_size=self.image_size,
             image_channels=3 * len(self.image_keys),
             image_keys=self.image_keys,
+            proprio_keys=self.proprio_keys,
         )
 
     @property
@@ -189,8 +204,17 @@ class PixelSequenceDataset(BaseDataset):
         dones = torch.from_numpy(np.asarray(demo["dones"][start:end], dtype=np.float32))
         is_first = torch.zeros(self.sequence_length, dtype=torch.bool)
         is_first[0] = True
+        proprio = None
+        if self.proprio_keys:
+            proprio_arrays = [
+                np.asarray(obs_group[key][start:end], dtype=np.float32).reshape(
+                    self.sequence_length, -1
+                )
+                for key in self.proprio_keys
+            ]
+            proprio = torch.from_numpy(np.concatenate(proprio_arrays, axis=-1))
 
-        return {
+        item = {
             "images": images,
             "actions": actions,
             "current_actions": current_actions,
@@ -201,6 +225,9 @@ class PixelSequenceDataset(BaseDataset):
             "demo_key": entry.demo_key,
             "start": start,
         }
+        if proprio is not None:
+            item["proprio"] = proprio
+        return item
 
 
 __all__ = ["PixelSequenceDataset", "PixelSequenceSpec"]

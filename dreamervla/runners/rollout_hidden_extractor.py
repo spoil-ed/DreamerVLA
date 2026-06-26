@@ -59,6 +59,7 @@ History protocol:
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -104,6 +105,25 @@ def input_token_hidden_from_projected(
     return projected[:, -token_count:, :]
 
 
+@dataclass(frozen=True)
+class OFTDecodeOutput:
+    """Tuple-compatible OFT decode result with optional demo-level sidecars."""
+
+    action_chunk: list[Any]
+    hidden_state: torch.Tensor
+    lang_emb: torch.Tensor | None = None
+
+    def __iter__(self):
+        yield self.action_chunk
+        yield self.hidden_state
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> Any:
+        return (self.action_chunk, self.hidden_state)[index]
+
+
 class OFTRolloutHiddenExtractor:
     """Wraps an ``OpenVLAOFTPolicy`` to capture the action-query hidden states.
 
@@ -138,6 +158,8 @@ class OFTRolloutHiddenExtractor:
                           ``obs_embedding[t]``.  For ``input_token_embedding``
                           this is tokenized ``[N, token_dim]``; for legacy
                           ``action_query`` it remains flat.
+        ``lang_emb`` — available as ``extractor.step(...).lang_emb``; demo-level
+                       CPU float16 language embedding matching offline preprocess.
 
     The obs dict must contain uint8 ``np.ndarray`` images under each key in
     ``image_keys``, with shape ``(H, W, 3)``.  Optionally it may contain a
@@ -330,8 +352,8 @@ class OFTRolloutHiddenExtractor:
         self,
         obs: dict[str, Any],
         task_description: str,
-    ) -> tuple[list[Any], torch.Tensor]:
-        """Run one forward pass and return ``(action_chunk, hidden_state)``.
+    ) -> OFTDecodeOutput:
+        """Run one forward pass and return a tuple-compatible decode output.
 
         Thin wrapper over :func:`batched_forward` with a single observation, so
         single-env and batched (step_batch) collection share exactly one inference
@@ -347,6 +369,7 @@ class OFTRolloutHiddenExtractor:
                 - hidden_state: CPU float16 tensor matching the offline sidecar
                   ``obs_embedding[t]``.  Input-token sidecars are tokenized
                   ``[N, token_dim]``; legacy action-query sidecars are flat.
+                - lang_emb: CPU float16 language sidecar on the output object.
         """
         if self._decoder is None:
             self._decoder = OFTBatchedDecoder(
@@ -363,7 +386,7 @@ class OFTRolloutHiddenExtractor:
         self,
         obs: dict[str, Any],
         task_description: str,
-    ) -> tuple[list[Any], torch.Tensor]:
+    ) -> OFTDecodeOutput:
         """Alias for ``step``; initialises history on first call if not reset."""
         return self.step(obs, task_description)
 
@@ -421,7 +444,7 @@ class OFTBatchedDecoder:
 
     Constructed ONCE per policy; caches the model handles, special-token ids, action
     constants, and the head mode.  ``predict_batch(preps)`` runs ONE VLA forward over K
-    prepared observations and returns per-env ``(action_chunk, hidden_state)``.
+    prepared observations and returns per-env tuple-compatible decode outputs.
 
     It bypasses the upstream ``predict_action`` wrapper — which assumes batch==1 at
     modeling_prismatic.py:972 (token-cat) and :924 (action reshape) — by calling the model's
@@ -475,17 +498,18 @@ class OFTBatchedDecoder:
 
     def predict_batch(
         self, preps: list[dict[str, Any]]
-    ) -> list[tuple[list[Any], torch.Tensor]]:
-        """One VLA forward over K preps -> per-env ``(action_chunk, hidden_state)``.
+    ) -> list[OFTDecodeOutput]:
+        """One VLA forward over K preps -> per-env tuple-compatible decode output.
 
         Preps MAY have different prompt (``input_ids``) lengths — different tasks: they are
         left-padded to the batch max with ``attention_mask`` + ``position_ids`` so each
         padded sample is numerically equal to computing it alone (block-diagonal attention
         => no cross-sample interaction).  Equal-length batches pad to a no-op.
 
-        Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions and a
-        CPU float16 ``obs_embedding`` tensor.  Input-token sidecars are
-        tokenized ``[N, token_dim]``; legacy action-query sidecars are flat.
+        Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions, a
+        CPU float16 ``obs_embedding`` tensor, and a CPU float16 demo-level
+        ``lang_emb`` sidecar. Input-token sidecars are tokenized ``[N, token_dim]``;
+        legacy action-query sidecars are flat.
         Raises if ``preps`` is empty.
         """
         if not preps:
@@ -503,15 +527,16 @@ class OFTBatchedDecoder:
             if use_proprio
             else None
         )
-        actions, hidden = self._forward(input_ids, attention_mask, pixel_values, proprio)
-        out: list[tuple[list[Any], torch.Tensor]] = []
+        actions, hidden, lang_emb = self._forward(input_ids, attention_mask, pixel_values, proprio)
+        out: list[OFTDecodeOutput] = []
         for i in range(len(preps)):
             action_chunk = [actions[i, j] for j in range(actions.shape[1])]
             if self._obs_hidden_source == "input_token_embedding":
                 hidden_state = hidden[i].detach().cpu().to(torch.float16)
             else:
                 hidden_state = flatten_action_hidden(hidden[i : i + 1].cpu())
-            out.append((action_chunk, hidden_state))
+            lang_state = lang_emb[i].detach().cpu().to(torch.float16)
+            out.append(OFTDecodeOutput(action_chunk, hidden_state, lang_state))
         return out
 
     def _forward(
@@ -520,7 +545,7 @@ class OFTBatchedDecoder:
         attention_mask: torch.Tensor,
         pixel_values: torch.Tensor,
         proprio: np.ndarray | None,
-    ) -> tuple[np.ndarray, torch.Tensor]:
+    ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """Batched replica of ``predict_action`` + ``_regression_or_discrete_prediction``."""
         model = self._model
         use_proprio = proprio is not None
@@ -552,6 +577,7 @@ class OFTBatchedDecoder:
             language_embeddings = input_embeddings[~all_actions_mask].reshape(
                 input_embeddings.shape[0], -1, input_embeddings.shape[2]
             )
+            lang_emb = language_embeddings.mean(dim=1).float()
             projected = model._process_vision_features(
                 pixel_values, language_embeddings, use_film=False
             )
@@ -605,7 +631,7 @@ class OFTBatchedDecoder:
             normalized = self._decode(lm_out, actions_hidden_states, start, input_ids.shape[0])
         actions = model._unnormalize_actions(normalized, self._unnorm_key)
         hidden = input_token_hidden if input_token_hidden is not None else actions_hidden_states
-        return actions, hidden
+        return actions, hidden, lang_emb
 
     def _decode(
         self,
@@ -639,7 +665,7 @@ def batched_forward(
     policy: Any,
     preps: list[dict[str, Any]],
     unnorm_key: str,
-) -> list[tuple[list[Any], torch.Tensor]]:
+) -> list[OFTDecodeOutput]:
     """Convenience wrapper: build a one-shot :class:`OFTBatchedDecoder` and run it.
 
     For repeated inference (collection), construct ``OFTBatchedDecoder`` ONCE and call

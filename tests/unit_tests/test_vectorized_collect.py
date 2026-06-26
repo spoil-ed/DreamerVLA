@@ -22,6 +22,17 @@ from dreamervla.runners.vectorized_collect import collect_vectorized
 # ── fakes ─────────────────────────────────────────────────────────────────────
 
 
+class FakeDecodeResult:
+    def __init__(self, action_chunk, hidden_state, lang_emb=None):
+        self.action_chunk = action_chunk
+        self.hidden_state = hidden_state
+        self.lang_emb = lang_emb
+
+    def __iter__(self):
+        yield self.action_chunk
+        yield self.hidden_state
+
+
 def _fake_full_record(task_id: int, episode_id: int, t: int) -> dict:
     return {
         "agentview_rgb": np.full((4, 4, 3), t % 255, np.uint8),
@@ -252,6 +263,32 @@ def test_records_pair_pre_step_state_with_its_embedding():
     steps = captured["steps"]
     # term_at=4 -> 4 steps; record t holds ee_pos[2]==t (the pre-step frame)
     assert [int(s["obs"]["ee_pos"][2]) for s in steps] == [0, 1, 2, 3]
+
+
+def test_records_language_embedding_from_decode_result():
+    K = 1
+    vec = FakeVecEnv(K, lambda _t, _e: 2)
+    exts = [FakeExtractor()]
+    captured = {}
+
+    class CaptureWriter(FakeWriter):
+        def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kwargs):
+            captured["steps"] = steps
+            super().write_demo(index, steps, preprocess_config, data_attrs, **kwargs)
+
+    def infer_with_lang(preps):
+        return [
+            FakeDecodeResult(
+                [np.zeros(7, dtype=np.float64)],
+                torch.zeros(2, 3, dtype=torch.float16),
+                lang_emb=np.arange(6, dtype=np.float32),
+            )
+            for _ in preps
+        ]
+
+    collect_vectorized(vec, exts, infer_with_lang, CaptureWriter(), [(0, 0)], episode_horizon=5)
+
+    assert np.array_equal(captured["steps"][0]["lang_emb"], np.arange(6, dtype=np.float32))
 
 
 def test_rotating_writer_slices_demos_through_vectorized_loop(tmp_path):

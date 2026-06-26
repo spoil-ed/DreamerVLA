@@ -51,3 +51,19 @@ def test_write_demo_identity_optional(tmp_path):
         w.write_demo(index=0, steps=[_one_step()])
     with h5py.File(tmp_path / "r" / "shard_000.hdf5", "r") as f:
         assert "task_id" not in f["data"]["demo_0"].attrs
+
+
+def test_write_demo_persists_demo_language_embedding(tmp_path):
+    first = _one_step()
+    second = _one_step()
+    first["lang_emb"] = np.arange(8, dtype=np.float32)
+    second["lang_emb"] = np.arange(8, dtype=np.float32) + 100.0
+
+    with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "shard_000.hdf5") as w:
+        w.write_demo(index=0, steps=[first, second])
+
+    with h5py.File(tmp_path / "h" / "shard_000.hdf5", "r") as f:
+        lang_emb = f["data"]["demo_0"]["lang_emb"]
+        assert lang_emb.shape == (8,)
+        assert lang_emb.dtype == np.dtype("float16")
+        assert np.allclose(lang_emb[...], np.arange(8, dtype=np.float16))
