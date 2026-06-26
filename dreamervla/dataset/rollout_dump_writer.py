@@ -18,8 +18,8 @@ Schema (reward HDF5, per demo at data/demo_<i>/):
     demo.attrs: init_state (ndarray), num_samples (str(T))
     data group attrs: env meta
 
-Sidecar (same filename, separate dir):
-    data/demo_<i>/obs_embedding  (T, D) float16
+    Sidecar (same filename, separate dir):
+        data/demo_<i>/obs_embedding  (T, D) legacy or (T, N, D) input-token float16
 
 preprocess_config.json is written once to hidden_dir/preprocess_config.json.
 """
@@ -101,7 +101,7 @@ class RolloutDumpWriter:
                 ee_states        (6,)              float64
                 gripper_states   (2,)              float64
                 joint_states     (7,)              float64
-            obs_embedding   array-like (D,)       float16
+            obs_embedding   array-like (D,) legacy or (N,D) input-token float16
 
         ``preprocess_config`` is written to hidden_dir/preprocess_config.json
         on the first call that provides a non-None value.
@@ -138,7 +138,7 @@ class RolloutDumpWriter:
         )  # (T, S)
         obs_embedding = np.stack(
             [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
-        )  # (T, D)
+        )  # (T, D) legacy or (T, N, D) input-token
 
         # obs sub-fields
         obs_keys_dtypes = {

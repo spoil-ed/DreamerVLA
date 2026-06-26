@@ -1,4 +1,4 @@
-"""OFT action-query hidden extractor for online rollout collection.
+"""OFT hidden-state extractor for online rollout collection.
 
 The sidecar ``obs_embedding`` field (shape ``(229376,)`` float16 per frame)
 is computed by:
@@ -93,11 +93,15 @@ def input_token_hidden_from_projected(
     *,
     image_keys: list[str],
 ) -> torch.Tensor:
-    """Flatten current-frame projected vision patch tokens for input-token sidecars."""
+    """Return current-frame projected vision patch tokens for input-token sidecars.
+
+    DINO-WM keeps frame observations as patch-token batches ``[B, N, D]``.  The
+    flat-equivalent ``N * D`` is metadata only and must not become the sidecar
+    storage shape.
+    """
     per_image = int(model.vision_backbone.get_num_patches())
     token_count = per_image * len(list(image_keys))
-    current = projected[:, -token_count:, :]
-    return current.reshape(current.shape[0], -1)
+    return projected[:, -token_count:, :]
 
 
 class OFTRolloutHiddenExtractor:
@@ -125,14 +129,15 @@ class OFTRolloutHiddenExtractor:
     Public API::
 
         extractor.reset()                          # call at episode start
-        action_chunk, flat_hidden = extractor.step(obs, task_description)
+        action_chunk, hidden_state = extractor.step(obs, task_description)
 
     where:
         ``action_chunk`` — list of ``np.ndarray`` actions (one per open-loop
                           step), from ``vla.predict_action``
-        ``flat_hidden``  — ``torch.Tensor`` shape ``(229376,)`` dtype float16
-                          on CPU; numerically equivalent to the offline sidecar
-                          ``obs_embedding[t]`` for the same frame.
+        ``hidden_state`` — CPU float16 tensor equivalent to sidecar
+                          ``obs_embedding[t]``.  For ``input_token_embedding``
+                          this is tokenized ``[N, token_dim]``; for legacy
+                          ``action_query`` it remains flat.
 
     The obs dict must contain uint8 ``np.ndarray`` images under each key in
     ``image_keys``, with shape ``(H, W, 3)``.  Optionally it may contain a
@@ -326,7 +331,7 @@ class OFTRolloutHiddenExtractor:
         obs: dict[str, Any],
         task_description: str,
     ) -> tuple[list[Any], torch.Tensor]:
-        """Run one forward pass and return (action_chunk, flat_hidden).
+        """Run one forward pass and return ``(action_chunk, hidden_state)``.
 
         Thin wrapper over :func:`batched_forward` with a single observation, so
         single-env and batched (step_batch) collection share exactly one inference
@@ -339,8 +344,9 @@ class OFTRolloutHiddenExtractor:
         Returns:
             Tuple of:
                 - action_chunk: list of actions (length = NUM_ACTIONS_CHUNK)
-                - flat_hidden: shape ``(229376,)`` float16 tensor on CPU,
-                  matching the offline sidecar ``obs_embedding[t]``.
+                - hidden_state: CPU float16 tensor matching the offline sidecar
+                  ``obs_embedding[t]``.  Input-token sidecars are tokenized
+                  ``[N, token_dim]``; legacy action-query sidecars are flat.
         """
         if self._decoder is None:
             self._decoder = OFTBatchedDecoder(
@@ -415,7 +421,7 @@ class OFTBatchedDecoder:
 
     Constructed ONCE per policy; caches the model handles, special-token ids, action
     constants, and the head mode.  ``predict_batch(preps)`` runs ONE VLA forward over K
-    prepared observations and returns per-env ``(action_chunk, flat_hidden)``.
+    prepared observations and returns per-env ``(action_chunk, hidden_state)``.
 
     It bypasses the upstream ``predict_action`` wrapper — which assumes batch==1 at
     modeling_prismatic.py:972 (token-cat) and :924 (action reshape) — by calling the model's
@@ -470,7 +476,7 @@ class OFTBatchedDecoder:
     def predict_batch(
         self, preps: list[dict[str, Any]]
     ) -> list[tuple[list[Any], torch.Tensor]]:
-        """One VLA forward over K preps -> per-env ``(action_chunk, flat_hidden)``.
+        """One VLA forward over K preps -> per-env ``(action_chunk, hidden_state)``.
 
         Preps MAY have different prompt (``input_ids``) lengths — different tasks: they are
         left-padded to the batch max with ``attention_mask`` + ``position_ids`` so each
@@ -478,7 +484,9 @@ class OFTBatchedDecoder:
         => no cross-sample interaction).  Equal-length batches pad to a no-op.
 
         Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions and a
-        ``(229376,)`` float16 CPU ``obs_embedding`` tensor.  Raises if ``preps`` is empty.
+        CPU float16 ``obs_embedding`` tensor.  Input-token sidecars are
+        tokenized ``[N, token_dim]``; legacy action-query sidecars are flat.
+        Raises if ``preps`` is empty.
         """
         if not preps:
             raise ValueError("predict_batch requires at least one prep")
@@ -500,10 +508,10 @@ class OFTBatchedDecoder:
         for i in range(len(preps)):
             action_chunk = [actions[i, j] for j in range(actions.shape[1])]
             if self._obs_hidden_source == "input_token_embedding":
-                flat_hidden = hidden[i].detach().cpu().to(torch.float16)
+                hidden_state = hidden[i].detach().cpu().to(torch.float16)
             else:
-                flat_hidden = flatten_action_hidden(hidden[i : i + 1].cpu())
-            out.append((action_chunk, flat_hidden))
+                hidden_state = flatten_action_hidden(hidden[i : i + 1].cpu())
+            out.append((action_chunk, hidden_state))
         return out
 
     def _forward(

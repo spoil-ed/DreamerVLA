@@ -17,6 +17,8 @@ from typing import Any, Literal
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.config_resolvers import register_dreamervla_resolvers
+
 from dreamervla.dataset.collection_manifest import (
     format_collection_report,
     quarantine_corrupt_shards,
@@ -676,6 +678,7 @@ def _derive_collect_target_from_cmd(cmd: Sequence[str], *, num_tasks: int) -> in
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    register_dreamervla_resolvers()
     config_name, overrides = _parse_hydra_like_argv(
         list(sys.argv[1:] if argv is None else argv)
     )

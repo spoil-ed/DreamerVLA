@@ -10,6 +10,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config import validate_cfg
+from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.runners.base_runner import BaseRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ def _auto_apply_distributed(cfg: DictConfig) -> None:
 
 
 def run(cfg: DictConfig) -> None:
+    register_dreamervla_resolvers()
     _auto_apply_distributed(cfg)
     OmegaConf.resolve(cfg)
     cfg = validate_cfg(cfg)
@@ -78,6 +80,7 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> None:
+    register_dreamervla_resolvers()
     config_name, overrides = _parse_hydra_like_args(
         list(sys.argv[1:] if argv is None else argv)
     )

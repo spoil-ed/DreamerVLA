@@ -37,7 +37,9 @@ def test_vla_latent_spec_derives_flat_dim_from_policy() -> None:
 
     spec = vla_latent_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
     assert spec["per_image"] == _VisionBackbone.per_image
+    assert spec["patches_per_image"] == _VisionBackbone.per_image
     assert spec["views"] == _VisionBackbone.views
+    assert spec["num_images_in_input"] == _VisionBackbone.views
     assert spec["token_dim"] == _VLA.token_dim
     assert spec["token_count"] == _VisionBackbone.per_image * _VisionBackbone.views
     assert spec["flat_dim"] == spec["token_count"] * _VLA.token_dim

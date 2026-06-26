@@ -480,8 +480,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if extractor is not None:
             if is_first and hasattr(extractor, "reset"):
                 extractor.reset()
-            _chunk, flat_hidden = extractor.step(obs, task_desc)
-            return flat_hidden.reshape(1, -1).to(self.device).float()
+            _chunk, hidden_state = extractor.step(obs, task_desc)
+            return self._extractor_hidden_to_obs_embedding(hidden_state, backbone=backbone)
         if backbone:
             return obs_to_input_token_embedding(
                 self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
@@ -490,6 +490,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
             return obs_to_action_hidden(
                 self.encoder, processor, obs, self.device, target_token_id
             )
+
+    def _extractor_hidden_to_obs_embedding(self, hidden_state: torch.Tensor, *, backbone: bool) -> torch.Tensor:
+        hidden = hidden_state.to(self.device).float()
+        if backbone:
+            if hidden.ndim == 2:
+                return hidden.unsqueeze(0)
+            if hidden.ndim == 3:
+                return hidden
+            raise ValueError(
+                "backbone latent extractor must return [N,D] or [B,N,D], "
+                f"got {tuple(hidden.shape)}"
+            )
+        return hidden.reshape(1, -1)
 
     @torch.no_grad()
     def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):
@@ -1347,10 +1360,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
             obs_embs: list[Any] = [None] * num_envs
             actions = []
             for k in ids:
-                _chunk, flat_hidden = extractors[k].step(
+                _chunk, hidden_state = extractors[k].step(
                     extractor_obs_from_record(recs[k]), slot_desc[k]
                 )
-                obs_embs[k] = flat_hidden.reshape(1, -1).to(self.device).float()
+                backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
+                obs_embs[k] = self._extractor_hidden_to_obs_embedding(
+                    hidden_state, backbone=backbone
+                )
                 slot_latent[k] = self._update_actor_latent(
                     self.world_model,
                     obs_embs[k],
@@ -1371,7 +1387,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 wm_action = np.asarray(
                     info.get("wm_action", actions[k]), dtype=np.float32
                 ).reshape(-1)[:7]
-                emb = obs_embs[k].reshape(-1).detach().cpu().float().numpy()
+                emb = obs_embs[k].squeeze(0).detach().cpu().float().numpy()
                 tr = build_cotrain_replay_transition(
                     recs[k],
                     np.asarray(emb, dtype=np.float32),

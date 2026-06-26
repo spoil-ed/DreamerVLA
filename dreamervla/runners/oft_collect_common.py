@@ -60,13 +60,13 @@ def oft_open_loop_action(
     """One SINGLE-ENV OFT open-loop rollout step — the shared implementation used
     by the collector (``collect_parallel_rollouts``) and the online cotrain rollout
     (``OnlineCotrainRunner._rollout_action``) so the two can never drift. Runs the
-    OFT forward (``extractor.step``) for this frame's ``flat_hidden`` (= the
+    OFT forward (``extractor.step``) for this frame's hidden state (= the
     ``obs_embedding`` the WM/classifier consume), then takes the open-loop action
     via ``pop_open_loop_action`` (the same core the batched vectorized collector
-    uses). Returns ``(action, flat_hidden)``."""
-    action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
+    uses). Returns ``(action, hidden_state)``."""
+    action_chunk, hidden_state = extractor.step(extractor_obs, task_description)
     action = pop_open_loop_action(action_chunk, action_queue, action_steps)
-    return action, flat_hidden
+    return action, hidden_state
 
 
 def resolve_model_path(model_path: str) -> str:
@@ -100,14 +100,18 @@ def vla_latent_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     )
 
     token_dim = _resolve_token_dim(vla)
+    patches_per_image = int(vla.vision_backbone.get_num_patches())
     token_count, flat_dim = _input_token_sidecar_dims(
         vla,
         image_keys=list(image_keys),
         token_dim=token_dim,
     )
+    num_images_in_input = int(vla.vision_backbone.get_num_images_in_input())
     return {
-        "per_image": int(vla.vision_backbone.get_num_patches()),
-        "views": int(vla.vision_backbone.get_num_images_in_input()),
+        "per_image": int(patches_per_image),
+        "patches_per_image": int(patches_per_image),
+        "views": int(num_images_in_input),
+        "num_images_in_input": int(num_images_in_input),
         "token_dim": int(token_dim),
         "token_count": int(token_count),
         "flat_dim": int(flat_dim),
@@ -211,10 +215,18 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
         token_count = cfg.get("token_count")
         hidden_dim = cfg.get("hidden_dim")
+        patches_per_image = cfg.get("patches_per_image")
         if token_count is not None:
             config["token_count"] = int(token_count)
+            config["obs_embedding_shape"] = [
+                int(token_count),
+                int(cfg["token_dim"]),
+            ]
         if hidden_dim is not None:
             config["hidden_dim"] = int(hidden_dim)
+        if patches_per_image is not None:
+            config["patches_per_image"] = int(patches_per_image)
+        config["hidden_storage_format"] = "tokenized"
     return config
 
 

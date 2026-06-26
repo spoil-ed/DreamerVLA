@@ -11,6 +11,8 @@ from typing import Any
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.config_resolvers import register_dreamervla_resolvers
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 
@@ -66,6 +68,7 @@ def script_config(
     default_config_name: str,
     argv: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    register_dreamervla_resolvers()
     config_name, overrides = split_config_name(
         [] if argv is None else argv,
         default_config_name=default_config_name,

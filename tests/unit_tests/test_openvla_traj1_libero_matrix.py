@@ -30,6 +30,12 @@ def _compose(overrides: list[str]):
     return cfg
 
 
+def _compose_unresolved(overrides: list[str]):
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        return compose(config_name="train", overrides=overrides)
+
+
 def _assert_openvla_traj1_contract(cfg) -> None:
     oft = cfg.task.openvla_oft
     assert oft.dataset_statistics_key == f"{cfg.task.suite}_no_noops"
@@ -44,6 +50,44 @@ def _assert_openvla_traj1_contract(cfg) -> None:
     assert oft.wm_obs_dim == oft.token_count * oft.token_dim
     assert oft.actor_target == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
     assert oft.actor_head_type == "oft_discrete_token"
+
+    input_tokens = oft.input_tokens
+    assert input_tokens.expected_action_head_type == oft.expected_action_head_type
+    assert input_tokens.expected_obs_hidden_source == "input_token_embedding"
+    assert input_tokens.expected_prompt_style == oft.expected_prompt_style
+    assert input_tokens.expected_include_state == oft.expected_include_state
+    assert input_tokens.expected_history == oft.expected_history
+    assert input_tokens.num_images_in_input == oft.num_images_in_input
+    assert input_tokens.patches_per_image == 256
+    assert input_tokens.token_count == oft.num_images_in_input * input_tokens.patches_per_image
+    assert input_tokens.wm_obs_dim == input_tokens.token_count * input_tokens.token_dim
+    assert "num_images_in_input*patches_per_image" in input_tokens.latent_source
+
+
+@pytest.mark.parametrize("offline_task,_coldstart_task,_suite", MATRIX)
+def test_openvla_traj1_input_token_dims_are_resolver_expressions(
+    offline_task,
+    _coldstart_task,
+    _suite,
+) -> None:
+    raw_cfg = _compose_unresolved([f"task={offline_task}"])
+    raw = OmegaConf.to_container(
+        raw_cfg.task.openvla_oft.input_tokens,
+        resolve=False,
+    )
+    cfg = _compose([f"task={offline_task}"])
+
+    assert raw["token_count"] == (
+        "${dvla_mul:${task.openvla_oft.input_tokens.num_images_in_input},"
+        "${task.openvla_oft.input_tokens.patches_per_image}}"
+    )
+    assert raw["wm_obs_dim"] == (
+        "${dvla_mul:${task.openvla_oft.input_tokens.token_count},"
+        "${task.openvla_oft.input_tokens.token_dim}}"
+    )
+    assert cfg.task.openvla_oft.num_images_in_input == 1
+    assert cfg.task.openvla_oft.input_tokens.token_count == 256
+    assert cfg.task.openvla_oft.input_tokens.wm_obs_dim == 256 * 4096
 
 
 @pytest.mark.parametrize("offline_task,coldstart_task,suite", MATRIX)

@@ -11,6 +11,8 @@ from typing import Any
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.config_resolvers import register_dreamervla_resolvers
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 TRAIN_CONFIG_DIR = PROJECT_ROOT / "configs"
@@ -140,6 +142,7 @@ def _has_path(cfg: Mapping[str, Any], dotted: str) -> bool:
 def _compose_train_config(
     experiment_name: str, overrides: Sequence[str]
 ) -> dict[str, Any]:
+    register_dreamervla_resolvers()
     with initialize_config_dir(
         config_dir=str(TRAIN_CONFIG_DIR),
         job_name="train_launcher_target",
@@ -241,6 +244,7 @@ def _command(cfg: Mapping[str, Any], experiment_overrides: Sequence[str]) -> lis
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    register_dreamervla_resolvers()
     config_name, launcher_overrides, trailing = _parse_hydra_like_args(
         list(sys.argv[1:] if argv is None else argv)
     )

@@ -307,8 +307,9 @@ def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() 
     assert "action_hidden_dim" not in cfg.policy
     assert cfg.policy.head_type == "oft_discrete_token"
     assert cfg.world_model.latent_stage == "query_before"
-    assert cfg.world_model.token_count == 512
+    assert cfg.world_model.token_count == 256
     assert cfg.world_model.token_dim == 4096
+    assert cfg.world_model.obs_dim == 256 * 4096
     assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
 
 
@@ -397,6 +398,27 @@ def test_validate_cfg_rejects_inconsistent_task_latent_spec() -> None:
     )
 
     with pytest.raises(ValueError, match="task.legacy_action_hidden"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_inconsistent_oft_input_token_patch_count() -> None:
+    cfg = OmegaConf.create(
+        {
+            "task": {
+                "openvla_oft": {
+                    "num_images_in_input": 1,
+                    "input_tokens": {
+                        "wm_obs_dim": 2097152,
+                        "token_count": 512,
+                        "token_dim": 4096,
+                        "patches_per_image": 256,
+                    },
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="num_images_in_input \\* patches_per_image"):
         validate_cfg(cfg)
 
 

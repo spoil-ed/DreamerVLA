@@ -279,7 +279,7 @@ def _run_episode(
         # implementation also used by the online cotrain rollout
         # (oft_open_loop_action). process_action (inside it) does the LIBERO
         # gripper binarize/invert required before env.step.
-        action, flat_hidden = oft_open_loop_action(
+        action, hidden_state = oft_open_loop_action(
             extractor, extractor_obs, task_description, action_queue, action_steps
         )
 
@@ -303,7 +303,7 @@ def _run_episode(
                 "gripper_states": rec["gripper_states"].astype(np.float64),
                 "joint_states": rec["joint_states"].astype(np.float64),
             },
-            "obs_embedding": flat_hidden.numpy(),
+            "obs_embedding": hidden_state.numpy(),
         })
         t += 1
 
@@ -527,6 +527,8 @@ def collect_rollouts(
         spec = vla_latent_spec(policy.vla, image_keys)
         cfg["token_count"] = int(spec["token_count"])
         cfg["hidden_dim"] = int(spec["flat_dim"])
+        cfg["patches_per_image"] = int(spec["patches_per_image"])
+        cfg["num_images_in_input"] = int(spec["num_images_in_input"])
     extractor = OFTRolloutHiddenExtractor(
         policy,
         image_keys=image_keys,

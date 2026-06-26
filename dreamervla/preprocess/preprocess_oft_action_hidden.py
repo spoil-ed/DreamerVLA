@@ -359,10 +359,12 @@ def _predict_intermediates_chunk(
         )
         input_tokens = None
         if want_input_tokens:
-            _token_count, input_flat_dim = _input_token_sidecar_dims(
+            input_token_count, _input_flat_dim = _input_token_sidecar_dims(
                 vla, image_keys=image_keys, token_dim=int(args.token_dim)
             )
-            input_tokens = np.zeros((batch, input_flat_dim), dtype=np.float32)
+            input_tokens = np.zeros(
+                (batch, input_token_count, int(args.token_dim)), dtype=np.float32
+            )
         return hidden_c, hidden_d, action_hidden, input_tokens
 
     input_ids: list[torch.Tensor] = []
@@ -450,9 +452,7 @@ def _predict_intermediates_chunk(
             # frame's views (input order is [history ... current] x views).
             per_image = int(vla.vision_backbone.get_num_patches())
             current_tokens = projected_patch_embeddings[:, -per_image * len(image_keys) :, :]
-            input_token_emb = (
-                current_tokens.reshape(current_tokens.shape[0], -1).float().cpu().numpy()
-            )
+            input_token_emb = current_tokens.float().cpu().numpy()
         if not want_action:
             return None, None, None, input_token_emb
         if proprio_projector is not None and proprio_batch is not None:
@@ -667,6 +667,8 @@ def _write_source_sidecars(
             )
             out_input.attrs["save_action_hidden"] = False
             out_input.attrs["token_count"] = int(input_token_count)
+            out_input.attrs["token_dim"] = int(args.token_dim)
+            out_input.attrs["hidden_storage_format"] = "tokenized"
         data_group = source["data"]
         out_c_data = None if out_c is None else out_c.create_group("data")
         out_d_data = None if out_d is None else out_d.create_group("data")
@@ -756,15 +758,20 @@ def _write_source_sidecars(
             if demo_input is not None:
                 input_dset = demo_input.create_dataset(
                     args.hidden_key,
-                    shape=(length, input_flat_dim),
+                    shape=(length, input_token_count, int(args.token_dim)),
                     dtype=dtype,
-                    chunks=(min(max(1, int(args.chunk_size)), length), input_flat_dim),
+                    chunks=(
+                        min(max(1, int(args.chunk_size)), length),
+                        input_token_count,
+                        int(args.token_dim),
+                    ),
                     compression=None,
                 )
                 input_dset.attrs["hidden_dim"] = input_flat_dim
                 input_dset.attrs["source_dtype"] = "float32"
                 input_dset.attrs["token_count"] = int(input_token_count)
                 input_dset.attrs["token_dim"] = int(args.token_dim)
+                input_dset.attrs["hidden_storage_format"] = "tokenized"
 
             for start in range(0, length, int(args.chunk_size)):
                 end = min(start + int(args.chunk_size), length)
@@ -961,6 +968,7 @@ def main() -> None:
                 base_config,
                 obs_hidden_source="input_token_embedding",
                 save_action_hidden=False,
+                hidden_storage_format="tokenized",
             )
             annotate_preprocess_config(
                 config_input,

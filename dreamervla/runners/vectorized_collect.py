@@ -67,11 +67,11 @@ def extractor_obs_from_record(rec: dict[str, Any]) -> dict[str, Any]:
 
 def build_step_record(
     rec: dict[str, Any],
-    flat_hidden: Any,
+    hidden_state: Any,
     wm_action: Any,
 ) -> dict[str, Any]:
     """One per-step dict for ``RolloutDumpWriter.write_demo`` (schema per _run_episode)."""
-    emb = flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
+    emb = hidden_state.numpy() if hasattr(hidden_state, "numpy") else np.asarray(hidden_state)
     return {
         "actions": np.asarray(wm_action, dtype=np.float64),
         "rewards": np.float32(0.0),
@@ -118,7 +118,7 @@ def collect_vectorized(
             ``step(actions, env_ids)`` (returns per-env (reward, term, trunc, info, record)).
         extractors: list of length ``num_envs``; each has ``reset()`` and
             ``prepare(obs, task_description) -> prep``.  One per slot (isolated history).
-        infer_fn: ``preps -> list[(action_chunk, flat_hidden)]`` (e.g. a closure over
+        infer_fn: ``preps -> list[(action_chunk, hidden_state)]`` (e.g. a closure over
             ``rollout_hidden_extractor.batched_forward``).  MAY receive mixed prompt lengths.
         writer: a RolloutDumpWriter-like object with
             ``write_demo(index, steps, preprocess_config=, data_attrs=)``.
@@ -201,10 +201,10 @@ def collect_vectorized(
 
         finished: list[int] = []
         for i, k in enumerate(active_ids):
-            _action_chunk, flat_hidden = outs[i]
+            _action_chunk, hidden_state = outs[i]
             reward, terminated, truncated, info, rec_after = step_results[i]
             wm_action = info.get("wm_action", info.get("env_action", actions[i]))
-            slot_steps[k].append(build_step_record(slot_rec[k], flat_hidden, wm_action))
+            slot_steps[k].append(build_step_record(slot_rec[k], hidden_state, wm_action))
             slot_t[k] += 1
             slot_rec[k] = rec_after
             done = bool(terminated or truncated) or slot_t[k] >= episode_horizon

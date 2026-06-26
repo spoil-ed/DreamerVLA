@@ -241,6 +241,7 @@ def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
         "task.openvla_oft.input_tokens",
     ):
         _validate_latent_stage_value(cfg, key)
+    _validate_oft_input_token_patch_contract(cfg)
 
     for key in (
         "world_model",
@@ -251,6 +252,27 @@ def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
         _validate_latent_spec(cfg, key, obs_dim_field="obs_dim")
         _validate_latent_stage_contract(cfg, key)
         _validate_chunk_wm_token_space(cfg, key)
+
+
+def _validate_oft_input_token_patch_contract(cfg: DictConfig) -> None:
+    key = "task.openvla_oft.input_tokens"
+    if OmegaConf.select(cfg, key, default=None) is None:
+        return
+
+    token_count = _select_int(cfg, f"{key}.token_count")
+    patches_per_image = _select_int(cfg, f"{key}.patches_per_image")
+    num_images = _select_int(cfg, f"{key}.num_images_in_input")
+    if num_images is None:
+        num_images = _select_int(cfg, "task.openvla_oft.num_images_in_input")
+    if token_count is None or patches_per_image is None or num_images is None:
+        return
+
+    expected = num_images * patches_per_image
+    if token_count != expected:
+        raise ValueError(
+            f"{key}.token_count must equal num_images_in_input * patches_per_image "
+            f"({token_count} != {num_images} * {patches_per_image} = {expected})"
+        )
 
 
 def _validate_latent_stage_value(cfg: DictConfig, key: str) -> None:

@@ -29,7 +29,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
     ``data/<demo_key>/obs_embedding`` arrays, then returns both:
 
       images:        [T, C, H, W], uint8-range float tensor from the source HDF5
-      obs_embedding: [T, D], precomputed frozen VLA hidden vector
+      obs_embedding: [T, D] legacy hidden vector or [T, N, D] input-token grid
     """
 
     def __init__(
@@ -232,14 +232,52 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             token_dim = config.get("token_dim")
             if token_dim is not None:
                 declared_hidden_dim = int(config["token_count"]) * int(token_dim)
+        token_count = config.get("token_count")
+        token_dim = config.get("token_dim")
+        obs_source = str(config.get("obs_hidden_source", expected_obs_hidden_source or ""))
+        if declared_hidden_dim is not None and token_count is not None and token_dim is not None:
+            expected_hidden_dim = int(token_count) * int(token_dim)
+            if int(declared_hidden_dim) != expected_hidden_dim:
+                errors.append(
+                    "hidden_dim decomposition mismatch: "
+                    f"hidden_dim={int(declared_hidden_dim)} but "
+                    f"token_count * token_dim = {int(token_count)} * {int(token_dim)} "
+                    f"= {expected_hidden_dim}"
+                )
+        if obs_source == "input_token_embedding" and token_count is not None:
+            patches_per_image = config.get("patches_per_image")
+            num_images_in_input = config.get("num_images_in_input")
+            if patches_per_image is not None and num_images_in_input is not None:
+                expected_tokens = int(num_images_in_input) * int(patches_per_image)
+                if int(token_count) != expected_tokens:
+                    errors.append(
+                        "token_count decomposition mismatch: "
+                        f"token_count={int(token_count)} but "
+                        f"num_images_in_input * patches_per_image = "
+                        f"{int(num_images_in_input)} * {int(patches_per_image)} "
+                        f"= {expected_tokens}"
+                    )
         if declared_hidden_dim is not None:
             hidden_key = str(config.get("hidden_key", DEFAULT_HIDDEN_KEY))
-            actual_hidden_dim = self._first_sidecar_hidden_dim(hidden_key)
+            actual_hidden_shape = self._first_sidecar_hidden_shape(hidden_key)
+            actual_hidden_dim = self._flat_hidden_dim_from_shape(actual_hidden_shape)
             if actual_hidden_dim is not None and int(actual_hidden_dim) != int(declared_hidden_dim):
                 errors.append(
                     "hidden_dim mismatch: "
                     f"sidecar data={int(actual_hidden_dim)}, declared={int(declared_hidden_dim)}"
                 )
+            if (
+                obs_source == "input_token_embedding"
+                and token_count is not None
+                and token_dim is not None
+                and actual_hidden_shape is not None
+            ):
+                expected_shape = (int(token_count), int(token_dim))
+                if tuple(actual_hidden_shape) != expected_shape:
+                    errors.append(
+                        "input-token obs_embedding shape mismatch: "
+                        f"sidecar data={tuple(actual_hidden_shape)}, declared={expected_shape}"
+                    )
         if errors:
             joined = "\n  - ".join(errors)
             raise ValueError(
@@ -254,7 +292,13 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             )
         return config
 
-    def _first_sidecar_hidden_dim(self, hidden_key: str) -> int | None:
+    @staticmethod
+    def _flat_hidden_dim_from_shape(shape: tuple[int, ...] | None) -> int | None:
+        if shape is None:
+            return None
+        return int(np.prod(shape, dtype=np.int64))
+
+    def _first_sidecar_hidden_shape(self, hidden_key: str) -> tuple[int, ...] | None:
         for path in sorted(self.hidden_dir.glob("*.hdf5")):
             with h5py.File(path, "r") as handle:
                 data = handle.get("data")
@@ -263,8 +307,13 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
                 for demo_key in data:
                     demo = data[demo_key]
                     if hidden_key in demo:
-                        return int(demo[hidden_key].shape[-1])
+                        return tuple(int(dim) for dim in demo[hidden_key].shape[1:])
         return None
+
+    def _first_sidecar_hidden_dim(self, hidden_key: str) -> int | None:
+        return self._flat_hidden_dim_from_shape(
+            self._first_sidecar_hidden_shape(hidden_key)
+        )
 
     def _hidden_path_for_source(self, source_path: str | Path) -> Path:
         return self.hidden_dir / Path(source_path).name
