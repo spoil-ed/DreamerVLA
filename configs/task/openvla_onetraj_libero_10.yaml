@@ -66,3 +66,8 @@ openvla_oft:
   action_token_bins: 256
   min_action: -1.0
   max_action: 1.0
+  input_tokens:
+    proprio_keys: []
+    proprio_dim: 0
+    proprio_emb_dim: 0
+    model_dim: 4138

@@ -96,6 +96,45 @@ def test_world_model_pretrain_step_uses_configured_bf16_autocast():
     assert wm.autocast_seen is True
 
 
+def test_world_model_pretrain_step_forwards_condition_sidecars():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class SidecarRecordingWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+            self.seen: dict[str, torch.Tensor] = {}
+
+        def forward(self, batch):
+            self.seen = dict(batch)
+            loss = self.weight.square()
+            return {"_loss": loss, "loss": loss.detach()}
+
+    wm = SidecarRecordingWM()
+    optimizer = torch.optim.SGD(wm.parameters(), lr=0.01)
+    proprio = torch.zeros(2, 12, 8)
+    lang_emb = torch.zeros(2, 4096)
+
+    world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=optimizer,
+        batch={
+            "obs_embedding": torch.zeros(2, 12, 256, 4096),
+            "actions": torch.zeros(2, 12, 7),
+            "proprio": proprio,
+            "lang_emb": lang_emb,
+        },
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+    )
+
+    assert wm.seen["proprio"] is proprio
+    assert wm.seen["lang_emb"] is lang_emb
+
+
 def test_online_cotrain_actor_update_uses_registry():
     import inspect
 

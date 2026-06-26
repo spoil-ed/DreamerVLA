@@ -139,6 +139,8 @@ def world_model_pretrain_step(
         "tokens",
         "actions",
         "current_actions",
+        "proprio",
+        "lang_emb",
         "rewards",
         "dones",
         "is_first",

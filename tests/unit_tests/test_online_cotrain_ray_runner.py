@@ -1088,13 +1088,19 @@ def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> N
     assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
     assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
     assert cfg.ray_data.sequence_length == 12
-    assert cfg.ray_components.world_model.kwargs.model_dim == 4148
-    assert cfg.ray_components.world_model.kwargs.proprio_dim == 8
-    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 10
+    assert cfg.ray_components.world_model.kwargs.model_dim == 4138
+    assert cfg.ray_components.world_model.kwargs.proprio_dim == 0
+    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 0
     assert cfg.ray_components.world_model.kwargs.num_proprio_repeat == 1
     assert cfg.ray_components.world_model.kwargs.lang_dim == 4096
     assert cfg.ray_components.world_model.kwargs.lang_emb_dim == 32
     assert cfg.ray_components.world_model.kwargs.num_lang_repeat == 1
+    assert cfg.ray_components.world_model.kwargs.action_emb_dim == 10
+    assert cfg.ray_components.world_model.kwargs.model_dim == (
+        cfg.ray_components.world_model.kwargs.token_dim
+        + cfg.ray_components.world_model.kwargs.lang_emb_dim
+        + cfg.ray_components.world_model.kwargs.action_emb_dim
+    )
     assert cfg.ray_components.world_model.kwargs.cosine_loss_scale == 0.0
     assert cfg.ray_components.world_model.kwargs.chunk_rollout_chunks == 1
     assert cfg.ray_components.world_model.kwargs.chunk_rollout_loss_scale == 0.0

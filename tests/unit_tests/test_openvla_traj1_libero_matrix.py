@@ -62,6 +62,13 @@ def _assert_openvla_traj1_contract(cfg) -> None:
     assert input_tokens.token_count == oft.num_images_in_input * input_tokens.patches_per_image
     assert input_tokens.wm_obs_dim == input_tokens.token_count * input_tokens.token_dim
     assert "num_images_in_input*patches_per_image" in input_tokens.latent_source
+    assert input_tokens.proprio_keys == []
+    assert input_tokens.proprio_dim == 0
+    assert input_tokens.proprio_emb_dim == 0
+    assert input_tokens.lang_dim == 4096
+    assert input_tokens.lang_emb_dim == 32
+    assert input_tokens.action_emb_dim == 10
+    assert input_tokens.model_dim == 4096 + 32 + 10
 
 
 @pytest.mark.parametrize("offline_task,_coldstart_task,_suite", MATRIX)
