@@ -414,7 +414,12 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
         raise ValueError(f"offline_warmup.data_dir does not exist: {data_dir!r}")
     if not hidden_dir or not os.path.isdir(str(hidden_dir)):
         raise ValueError(f"offline_warmup.hidden_dir does not exist: {hidden_dir!r}")
-    for key in ("wm_warmup_steps", "classifier_warmup_steps"):
+    for key in (
+        "wm_warmup_steps",
+        "classifier_warmup_steps",
+        "warmup_replay_epochs",
+        "warmup_replay_max_steps",
+    ):
         val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
         if val < 0:
             raise ValueError(f"training.{key} must be >= 0, got {val}")

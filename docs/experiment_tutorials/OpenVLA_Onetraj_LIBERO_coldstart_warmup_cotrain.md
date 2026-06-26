@@ -67,6 +67,51 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   render_backend=egl > logs/cotrain_ray_egl.log 2>&1
 ```
 
+### Run Stages Separately
+
+Use one stable `RUN_ROOT` when debugging the later phases. The warmup stage writes
+`${RUN_ROOT}/cotrain/ckpt/wm_warmup.ckpt` and
+`${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt`; the online stage resumes those
+files and skips replay loading + warmup.
+
+```bash
+export RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/goal_g67_split_$(date +%Y%m%d_%H%M%S)"
+mkdir -p logs
+
+# 1) Cold-start collection only. Skip this if
+# ${DVLA_DATA_ROOT}/collected_rollouts/libero_goal already has the desired shards.
+CUDA_VISIBLE_DEVICES=6,7 python -m dreamervla.train \
+  experiment=collect_rollouts_ray \
+  task=openvla_onetraj_coldstart_libero \
+  logger=tensorboard \
+  collect.task_ids=all \
+  collect.episodes_per_task=50 \
+  collect.episode_horizon=300 \
+  collect.memory_fraction=0.9 \
+  collect.num_inference_workers=2 \
+  env.num_workers=8 \
+  task.openvla_oft.hdf5_reward_dir="${DVLA_DATA_ROOT}/collected_rollouts/libero_goal/reward" \
+  task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT}/collected_rollouts/libero_goal/hidden" \
+  training.out_dir="${RUN_ROOT}/collect" \
+  > logs/cotrain_goal_g67_collect.log 2>&1
+
+# 2) Offline replay warmup only. This runs the 1-epoch replay warmup and exits
+# before online rollout.
+CUDA_VISIBLE_DEVICES=6,7 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal ngpu=2 profile=multi_gpu collect.num_inference_workers=2 \
+  skip_collect=true cotrain_phase=warmup run_root="${RUN_ROOT}" \
+  > logs/cotrain_goal_g67_warmup.log 2>&1
+
+# 3) Online cotrain only. This validates the split warmup ckpts under RUN_ROOT,
+# appends training.resume=true, and starts directly from the online phase.
+CUDA_VISIBLE_DEVICES=6,7 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal ngpu=2 profile=multi_gpu collect.num_inference_workers=2 \
+  skip_collect=true cotrain_phase=online run_root="${RUN_ROOT}" \
+  > logs/cotrain_goal_g67_online.log 2>&1
+```
+
 Ray collect fans out `collect.num_inference_workers` policy workers (the `multi_gpu`
 profile sets 4); keep it **≤ the visible GPU count** — e.g. on two GPUs add
 `collect.num_inference_workers=2` (and `CUDA_VISIBLE_DEVICES=6,7 ngpu=2`).

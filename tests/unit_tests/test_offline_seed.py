@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 from dreamervla.runners.offline_seed import seed_replay_from_offline
@@ -40,9 +41,13 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)
     assert n == 2                                    # two episodes added
     assert replay.num_transitions == 12             # 6 + 6
+    assert {record["source"] for record in replay.episodes} == {"coldstart"}
     batch = replay.sample(2)
     assert set(int(t) for t in batch["task_ids"].tolist()) <= {2, 5}
+    assert set(batch["replay_source_ids"].tolist()) == {0}
     assert batch["obs_embedding"].shape[-1] == 16
+    assert replay.episodes[0]["episode"][0]["obs_embedding"].dtype == np.float16
+    assert batch["obs_embedding"].dtype == torch.float16
 
 
 def test_seed_replay_marks_success_only_at_terminal_step(tmp_path):

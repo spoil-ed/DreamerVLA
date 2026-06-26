@@ -94,6 +94,52 @@ def test_manifest_roundtrips(tmp_path):
     assert loaded["collected"] == 360
 
 
+def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as launcher
+
+    del monkeypatch
+    collected_root = tmp_path / "collected"
+    reward_dir = collected_root / "reward"
+    hidden_dir = collected_root / "hidden"
+    reward_dir.mkdir(parents=True)
+    hidden_dir.mkdir(parents=True)
+    (hidden_dir / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "hidden_key": "obs_embedding",
+                "chunk_size": 8,
+                "token_count": 56,
+                "token_dim": 4096,
+                "output_dtype": "float16",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_shard_with_task_ids(reward_dir / "shard_000.hdf5", [0, 1])
+    plan = SimpleNamespace(
+        task="openvla_onetraj_coldstart_libero",
+        mode="full",
+        profile="release",
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+        collected_root=collected_root,
+        run_root=tmp_path / "run",
+        collect_cmd=["python", "-m", "dreamervla.train"],
+    )
+
+    launcher._write_collection_manifest(plan, target_episodes=10, num_tasks=2)
+
+    manifest = json.loads((collected_root / "collection_manifest.json").read_text())
+    assert manifest["hidden_schema"]["hidden_key"] == "obs_embedding"
+    assert manifest["hidden_schema"]["chunk_size"] == 8
+    assert manifest["hidden_schema"]["token_count"] == 56
+    assert manifest["hidden_schema"]["token_dim"] == 4096
+    assert manifest["backend"] in {"unknown", "egl", "osmesa"}
+
+
 def test_read_manifest_missing_returns_none(tmp_path):
     assert read_manifest(tmp_path) is None
 

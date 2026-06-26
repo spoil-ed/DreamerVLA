@@ -1,6 +1,58 @@
 from __future__ import annotations
 
 
+def test_task_conditioning_config_is_component_visible():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.load(
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "dreamervla"
+        / "online_cotrain_pipeline_libero_goal.yaml"
+    )
+
+    assert OmegaConf.select(cfg, "world_model.task_conditioning.enabled") is False
+    assert OmegaConf.select(cfg, "world_model.task_conditioning.num_tasks") == 10
+    assert OmegaConf.select(cfg, "classifier.task_conditioning.enabled") is False
+    assert OmegaConf.select(cfg, "classifier.task_conditioning.embedding_dim") == 64
+
+
+def test_pipeline_config_uses_full_replay_epoch_warmup():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.load(
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "dreamervla"
+        / "online_cotrain_pipeline_libero_goal.yaml"
+    )
+
+    assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 1
+    assert OmegaConf.select(cfg, "training.warmup_replay_max_steps") == 0
+
+
+def test_pipeline_smoke_config_uses_fixed_step_warmup():
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=online_cotrain_pipeline_oft_action_hidden_smoke"],
+        )
+
+    assert OmegaConf.select(cfg, "training.debug") is True
+    assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 0
+    assert OmegaConf.select(cfg, "training.wm_warmup_steps") == 1200
+
+
 def test_validate_cfg_warmup(tmp_path):
     import pytest
     from omegaconf import OmegaConf
@@ -26,3 +78,15 @@ def test_validate_cfg_warmup(tmp_path):
     })
     with pytest.raises(Exception, match="wm_warmup_steps"):
         validate_cfg(neg)
+    neg_replay_max = OmegaConf.create({
+        "_target_": "dreamervla.runners.OnlineCotrainPipelineRunner",
+        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+        "training": {
+            "wm_warmup_steps": 10,
+            "classifier_warmup_steps": 10,
+            "warmup_replay_epochs": 1,
+            "warmup_replay_max_steps": -1,
+        },
+    })
+    with pytest.raises(Exception, match="warmup_replay_max_steps"):
+        validate_cfg(neg_replay_max)

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,33 @@ def _temporarily_freeze(module: nn.Module):
             p.requires_grad_(flag)
 
 
+def _manual_autocast_context(
+    optim_cfg: Mapping[str, Any],
+    device: torch.device,
+):
+    raw = str(optim_cfg.get("precision", optim_cfg.get("dtype", "fp32"))).strip().lower()
+    aliases = {
+        "": "fp32",
+        "none": "fp32",
+        "float32": "fp32",
+        "fp32": "fp32",
+        "bfloat16": "bf16",
+        "bf16": "bf16",
+        "float16": "fp16",
+        "fp16": "fp16",
+    }
+    if raw not in aliases:
+        raise ValueError(
+            "optim.precision must be one of fp32, bf16, or fp16; "
+            f"got {optim_cfg.get('precision', optim_cfg.get('dtype'))!r}"
+        )
+    precision = aliases[raw]
+    if precision == "fp32":
+        return nullcontext()
+    dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    return torch.amp.autocast(device_type=device.type, dtype=dtype)
+
+
 def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
     total = torch.zeros((), device=next(module.parameters()).device)
     for name, param in module.named_parameters():
@@ -57,6 +84,29 @@ def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
             continue
         total = total + param.grad.detach().float().pow(2).sum()
     return float(total.sqrt().cpu())
+
+
+_WM_LOG_METRIC_KEYS = (
+    "loss",
+    "hidden_rec_loss",
+    "hidden_cosine_loss",
+    "full_hidden_rec_loss",
+    "full_hidden_cosine_loss",
+)
+
+
+def namespaced_world_model_metrics(raw: Mapping[str, Any]) -> dict[str, float]:
+    """Return the public ``wm/*`` metric subset emitted by learner loops."""
+    metrics: dict[str, float] = {}
+    for key in _WM_LOG_METRIC_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if isinstance(value, torch.Tensor):
+            metrics[f"wm/{key}"] = float(value.detach().cpu())
+        else:
+            metrics[f"wm/{key}"] = float(value)
+    return metrics
 
 
 def world_model_pretrain_step(
@@ -97,6 +147,7 @@ def world_model_pretrain_step(
         "success_to_go",
         "return_to_go",
         "return_targets",
+        "task_ids",
     ):
         value = batch.get(key)
         if isinstance(value, torch.Tensor):
@@ -105,7 +156,8 @@ def world_model_pretrain_step(
             flat_batch[key] = value
 
     world_model.train()
-    losses = world_model(flat_batch)
+    with _manual_autocast_context(optim_cfg, device):
+        losses = world_model(flat_batch)
     loss_tensor = losses.get("_loss", losses.get("loss"))
     if not isinstance(loss_tensor, torch.Tensor):
         raise KeyError("world_model output must contain Tensor key 'loss' or '_loss'")

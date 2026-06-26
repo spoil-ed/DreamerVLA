@@ -82,6 +82,12 @@ class OnlineCotrainRayRunner(BaseRunner):
             cluster.shutdown()
 
     def _build_components(self, cluster: Cluster) -> dict[str, Any]:
+        rollout_mode = self._ray_rollout_mode()
+        if rollout_mode == "learned_actor":
+            raise ValueError(
+                "ray_rollout.mode=learned_actor requires a learned-actor inference worker; "
+                "use no-Ray OnlineCotrainRunner or select ray_rollout.mode=oft_fixed_base."
+            )
         num_envs = self._int_from(("env.num_workers", "num_env_workers"), 2)
         horizon = self._int_from(("env.cfg.kwargs.horizon", "episode_horizon"), 3)
         seq_len = self._int_from(("replay.cfg.sequence_length", "sequence_length"), 3)
@@ -222,10 +228,11 @@ class OnlineCotrainRayRunner(BaseRunner):
         replay = groups["replay"]
         learner = groups["learner"]
         env_ids = list(range(int(groups["num_envs"])))
-        rollout_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
+        target_env_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
         min_episodes = self._int_from(
             ("rollout.min_replay_episodes", "min_replay_episodes"), 1
         )
+        replay_ready_kwargs = self._replay_ready_kwargs(min_episodes)
         weight_sync_every = self._int_from(
             ("sync.weight_sync_every", "weight_sync_every"), 1
         )
@@ -244,19 +251,29 @@ class OnlineCotrainRayRunner(BaseRunner):
         overlap_events = 0
         pending_learn = None
         pending_learn_start = 0.0
+        env_steps = 0
+        infer_batches = 0
+        episode_count = 0
+        episode_successes = 0
+        last_episode_success = 0
 
-        for step in range(rollout_steps):
-            self.console_progress(step + 1, rollout_steps, "rollout", unit="step")
-            obs_batch = envs.current_obs().wait()
+        while env_steps < target_env_steps:
+            self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
+            obs_batch_all = envs.current_obs().wait()
+            active_env_ids = env_ids[
+                : max(0, min(len(env_ids), target_env_steps - env_steps))
+            ]
+            obs_batch = [obs_batch_all[env_id] for env_id in active_env_ids]
 
-            if pending_learn is None and replay.ready(min_episodes).wait()[0]:
+            if pending_learn is None and replay.ready(**replay_ready_kwargs).wait()[0]:
                 pending_learn = learner.update(learner_phase, 1)
                 pending_learn_start = time.perf_counter()
 
             rollout_start = time.perf_counter()
             infer_start = time.perf_counter()
-            infer_out = infer.forward_batch(obs_batch, env_ids).wait()[0]
+            infer_out = infer.forward_batch(obs_batch, active_env_ids).wait()[0]
             infer_wait_s += time.perf_counter() - infer_start
+            infer_batches += 1
             for key, value in dict(infer_out.get("timing", {})).items():
                 metric_key = f"time/infer_{key}"
                 infer_stage_timing[metric_key] = infer_stage_timing.get(
@@ -264,24 +281,38 @@ class OnlineCotrainRayRunner(BaseRunner):
                 ) + float(value)
             step_results = []
             for rank, action, hidden in zip(
-                env_ids, infer_out["actions"], infer_out["obs_embedding"], strict=True
+                active_env_ids,
+                infer_out["actions"],
+                infer_out["obs_embedding"],
+                strict=True,
             ):
                 env_step_start = time.perf_counter()
                 step_results.extend(envs.execute_on(rank).step(action, hidden).wait())
                 env_step_wait_s += time.perf_counter() - env_step_start
+                env_steps += 1
             rollout_end = time.perf_counter()
 
             done_envs = []
-            for env_id, (_obs, done, info) in zip(env_ids, step_results, strict=True):
+            for env_id, (_obs, done, info) in zip(
+                active_env_ids, step_results, strict=True
+            ):
                 if done:
                     done_envs.append(env_id)
-                    self.console_record_success(bool((info or {}).get("success", False)))
+                    success = bool((info or {}).get("success", False))
+                    episode_count += 1
+                    episode_successes += int(success)
+                    last_episode_success = int(success)
+                    self._record_rollout_episode(
+                        episode=episode_count,
+                        success=success,
+                        successes=episode_successes,
+                    )
             if done_envs:
                 infer.reset_states(done_envs).wait()
 
             if pending_learn is not None:
                 learn_done = pending_learn.done()
-                if learn_done or step == rollout_steps - 1:
+                if learn_done or env_steps >= target_env_steps:
                     learner_wait_start = time.perf_counter()
                     metrics = pending_learn.wait()[0]
                     learner_wait_s += time.perf_counter() - learner_wait_start
@@ -324,17 +355,23 @@ class OnlineCotrainRayRunner(BaseRunner):
             self.log_metrics(update_metrics, step=learner_updates)
             learner.sync_weights("policy", policy_version).wait()
 
+        rollout_success = self._rollout_success_metrics(
+            episode_count=episode_count,
+            episode_successes=episode_successes,
+            last_episode_success=last_episode_success,
+        )
+        self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
         return {
-            "rollout/episodes": int(replay.size().wait()[0]),
-            "rollout/steps": int(rollout_steps),
+            "rollout/steps": int(env_steps),
+            "rollout/infer_batches": int(infer_batches),
             "train/learner_updates": int(learner_updates),
             # Compatibility for older smoke tests and dashboards.
             "train/ppo_updates": int(learner_updates),
             "sync/policy_version": int(policy_version),
             "time/overlap_events": int(overlap_events),
             "time/rollout_overlap_events": 0,
-            "time/rollout_infer_ready_batches": int(rollout_steps),
-            "time/rollout_env_ready_batches": int(rollout_steps * len(env_ids)),
+            "time/rollout_infer_ready_batches": int(infer_batches),
+            "time/rollout_env_ready_batches": int(env_steps),
             "time/infer_wait_s": float(infer_wait_s),
             "time/env_step_wait_s": float(env_step_wait_s),
             "time/learner_wait_s": float(learner_wait_s),
@@ -342,6 +379,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             "train/rl_loss": float(last_loss),
             **infer_stage_timing,
             **last_metrics,
+            **rollout_success,
             **collect_resource_metrics(prefix="time"),
         }
 
@@ -353,10 +391,11 @@ class OnlineCotrainRayRunner(BaseRunner):
         replay = groups["replay"]
         learner = groups["learner"]
         env_ids = list(range(int(groups["num_envs"])))
-        rollout_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
+        target_env_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
         min_episodes = self._int_from(
             ("rollout.min_replay_episodes", "min_replay_episodes"), 1
         )
+        replay_ready_kwargs = self._replay_ready_kwargs(min_episodes)
         weight_sync_every = self._int_from(
             ("sync.weight_sync_every", "weight_sync_every"), 1
         )
@@ -371,7 +410,8 @@ class OnlineCotrainRayRunner(BaseRunner):
         pending_learn_start = 0.0
         pending_learn_overlapped = False
 
-        steps = 0
+        env_steps = 0
+        infer_batches = 0
         learner_updates = 0
         policy_version = 0
         local_infer_version = 0
@@ -389,6 +429,9 @@ class OnlineCotrainRayRunner(BaseRunner):
         rollout_strict_overlap_events = 0
         infer_ready_batches = 0
         env_ready_batches = 0
+        episode_count = 0
+        episode_successes = 0
+        last_episode_success = 0
 
         def add_infer_timing(infer_out: dict[str, Any]) -> None:
             for key, value in dict(infer_out.get("timing", {})).items():
@@ -397,15 +440,23 @@ class OnlineCotrainRayRunner(BaseRunner):
                     metric_key, 0.0
                 ) + float(value)
 
+        def in_flight_env_steps() -> int:
+            return len(pending_steps) + sum(
+                len(batch_env_ids) for batch_env_ids, _result, _start in pending_infers.values()
+            )
+
         def launch_infer() -> None:
-            nonlocal steps, rollout_overlap_events, rollout_strict_overlap_events
-            if pending_infers or not ready_obs or steps >= rollout_steps:
+            nonlocal infer_batches, rollout_overlap_events, rollout_strict_overlap_events
+            if pending_infers or not ready_obs:
                 return
-            batch = list(ready_obs)
-            ready_obs.clear()
+            remaining = target_env_steps - env_steps - in_flight_env_steps()
+            if remaining <= 0:
+                return
+            batch = list(ready_obs[:remaining])
+            del ready_obs[:remaining]
             batch_env_ids = [env_id for env_id, _obs in batch]
             obs_batch = [obs for _env_id, obs in batch]
-            if pending_steps or steps > 0:
+            if pending_steps or infer_batches > 0:
                 rollout_overlap_events += 1
             if pending_steps:
                 rollout_strict_overlap_events += 1
@@ -415,7 +466,7 @@ class OnlineCotrainRayRunner(BaseRunner):
                 result,
                 time.perf_counter(),
             )
-            steps += 1
+            infer_batches += 1
 
         def launch_steps(batch_env_ids: list[int], infer_out: dict[str, Any]) -> None:
             for env_id, action, hidden in zip(
@@ -435,23 +486,37 @@ class OnlineCotrainRayRunner(BaseRunner):
             env_id: int,
             step_result: tuple[dict[str, Any], bool, dict[str, Any]],
         ) -> None:
+            nonlocal env_steps, episode_count, episode_successes
+            nonlocal last_episode_success
             next_obs, done, info = step_result
+            env_steps += 1
             if done:
-                self.console_record_success(bool((info or {}).get("success", False)))
+                success = bool((info or {}).get("success", False))
+                episode_count += 1
+                episode_successes += int(success)
+                last_episode_success = int(success)
+                self._record_rollout_episode(
+                    episode=episode_count,
+                    success=success,
+                    successes=episode_successes,
+                )
                 infer.reset_states([int(env_id)]).wait()
-            if steps < rollout_steps:
+            if env_steps + in_flight_env_steps() < target_env_steps:
                 ready_obs.append((int(env_id), next_obs))
 
         def maybe_launch_learner() -> None:
             nonlocal pending_learn, pending_learn_start, pending_learn_overlapped
             if pending_learn is not None:
                 return
-            if not bool(replay.ready(min_episodes).wait()[0]):
+            if not bool(replay.ready(**replay_ready_kwargs).wait()[0]):
                 return
             pending_learn = learner.update(learner_phase, 1)
             pending_learn_start = time.perf_counter()
             pending_learn_overlapped = bool(
-                pending_infers or pending_steps or ready_obs or steps < rollout_steps
+                pending_infers
+                or pending_steps
+                or ready_obs
+                or env_steps + in_flight_env_steps() < target_env_steps
             )
 
         def finish_learner(*, block: bool) -> None:
@@ -503,13 +568,13 @@ class OnlineCotrainRayRunner(BaseRunner):
         launch_infer()
 
         while pending_infers or pending_steps or ready_obs:
-            self.console_progress(steps, rollout_steps, "rollout", unit="step")
+            self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
             finish_learner(block=False)
             maybe_launch_learner()
             launch_infer()
             refs = list(pending_infers) + list(pending_steps)
             if not refs:
-                if steps >= rollout_steps:
+                if env_steps >= target_env_steps:
                     break
                 continue
 
@@ -540,7 +605,7 @@ class OnlineCotrainRayRunner(BaseRunner):
                     handle_step_result(env_id, step_result)
 
             finish_learner(block=False)
-            if steps >= rollout_steps:
+            if env_steps >= target_env_steps:
                 ready_obs.clear()
 
         for _env_id, result, start_time in list(pending_steps.values()):
@@ -554,10 +619,15 @@ class OnlineCotrainRayRunner(BaseRunner):
         pending_infers.clear()
         finish_learner(block=True)
 
+        rollout_success = self._rollout_success_metrics(
+            episode_count=episode_count,
+            episode_successes=episode_successes,
+            last_episode_success=last_episode_success,
+        )
+        self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
         return {
-            "rollout/episodes": int(replay.size().wait()[0]),
-            "rollout/steps": int(steps),
-            "rollout/success_rate": float(self.console_success_rate()),
+            "rollout/steps": int(env_steps),
+            "rollout/infer_batches": int(infer_batches),
             "train/learner_updates": int(learner_updates),
             # Compatibility for older smoke tests and dashboards.
             "train/ppo_updates": int(learner_updates),
@@ -575,7 +645,45 @@ class OnlineCotrainRayRunner(BaseRunner):
             "train/rl_loss": float(last_loss),
             **infer_stage_timing,
             **last_metrics,
+            **rollout_success,
             **collect_resource_metrics(prefix="time"),
+        }
+
+    def _record_rollout_episode(
+        self, *, episode: int, success: bool, successes: int
+    ) -> None:
+        self.console_record_success(success)
+        avg_success_rate = float(successes) / max(1, int(episode))
+        self.console_rollout_episode(
+            episode=int(episode),
+            success=bool(success),
+            avg_success_rate=avg_success_rate,
+            window_success_rate=float(self.console_success_rate()),
+        )
+
+    def _rollout_success_metrics(
+        self,
+        *,
+        episode_count: int,
+        episode_successes: int,
+        last_episode_success: int,
+    ) -> dict[str, float]:
+        del last_episode_success
+        success_rate = (
+            float(episode_successes) / float(episode_count)
+            if int(episode_count) > 0
+            else 0.0
+        )
+        recent_success_rate = (
+            float(self.console_success_rate()) if int(episode_count) > 0 else 0.0
+        )
+        return {
+            "rollout/episodes": float(episode_count),
+            "rollout/successes": float(episode_successes),
+            "rollout/success_rate": float(success_rate),
+            "rollout/success_rate_valid": float(int(episode_count) > 0),
+            "rollout/recent_success_rate": float(recent_success_rate),
+            "rollout/recent_success_rate_valid": float(int(episode_count) > 0),
         }
 
     def _learner_update_phase(self) -> str:
@@ -608,6 +716,36 @@ class OnlineCotrainRayRunner(BaseRunner):
             if ids:
                 return ids
         return []
+
+    def _ray_rollout_mode(self) -> str:
+        mode = str(OmegaConf.select(self.cfg, "ray_rollout.mode", default="oft_fixed_base"))
+        allowed = {"oft_fixed_base", "learned_actor"}
+        if mode not in allowed:
+            raise ValueError(
+                f"ray_rollout.mode must be one of {sorted(allowed)}, got {mode!r}"
+            )
+        return mode
+
+    def _replay_ready_kwargs(self, min_episodes: int) -> dict[str, Any]:
+        return {
+            "min_episodes_per_task": int(min_episodes),
+            "min_transitions": self._int_from(
+                ("rollout.min_replay_transitions", "min_replay_transitions"), 0
+            ),
+            "task_ids": tuple(self._rollout_task_ids() or [0]),
+            "min_sampleable_windows": self._int_from(
+                ("rollout.min_sampleable_windows", "min_sampleable_windows"), 0
+            ),
+            "require_classifier_evidence": bool(
+                self._select_first(
+                    (
+                        "rollout.require_classifier_evidence",
+                        "require_classifier_evidence",
+                    ),
+                    False,
+                )
+            ),
+        }
 
     def _egl_device_pool(self) -> list[int]:
         """Physical GPU ids for egl env rendering (default backend). Read from the driver's

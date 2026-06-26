@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter, deque
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -23,6 +24,7 @@ class OnlineReplay:
         failure_prefix_ratio: float = 0.2,
         task_balanced: bool = True,
         rank: int = 0,
+        replay_sampling: Mapping[str, Any] | None = None,
     ) -> None:
         self.capacity = int(capacity)
         self.sequence_length = int(sequence_length)
@@ -40,6 +42,18 @@ class OnlineReplay:
         self.failure_prefix_ratio = float(failure_prefix_ratio)
         self.task_balanced = bool(task_balanced)
         self.rank = int(rank)
+        sampling_cfg = dict(replay_sampling or {})
+        mix_cfg = dict(sampling_cfg.get("mix", {}) or {})
+        self.replay_sampling_enabled = bool(sampling_cfg.get("enabled", False))
+        self.recent_episode_count = int(sampling_cfg.get("recent_episode_count", 8))
+        self.replay_sampling_mix = {
+            "online_recent": float(mix_cfg.get("online_recent", 0.5)),
+            "online_replay": float(mix_cfg.get("online_replay", 0.3)),
+            "coldstart_anchor": float(mix_cfg.get("coldstart_anchor", 0.2)),
+        }
+        self.latest_online_required = bool(
+            sampling_cfg.get("latest_online_required", False)
+        )
         self.episodes_by_task: dict[int, deque[dict[str, Any]]] = {}
         self._transitions_by_task: Counter[int] = Counter()
         # Off-policy staleness (Phase 4): episodes are stamped with the rollout
@@ -48,6 +62,7 @@ class OnlineReplay:
         self._next_episode_id = 0
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
+        self._pending_latest_online_episode_ids: set[int] = set()
 
     @property
     def episodes(self) -> list[dict[str, Any]]:
@@ -72,7 +87,9 @@ class OnlineReplay:
         denom = max(1, len(self.task_ids or ()))
         return max(int(self.sequence_length), int(self.capacity) // denom)
 
-    def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def add_episode(
+        self, episode: list[dict[str, Any]], *, source: str = "online"
+    ) -> dict[str, Any] | None:
         if len(episode) < self.sequence_length:
             return None
         task_id = self._episode_task_id(episode)
@@ -92,6 +109,8 @@ class OnlineReplay:
             "rank": self.rank,
             "task_id": task_id,
             "success": success,
+            "source": str(source),
+            "source_id": self._source_id(str(source)),
             "length": len(episode),
             "finish_step": finish_step,
             "policy_version": int(self._current_policy_version),
@@ -106,7 +125,17 @@ class OnlineReplay:
         if not bucket:
             self.episodes_by_task.pop(int(task_id), None)
             self._transitions_by_task.pop(int(task_id), None)
+        if str(source) == "online":
+            self._pending_latest_online_episode_ids.add(int(episode_id))
         return record
+
+    @staticmethod
+    def _source_id(source: str) -> int:
+        if source == "coldstart":
+            return 0
+        if source == "online":
+            return 1
+        return 2
 
     @staticmethod
     def _episode_success(episode: list[dict[str, Any]]) -> bool:
@@ -161,6 +190,9 @@ class OnlineReplay:
         limit = self._sample_limit(record)
         return max(0, int(limit) - self.sequence_length + 1)
 
+    def sampleable_window_count(self) -> int:
+        return sum(self._sampleable_windows(record) for record in self._valid_records())
+
     def task_episode_counts(self) -> Counter[int]:
         return Counter(int(record["task_id"]) for record in self._valid_records())
 
@@ -213,17 +245,36 @@ class OnlineReplay:
         min_transitions: int,
         task_ids: tuple[int, ...],
         min_episodes_per_task: int,
+        min_sampleable_windows: int = 0,
+        require_classifier_evidence: bool = False,
     ) -> bool:
         if self.num_transitions < int(min_transitions):
             return False
+        if int(min_sampleable_windows) > 0:
+            if self.sampleable_window_count() < int(min_sampleable_windows):
+                return False
         min_eps = int(min_episodes_per_task)
         if min_eps <= 0:
-            return bool(self._valid_records())
-        counts = self.task_episode_counts()
-        return all(counts[int(task_id)] >= min_eps for task_id in task_ids)
+            ready = bool(self._valid_records())
+        else:
+            counts = self.task_episode_counts()
+            ready = all(counts[int(task_id)] >= min_eps for task_id in task_ids)
+        if not ready:
+            return False
+        if require_classifier_evidence and not self.classifier_ready(task_ids=task_ids):
+            return False
+        return True
 
-    def _choose_records(
-        self, batch_size: int, *, staleness_threshold: int | None = None
+    def classifier_ready(self, *, task_ids: tuple[int, ...] | None = None) -> bool:
+        stats = self.task_stats(task_ids)
+        totals = {
+            "successes": sum(int(item["successes"]) for item in stats.values()),
+            "failures": sum(int(item["failures"]) for item in stats.values()),
+        }
+        return totals["successes"] > 0 and totals["failures"] > 0
+
+    def _fresh_valid_records(
+        self, *, staleness_threshold: int | None = None
     ) -> list[dict[str, Any]]:
         valid = self._valid_records()
         if staleness_threshold is not None:
@@ -243,26 +294,103 @@ class OnlineReplay:
             # version stays 0 while the learner version climbs → all "stale").
             if fresh:
                 valid = fresh
-        if not valid:
+        return valid
+
+    def _choose_one_task_balanced(
+        self, records: list[dict[str, Any]], sample_idx: int = 0
+    ) -> dict[str, Any]:
+        if not records:
             raise RuntimeError("online replay has no full sequences")
         if not self.task_balanced:
-            return [random.choice(valid) for _ in range(int(batch_size))]
-
+            return random.choice(records)
         by_task: dict[int, list[dict[str, Any]]] = {}
-        for record in valid:
+        for record in records:
             by_task.setdefault(int(record["task_id"]), []).append(record)
         task_ids = sorted(by_task)
         if not task_ids:
             raise RuntimeError("online replay has no task-indexed full sequences")
-        offset = random.randrange(len(task_ids))
-        ordered_tasks = task_ids[offset:] + task_ids[:offset]
-        return [
-            random.choice(by_task[ordered_tasks[idx % len(ordered_tasks)]])
-            for idx in range(int(batch_size))
+        return random.choice(by_task[task_ids[int(sample_idx) % len(task_ids)]])
+
+    def _records_by_sampling_pool(
+        self, valid: list[dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
+        online = [record for record in valid if record.get("source", "online") == "online"]
+        coldstart = [
+            record for record in valid if record.get("source", "online") == "coldstart"
         ]
+        recent_n = max(0, int(self.recent_episode_count))
+        recent = sorted(
+            online,
+            key=lambda record: int(record.get("collection_index", 0)),
+            reverse=True,
+        )[:recent_n] if recent_n > 0 else []
+        return {
+            "online_recent": recent,
+            "online_replay": online,
+            "coldstart_anchor": coldstart,
+        }
+
+    def _choose_pool_name(self, pools: dict[str, list[dict[str, Any]]]) -> str:
+        available = [
+            (name, max(0.0, float(self.replay_sampling_mix.get(name, 0.0))))
+            for name, records in pools.items()
+            if records
+        ]
+        if not available:
+            raise RuntimeError("online replay has no full sequences")
+        total = sum(weight for _name, weight in available)
+        if total <= 0.0:
+            return random.choice([name for name, _weight in available])
+        pick = random.random() * total
+        acc = 0.0
+        for name, weight in available:
+            acc += weight
+            if pick <= acc:
+                return name
+        return available[-1][0]
+
+    def _pop_pending_latest_online(
+        self, valid: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        if not self.latest_online_required or not self._pending_latest_online_episode_ids:
+            return None
+        by_id = {int(record["episode_id"]): record for record in valid}
+        for episode_id in sorted(self._pending_latest_online_episode_ids, reverse=True):
+            record = by_id.get(int(episode_id))
+            if record is not None:
+                self._pending_latest_online_episode_ids.discard(int(episode_id))
+                return record
+            self._pending_latest_online_episode_ids.discard(int(episode_id))
+        return None
+
+    def _choose_records(
+        self, batch_size: int, *, staleness_threshold: int | None = None
+    ) -> list[dict[str, Any]]:
+        valid = self._fresh_valid_records(staleness_threshold=staleness_threshold)
+        if not valid:
+            raise RuntimeError("online replay has no full sequences")
+        chosen: list[dict[str, Any]] = []
+        pending = self._pop_pending_latest_online(valid)
+        if pending is not None:
+            chosen.append(pending)
+        if self.replay_sampling_enabled:
+            pools = self._records_by_sampling_pool(valid)
+            while len(chosen) < int(batch_size):
+                pool_name = self._choose_pool_name(pools)
+                chosen.append(
+                    self._choose_one_task_balanced(pools[pool_name], len(chosen))
+                )
+            return chosen
+        while len(chosen) < int(batch_size):
+            chosen.append(self._choose_one_task_balanced(valid, len(chosen)))
+        return chosen
 
     def sample(
-        self, batch_size: int, *, staleness_threshold: int | None = None
+        self,
+        batch_size: int,
+        *,
+        staleness_threshold: int | None = None,
+        include_images: bool = True,
     ) -> dict[str, torch.Tensor]:
         windows = []
         task_ids: list[int] = []
@@ -274,6 +402,7 @@ class OnlineReplay:
         episode_lengths: list[int] = []
         sample_limits: list[int] = []
         source_ranks: list[int] = []
+        replay_source_ids: list[int] = []
         for record in self._choose_records(
             int(batch_size), staleness_threshold=staleness_threshold
         ):
@@ -290,10 +419,8 @@ class OnlineReplay:
             episode_lengths.append(int(record["length"]))
             sample_limits.append(int(limit))
             source_ranks.append(int(record["rank"]))
+            replay_source_ids.append(int(record.get("source_id", self._source_id("online"))))
 
-        images = np.stack(
-            [[step["image"] for step in window] for window in windows], axis=0
-        )
         obs_embedding = np.stack(
             [[step["obs_embedding"] for step in window] for window in windows], axis=0
         )
@@ -329,9 +456,8 @@ class OnlineReplay:
                 )
         is_first = np.zeros((len(windows), self.sequence_length), dtype=np.bool_)
         is_first[:, 0] = True
-        return {
-            "images": torch.from_numpy(images).to(torch.float32),
-            "obs_embedding": torch.from_numpy(obs_embedding).to(torch.float32),
+        batch = {
+            "obs_embedding": torch.from_numpy(obs_embedding),
             "actions": torch.from_numpy(actions),
             "current_actions": torch.from_numpy(current_actions),
             "rewards": torch.from_numpy(rewards.astype(np.float32, copy=False)),
@@ -350,7 +476,14 @@ class OnlineReplay:
             "episode_lengths": torch.tensor(episode_lengths, dtype=torch.long),
             "sample_limits": torch.tensor(sample_limits, dtype=torch.long),
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
+            "replay_source_ids": torch.tensor(replay_source_ids, dtype=torch.long),
         }
+        if bool(include_images):
+            images = np.stack(
+                [[step["image"] for step in window] for window in windows], axis=0
+            )
+            batch["images"] = torch.from_numpy(images).to(torch.float32)
+        return batch
 
     def sample_classifier_windows(
         self,
@@ -382,6 +515,7 @@ class OnlineReplay:
         task_episode_indices: list[int] = []
         task_ids: list[int] = []
         source_ranks: list[int] = []
+        replay_source_ids: list[int] = []
         source_successes: list[bool] = []
         episode_lengths: list[int] = []
         finish_steps: list[int] = []
@@ -431,6 +565,7 @@ class OnlineReplay:
             task_episode_indices.append(int(record["task_episode_index"]))
             task_ids.append(int(record["task_id"]))
             source_ranks.append(int(record["rank"]))
+            replay_source_ids.append(int(record.get("source_id", self._source_id("online"))))
             source_successes.append(bool(record["success"]))
             episode_lengths.append(int(record["length"]))
             finish_steps.append(int(finish_step))
@@ -447,6 +582,7 @@ class OnlineReplay:
             ),
             "task_ids": torch.tensor(task_ids, dtype=torch.long),
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
+            "replay_source_ids": torch.tensor(replay_source_ids, dtype=torch.long),
             "source_success": torch.tensor(source_successes, dtype=torch.bool),
             "episode_lengths": torch.tensor(episode_lengths, dtype=torch.long),
             "finish_steps": torch.tensor(finish_steps, dtype=torch.long),
@@ -478,6 +614,8 @@ def pack_replay_task_stats_for_ddp(
     task_ids: tuple[int, ...],
     min_transitions: int,
     min_episodes_per_task: int,
+    min_sampleable_windows: int = 0,
+    require_classifier_evidence: bool = False,
     device: torch.device | None = None,
 ) -> torch.Tensor:
     """Pack local replay stats into a tensor that can be all-reduced by SUM."""
@@ -491,6 +629,8 @@ def pack_replay_task_stats_for_ddp(
             min_transitions=int(min_transitions),
             task_ids=task_ids,
             min_episodes_per_task=int(min_episodes_per_task),
+            min_sampleable_windows=int(min_sampleable_windows),
+            require_classifier_evidence=bool(require_classifier_evidence),
         )
     )
     rows.append([float(replay.num_transitions), local_ready, 0.0, 0.0, 0.0])
@@ -504,6 +644,7 @@ def unpack_replay_task_stats_from_ddp(
     world_size: int,
     min_transitions: int = 0,
     min_episodes_per_task: int = 1,
+    min_sampleable_windows: int = 0,
 ) -> tuple[dict[str, dict[str, int]], bool, bool]:
     """Unpack SUM-reduced replay stats and compute global per-task readiness."""
     cpu = packed.detach().cpu()
@@ -520,8 +661,13 @@ def unpack_replay_task_stats_from_ddp(
         stats[str(int(task_id))]["episodes"] >= int(min_episodes_per_task)
         for task_id in task_ids
     )
+    total_sampleable_windows = sum(
+        stats[str(int(task_id))]["sampleable_windows"] for task_id in task_ids
+    )
     global_coverage_ready = (
-        total_transitions >= int(min_transitions) and global_task_ready
+        total_transitions >= int(min_transitions)
+        and total_sampleable_windows >= int(min_sampleable_windows)
+        and global_task_ready
     )
     return stats, bool(global_coverage_ready), bool(all_ranks_ready)
 
@@ -535,12 +681,16 @@ def get_replay_task_stats_global(
     device: torch.device,
     is_dist: bool,
     world_size: int,
+    min_sampleable_windows: int = 0,
+    require_classifier_evidence: bool = False,
 ) -> tuple[dict[str, dict[str, int]], bool, bool]:
     packed = pack_replay_task_stats_for_ddp(
         replay,
         task_ids=task_ids,
         min_transitions=min_transitions,
         min_episodes_per_task=min_episodes_per_task,
+        min_sampleable_windows=min_sampleable_windows,
+        require_classifier_evidence=require_classifier_evidence,
         device=device if is_dist else None,
     )
     if is_dist:
@@ -551,5 +701,5 @@ def get_replay_task_stats_global(
         world_size=world_size,
         min_transitions=min_transitions,
         min_episodes_per_task=min_episodes_per_task,
+        min_sampleable_windows=min_sampleable_windows,
     )
-

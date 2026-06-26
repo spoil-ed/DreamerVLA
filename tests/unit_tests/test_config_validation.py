@@ -263,7 +263,11 @@ def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
     assert cfg.world_model.num_hist == 3
     assert cfg.world_model.chunk_size == 8
     assert cfg.world_model.chunk_rollout_chunks == 4
-    assert cfg.online_rollout.sequence_length == 36
+    assert cfg.online_rollout.sequence_length == (
+        cfg.world_model.num_hist
+        + cfg.world_model.chunk_rollout_chunks * cfg.world_model.chunk_size
+        + 1
+    )
     assert cfg.world_model.depth == 6
     assert cfg.world_model.heads == 16
     assert cfg.world_model.dim_head == 256
@@ -303,6 +307,23 @@ def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() 
     assert cfg.world_model.latent_stage == "query_before"
     assert cfg.world_model.token_count == 512
     assert cfg.world_model.token_dim == 4096
+    assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
+
+
+def test_online_cotrain_action_hidden_route_declares_classifier_target() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=online_cotrain_oft_action_hidden",
+                "task=libero_goal",
+            ],
+        )
+
+    validate_cfg(cfg, world_size=1)
+    assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
 
 
 @pytest.mark.parametrize(

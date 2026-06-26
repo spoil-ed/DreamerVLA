@@ -28,6 +28,7 @@ from typing import Any
 import hydra
 import numpy as np
 import torch
+import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 
 # Force CPU software rendering for robosuite offscreen cameras BEFORE any import
@@ -38,10 +39,14 @@ from omegaconf import DictConfig, OmegaConf
 os.environ.setdefault("MUJOCO_GL", "osmesa")
 os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
-from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+from dreamervla.algorithms.dreamervla import (
+    namespaced_world_model_metrics,
+    world_model_pretrain_step,
+)
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.reward import build_classifier
+from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_dreamervla import (
     _unwrap,
@@ -129,6 +134,40 @@ def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -
             )
 
 
+def validate_task_conditioning_cfg(
+    cfg: DictConfig,
+    *,
+    world_model: Any,
+    classifier: Any,
+) -> None:
+    """Validate optional explicit task conditioning without binding concrete models."""
+    tc = OmegaConf.select(cfg, "task_conditioning", default={}) or {}
+    if OmegaConf.is_config(tc):
+        tc = OmegaConf.to_container(tc, resolve=True)
+    tc = dict(tc)
+    enabled = bool(tc.get("enabled", False))
+    if not enabled:
+        return
+    num_tasks = int(tc.get("num_tasks", 0) or 0)
+    embedding_dim = int(tc.get("embedding_dim", 0) or 0)
+    if num_tasks <= 0 or embedding_dim <= 0:
+        raise ValueError(
+            "task_conditioning.enabled requires positive num_tasks and embedding_dim"
+        )
+    missing: list[str] = []
+    for name, module in (
+        ("world_model", _unwrap(world_model)),
+        ("classifier", _unwrap(classifier)),
+    ):
+        if not bool(getattr(module, "supports_task_conditioning", False)):
+            missing.append(name)
+    if missing:
+        raise ValueError(
+            "task_conditioning.enabled=true but selected implementation(s) lack "
+            f"task-conditioning support: {', '.join(missing)}"
+        )
+
+
 def build_rollout_progress_metrics(
     *,
     counters: dict[str, int],
@@ -146,10 +185,16 @@ def build_rollout_progress_metrics(
     n_episodes = int(counters.get("n_episodes", 0))
     n_success = int(counters.get("n_success", 0))
     success_rate = (n_success / n_episodes) if n_episodes > 0 else 0.0
-    current_episodes = int(counters.get("current_episodes", 0))
-    current_success = int(counters.get("current_success", 0))
-    current_success_rate = (
-        current_success / current_episodes if current_episodes > 0 else 0.0
+    recent_successes = list(counters.get("recent_successes", []))
+    recent_window = max(
+        1,
+        int(counters.get("recent_success_window", len(recent_successes) or 1)),
+    )
+    recent_values = recent_successes[-recent_window:]
+    recent_success_rate = (
+        sum(int(x) for x in recent_values) / len(recent_values)
+        if recent_values
+        else 0.0
     )
 
     if active_episode_steps is None:
@@ -166,12 +211,8 @@ def build_rollout_progress_metrics(
     return {
         "rollout/success_rate": float(success_rate),
         "rollout/success_rate_valid": float(n_episodes > 0),
-        "rollout/current_success_rate": float(current_success_rate),
-        "rollout/current_success_rate_valid": float(current_episodes > 0),
-        "rollout/current_episodes": float(current_episodes),
-        "rollout/current_successes": float(current_success),
-        "rollout/avg_success_rate": float(success_rate),
-        "rollout/avg_success_rate_valid": float(n_episodes > 0),
+        "rollout/recent_success_rate": float(recent_success_rate),
+        "rollout/recent_success_rate_valid": float(len(recent_values) > 0),
         "rollout/episodes": float(n_episodes),
         "rollout/successes": float(n_success),
         "rollout/env_steps": float(env_step),
@@ -380,31 +421,83 @@ class OnlineCotrainRunner(DreamerVLARunner):
         return default_env_factory(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
-    def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):
-        """WM-latent step + trained-actor sample from an ``action_hidden`` embedding.
-
-        Returns ``(action[7], new_latent)``. The KL/BC-anchored RL actor (an adapter split
-        out of the VLA, init from the OFT head so it starts ≈ base) DRIVES the env: this
-        both deploys the policy PPO is optimizing and collects on-policy data for the WM,
-        instead of freezing the base. Runs in the caller's no_grad scope."""
+    def _update_actor_latent(
+        self,
+        world_model,
+        obs_embedding,
+        latent,
+        prev_action,
+        is_first,
+    ):
         if latent is None or is_first:
-            latent = world_model({"mode": "encode_latent", "hidden": obs_embedding})
-        else:
-            latent = world_model(
-                {
-                    "mode": "observe_next",
-                    "latent": latent,
-                    "hidden": obs_embedding,
-                    "actions": prev_action,
-                    "is_first": False,
-                }
-            )
+            return world_model({"mode": "encode_latent", "hidden": obs_embedding})
+        return world_model(
+            {
+                "mode": "observe_next",
+                "latent": latent,
+                "hidden": obs_embedding,
+                "actions": prev_action,
+                "is_first": False,
+            }
+        )
+
+    @torch.no_grad()
+    def _sample_actor_action_chunk(self, world_model, policy, latent):
         feat = world_model({"mode": "actor_input", "latent": latent}).float()
         action_chunk, _lp, _x = policy(
             {"mode": "sample", "hidden": feat, "deterministic": False, "return_chunk": True}
         )
         chunk = action_chunk.reshape(-1, action_chunk.shape[-1]).detach().cpu().float().numpy()
-        return np.asarray(chunk[0][:7], dtype=np.float32), latent
+        return np.asarray(chunk[:, :7], dtype=np.float32)
+
+    @torch.no_grad()
+    def _actor_action_chunk_and_latent(
+        self,
+        world_model,
+        policy,
+        obs_embedding,
+        latent,
+        prev_action,
+        is_first,
+    ):
+        """WM-latent step + trained-actor action chunk from an embedding.
+
+        Returns ``(action_chunk[K,7], new_latent)``. The KL/BC-anchored RL actor (an adapter split
+        out of the VLA, init from the OFT head so it starts ≈ base) DRIVES the env: this
+        both deploys the policy PPO is optimizing and collects on-policy data for the WM,
+        instead of freezing the base. Runs in the caller's no_grad scope."""
+        latent = self._update_actor_latent(
+            world_model, obs_embedding, latent, prev_action, is_first
+        )
+        return self._sample_actor_action_chunk(world_model, policy, latent), latent
+
+    def _rollout_obs_embedding(self, processor, obs, target_token_id):
+        is_first = bool(obs.get("is_first", False))
+        task_desc = str(obs.get("task_description", ""))
+        backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
+        extractor_attr = "_oft_input_token_extractor" if backbone else "_oft_action_hidden_extractor"
+        extractor = getattr(self, extractor_attr, None)
+        if extractor is not None:
+            if is_first and hasattr(extractor, "reset"):
+                extractor.reset()
+            _chunk, flat_hidden = extractor.step(obs, task_desc)
+            return flat_hidden.reshape(1, -1).to(self.device).float()
+        if backbone:
+            return obs_to_input_token_embedding(
+                self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
+            )
+        else:
+            return obs_to_action_hidden(
+                self.encoder, processor, obs, self.device, target_token_id
+            )
+
+    @torch.no_grad()
+    def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):
+        """Backward-compatible first-action wrapper for existing callers/tests."""
+        chunk, latent = self._actor_action_chunk_and_latent(
+            world_model, policy, obs_embedding, latent, prev_action, is_first
+        )
+        return np.asarray(chunk[0], dtype=np.float32), latent
 
     def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):
         """One env-step action + the WM-input latent (``obs_embedding``) for this
@@ -421,23 +514,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         ``obs_embedding`` is the post-Action-Query action-hidden (``action_hidden``) or the
         pre-Action-Query backbone input-token latent (``backbone_latent``)."""
         is_first = bool(obs.get("is_first", False))
-        task_desc = str(obs.get("task_description", ""))
-        backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
-        extractor_attr = "_oft_input_token_extractor" if backbone else "_oft_action_hidden_extractor"
-        extractor = getattr(self, extractor_attr, None)
-        if extractor is not None:
-            if is_first and hasattr(extractor, "reset"):
-                extractor.reset()
-            _chunk, flat_hidden = extractor.step(obs, task_desc)
-            obs_embedding = flat_hidden.reshape(1, -1).to(self.device).float()
-        elif backbone:
-            obs_embedding = obs_to_input_token_embedding(
-                self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
-            )
-        else:
-            obs_embedding = obs_to_action_hidden(
-                self.encoder, processor, obs, self.device, target_token_id
-            )
+        obs_embedding = self._rollout_obs_embedding(processor, obs, target_token_id)
         action, latent = self._actor_action_and_latent(
             world_model, policy, obs_embedding, latent, prev_action, is_first
         )
@@ -525,6 +602,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         )
 
         self._build_trainable_classifier(cfg)
+        validate_task_conditioning_cfg(
+            cfg,
+            world_model=self.world_model,
+            classifier=self.classifier,
+        )
         self._assert_optimizers_disjoint()
 
     def _build_oft_input_token_extractor(self, cfg: DictConfig) -> Any | None:
@@ -640,8 +722,26 @@ class OnlineCotrainRunner(DreamerVLARunner):
         batch_size = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         min_replay = int(OmegaConf.select(oc, "min_replay", default=seq_len * batch_size))
         min_eps = int(OmegaConf.select(oc, "min_episodes_per_task", default=1))
+        min_sampleable_windows = int(
+            OmegaConf.select(oc, "min_sampleable_windows", default=0)
+        )
+        require_classifier_evidence = bool(
+            OmegaConf.select(oc, "require_classifier_evidence", default=False)
+        )
+        train_trigger = str(OmegaConf.select(oc, "train_trigger", default="episode_end"))
+        if train_trigger not in {"episode_end", "env_step"}:
+            raise ValueError(
+                "online_rollout.train_trigger must be 'episode_end' or 'env_step', "
+                f"got {train_trigger!r}"
+            )
         train_every = int(OmegaConf.select(oc, "train_every", default=8))
         updates_per_train = int(OmegaConf.select(oc, "updates_per_train", default=1))
+        updates_per_episode = int(
+            OmegaConf.select(oc, "updates_per_episode", default=updates_per_train)
+        )
+        recent_success_window = int(
+            OmegaConf.select(oc, "recent_success_window", default=100)
+        )
         total_env_steps = int(OmegaConf.select(oc, "total_env_steps", default=200000))
         max_train_updates = OmegaConf.select(oc, "max_train_updates", default=None)
         buffer_size = int(OmegaConf.select(oc, "buffer_size", default=20000))
@@ -672,12 +772,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
 
         env_task_ids = OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]
         env_task_ids = tuple(int(x) for x in env_task_ids)
+        replay_sampling_cfg = OmegaConf.select(oc, "replay_sampling", default={}) or {}
+        if OmegaConf.is_config(replay_sampling_cfg):
+            replay_sampling_cfg = OmegaConf.to_container(
+                replay_sampling_cfg,
+                resolve=True,
+            )
         replay = OnlineReplay(
             capacity=buffer_size,
             sequence_length=seq_len,
             task_ids=env_task_ids,
             capacity_mode=replay_capacity_mode,
             rank=self._rank,
+            replay_sampling=replay_sampling_cfg,
         )
         is_dist = self._world_size > 1
         # Seed the online replay from the warmup data so RL starts RIGHT AFTER the offline
@@ -715,7 +822,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
             print(
                 f"[online-cotrain] warmup_steps={warmup_steps} "
                 f"train_actor_after={train_actor_after} train_cls_inline={train_cls_inline} "
-                f"buffer_size={buffer_size} seq_len={seq_len} train_every={train_every} "
+                f"buffer_size={buffer_size} seq_len={seq_len} train_trigger={train_trigger} "
+                f"train_every={train_every} updates_per_episode={updates_per_episode} "
                 f"episode_horizon={episode_horizon} world_size={self._world_size}",
                 flush=True,
             )
@@ -725,9 +833,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
         knobs = {
             "min_replay": min_replay,
             "min_eps": min_eps,
+            "min_sampleable_windows": min_sampleable_windows,
+            "require_classifier_evidence": require_classifier_evidence,
             "is_dist": is_dist,
+            "train_trigger": train_trigger,
             "train_every": train_every,
             "updates_per_train": updates_per_train,
+            "updates_per_episode": updates_per_episode,
             "max_train_updates": max_train_updates,
             "warmup_steps": warmup_steps,
             "train_actor_after": train_actor_after,
@@ -749,6 +861,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "n_success": 0,
             "current_episodes": 0,
             "current_success": 0,
+            "recent_success_window": recent_success_window,
+            "recent_successes": [],
         }
         history: list[dict[str, float | str | int]] = []
 
@@ -770,6 +884,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         obs, _info = env.reset()
         latent: Any = None
         prev_action: torch.Tensor | None = None
+        pending_actions = ActionChunkQueue(action_dim=7)
         episode: list[dict[str, Any]] = []
         stop = False
 
@@ -777,9 +892,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
             if stop:
                 break
             self.console_progress(env_step, total_env_steps, "cotrain", unit="env")
-            policy_action, obs_embedding, latent = self._rollout_action(
-                self.world_model, self.policy, processor, obs, latent, prev_action, target_token_id
+            is_first = bool(obs.get("is_first", False))
+            obs_embedding = self._rollout_obs_embedding(processor, obs, target_token_id)
+            latent = self._update_actor_latent(
+                self.world_model,
+                obs_embedding,
+                latent,
+                prev_action,
+                is_first,
             )
+            if not pending_actions.has_pending:
+                chunk = self._sample_actor_action_chunk(self.world_model, self.policy, latent)
+                pending_actions.refill(chunk)
+            policy_action = pending_actions.pop()
             next_obs, reward, terminated, truncated, info = env.step(policy_action)
             done = bool(terminated or truncated)
             wm_action = np.asarray(info.get("wm_action", policy_action), dtype=np.float32).reshape(-1)[:7]
@@ -791,18 +916,24 @@ class OnlineCotrainRunner(DreamerVLARunner):
             prev_action = torch.from_numpy(wm_action).to(self.device, dtype=obs_embedding.dtype).unsqueeze(0)
 
             obs = next_obs
+            episode_added = False
             if done:
-                rec = replay.add_episode(episode)
+                rec = replay.add_episode(episode, source="online")
                 if rec is not None:
+                    episode_added = True
                     counters["n_episodes"] += 1
                     success = bool(rec["success"])
                     counters["n_success"] += int(success)
                     counters["current_episodes"] += 1
                     counters["current_success"] += int(success)
+                    recent = counters.setdefault("recent_successes", [])
+                    recent.append(int(success))
+                    del recent[:-recent_success_window]
                     self.console_record_success(success)
                 episode = []
                 obs, _info = env.reset()
                 latent, prev_action = None, None
+                pending_actions.clear()
 
             stop = self._run_training_bursts(
                 env_step,
@@ -813,6 +944,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 counters=counters,
                 history=history,
                 active_episode_steps=[len(episode)],
+                episode_added=episode_added,
             )
 
         if self.distributed.is_main_process:
@@ -834,18 +966,46 @@ class OnlineCotrainRunner(DreamerVLARunner):
         counters: dict[str, int],
         history: list,
         active_episode_steps: list[int] | tuple[int, ...] | None = None,
+        episode_added: bool = False,
     ) -> bool:
-        """Run the WM/classifier/RL training bursts for one env-step. Returns True
+        """Run the WM/classifier/RL training bursts for one rollout event. Returns True
         when ``max_train_updates`` is reached (caller should stop). Shared by the
         legacy single-env loop and the vectorized (num_envs>1) rollout — the burst
         math is identical; only the rollout that fills ``replay`` differs."""
         # ---- training bursts (lockstep across ranks via global-ready flag)
-        # Readiness (and its per-step DDP all_reduce) is only consulted on
-        # train_every boundaries, so skip the replay scan + collective on the other
-        # steps — identical training cadence, fewer per-step scans/collectives. All
-        # ranks gate on the shared env_step, so the all_reduce stays in lockstep.
-        if env_step % knobs["train_every"] != 0:
-            return False
+        train_trigger = str(knobs.get("train_trigger", "episode_end"))
+        if train_trigger == "env_step":
+            # Compatibility mode: old fixed step cadence. All ranks gate on the
+            # shared env_step, so the replay-readiness all_reduce stays lockstep.
+            if env_step % int(knobs["train_every"]) != 0:
+                return False
+            updates_per_trigger = int(knobs["updates_per_train"])
+        elif train_trigger == "episode_end":
+            # RLinf-style cadence: rollout first, train after a full trajectory
+            # enters replay. In DDP every rank still calls this hook each env-step;
+            # this one-scalar OR keeps ranks aligned when only some ranks finish an
+            # episode on a given driver tick.
+            trigger_tensor = torch.tensor(
+                [1.0 if episode_added else 0.0],
+                device=self.device,
+                dtype=torch.float32,
+            )
+            if (
+                bool(knobs.get("is_dist", False))
+                and dist.is_available()
+                and dist.is_initialized()
+            ):
+                dist.all_reduce(trigger_tensor, op=dist.ReduceOp.MAX)
+            if float(trigger_tensor.item()) <= 0.0:
+                return False
+            updates_per_trigger = int(
+                knobs.get("updates_per_episode", knobs["updates_per_train"])
+            )
+        else:
+            raise ValueError(
+                "online_rollout.train_trigger must be 'episode_end' or 'env_step', "
+                f"got {train_trigger!r}"
+            )
         _stats, _cov_ready, all_ready = get_replay_task_stats_global(
             replay,
             task_ids=env_task_ids,
@@ -854,8 +1014,10 @@ class OnlineCotrainRunner(DreamerVLARunner):
             device=self.device,
             is_dist=knobs["is_dist"],
             world_size=self._world_size,
+            min_sampleable_windows=knobs.get("min_sampleable_windows", 0),
+            require_classifier_evidence=knobs.get("require_classifier_evidence", False),
         )
-        num_updates = knobs["updates_per_train"] if all_ready else 0
+        num_updates = updates_per_trigger if all_ready else 0
         for _ in range(num_updates):
             if (
                 knobs["max_train_updates"] is not None
@@ -882,7 +1044,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
             self.policy.eval()
             self.critic.eval()
             _unwrap(self.classifier).eval()
-            wm_batch = self._build_wm_pretrain_batch(replay.sample(knobs["batch_size"]))
+            wm_batch = self._build_wm_pretrain_batch(
+                replay.sample(knobs["batch_size"], include_images=False)
+            )
             if wm_batch is not None:
                 wm_metrics = world_model_pretrain_step(
                     policy=self.policy,
@@ -892,7 +1056,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     device=self.device,
                     optim_cfg=knobs["optim_cfg"],
                 )
-                metrics["wm/loss"] = float(wm_metrics.get("loss", 0.0))
+                metrics.update(namespaced_world_model_metrics(wm_metrics))
 
             # Phase CLS (always) — WM/actor frozen; classifier trains
             if knobs["train_cls_inline"] and replay.classifier_window_count(
@@ -962,6 +1126,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     ac_metrics.get("advantage_mag", 0.0)
                 )
                 metrics["rl/policy_grad_norm"] = float(ac_metrics.get("actor_grad_norm", 0.0))
+                metrics["rl/skipped_zero_variance_groups"] = float(
+                    ac_metrics.get("LUMOS/skipped_zero_variance_groups", 0.0)
+                )
                 metrics["rl/ppo_step_applied"] = float(
                     ac_metrics.get("ppo_step_applied", 0.0)
                 )
@@ -1062,6 +1229,8 @@ class OnlineCotrainRunner(DreamerVLARunner):
             def _train_hook(
                 env_step: int,
                 active_episode_steps: list[int] | tuple[int, ...] | None = None,
+                *,
+                episode_added: bool = False,
             ) -> bool:
                 return self._run_training_bursts(
                     env_step,
@@ -1072,6 +1241,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     counters=counters,
                     history=history,
                     active_episode_steps=active_episode_steps,
+                    episode_added=episode_added,
                 )
 
             self._vectorized_cotrain_rollout(
@@ -1119,15 +1289,17 @@ class OnlineCotrainRunner(DreamerVLARunner):
         the send-all/recv-all barrier; finished slots refill immediately (infinite
         episodes until ``total_env_steps``). Transitions are rebuilt in the parent
         from each child ``full_record`` (env lives in the child) and pushed to
-        ``replay``. ``train_hook(env_step, active_episode_steps) -> stop``
-        interleaves the training burst per env-step exactly like the single-env
-        loop; it is None in unit tests."""
+        ``replay``. ``train_hook(env_step, active_episode_steps, episode_added=...)``
+        is invoked every env-step for DDP lockstep; the default training cadence
+        only runs a learner update when a complete episode has entered replay."""
         if counters is None:
             counters = {
                 "n_episodes": 0,
                 "n_success": 0,
                 "current_episodes": 0,
                 "current_success": 0,
+                "recent_success_window": 100,
+                "recent_successes": [],
             }
         task_cycle = [int(t) for t in task_ids] or [0]
         episodes: list[list[dict[str, Any]]] = [[] for _ in range(num_envs)]
@@ -1140,6 +1312,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         # previous action (mirrors the single-env loop's latent/prev_action threading).
         slot_latent: list[Any] = [None] * num_envs
         slot_prev_action: list[Any] = [None] * num_envs
+        slot_pending_actions = [ActionChunkQueue(action_dim=7) for _ in range(num_envs)]
         ep_counter = 0
 
         def _start_slot(k: int) -> dict[str, Any]:
@@ -1157,6 +1330,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             slot_step[k] = 0
             slot_latent[k] = None       # fresh WM belief at episode start (is_first)
             slot_prev_action[k] = None
+            slot_pending_actions[k].clear()
             return rec
 
         recs: list[Any] = [None] * num_envs
@@ -1177,14 +1351,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     extractor_obs_from_record(recs[k]), slot_desc[k]
                 )
                 obs_embs[k] = flat_hidden.reshape(1, -1).to(self.device).float()
-                act, slot_latent[k] = self._actor_action_and_latent(
+                slot_latent[k] = self._update_actor_latent(
                     self.world_model,
-                    self.policy,
                     obs_embs[k],
                     slot_latent[k],
                     slot_prev_action[k],
                     is_first=(slot_step[k] == 0),
                 )
+                if not slot_pending_actions[k].has_pending:
+                    chunk = self._sample_actor_action_chunk(
+                        self.world_model, self.policy, slot_latent[k]
+                    )
+                    slot_pending_actions[k].refill(chunk)
+                act = slot_pending_actions[k].pop()
                 actions.append(act)
             step_results = vec.step(actions, env_ids=ids)
             for k in ids:
@@ -1215,14 +1394,20 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 env_step += 1
                 recs[k] = rec_after
                 done = bool(terminated or truncated) or slot_step[k] >= episode_horizon
+                episode_added = False
                 if done:
-                    rec_added = replay.add_episode(episodes[k])
+                    rec_added = replay.add_episode(episodes[k], source="online")
                     if rec_added is not None:
+                        episode_added = True
                         counters["n_episodes"] += 1
                         success = bool(rec_added["success"])
                         counters["n_success"] += int(success)
                         counters["current_episodes"] += 1
                         counters["current_success"] += int(success)
+                        recent = counters.setdefault("recent_successes", [])
+                        recent.append(int(success))
+                        recent_window = int(counters.get("recent_success_window", 100))
+                        del recent[:-recent_window]
                         self.console_record_success(success)
                     recs[k] = _start_slot(k)
                 # The rollout runs under the method-level no_grad, but the training
@@ -1231,7 +1416,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 # scoped to ``_rollout_action`` only.
                 if train_hook is not None:
                     with torch.enable_grad():
-                        stop = train_hook(env_step, list(slot_step))
+                        stop = train_hook(
+                            env_step,
+                            list(slot_step),
+                            episode_added=episode_added,
+                        )
                     if stop:
                         return
             self.console_progress(

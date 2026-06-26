@@ -30,3 +30,10 @@ inside the commands mix the two — this is intentional (see EXPLAINED.md).
   OpenVLA-OFT / RLinf action contract and the shared rollout core.
 - [Ray online cotrain backend](../ray_online_cotrain_backend.md) — single-node Ray
   proof commands and gated real OFT/LIBERO smoke.
+- [Online cotrain abstract pipeline](../online_cotrain_pipeline_abstract.md) —
+  implementation-free explanation of the training data flow, signal flow, rollout
+  statistics, PPO/GRPO learning signal, and go/no-go logic.
+- [Online cotrain pipeline explained](../online_cotrain_pipeline_explained.md) —
+  implementation-oriented reference for the second-stage code confirmation.
+- [Cold-start cotrain abstract process review](../online_cotrain_pipeline_audit_window.md) —
+  editable confirmation window derived from the cold-start collect + warmup + cotrain tutorial.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 import numpy as np
+import torch
 
 from dreamervla.runners.online_replay import (
     OnlineReplay,
@@ -64,6 +65,17 @@ def test_online_replay_balances_available_tasks() -> None:
 
     assert batch["task_ids"].tolist().count(2) == 3
     assert batch["task_ids"].tolist().count(9) == 3
+
+
+def test_online_replay_can_sample_without_images() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    replay.add_episode(_episode(task_id=2, length=5, success=True))
+
+    batch = replay.sample(2, include_images=False)
+
+    assert "images" not in batch
+    assert batch["obs_embedding"].dtype == torch.float32
+    assert batch["obs_embedding"].shape == (2, 3, 2)
 
 
 def test_online_replay_training_readiness_requires_each_task() -> None:
@@ -168,3 +180,236 @@ def test_online_replay_can_report_global_ddp_task_stats() -> None:
     assert stats["0"]["successes"] == 1
     assert stats["1"]["episodes"] == 1
     assert stats["1"]["failures"] == 1
+
+
+def test_online_replay_stamps_episode_source_and_returns_source_ids() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    cold = replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+    online = replay.add_episode(_episode(task_id=0, length=6, success=False))
+
+    assert cold is not None and cold["source"] == "coldstart" and cold["source_id"] == 0
+    assert online is not None and online["source"] == "online" and online["source_id"] == 1
+
+    batch = replay.sample(8)
+
+    assert set(batch["replay_source_ids"].tolist()) <= {0, 1}
+
+
+def test_online_replay_three_pool_recent_samples_newest_online_only() -> None:
+    random.seed(2)
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 1,
+            "mix": {
+                "online_recent": 1.0,
+                "online_replay": 0.0,
+                "coldstart_anchor": 0.0,
+            },
+        },
+    )
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+    old_online = replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+    new_online = replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+
+    batch = replay.sample(12)
+
+    assert old_online is not None and new_online is not None
+    assert set(batch["episode_ids"].tolist()) == {int(new_online["episode_id"])}
+    assert set(batch["replay_source_ids"].tolist()) == {1}
+
+
+def test_online_replay_three_pool_can_sample_coldstart_anchor_only() -> None:
+    random.seed(3)
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 2,
+            "mix": {
+                "online_recent": 0.0,
+                "online_replay": 0.0,
+                "coldstart_anchor": 1.0,
+            },
+        },
+    )
+    cold = replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+
+    batch = replay.sample(8)
+
+    assert cold is not None
+    assert set(batch["episode_ids"].tolist()) == {int(cold["episode_id"])}
+    assert set(batch["replay_source_ids"].tolist()) == {0}
+
+
+def test_online_replay_three_pool_mixed_weights_can_return_anchor_and_recent() -> None:
+    random.seed(4)
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 1,
+            "mix": {
+                "online_recent": 0.5,
+                "online_replay": 0.0,
+                "coldstart_anchor": 0.5,
+            },
+        },
+    )
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+
+    batch = replay.sample(64)
+
+    assert {0, 1} <= set(batch["replay_source_ids"].tolist())
+
+
+def test_online_replay_three_pool_falls_back_when_recent_pool_empty() -> None:
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 0,
+            "mix": {
+                "online_recent": 1.0,
+                "online_replay": 0.0,
+                "coldstart_anchor": 0.0,
+            },
+        },
+    )
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+
+    batch = replay.sample(4)
+
+    assert set(batch["replay_source_ids"].tolist()) == {0}
+
+
+def test_online_replay_three_pool_sampling_falls_back_to_available_pool() -> None:
+    random.seed(7)
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 8,
+            "mix": {
+                "online_recent": 0.0,
+                "online_replay": 0.0,
+                "coldstart_anchor": 1.0,
+            },
+        },
+    )
+    online = replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+
+    batch = replay.sample(3)
+
+    assert online is not None
+    assert set(batch["episode_ids"].tolist()) == {int(online["episode_id"])}
+    assert set(batch["replay_source_ids"].tolist()) == {1}
+
+
+def test_online_replay_latest_online_required_samples_new_episode_first() -> None:
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_balanced=False,
+        replay_sampling={
+            "enabled": True,
+            "recent_episode_count": 1,
+            "latest_online_required": True,
+            "mix": {
+                "online_recent": 0.0,
+                "online_replay": 0.0,
+                "coldstart_anchor": 1.0,
+            },
+        },
+    )
+    replay.add_episode(_episode(task_id=0, length=6, success=True), source="coldstart")
+    online = replay.add_episode(_episode(task_id=0, length=6, success=True), source="online")
+
+    batch = replay.sample(1)
+
+    assert online is not None
+    assert int(batch["episode_ids"][0]) == int(online["episode_id"])
+    assert int(batch["replay_source_ids"][0]) == 1
+
+
+def test_online_replay_classifier_evidence_readiness_requires_pos_and_neg() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3)
+    replay.add_episode(_episode(task_id=0, length=6, success=True))
+
+    assert replay.ready_for_training(
+        min_transitions=3,
+        task_ids=(0,),
+        min_episodes_per_task=1,
+        require_classifier_evidence=True,
+    ) is False
+
+    replay.add_episode(_episode(task_id=0, length=6, success=False))
+
+    assert replay.ready_for_training(
+        min_transitions=3,
+        task_ids=(0,),
+        min_episodes_per_task=1,
+        require_classifier_evidence=True,
+    ) is True
+
+
+def test_online_replay_readiness_requires_sampleable_window_budget() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3)
+    replay.add_episode(_episode(task_id=0, length=6, success=True))
+
+    assert replay.sampleable_window_count() == 4
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(0,),
+            min_episodes_per_task=1,
+            min_sampleable_windows=5,
+        )
+        is False
+    )
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(0,),
+            min_episodes_per_task=1,
+            min_sampleable_windows=4,
+        )
+        is True
+    )
+
+
+def test_ddp_replay_readiness_packs_sampleable_window_budget() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3)
+    replay.add_episode(_episode(task_id=0, length=6, success=True))
+
+    packed = pack_replay_task_stats_for_ddp(
+        replay,
+        task_ids=(0,),
+        min_transitions=3,
+        min_episodes_per_task=1,
+        min_sampleable_windows=5,
+    )
+    _stats, coverage_ready, all_ranks_ready = unpack_replay_task_stats_from_ddp(
+        packed,
+        task_ids=(0,),
+        world_size=1,
+        min_transitions=3,
+        min_episodes_per_task=1,
+        min_sampleable_windows=5,
+    )
+
+    assert coverage_ready is False
+    assert all_ranks_ready is False

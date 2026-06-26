@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.oft_collect_common import process_action
 from dreamervla.scheduler.worker import Worker
 
@@ -41,7 +42,10 @@ class RolloutInferenceWorker(Worker):
         self._action_steps = max(1, int(self._cfg.get("action_steps", 1)))
         self._bundle: Any | None = None
         self._extractors: list[Any] = []
-        self._action_queues: list[list[Any]] = [[] for _ in range(self._num_envs)]
+        self._action_queues = [
+            ActionChunkQueue(action_dim=self._action_dim, action_steps=self._action_steps)
+            for _ in range(self._num_envs)
+        ]
 
     def init(self) -> None:
         decoder_cfg = dict(self._cfg["decoder"])
@@ -75,14 +79,10 @@ class RolloutInferenceWorker(Worker):
             # Gripper post-process here (single point for the ray path); the EnvWorker
             # must NOT re-apply it. Without it grasping/success fails.
             env_index = int(env_id)
-            if not self._action_queues[env_index]:
-                chunk = list(action_chunk)
-                if len(chunk) < self._action_steps:
-                    raise ValueError(
-                        f"policy returned {len(chunk)} actions, need action_steps={self._action_steps}"
-                    )
-                self._action_queues[env_index] = chunk[: self._action_steps]
-            action = process_action(self._action_queues[env_index].pop(0))[: self._action_dim]
+            queue = self._action_queues[env_index]
+            if not queue.has_pending:
+                queue.refill(np.asarray(action_chunk, dtype=np.float32))
+            action = process_action(queue.pop())[: self._action_dim]
             obs_embedding = (
                 flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
             )
@@ -98,7 +98,7 @@ class RolloutInferenceWorker(Worker):
                 extractor.reset()
             else:
                 self._extractors[int(env_id)] = bundle.make_extractor()
-            self._action_queues[int(env_id)] = []
+            self._action_queues[int(env_id)].clear()
 
     def pull_weights(self, store_name: str, key: str, local_version: int) -> int | None:
         """No-op weight sync for the async overlap loop.

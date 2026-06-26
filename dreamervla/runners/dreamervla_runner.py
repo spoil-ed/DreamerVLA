@@ -221,14 +221,12 @@ class DreamerVLARunner(BaseRunner):
     def _build_wm_pretrain_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
         """Assemble the WM pretrain batch for retained DreamerV3-style routes."""
         if (
-            isinstance(batch.get("images"), torch.Tensor)
-            and isinstance(batch.get("obs_embedding"), torch.Tensor)
+            isinstance(batch.get("obs_embedding"), torch.Tensor)
             and isinstance(batch.get("actions"), torch.Tensor)
         ):
             return {
                 key: value
                 for key in (
-                    "images",
                     "obs_embedding",
                     "actions",
                     "current_actions",
@@ -240,6 +238,7 @@ class DreamerVLARunner(BaseRunner):
                     "success_to_go",
                     "return_to_go",
                     "return_targets",
+                    "task_ids",
                 )
                 if (value := batch.get(key)) is not None
             }
@@ -260,6 +259,7 @@ class DreamerVLARunner(BaseRunner):
                     "success_to_go",
                     "return_to_go",
                     "return_targets",
+                    "task_ids",
                 )
                 if (value := batch.get(key)) is not None
             }

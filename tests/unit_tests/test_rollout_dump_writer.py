@@ -269,3 +269,63 @@ def test_writer_data_attrs(tmp_path: Path) -> None:
         assert attrs["bddl_file_name"] == "x.bddl"
         assert attrs["env_name"] == "Libero_Goal"
         assert attrs["tag"] == "libero-v1"
+
+
+def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
+    """episode_metadata scalar/string values are stored as per-demo attrs."""
+    import h5py
+
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    writer = RolloutDumpWriter(
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+        shard_name="shard_000.hdf5",
+    )
+    writer.write_demo(
+        index=0,
+        steps=_make_episode(success=True),
+        preprocess_config=PREPROCESS_CONFIG,
+        task_id=2,
+        episode_id=7,
+        episode_success=True,
+        episode_horizon=300,
+        episode_metadata={
+            "suite": "libero_goal",
+            "task_name": "open drawer",
+            "global_episode_index": 123,
+            "policy_name": "openvla_oft_default",
+            "policy_ckpt": "/ckpts/policy",
+            "policy_version": 5,
+            "success_step": 9,
+            "timeout": False,
+            "chunk_size": 8,
+            "action_scale": "raw",
+            "seed": 17,
+            "render_backend": "egl",
+            "hidden_key": "obs_embedding",
+            "hidden_dim": HIDDEN_DIM,
+            "token_count": 56,
+            "token_dim": 4096,
+            "ignored_none": None,
+            "ignored_dict": {"not": "an attr scalar"},
+        },
+    )
+    writer.close()
+
+    with h5py.File(reward_dir / "shard_000.hdf5", "r") as f:
+        attrs = f["data"]["demo_0"].attrs
+        assert attrs["task_id"] == 2
+        assert attrs["episode_id"] == 7
+        assert attrs["suite"] == "libero_goal"
+        assert attrs["task_name"] == "open drawer"
+        assert attrs["chunk_size"] == 8
+        assert attrs["action_scale"] == "raw"
+        assert attrs["timeout"] == np.False_
+        assert attrs["hidden_dim"] == HIDDEN_DIM
+        assert attrs["token_count"] == 56
+        assert attrs["token_dim"] == 4096
+        assert "ignored_none" not in attrs
+        assert "ignored_dict" not in attrs

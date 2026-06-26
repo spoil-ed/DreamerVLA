@@ -181,6 +181,8 @@ def test_launcher_profiles_do_not_override_model_structure() -> None:
         "training.debug",
         "training.wm_warmup_steps",
         "training.classifier_warmup_steps",
+        "training.warmup_replay_epochs",
+        "training.warmup_replay_max_steps",
         "training.classifier_batch_size",
         "dataloader.batch_size",
         "online_rollout.buffer_size",
@@ -189,6 +191,17 @@ def test_launcher_profiles_do_not_override_model_structure() -> None:
 
     for profile in cfg["profiles"].values():
         assert {_override_key(item) for item in profile["cotrain"]} <= runtime_keys
+
+
+def test_release_profiles_keep_full_coldstart_pool_for_warmup() -> None:
+    cfg = _launcher_cfg()
+
+    for profile_name in ("release", "multi_gpu"):
+        buffer_size = _override_int(
+            cfg["profiles"][profile_name]["cotrain"],
+            "online_rollout.buffer_size",
+        )
+        assert buffer_size >= 160_000
 
 
 @pytest.mark.parametrize(
@@ -723,8 +736,21 @@ def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
 
     assert "training.debug=false" in cotrain
     assert "online_rollout.total_env_steps=200000" in cotrain
-    assert "training.wm_warmup_steps=2000" in cotrain
-    assert "training.classifier_warmup_steps=2000" in cotrain
+    assert "training.wm_warmup_steps=1200" in cotrain
+    assert "training.classifier_warmup_steps=1200" in cotrain
+    assert "training.warmup_replay_epochs=1" in cotrain
+    assert not any(
+        item.startswith("training.warmup_replay_max_steps=") for item in cotrain
+    )
+
+
+def test_smoke_profile_uses_fixed_step_warmup_not_replay_epoch() -> None:
+    cfg = _launcher_cfg()
+    cotrain = cfg["profiles"]["smoke"]["cotrain"]
+
+    assert "training.wm_warmup_steps=1" in cotrain
+    assert "training.classifier_warmup_steps=1" in cotrain
+    assert "training.warmup_replay_epochs=0" in cotrain
 
 
 def test_launcher_debug_control_appends_training_debug_to_cotrain(tmp_path) -> None:
@@ -758,8 +784,84 @@ def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
     assert "experiment=online_cotrain_ray_oft_action_hidden" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd
     assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
-    assert "inference.init_ckpt.path=null" in plan.cotrain_online_cmd
+    assert "inference.init_ckpt.path=null" not in plan.cotrain_online_cmd
     assert plan.ray_init_ckpt is not None
+
+
+def test_sync_cotrain_phase_warmup_only_has_no_online_steps(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_phase"] = "warmup"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+    )
+
+    assert plan.cotrain_phase == "warmup"
+    assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
+    assert "training.resume=true" not in plan.cotrain_warmup_cmd
+
+
+def test_sync_cotrain_phase_online_only_resumes_warmup_ckpts(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_phase"] = "online"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+    )
+
+    assert plan.cotrain_phase == "online"
+    assert "training.resume=true" in plan.cotrain_online_cmd
+    assert "online_rollout.total_env_steps=0" not in plan.cotrain_online_cmd
+
+
+def test_validate_warmup_outputs_requires_split_ckpts(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import validate_warmup_outputs
+
+    errors = validate_warmup_outputs(cotrain_out=tmp_path)
+    assert "wm_warmup.ckpt" in "\n".join(errors)
+    assert "classifier_warmup.ckpt" in "\n".join(errors)
+
+    ckpt_dir = tmp_path / "ckpt"
+    ckpt_dir.mkdir()
+    (ckpt_dir / "wm_warmup.ckpt").touch()
+    (ckpt_dir / "classifier_warmup.ckpt").touch()
+
+    assert validate_warmup_outputs(cotrain_out=tmp_path) == []
+
+
+def test_async_cotrain_online_command_uses_valid_ray_hydra_keys(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        cotrain_overrides=["rollout.steps=4", "env.num_workers=1"],
+    )
+    overrides = [
+        item
+        for item in plan.cotrain_online_cmd
+        if "=" in item and not item.startswith("-")
+    ]
+
+    root = Path(__file__).resolve().parents[2]
+    with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
+        cfg_obj = compose(config_name="train", overrides=overrides)
+    OmegaConf.resolve(cfg_obj)
+
+    assert cfg_obj.init.warmup_ckpt_path == str(plan.ray_init_ckpt)
+    assert cfg_obj.learner.init_ckpt.path == str(plan.ray_init_ckpt)
 
 
 def test_sync_cotrain_engine_has_no_async_subcommands(tmp_path) -> None:
@@ -767,6 +869,7 @@ def test_sync_cotrain_engine_has_no_async_subcommands(tmp_path) -> None:
 
     plan = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
     assert plan.cotrain_engine == "sync"
+    assert plan.cotrain_phase == "all"
     assert plan.cotrain_warmup_cmd == []
     assert plan.cotrain_online_cmd == []
 

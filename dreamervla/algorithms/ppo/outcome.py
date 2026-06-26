@@ -163,6 +163,59 @@ def _resolve_reward_tensor(
     )
 
 
+def _adaptive_group_advantage_and_mask(
+    returns: torch.Tensor,
+    *,
+    group_size_min: int,
+    group_size_max: int,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute GRPO advantages over the first rollout prefix with variance.
+
+    The imagination path still generates ``group_size_max`` rollouts per start so the
+    existing fixed-width slicing and PPO re-evaluation path stay simple. This helper
+    selects the prefix used for PPO: begin at ``group_size_min`` and extend until
+    the group's return variance is non-zero, or mark the group as zero-signal at
+    ``group_size_max``. Rollouts after the selected prefix are masked out.
+    """
+    if int(returns.numel()) % int(group_size_max) != 0:
+        raise ValueError(
+            "adaptive GRPO grouping requires returns to be divisible by "
+            f"group_size_max={group_size_max}, got {int(returns.numel())}"
+        )
+    groups = returns.reshape(-1, int(group_size_max))
+    advantages = torch.zeros_like(groups)
+    active_mask = torch.zeros_like(groups)
+    has_variance = torch.zeros(groups.shape[0], dtype=torch.bool, device=returns.device)
+    effective_counts = torch.full(
+        (groups.shape[0],),
+        int(group_size_max),
+        dtype=torch.long,
+        device=returns.device,
+    )
+    for idx in range(groups.shape[0]):
+        chosen = int(group_size_max)
+        std = torch.zeros((), dtype=groups.dtype, device=groups.device)
+        for count in range(int(group_size_min), int(group_size_max) + 1):
+            vals = groups[idx, :count]
+            std = vals.std(unbiased=False)
+            if bool(std > eps):
+                chosen = count
+                has_variance[idx] = True
+                break
+        active_mask[idx, :chosen] = 1.0
+        effective_counts[idx] = chosen
+        if bool(has_variance[idx]):
+            vals = groups[idx, :chosen]
+            advantages[idx, :chosen] = (vals - vals.mean()) / (std + eps)
+    return (
+        advantages.reshape(-1),
+        active_mask.reshape(-1),
+        has_variance,
+        effective_counts,
+    )
+
+
 def _predict_next_chunk_mb(
     world_model: nn.Module, current: Any, action_chunk: torch.Tensor, micro_batch: int
 ) -> dict[str, torch.Tensor]:
@@ -427,7 +480,15 @@ def dino_lumos_step(
         lumos_cfg.get("filter_zero_variance_groups", True)
     )
 
-    group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
+    legacy_group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
+    group_size_min = int(lumos_cfg.get("ppo_rollouts_per_start_min", legacy_group_size))
+    group_size_max = int(lumos_cfg.get("ppo_rollouts_per_start_max", legacy_group_size))
+    if group_size_min < 1 or group_size_max < group_size_min:
+        raise ValueError(
+            "algorithm.lumos ppo rollout bounds must satisfy "
+            f"1 <= min <= max, got min={group_size_min} max={group_size_max}"
+        )
+    group_size = int(group_size_max)
     update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
@@ -653,16 +714,37 @@ def dino_lumos_step(
     # return (no within-group variance) — those produce zero advantage anyway
     # and waste compute on policy forwards. We mark them via a per-rollout
     # mask and multiply into chunk_mask so the entire group is skipped.
-    advantages = _group_advantage(returns_adjusted, group_size=group_size, eps=adv_eps)
+    if B_eff >= group_size and B_eff % group_size == 0:
+        (
+            advantages,
+            adaptive_rollout_mask,
+            adaptive_group_has_variance,
+            adaptive_effective_counts,
+        ) = _adaptive_group_advantage_and_mask(
+            returns_adjusted,
+            group_size_min=group_size_min,
+            group_size_max=group_size,
+            eps=adv_eps,
+        )
+    else:
+        advantages = _group_advantage(
+            returns_adjusted, group_size=group_size, eps=adv_eps
+        )
+        adaptive_rollout_mask = torch.ones_like(returns_adjusted)
+        adaptive_group_has_variance = torch.ones(
+            (0,), dtype=torch.bool, device=returns_adjusted.device
+        )
+        adaptive_effective_counts = torch.zeros(
+            (0,), dtype=torch.long, device=returns_adjusted.device
+        )
     # Preserve the finish-only mask BEFORE the variance filter — BC anchor is
     # a regularizer that should still fire on zero-variance groups (it does
     # not need a learning signal from the return), so it uses the finish mask
     # alone and is decoupled from ``filter_zero_variance_groups``.
     bc_chunk_mask = chunk_mask.clone()
+    chunk_mask = chunk_mask * adaptive_rollout_mask.unsqueeze(0)
     if filter_zero_variance_groups and B_eff >= group_size:
-        groups = returns_adjusted.reshape(-1, group_size)
-        group_has_variance = (groups.std(dim=-1, unbiased=False) > adv_eps).float()
-        per_rollout_group_mask = group_has_variance.repeat_interleave(
+        per_rollout_group_mask = adaptive_group_has_variance.float().repeat_interleave(
             group_size
         )  # [B_eff]
         chunk_mask = chunk_mask * per_rollout_group_mask.unsqueeze(0)
@@ -907,13 +989,15 @@ def dino_lumos_step(
         group_success_counts: list[int] = groups_complete.sum(dim=-1).cpu().tolist()
         group_rollout_successes: list[list[bool]] = groups_complete.cpu().tolist()
         group_finish_steps: list[list[int]] = groups_finish_step.cpu().tolist()
-        group_has_variance_bool = (
-            (groups_returns.std(dim=-1, unbiased=False) > adv_eps).cpu().tolist()
-        )
+        group_has_variance_bool = adaptive_group_has_variance.detach().cpu().tolist()
         num_groups = int(groups_returns.shape[0])
         num_all_success = int(groups_complete.all(dim=-1).sum().item())
         num_all_fail = int((~groups_complete).all(dim=-1).sum().item())
         num_mixed = num_groups - num_all_success - num_all_fail
+        num_zero_variance = int(num_groups - int(adaptive_group_has_variance.sum().item()))
+        effective_group_size_mean = float(
+            adaptive_effective_counts.float().mean().item()
+        )
     else:
         group_success_rates = []
         group_success_counts = []
@@ -924,6 +1008,8 @@ def dino_lumos_step(
         num_all_success = 0
         num_all_fail = 0
         num_mixed = 0
+        num_zero_variance = 0
+        effective_group_size_mean = 0.0
 
     return {
         # Flat keys — for compatibility with workspace/script metric extraction.
@@ -987,7 +1073,11 @@ def dino_lumos_step(
         "LUMOS/group_var_keep_frac": float(per_rollout_group_mask.mean().item()),
         # ── per-group breakdown for ppo_groups.jsonl log ─────────────────
         "LUMOS/group_size": float(group_size),
+        "LUMOS/group_size_min": float(group_size_min),
+        "LUMOS/group_size_max": float(group_size_max),
+        "LUMOS/effective_group_size_mean": effective_group_size_mean,
         "LUMOS/num_groups": float(num_groups),
+        "LUMOS/skipped_zero_variance_groups": float(num_zero_variance),
         "LUMOS/num_all_success_groups": float(num_all_success),
         "LUMOS/num_all_fail_groups": float(num_all_fail),
         "LUMOS/num_mixed_groups": float(num_mixed),

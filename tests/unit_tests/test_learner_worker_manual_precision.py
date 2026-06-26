@@ -117,7 +117,11 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
         assert kwargs["world_model"] is learner.world_model
         assert kwargs["optimizer"] is learner.world_model_optimizer
         assert "obs_embedding" in kwargs["batch"]
-        return {"loss": 1.25}
+        return {
+            "loss": 1.25,
+            "hidden_rec_loss": 0.25,
+            "hidden_cosine_loss": 0.125,
+        }
 
     def fake_classifier_step(**kwargs):
         calls.append("classifier")
@@ -151,24 +155,84 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
     learner = LearnerWorker(_cotrain_model_cfg(), {}, _cotrain_train_cfg(), replay)
     learner.init()
 
-    assert learner.update("wm", 1) == {"wm/loss": 1.25}
+    assert learner.update("wm", 1) == {
+        "wm/loss": 1.25,
+        "wm/hidden_rec_loss": 0.25,
+        "wm/hidden_cosine_loss": 0.125,
+    }
     assert learner.update("classifier", 1) == {
         "cls/loss": 0.5,
         "cls/acc": 1.0,
         "cls/f1": 1.0,
     }
-    assert learner.update("rl", 1) == {
-        "rl/actor_loss": 0.75,
-        "rl/returns_mean": 0.25,
-        "rl/policy_grad_norm": 0.125,
-    }
+    rl_metrics = learner.update("rl", 1)
+    assert rl_metrics["rl/actor_loss"] == 0.75
+    assert rl_metrics["rl/returns_mean"] == 0.25
+    assert rl_metrics["rl/policy_grad_norm"] == 0.125
+    assert rl_metrics["rl/skipped_no_signal"] == 0.0
 
     metrics = learner.update("cotrain", 1)
 
     assert metrics["wm/loss"] == 1.25
+    assert metrics["wm/hidden_rec_loss"] == 0.25
+    assert metrics["wm/hidden_cosine_loss"] == 0.125
     assert metrics["cls/loss"] == 0.5
     assert metrics["rl/actor_loss"] == 0.75
     assert calls == ["wm", "classifier", "rl", "wm", "classifier", "rl"]
+
+
+def test_dreamervla_cotrain_actor_signal_gate_delays_rl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    calls: list[str] = []
+    f1_values = iter([0.25, 0.75])
+
+    def fake_wm_step(**kwargs):
+        del kwargs
+        calls.append("wm")
+        return {"loss": 1.0}
+
+    def fake_classifier_step(**kwargs):
+        del kwargs
+        calls.append("classifier")
+        return {"loss": 0.5, "acc": 0.5, "f1": next(f1_values)}
+
+    def fake_rl_step(**kwargs):
+        del kwargs
+        calls.append("rl")
+        return {
+            "actor_loss": 0.75,
+            "returns_mean": 0.25,
+            "returns_std": 0.5,
+            "actor_grad_norm": 0.125,
+            "ppo_step_applied": 1.0,
+        }
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+    monkeypatch.setattr(mod, "online_classifier_update_step", fake_classifier_step)
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["actor_signal_gate"] = {
+        "enabled": True,
+        "min_classifier_f1": 0.6,
+        "min_classifier_updates": 1,
+    }
+    learner = LearnerWorker(_cotrain_model_cfg(), {}, train_cfg, _DirectReplay())
+    learner.init()
+
+    first = learner.update("cotrain", 1)
+    second = learner.update("cotrain", 1)
+
+    assert calls == ["wm", "classifier", "wm", "classifier", "rl"]
+    assert first["rl/skipped_no_signal"] == 1.0
+    assert first["rl/actor_signal_ready"] == 0.0
+    assert first["rl/actor_loss"] == 0.0
+    assert second["rl/skipped_no_signal"] == 0.0
+    assert second["rl/actor_signal_ready"] == 1.0
+    assert second["rl/actor_loss"] == 0.75
 
 
 def test_dreamervla_cotrain_mode_requires_components() -> None:

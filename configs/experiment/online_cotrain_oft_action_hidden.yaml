@@ -80,8 +80,19 @@ online_rollout:
   sequence_length: 24
   min_replay: 2000
   min_episodes_per_task: 1
+  train_trigger: episode_end
   train_every: 8
   updates_per_train: 1
+  updates_per_episode: 1
+  recent_success_window: 100
+  replay_sampling:
+    enabled: true
+    recent_episode_count: 8
+    latest_online_required: true
+    mix:
+      online_recent: 0.5
+      online_replay: 0.3
+      coldstart_anchor: 0.2
   total_env_steps: 200000
   rollout_policy_source: dreamer_actor
   classifier_early_neg_stride: 8
@@ -164,6 +175,7 @@ critic:
   bin_max: 20.0
 
 classifier:
+  _target_: dreamervla.models.reward.LatentSuccessClassifier
   latent_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.legacy_action_hidden.chunk_size}
@@ -185,6 +197,8 @@ algorithm:
     episode_max_steps: 300
     classifier_min_steps: 4
     filter_zero_variance_groups: true
+    ppo_rollouts_per_start_min: 4
+    ppo_rollouts_per_start_max: 16
   actor_input_mode: pooled
   rssm_action_scale: env
   rssm_action_clip: true

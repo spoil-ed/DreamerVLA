@@ -21,6 +21,9 @@ render_backend: egl
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
 cotrain_engine: sync
 cotrain_async_experiment: online_cotrain_ray_oft_action_hidden
+# Cotrain phase: all (default), warmup (write warmup ckpts only), or online
+# (resume from warmup ckpts under run_root/cotrain and run the online phase only).
+cotrain_phase: all
 master_port: 29500
 distributed: true
 dry_run: false
@@ -55,6 +58,7 @@ collect:
 warmup:
   wm_steps: null
   classifier_steps: null
+  replay_epochs: null
   batch_size: null
   classifier_batch_size: null
   buffer_size: null
@@ -76,6 +80,7 @@ control_overrides:
   warmup:
     wm_steps: training.wm_warmup_steps
     classifier_steps: training.classifier_warmup_steps
+    replay_epochs: training.warmup_replay_epochs
     batch_size: dataloader.batch_size
     classifier_batch_size: training.classifier_batch_size
     buffer_size: online_rollout.buffer_size
@@ -158,6 +163,7 @@ profiles:
       - training.debug=false
       - training.wm_warmup_steps=1
       - training.classifier_warmup_steps=1
+      - training.warmup_replay_epochs=0
       - training.classifier_batch_size=1
       - dataloader.batch_size=1
       - online_rollout.buffer_size=100
@@ -174,11 +180,12 @@ profiles:
         - collect.memory_fraction=0.9
     cotrain:
       - training.debug=false
-      - training.wm_warmup_steps=2000
-      - training.classifier_warmup_steps=2000
+      - training.wm_warmup_steps=1200
+      - training.classifier_warmup_steps=1200
+      - training.warmup_replay_epochs=1
       - training.classifier_batch_size=512
       - dataloader.batch_size=96
-      - online_rollout.buffer_size=10000
+      - online_rollout.buffer_size=160000
       - online_rollout.total_env_steps=200000
   # Multi-GPU cotrain runtime profile — GPU-count-AGNOSTIC. The GPU count is the
   # separate variable `ngpu` (e.g. `ngpu=4 profile=multi_gpu`); nothing here is tied to
@@ -200,9 +207,10 @@ profiles:
         - collect.memory_fraction=0.9
     cotrain:
       - training.debug=false
-      - training.wm_warmup_steps=2000
-      - training.classifier_warmup_steps=2000
+      - training.wm_warmup_steps=1200
+      - training.classifier_warmup_steps=1200
+      - training.warmup_replay_epochs=1
       - training.classifier_batch_size=64
       - dataloader.batch_size=12
-      - online_rollout.buffer_size=10000
+      - online_rollout.buffer_size=160000
       - online_rollout.total_env_steps=200000

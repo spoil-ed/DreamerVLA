@@ -1068,6 +1068,23 @@ class BaseRunner(ABC):
             st["tracker"] = SuccessTracker(window=st["window"])
         st["tracker"].update(bool(success))
 
+    def console_rollout_episode(
+        self,
+        *,
+        episode: int,
+        success: bool,
+        avg_success_rate: float,
+        window_success_rate: float,
+    ) -> None:
+        if not self.is_main_process:
+            return
+        print(
+            f"[rollout] episode={int(episode)} success={int(bool(success))} "
+            f"avg_success_rate={float(avg_success_rate):.3f} "
+            f"window_success_rate={float(window_success_rate):.3f}",
+            flush=True,
+        )
+
     def console_metrics(self, header: str, metrics: dict, *, force: bool = False) -> None:
         if not self.is_main_process:
             return

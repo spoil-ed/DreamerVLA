@@ -15,6 +15,9 @@ _target_: dreamervla.runners.OnlineCotrainRayRunner
 latent_type: action_hidden
 seed: 7
 
+ray_rollout:
+  mode: oft_fixed_base
+
 hydra:
   run:
     dir: ${training.out_dir}
@@ -136,6 +139,9 @@ env:
 rollout:
   steps: 200
   min_replay_episodes: ${ray_data.min_replay_episodes}
+  min_replay_transitions: ${ray_data.sequence_length}
+  min_sampleable_windows: 0
+  require_classifier_evidence: true
 
 replay:
   cfg:
@@ -143,6 +149,14 @@ replay:
     sequence_length: ${ray_data.sequence_length}
     task_ids: ${ray_data.task_ids}
     rank: 0
+    replay_sampling:
+      enabled: true
+      recent_episode_count: 8
+      latest_online_required: true
+      mix:
+        online_recent: 0.5
+        online_replay: 0.3
+        coldstart_anchor: 0.2
 
 policy:
   cfg: ${ray_components.policy}
@@ -188,14 +202,17 @@ learner:
     device: auto
     precision: bf16
     algorithm_cfg:
-      ppo_rollouts_per_start: 1
+      ppo_rollouts_per_start: 4
       ppo_update_epochs: 1
       entropy_coef: 0.0
       lumos:
         chunk_size: ${task.openvla_oft.chunk_size}
         episode_max_steps: 300
         classifier_min_steps: 4
+        ppo_rollouts_per_start_min: 4
+        ppo_rollouts_per_start_max: 16
         filter_zero_variance_groups: true
+        update_micro_batch_starts: 1
     optim_cfg:
       grad_clip_norm: 1.0
       zero_grad_set_to_none: true

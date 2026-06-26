@@ -62,6 +62,8 @@ class LearnerWorker(Worker):
         self.fsdp_manager: FSDPModelManager | None = None
         self.phase_updater: Any | None = None
         self.replay_client: ReplayClient | None = None
+        self._cotrain_classifier_updates = 0
+        self._cotrain_last_classifier_f1 = 0.0
 
     def init(self) -> None:
         self.precision = _resolve_precision(self.train_cfg, self.torch_device)
@@ -201,9 +203,9 @@ class LearnerWorker(Worker):
                 device=self.torch_device,
                 optim_cfg=self._optim_cfg(),
             )
-        return {
-            "wm/loss": float(raw.get("loss", 0.0)),
-        }
+        from dreamervla.algorithms.dreamervla import namespaced_world_model_metrics
+
+        return namespaced_world_model_metrics(raw)
 
     def _dreamervla_classifier_update_once(self) -> dict[str, float]:
         with self._precision().context():
@@ -221,6 +223,8 @@ class LearnerWorker(Worker):
                 early_neg_stride=int(self.train_cfg.get("classifier_early_neg_stride", 8)),
                 grad_clip=float(self._optim_cfg().get("grad_clip_norm", 1.0)),
             )
+        self._cotrain_classifier_updates += 1
+        self._cotrain_last_classifier_f1 = float(raw.get("f1", 0.0))
         return {
             "cls/loss": float(raw.get("loss", 0.0)),
             "cls/acc": float(raw.get("acc", 0.0)),
@@ -228,6 +232,10 @@ class LearnerWorker(Worker):
         }
 
     def _dreamervla_rl_update_once(self) -> dict[str, float]:
+        gate_cfg = self._actor_signal_gate_cfg()
+        if not self._actor_signal_ready(gate_cfg):
+            return self._skipped_rl_metrics()
+
         # Phase 4 off-policy gating: drop replay samples older than
         # ``staleness_threshold`` rollout-policy versions (None / <0 disables → the
         # default, behaviour-preserving path). Graceful for fixed-base rollouts
@@ -268,7 +276,58 @@ class LearnerWorker(Worker):
         return {
             "rl/actor_loss": float(raw.get("actor_loss", 0.0)),
             "rl/returns_mean": float(raw.get("returns_mean", 0.0)),
+            "rl/returns_std": float(raw.get("returns_std", 0.0)),
             "rl/policy_grad_norm": float(raw.get("actor_grad_norm", 0.0)),
+            "rl/skipped_zero_variance_groups": float(
+                raw.get("LUMOS/skipped_zero_variance_groups", 0.0)
+            ),
+            "rl/ppo_step_applied": float(raw.get("ppo_step_applied", 0.0)),
+            "rl/actor_signal_ready": 1.0,
+            "rl/skipped_no_signal": 0.0,
+            "rl/classifier_f1_gate": float(self._cotrain_last_classifier_f1),
+            "rl/classifier_updates": float(self._cotrain_classifier_updates),
+            "LUMOS/score_mean": float(raw.get("LUMOS/score_mean", raw.get("score_mean", 0.0))),
+            "LUMOS/score_std": float(raw.get("LUMOS/score_std", raw.get("score_std", 0.0))),
+            "LUMOS/group_var_keep_frac": float(raw.get("LUMOS/group_var_keep_frac", 0.0)),
+            "LUMOS/num_mixed_groups": float(raw.get("LUMOS/num_mixed_groups", 0.0)),
+        }
+
+    def _actor_signal_gate_cfg(self) -> dict[str, Any]:
+        raw = self.train_cfg.get("actor_signal_gate", {})
+        if isinstance(raw, bool):
+            return {"enabled": bool(raw)}
+        cfg = _as_plain_dict(raw) if raw is not None else {}
+        cfg.setdefault("enabled", False)
+        cfg.setdefault("min_classifier_f1", 0.0)
+        cfg.setdefault("min_classifier_updates", 0)
+        return cfg
+
+    def _actor_signal_ready(self, gate_cfg: dict[str, Any]) -> bool:
+        if not bool(gate_cfg.get("enabled", False)):
+            return True
+        min_updates = int(gate_cfg.get("min_classifier_updates", 0))
+        min_f1 = float(gate_cfg.get("min_classifier_f1", 0.0))
+        return (
+            int(self._cotrain_classifier_updates) >= min_updates
+            and float(self._cotrain_last_classifier_f1) >= min_f1
+        )
+
+    def _skipped_rl_metrics(self) -> dict[str, float]:
+        return {
+            "rl/actor_loss": 0.0,
+            "rl/returns_mean": 0.0,
+            "rl/returns_std": 0.0,
+            "rl/policy_grad_norm": 0.0,
+            "rl/skipped_zero_variance_groups": 0.0,
+            "rl/ppo_step_applied": 0.0,
+            "rl/actor_signal_ready": 0.0,
+            "rl/skipped_no_signal": 1.0,
+            "rl/classifier_f1_gate": float(self._cotrain_last_classifier_f1),
+            "rl/classifier_updates": float(self._cotrain_classifier_updates),
+            "LUMOS/score_mean": 0.0,
+            "LUMOS/score_std": 0.0,
+            "LUMOS/group_var_keep_frac": 0.0,
+            "LUMOS/num_mixed_groups": 0.0,
         }
 
     def _synthetic_ppo_update(self, num_steps: int) -> dict[str, float]:

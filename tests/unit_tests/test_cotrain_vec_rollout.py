@@ -150,19 +150,21 @@ def test_rollout_progress_metrics_marks_success_rate_valid_after_episode():
 
     assert metrics["rollout/success_rate"] == 0.25
     assert metrics["rollout/success_rate_valid"] == 1.0
+    assert metrics["rollout/recent_success_rate"] == 0.0
+    assert metrics["rollout/recent_success_rate_valid"] == 0.0
     assert metrics["rollout/episodes"] == 4.0
     assert metrics["rollout/successes"] == 1.0
 
 
-def test_rollout_progress_metrics_reports_current_and_average_success_rates():
+def test_rollout_progress_metrics_reports_recent_success_rate():
     from dreamervla.runners.online_cotrain_runner import build_rollout_progress_metrics
 
     metrics = build_rollout_progress_metrics(
         counters={
             "n_episodes": 4,
             "n_success": 1,
-            "current_episodes": 2,
-            "current_success": 1,
+            "recent_success_window": 3,
+            "recent_successes": [0, 1, 0, 1],
         },
         env_step=1208,
         num_envs=4,
@@ -170,12 +172,11 @@ def test_rollout_progress_metrics_reports_current_and_average_success_rates():
         active_episode_steps=[2, 2, 2, 2],
     )
 
-    assert metrics["rollout/current_success_rate"] == 0.5
-    assert metrics["rollout/current_success_rate_valid"] == 1.0
-    assert metrics["rollout/current_episodes"] == 2.0
-    assert metrics["rollout/current_successes"] == 1.0
-    assert metrics["rollout/avg_success_rate"] == 0.25
-    assert metrics["rollout/avg_success_rate_valid"] == 1.0
+    assert metrics["rollout/recent_success_rate"] == pytest.approx(2.0 / 3.0)
+    assert metrics["rollout/recent_success_rate_valid"] == 1.0
+    assert "rollout/current_success_rate" not in metrics
+    assert "rollout/avg_success_rate" not in metrics
+    assert "LUMOS/success_rate" not in metrics
 
 
 # --------------------------------------------------------------- Task 4
@@ -242,7 +243,9 @@ class _FakePolicy:
         import torch
 
         # sample mode -> (action_chunk[1, chunk, 7], logp, extra)
-        return torch.full((1, 2, 7), 0.25), None, None
+        first = torch.full((1, 1, 7), 0.25)
+        second = torch.full((1, 1, 7), 0.75)
+        return torch.cat([first, second], dim=1), None, None
 
 
 def _make_min_runner():
@@ -267,7 +270,8 @@ def test_vectorized_rollout_isolated_queues_and_episode_grouping():
     class _Replay:
         sequence_length = 2
 
-        def add_episode(self, ep):
+        def add_episode(self, ep, *, source="online"):
+            assert source == "online"
             captured.append(list(ep))
             return None  # mimic too-short / no-success-record path
 
@@ -292,15 +296,21 @@ def test_vectorized_rollout_isolated_queues_and_episode_grouping():
     # 2 refills (after each of the 2 finished episodes) = 3 per slot.
     assert extractors[0].resets == 3 and extractors[1].resets == 3
     assert vec.actions_seen
-    for action in vec.actions_seen:
-        np.testing.assert_array_equal(action, np.full(7, 0.25, dtype=np.float32))
+    assert len(vec.actions_seen) == 12
+    for slot in range(2):
+        slot_actions = vec.actions_seen[slot::2]
+        assert len(slot_actions) == 6
+        expected_scalars = [0.25, 0.75, 0.25, 0.25, 0.75, 0.25]
+        for action, expected in zip(slot_actions, expected_scalars, strict=True):
+            np.testing.assert_array_equal(action, np.full(7, expected, dtype=np.float32))
 
 
 def test_vectorized_rollout_train_hook_can_stop():
     class _Replay:
         sequence_length = 2
 
-        def add_episode(self, ep):
+        def add_episode(self, ep, *, source="online"):
+            assert source == "online"
             return None
 
     runner = _make_min_runner()
@@ -308,8 +318,9 @@ def test_vectorized_rollout_train_hook_can_stop():
     extractors = [_FakeExtractor(), _FakeExtractor()]
     calls = {"n": 0}
 
-    def hook(env_step, active_episode_steps=None):
+    def hook(env_step, active_episode_steps=None, *, episode_added=False):
         assert active_episode_steps is not None
+        assert episode_added is False
         calls["n"] += 1
         return calls["n"] >= 3  # stop after 3 env-steps
 
@@ -330,7 +341,8 @@ def test_vectorized_rollout_train_hook_runs_with_grad_enabled():
     class _Replay:
         sequence_length = 2
 
-        def add_episode(self, ep):
+        def add_episode(self, ep, *, source="online"):
+            assert source == "online"
             return None
 
     runner = _make_min_runner()
@@ -338,8 +350,9 @@ def test_vectorized_rollout_train_hook_runs_with_grad_enabled():
     extractors = [_FakeExtractor(), _FakeExtractor()]
     seen = {"grad": None}
 
-    def hook(env_step, active_episode_steps=None):
+    def hook(env_step, active_episode_steps=None, *, episode_added=False):
         assert active_episode_steps is not None
+        assert episode_added is False
         seen["grad"] = torch.is_grad_enabled()
         return True  # stop immediately
 
@@ -349,3 +362,32 @@ def test_vectorized_rollout_train_hook_runs_with_grad_enabled():
         action_steps=1, image_size=64, task_ids=[0], train_hook=hook,
     )
     assert seen["grad"] is True
+
+
+def test_vectorized_rollout_marks_train_hook_when_full_episode_enters_replay():
+    class _Replay:
+        sequence_length = 2
+
+        def add_episode(self, ep, *, source="online"):
+            assert source == "online"
+            return {"success": bool(ep[-1]["reward"] > 0.0)}
+
+    runner = _make_min_runner()
+    vec = _FakeVec(num_envs=2, horizon=3, full_record_fn=_full_record)
+    extractors = [_FakeExtractor(), _FakeExtractor()]
+    events = []
+
+    def hook(env_step, active_episode_steps=None, *, episode_added=False):
+        assert active_episode_steps is not None
+        events.append((int(env_step), bool(episode_added)))
+        return False
+
+    runner._vectorized_cotrain_rollout(
+        vec=vec, extractors=extractors, replay=_Replay(),
+        num_envs=2, total_env_steps=6, episode_horizon=3,
+        action_steps=1, image_size=64, task_ids=[0], train_hook=hook,
+    )
+
+    assert len(events) == 6
+    assert [flag for _step, flag in events].count(True) == 2
+    assert events[-2:] == [(5, True), (6, True)]

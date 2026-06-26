@@ -44,7 +44,7 @@ def _demo_to_transitions(
             reward = 1.0
         transitions.append({
             "image": images[t],
-            "obs_embedding": np.asarray(emb[t], dtype=np.float32),
+            "obs_embedding": np.asarray(emb[t]),
             "reward": reward,                      # sparse reward = collector signal
             "done": float(dones[t]),
             "is_last": float(dones[t]),
@@ -103,7 +103,13 @@ def seed_replay_from_offline(
                     if cap is not None and per_task.get(task_id, 0) >= cap:
                         continue
                     emb = np.asarray(hf["data"][demo_key]["obs_embedding"][...])
-                    if replay.add_episode(_demo_to_transitions(demo, emb, task_id)) is not None:
+                    if (
+                        replay.add_episode(
+                            _demo_to_transitions(demo, emb, task_id),
+                            source="coldstart",
+                        )
+                        is not None
+                    ):
                         n_added += 1
                         per_task[task_id] = per_task.get(task_id, 0) + 1
         except (OSError, KeyError) as exc:

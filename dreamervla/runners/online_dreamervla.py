@@ -344,8 +344,14 @@ def online_classifier_update_step(
     )
     windows = cls_batch["windows"].to(device, non_blocking=True)
     labels = cls_batch["labels"].to(device, non_blocking=True)
+    task_ids = cls_batch.get("task_ids")
     classifier.train()
-    logits = classifier(windows)
+    if bool(getattr(module, "supports_task_conditioning", False)) and isinstance(
+        task_ids, torch.Tensor
+    ):
+        logits = classifier(windows, task_ids=task_ids.to(device, non_blocking=True))
+    else:
+        logits = classifier(windows)
     loss = torch.nn.functional.cross_entropy(logits, labels)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()

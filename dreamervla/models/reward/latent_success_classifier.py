@@ -50,6 +50,7 @@ class LatentSuccessClassifierConfig:
     # before pooling, so the input projection stays token_dim-sized instead of
     # the (huge) N*token_dim flat dim. None keeps the historical flat behaviour.
     token_count: int | None = None
+    task_conditioning: dict | None = None
 
 
 class LatentSuccessClassifier(nn.Module):
@@ -88,6 +89,24 @@ class LatentSuccessClassifier(nn.Module):
         token_pool = str(getattr(cfg, "token_pool", "flat"))
         if token_pool not in {"flat", "mean"}:
             raise ValueError(f"token_pool must be flat|mean, got {token_pool!r}")
+        task_cfg = dict(getattr(cfg, "task_conditioning", None) or {})
+        self.task_conditioning_enabled = bool(task_cfg.get("enabled", False))
+        self.supports_task_conditioning = bool(self.task_conditioning_enabled)
+        if self.task_conditioning_enabled:
+            num_tasks = int(task_cfg.get("num_tasks", 0) or 0)
+            embedding_dim = int(task_cfg.get("embedding_dim", 0) or 0)
+            if num_tasks <= 0 or embedding_dim <= 0:
+                raise ValueError(
+                    "classifier.task_conditioning requires positive num_tasks and embedding_dim"
+                )
+            if embedding_dim != int(cfg.latent_dim):
+                raise ValueError(
+                    "LatentSuccessClassifier task_conditioning.embedding_dim must match "
+                    f"latent_dim ({embedding_dim} != {int(cfg.latent_dim)})"
+                )
+            self.task_embedding = nn.Embedding(num_tasks, int(cfg.latent_dim))
+        else:
+            self.task_embedding = None
         ht = str(getattr(cfg, "head_type", "transformer"))
         if ht == "transformer":
             self.input_proj = nn.Linear(cfg.latent_dim, cfg.hidden_dim)
@@ -118,7 +137,12 @@ class LatentSuccessClassifier(nn.Module):
         else:
             raise ValueError(f"unknown head_type: {ht!r} (transformer|linear|mlp2)")
 
-    def forward(self, latent_window: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        latent_window: torch.Tensor,
+        *,
+        task_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """latent_window: [B, W, latent_dim] or [B, W, ...] -> logits [B, 2]."""
         if latent_window.shape[1] != self.cfg.window:
             raise ValueError(f"expected window={self.cfg.window}, got {latent_window.shape[1]}")
@@ -147,6 +171,15 @@ class LatentSuccessClassifier(nn.Module):
             latent_window = latent_window.reshape(
                 latent_window.shape[0], latent_window.shape[1], tc, -1
             ).mean(dim=2)
+        if self.task_conditioning_enabled:
+            if task_ids is None:
+                raise ValueError(
+                    "task_ids are required when classifier task conditioning is enabled"
+                )
+            if self.task_embedding is None:
+                raise RuntimeError("task conditioning is enabled without an embedding")
+            task_emb = self.task_embedding(task_ids.to(latent_window.device).long())
+            latent_window = latent_window + task_emb[:, None, :].to(latent_window.dtype)
         ht = str(getattr(self.cfg, "head_type", "transformer"))
         if ht == "transformer":
             x = self.input_proj(latent_window.to(self.input_proj.weight.dtype))
@@ -190,6 +223,7 @@ class LatentSuccessClassifier(nn.Module):
         stride: int = 1,
         min_steps: int = 0,
         pre_pooled: bool = False,
+        task_ids: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Earliest-window success scan over a latent video.
 
@@ -248,7 +282,7 @@ class LatentSuccessClassifier(nn.Module):
         first_end = max(W, int(min_steps) + W)
         for end in range(first_end, T_scan + 1, stride):
             window = scan_video[:, end - W : end]
-            logits = self.forward(window)
+            logits = self.forward(window, task_ids=task_ids)
             probs = torch.softmax(logits, dim=-1)[:, 1]
             better = probs > score
             if better.any():

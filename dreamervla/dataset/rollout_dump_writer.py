@@ -26,6 +26,7 @@ preprocess_config.json is written once to hidden_dir/preprocess_config.json.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,7 @@ class RolloutDumpWriter:
         task_description: str | None = None,
         episode_success: bool | None = None,
         episode_horizon: int | None = None,
+        episode_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Write one demo (list of per-step dicts) to both HDF5 files.
 
@@ -185,6 +187,24 @@ class RolloutDumpWriter:
             demo_grp.attrs["episode_success"] = bool(episode_success)
         if episode_horizon is not None:
             demo_grp.attrs["episode_horizon"] = int(episode_horizon)
+        if episode_metadata is not None:
+            for key, value in episode_metadata.items():
+                if value is None:
+                    continue
+                if isinstance(
+                    value,
+                    (
+                        str,
+                        bytes,
+                        bool,
+                        int,
+                        float,
+                        np.bool_,
+                        np.integer,
+                        np.floating,
+                    ),
+                ):
+                    demo_grp.attrs[str(key)] = value
 
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)

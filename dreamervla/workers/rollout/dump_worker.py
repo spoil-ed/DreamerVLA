@@ -70,6 +70,7 @@ class RolloutDumpWorker(Worker):
             task_description=first.get("task_description"),
             episode_success=bool(episode[-1].get("success", False)),
             episode_horizon=len(episode),
+            episode_metadata=episode[-1].get("episode_metadata"),
         )
         self._shard_demos += 1
         self.num_episodes += 1

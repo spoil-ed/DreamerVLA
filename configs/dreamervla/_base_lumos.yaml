@@ -68,6 +68,8 @@ algorithm:
     # chunk_size + classifier_min_steps are variant-specific.
     episode_max_steps: 300  # LIBERO official horizon
     filter_zero_variance_groups: true
+    ppo_rollouts_per_start_min: 4
+    ppo_rollouts_per_start_max: 16
     # MEM-RL-01 — bound the outcome update's peak GPU memory. All numerically
     # equivalent to the full-batch update (the imagination is pure data; the PPO
     # gradient flows only through the policy re-eval). Defaults preserve the

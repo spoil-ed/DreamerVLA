@@ -30,8 +30,10 @@ class ReplayWorker(Worker):
     def init(self) -> None:
         self.replay = _online_replay_cls()(**self.replay_cfg)
 
-    def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
-        return self._replay().add_episode(episode)
+    def add_episode(
+        self, episode: list[dict[str, Any]], source: str = "online"
+    ) -> dict[str, Any] | None:
+        return self._replay().add_episode(episode, source=str(source))
 
     def set_policy_version(self, version: int) -> None:
         self._replay().set_policy_version(int(version))
@@ -74,8 +76,28 @@ class ReplayWorker(Worker):
     def num_transitions(self) -> int:
         return int(self._replay().num_transitions)
 
-    def ready(self, min_episodes: int) -> bool:
-        return len(self._replay()._valid_records()) >= int(min_episodes)
+    def ready(
+        self,
+        min_episodes_per_task: int,
+        *,
+        min_transitions: int = 0,
+        task_ids: tuple[int, ...] | None = None,
+        min_sampleable_windows: int = 0,
+        require_classifier_evidence: bool = False,
+    ) -> bool:
+        replay = self._replay()
+        selected_task_ids = (
+            tuple(int(task_id) for task_id in task_ids)
+            if task_ids is not None
+            else tuple(int(task_id) for task_id in (replay.task_ids or (0,)))
+        )
+        return replay.ready_for_training(
+            min_transitions=int(min_transitions),
+            task_ids=selected_task_ids,
+            min_episodes_per_task=int(min_episodes_per_task),
+            min_sampleable_windows=int(min_sampleable_windows),
+            require_classifier_evidence=bool(require_classifier_evidence),
+        )
 
     def task_stats(self, task_ids: tuple[int, ...] | None = None) -> dict[str, dict[str, int]]:
         return self._replay().task_stats(task_ids)

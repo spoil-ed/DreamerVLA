@@ -28,7 +28,8 @@ offline_warmup:
   data_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
   hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2_hidden
   task_id: null              # set for single-task data lacking per-demo task_id attr
-  max_episodes_per_task: 10
+  max_episodes_per_task: null
+  debug_warmup_replay_epochs: 0
   debug_wm_warmup_steps: 2
   debug_classifier_warmup_steps: 2
 
@@ -46,8 +47,10 @@ training:
   lr_warmup_steps: 0
   use_ema: false
   checkpoint_every: 2000
-  wm_warmup_steps: 2000
-  classifier_warmup_steps: 2000
+  wm_warmup_steps: 1200
+  classifier_warmup_steps: 1200
+  warmup_replay_epochs: 1  # one pass over sampleable replay windows
+  warmup_replay_max_steps: 0  # 0 disables cap; keep 1 replay epoch as full coverage
   warmup_steps: 0            # online RL starts immediately (WM/classifier already warm)
   train_actor_after_warmup: true
   train_classifier_inline: true
@@ -88,8 +91,21 @@ online_rollout:
   sequence_length: 24
   min_replay: 2000
   min_episodes_per_task: 1
+  min_sampleable_windows: 0
+  require_classifier_evidence: true
+  train_trigger: episode_end
   train_every: 8
   updates_per_train: 1
+  updates_per_episode: 1
+  recent_success_window: 100
+  replay_sampling:
+    enabled: true
+    recent_episode_count: 8
+    latest_online_required: true
+    mix:
+      online_recent: 0.5
+      online_replay: 0.3
+      coldstart_anchor: 0.2
   total_env_steps: 200000
   rollout_policy_source: dreamer_actor
   warmup_seed_episodes_per_task: 3
@@ -107,6 +123,11 @@ online_rollout:
   debug_min_replay: 48
   debug_max_train_updates: 4
   debug_episode_horizon: 50
+
+task_conditioning:
+  enabled: false  # rollbackable; enable only with WM/classifier implementations that declare support
+  num_tasks: 10
+  embedding_dim: 64
 
 env:
   _target_: dreamervla.envs.train_env.DreamerVLAOnlineTrainEnv
@@ -134,6 +155,7 @@ world_model:
   depth: 6
   heads: 16
   dim_head: 64
+  attn_impl: sdpa
   mlp_dim: 2048
   dropout: 0.1
   num_hist: 3
@@ -150,6 +172,7 @@ world_model:
   reward_pos_weight: 1.0
   return_predictions: false
   freeze_backbone: true
+  task_conditioning: ${task_conditioning}
 
 policy:
   _target_: dreamervla.models.actor.RynnVLAActionHiddenActor
@@ -194,6 +217,7 @@ classifier:
   granularity: chunk
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   chunk_pool: last
+  task_conditioning: ${task_conditioning}
 
 algorithm:
   update_type: LUMOS
@@ -204,6 +228,8 @@ algorithm:
     reward_model: probability_outcome
     classifier_min_steps: 4
     filter_zero_variance_groups: true
+    ppo_rollouts_per_start_min: 4
+    ppo_rollouts_per_start_max: 16
     # MEM-RL-01 — bound the outcome update's peak GPU memory to one group-aligned
     # slice of this many imagination START points (each = ppo_rollouts_per_start
     # rollouts). Numerically equivalent to the full-batch update. Sized so a slice
@@ -252,6 +278,7 @@ algorithm:
     eps: 1.0e-6
 
 optim:
+  precision: bf16
   grad_clip_norm: 1.0
   zero_grad_set_to_none: true
   world_model:

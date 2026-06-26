@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 
 PipelineMode = Literal["ray", "noray"]
+CotrainPhase = Literal["all", "warmup", "online"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class PipelinePlan:
     # then a ray async online phase initialized from the consolidated warmup ckpt. Empty
     # for the default sync engine.
     cotrain_engine: str = "sync"
+    cotrain_phase: CotrainPhase = "all"
     cotrain_warmup_cmd: list[str] = field(default_factory=list)
     cotrain_online_cmd: list[str] = field(default_factory=list)
     warmup_wm_ckpt: Path | None = None
@@ -62,6 +64,17 @@ def _normalize_mode(mode: str) -> PipelineMode:
     if normalized in {"noray", "no-ray", "non-ray"}:
         return "noray"
     raise ValueError("mode must be one of: ray, noray")
+
+
+def _normalize_cotrain_phase(phase: str) -> CotrainPhase:
+    normalized = phase.strip().lower().replace("-", "_")
+    if normalized in {"all", "full"}:
+        return "all"
+    if normalized in {"warmup", "warmup_only"}:
+        return "warmup"
+    if normalized in {"online", "online_only"}:
+        return "online"
+    raise ValueError("cotrain_phase must be one of: all, warmup, online")
 
 
 def _normalise_key(value: str) -> str:
@@ -172,10 +185,14 @@ def build_pipeline_plan(
     ngpu: int | None = None,
     master_port: int | None = None,
     debug: bool | None = None,
+    cotrain_phase: str | None = None,
 ) -> PipelinePlan:
     cfg = script_config("coldstart_warmup_cotrain") if launcher_cfg is None else launcher_cfg
     selected_mode = _normalize_mode(str(cfg["mode"] if mode is None else mode))
     selected_profile = _normalise_key(str(cfg["profile"] if profile is None else profile))
+    selected_cotrain_phase = _normalize_cotrain_phase(
+        str(cfg.get("cotrain_phase", "all") if cotrain_phase is None else cotrain_phase)
+    )
     _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")
     task_name, task_spec = _resolve_task(str(cfg["task"] if task is None else task), dict(cfg["tasks"]))
     python_cmd = str(cfg["python"] if python is None else python)
@@ -294,18 +311,22 @@ def build_pipeline_plan(
     if debug_enabled:
         cotrain_cmd.append("training.debug=true")
 
+    cotrain_warmup_cmd: list[str] = []
+    cotrain_online_cmd: list[str] = []
+
     # cotrain_engine=async: run the sync pipeline warmup ONLY (writes wm/classifier warmup
     # ckpts), consolidate them, then run the ray async overlap online loop initialized from
     # that ckpt. The online phase is NOT wrapped in torchrun (Ray owns placement).
     cotrain_engine = str(cfg.get("cotrain_engine", "sync")).strip().lower()
-    cotrain_warmup_cmd: list[str] = []
-    cotrain_online_cmd: list[str] = []
-    warmup_wm_ckpt = warmup_cls_ckpt = ray_init_ckpt = None
+    ckpt_dir = cotrain_out / "ckpt"
+    warmup_wm_ckpt = ckpt_dir / "wm_warmup.ckpt"
+    warmup_cls_ckpt = ckpt_dir / "classifier_warmup.ckpt"
+    ray_init_ckpt = None
+    if selected_cotrain_phase != "all":
+        cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
+        cotrain_online_cmd = [*cotrain_cmd, "training.resume=true"]
     if cotrain_engine == "async":
         async_exp = str(cfg.get("cotrain_async_experiment", "online_cotrain_ray_oft"))
-        ckpt_dir = cotrain_out / "ckpt"
-        warmup_wm_ckpt = ckpt_dir / "wm_warmup.ckpt"
-        warmup_cls_ckpt = ckpt_dir / "classifier_warmup.ckpt"
         ray_init_ckpt = ckpt_dir / "ray_async_init.ckpt"
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
         cotrain_online_cmd = [
@@ -316,7 +337,6 @@ def build_pipeline_plan(
             f"task={task_spec['hydra_task']}",
             f"training.out_dir={cotrain_out}",
             f"init.warmup_ckpt_path={ray_init_ckpt}",
-            "inference.init_ckpt.path=null",
             *common_overrides,
             *cotrain_overrides,
         ]
@@ -334,6 +354,7 @@ def build_pipeline_plan(
         collect_cmd=collect_cmd,
         cotrain_cmd=cotrain_cmd,
         cotrain_engine=cotrain_engine,
+        cotrain_phase=selected_cotrain_phase,
         cotrain_warmup_cmd=cotrain_warmup_cmd,
         cotrain_online_cmd=cotrain_online_cmd,
         warmup_wm_ckpt=warmup_wm_ckpt,
@@ -397,6 +418,20 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
             "cold-start hidden directory is missing preprocess_config.json: "
             f"{hidden / 'preprocess_config.json'}"
         )
+    return errors
+
+
+def validate_warmup_outputs(*, cotrain_out: str | Path) -> list[str]:
+    """Return missing split warmup checkpoints for an online-only cotrain resume."""
+    root = Path(cotrain_out).expanduser()
+    ckpt = root / "ckpt"
+    errors: list[str] = []
+    wm = ckpt / "wm_warmup.ckpt"
+    cls = ckpt / "classifier_warmup.ckpt"
+    if not wm.is_file() and not (ckpt / "wm_warmup_hf").is_dir():
+        errors.append(f"warmup world-model checkpoint not found: {wm}")
+    if not cls.is_file() and not (ckpt / "classifier_warmup_hf").is_dir():
+        errors.append(f"warmup classifier checkpoint not found: {cls}")
     return errors
 
 
@@ -489,23 +524,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         cotrain_overrides=_as_str_list(cfg.get("cotrain_overrides")),
         common_overrides=_as_str_list(cfg.get("common_overrides")),
         debug=bool(cfg.get("debug", False)),
+        cotrain_phase=str(cfg.get("cotrain_phase", "all")),
     )
     print(f"mode: {plan.mode}")
     print(f"profile: {plan.profile}")
     print(f"task: {plan.task}")
+    print(f"cotrain_phase: {plan.cotrain_phase}")
     print(f"run_root: {plan.run_root}")
     print(f"reward_dir: {plan.reward_dir}")
     print(f"hidden_dir: {plan.hidden_dir}")
     print(f"collect: {shlex.join(plan.collect_cmd)}")
     print(f"cotrain: {shlex.join(plan.cotrain_cmd)}")
-    if plan.cotrain_engine == "async":
+    if plan.cotrain_phase != "all" or plan.cotrain_engine == "async":
         print(f"cotrain_warmup: {shlex.join(plan.cotrain_warmup_cmd)}")
         print(f"cotrain_online: {shlex.join(plan.cotrain_online_cmd)}")
     if bool(cfg.get("dry_run", False)):
         return 0
 
     if not bool(cfg.get("skip_asset_check", False)):
-        if bool(cfg.get("skip_collect", False)):
+        if plan.cotrain_phase == "online":
+            errors = validate_warmup_outputs(cotrain_out=plan.run_root / "cotrain")
+        elif bool(cfg.get("skip_collect", False)):
             errors = validate_collected_outputs(
                 reward_dir=plan.reward_dir,
                 hidden_dir=plan.hidden_dir,
@@ -544,7 +583,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{', '.join(quarantined)}",
             flush=True,
         )
-    run_collect = not bool(cfg.get("skip_collect", False))
+    run_collect = not bool(cfg.get("skip_collect", False)) and plan.cotrain_phase != "online"
     if run_collect:
         # Identify what is already collected and print it BEFORE deciding to collect,
         # resume, or skip — never load blindly.
@@ -583,7 +622,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
     _write_collection_manifest(plan, target_episodes=target_episodes, num_tasks=num_tasks)
-    if plan.cotrain_engine == "async":
+    if plan.cotrain_phase == "warmup":
+        print("PHASE 2/2 START: offline warmup only", flush=True)
+        subprocess.run(plan.cotrain_warmup_cmd, check=True)
+        if plan.cotrain_engine == "async":
+            print("PHASE 2/2: consolidate warmup ckpts -> ray async init", flush=True)
+            _consolidate_warmup_state_dicts(
+                plan.warmup_wm_ckpt, plan.warmup_cls_ckpt, plan.ray_init_ckpt
+            )
+    elif plan.cotrain_phase == "online":
+        print("PHASE 2/2 START: online cotrain resume from warmup ckpts", flush=True)
+        subprocess.run(plan.cotrain_online_cmd, check=True)
+    elif plan.cotrain_engine == "async":
         print("PHASE 2a/3: offline warmup (sync, writes warmup ckpts)", flush=True)
         subprocess.run(plan.cotrain_warmup_cmd, check=True)
         print("PHASE 2b/3: consolidate warmup ckpts -> ray async init", flush=True)
@@ -610,14 +660,32 @@ def _write_collection_manifest(
         if plan.reward_dir.is_dir()
         else []
     )
+    hidden_schema: dict[str, object] = {}
+    preprocess_path = plan.hidden_dir / "preprocess_config.json"
+    if preprocess_path.is_file():
+        try:
+            preprocess = json.loads(preprocess_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            preprocess = {}
+        for key in (
+            "hidden_key",
+            "chunk_size",
+            "token_count",
+            "token_dim",
+            "output_dtype",
+        ):
+            if key in preprocess:
+                hidden_schema[key] = preprocess[key]
     write_manifest(
         plan.collected_root,
         {
             "task": plan.task,
             "mode": plan.mode,
             "profile": plan.profile,
+            "backend": os.environ.get("MUJOCO_GL", "unknown"),
             "reward_dir": str(plan.reward_dir),
             "hidden_dir": str(plan.hidden_dir),
+            "hidden_schema": hidden_schema,
             "target_episodes": target_episodes,
             "num_tasks": num_tasks,
             "collected_episodes": summary["total"],

@@ -177,6 +177,7 @@ def test_degenerate_classifier_gives_zero_signal():
     assert metrics["actor_grad_norm"] == 0.0
     assert metrics["ppo_step_applied"] == 0.0
     assert metrics["returns_mean"] == 0.0
+    assert metrics["LUMOS/skipped_zero_variance_groups"] == 1.0
     assert policy.action_value.grad is None or policy.action_value.grad.abs().item() == 0.0
 
 
@@ -195,3 +196,32 @@ def test_probability_reward_updates_when_threshold_outcomes_are_constant():
     assert metrics["LUMOS/group_var_keep_frac"] == 1.0
     assert policy.action_value.grad is not None
     assert policy.action_value.grad.abs().item() > 0.0
+
+
+def test_lumos_rollout_bounds_use_configured_max_group_size_with_adaptive_prefix():
+    cfg = _cfg()
+    cfg.lumos.ppo_rollouts_per_start_min = 2
+    cfg.lumos.ppo_rollouts_per_start_max = 4
+    policy = _TinyPolicy()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=_TinyChunkWM(),
+        classifier=_DiscriminativeClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={"obs_embedding": torch.zeros(1, 1, 1)},
+        device=torch.device("cpu"),
+        algorithm_cfg=cfg,
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=None,
+    )
+
+    assert metrics["LUMOS/group_size_min"] == 2.0
+    assert metrics["LUMOS/group_size_max"] == 4.0
+    assert metrics["LUMOS/group_size"] == 4.0
+    assert metrics["LUMOS/effective_group_size_mean"] == 2.0
+    assert metrics["LUMOS/skipped_zero_variance_groups"] == 0.0

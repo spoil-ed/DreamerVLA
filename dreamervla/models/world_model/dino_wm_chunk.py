@@ -164,6 +164,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         num_action_repeat: int = 1,
         dim_head: int = 64,
         attn_impl: str = "manual",
+        task_conditioning: dict | None = None,
         **kwargs: Any,
     ) -> None:
         args_list = list(args)
@@ -228,6 +229,24 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.dim_head = int(dim_head)
         self.attn_impl = str(attn_impl)
+        task_cfg = dict(task_conditioning or {})
+        self.task_conditioning_enabled = bool(task_cfg.get("enabled", False))
+        self.supports_task_conditioning = bool(self.task_conditioning_enabled)
+        if self.task_conditioning_enabled:
+            num_tasks = int(task_cfg.get("num_tasks", 0) or 0)
+            embedding_dim = int(task_cfg.get("embedding_dim", 0) or 0)
+            if num_tasks <= 0 or embedding_dim <= 0:
+                raise ValueError(
+                    "world_model.task_conditioning requires positive num_tasks and embedding_dim"
+                )
+            if embedding_dim != int(self.token_dim):
+                raise ValueError(
+                    "ChunkAwareDinoWMWorldModel task_conditioning.embedding_dim must match "
+                    f"token_dim ({embedding_dim} != {int(self.token_dim)})"
+                )
+            self.task_embedding = nn.Embedding(num_tasks, int(self.token_dim))
+        else:
+            self.task_embedding = None
         self.slots_per_step = self.token_count
         self.pos_context_len = self.num_hist
         self.obs_norm = nn.Identity()
@@ -262,6 +281,24 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
 
     def _module_device(self) -> torch.device:
         return self.action_proj[-1].weight.device
+
+    def _apply_task_conditioning(
+        self,
+        obs_tokens: torch.Tensor,
+        task_ids: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if not self.task_conditioning_enabled:
+            return obs_tokens
+        if task_ids is None:
+            raise ValueError(
+                "task_ids are required when world model task conditioning is enabled"
+            )
+        if self.task_embedding is None:
+            raise RuntimeError("task conditioning is enabled without an embedding")
+        task_emb = self.task_embedding(task_ids.to(obs_tokens.device).long())
+        while task_emb.ndim < obs_tokens.ndim:
+            task_emb = task_emb.unsqueeze(1)
+        return obs_tokens + task_emb.to(obs_tokens.dtype)
 
     def _condition_tokens(
         self,
@@ -453,6 +490,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         H = self.num_hist
         K = self.chunk_size
         obs_tokens = self.obs_to_tokens(obs)
+        obs_tokens = self._apply_task_conditioning(obs_tokens, batch.get("task_ids"))
         T = int(obs_tokens.shape[1])
         if T < H + K:
             raise ValueError(f"chunk_loss requires T >= H+K = {H + K}, got T={T}")

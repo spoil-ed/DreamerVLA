@@ -9,10 +9,12 @@ class _FakeWriter:
     def __init__(self, reward_dir, hidden_dir, shard_name):
         self.shard_name = str(shard_name)
         self.demos: list[int] = []
+        self.kwargs: list[dict] = []
         _FakeWriter.created.append(self.shard_name)
         _FakeWriter.instances.append(self)
     def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kw):
         self.demos.append(int(index))
+        self.kwargs.append(dict(kw))
     def close(self):
         pass
 
@@ -72,3 +74,18 @@ def test_start_shard_index_names_single_shard_on_resume():
         w.init()
         w.add_episode(_episode())
         assert _FakeWriter.created == ["ray_shard_002.hdf5"]
+
+
+def test_episode_metadata_passes_to_writer_from_terminal_step():
+    _FakeWriter.created = []
+    _FakeWriter.instances = []
+    episode = _episode()
+    episode[-1]["episode_metadata"] = {"chunk_size": 8, "policy_name": "oft"}
+    with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
+        w = dw.RolloutDumpWorker("r", "h", demos_per_shard=0)
+        w.init()
+        w.add_episode(episode)
+        assert _FakeWriter.instances[0].kwargs[0]["episode_metadata"] == {
+            "chunk_size": 8,
+            "policy_name": "oft",
+        }

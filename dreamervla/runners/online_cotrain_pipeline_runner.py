@@ -11,6 +11,7 @@ See docs/superpowers/specs/2026-06-17-offline-warmup-online-cotrain-pipeline-des
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +57,27 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     runner_family = "actor"
 
     # ------------------------------------------------------------------ warmup
+    def _log_replay_warmup_metrics(self, metrics: dict[str, float], *, step: int) -> None:
+        """Log replay-warmup progress under the training namespace."""
+        if hasattr(self, "log_metrics"):
+            self.log_metrics(metrics, step=int(step))
+
+    def _print_pipeline_event(self, message: str) -> None:
+        """Print one pipeline progress line from rank 0 only."""
+        distributed = getattr(self, "distributed", None)
+        if distributed is not None and not bool(getattr(distributed, "is_main_process", True)):
+            return
+        print(message, flush=True)
+
     def _offline_warmup_wm(self, replay, *, steps: int, batch_size: int, optim_cfg) -> float:
         self.world_model.train()
         last = 0.0
         for i in range(int(steps)):
-            wm_batch = self._build_wm_pretrain_batch(replay.sample(batch_size))
+            wm_batch = self._build_wm_pretrain_batch(
+                replay.sample(batch_size, include_images=False)
+            )
             if wm_batch is None:
+                self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
                 continue
             m = world_model_pretrain_step(
                 policy=self.policy,
@@ -73,7 +89,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             )
             last = float(m.get("loss", 0.0))
             if i % 50 == 0:
+                self._log_replay_warmup_metrics(
+                    {"train/wm_warmup_loss": last},
+                    step=i,
+                )
                 print(f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}", flush=True)
+            self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
         return last
 
     def _offline_warmup_classifier(
@@ -92,6 +113,15 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             )
             last_acc = float(m["acc"])
             if i % 50 == 0:
+                self._log_replay_warmup_metrics(
+                    {
+                        "train/classifier_warmup_loss": float(m["loss"]),
+                        "train/classifier_warmup_acc": last_acc,
+                        "train/classifier_warmup_f1": float(m.get("f1", 0.0)),
+                        "train/classifier_warmup_pos_frac": float(m.get("pos_frac", 0.0)),
+                    },
+                    step=i,
+                )
                 print(
                     f"[pipeline][cls-warmup] step={i}/{steps} "
                     f"loss={float(m['loss']):.4f} acc={last_acc:.3f} "
@@ -99,7 +129,144 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     f"pos={float(m.get('pos_frac', 0.0)):.3f}",
                     flush=True,
                 )
+            self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
         return last_acc
+
+    @staticmethod
+    def _steps_for_replay_epochs(replay, *, replay_epochs: int, batch_size: int) -> int:
+        epochs = int(replay_epochs)
+        if epochs <= 0:
+            return 0
+        windows = int(replay.sampleable_window_count())
+        if windows <= 0:
+            return 0
+        return int(epochs) * max(1, (windows + int(batch_size) - 1) // int(batch_size))
+
+    @staticmethod
+    def _steps_for_classifier_replay_epochs(
+        replay,
+        *,
+        replay_epochs: int,
+        batch_size: int,
+        window: int,
+        chunk_size: int,
+    ) -> int:
+        epochs = int(replay_epochs)
+        if epochs <= 0:
+            return 0
+        windows = int(
+            replay.classifier_window_count(
+                window=int(window),
+                chunk_size=int(chunk_size),
+            )
+        )
+        if windows <= 0:
+            return 0
+        return epochs * max(1, (windows + int(batch_size) - 1) // int(batch_size))
+
+    @classmethod
+    def _resolve_warmup_steps(
+        cls,
+        replay,
+        *,
+        wm_steps: int,
+        cls_steps: int,
+        replay_epochs: int,
+        replay_max_steps: int,
+        wm_batch_size: int,
+        cls_batch_size: int,
+        cls_window: int,
+        cls_chunk_size: int,
+    ) -> tuple[int, int]:
+        epoch_count = int(replay_epochs)
+        if epoch_count <= 0:
+            return int(wm_steps), int(cls_steps)
+        resolved_wm = cls._steps_for_replay_epochs(
+            replay,
+            replay_epochs=epoch_count,
+            batch_size=int(wm_batch_size),
+        )
+        resolved_cls = cls._steps_for_classifier_replay_epochs(
+            replay,
+            replay_epochs=epoch_count,
+            batch_size=int(cls_batch_size),
+            window=int(cls_window),
+            chunk_size=int(cls_chunk_size),
+        )
+        max_steps = int(replay_max_steps)
+        if max_steps > 0:
+            resolved_wm = min(resolved_wm, max_steps)
+            resolved_cls = min(resolved_cls, max_steps)
+        return resolved_wm, resolved_cls
+
+    def _offline_warmup_alternating(
+        self,
+        replay,
+        *,
+        wm_steps: int,
+        cls_steps: int,
+        wm_batch_size: int,
+        cls_batch_size: int,
+        optim_cfg,
+        early_neg_stride: int,
+        grad_clip: float,
+    ) -> tuple[float, float]:
+        self.world_model.train()
+        wm_last = 0.0
+        cls_last = 0.0
+        cls_loss = 0.0
+        cls_f1 = 0.0
+        cls_pos_frac = 0.0
+        total = max(int(wm_steps), int(cls_steps))
+        for i in range(total):
+            if i < int(wm_steps):
+                wm_batch = self._build_wm_pretrain_batch(
+                    replay.sample(wm_batch_size, include_images=False)
+                )
+                if wm_batch is not None:
+                    wm_metrics = world_model_pretrain_step(
+                        policy=self.policy,
+                        world_model=self.world_model,
+                        optimizer=self.world_model_optimizer,
+                        batch=wm_batch,
+                        device=self.device,
+                        optim_cfg=optim_cfg,
+                    )
+                    wm_last = float(wm_metrics.get("loss", 0.0))
+            if i < int(cls_steps):
+                cls_metrics = online_classifier_update_step(
+                    classifier=self.classifier,
+                    optimizer=self.classifier_optimizer,
+                    replay=replay,
+                    device=self.device,
+                    batch_size=cls_batch_size,
+                    early_neg_stride=early_neg_stride,
+                    grad_clip=grad_clip,
+                )
+                cls_loss = float(cls_metrics.get("loss", 0.0))
+                cls_last = float(cls_metrics["acc"])
+                cls_f1 = float(cls_metrics.get("f1", 0.0))
+                cls_pos_frac = float(cls_metrics.get("pos_frac", 0.0))
+            if i % 50 == 0:
+                self._log_replay_warmup_metrics(
+                    {
+                        "train/wm_warmup_loss": wm_last,
+                        "train/classifier_warmup_loss": cls_loss,
+                        "train/classifier_warmup_acc": cls_last,
+                        "train/classifier_warmup_f1": cls_f1,
+                        "train/classifier_warmup_pos_frac": cls_pos_frac,
+                    },
+                    step=i,
+                )
+                print(
+                    f"[pipeline][replay-warmup] learner_update={i}/{total} "
+                    f"wm_loss={wm_last:.4f} cls_loss={cls_loss:.4f} "
+                    f"cls_acc={cls_last:.3f} cls_f1={cls_f1:.3f} "
+                    f"cls_pos={cls_pos_frac:.3f}",
+                    flush=True,
+                )
+            self.console_progress(i + 1, total, "replay-warmup", unit="update")
+        return wm_last, cls_last
 
     # ------------------------------------------------------------ split ckpts
     def _wm_warmup_ckpt(self) -> str:
@@ -158,6 +325,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         swaps = [
             ("training.wm_warmup_steps", "offline_warmup.debug_wm_warmup_steps", 2),
             ("training.classifier_warmup_steps", "offline_warmup.debug_classifier_warmup_steps", 2),
+            ("training.warmup_replay_epochs", "offline_warmup.debug_warmup_replay_epochs", 0),
             ("online_rollout.total_env_steps", "online_rollout.debug_total_env_steps", 160),
             ("online_rollout.max_train_updates", "online_rollout.debug_max_train_updates", 4),
             ("online_rollout.episode_horizon", "online_rollout.debug_episode_horizon", 50),
@@ -165,6 +333,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
             ("algorithm.imagination_horizon", "algorithm.debug_imagination_horizon", 3),
             ("algorithm.ppo_rollouts_per_start", "algorithm.debug_ppo_rollouts_per_start", 2),
+            ("algorithm.lumos.ppo_rollouts_per_start_min", "algorithm.debug_ppo_rollouts_per_start", 2),
+            ("algorithm.lumos.ppo_rollouts_per_start_max", "algorithm.debug_ppo_rollouts_per_start", 2),
             ("algorithm.lumos.episode_max_steps", "algorithm.lumos.debug_episode_max_steps", 150),
         ]
         for full_key, debug_key, fallback in swaps:
@@ -239,6 +409,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         # warmup knobs (debug values, if any, were applied by _apply_debug_overrides)
         wm_steps = int(OmegaConf.select(cfg, "training.wm_warmup_steps", default=2000))
         cls_steps = int(OmegaConf.select(cfg, "training.classifier_warmup_steps", default=2000))
+        warmup_replay_epochs = int(
+            OmegaConf.select(cfg, "training.warmup_replay_epochs", default=0) or 0
+        )
+        warmup_replay_max_steps = int(
+            OmegaConf.select(cfg, "training.warmup_replay_max_steps", default=0) or 0
+        )
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
         optim_cfg = OmegaConf.select(cfg, "optim")
@@ -263,14 +439,37 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             rank=self._rank,
         )
         if need_wm or need_cls:
+            data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir")
+            hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir")
+            max_seed_label = (
+                "all"
+                if max_seed_eps is None
+                else f"<= {int(max_seed_eps)}/task"
+            )
+            self._print_pipeline_event(
+                "[pipeline][replay] loading offline shards "
+                f"data_dir={data_dir} hidden_dir={hidden_dir} "
+                f"tasks={list(env_task_ids)} seq_len={seq_len} "
+                f"capacity={buffer_size} capacity_mode={replay_capacity_mode} "
+                f"episodes={max_seed_label}"
+            )
+            replay_load_start = time.perf_counter()
             n = seed_replay_from_offline(
                 warmup_replay,
-                data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
-                hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
+                data_dir=data_dir,
+                hidden_dir=hidden_dir,
                 default_task_id=(int(default_task_id) if default_task_id is not None else None),
                 max_episodes_per_task=(
                     int(max_seed_eps) if max_seed_eps is not None else None
                 ),
+            )
+            replay_load_s = time.perf_counter() - replay_load_start
+            sampleable_windows = int(warmup_replay.sampleable_window_count())
+            self._print_pipeline_event(
+                "[pipeline][replay] loaded complete "
+                f"episodes={n} transitions={warmup_replay.num_transitions} "
+                f"sampleable_windows={sampleable_windows} "
+                f"elapsed_s={replay_load_s:.1f}"
             )
             if self.distributed.is_main_process:
                 cap_msg = (
@@ -286,17 +485,77 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 )
             if n == 0 or warmup_replay.num_transitions == 0:
                 raise RuntimeError("offline seeding produced an empty replay buffer")
+            classifier_cfg = getattr(_unwrap(self.classifier), "cfg", None)
+            default_cls_window = int(
+                getattr(
+                    self,
+                    "_cls_window",
+                    OmegaConf.select(cfg, "classifier.window", default=4) or 4,
+                )
+            )
+            cls_window = int(getattr(classifier_cfg, "window", default_cls_window))
+            cls_chunk_size = int(getattr(classifier_cfg, "chunk_size", 1))
+            classifier_windows = int(
+                warmup_replay.classifier_window_count(
+                    window=cls_window,
+                    chunk_size=cls_chunk_size,
+                )
+            )
+            wm_steps, cls_steps = self._resolve_warmup_steps(
+                warmup_replay,
+                wm_steps=wm_steps,
+                cls_steps=cls_steps,
+                replay_epochs=warmup_replay_epochs,
+                replay_max_steps=warmup_replay_max_steps,
+                wm_batch_size=bs,
+                cls_batch_size=cls_bs,
+                cls_window=cls_window,
+                cls_chunk_size=cls_chunk_size,
+            )
+            self._print_pipeline_event(
+                "[pipeline][warmup] resolved replay warmup "
+                f"epochs={warmup_replay_epochs} wm_updates={wm_steps} "
+                f"cls_updates={cls_steps} wm_batch={bs} cls_batch={cls_bs} "
+                f"classifier_window={cls_window} chunk_size={cls_chunk_size} "
+                f"classifier_windows={classifier_windows}"
+            )
             # The frozen encoder is idle during warmup — park it off-GPU to reclaim
             # its weights (restored before the online phase below).
             self._set_encoder_device("cpu")
+            self._print_pipeline_event(
+                "[pipeline][device] encoder parked on cpu for replay warmup"
+            )
 
-        if need_wm:
+        if need_wm and need_cls:
+            self.console_banner(
+                "[1/3] REPLAY WARMUP",
+                subtitle=f"wm={wm_steps} cls={cls_steps} learner updates",
+            )
+            wm_last, cls_last = self._offline_warmup_alternating(
+                warmup_replay,
+                wm_steps=wm_steps,
+                cls_steps=cls_steps,
+                wm_batch_size=bs,
+                cls_batch_size=cls_bs,
+                optim_cfg=optim_cfg,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+            )
+            if self.distributed.is_main_process:
+                self._save_wm_warmup()
+                self._save_cls_warmup()
+                self.console_banner(
+                    "[1/3] REPLAY WARMUP",
+                    subtitle=f"wm_loss {wm_last:.3f} cls_acc {cls_last:.3f}",
+                    done=True,
+                )
+        elif need_wm:
             self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
             wm_last = self._offline_warmup_wm(warmup_replay, steps=wm_steps, batch_size=bs, optim_cfg=optim_cfg)
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
-        else:
+        if not need_wm:
             if os.path.exists(self._wm_warmup_ckpt()):
                 payload = torch.load(self._wm_warmup_ckpt(), map_location="cpu", weights_only=False)
                 _unwrap(self.world_model).load_state_dict(payload["world_model"])
@@ -304,14 +563,14 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 src = load_module_pretrained(self._wm_warmup_hf_dir())
                 _unwrap(self.world_model).load_state_dict(src.state_dict())
 
-        if need_cls:
+        if need_cls and not need_wm:
             self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
             cls_last = self._offline_warmup_classifier(warmup_replay, steps=cls_steps, batch_size=cls_bs,
                                             early_neg_stride=early_neg_stride, grad_clip=grad_clip)
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
                 self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True)
-        else:
+        if not need_cls:
             if os.path.exists(self._cls_warmup_ckpt()):
                 payload = torch.load(self._cls_warmup_ckpt(), map_location="cpu", weights_only=False)
                 _unwrap(self.classifier).load_state_dict(payload["classifier"])
@@ -332,5 +591,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             return []
         # Restore the encoder onto the device for the online phase that uses it.
         self._set_encoder_device(self.device)
+        self._print_pipeline_event(
+            f"[pipeline][device] encoder restored to {self.device} for online rollout"
+        )
         self.console_banner("[3/3] ONLINE COTRAIN", subtitle=f"{total_env_steps} env steps")
         return self._online_cotrain_loop(cfg)
