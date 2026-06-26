@@ -20,6 +20,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from dreamervla.dataset.collection_manifest import (
     format_collection_report,
     quarantine_corrupt_shards,
+    read_manifest,
     resume_plan,
     summarize_collection,
     write_manifest,
@@ -655,6 +656,7 @@ def _write_collection_manifest(
     summary = summarize_collection(
         plan.reward_dir, target_total=target_episodes, num_tasks=num_tasks
     )
+    existing = read_manifest(plan.collected_root) or {}
     shards = (
         sorted(p.name for p in plan.reward_dir.glob("*.hdf5"))
         if plan.reward_dir.is_dir()
@@ -662,6 +664,7 @@ def _write_collection_manifest(
     )
     hidden_schema: dict[str, object] = {}
     preprocess_path = plan.hidden_dir / "preprocess_config.json"
+    preprocess: dict[str, Any] = {}
     if preprocess_path.is_file():
         try:
             preprocess = json.loads(preprocess_path.read_text(encoding="utf-8"))
@@ -673,33 +676,72 @@ def _write_collection_manifest(
             "token_count",
             "token_dim",
             "output_dtype",
+            "hidden_dim",
         ):
             if key in preprocess:
                 hidden_schema[key] = preprocess[key]
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    resolved = plan.run_root / "collect" / "resolved_config.yaml"
+    resolved_snapshot = (
+        resolved.read_text(encoding="utf-8") if resolved.is_file() else None
+    )
+    suite = str(preprocess.get("task_suite_name") or plan.collected_root.name)
+    collected_counts = {
+        "total": int(summary["total"]),
+        "per_task": {str(k): int(v) for k, v in summary["per_task"].items()},
+    }
+    resume_status = {
+        "complete": bool(summary["complete"]),
+        "remaining": summary["remaining"],
+        "target_total": summary["target_total"],
+        "target_per_task": summary["target_per_task"],
+        "num_tasks": int(summary["num_tasks"]),
+    }
     write_manifest(
         plan.collected_root,
         {
+            "suite": suite,
             "task": plan.task,
             "mode": plan.mode,
             "profile": plan.profile,
             "backend": os.environ.get("MUJOCO_GL", "unknown"),
             "reward_dir": str(plan.reward_dir),
             "hidden_dir": str(plan.hidden_dir),
+            "policy_checkpoint": _policy_checkpoint_from_cmd(plan.collect_cmd),
             "hidden_schema": hidden_schema,
             "target_episodes": target_episodes,
             "num_tasks": num_tasks,
+            "collected_counts": collected_counts,
             "collected_episodes": summary["total"],
             "episodes_per_task": summary["per_task"],
             "shards": shards,
             "status": "complete" if summary["complete"] else "in_progress",
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "resume_status": resume_status,
+            "created_at": existing.get("created_at", now),
+            "updated_at": now,
+            "resolved_config_snapshot": resolved_snapshot,
             "collect_cmd": list(plan.collect_cmd),
         },
     )
     # Co-locate the resolved collection config with the data (best-effort).
-    resolved = plan.run_root / "collect" / "resolved_config.yaml"
     if resolved.is_file():
         shutil.copy2(resolved, plan.collected_root / "resolved_config.yaml")
+
+
+def _policy_checkpoint_from_cmd(cmd: Sequence[str]) -> str | None:
+    for item in cmd:
+        text = str(item)
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        if key in {
+            "init.vla_ckpt_path",
+            "collect.model_path",
+            "task.openvla_oft.ckpt_path",
+            "policy.ckpt_path",
+        }:
+            return value
+    return None
 
 
 if __name__ == "__main__":

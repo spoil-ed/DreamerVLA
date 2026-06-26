@@ -1037,7 +1037,13 @@ class BaseRunner(ABC):
         return st
 
     def console_progress(
-        self, current: int, total: int | None, desc: str, *, unit: str = "it"
+        self,
+        current: int,
+        total: int | None,
+        desc: str,
+        *,
+        unit: str = "it",
+        status: str | None = None,
     ) -> None:
         # One uniform progress line per flow. Caches a wall-time-throttled
         # ProgressReporter per ``desc`` so every loop reports identically; the
@@ -1052,8 +1058,11 @@ class BaseRunner(ABC):
                 enabled=self.is_main_process,
                 min_interval_s=st["progress_every_s"],
                 unit=unit,
+                status=status,
             )
             reporters[desc] = rep
+        else:
+            rep.set_status(status)
         rep.set(current)
 
     def console_banner(self, title: str, *, subtitle: str | None = None, done: bool = False) -> None:

@@ -115,6 +115,37 @@ class _TinyPolicy(torch.nn.Module):
         raise ValueError(batch["mode"])
 
 
+class _ActionScoringRefPolicy(torch.nn.Module):
+    """Reference policy whose log-prob varies with the sampled action.
+
+    Used to prove that KL-derived return variance must not make an all-fail
+    classifier group eligible for PPO; the adaptive keep/skip decision is based
+    on classifier score/outcome signal, not KL alone.
+    """
+
+    def forward(self, batch):
+        hidden = batch["hidden"]
+        batch_size = int(hidden.shape[0])
+        if batch["mode"] == "evaluate":
+            action = batch["action"]
+            log_prob = -(action.float().reshape(batch_size, -1).square().sum(dim=-1))
+            return log_prob, torch.zeros_like(log_prob), {}
+        if batch["mode"] == "sample":
+            action_chunk = torch.zeros(
+                batch_size,
+                2,
+                1,
+                dtype=hidden.dtype,
+                device=hidden.device,
+            )
+            return (
+                action_chunk,
+                torch.zeros(batch_size, dtype=hidden.dtype, device=hidden.device),
+                {"action_chunk": action_chunk},
+            )
+        raise ValueError(batch["mode"])
+
+
 def _cfg(reward_model: str = "sparse_outcome"):
     return OmegaConf.create(
         {
@@ -225,3 +256,56 @@ def test_lumos_rollout_bounds_use_configured_max_group_size_with_adaptive_prefix
     assert metrics["LUMOS/group_size"] == 4.0
     assert metrics["LUMOS/effective_group_size_mean"] == 2.0
     assert metrics["LUMOS/skipped_zero_variance_groups"] == 0.0
+
+
+def test_zero_classifier_variance_skips_even_when_ref_kl_varies():
+    cfg = _cfg()
+    cfg.lumos.ppo_rollouts_per_start_min = 2
+    cfg.lumos.ppo_rollouts_per_start_max = 2
+    cfg.kl_coef = 1.0
+    policy = _TinyPolicy()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=_TinyChunkWM(),
+        classifier=_DegenerateClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={"obs_embedding": torch.zeros(1, 1, 1)},
+        device=torch.device("cpu"),
+        algorithm_cfg=cfg,
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=_ActionScoringRefPolicy(),
+    )
+
+    assert metrics["LUMOS/skipped_zero_variance_groups"] == 1.0
+    assert metrics["LUMOS/group_var_keep_frac"] == 0.0
+    assert metrics["ppo_step_applied"] == 0.0
+
+
+def test_group_var_keep_frac_reports_signal_health_when_filter_disabled():
+    cfg = _cfg()
+    cfg.lumos.filter_zero_variance_groups = False
+    policy = _TinyPolicy()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=_TinyChunkWM(),
+        classifier=_DegenerateClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={"obs_embedding": torch.zeros(1, 1, 1)},
+        device=torch.device("cpu"),
+        algorithm_cfg=cfg,
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=None,
+    )
+
+    assert metrics["LUMOS/skipped_zero_variance_groups"] == 1.0
+    assert metrics["LUMOS/group_var_keep_frac"] == 0.0

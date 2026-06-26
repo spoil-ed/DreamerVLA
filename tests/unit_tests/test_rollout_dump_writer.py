@@ -311,21 +311,35 @@ def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
             "token_dim": 4096,
             "ignored_none": None,
             "ignored_dict": {"not": "an attr scalar"},
+            "ignored_array": np.arange(3),
         },
     )
     writer.close()
 
     with h5py.File(reward_dir / "shard_000.hdf5", "r") as f:
         attrs = f["data"]["demo_0"].attrs
+        assert attrs["success"] == np.True_
+        assert attrs["horizon"] == 300
+        assert attrs["episode_success"] == np.True_
+        assert attrs["episode_horizon"] == 300
         assert attrs["task_id"] == 2
         assert attrs["episode_id"] == 7
         assert attrs["suite"] == "libero_goal"
         assert attrs["task_name"] == "open drawer"
+        assert attrs["global_episode_index"] == 123
+        assert attrs["policy_name"] == "openvla_oft_default"
+        assert attrs["policy_ckpt"] == "/ckpts/policy"
+        assert attrs["policy_version"] == 5
+        assert attrs["success_step"] == 9
         assert attrs["chunk_size"] == 8
         assert attrs["action_scale"] == "raw"
         assert attrs["timeout"] == np.False_
+        assert attrs["seed"] == 17
+        assert attrs["render_backend"] == "egl"
+        assert attrs["hidden_key"] == "obs_embedding"
         assert attrs["hidden_dim"] == HIDDEN_DIM
         assert attrs["token_count"] == 56
         assert attrs["token_dim"] == 4096
         assert "ignored_none" not in attrs
         assert "ignored_dict" not in attrs
+        assert "ignored_array" not in attrs

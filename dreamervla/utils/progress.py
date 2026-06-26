@@ -30,6 +30,7 @@ class ProgressReporter:
         enabled: bool = True,
         min_interval_s: float = 5.0,
         unit: str = "it",
+        status: str | None = None,
         clock: Callable[[], float] = time.monotonic,
         sink: Callable[[str], None] = _flush_print,
     ) -> None:
@@ -38,6 +39,7 @@ class ProgressReporter:
         self.enabled = enabled
         self.min_interval_s = float(min_interval_s)
         self.unit = unit
+        self.status = status
         self._clock = clock
         self._sink = sink
         self._current = 0
@@ -46,6 +48,9 @@ class ProgressReporter:
 
     def update(self, n: int = 1) -> None:
         self.set(self._current + n)
+
+    def set_status(self, status: str | None) -> None:
+        self.status = status
 
     def set(self, current: int) -> None:
         self._current = int(current)
@@ -75,6 +80,7 @@ class ProgressReporter:
                 eta_s=eta,
                 rate=rate,
                 unit=self.unit,
+                status=self.status,
             )
         )
         self._last_print_t = now

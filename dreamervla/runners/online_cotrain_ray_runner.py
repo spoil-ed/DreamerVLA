@@ -18,7 +18,9 @@ from typing import Any
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runners.base_runner import _atomic_torch_save, _materialize_checkpoint_copy
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
     FlexiblePlacementStrategy,
@@ -219,6 +221,14 @@ class OnlineCotrainRayRunner(BaseRunner):
             result = self._run_loop_sync(groups)
         else:
             result = self._run_loop_overlap(groups)
+        self._maybe_save_ray_checkpoint(
+            groups,
+            env_steps=int(result.get("rollout/steps", 0)),
+            learner_updates=int(result.get("train/learner_updates", 0)),
+            policy_version=int(result.get("sync/policy_version", 0)),
+            metrics=result,
+            force=True,
+        )
         self.console_banner("ONLINE COTRAIN (ray)", done=True)
         return result
 
@@ -229,6 +239,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         learner = groups["learner"]
         env_ids = list(range(int(groups["num_envs"])))
         target_env_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
+        target_global_steps = self._target_global_steps()
         min_episodes = self._int_from(
             ("rollout.min_replay_episodes", "min_replay_episodes"), 1
         )
@@ -238,7 +249,8 @@ class OnlineCotrainRayRunner(BaseRunner):
         )
         learner_phase = self._learner_update_phase()
 
-        learner_updates = 0
+        learner_updates = int(getattr(self, "global_step", 0) or 0)
+        self.global_step = learner_updates
         policy_version = 0
         local_infer_version = 0
         last_loss = 0.0
@@ -256,16 +268,46 @@ class OnlineCotrainRayRunner(BaseRunner):
         episode_count = 0
         episode_successes = 0
         last_episode_success = 0
+        task_state = self._make_rollout_task_state(len(env_ids))
+        active_task_by_env = task_state["active_task_by_env"]
+        episode_steps_by_env: dict[int, int] = {}
 
-        while env_steps < target_env_steps:
-            self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
+        while self._cotrain_should_continue(
+            learner_updates,
+            target_global_steps,
+            env_steps,
+            target_env_steps,
+        ):
+            self._console_cotrain_progress(
+                learner_updates,
+                target_global_steps,
+                env_steps,
+                target_env_steps,
+                episode_count=episode_count,
+                episode_successes=episode_successes,
+                active_task_by_env=active_task_by_env,
+                episode_steps_by_env=episode_steps_by_env,
+                last_loss=last_loss,
+                last_metrics=last_metrics,
+            )
             obs_batch_all = envs.current_obs().wait()
+            for env_id, obs in enumerate(obs_batch_all):
+                if isinstance(obs, dict):
+                    episode_steps_by_env[int(env_id)] = int(obs.get("step", 0) or 0)
+                    if "task_id" in obs:
+                        active_task_by_env[int(env_id)] = int(obs["task_id"])
             active_env_ids = env_ids[
                 : max(0, min(len(env_ids), target_env_steps - env_steps))
             ]
             obs_batch = [obs_batch_all[env_id] for env_id in active_env_ids]
 
-            if pending_learn is None and replay.ready(**replay_ready_kwargs).wait()[0]:
+            if (
+                pending_learn is None
+                and self._cotrain_can_launch_learner(
+                    learner_updates, target_global_steps
+                )
+                and replay.ready(**replay_ready_kwargs).wait()[0]
+            ):
                 pending_learn = learner.update(learner_phase, 1)
                 pending_learn_start = time.perf_counter()
 
@@ -296,6 +338,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             for env_id, (_obs, done, info) in zip(
                 active_env_ids, step_results, strict=True
             ):
+                next_obs = _obs
                 if done:
                     done_envs.append(env_id)
                     success = bool((info or {}).get("success", False))
@@ -306,6 +349,18 @@ class OnlineCotrainRayRunner(BaseRunner):
                         episode=episode_count,
                         success=success,
                         successes=episode_successes,
+                    )
+                    next_obs = self._maybe_rotate_rollout_task(
+                        envs, int(env_id), next_obs, task_state
+                    )
+                    episode_steps_by_env[int(env_id)] = int(
+                        next_obs.get("step", 0) if isinstance(next_obs, dict) else 0
+                    )
+                else:
+                    episode_steps_by_env[int(env_id)] = int(
+                        next_obs.get("step", episode_steps_by_env.get(int(env_id), 0) + 1)
+                        if isinstance(next_obs, dict)
+                        else episode_steps_by_env.get(int(env_id), 0) + 1
                     )
             if done_envs:
                 infer.reset_states(done_envs).wait()
@@ -319,6 +374,7 @@ class OnlineCotrainRayRunner(BaseRunner):
                     last_metrics = _float_metrics(metrics)
                     last_loss = _learner_loss(metrics)
                     learner_updates += 1
+                    self.global_step = learner_updates
                     policy_version += 1
                     update_metrics = {"train/rl_loss": last_loss, **last_metrics}
                     self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
@@ -337,6 +393,13 @@ class OnlineCotrainRayRunner(BaseRunner):
                         and rollout_start < time.perf_counter()
                     ):
                         overlap_events += 1
+                    self._maybe_save_ray_checkpoint(
+                        groups,
+                        env_steps=env_steps,
+                        learner_updates=learner_updates,
+                        policy_version=policy_version,
+                        metrics=update_metrics,
+                    )
                     pending_learn = None
 
         if pending_learn is not None:
@@ -346,6 +409,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_metrics = _float_metrics(metrics)
             last_loss = _learner_loss(metrics)
             learner_updates += 1
+            self.global_step = learner_updates
             policy_version += 1
             # Stamp subsequently-added episodes with the new rollout policy version
             # so the learner's staleness gate (Phase 4) can age replay samples.
@@ -353,6 +417,13 @@ class OnlineCotrainRayRunner(BaseRunner):
             update_metrics = {"train/rl_loss": last_loss, **last_metrics}
             self.console_metrics(f"cotrain · step {learner_updates}", update_metrics)
             self.log_metrics(update_metrics, step=learner_updates)
+            self._maybe_save_ray_checkpoint(
+                groups,
+                env_steps=env_steps,
+                learner_updates=learner_updates,
+                policy_version=policy_version,
+                metrics=update_metrics,
+            )
             learner.sync_weights("policy", policy_version).wait()
 
         rollout_success = self._rollout_success_metrics(
@@ -360,8 +431,20 @@ class OnlineCotrainRayRunner(BaseRunner):
             episode_successes=episode_successes,
             last_episode_success=last_episode_success,
         )
-        self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
+        self._console_cotrain_progress(
+            learner_updates,
+            target_global_steps,
+            env_steps,
+            target_env_steps,
+            episode_count=episode_count,
+            episode_successes=episode_successes,
+            active_task_by_env=active_task_by_env,
+            episode_steps_by_env=episode_steps_by_env,
+            last_loss=last_loss,
+            last_metrics=last_metrics,
+        )
         return {
+            "global_step": int(learner_updates),
             "rollout/steps": int(env_steps),
             "rollout/infer_batches": int(infer_batches),
             "train/learner_updates": int(learner_updates),
@@ -392,6 +475,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         learner = groups["learner"]
         env_ids = list(range(int(groups["num_envs"])))
         target_env_steps = self._int_from(("rollout.steps", "rollout_steps"), 9)
+        target_global_steps = self._target_global_steps()
         min_episodes = self._int_from(
             ("rollout.min_replay_episodes", "min_replay_episodes"), 1
         )
@@ -412,7 +496,8 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         env_steps = 0
         infer_batches = 0
-        learner_updates = 0
+        learner_updates = int(getattr(self, "global_step", 0) or 0)
+        self.global_step = learner_updates
         policy_version = 0
         local_infer_version = 0
         last_loss = 0.0
@@ -432,6 +517,9 @@ class OnlineCotrainRayRunner(BaseRunner):
         episode_count = 0
         episode_successes = 0
         last_episode_success = 0
+        task_state = self._make_rollout_task_state(len(env_ids))
+        active_task_by_env = task_state["active_task_by_env"]
+        episode_steps_by_env: dict[int, int] = {}
 
         def add_infer_timing(infer_out: dict[str, Any]) -> None:
             for key, value in dict(infer_out.get("timing", {})).items():
@@ -448,6 +536,13 @@ class OnlineCotrainRayRunner(BaseRunner):
         def launch_infer() -> None:
             nonlocal infer_batches, rollout_overlap_events, rollout_strict_overlap_events
             if pending_infers or not ready_obs:
+                return
+            if not self._cotrain_should_continue(
+                learner_updates,
+                target_global_steps,
+                env_steps,
+                target_env_steps,
+            ):
                 return
             remaining = target_env_steps - env_steps - in_flight_env_steps()
             if remaining <= 0:
@@ -500,13 +595,36 @@ class OnlineCotrainRayRunner(BaseRunner):
                     success=success,
                     successes=episode_successes,
                 )
+                next_obs = self._maybe_rotate_rollout_task(
+                    envs, int(env_id), next_obs, task_state
+                )
+                episode_steps_by_env[int(env_id)] = int(
+                    next_obs.get("step", 0) if isinstance(next_obs, dict) else 0
+                )
                 infer.reset_states([int(env_id)]).wait()
-            if env_steps + in_flight_env_steps() < target_env_steps:
+            else:
+                episode_steps_by_env[int(env_id)] = int(
+                    next_obs.get("step", episode_steps_by_env.get(int(env_id), 0) + 1)
+                    if isinstance(next_obs, dict)
+                    else episode_steps_by_env.get(int(env_id), 0) + 1
+                )
+            if (
+                self._cotrain_should_continue(
+                    learner_updates,
+                    target_global_steps,
+                    env_steps + in_flight_env_steps(),
+                    target_env_steps,
+                )
+            ):
                 ready_obs.append((int(env_id), next_obs))
 
         def maybe_launch_learner() -> None:
             nonlocal pending_learn, pending_learn_start, pending_learn_overlapped
             if pending_learn is not None:
+                return
+            if not self._cotrain_can_launch_learner(
+                learner_updates, target_global_steps
+            ):
                 return
             if not bool(replay.ready(**replay_ready_kwargs).wait()[0]):
                 return
@@ -535,6 +653,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             last_metrics = _float_metrics(metrics)
             last_loss = _learner_loss(metrics)
             learner_updates += 1
+            self.global_step = learner_updates
             policy_version += 1
             # Stamp subsequently-added episodes with the new rollout policy version
             # so the learner's staleness gate (Phase 4) can age replay samples.
@@ -555,11 +674,23 @@ class OnlineCotrainRayRunner(BaseRunner):
 
             if pending_learn_overlapped and pending_learn_start <= time.perf_counter():
                 overlap_events += 1
+            self._maybe_save_ray_checkpoint(
+                groups,
+                env_steps=env_steps,
+                learner_updates=learner_updates,
+                policy_version=policy_version,
+                metrics=update_metrics,
+            )
             pending_learn = None
             pending_learn_start = 0.0
             pending_learn_overlapped = False
 
         initial_obs = envs.current_obs().wait()
+        for env_id, obs in zip(env_ids, initial_obs, strict=True):
+            if isinstance(obs, dict):
+                episode_steps_by_env[int(env_id)] = int(obs.get("step", 0) or 0)
+                if "task_id" in obs:
+                    active_task_by_env[int(env_id)] = int(obs["task_id"])
         ready_obs.extend(
             (int(env_id), obs)
             for env_id, obs in zip(env_ids, initial_obs, strict=True)
@@ -568,8 +699,26 @@ class OnlineCotrainRayRunner(BaseRunner):
         launch_infer()
 
         while pending_infers or pending_steps or ready_obs:
-            self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
+            self._console_cotrain_progress(
+                learner_updates,
+                target_global_steps,
+                env_steps,
+                target_env_steps,
+                episode_count=episode_count,
+                episode_successes=episode_successes,
+                active_task_by_env=active_task_by_env,
+                episode_steps_by_env=episode_steps_by_env,
+                last_loss=last_loss,
+                last_metrics=last_metrics,
+            )
             finish_learner(block=False)
+            if not self._cotrain_should_continue(
+                learner_updates,
+                target_global_steps,
+                env_steps + in_flight_env_steps(),
+                target_env_steps,
+            ):
+                ready_obs.clear()
             maybe_launch_learner()
             launch_infer()
             refs = list(pending_infers) + list(pending_steps)
@@ -605,7 +754,12 @@ class OnlineCotrainRayRunner(BaseRunner):
                     handle_step_result(env_id, step_result)
 
             finish_learner(block=False)
-            if env_steps >= target_env_steps:
+            if not self._cotrain_should_continue(
+                learner_updates,
+                target_global_steps,
+                env_steps,
+                target_env_steps,
+            ):
                 ready_obs.clear()
 
         for _env_id, result, start_time in list(pending_steps.values()):
@@ -624,8 +778,20 @@ class OnlineCotrainRayRunner(BaseRunner):
             episode_successes=episode_successes,
             last_episode_success=last_episode_success,
         )
-        self.console_progress(env_steps, target_env_steps, "rollout", unit="step")
+        self._console_cotrain_progress(
+            learner_updates,
+            target_global_steps,
+            env_steps,
+            target_env_steps,
+            episode_count=episode_count,
+            episode_successes=episode_successes,
+            active_task_by_env=active_task_by_env,
+            episode_steps_by_env=episode_steps_by_env,
+            last_loss=last_loss,
+            last_metrics=last_metrics,
+        )
         return {
+            "global_step": int(learner_updates),
             "rollout/steps": int(env_steps),
             "rollout/infer_batches": int(infer_batches),
             "train/learner_updates": int(learner_updates),
@@ -684,6 +850,152 @@ class OnlineCotrainRayRunner(BaseRunner):
             "rollout/success_rate_valid": float(int(episode_count) > 0),
             "rollout/recent_success_rate": float(recent_success_rate),
             "rollout/recent_success_rate_valid": float(int(episode_count) > 0),
+        }
+
+    def _checkpoint_cfg(self) -> dict[str, Any]:
+        raw = OmegaConf.select(self.cfg, "checkpoint", default={}) or {}
+        cfg = _plain(raw)
+        if not isinstance(cfg, dict):
+            raise TypeError("checkpoint must be a mapping")
+        if "save_interval" not in cfg:
+            legacy_interval = cfg.get(
+                "every_updates",
+                OmegaConf.select(self.cfg, "training.checkpoint_every", default=0),
+            )
+            cfg["save_interval"] = legacy_interval
+        cfg.setdefault("save_final", False)
+        cfg.setdefault("filename", "learner.ckpt")
+        cfg.setdefault("latest_name", "latest.ckpt")
+        return cfg
+
+    def _maybe_save_ray_checkpoint(
+        self,
+        groups: dict[str, Any],
+        *,
+        env_steps: int,
+        learner_updates: int,
+        policy_version: int,
+        metrics: dict[str, Any],
+        force: bool = False,
+    ) -> Path | None:
+        cfg = self._checkpoint_cfg()
+        global_step = int(learner_updates)
+        if global_step <= 0:
+            return None
+        save_interval = int(cfg.get("save_interval", 0) or 0)
+        if force:
+            if not bool(cfg.get("save_final", False)):
+                return None
+        elif (
+            save_interval <= 0
+            or global_step % save_interval != 0
+        ):
+            return None
+        return self._save_ray_checkpoint(
+            groups["learner"],
+            env_steps=env_steps,
+            learner_updates=global_step,
+            policy_version=policy_version,
+            metrics=metrics,
+            checkpoint_cfg=cfg,
+        )
+
+    def _save_ray_checkpoint(
+        self,
+        learner: Any,
+        *,
+        env_steps: int,
+        learner_updates: int,
+        policy_version: int,
+        metrics: dict[str, Any],
+        checkpoint_cfg: dict[str, Any] | None = None,
+    ) -> Path:
+        cfg = checkpoint_cfg if checkpoint_cfg is not None else self._checkpoint_cfg()
+        global_step = int(learner_updates)
+        path = self._ray_checkpoint_path(
+            cfg,
+            global_step=global_step,
+            env_steps=int(env_steps),
+            policy_version=int(policy_version),
+        )
+        payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "global_step": global_step,
+            "cfg": self.cfg,
+            "state_dicts": self._ray_learner_state_dicts(learner),
+            "pickles": {},
+            "ray": {
+                "global_step": global_step,
+                "env_step": int(env_steps),
+                "update_step": global_step,
+                "policy_version": int(policy_version),
+            },
+            "metrics": _float_metrics(metrics),
+        }
+        _atomic_torch_save(payload, path)
+        latest_name = str(cfg.get("latest_name", "latest.ckpt") or "")
+        latest_path = None
+        if latest_name:
+            latest_path = Path(latest_name).expanduser()
+            if not latest_path.is_absolute():
+                latest_path = self._ray_checkpoint_dir(cfg) / latest_path
+            _materialize_checkpoint_copy(path, latest_path)
+        latest_text = f" latest={latest_path}" if latest_path is not None else ""
+        print(f"[ray-cotrain] checkpoint saved path={path}{latest_text}", flush=True)
+        return path
+
+    def _ray_checkpoint_path(
+        self,
+        checkpoint_cfg: dict[str, Any],
+        *,
+        global_step: int,
+        env_steps: int,
+        policy_version: int,
+    ) -> Path:
+        ckpt_dir = self._ray_checkpoint_dir(checkpoint_cfg)
+        format_str = checkpoint_cfg.get("format_str")
+        if format_str not in (None, ""):
+            filename = str(format_str).format(
+                global_step=int(global_step),
+                env_step=int(env_steps),
+                update_step=int(global_step),
+                policy_version=int(policy_version),
+            )
+            return ckpt_dir / filename
+        filename = str(checkpoint_cfg.get("filename", "learner.ckpt") or "learner.ckpt")
+        return ckpt_dir / f"global_step_{int(global_step)}" / filename
+
+    def _ray_checkpoint_dir(self, checkpoint_cfg: dict[str, Any]) -> Path:
+        raw = checkpoint_cfg.get("dir")
+        if raw in (None, ""):
+            return self.get_checkpoint_dir()
+        path = Path(str(raw)).expanduser()
+        if path.is_absolute():
+            return path
+        return self.get_run_dir() / path
+
+    def _ray_learner_state_dicts(
+        self, learner: Any
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        handle = learner
+        if hasattr(learner, "execute_on"):
+            handle = learner.execute_on(0)
+        result = handle.state_dicts()
+        if hasattr(result, "wait"):
+            values = result.wait()
+            state_dicts = values[0] if isinstance(values, list) else values
+        else:
+            state_dicts = result
+        if not isinstance(state_dicts, dict):
+            raise TypeError("Ray learner state_dicts() must return a mapping")
+        return {
+            str(name): {
+                str(key): value.detach().cpu()
+                if isinstance(value, torch.Tensor)
+                else value
+                for key, value in dict(state).items()
+            }
+            for name, state in state_dicts.items()
         }
 
     def _learner_update_phase(self) -> str:
@@ -747,6 +1059,90 @@ class OnlineCotrainRayRunner(BaseRunner):
             ),
         }
 
+    def _make_rollout_task_state(self, num_envs: int) -> dict[str, Any]:
+        task_ids = self._rollout_task_ids()
+        active_task_by_env: dict[int, int] = {}
+        if task_ids:
+            for env_id in range(max(0, int(num_envs))):
+                active_task_by_env[int(env_id)] = int(task_ids[env_id % len(task_ids)])
+        return {
+            "task_ids": task_ids,
+            "active_task_by_env": active_task_by_env,
+            "task_episode_counts": {int(task_id): 0 for task_id in task_ids},
+            "next_task_index": int(num_envs) if task_ids else 0,
+        }
+
+    def _maybe_rotate_rollout_task(
+        self,
+        envs: Any,
+        env_id: int,
+        next_obs: dict[str, Any],
+        task_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Switch an env to the next configured task after an episode boundary.
+
+        This is deliberately episode-boundary based: low-level env/rollout steps only
+        update progress status; they do not drive task switching or train progress.
+        """
+
+        task_ids = list(task_state.get("task_ids") or [])
+        if not task_ids:
+            return next_obs
+        active_task_by_env = task_state["active_task_by_env"]
+        task_episode_counts = task_state["task_episode_counts"]
+        env_id = int(env_id)
+        current_task = active_task_by_env.get(env_id)
+        if current_task is not None:
+            task_episode_counts[int(current_task)] = (
+                int(task_episode_counts.get(int(current_task), 0)) + 1
+            )
+        next_index = int(task_state.get("next_task_index", 0))
+        next_task = int(task_ids[next_index % len(task_ids)])
+        task_state["next_task_index"] = next_index + 1
+        active_task_by_env[env_id] = next_task
+        start_episode_id = int(task_episode_counts.get(next_task, 0))
+        switched = envs.execute_on(env_id).set_task(next_task, start_episode_id).wait()
+        if isinstance(switched, list):
+            return dict(switched[0])
+        return dict(switched)
+
+    def _cotrain_progress_status(
+        self,
+        *,
+        env_steps: int,
+        target_env_steps: int,
+        episode_count: int,
+        episode_successes: int,
+        active_task_by_env: dict[int, int] | None = None,
+        episode_steps_by_env: dict[int, int] | None = None,
+        last_loss: float = 0.0,
+        last_metrics: dict[str, float] | None = None,
+    ) -> str:
+        parts = [f"env_steps={int(env_steps)}/{int(target_env_steps)}"]
+        active = dict(active_task_by_env or {})
+        ep_steps = dict(episode_steps_by_env or {})
+        if active:
+            pairs = []
+            for env_id in sorted(active):
+                task_id = int(active[env_id])
+                step = int(ep_steps.get(int(env_id), 0))
+                pairs.append(f"t{task_id}:s{step}")
+            parts.append("collect=" + ",".join(pairs[:4]))
+        if int(episode_count) > 0:
+            success_rate = float(episode_successes) / max(1, int(episode_count))
+            parts.append(f"eps={int(episode_count)}")
+            parts.append(f"succ={success_rate:.3f}")
+        if float(last_loss) != 0.0:
+            parts.append(f"loss={float(last_loss):.3f}")
+        metrics = last_metrics or {}
+        if "cls/acc" in metrics:
+            parts.append(f"cls_acc={float(metrics['cls/acc']):.3f}")
+        elif "cls/f1" in metrics:
+            parts.append(f"cls_f1={float(metrics['cls/f1']):.3f}")
+        if "rl/returns_mean" in metrics:
+            parts.append(f"ret={float(metrics['rl/returns_mean']):.3f}")
+        return " ".join(parts)
+
     def _egl_device_pool(self) -> list[int]:
         """Physical GPU ids for egl env rendering (default backend). Read from the driver's
         CUDA_VISIBLE_DEVICES; empty when the render backend is osmesa."""
@@ -760,6 +1156,79 @@ class OnlineCotrainRayRunner(BaseRunner):
 
     def _int_from(self, paths: tuple[str, ...], default: int) -> int:
         return int(self._select_first(paths, default))
+
+    def _target_global_steps(self) -> int | None:
+        for path in (
+            "training.max_steps",
+            "training.max_train_steps",
+            "runner.max_steps",
+        ):
+            value = OmegaConf.select(self.cfg, path, default=None)
+            if value is None:
+                continue
+            steps = int(value)
+            return steps if steps >= 0 else None
+        return None
+
+    def _cotrain_should_continue(
+        self,
+        global_step: int,
+        target_global_steps: int | None,
+        env_steps: int,
+        target_env_steps: int,
+    ) -> bool:
+        if (
+            target_global_steps is not None
+            and int(global_step) >= int(target_global_steps)
+        ):
+            return False
+        return int(env_steps) < int(target_env_steps)
+
+    def _cotrain_can_launch_learner(
+        self, global_step: int, target_global_steps: int | None
+    ) -> bool:
+        return target_global_steps is None or int(global_step) < int(target_global_steps)
+
+    def _console_cotrain_progress(
+        self,
+        global_step: int,
+        target_global_steps: int | None,
+        env_steps: int,
+        target_env_steps: int,
+        *,
+        episode_count: int = 0,
+        episode_successes: int = 0,
+        active_task_by_env: dict[int, int] | None = None,
+        episode_steps_by_env: dict[int, int] | None = None,
+        last_loss: float = 0.0,
+        last_metrics: dict[str, float] | None = None,
+    ) -> None:
+        status = self._cotrain_progress_status(
+            env_steps=int(env_steps),
+            target_env_steps=int(target_env_steps),
+            episode_count=int(episode_count),
+            episode_successes=int(episode_successes),
+            active_task_by_env=active_task_by_env,
+            episode_steps_by_env=episode_steps_by_env,
+            last_loss=float(last_loss),
+            last_metrics=last_metrics,
+        )
+        if target_global_steps is not None:
+            self.console_progress(
+                int(global_step),
+                int(target_global_steps),
+                "train",
+                unit="step",
+                status=status,
+            )
+            return
+        self.console_progress(
+            int(env_steps),
+            int(target_env_steps),
+            "rollout",
+            unit="env",
+            status=status,
+        )
 
     def _cfg_from(self, path: str, default: dict[str, Any]) -> dict[str, Any]:
         value = OmegaConf.select(self.cfg, path, default=None)

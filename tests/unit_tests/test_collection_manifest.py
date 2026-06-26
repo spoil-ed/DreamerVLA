@@ -101,15 +101,20 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
     import dreamervla.launchers.coldstart_warmup_cotrain as launcher
 
     del monkeypatch
-    collected_root = tmp_path / "collected"
+    collected_root = tmp_path / "collected_rollouts" / "libero_goal"
     reward_dir = collected_root / "reward"
     hidden_dir = collected_root / "hidden"
     reward_dir.mkdir(parents=True)
     hidden_dir.mkdir(parents=True)
+    collect_out = tmp_path / "run" / "collect"
+    collect_out.mkdir(parents=True)
+    resolved_config = "task:\n  suite: libero_goal\n"
+    (collect_out / "resolved_config.yaml").write_text(resolved_config, encoding="utf-8")
     (hidden_dir / "preprocess_config.json").write_text(
         json.dumps(
             {
                 "hidden_key": "obs_embedding",
+                "hidden_dim": 229376,
                 "chunk_size": 8,
                 "token_count": 56,
                 "token_dim": 4096,
@@ -127,17 +132,33 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
         hidden_dir=hidden_dir,
         collected_root=collected_root,
         run_root=tmp_path / "run",
-        collect_cmd=["python", "-m", "dreamervla.train"],
+        collect_cmd=[
+            "python",
+            "-m",
+            "dreamervla.train",
+            "init.vla_ckpt_path=/ckpts/openvla",
+        ],
     )
 
     launcher._write_collection_manifest(plan, target_episodes=10, num_tasks=2)
 
     manifest = json.loads((collected_root / "collection_manifest.json").read_text())
+    assert manifest["suite"] == "libero_goal"
+    assert manifest["target_episodes"] == 10
+    assert manifest["collected_counts"] == {"total": 2, "per_task": {"0": 1, "1": 1}}
+    assert manifest["policy_checkpoint"] == "/ckpts/openvla"
     assert manifest["hidden_schema"]["hidden_key"] == "obs_embedding"
+    assert manifest["hidden_schema"]["hidden_dim"] == 229376
     assert manifest["hidden_schema"]["chunk_size"] == 8
     assert manifest["hidden_schema"]["token_count"] == 56
     assert manifest["hidden_schema"]["token_dim"] == 4096
     assert manifest["backend"] in {"unknown", "egl", "osmesa"}
+    assert manifest["shards"] == ["shard_000.hdf5"]
+    assert manifest["created_at"].endswith("Z")
+    assert manifest["updated_at"].endswith("Z")
+    assert manifest["resolved_config_snapshot"] == resolved_config
+    assert manifest["resume_status"]["complete"] is False
+    assert manifest["resume_status"]["remaining"] == 8
 
 
 def test_read_manifest_missing_returns_none(tmp_path):

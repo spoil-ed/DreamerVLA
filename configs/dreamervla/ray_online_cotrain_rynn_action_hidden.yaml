@@ -130,7 +130,7 @@ env:
       max_steps: 300
 
 rollout:
-  steps: 2
+  steps: 200000
   min_replay_episodes: ${ray_data.min_replay_episodes}
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0
@@ -162,6 +162,8 @@ inference:
     path: ${init.warmup_ckpt_path}
     components: [world_model, policy]
   cfg:
+    action_dim: ${task.action_dim}
+    action_steps: ${task.legacy_action_hidden.chunk_size}
     encoder: ${ray_components.encoder}
     world_model: ${ray_components.world_model}
     policy: ${ray_components.policy}
@@ -220,8 +222,15 @@ learner:
 sync:
   weight_sync_every: 1
 
+checkpoint:
+  save_interval: 20
+  save_final: true
+  filename: learner.ckpt
+  latest_name: latest.ckpt
+
 training:
   out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_rynn_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
+  max_steps: 1000
   distributed_strategy: single
   data_parallel: false
   gradient_accumulate_every: 1

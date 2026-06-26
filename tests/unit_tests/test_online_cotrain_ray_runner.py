@@ -89,6 +89,32 @@ class _Learner:
         assert version == 1
         return _Ready([None])
 
+    def state_dicts(self):
+        import torch
+
+        return {"policy": {"weight": torch.ones(1)}}
+
+
+class _MultiUpdateLearner:
+    def __init__(self) -> None:
+        self.update_phases: list[tuple[str, int]] = []
+        self.synced_versions: list[int] = []
+
+    def update(self, phase: str, num_steps: int) -> _Ready:
+        self.update_phases.append((phase, int(num_steps)))
+        value = float(len(self.update_phases))
+        return _Ready([{"rl/actor_loss": value}])
+
+    def sync_weights(self, what: str, version: int) -> _Ready:
+        assert what == "policy"
+        self.synced_versions.append(int(version))
+        return _Ready([None])
+
+    def state_dicts(self):
+        import torch
+
+        return {"policy": {"weight": torch.tensor([float(len(self.update_phases))])}}
+
 
 class _NeverReadyReplay:
     def ready(self, **kwargs) -> _Ready:
@@ -134,6 +160,63 @@ class _DoneEnvGroup:
     def step(self, action, hidden) -> _Ready:
         del action, hidden
         return _Ready([({"step": 1, "env_id": 0}, True, {"success": True})])
+
+
+class _TaskSwitchEnvGroup:
+    def __init__(self, num_envs: int) -> None:
+        self.num_envs = int(num_envs)
+        self.task_by_env = {env_id: env_id for env_id in range(self.num_envs)}
+        self.set_task_calls: list[tuple[int, int, int]] = []
+        self.step_ranks: list[int] = []
+        self._rank = 0
+
+    def current_obs(self) -> _Ready:
+        return _Ready(
+            [
+                {
+                    "step": len(self.step_ranks),
+                    "env_id": env_id,
+                    "task_id": self.task_by_env[env_id],
+                    "is_first": False,
+                }
+                for env_id in range(self.num_envs)
+            ]
+        )
+
+    def execute_on(self, rank: int):
+        self._rank = int(rank)
+        return self
+
+    def set_task(self, task_id: int, start_episode_id: int = 0) -> _Ready:
+        self.task_by_env[self._rank] = int(task_id)
+        self.set_task_calls.append((self._rank, int(task_id), int(start_episode_id)))
+        return _Ready(
+            [
+                {
+                    "step": 0,
+                    "env_id": self._rank,
+                    "task_id": int(task_id),
+                    "is_first": True,
+                }
+            ]
+        )
+
+    def step(self, action, hidden) -> _Ready:
+        del action, hidden
+        self.step_ranks.append(self._rank)
+        return _Ready(
+            [
+                (
+                    {
+                        "step": len(self.step_ranks),
+                        "env_id": self._rank,
+                        "task_id": self.task_by_env[self._rank],
+                    },
+                    True,
+                    {"success": False, "task_id": self.task_by_env[self._rank]},
+                )
+            ]
+        )
 
 
 class _BatchInfer:
@@ -385,6 +468,196 @@ def test_ray_runner_rejects_unknown_rollout_mode() -> None:
         runner._ray_rollout_mode()
 
 
+def test_ray_runner_saves_learner_checkpoint(tmp_path) -> None:
+    import torch
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    cfg = OmegaConf.create(
+        {
+            "checkpoint": {
+                "every_updates": 1,
+                "save_final": True,
+                "format_str": "ray_step={env_step:07d}-updates={update_step:07d}.ckpt",
+                "latest_name": "ray_latest.ckpt",
+            },
+            "training": {"out_dir": str(tmp_path)},
+        }
+    )
+    runner.cfg = cfg
+    runner.config = cfg
+    runner._output_dir = None
+    groups = {"learner": _Learner()}
+
+    path = runner._maybe_save_ray_checkpoint(
+        groups,
+        env_steps=123,
+        learner_updates=1,
+        policy_version=1,
+        metrics={"rl/actor_loss": 0.25},
+    )
+
+    assert path == tmp_path / "checkpoints" / "ray_step=0000123-updates=0000001.ckpt"
+    latest = tmp_path / "checkpoints" / "ray_latest.ckpt"
+    assert path.is_file()
+    assert latest.is_file()
+    payload = torch.load(latest, map_location="cpu", weights_only=False)
+    assert payload["global_step"] == 1
+    assert payload["ray"] == {
+        "global_step": 1,
+        "env_step": 123,
+        "update_step": 1,
+        "policy_version": 1,
+    }
+    assert torch.equal(payload["state_dicts"]["policy"]["weight"], torch.ones(1))
+    assert payload["metrics"]["rl/actor_loss"] == 0.25
+
+
+def test_ray_runner_uses_learner_global_step_for_progress_and_checkpoint(tmp_path) -> None:
+    import torch
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+    from dreamervla.utils.metric_logger import NullMetricLogger
+
+    cfg = OmegaConf.create(
+        {
+            "training": {"out_dir": str(tmp_path), "max_steps": 1},
+            "checkpoint": {
+                "save_interval": 1,
+                "save_final": False,
+                "filename": "learner.ckpt",
+                "latest_name": "latest.ckpt",
+            },
+            "rollout": {"steps": 4, "min_replay_episodes": 1},
+            "sync": {"weight_sync_every": 1},
+            "learner": {"train_cfg": {"mode": "dreamervla_cotrain"}},
+        }
+    )
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+    runner.config = cfg
+    runner._output_dir = None
+    runner.global_step = 0
+    runner._metric_logger = NullMetricLogger()
+    progress_calls: list[tuple[int, int, str, str | None, str | None]] = []
+    runner.console_progress = lambda current, total, label, **kwargs: progress_calls.append(
+        (int(current), int(total), str(label), kwargs.get("unit"), kwargs.get("status"))
+    )
+    runner.console_banner = lambda *_args, **_kwargs: None
+    runner.console_metrics = lambda *_args, **_kwargs: None
+
+    learner = _MultiUpdateLearner()
+    history = runner._run_loop(
+        {
+            "envs": _EnvGroup(),
+            "infer": _BatchInfer(),
+            "replay": _Replay(),
+            "learner": learner,
+            "store_name": "test_store",
+            "num_envs": 1,
+        }
+    )
+
+    ckpt_path = tmp_path / "checkpoints" / "global_step_1" / "learner.ckpt"
+    latest_path = tmp_path / "checkpoints" / "latest.ckpt"
+    assert history["train/learner_updates"] == 1
+    assert runner.global_step == 1
+    assert learner.update_phases == [("cotrain", 1)]
+    assert progress_calls[-1][:4] == (1, 1, "train", "step")
+    assert progress_calls[-1][4] is not None
+    assert "env_steps=1/4" in progress_calls[-1][4]
+    assert ckpt_path.is_file()
+    assert latest_path.is_file()
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    assert payload["global_step"] == 1
+    assert payload["ray"] == {
+        "global_step": 1,
+        "env_step": 1,
+        "update_step": 1,
+        "policy_version": 1,
+    }
+    assert torch.equal(payload["state_dicts"]["policy"]["weight"], torch.tensor([1.0]))
+
+
+def test_ray_runner_progress_status_summarizes_rollout_and_training_state() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    progress_calls: list[tuple[int, int, str, str | None, str | None]] = []
+    runner.console_progress = lambda current, total, label, **kwargs: progress_calls.append(
+        (int(current), int(total), str(label), kwargs.get("unit"), kwargs.get("status"))
+    )
+
+    runner._console_cotrain_progress(
+        3,
+        10,
+        57,
+        200,
+        episode_count=5,
+        episode_successes=2,
+        active_task_by_env={0: 0, 1: 3, 2: 9},
+        episode_steps_by_env={0: 12, 1: 4, 2: 0},
+        last_loss=0.1234,
+        last_metrics={"cls/acc": 0.75},
+    )
+
+    current, total, label, unit, status = progress_calls[-1]
+    assert (current, total, label, unit) == (3, 10, "train", "step")
+    assert status is not None
+    assert "env_steps=57/200" in status
+    assert "collect=t0:s12,t3:s4,t9:s0" in status
+    assert "eps=5" in status
+    assert "succ=0.400" in status
+    assert "loss=0.123" in status
+    assert "cls_acc=0.750" in status
+
+
+def test_ray_runner_rotates_task_pool_on_episode_done() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+    from dreamervla.utils.metric_logger import NullMetricLogger
+
+    cfg = OmegaConf.create(
+        {
+            "training": {"max_steps": 1},
+            "rollout": {"steps": 6, "min_replay_episodes": 1},
+            "ray_data": {"task_ids": [0, 1, 2, 3, 4, 5]},
+            "sync": {"weight_sync_every": 1},
+            "learner": {"train_cfg": {"mode": "dreamervla_cotrain"}},
+        }
+    )
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+    runner._metric_logger = NullMetricLogger()
+    runner.console_progress = lambda *_args, **_kwargs: None
+    runner.console_banner = lambda *_args, **_kwargs: None
+    runner.console_metrics = lambda *_args, **_kwargs: None
+    envs = _TaskSwitchEnvGroup(num_envs=4)
+
+    history = runner._run_loop(
+        {
+            "envs": envs,
+            "infer": _BatchInfer(),
+            "replay": _NeverReadyReplay(),
+            "learner": _UnexpectedLearner(),
+            "store_name": "test_store",
+            "num_envs": 4,
+        }
+    )
+
+    assert history["rollout/steps"] == 6
+    assert envs.set_task_calls[:2] == [(0, 4, 0), (1, 5, 0)]
+    switched_tasks = [task_id for _env_id, task_id, _episode_id in envs.set_task_calls]
+    assert switched_tasks[:6] == [4, 5, 0, 1, 2, 3]
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -506,6 +779,8 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
     assert cfg.replay.cfg.sequence_length >= cfg.learner.model_cfg.classifier.kwargs.window
 
     task_spec = cfg.task.legacy_action_hidden
+    assert cfg.inference.cfg.action_dim == cfg.task.action_dim
+    assert cfg.inference.cfg.action_steps == task_spec.chunk_size
     assert task_spec.token_count == task_spec.chunk_size * cfg.task.action_dim
     assert task_spec.wm_obs_dim == task_spec.token_count * task_spec.token_dim
     assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim

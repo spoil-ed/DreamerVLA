@@ -108,6 +108,19 @@ def test_console_progress_prints_and_caches_per_desc(capsys):
     assert set(r._console_state["progress"].keys()) == {"train"}
 
 
+def test_console_progress_updates_status_without_new_reporter(capsys):
+    cfg = OmegaConf.create({"console": {"progress_every_s": 0.0}})
+    r = _progress_runner(cfg)
+
+    r.console_progress(0, 10, "train", unit="step", status="env_steps=1/100 collect=t0:s1")
+    r.console_progress(0, 10, "train", unit="step", status="env_steps=2/100 collect=t0:s2")
+
+    out = capsys.readouterr().out
+    assert "env_steps=1/100 collect=t0:s1" in out
+    assert "env_steps=2/100 collect=t0:s2" in out
+    assert set(r._console_state["progress"].keys()) == {"train"}
+
+
 def test_console_progress_guarded_on_non_main(capsys):
     cfg = OmegaConf.create({"console": {"progress_every_s": 0.0}})
     _progress_runner(cfg, main=False).console_progress(1, 10, "train")

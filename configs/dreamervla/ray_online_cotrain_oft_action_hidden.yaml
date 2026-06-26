@@ -137,7 +137,7 @@ env:
       max_steps: 300
 
 rollout:
-  steps: 200
+  steps: 200000
   min_replay_episodes: ${ray_data.min_replay_episodes}
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0
@@ -232,8 +232,15 @@ learner:
 sync:
   weight_sync_every: 1
 
+checkpoint:
+  save_interval: 20
+  save_final: true
+  filename: learner.ckpt
+  latest_name: latest.ckpt
+
 training:
   out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_action_hidden/${task.name}/${now:%Y%m%d_%H%M%S}}
+  max_steps: 1000
   distributed_strategy: single
   data_parallel: false
   gradient_accumulate_every: 1

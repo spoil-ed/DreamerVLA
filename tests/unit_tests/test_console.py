@@ -85,6 +85,21 @@ def test_format_progress_line_with_total():
     assert s == f"pretokenize [{bar}] 12800/50000 (26%) · 03:21<09:45 · 63.7 it/s"
 
 
+def test_format_progress_line_with_status_suffix():
+    s = format_progress_line(
+        "train",
+        1,
+        10,
+        elapsed_s=10.0,
+        eta_s=90.0,
+        rate=0.1,
+        unit="step",
+        status="env_steps=128/200000 collect=t0:s32",
+    )
+
+    assert s.endswith(" · env_steps=128/200000 collect=t0:s32")
+
+
 def test_format_progress_line_bar_fill_scales_with_progress():
     empty = format_progress_line("c", 0, 100, elapsed_s=1.0, eta_s=1.0, rate=1.0)
     half = format_progress_line("c", 50, 100, elapsed_s=1.0, eta_s=1.0, rate=1.0)

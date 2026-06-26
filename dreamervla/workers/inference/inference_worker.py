@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.scheduler.worker import Worker
 
 
@@ -33,6 +34,28 @@ class InferenceWorker(Worker):
         self.world_model: torch.nn.Module | None = None
         self.policy: torch.nn.Module | None = None
         self.state: list[dict[str, Any]] = []
+        self.action_dim = _cfg_int(
+            self.model_cfg,
+            (
+                ("action_dim",),
+                ("policy", "kwargs", "action_dim"),
+                ("world_model", "kwargs", "action_dim"),
+            ),
+            default=7,
+        )
+        self.action_steps = _cfg_int(
+            self.model_cfg,
+            (
+                ("action_steps",),
+                ("policy", "kwargs", "time_horizon"),
+                ("world_model", "kwargs", "chunk_size"),
+            ),
+            default=1,
+        )
+        self.action_queues = [
+            ActionChunkQueue(action_dim=self.action_dim, action_steps=self.action_steps)
+            for _ in range(self.num_envs)
+        ]
 
     def init(self) -> None:
         self.encoder = _build_from_cfg(self.model_cfg["encoder"])
@@ -49,6 +72,7 @@ class InferenceWorker(Worker):
     def reset_states(self, env_ids: list[int]) -> None:
         for env_id in env_ids:
             self.state[int(env_id)] = self._empty_state()
+            self.action_queues[int(env_id)].clear()
 
     @torch.no_grad()
     def forward_batch(
@@ -90,32 +114,53 @@ class InferenceWorker(Worker):
             self.state[env_id]["latent"] = _detach_tensor(latent)
             latents.append(latent)
 
-        latent_batch = _concat_structures(latents)
-        feat = world_model({"mode": "actor_input", "latent": latent_batch}).float()
+        refill_positions = [
+            idx
+            for idx, env_id_raw in enumerate(env_ids)
+            if not self.action_queues[int(env_id_raw)].has_pending
+        ]
+        if refill_positions:
+            latent_batch = _concat_structures([latents[idx] for idx in refill_positions])
+            feat = world_model({"mode": "actor_input", "latent": latent_batch}).float()
+        else:
+            feat = None
         world_model_s = time.perf_counter() - wm_start
         policy_start = time.perf_counter()
-        action_chunk, _log_prob, _extra = policy(
-            {
-                "mode": "sample",
-                "hidden": feat,
-                "deterministic": False,
-                "return_chunk": True,
-            }
-        )
-        actions = action_chunk.reshape(
-            action_chunk.shape[0], -1, action_chunk.shape[-1]
-        )[:, 0, :7]
+        if feat is not None:
+            action_chunk, _log_prob, _extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": feat,
+                    "deterministic": False,
+                    "return_chunk": True,
+                }
+            )
+            action_chunks_np = (
+                action_chunk.reshape(action_chunk.shape[0], -1, action_chunk.shape[-1])
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=False)
+            )
+            for row, idx in enumerate(refill_positions):
+                env_id = int(env_ids[idx])
+                self.action_queues[env_id].refill(action_chunks_np[row])
         policy_s = time.perf_counter() - policy_start
 
+        actions_np: list[np.ndarray] = []
         for idx, env_id_raw in enumerate(env_ids):
             env_id = int(env_id_raw)
-            self.state[env_id]["prev_action"] = actions[idx : idx + 1].detach()
+            action_np = self.action_queues[env_id].pop()
+            actions_np.append(action_np.astype(np.float32, copy=False))
+            prev_action = torch.from_numpy(action_np).to(
+                self.torch_device, dtype=obs_embedding.dtype
+            )
+            self.state[env_id]["prev_action"] = prev_action.unsqueeze(0).detach()
             self.state[env_id]["is_first"] = False
 
-        actions_np = actions.detach().cpu().numpy().astype(np.float32)
         obs_embedding_np = obs_embedding.detach().cpu().numpy().astype(np.float32)
         return {
-            "actions": [actions_np[i] for i in range(actions_np.shape[0])],
+            "actions": actions_np,
             "obs_embedding": [
                 obs_embedding_np[i] for i in range(obs_embedding_np.shape[0])
             ],
@@ -193,6 +238,24 @@ def _build_from_cfg(cfg: dict[str, Any]) -> Any:
         module_name, class_name = str(target).rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, class_name)(**kwargs)
+
+
+def _cfg_int(
+    cfg: dict[str, Any],
+    paths: tuple[tuple[str, ...], ...],
+    *,
+    default: int,
+) -> int:
+    for path in paths:
+        cur: Any = cfg
+        for key in path:
+            if not isinstance(cur, dict) or key not in cur:
+                cur = None
+                break
+            cur = cur[key]
+        if cur is not None:
+            return max(1, int(cur))
+    return max(1, int(default))
 
 
 def _encode_batch(encoder: Any, obs_batch: list[dict[str, Any]]) -> torch.Tensor:

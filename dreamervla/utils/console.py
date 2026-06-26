@@ -98,6 +98,7 @@ def format_progress_line(
     eta_s: float | None,
     rate: float,
     unit: str = "it",
+    status: str | None = None,
 ) -> str:
     """RLinf-style one-line progress string.
 
@@ -111,4 +112,7 @@ def format_progress_line(
     else:
         head = f"{desc} {current}"
         timing = _fmt_duration(elapsed_s)
-    return f"{head} · {timing} · {rate:.1f} {unit}/s"
+    line = f"{head} · {timing} · {rate:.1f} {unit}/s"
+    if status:
+        line = f"{line} · {status}"
+    return line

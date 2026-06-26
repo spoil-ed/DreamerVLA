@@ -187,24 +187,15 @@ class RolloutDumpWriter:
             demo_grp.attrs["episode_success"] = bool(episode_success)
         if episode_horizon is not None:
             demo_grp.attrs["episode_horizon"] = int(episode_horizon)
-        if episode_metadata is not None:
-            for key, value in episode_metadata.items():
-                if value is None:
-                    continue
-                if isinstance(
-                    value,
-                    (
-                        str,
-                        bytes,
-                        bool,
-                        int,
-                        float,
-                        np.bool_,
-                        np.integer,
-                        np.floating,
-                    ),
-                ):
-                    demo_grp.attrs[str(key)] = value
+        for key, value in _episode_attrs(
+            preprocess_config=preprocess_config,
+            data_attrs=data_attrs,
+            task_description=task_description,
+            episode_success=episode_success,
+            episode_horizon=episode_horizon,
+            episode_metadata=episode_metadata,
+        ).items():
+            demo_grp.attrs[key] = value
 
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)
@@ -339,3 +330,59 @@ class RotatingRolloutDumpWriter:
 
 
 __all__ = ["RolloutDumpWriter", "RotatingRolloutDumpWriter"]
+
+
+def _episode_attrs(
+    *,
+    preprocess_config: Mapping[str, Any] | None,
+    data_attrs: Mapping[str, Any] | None,
+    task_description: str | None,
+    episode_success: bool | None,
+    episode_horizon: int | None,
+    episode_metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    attrs: dict[str, Any] = {}
+    if data_attrs is not None:
+        suite = data_attrs.get("suite", data_attrs.get("task_suite_name"))
+        if suite is not None:
+            attrs["suite"] = suite
+    if task_description is not None:
+        attrs["task_name"] = str(task_description)
+    if episode_success is not None:
+        attrs["success"] = bool(episode_success)
+    if episode_horizon is not None:
+        attrs["horizon"] = int(episode_horizon)
+    if preprocess_config is not None:
+        for key in ("chunk_size", "hidden_key", "hidden_dim", "token_count", "token_dim"):
+            if key in preprocess_config:
+                attrs[key] = preprocess_config[key]
+        if "hidden_dim" not in attrs:
+            token_count = preprocess_config.get("token_count")
+            token_dim = preprocess_config.get("token_dim")
+            if token_count is not None and token_dim is not None:
+                attrs["hidden_dim"] = int(token_count) * int(token_dim)
+    if episode_metadata is not None:
+        attrs.update(dict(episode_metadata))
+    return {
+        str(key): value
+        for key, value in attrs.items()
+        if _is_hdf5_attr_scalar(value)
+    }
+
+
+def _is_hdf5_attr_scalar(value: Any) -> bool:
+    if value is None:
+        return False
+    return isinstance(
+        value,
+        (
+            str,
+            bytes,
+            bool,
+            int,
+            float,
+            np.bool_,
+            np.integer,
+            np.floating,
+        ),
+    )

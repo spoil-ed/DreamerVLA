@@ -166,24 +166,36 @@ def _resolve_reward_tensor(
 def _adaptive_group_advantage_and_mask(
     returns: torch.Tensor,
     *,
+    variance_signal: torch.Tensor | None = None,
     group_size_min: int,
     group_size_max: int,
     eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute GRPO advantages over the first rollout prefix with variance.
+    """Compute GRPO advantages over the first classifier-signal prefix with variance.
 
     The imagination path still generates ``group_size_max`` rollouts per start so the
     existing fixed-width slicing and PPO re-evaluation path stay simple. This helper
-    selects the prefix used for PPO: begin at ``group_size_min`` and extend until
-    the group's return variance is non-zero, or mark the group as zero-signal at
-    ``group_size_max``. Rollouts after the selected prefix are masked out.
+    selects the prefix used for PPO: begin at ``group_size_min`` and extend until the
+    group's classifier score/outcome signal has non-zero variance, or mark the group
+    as zero-signal at ``group_size_max``. Rollouts after the selected prefix are
+    masked out. ``returns`` may include KL shaping for the advantage values, but the
+    keep/skip decision must come from classifier signal rather than KL alone.
     """
     if int(returns.numel()) % int(group_size_max) != 0:
         raise ValueError(
             "adaptive GRPO grouping requires returns to be divisible by "
             f"group_size_max={group_size_max}, got {int(returns.numel())}"
         )
+    if variance_signal is None:
+        variance_signal = returns
+    if int(variance_signal.numel()) != int(returns.numel()):
+        raise ValueError(
+            "adaptive GRPO grouping requires variance_signal and returns to have "
+            f"the same size, got {int(variance_signal.numel())} and "
+            f"{int(returns.numel())}"
+        )
     groups = returns.reshape(-1, int(group_size_max))
+    signal_groups = variance_signal.reshape(-1, int(group_size_max))
     advantages = torch.zeros_like(groups)
     active_mask = torch.zeros_like(groups)
     has_variance = torch.zeros(groups.shape[0], dtype=torch.bool, device=returns.device)
@@ -197,9 +209,9 @@ def _adaptive_group_advantage_and_mask(
         chosen = int(group_size_max)
         std = torch.zeros((), dtype=groups.dtype, device=groups.device)
         for count in range(int(group_size_min), int(group_size_max) + 1):
-            vals = groups[idx, :count]
-            std = vals.std(unbiased=False)
-            if bool(std > eps):
+            signal_vals = signal_groups[idx, :count]
+            signal_std = signal_vals.std(unbiased=False)
+            if bool(signal_std > eps):
                 chosen = count
                 has_variance[idx] = True
                 break
@@ -207,6 +219,7 @@ def _adaptive_group_advantage_and_mask(
         effective_counts[idx] = chosen
         if bool(has_variance[idx]):
             vals = groups[idx, :chosen]
+            std = vals.std(unbiased=False)
             advantages[idx, :chosen] = (vals - vals.mean()) / (std + eps)
     return (
         advantages.reshape(-1),
@@ -710,10 +723,11 @@ def dino_lumos_step(
         returns_adjusted = returns
 
     # ─── Group-relative advantage, then zero-variance filter ──────────────
-    # LUMOS's ray_trainer filters out groups where every rollout has the same
-    # return (no within-group variance) — those produce zero advantage anyway
-    # and waste compute on policy forwards. We mark them via a per-rollout
-    # mask and multiply into chunk_mask so the entire group is skipped.
+    # Filter on classifier score/outcome variance, not KL-shaped returns. KL can
+    # vary inside an all-fail/all-success group, but that must not create a fake
+    # actor learning signal when the verifier/WM signal itself is degenerate.
+    # We mark zero-signal groups via a per-rollout mask and multiply into
+    # chunk_mask so the entire group is skipped.
     if B_eff >= group_size and B_eff % group_size == 0:
         (
             advantages,
@@ -722,6 +736,7 @@ def dino_lumos_step(
             adaptive_effective_counts,
         ) = _adaptive_group_advantage_and_mask(
             returns_adjusted,
+            variance_signal=returns,
             group_size_min=group_size_min,
             group_size_max=group_size,
             eps=adv_eps,
@@ -995,6 +1010,7 @@ def dino_lumos_step(
         num_all_fail = int((~groups_complete).all(dim=-1).sum().item())
         num_mixed = num_groups - num_all_success - num_all_fail
         num_zero_variance = int(num_groups - int(adaptive_group_has_variance.sum().item()))
+        group_var_keep_frac = float(adaptive_group_has_variance.float().mean().item())
         effective_group_size_mean = float(
             adaptive_effective_counts.float().mean().item()
         )
@@ -1009,6 +1025,7 @@ def dino_lumos_step(
         num_all_fail = 0
         num_mixed = 0
         num_zero_variance = 0
+        group_var_keep_frac = 0.0
         effective_group_size_mean = 0.0
 
     return {
@@ -1037,6 +1054,10 @@ def dino_lumos_step(
         "value_mean": 0.0,
         "actor_grad_norm": grad_norm,
         "critic_grad_norm": 0.0,
+        "rl/returns_mean": returns_mean,
+        "rl/returns_std": returns_std,
+        "rl/policy_grad_norm": grad_norm,
+        "rl/skipped_zero_variance_groups": float(num_zero_variance),
         "ppo_update_epochs": float(update_epochs),
         # Real ratio diagnostics emitted now — used to be hard-coded 1.0 / 0.0,
         # which masked clip pressure whenever ``ppo_update_epochs > 1``.
@@ -1070,7 +1091,7 @@ def dino_lumos_step(
         "LUMOS/valid_chunk_frac": float(
             chunk_mask.sum().item() / max(1, num_chunks * B_eff)
         ),
-        "LUMOS/group_var_keep_frac": float(per_rollout_group_mask.mean().item()),
+        "LUMOS/group_var_keep_frac": group_var_keep_frac,
         # ── per-group breakdown for ppo_groups.jsonl log ─────────────────
         "LUMOS/group_size": float(group_size),
         "LUMOS/group_size_min": float(group_size_min),

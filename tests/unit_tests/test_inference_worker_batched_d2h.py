@@ -51,8 +51,29 @@ class _StubPolicy(torch.nn.Module):
         return chunk, None, None
 
 
-def _make_worker(num_envs: int) -> InferenceWorker:
+class _ChunkPolicy(torch.nn.Module):
+    def __init__(self, chunk_size: int = 3) -> None:
+        super().__init__()
+        self.chunk_size = int(chunk_size)
+        self.calls = 0
+
+    def forward(self, batch: dict[str, Any]):
+        self.calls += 1
+        feat = batch["hidden"]  # [N, HIDDEN]
+        rows = []
+        for base in feat[:, 0].detach().cpu().tolist():
+            chunk = [
+                torch.full((ACTION_DIM,), float(base) + float(j), dtype=torch.float32)
+                for j in range(self.chunk_size)
+            ]
+            rows.append(torch.stack(chunk, dim=0))
+        return torch.stack(rows, dim=0), None, None
+
+
+def _make_worker(num_envs: int, *, action_steps: int | None = None) -> InferenceWorker:
     cfg = {"device": "cpu", "encoder": {}, "world_model": {}, "policy": {}}
+    if action_steps is not None:
+        cfg["action_steps"] = int(action_steps)
     w = InferenceWorker(cfg, {}, num_envs=num_envs)
     w.encoder = _StubEncoder()
     w.world_model = _StubWM()
@@ -97,3 +118,31 @@ def test_forward_batch_calls_cpu_exactly_twice(monkeypatch) -> None:
 
     # exactly two batch-level D2H transfers (actions + obs_embedding), independent of num_envs
     assert calls["n"] == 2, f"expected 2 .cpu() calls, got {calls['n']}"
+
+
+def test_forward_batch_executes_full_action_chunk_before_resampling() -> None:
+    w = _make_worker(num_envs=1, action_steps=3)
+    policy = _ChunkPolicy(chunk_size=3)
+    w.policy = policy
+
+    outs = [
+        w.forward_batch([{"seed": seed, "is_first": index == 0}], [0])
+        for index, seed in enumerate([0, 10, 20, 30])
+    ]
+
+    assert [int(out["actions"][0][0]) for out in outs] == [0, 1, 2, 30]
+    assert policy.calls == 2
+
+
+def test_reset_states_drops_pending_action_chunk() -> None:
+    w = _make_worker(num_envs=1, action_steps=3)
+    policy = _ChunkPolicy(chunk_size=3)
+    w.policy = policy
+
+    first = w.forward_batch([{"seed": 0, "is_first": True}], [0])
+    w.reset_states([0])
+    second = w.forward_batch([{"seed": 10, "is_first": True}], [0])
+
+    assert int(first["actions"][0][0]) == 0
+    assert int(second["actions"][0][0]) == 10
+    assert policy.calls == 2
