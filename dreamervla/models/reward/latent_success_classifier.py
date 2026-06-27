@@ -56,6 +56,7 @@ class LatentSuccessClassifierConfig:
     lang_dim: int = 0
     lang_emb_dim: int = 0
     num_lang_repeat: int = 1
+    vision_input_norm: bool = True
     task_conditioning: dict | None = None
 
 
@@ -174,6 +175,11 @@ class LatentSuccessClassifier(nn.Module):
             if token_count < 1:
                 raise ValueError("head_type='spatial_tf' requires token_count >= 1")
             self.vision_proj = nn.Linear(int(cfg.token_dim), int(cfg.hidden_dim))
+            self.vision_norm = (
+                nn.LayerNorm(int(cfg.token_dim))
+                if bool(getattr(cfg, "vision_input_norm", True))
+                else nn.Identity()
+            )
             self.spatial_cls_token = nn.Parameter(torch.zeros(1, 1, cfg.hidden_dim))
             self.frame_pos_embed = nn.Parameter(
                 torch.zeros(1, int(cfg.window), 1, int(cfg.hidden_dim))
@@ -390,7 +396,8 @@ class LatentSuccessClassifier(nn.Module):
                 f"{int(self.token_pos_embed.shape[2])}"
             )
         weight = self.vision_proj.weight
-        vision = self.vision_proj(tokens.to(device=weight.device, dtype=weight.dtype))
+        normed = self.vision_norm(tokens.to(device=weight.device, dtype=weight.dtype))
+        vision = self.vision_proj(normed)
         vision = vision + self.frame_pos_embed[:, :window].to(vision.dtype)
         vision = vision + self.token_pos_embed[:, :, :token_count].to(vision.dtype)
         seq_parts = [vision.reshape(bsz, window * token_count, -1)]
