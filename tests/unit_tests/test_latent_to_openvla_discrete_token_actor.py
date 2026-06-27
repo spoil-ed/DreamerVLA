@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 import torch.nn as nn
 from hydra import compose, initialize_config_dir
-import pytest
 
-from dreamervla.models.actor.latent_to_openvla_hidden_state_actor import (
-    LatentToOpenVLAHiddenStateActor,
-)
 from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
     LatentToOpenVLADiscreteTokenActor,
+)
+from dreamervla.models.actor.latent_to_openvla_hidden_state_actor import (
+    LatentToOpenVLAHiddenStateActor,
 )
 
 

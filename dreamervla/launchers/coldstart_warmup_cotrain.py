@@ -18,7 +18,6 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
-
 from dreamervla.dataset.collection_manifest import (
     format_collection_report,
     quarantine_corrupt_shards,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Deque
 
 import numpy as np
 
@@ -14,7 +13,7 @@ class ActionChunkQueue:
     def __init__(self, *, action_dim: int = 7, action_steps: int | None = None) -> None:
         self.action_dim = int(action_dim)
         self.action_steps = None if action_steps is None else max(1, int(action_steps))
-        self._pending: Deque[np.ndarray] = deque()
+        self._pending: deque[np.ndarray] = deque()
 
     @property
     def has_pending(self) -> bool:
