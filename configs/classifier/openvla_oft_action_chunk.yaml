@@ -50,7 +50,7 @@ training:
   num_workers: 2
   lr: 1.0e-4
   weight_decay: 1.0e-2
-  label_smoothing: 0.1
+  label_smoothing: 0.0  # WMPO uses plain CE; smoothing hurts threshold calibration
   class_balanced: false
   eval_every: 200
   ckpt_every: 500
