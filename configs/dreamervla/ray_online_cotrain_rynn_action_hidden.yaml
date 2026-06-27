@@ -12,6 +12,14 @@ defaults:
 _target_: dreamervla.runners.OnlineCotrainRayRunner
 latent_type: action_hidden
 seed: 7
+render_backend: osmesa
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env: 0
+    rollout: 1
+    actor: 1
 
 hydra:
   run:
@@ -112,6 +120,7 @@ ray_components:
 
 env:
   num_workers: 1
+  envs_per_worker: 4
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true

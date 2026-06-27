@@ -28,13 +28,14 @@ render backend with the launcher knob `render_backend`, not an env var.
 
 ## Render backends
 
-The online cotrain rollout has two backends, switched with `render_backend` (direct
-experiment entry: `online_rollout.render_backend`). Both write the same outputs (see
-[Output](#output)); collection always renders osmesa.
+The online cotrain rollout has two backends, switched with `render_backend` in
+the launcher/Ray route. The sync no-Ray route keeps the nested direct key
+`online_rollout.render_backend`. Both write the same outputs (see [Output](#output));
+collection always renders osmesa.
 
 | Backend | Select | Implementation |
 | --- | --- | --- |
-| **egl** — GPU, RLinf-vendored | `render_backend=egl`, `num_envs=K` | one spawn subprocess per env through RLinf's `SubprocVectorEnv` (`dreamervla/envs/rlinf_venv.py` → `OnlineEglVecEnv`); each child forces `MUJOCO_GL=egl` + its own GPU. Keep **1–2 envs per GPU**; action_hidden only (`backbone_latent` needs `num_envs=1`) |
+| **egl** — GPU, RLinf-style | `render_backend=egl` | Ray mainline binds env workers with `cluster.component_placement.env`; each EnvWorker owns `CUDA_VISIBLE_DEVICES` + `MUJOCO_EGL_DEVICE_ID` and hosts `env.envs_per_worker` LIBERO spawn children on that render GPU. The legacy no-Ray vec env still uses `online_rollout.render_devices` |
 | **osmesa** — CPU, stable | `render_backend=osmesa` or `num_envs=1` | the validated `VecRolloutEnv`; use this if egl aborts |
 
 ## Run
@@ -43,7 +44,8 @@ Default GPUs `0,1,2,3,4,5`; logs go to `logs/`. The four schemes are the cross o
 **collect backend** (`noray` = pure torchrun vectorized collector, `ray` = worker
 fan-out) and the cotrain **rollout `render_backend`** (`osmesa` = CPU software,
 `egl` = GPU offscreen). Only the script name and `render_backend` differ — collect
-always renders osmesa; the DDP cotrain stage is identical across backends.
+always renders osmesa. Add `cotrain_engine=async` when you want the Ray online
+cotrain worker topology instead of the sync DDP cotrain stage.
 
 ```bash
 # 1) no-Ray + osmesa
@@ -65,12 +67,22 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
   render_backend=egl > logs/cotrain_ray_egl.log 2>&1
+
+# 4b) Ray async online + egl (6-GPU Ray worker topology)
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=6 profile=multi_gpu \
+  cotrain_engine=async render_backend=egl > logs/cotrain_ray_async_egl.log 2>&1
 ```
 
 With `profile=multi_gpu ngpu=6`, the launcher expands the Hydra concurrency from
 the profile: sync cotrain gets `online_rollout.num_envs=12`; Ray async online
-(`cotrain_engine=async`) gets `env.num_workers=12` plus EGL spawn guards when
-`render_backend=egl`.
+(`cotrain_engine=async`) gets `env.num_workers=12` for osmesa, or
+`env.num_workers=6` and `env.envs_per_worker=2` for EGL unless explicitly
+overridden. For EGL, the launcher also expands RLinf-style
+`cluster.component_placement`: env workers span GPU 0-5, rollout inference stays a
+single worker on GPU 0, and the learner/actor stays a single worker on GPU 5. Each
+worker owns `CUDA_VISIBLE_DEVICES` and `MUJOCO_EGL_DEVICE_ID`; child env slots
+inherit that regime.
 
 ### Mainline Hydra Config
 
@@ -96,6 +108,45 @@ classifier:
   token_count: ${task.openvla_oft.input_tokens.token_count}
   token_dim: ${task.openvla_oft.input_tokens.token_dim}
 ```
+
+The Ray async online phase is selected by `cotrain_engine=async`. The launcher first
+runs the same sync warmup-only phase, writes `ray_async_init.ckpt`, then starts
+`experiment=online_cotrain_ray_oft_backbone_latent` (or the action-hidden async
+experiment selected by `cotrain_async_experiment`). Those Ray configs already carry
+the RLinf-style placement contract:
+
+```yaml
+render_backend: osmesa  # override with render_backend=egl
+cluster:
+  component_placement:
+    env: 0
+    rollout: 1
+    actor: 1
+env:
+  num_workers: 1
+  envs_per_worker: 4
+```
+
+With `render_backend=egl`, the base experiment is the small two-GPU default: GPU 0
+is the EnvWorker/render GPU and GPU 1 hosts rollout inference plus learner/actor.
+For a 6-GPU production run, use the launcher form above (`profile=multi_gpu ngpu=6
+cotrain_engine=async render_backend=egl`); it overrides the Ray online phase to:
+
+```yaml
+cluster:
+  component_placement:
+    env: 0-5
+    rollout: 0
+    actor: 5
+env:
+  num_workers: 6
+  envs_per_worker: 2
+```
+
+Do not set `rollout: all` or `actor: all` for this DreamerVLA Ray runner yet.
+Unlike RLinf's full embodied stack, this runner only shards env workers; rollout
+inference and learner are single-worker contracts and startup validation rejects
+multi-worker compute placement.
 
 ### Run Stages Separately
 

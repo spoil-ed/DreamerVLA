@@ -977,10 +977,71 @@ def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
     )
 
     assert "env.num_workers=12" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
     assert "render_backend=osmesa" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" not in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" not in plan.cotrain_online_cmd
     assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
+
+
+def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        profile="multi_gpu",
+        ngpu=6,
+    )
+
+    assert "env.num_workers=6" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=2" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
+    assert "cluster.component_placement.env=0-5" in plan.cotrain_online_cmd
+    assert "cluster.component_placement.rollout=0" in plan.cotrain_online_cmd
+    assert "cluster.component_placement.actor=5" in plan.cotrain_online_cmd
+    assert "render_backend=egl" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_stagger_s=2.0" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_init_timeout_s=900" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
+
+
+def test_async_ray_egl_respects_explicit_online_worker_topology(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        profile="multi_gpu",
+        ngpu=6,
+        cotrain_overrides=[
+            "env.num_workers=3",
+            "env.envs_per_worker=4",
+            "cluster.component_placement.env=0-2",
+            "cluster.component_placement.rollout=3",
+            "cluster.component_placement.actor=5",
+        ],
+    )
+
+    assert plan.cotrain_online_cmd.count("env.num_workers=3") == 1
+    assert plan.cotrain_online_cmd.count("env.envs_per_worker=4") == 1
+    assert "env.num_workers=6" not in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=2" not in plan.cotrain_online_cmd
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.env=0-2") == 1
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.rollout=3") == 1
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.actor=5") == 1
 
 
 def test_sync_cotrain_phase_warmup_only_has_no_online_steps(tmp_path) -> None:

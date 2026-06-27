@@ -11,8 +11,10 @@ See docs/superpowers/specs/2026-06-17-offline-warmup-online-cotrain-pipeline-des
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable
+from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +22,15 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+from dreamervla.runners.base_runner import _atomic_torch_save
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
+from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+
+_WARMUP_PROGRESS_RE = re.compile(r"^(?P<component>wm|classifier)_step_(?P<step>\d+)\.ckpt$")
 
 
 def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
@@ -84,7 +90,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         current: int,
         total: int,
         every: int,
-        checkpoint_fn: Callable[[], None] | None,
+        checkpoint_fn: Callable[..., None] | None,
+        metrics: dict[str, float] | None = None,
         label: str,
     ) -> None:
         """Save an optional mid-warmup component checkpoint."""
@@ -94,10 +101,27 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         total_i = int(total)
         if current_i >= total_i or current_i % int(every) != 0:
             return
-        checkpoint_fn()
+        self._invoke_warmup_checkpoint(
+            checkpoint_fn, step=current_i, metrics=metrics or {}
+        )
         self._print_pipeline_event(
             f"[pipeline][{label}] checkpoint saved step={current_i}/{total_i}"
         )
+
+    @staticmethod
+    def _invoke_warmup_checkpoint(
+        checkpoint_fn: Callable[..., None],
+        *,
+        step: int,
+        metrics: dict[str, float],
+    ) -> None:
+        param_count = len(signature(checkpoint_fn).parameters)
+        if param_count == 0:
+            checkpoint_fn()
+        elif param_count == 1:
+            checkpoint_fn(int(step))
+        else:
+            checkpoint_fn(int(step), metrics)
 
     def _offline_warmup_wm(
         self,
@@ -107,11 +131,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         batch_size: int,
         optim_cfg,
         checkpoint_every: int = 0,
-        checkpoint_fn: Callable[[], None] | None = None,
+        checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
+        start_step: int = 0,
     ) -> float:
         self.world_model.train()
         last = 0.0
-        for i in range(int(steps)):
+        for i in range(int(start_step), int(steps)):
             wm_batch = self._build_wm_pretrain_batch(
                 replay.sample(batch_size, include_images=False)
             )
@@ -138,6 +163,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 total=int(steps),
                 every=checkpoint_every,
                 checkpoint_fn=checkpoint_fn,
+                metrics={"loss": last},
                 label="wm-warmup",
             )
             self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
@@ -153,10 +179,11 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         grad_clip: float,
         log_step_offset: int = 0,
         checkpoint_every: int = 0,
-        checkpoint_fn: Callable[[], None] | None = None,
+        checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
+        start_step: int = 0,
     ) -> float:
         last_acc = 0.0
-        for i in range(int(steps)):
+        for i in range(int(start_step), int(steps)):
             m = online_classifier_update_step(
                 classifier=self.classifier,
                 optimizer=self.classifier_optimizer,
@@ -184,11 +211,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     f"pos={float(m.get('pos_frac', 0.0)):.3f}",
                     flush=True,
                 )
+            metrics = {
+                "loss": float(m["loss"]),
+                "acc": last_acc,
+                "f1": float(m.get("f1", 0.0)),
+                "pos_frac": float(m.get("pos_frac", 0.0)),
+            }
             self._maybe_warmup_checkpoint(
                 current=i + 1,
                 total=int(steps),
                 every=checkpoint_every,
                 checkpoint_fn=checkpoint_fn,
+                metrics=metrics,
                 label="classifier-warmup",
             )
             self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
@@ -343,10 +377,162 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     def _cls_warmup_hf_dir(self) -> str:
         return os.path.join(self.output_dir, "ckpt", "classifier_warmup_hf")
 
+    def _warmup_progress_dir(self) -> Path:
+        return Path(self.output_dir) / "ckpt" / "warmup_progress"
+
+    def _warmup_topk_dir(self, component: str) -> Path:
+        return Path(self.output_dir) / "ckpt" / "warmup_topk" / str(component)
+
+    def _warmup_progress_path(self, component: str, step: int) -> Path:
+        return self._warmup_progress_dir() / f"{component}_step_{int(step):08d}.ckpt"
+
+    def _latest_warmup_progress_path(self, component: str) -> Path | None:
+        latest_step = -1
+        latest_path: Path | None = None
+        progress_dir = self._warmup_progress_dir()
+        if not progress_dir.is_dir():
+            return None
+        for path in progress_dir.glob(f"{component}_step_*.ckpt"):
+            match = _WARMUP_PROGRESS_RE.match(path.name)
+            if match is None or match.group("component") != component:
+                continue
+            step = int(match.group("step"))
+            if step > latest_step:
+                latest_step = step
+                latest_path = path
+        return latest_path
+
+    def _make_warmup_topk_manager(
+        self, *, component: str, k: int | None = None
+    ) -> TopKCheckpointManager | None:
+        k_value = (
+            int(k)
+            if k is not None
+            else int(OmegaConf.select(self.cfg, "training.warmup_topk_k", default=0) or 0)
+        )
+        if k_value <= 0:
+            return None
+        if component == "wm":
+            return TopKCheckpointManager(
+                save_dir=str(self._warmup_topk_dir("wm")),
+                monitor_key="loss",
+                mode="min",
+                k=k_value,
+                format_str="wm_step={step:08d}-loss={loss:.6f}.ckpt",
+            )
+        if component == "classifier":
+            return TopKCheckpointManager(
+                save_dir=str(self._warmup_topk_dir("classifier")),
+                monitor_key="f1",
+                mode="max",
+                k=k_value,
+                format_str="classifier_step={step:08d}-f1={f1:.6f}.ckpt",
+            )
+        raise ValueError(f"unknown warmup component: {component}")
+
+    @staticmethod
+    def _save_warmup_topk(
+        payload: dict[str, Any],
+        *,
+        metrics: dict[str, float],
+        step: int,
+        topk_manager: TopKCheckpointManager | None,
+    ) -> None:
+        if topk_manager is None:
+            return
+        data = {"step": int(step)}
+        data.update({key: float(value) for key, value in metrics.items()})
+        path = topk_manager.get_ckpt_path(data)
+        if path is not None:
+            _atomic_torch_save(payload, Path(path))
+
+    def _save_wm_warmup_progress(
+        self,
+        *,
+        step: int,
+        total: int,
+        metrics: dict[str, float],
+        topk_manager: TopKCheckpointManager | None,
+    ) -> None:
+        payload = {
+            "global_step": int(self.global_step),
+            "warmup_component": "wm",
+            "warmup_step": int(step),
+            "warmup_total_steps": int(total),
+            "complete": False,
+            "metrics": {key: float(value) for key, value in metrics.items()},
+            "world_model": _unwrap(self.world_model).state_dict(),
+            "world_model_optimizer": self.world_model_optimizer.state_dict(),
+        }
+        _atomic_torch_save(payload, self._warmup_progress_path("wm", int(step)))
+        self._save_warmup_topk(
+            payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+        )
+
+    def _save_cls_warmup_progress(
+        self,
+        *,
+        step: int,
+        total: int,
+        metrics: dict[str, float],
+        topk_manager: TopKCheckpointManager | None,
+    ) -> None:
+        payload = {
+            "global_step": int(self.global_step),
+            "warmup_component": "classifier",
+            "warmup_step": int(step),
+            "warmup_total_steps": int(total),
+            "complete": False,
+            "metrics": {key: float(value) for key, value in metrics.items()},
+            "classifier": _unwrap(self.classifier).state_dict(),
+            "classifier_optimizer": self.classifier_optimizer.state_dict(),
+            "classifier_threshold": float(self.classifier_threshold),
+        }
+        _atomic_torch_save(payload, self._warmup_progress_path("classifier", int(step)))
+        self._save_warmup_topk(
+            payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+        )
+
+    def _load_latest_wm_warmup_progress(self) -> int:
+        path = self._latest_warmup_progress_path("wm")
+        if path is None:
+            return 0
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        _unwrap(self.world_model).load_state_dict(payload["world_model"])
+        if "world_model_optimizer" in payload:
+            self.world_model_optimizer.load_state_dict(payload["world_model_optimizer"])
+        step = int(payload.get("warmup_step", 0))
+        self._print_pipeline_event(
+            f"[pipeline][wm-warmup] resumed progress step={step} from {path}"
+        )
+        return step
+
+    def _load_latest_cls_warmup_progress(self) -> int:
+        path = self._latest_warmup_progress_path("classifier")
+        if path is None:
+            return 0
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        _unwrap(self.classifier).load_state_dict(payload["classifier"])
+        if "classifier_optimizer" in payload:
+            self.classifier_optimizer.load_state_dict(payload["classifier_optimizer"])
+        if "classifier_threshold" in payload:
+            self.classifier_threshold = float(payload["classifier_threshold"])
+        step = int(payload.get("warmup_step", 0))
+        self._print_pipeline_event(
+            f"[pipeline][classifier-warmup] resumed progress step={step} from {path}"
+        )
+        return step
+
     def _save_wm_warmup(self) -> None:
         if self.checkpoint_save_torch():
-            torch.save({"global_step": int(self.global_step),
-                        "world_model": _unwrap(self.world_model).state_dict()}, self._wm_warmup_ckpt())
+            _atomic_torch_save(
+                {
+                    "global_step": int(self.global_step),
+                    "world_model": _unwrap(self.world_model).state_dict(),
+                    "complete": True,
+                },
+                Path(self._wm_warmup_ckpt()),
+            )
         if self.checkpoint_save_hf():
             wm_cfg = OmegaConf.to_container(OmegaConf.select(self.cfg, "world_model"), resolve=True)
             target = wm_cfg.pop("_target_")
@@ -355,9 +541,15 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
 
     def _save_cls_warmup(self) -> None:
         if self.checkpoint_save_torch():
-            torch.save({"global_step": int(self.global_step),
-                        "classifier": _unwrap(self.classifier).state_dict(),
-                        "classifier_threshold": float(self.classifier_threshold)}, self._cls_warmup_ckpt())
+            _atomic_torch_save(
+                {
+                    "global_step": int(self.global_step),
+                    "classifier": _unwrap(self.classifier).state_dict(),
+                    "classifier_threshold": float(self.classifier_threshold),
+                    "complete": True,
+                },
+                Path(self._cls_warmup_ckpt()),
+            )
         if self.checkpoint_save_hf():
             cls_kwargs = getattr(self, "_classifier_cls_kwargs", {})
             save_module_pretrained(
@@ -584,17 +776,42 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 f"classifier_window={cls_window} chunk_size={cls_chunk_size} "
                 f"classifier_windows={classifier_windows}"
             )
+            if resume and need_wm:
+                wm_start_step = min(self._load_latest_wm_warmup_progress(), int(wm_steps))
+            else:
+                wm_start_step = 0
+            if resume and need_cls:
+                cls_start_step = min(self._load_latest_cls_warmup_progress(), int(cls_steps))
+            else:
+                cls_start_step = 0
             # The frozen encoder is idle during warmup — park it off-GPU to reclaim
             # its weights (restored before the online phase below).
             self._set_encoder_device("cpu")
             self._print_pipeline_event(
                 "[pipeline][device] encoder parked on cpu for replay warmup"
             )
+        else:
+            wm_start_step = 0
+            cls_start_step = 0
+
+        wm_topk_manager = (
+            self._make_warmup_topk_manager(component="wm")
+            if self.distributed.is_main_process
+            else None
+        )
+        cls_topk_manager = (
+            self._make_warmup_topk_manager(component="classifier")
+            if self.distributed.is_main_process
+            else None
+        )
 
         if need_wm and need_cls:
             self.console_banner(
                 "[1/3] REPLAY WARMUP",
-                subtitle=f"wm={wm_steps} cls={cls_steps} learner updates",
+                subtitle=(
+                    f"wm={wm_start_step}->{wm_steps} "
+                    f"cls={cls_start_step}->{cls_steps} learner updates"
+                ),
             )
             wm_last = self._offline_warmup_wm(
                 warmup_replay,
@@ -603,8 +820,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 optim_cfg=optim_cfg,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(
-                    self._save_wm_warmup if self.distributed.is_main_process else None
+                    (
+                        lambda step, metrics: self._save_wm_warmup_progress(
+                            step=step,
+                            total=wm_steps,
+                            metrics=metrics,
+                            topk_manager=wm_topk_manager,
+                        )
+                    )
+                    if self.distributed.is_main_process
+                    else None
                 ),
+                start_step=wm_start_step,
             )
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
@@ -617,8 +844,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 log_step_offset=wm_steps,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(
-                    self._save_cls_warmup if self.distributed.is_main_process else None
+                    (
+                        lambda step, metrics: self._save_cls_warmup_progress(
+                            step=step,
+                            total=cls_steps,
+                            metrics=metrics,
+                            topk_manager=cls_topk_manager,
+                        )
+                    )
+                    if self.distributed.is_main_process
+                    else None
                 ),
+                start_step=cls_start_step,
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
@@ -636,8 +873,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 optim_cfg=optim_cfg,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(
-                    self._save_wm_warmup if self.distributed.is_main_process else None
+                    (
+                        lambda step, metrics: self._save_wm_warmup_progress(
+                            step=step,
+                            total=wm_steps,
+                            metrics=metrics,
+                            topk_manager=wm_topk_manager,
+                        )
+                    )
+                    if self.distributed.is_main_process
+                    else None
                 ),
+                start_step=wm_start_step,
             )
             if self.distributed.is_main_process:
                 self._save_wm_warmup()
@@ -661,8 +908,18 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 log_step_offset=wm_steps,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(
-                    self._save_cls_warmup if self.distributed.is_main_process else None
+                    (
+                        lambda step, metrics: self._save_cls_warmup_progress(
+                            step=step,
+                            total=cls_steps,
+                            metrics=metrics,
+                            topk_manager=cls_topk_manager,
+                        )
+                    )
+                    if self.distributed.is_main_process
+                    else None
                 ),
+                start_step=cls_start_step,
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()

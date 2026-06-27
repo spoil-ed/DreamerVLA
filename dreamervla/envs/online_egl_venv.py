@@ -1,10 +1,13 @@
-"""DreamerVLA online-rollout **EGL** vec env, built on RLinf's vendored classes.
+"""Legacy no-Ray online-rollout **EGL** vec env, built on RLinf's vendored classes.
 
-This is approach 1 of the two cotrain render backends: run each online-rollout env
-in its own ``multiprocessing.spawn`` subprocess through RLinf's exact
-``SubprocVectorEnv`` machinery (``dreamervla/envs/rlinf_venv.py``, vendored verbatim),
-with RLinf's exact per-child EGL device regime.  Approach 2 (osmesa) stays on the
-proven ``dreamervla.runners.vec_rollout_env.VecRolloutEnv``.
+This adapter is retained for the synchronous/no-Ray rollout path: it runs each
+online-rollout env in its own ``multiprocessing.spawn`` subprocess through
+RLinf's ``SubprocVectorEnv`` machinery
+(``dreamervla/envs/rlinf_venv.py``, vendored verbatim), with a per-child EGL
+device pool. The Ray mainline uses ``dreamervla.workers.env.EnvWorker`` instead:
+WorkerGroup binds the EnvWorker's CUDA/EGL env vars from
+``cluster.component_placement.env``, and its child env slots inherit that
+worker-level regime.
 
 The structure mirrors RLinf's per-env-family adapter ``rlinf/envs/libero/venv.py``:
 a spawn ``SubprocEnvWorker`` subclass + a domain ``_worker`` command loop, on top of
@@ -14,13 +17,10 @@ the vendored ``BaseVectorEnv``.  Only two things are DreamerVLA-specific and liv
 1. the command protocol the child serves — DreamerVLA's online train env
    (``set_task`` / ``reset(task_id, episode_id)`` / ``step`` -> ``full_record``), i.e.
    the same protocol as ``VecRolloutEnv`` so this class is drop-in for the egl path;
-2. the per-child EGL device regime, set in the child **before** the env (robosuite/
-   mujoco) is imported, EXACTLY as RLinf's scheduler does for its env workers
-   (``rlinf/scheduler/hardware/accelerators/nvidia_gpu.py`` lines 107-114):
-   ``CUDA_VISIBLE_DEVICES`` + ``MUJOCO_EGL_DEVICE_ID`` (+ ``MUJOCO_GL=egl`` /
-   ``PYOPENGL_PLATFORM=egl`` / ``RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES``),
-   the device chosen per child from ``egl_device_pool`` (round-robin), so env load is
-   spread across GPUs instead of stacked on one.
+2. the legacy per-child EGL device regime, set in the child **before** the env
+   (robosuite/mujoco) is imported. New Ray runs should prefer component
+   placement and WorkerGroup-level env vars so several env slots can share one
+   render GPU the same way RLinf's env worker does.
 
 Env contract the child's env object must provide (same as ``VecRolloutEnv``):
     set_task(task_id) ; task_description ; reset(task_id=, episode_id=) ;
@@ -166,12 +166,12 @@ def _default_factory(cfg_kwargs: dict[str, Any]) -> Any:
 
 
 class OnlineEglVecEnv(BaseVectorEnv):
-    """K online-rollout envs in K spawn subprocesses, on RLinf's ``BaseVectorEnv``.
+    """K no-Ray online-rollout envs in K spawn subprocesses.
 
-    Drop-in for ``VecRolloutEnv`` on the egl path: identical public API
+    Drop-in for ``VecRolloutEnv`` on the legacy egl path: identical public API
     (``num_envs``, ``reset`` / ``step`` / ``set_task`` / ``close``, context manager),
     but each env runs through RLinf's vendored ``BaseVectorEnv`` + spawn
-    ``SubprocEnvWorker`` with RLinf's per-child egl device regime.
+    ``SubprocEnvWorker`` with the per-child egl device pool.
 
     Args:
         num_envs: number of parallel env subprocesses (K).

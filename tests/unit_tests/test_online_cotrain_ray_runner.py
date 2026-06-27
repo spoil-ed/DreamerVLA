@@ -397,6 +397,40 @@ def test_ray_runner_uses_cotrain_phase_for_dreamervla_learner_mode() -> None:
     assert history["time/infer_policy_s"] == 0.3
 
 
+def test_ray_runner_final_metrics_distinguish_env_workers_from_slots(monkeypatch) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners import online_cotrain_ray_runner as module
+
+    class _ClusterStub:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
+        def require_single_node(self) -> None:
+            return None
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    cluster = _ClusterStub()
+    monkeypatch.setattr(module, "Cluster", lambda _cfg: cluster)
+    runner = module.OnlineCotrainRayRunner.__new__(module.OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({})
+    runner._build_components = lambda _cluster: {
+        "num_envs": 4,
+        "num_env_workers": 1,
+        "envs_per_worker": 4,
+    }
+    runner._run_loop = lambda _groups: {"rollout/steps": 160}
+
+    metrics = runner.run()
+
+    assert metrics["env/num_env_workers"] == 1
+    assert metrics["env/num_logical_envs"] == 4
+    assert metrics["env/envs_per_worker"] == 4
+    assert cluster.shutdown_called is True
+
+
 def test_runner_syncs_snapshots_only_at_rollout_boundary() -> None:
     from omegaconf import OmegaConf
 
@@ -967,6 +1001,86 @@ def test_ray_lumos_configs_use_non_degenerate_grpo_groups(path: str) -> None:
     assert not filters_zero_variance or group_size > 1
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
+        "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
+        "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
+    ],
+)
+def test_ray_real_configs_use_component_placement_for_egl_mainline(path: str) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+    from dreamervla.scheduler.placement import ComponentPlacement
+
+    cfg = OmegaConf.load(path)
+    cfg.render_backend = "egl"
+
+    placement = ComponentPlacement(cfg)
+    assert placement.has_component("env")
+    assert placement.has_component("rollout")
+    assert placement.has_component("actor")
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = cfg
+    placements = runner._env_placement().get_placement(_Cluster(num_gpus=2))
+
+    assert placements
+    assert all(p.visible_accelerators == ["0"] for p in placements)
+    assert OmegaConf.select(cfg, "env.cfg.egl_device_pool", default=None) is None
+
+
+def test_ray_runner_rejects_env_placement_count_mismatch() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "cluster": {"component_placement": {"env": "0-5"}},
+            "env": {"num_workers": 1, "envs_per_worker": 2},
+        }
+    )
+
+    with pytest.raises(ValueError, match="env.num_workers"):
+        runner._validate_env_placement(_Cluster(num_gpus=6), runner._env_placement())
+
+
+@pytest.mark.parametrize(
+    ("component", "placement_cfg"),
+    [
+        ("inference", {"cluster": {"component_placement": {"rollout": "0-5"}}}),
+        ("learner", {"cluster": {"component_placement": {"actor": "0-5"}}}),
+    ],
+)
+def test_ray_runner_rejects_unsupported_multiworker_compute_placement(
+    component: str,
+    placement_cfg: dict,
+) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(placement_cfg)
+    strategy = (
+        runner._inference_placement()
+        if component == "inference"
+        else runner._learner_placement()
+    )
+
+    with pytest.raises(ValueError, match=f"{component}.*single worker"):
+        runner._validate_single_worker_placement(
+            component,
+            _Cluster(num_gpus=6),
+            strategy,
+        )
+
+
 def test_ray_runner_builds_packed_multigpu_learner_placement() -> None:
     from omegaconf import OmegaConf
 
@@ -1097,7 +1211,7 @@ def test_ray_runner_egl_rejects_render_compute_overlap() -> None:
         runner._rollout_env_cfg(use_oft_collect_path=False)
 
 
-def test_ray_runner_egl_pool_uses_explicit_disjoint_render_devices() -> None:
+def test_ray_runner_egl_cfg_uses_explicit_disjoint_render_devices_for_placement() -> None:
     from omegaconf import OmegaConf
 
     from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
@@ -1120,8 +1234,187 @@ def test_ray_runner_egl_pool_uses_explicit_disjoint_render_devices() -> None:
     )
 
     env_cfg = runner._rollout_env_cfg(use_oft_collect_path=False)
+    placements = runner._env_placement().get_placement(_Cluster(num_gpus=4))
 
-    assert env_cfg["egl_device_pool"] == [2, 3]
+    assert env_cfg["render_backend"] == "egl"
+    assert "egl_device_pool" not in env_cfg
+    assert [p.visible_accelerators for p in placements] == [["2"], ["2"], ["3"], ["3"]]
+
+
+def test_ray_runner_egl_places_env_workers_on_render_gpu() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "render_devices": [2],
+            "env": {"num_workers": 4},
+            "inference": {"placement": {"strategy": "packed", "gpu_id": 0}},
+            "learner": {
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 1,
+                    "end_gpu": 1,
+                }
+            },
+        }
+    )
+
+    placements = runner._env_placement().get_placement(_Cluster(num_gpus=3))
+
+    assert [p.visible_accelerators for p in placements] == [["2"]] * 4
+    assert [p.device for p in placements] == ["cuda:2"] * 4
+
+
+def test_ray_runner_env_placement_defaults_to_osmesa_node_workers() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create({"env": {"num_workers": 2}})
+
+    placements = runner._env_placement().get_placement(_Cluster(num_gpus=2))
+
+    assert [p.visible_accelerators for p in placements] == [[], []]
+    assert [p.device for p in placements] == ["cpu", "cpu"]
+
+
+def test_ray_runner_egl_env_cfg_uses_worker_level_regime() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "render_devices": [2],
+            "env": {"num_workers": 4},
+            "inference": {"placement": {"strategy": "packed", "gpu_id": 0}},
+            "learner": {
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 1,
+                    "end_gpu": 1,
+                }
+            },
+        }
+    )
+
+    env_cfg = runner._rollout_env_cfg(use_oft_collect_path=False)
+
+    assert env_cfg["render_backend"] == "egl"
+    assert "egl_device_pool" not in env_cfg
+
+
+def test_ray_runner_envs_per_worker_defines_logical_env_count() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "cluster": {"component_placement": {"env": 0}},
+            "env": {"num_workers": 2, "envs_per_worker": 3},
+        }
+    )
+
+    env_cfg = runner._rollout_env_cfg(use_oft_collect_path=False)
+
+    assert runner._env_worker_count() == 2
+    assert runner._envs_per_worker() == 3
+    assert runner._logical_env_count() == 6
+    assert env_cfg["num_envs_per_worker"] == 3
+
+
+def test_ray_runner_osmesa_ignores_envs_per_worker_slots() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {"render_backend": "osmesa", "env": {"num_workers": 2, "envs_per_worker": 3}}
+    )
+
+    env_cfg = runner._rollout_env_cfg(use_oft_collect_path=False)
+
+    assert runner._envs_per_worker() == 3
+    assert runner._effective_envs_per_worker() == 1
+    assert runner._logical_env_count() == 2
+    assert env_cfg["num_envs_per_worker"] == 1
+
+
+def test_ray_runner_maps_logical_env_ids_to_worker_slots() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {"render_backend": "egl", "env": {"num_workers": 2, "envs_per_worker": 3}}
+    )
+
+    assert runner._env_worker_rank_slot(0) == (0, 0)
+    assert runner._env_worker_rank_slot(2) == (0, 2)
+    assert runner._env_worker_rank_slot(3) == (1, 0)
+    assert runner._env_worker_rank_slot(5) == (1, 2)
+
+
+def test_ray_runner_env_step_dispatches_to_worker_slot() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    class _SlotEnvs:
+        def __init__(self) -> None:
+            self.rank = None
+            self.calls = []
+
+        def execute_on(self, rank):
+            self.rank = int(rank)
+            return self
+
+        def step_slot(self, slot, action, hidden, lang_emb=None):
+            self.calls.append((self.rank, int(slot), action, hidden, lang_emb))
+            return _Ready([({"env": self.rank, "slot": int(slot)}, False, {})])
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {"render_backend": "egl", "env": {"num_workers": 2, "envs_per_worker": 3}}
+    )
+    envs = _SlotEnvs()
+
+    result = runner._env_step(envs, env_id=5, action="a", hidden="h", lang_emb="l")
+
+    assert result.wait() == [({"env": 1, "slot": 2}, False, {})]
+    assert envs.calls == [(1, 2, "a", "h", "l")]
+
+
+def test_ray_runner_flattens_worker_slot_observations() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {"render_backend": "egl", "env": {"num_workers": 2, "envs_per_worker": 2}}
+    )
+
+    flattened = runner._flatten_env_obs(
+        [
+            [{"env_id": 0}, {"env_id": 1}],
+            [{"env_id": 2}, {"env_id": 3}],
+        ]
+    )
+
+    assert flattened == [{"env_id": 0}, {"env_id": 1}, {"env_id": 2}, {"env_id": 3}]
 
 
 def test_online_cotrain_ray_oft_experiment_accepts_render_backend_override() -> None:

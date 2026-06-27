@@ -197,6 +197,16 @@ def _scaled_profile_count(
     return max(1, int(ngpu)) * per_gpu
 
 
+def _profile_per_gpu_count(profile_cfg: Mapping[str, Any], key: str) -> int | None:
+    raw = _plain(profile_cfg).get(key)
+    if raw is None:
+        return None
+    per_gpu = int(raw)
+    if per_gpu < 1:
+        raise ValueError(f"profile.{key} must be >= 1 when set")
+    return per_gpu
+
+
 def _sync_cotrain_scale_overrides(
     profile_cfg: Mapping[str, Any],
     *,
@@ -221,18 +231,38 @@ def _ray_online_scale_overrides(
     explicit_overrides: Sequence[str],
 ) -> list[str]:
     overrides: list[str] = []
-    num_workers = _scaled_profile_count(
+    gpu_count = max(1, int(ngpu))
+    envs_per_gpu = _profile_per_gpu_count(
+        profile_cfg,
+        "online_rollout_envs_per_gpu",
+    )
+    scaled_envs = _scaled_profile_count(
         profile_cfg,
         "online_rollout_envs_per_gpu",
         ngpu=ngpu,
     )
-    if num_workers is not None and not _has_override(explicit_overrides, "env.num_workers"):
-        overrides.append(f"env.num_workers={num_workers}")
     if not _has_override(explicit_overrides, "render_backend"):
         overrides.append(f"render_backend={render_backend}")
 
     if render_backend.strip().lower() != "egl":
+        if scaled_envs is not None and not _has_override(
+            explicit_overrides, "env.num_workers"
+        ):
+            overrides.append(f"env.num_workers={scaled_envs}")
         return overrides
+
+    if envs_per_gpu is not None:
+        if not _has_override(explicit_overrides, "env.num_workers"):
+            overrides.append(f"env.num_workers={gpu_count}")
+        if not _has_override(explicit_overrides, "env.envs_per_worker"):
+            overrides.append(f"env.envs_per_worker={envs_per_gpu}")
+
+    overrides.extend(
+        _ray_online_egl_component_placement_overrides(
+            ngpu=gpu_count,
+            explicit_overrides=explicit_overrides,
+        )
+    )
 
     egl_cfg = _plain(profile_cfg).get("ray_online_egl_spawn", {})
     if not isinstance(egl_cfg, Mapping):
@@ -240,13 +270,35 @@ def _ray_online_scale_overrides(
     egl_targets = {
         "stagger_s": "env.cfg.egl_spawn_stagger_s",
         "init_timeout_s": "env.cfg.egl_spawn_init_timeout_s",
-        "max_respawns": "env.cfg.egl_max_respawns",
     }
     for source_key, target_key in egl_targets.items():
         value = egl_cfg.get(source_key)
         if value is None or _has_override(explicit_overrides, target_key):
             continue
         overrides.append(f"++{target_key}={_format_hydra_value(value)}")
+    return overrides
+
+
+def _ray_online_egl_component_placement_overrides(
+    *,
+    ngpu: int,
+    explicit_overrides: Sequence[str],
+) -> list[str]:
+    if _has_override(explicit_overrides, "cluster.component_placement"):
+        return []
+
+    overrides: list[str] = []
+    gpu_count = max(1, int(ngpu))
+    env_ranks = "0" if gpu_count == 1 else f"0-{gpu_count - 1}"
+    actor_rank = gpu_count - 1
+    defaults = {
+        "cluster.component_placement.env": env_ranks,
+        "cluster.component_placement.rollout": "0",
+        "cluster.component_placement.actor": str(actor_rank),
+    }
+    for key, value in defaults.items():
+        if not _has_override(explicit_overrides, key):
+            overrides.append(f"{key}={value}")
     return overrides
 
 

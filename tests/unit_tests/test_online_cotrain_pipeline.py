@@ -1198,6 +1198,64 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
 
 
+def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
+    from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+
+    runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.world_model = torch.nn.Linear(2, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
+
+    with torch.no_grad():
+        runner.world_model.weight.fill_(3.0)
+    runner._save_wm_warmup_progress(
+        step=7,
+        total=20,
+        metrics={"loss": 0.25},
+        topk_manager=None,
+    )
+    with torch.no_grad():
+        runner.world_model.weight.fill_(9.0)
+
+    restored_step = runner._load_latest_wm_warmup_progress()
+
+    assert restored_step == 7
+    assert not (tmp_path / "ckpt" / "wm_warmup.ckpt").exists()
+    assert (tmp_path / "ckpt" / "warmup_progress" / "wm_step_00000007.ckpt").exists()
+    assert torch.allclose(
+        runner.world_model.weight,
+        torch.full_like(runner.world_model.weight, 3.0),
+    )
+
+
+def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
+    from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+
+    runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.classifier = torch.nn.Linear(2, 2)
+    runner.classifier_optimizer = torch.optim.AdamW(runner.classifier.parameters(), lr=1e-3)
+    runner.classifier_threshold = 0.5
+
+    topk = runner._make_warmup_topk_manager(component="classifier", k=2)
+    for step, f1 in [(1, 0.10), (2, 0.70), (3, 0.30), (4, 0.90)]:
+        runner._save_cls_warmup_progress(
+            step=step,
+            total=10,
+            metrics={"loss": 1.0 - f1, "acc": f1, "f1": f1, "pos_frac": 0.5},
+            topk_manager=topk,
+        )
+
+    names = sorted(p.name for p in (tmp_path / "ckpt" / "warmup_topk" / "classifier").glob("*.ckpt"))
+    assert len(names) == 2
+    assert any("step=00000002" in name and "f1=0.700000" in name for name in names)
+    assert any("step=00000004" in name and "f1=0.900000" in name for name in names)
+    assert not any("step=00000001" in name for name in names)
+    assert not any("step=00000003" in name for name in names)
+
+
 def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     from omegaconf import OmegaConf
 

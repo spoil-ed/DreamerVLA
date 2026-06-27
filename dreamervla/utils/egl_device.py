@@ -33,6 +33,26 @@ def apply_egl_device_regime(
     _log_egl_devices(logger, int(egl_device_id))
 
 
+def log_egl_device_diagnostics_from_env(*, logger_name: str) -> None:
+    """Log EGL diagnostics for a worker-level regime that is already set.
+
+    RLinf-style Ray workers receive ``CUDA_VISIBLE_DEVICES`` and
+    ``MUJOCO_EGL_DEVICE_ID`` from ``runtime_env``. This helper validates and
+    reports that inherited state without mutating it.
+    """
+    logger = logging.getLogger(logger_name)
+    raw_device = os.environ.get("MUJOCO_EGL_DEVICE_ID")
+    if raw_device in (None, ""):
+        _log_egl_devices(logger, None)
+        return
+    try:
+        egl_device_id = int(raw_device)
+    except ValueError:
+        logger.warning("Invalid MUJOCO_EGL_DEVICE_ID=%r for EGL diagnostics", raw_device)
+        return
+    _log_egl_devices(logger, egl_device_id)
+
+
 def _log_egl_devices(logger: logging.Logger, egl_device_id: int | None) -> None:
     try:
         from mujoco.egl import egl_ext as egl
@@ -42,12 +62,16 @@ def _log_egl_devices(logger: logging.Logger, egl_device_id: int | None) -> None:
         logger.warning("EGL device diagnostics unavailable: %r", exc)
         return
 
-    logger.info(
+    message = (
         "EGL device diagnostics: eglQueryDevicesEXT count=%d, "
-        "MUJOCO_EGL_DEVICE_ID=%s (EGL enumeration index, not CUDA id)",
-        count,
-        egl_device_id,
+        "MUJOCO_EGL_DEVICE_ID=%s (EGL enumeration index, not CUDA id)"
     )
+    logger.info(message, count, egl_device_id)
+    if not logger.isEnabledFor(logging.INFO):
+        print(
+            f"[egl_device] {message % (count, egl_device_id)}",
+            flush=True,
+        )
     if egl_device_id is not None and not 0 <= int(egl_device_id) < count:
         raise ValueError(
             "MUJOCO_EGL_DEVICE_ID is an EGL enumeration index, not a CUDA physical "

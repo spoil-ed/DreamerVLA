@@ -8,7 +8,7 @@ sub-project; ``get_placement`` keeps the same signature.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -140,6 +140,86 @@ class FlexiblePlacementStrategy(PlacementStrategy):
         ]
 
 
+class ResourceMapPlacementStrategy(PlacementStrategy):
+    """RLinf-style single-node resource/process rank-map placement.
+
+    Supported forms match the useful single-node subset of RLinf's
+    ``resource_ranks:process_ranks`` grammar:
+
+    - ``"0-3"``: one worker per GPU.
+    - ``"0:0-3"``: workers 0..3 share GPU 0.
+    - ``"0-1:0-3"``: two workers share each GPU.
+    - ``"0-3:0-1"``: each worker gets two GPUs.
+    - ``"all"``: one worker per visible cluster GPU.
+    """
+
+    def __init__(self, rank_map: str) -> None:
+        self.rank_map = str(rank_map)
+
+    def get_placement(self, cluster: Cluster) -> list[Placement]:
+        rank_map = _parse_rank_map(self.rank_map, cluster.num_gpus)
+        process_resources = _rank_map_to_process_resources(rank_map)
+        if not process_resources:
+            raise ValueError("component placement produced no workers")
+        num_workers = max(process_resources) + 1
+        placements: list[Placement] = []
+        for rank in range(num_workers):
+            if rank not in process_resources:
+                raise ValueError(
+                    f"component placement process ranks must be continuous from 0; missing {rank}"
+                )
+            gpus = process_resources[rank]
+            for gpu in gpus:
+                if gpu >= cluster.num_gpus:
+                    raise ValueError(
+                        f"cluster has {cluster.num_gpus} GPU(s) but placement needs GPU index {gpu}"
+                    )
+            placements.append(
+                Placement(
+                    rank=rank,
+                    local_rank=rank,
+                    local_world_size=num_workers,
+                    visible_accelerators=[str(gpu) for gpu in gpus],
+                    device=f"cuda:{gpus[0]}",
+                )
+            )
+        return placements
+
+
+class ComponentPlacement:
+    """Parse ``cluster.component_placement`` into per-component strategies.
+
+    This is the DreamerVLA single-node counterpart of RLinf's
+    ``HybridComponentPlacement``. It keeps the grammar at the component layer
+    instead of inventing per-feature GPU pools.
+    """
+
+    def __init__(self, cfg: object) -> None:
+        placement_cfg = _select(cfg, "cluster.component_placement", default=None)
+        if placement_cfg is None:
+            raise ValueError("cluster.component_placement is required")
+        plain = _to_plain_mapping(placement_cfg)
+        self._strategies: dict[str, ResourceMapPlacementStrategy] = {}
+        for raw_names, raw_spec in plain.items():
+            placement_spec = _component_placement_string(raw_spec)
+            names = [name.strip() for name in str(raw_names).split(",") if name.strip()]
+            if not names:
+                raise ValueError("component placement name must not be empty")
+            strategy = ResourceMapPlacementStrategy(placement_spec)
+            for name in names:
+                if name in self._strategies:
+                    raise ValueError(f"duplicate component placement for {name!r}")
+                self._strategies[name] = strategy
+
+    def get_strategy(self, component_name: str) -> ResourceMapPlacementStrategy:
+        if component_name not in self._strategies:
+            raise ValueError(f"component {component_name!r} is not in component_placement")
+        return self._strategies[component_name]
+
+    def has_component(self, component_name: str) -> bool:
+        return component_name in self._strategies
+
+
 def _normalize_accelerator_group(group: str | Sequence[int]) -> list[int]:
     if isinstance(group, str):
         ranks = parse_accelerator_range(group)
@@ -152,6 +232,130 @@ def _normalize_accelerator_group(group: str | Sequence[int]) -> list[int]:
     if len(ranks) != len(set(ranks)):
         raise ValueError(f"accelerator group contains duplicate ranks: {ranks}")
     return sorted(ranks)
+
+
+def _parse_rank_map(rank_map_str: str, num_gpus: int) -> dict[tuple[int, ...], list[int]]:
+    rank_map: dict[tuple[int, ...], list[int]] = {}
+    parsed_resources: list[int] = []
+    parsed_processes: list[int] = []
+    for raw_part in str(rank_map_str).split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        pieces = part.split(":")
+        if len(pieces) not in (1, 2):
+            raise ValueError(f"invalid component placement segment {part!r}")
+        resources = _parse_rank_config(pieces[0].strip(), num_gpus, "accelerator")
+        if not resources:
+            raise ValueError(f"empty resource ranks in component placement {part!r}")
+        if set(resources).intersection(parsed_resources):
+            raise ValueError(f"duplicate resource ranks in component placement {rank_map_str!r}")
+        if parsed_resources and resources[0] <= parsed_resources[-1]:
+            raise ValueError(
+                f"resource ranks must be ascending in component placement {rank_map_str!r}"
+            )
+
+        if len(pieces) == 2:
+            processes = _parse_rank_config(pieces[1].strip(), None, "process")
+        else:
+            start = parsed_processes[-1] + 1 if parsed_processes else 0
+            processes = list(range(start, start + len(resources)))
+        if not processes:
+            raise ValueError(f"empty process ranks in component placement {part!r}")
+        if set(processes).intersection(parsed_processes):
+            raise ValueError(f"duplicate process ranks in component placement {rank_map_str!r}")
+        if parsed_processes and processes[0] != parsed_processes[-1] + 1:
+            raise ValueError(
+                f"process ranks must be continuous in component placement {rank_map_str!r}"
+            )
+        if processes != list(range(processes[0], processes[0] + len(processes))):
+            raise ValueError(
+                f"process ranks must be continuous in component placement {rank_map_str!r}"
+            )
+        if len(processes) % len(resources) and len(resources) % len(processes):
+            raise ValueError(
+                "resource and process counts must divide each other in component "
+                f"placement segment {part!r}"
+            )
+        parsed_resources.extend(resources)
+        parsed_processes.extend(processes)
+        rank_map[tuple(resources)] = processes
+    return rank_map
+
+
+def _parse_rank_config(value: str, num_gpus: int | None, label: str) -> list[int]:
+    value = str(value).strip()
+    if value == "all":
+        if num_gpus is None:
+            raise ValueError(f"{label} ranks cannot use 'all'")
+        return list(range(int(num_gpus)))
+    return parse_accelerator_range(value)
+
+
+def _rank_map_to_process_resources(
+    rank_map: dict[tuple[int, ...], list[int]]
+) -> dict[int, list[int]]:
+    process_resources: dict[int, list[int]] = {}
+    for resource_ranks, process_ranks in rank_map.items():
+        resources = list(resource_ranks)
+        if len(resources) >= len(process_ranks):
+            resources_per_process = len(resources) // len(process_ranks)
+            for index, process_rank in enumerate(process_ranks):
+                process_resources[process_rank] = resources[
+                    index * resources_per_process : (index + 1) * resources_per_process
+                ]
+        else:
+            processes_per_resource = len(process_ranks) // len(resources)
+            for resource_index, resource_rank in enumerate(resources):
+                start = resource_index * processes_per_resource
+                stop = start + processes_per_resource
+                for process_rank in process_ranks[start:stop]:
+                    process_resources.setdefault(process_rank, []).append(resource_rank)
+    return process_resources
+
+
+def _component_placement_string(spec: object) -> str:
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, Mapping):
+        if "placement" not in spec:
+            raise ValueError(f"component placement mapping missing 'placement': {spec}")
+        return str(spec["placement"])
+    return str(spec)
+
+
+def _to_plain_mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return value
+    try:
+        from omegaconf import OmegaConf
+
+        plain = OmegaConf.to_container(value, resolve=True)
+    except Exception as exc:  # noqa: BLE001
+        raise TypeError("component_placement must be a mapping") from exc
+    if not isinstance(plain, Mapping):
+        raise TypeError("component_placement must be a mapping")
+    return plain
+
+
+def _select(cfg: object, path: str, *, default: object = None) -> object:
+    try:
+        from omegaconf import OmegaConf
+
+        value = OmegaConf.select(cfg, path, default=None)
+        return default if value is None else value
+    except Exception:  # noqa: BLE001
+        cur = cfg
+        for part in path.split("."):
+            if isinstance(cur, Mapping):
+                if part not in cur:
+                    return default
+                cur = cur[part]
+            else:
+                if not hasattr(cur, part):
+                    return default
+                cur = getattr(cur, part)
+        return cur
 
 
 class NodePlacementStrategy(PlacementStrategy):

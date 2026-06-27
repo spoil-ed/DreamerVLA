@@ -222,7 +222,6 @@ profiles:
     ray_online_egl_spawn:
       stagger_s: 2.0
       init_timeout_s: 900
-      max_respawns: 5
     collect:
       ray:
         - collect.episode_horizon=300

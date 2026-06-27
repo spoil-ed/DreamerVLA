@@ -29,10 +29,13 @@ from dreamervla.runners.render_device_config import (
 )
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
+    ComponentPlacement,
     FlexiblePlacementStrategy,
     NodePlacementStrategy,
     PackedPlacementStrategy,
+    Placement,
     PlacementStrategy,
+    ResourceMapPlacementStrategy,
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.resource_metrics import collect_resource_metrics
@@ -79,7 +82,11 @@ class OnlineCotrainRayRunner(BaseRunner):
             cluster.require_single_node()
             groups = self._build_components(cluster)
             metrics = self._run_loop(groups)
-            metrics["env/num_env_workers"] = int(groups["num_envs"])
+            metrics["env/num_logical_envs"] = int(groups["num_envs"])
+            metrics["env/num_env_workers"] = int(
+                groups.get("num_env_workers", groups["num_envs"])
+            )
+            metrics["env/envs_per_worker"] = int(groups.get("envs_per_worker", 1))
             # Expose ALL metrics in the log (stdout), independent of logger backend, so an
             # async ray run's learner_updates / overlap_events / rollout episodes +
             # success_rate / losses / timings are always visible in the captured log.
@@ -96,7 +103,8 @@ class OnlineCotrainRayRunner(BaseRunner):
                 "ray_rollout.mode=learned_actor requires a learned-actor inference worker; "
                 "use no-Ray OnlineCotrainRunner or select ray_rollout.mode=oft_fixed_base."
             )
-        num_envs = self._int_from(("env.num_workers", "num_env_workers"), 2)
+        num_env_workers = self._env_worker_count()
+        num_envs = self._logical_env_count()
         horizon = self._int_from(("env.cfg.kwargs.horizon", "episode_horizon"), 3)
         seq_len = self._int_from(("replay.cfg.sequence_length", "sequence_length"), 3)
         store_name = str(
@@ -145,8 +153,12 @@ class OnlineCotrainRayRunner(BaseRunner):
             horizon=horizon,
             use_oft_collect_path=infer_worker_cls is RolloutInferenceWorker,
         )
+        env_placement = self._env_placement()
+        self._validate_env_placement(cluster, env_placement)
         env_group = WorkerGroup(EnvWorker, env_cfg, task_id=0, replay=replay).launch(
-            cluster, NodePlacementStrategy(num_envs)
+            cluster,
+            env_placement,
+            env_vars=self._env_worker_env_vars(),
         )
         # Spread env workers across the configured task ids (round-robin) instead of
         # pinning every env to task 0. The env config itself now comes from the collect
@@ -157,7 +169,11 @@ class OnlineCotrainRayRunner(BaseRunner):
             for env_index in range(num_envs):
                 tid = int(rollout_task_ids[env_index % len(rollout_task_ids)])
                 if tid != 0:
-                    env_group.execute_on(env_index).set_task(tid).wait()
+                    self._env_set_task(
+                        env_group,
+                        env_id=env_index,
+                        task_id=tid,
+                    ).wait()
 
         if infer_worker_cls is RolloutInferenceWorker:
             # OFT recipe: build the OFT rollout inference cfg via the SAME programmatic
@@ -172,18 +188,28 @@ class OnlineCotrainRayRunner(BaseRunner):
             infer_cfg.setdefault("policy", policy_cfg)
             infer_cfg.setdefault("device", "cpu")
             infer_init_ckpt = self._load_init_ckpt("inference.init_ckpt")
+        inference_placement = self._inference_placement()
+        self._validate_single_worker_placement(
+            "inference",
+            cluster,
+            inference_placement,
+        )
         infer_group = WorkerGroup(
             infer_worker_cls,
             infer_cfg,
             infer_init_ckpt,
             num_envs=num_envs,
-        ).launch(cluster, self._inference_placement())
+        ).launch(cluster, inference_placement)
 
         learner_model_cfg = self._cfg_from("learner.model_cfg", {"policy": policy_cfg})
         learner_model_cfg.setdefault("policy", policy_cfg)
         learner_init_ckpt = self._load_init_ckpt("learner.init_ckpt")
         learner_placement = self._learner_placement()
-        learner_placements = learner_placement.get_placement(cluster)
+        learner_placements = self._validate_single_worker_placement(
+            "learner",
+            cluster,
+            learner_placement,
+        )
         learner_train_cfg = self._learner_train_cfg(
             store_name,
             placement_has_gpu=any(item.visible_accelerators for item in learner_placements),
@@ -203,6 +229,8 @@ class OnlineCotrainRayRunner(BaseRunner):
             "learner": learner_group,
             "store_name": store_name,
             "num_envs": num_envs,
+            "num_env_workers": num_env_workers,
+            "envs_per_worker": self._effective_envs_per_worker(),
         }
 
     def _run_loop(self, groups: dict[str, Any]) -> dict[str, float | int]:
@@ -289,7 +317,7 @@ class OnlineCotrainRayRunner(BaseRunner):
                 last_loss=last_loss,
                 last_metrics=last_metrics,
             )
-            obs_batch_all = envs.current_obs().wait()
+            obs_batch_all = self._flatten_env_obs(envs.current_obs().wait())
             for env_id, obs in enumerate(obs_batch_all):
                 if isinstance(obs, dict):
                     episode_steps_by_env[int(env_id)] = int(obs.get("step", 0) or 0)
@@ -336,7 +364,13 @@ class OnlineCotrainRayRunner(BaseRunner):
             ):
                 env_step_start = time.perf_counter()
                 step_results.extend(
-                    envs.execute_on(rank).step(action, hidden, lang_emb).wait()
+                    self._env_step(
+                        envs,
+                        env_id=rank,
+                        action=action,
+                        hidden=hidden,
+                        lang_emb=lang_emb,
+                    ).wait()
                 )
                 env_step_wait_s += time.perf_counter() - env_step_start
                 env_steps += 1
@@ -651,7 +685,13 @@ class OnlineCotrainRayRunner(BaseRunner):
                 lang_batch,
                 strict=True,
             ):
-                result = envs.execute_on(int(env_id)).step(action, hidden, lang_emb)
+                result = self._env_step(
+                    envs,
+                    env_id=int(env_id),
+                    action=action,
+                    hidden=hidden,
+                    lang_emb=lang_emb,
+                )
                 pending_steps[result.refs[0]] = (
                     int(env_id),
                     result,
@@ -789,7 +829,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             pending_learn_start = 0.0
             pending_learn_overlapped = False
 
-        initial_obs = envs.current_obs().wait()
+        initial_obs = self._flatten_env_obs(envs.current_obs().wait())
         for env_id, obs in zip(env_ids, initial_obs, strict=True):
             if isinstance(obs, dict):
                 episode_steps_by_env[int(env_id)] = int(obs.get("step", 0) or 0)
@@ -1494,7 +1534,12 @@ class OnlineCotrainRayRunner(BaseRunner):
         task_state["next_task_index"] = next_index + 1
         active_task_by_env[env_id] = next_task
         start_episode_id = int(task_episode_counts.get(next_task, 0))
-        switched = envs.execute_on(env_id).set_task(next_task, start_episode_id).wait()
+        switched = self._env_set_task(
+            envs,
+            env_id=env_id,
+            task_id=next_task,
+            start_episode_id=start_episode_id,
+        ).wait()
         if isinstance(switched, list):
             return dict(switched[0])
         return dict(switched)
@@ -1552,6 +1597,200 @@ class OnlineCotrainRayRunner(BaseRunner):
             compute_devices=self._ray_compute_device_pool(),
             render_key="render_devices",
         )
+
+    def _env_placement(self) -> PlacementStrategy:
+        """RLinf-style placement for env workers.
+
+        osmesa stays CPU-only. EGL places env workers directly on the configured
+        render GPU pool, allowing multiple env workers to share one render GPU.
+        The worker-level CUDA/EGL regime is injected by WorkerGroup, and env
+        subprocesses inherit it.
+        """
+        num_envs = self._env_worker_count()
+        backend = str(
+            self._select_first(("render_backend", "env.render_backend"), "osmesa")
+        ).lower()
+        if backend != "egl":
+            return NodePlacementStrategy(num_envs)
+        component_strategy = self._component_placement_strategy("env")
+        if component_strategy is not None:
+            return component_strategy
+
+        placement_cfg = self._cfg_from("env.placement", {})
+        strategy = str(placement_cfg.get("strategy", "")).strip().lower()
+        if strategy in {"", "shared", "shared_accelerator", "shared_gpu"}:
+            devices = self._egl_device_pool()
+            return ResourceMapPlacementStrategy(
+                self._shared_resource_rank_map(devices, num_envs)
+            )
+        if strategy == "packed":
+            start_gpu = int(
+                placement_cfg.get("gpu_id", placement_cfg.get("start_gpu", 0))
+            )
+            end_gpu = int(placement_cfg.get("end_gpu", start_gpu))
+            num_gpus_per_worker = int(placement_cfg.get("num_gpus_per_worker", 1))
+            return PackedPlacementStrategy(
+                start_gpu,
+                end_gpu,
+                num_gpus_per_worker=num_gpus_per_worker,
+            )
+        if strategy == "flexible":
+            groups = placement_cfg.get("accelerator_groups")
+            if groups is None:
+                groups = placement_cfg.get("groups")
+            if groups is None:
+                raise ValueError(
+                    "env.placement.accelerator_groups is required for flexible placement"
+                )
+            return FlexiblePlacementStrategy(groups)
+        raise ValueError(
+            "env.placement.strategy must be one of shared, packed, or flexible; "
+            f"got {strategy!r}"
+        )
+
+    def _validate_env_placement(
+        self,
+        cluster: Cluster,
+        placement: PlacementStrategy,
+    ) -> list[Placement]:
+        placements = placement.get_placement(cluster)
+        expected = self._env_worker_count()
+        actual = len(placements)
+        if actual != expected:
+            raise ValueError(
+                "env placement produced "
+                f"{actual} worker(s), but env.num_workers={expected}; set "
+                "env.num_workers to match cluster.component_placement.env."
+            )
+        return placements
+
+    def _validate_single_worker_placement(
+        self,
+        component: str,
+        cluster: Cluster,
+        placement: PlacementStrategy,
+    ) -> list[Placement]:
+        placements = placement.get_placement(cluster)
+        if len(placements) != 1:
+            raise ValueError(
+                f"{component} placement must resolve to a single worker in "
+                "OnlineCotrainRayRunner; multi-worker compute placement is not "
+                f"supported by this runner yet (got {len(placements)} workers)."
+            )
+        return placements
+
+    def _component_placement_strategy(
+        self, *component_names: str
+    ) -> PlacementStrategy | None:
+        if OmegaConf.select(self.cfg, "cluster.component_placement", default=None) is None:
+            return None
+        placement = ComponentPlacement(self.cfg)
+        for name in component_names:
+            if placement.has_component(name):
+                return placement.get_strategy(name)
+        return None
+
+    def _env_worker_count(self) -> int:
+        return self._int_from(("env.num_workers", "num_env_workers"), 1)
+
+    def _envs_per_worker(self) -> int:
+        return self._int_from(("env.envs_per_worker", "envs_per_worker"), 1)
+
+    def _effective_envs_per_worker(self) -> int:
+        backend = str(
+            self._select_first(("render_backend", "env.render_backend"), "osmesa")
+        ).lower()
+        if backend != "egl":
+            return 1
+        return self._envs_per_worker()
+
+    def _logical_env_count(self) -> int:
+        explicit = OmegaConf.select(self.cfg, "env.total_num_envs", default=None)
+        if explicit is not None:
+            return int(explicit)
+        return self._env_worker_count() * self._effective_envs_per_worker()
+
+    def _env_worker_rank_slot(self, env_id: int) -> tuple[int, int]:
+        envs_per_worker = self._effective_envs_per_worker()
+        if envs_per_worker < 1:
+            raise ValueError(f"env.envs_per_worker must be >= 1, got {envs_per_worker}")
+        env_id = int(env_id)
+        return env_id // envs_per_worker, env_id % envs_per_worker
+
+    def _flatten_env_obs(self, worker_obs: list[Any]) -> list[dict[str, Any]]:
+        if self._effective_envs_per_worker() == 1:
+            return list(worker_obs)
+        flattened: list[dict[str, Any]] = []
+        for item in worker_obs:
+            if not isinstance(item, (list, tuple)):
+                raise TypeError(
+                    "EnvWorker.current_obs() must return a list when env.envs_per_worker>1"
+                )
+            flattened.extend(dict(obs) for obs in item)
+        return flattened
+
+    def _env_step(
+        self,
+        envs: Any,
+        *,
+        env_id: int,
+        action: Any,
+        hidden: Any,
+        lang_emb: Any | None = None,
+    ) -> Any:
+        if self._effective_envs_per_worker() == 1:
+            return envs.execute_on(int(env_id)).step(action, hidden, lang_emb)
+        worker_rank, slot_id = self._env_worker_rank_slot(int(env_id))
+        return envs.execute_on(worker_rank).step_slot(slot_id, action, hidden, lang_emb)
+
+    def _env_set_task(
+        self,
+        envs: Any,
+        *,
+        env_id: int,
+        task_id: int,
+        start_episode_id: int = 0,
+    ) -> Any:
+        if self._effective_envs_per_worker() == 1:
+            return envs.execute_on(int(env_id)).set_task(task_id, start_episode_id)
+        worker_rank, slot_id = self._env_worker_rank_slot(int(env_id))
+        return envs.execute_on(worker_rank).set_task_slot(
+            slot_id, task_id, start_episode_id
+        )
+
+    @staticmethod
+    def _shared_resource_rank_map(devices: list[int], num_workers: int) -> str:
+        if not devices:
+            raise ValueError("render_devices must not be empty")
+        workers = int(num_workers)
+        if workers < 1:
+            raise ValueError(f"num_workers must be >= 1, got {num_workers}")
+        if workers % len(devices) != 0:
+            raise ValueError(
+                "RLinf-style shared placement requires env.num_workers to be "
+                f"divisible by render device count ({workers} vs {len(devices)})"
+            )
+        workers_per_device = workers // len(devices)
+        parts: list[str] = []
+        start_rank = 0
+        for device in devices:
+            end_rank = start_rank + workers_per_device - 1
+            ranks = (
+                str(start_rank)
+                if start_rank == end_rank
+                else f"{start_rank}-{end_rank}"
+            )
+            parts.append(f"{int(device)}:{ranks}")
+            start_rank = end_rank + 1
+        return ",".join(parts)
+
+    def _env_worker_env_vars(self) -> dict[str, str]:
+        backend = str(
+            self._select_first(("render_backend", "env.render_backend"), "egl")
+        ).lower()
+        if backend != "egl":
+            return {}
+        return {"MUJOCO_GL": "egl", "PYOPENGL_PLATFORM": "egl"}
 
     def _ray_compute_device_pool(self) -> list[int]:
         """GPU ids used by non-env Ray components from Hydra placement config."""
@@ -1620,9 +1859,16 @@ class OnlineCotrainRayRunner(BaseRunner):
         # DreamerVLAOnlineTrainEnv (use_from_config) rejects it and uses max_steps.
         if not bool(env_cfg.get("use_from_config")):
             env_cfg["kwargs"].setdefault("horizon", int(horizon or 3))
-        egl_pool = self._egl_device_pool()
-        if egl_pool:
-            env_cfg["egl_device_pool"] = egl_pool
+        render_backend = str(
+            self._select_first(("render_backend", "env.render_backend"), "osmesa")
+        ).lower()
+        env_cfg["render_backend"] = render_backend
+        env_cfg["num_envs_per_worker"] = self._effective_envs_per_worker()
+        if (
+            render_backend == "egl"
+            and self._component_placement_strategy("env") is None
+        ):
+            self._egl_device_pool()
         return env_cfg
 
     def _int_from(self, paths: tuple[str, ...], default: int) -> int:
@@ -1737,6 +1983,9 @@ class OnlineCotrainRayRunner(BaseRunner):
         return _load_runner_state_dicts(str(ckpt_path), components=components)
 
     def _learner_placement(self) -> PlacementStrategy:
+        component_strategy = self._component_placement_strategy("learner", "actor")
+        if component_strategy is not None:
+            return component_strategy
         num_workers_raw = OmegaConf.select(self.cfg, "learner.num_workers", default=None)
         num_workers = int(num_workers_raw) if num_workers_raw is not None else None
         placement_cfg = self._cfg_from("learner.placement", {"strategy": "node"})
@@ -1786,6 +2035,9 @@ class OnlineCotrainRayRunner(BaseRunner):
         )
 
     def _inference_placement(self) -> PlacementStrategy:
+        component_strategy = self._component_placement_strategy("inference", "rollout")
+        if component_strategy is not None:
+            return component_strategy
         placement_cfg = self._cfg_from("inference.placement", {"strategy": "node"})
         strategy = str(placement_cfg.get("strategy", "node")).strip().lower()
         if strategy in {"", "node", "cpu"}:
