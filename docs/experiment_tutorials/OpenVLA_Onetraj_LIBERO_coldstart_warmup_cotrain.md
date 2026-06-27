@@ -72,6 +72,31 @@ the profile: sync cotrain gets `online_rollout.num_envs=12`; Ray async online
 (`cotrain_engine=async`) gets `env.num_workers=12` plus EGL spawn guards when
 `render_backend=egl`.
 
+### Mainline Hydra Config
+
+The default cotrain path in this tutorial is the sync Hydra route:
+
+```yaml
+# configs/scripts/coldstart_warmup_cotrain.yaml
+cotrain:
+  base:
+    - experiment=online_cotrain_pipeline_oft_backbone_latent
+```
+
+That experiment composes
+`configs/dreamervla/online_cotrain_pipeline_openvla_oft_backbone_latent.yaml`.
+The success classifier is configured there, not as an ad-hoc launcher override:
+
+```yaml
+classifier:
+  head_type: spatial_tf
+  hidden_dim: 1024
+  num_layers: 12
+  num_heads: 8
+  token_count: ${task.openvla_oft.input_tokens.token_count}
+  token_dim: ${task.openvla_oft.input_tokens.token_dim}
+```
+
 ### Run Stages Separately
 
 Use one stable `RUN_ROOT` when debugging the later phases. The warmup stage writes

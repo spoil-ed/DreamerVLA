@@ -68,6 +68,7 @@ def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
         )
 
     wm = cfg.world_model
+    classifier = cfg.classifier
     assert cfg.latent_type == "backbone_latent"
     assert cfg.online_rollout.sequence_length == 12
     assert wm.model_dim == 4148
@@ -87,6 +88,8 @@ def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
     assert wm.cosine_loss_scale == 0.0
     assert wm.chunk_rollout_chunks == 1
     assert wm.chunk_rollout_loss_scale == 0.0
+    assert classifier.head_type == "spatial_tf"
+    assert classifier.num_layers == 12
 
 
 def test_validate_cfg_warmup(tmp_path):

@@ -223,7 +223,7 @@ classifier:
   num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
   window: 8
   hidden_dim: 1024
-  num_layers: 4
+  num_layers: 12
   num_heads: 8
   mlp_ratio: 4.0
   dropout: 0.1
