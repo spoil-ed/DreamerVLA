@@ -8,6 +8,7 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
+from dreamervla.algorithms.dreamervla import _flatten_last_steps, _flatten_strided_steps
 from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
 from dreamervla.dataset.pixel_sequence_dataset import PixelSequenceDataset
 
@@ -114,8 +115,95 @@ def test_predict_next_chunk_threads_proprio_and_lang() -> None:
     out = wm.predict_next_chunk(latent, torch.zeros(bsz, chunk, wm.action_dim))
 
     assert out["hidden_seq"].shape == (bsz, chunk, slots, wm.obs_token_dim)
+    assert out["proprio_seq"].shape == (bsz, chunk, wm.proprio_dim)
     assert out["history"].shape == (bsz, hist, slots, wm.obs_token_dim)
     assert out["lang"] is lang
+
+
+def test_chunk_loss_trains_raw_proprio_head_for_classifier_scoring() -> None:
+    wm, _ = _qb_world_model()
+    bsz, steps, slots = 2, wm.num_hist + wm.chunk_size, wm.token_count
+    batch = {
+        "obs_embedding": torch.randn(bsz, steps, slots, wm.token_dim),
+        "proprio": torch.randn(bsz, steps, wm.proprio_dim),
+        "lang_emb": torch.randn(bsz, wm.lang_dim),
+        "actions": torch.zeros(bsz, steps, wm.action_dim),
+        "rewards": torch.zeros(bsz, steps),
+        "success_to_go": torch.zeros(bsz, steps),
+    }
+
+    out = wm.chunk_loss(batch)
+
+    assert "proprio_reconstruction_loss" in out
+    assert torch.isfinite(out["proprio_reconstruction_loss"])
+
+
+def test_observe_sequence_threads_proprio_and_lang_for_lumos() -> None:
+    wm, _ = _qb_world_model()
+    bsz, steps, slots = 2, wm.num_hist + 3, wm.token_count
+    lang = torch.randn(bsz, wm.lang_dim)
+    batch = {
+        "mode": "observe_sequence",
+        "obs_embedding": torch.randn(bsz, steps, slots, wm.token_dim),
+        "proprio": torch.randn(bsz, steps, wm.proprio_dim),
+        "lang_emb": lang,
+        "actions": torch.zeros(bsz, steps, wm.action_dim),
+    }
+
+    latent = wm(batch)["latent"]
+
+    assert latent["hidden"].shape == (bsz, steps, slots, wm.obs_token_dim)
+    assert latent["history"].shape == (bsz, steps, wm.num_hist, slots, wm.obs_token_dim)
+    assert latent["actions"].shape == (bsz, steps, wm.num_hist, wm.action_dim)
+    assert latent["lang"] is lang
+
+
+def test_lumos_flatten_repeats_episode_level_lang() -> None:
+    bsz, steps, starts, slots, dim, lang_dim = 2, 5, 3, 4, 6, 7
+    lang = torch.randn(bsz, lang_dim)
+    latent = {
+        "hidden": torch.randn(bsz, steps, slots, dim),
+        "history": torch.randn(bsz, steps, 2, slots, dim),
+        "actions": torch.randn(bsz, steps, 2, 3),
+        "lang": lang,
+    }
+
+    flat_last = _flatten_last_steps(latent, starts)
+    flat_strided = _flatten_strided_steps(latent, starts, min_start=1)
+
+    expected = lang.repeat_interleave(starts, dim=0)
+    assert flat_last["lang"].shape == (bsz * starts, lang_dim)
+    assert flat_strided["lang"].shape == (bsz * starts, lang_dim)
+    assert torch.allclose(flat_last["lang"], expected)
+    assert torch.allclose(flat_strided["lang"], expected)
+
+
+def test_actor_and_critic_inputs_strip_predicted_proprio() -> None:
+    wm, _ = _qb_world_model()
+    bsz, slots = 2, wm.token_count
+    hidden = torch.randn(bsz, slots, wm.obs_token_dim)
+    latent = {"hidden": hidden}
+
+    actor_input = wm.actor_input(latent)
+    critic_input = wm.critic_input(latent)
+
+    assert actor_input.shape == (bsz, slots, wm.token_dim)
+    assert torch.allclose(actor_input, hidden[..., : wm.token_dim])
+    assert critic_input.shape == (bsz, wm.token_dim)
+    assert torch.allclose(critic_input, hidden[..., : wm.token_dim].mean(dim=1))
+
+
+def test_classifier_input_strips_predicted_proprio() -> None:
+    wm, _ = _qb_world_model()
+    bsz, slots = 2, wm.token_count
+    hidden = torch.randn(bsz, slots, wm.obs_token_dim)
+
+    classifier_input = wm(
+        {"mode": "classifier_input", "latent": {"hidden": hidden}}
+    )
+
+    assert classifier_input.shape == (bsz, slots, wm.token_dim)
+    assert torch.allclose(classifier_input, hidden[..., : wm.token_dim])
 
 
 def test_chunk_loss_with_proprio_language() -> None:

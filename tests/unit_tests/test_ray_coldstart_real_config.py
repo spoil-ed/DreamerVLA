@@ -162,10 +162,12 @@ def test_ray_dump_step_records_episode_id() -> None:
 
     step = _build_oft_dump_step(
         _Env(), {}, np.ones(7), 0.0, True, False,
-        {"task_id": 1, "episode_id": 4, "success": True}, np.zeros(8, "float16"),
+        {"task_id": 1, "episode_id": 4, "init_state_index": 4, "success": True},
+        np.zeros(8, "float16"),
     )
     assert step["task_id"] == 1
     assert step["episode_id"] == 4
+    assert step["init_state_index"] == 4
 
 
 def test_wait_worker_results_batches_ray_get(monkeypatch) -> None:

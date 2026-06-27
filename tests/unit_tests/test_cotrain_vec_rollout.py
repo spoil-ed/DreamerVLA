@@ -119,6 +119,44 @@ def test_validate_rollout_cfg_rejects_zero_envs():
         validate_rollout_cfg(num_envs=0, render_backend="egl", latent_type="action_hidden")
 
 
+def test_validate_rollout_cfg_requires_render_devices_for_multienv_egl():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="render_devices.*osmesa"):
+        validate_rollout_cfg(
+            num_envs=4,
+            render_backend="egl",
+            latent_type="action_hidden",
+            render_devices=[],
+            compute_devices=[0, 1],
+        )
+
+
+def test_validate_rollout_cfg_rejects_egl_render_compute_overlap():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="not overlap.*render_backend=osmesa"):
+        validate_rollout_cfg(
+            num_envs=4,
+            render_backend="egl",
+            latent_type="action_hidden",
+            render_devices=[1, 2],
+            compute_devices=[0, 1],
+        )
+
+
+def test_validate_rollout_cfg_accepts_disjoint_egl_render_devices():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    validate_rollout_cfg(
+        num_envs=4,
+        render_backend="egl",
+        latent_type="action_hidden",
+        render_devices=[2, 3],
+        compute_devices=[0, 1],
+    )
+
+
 def test_rollout_progress_metrics_exposes_empty_denominator_and_active_steps():
     from dreamervla.runners.online_cotrain_runner import build_rollout_progress_metrics
 

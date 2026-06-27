@@ -544,6 +544,8 @@ class OnlineReplay:
         finish_steps: list[int] = []
         window_end_indices: list[int] = []
         is_end_window: list[bool] = []
+        proprio_windows: list[np.ndarray] = []
+        lang_embs: list[np.ndarray] = []
 
         for _ in range(int(batch_size)):
             record = random.choice(candidates)
@@ -581,6 +583,40 @@ class OnlineReplay:
             else:
                 pooled = env_window
 
+            selected_steps = episode[end - window_env : end]
+            if all("proprio" in step for step in selected_steps):
+                env_proprio = np.stack(
+                    [
+                        np.asarray(step["proprio"], dtype=np.float32).reshape(-1)
+                        for step in selected_steps
+                    ],
+                    axis=0,
+                )
+                if chunk_size > 1:
+                    trailing_shape = env_proprio.shape[1:]
+                    reshaped_proprio = env_proprio.reshape(
+                        window, chunk_size, *trailing_shape
+                    )
+                    if chunk_pool == "last":
+                        pooled_proprio = reshaped_proprio[:, -1]
+                    elif chunk_pool == "first":
+                        pooled_proprio = reshaped_proprio[:, 0]
+                    elif chunk_pool == "mean":
+                        pooled_proprio = reshaped_proprio.mean(axis=1)
+                    else:
+                        raise ValueError(f"unknown chunk_pool={chunk_pool!r}")
+                else:
+                    pooled_proprio = env_proprio
+                proprio_windows.append(
+                    np.ascontiguousarray(pooled_proprio, dtype=np.float32)
+                )
+            if all("lang_emb" in step for step in selected_steps):
+                lang_embs.append(
+                    np.asarray(selected_steps[0]["lang_emb"], dtype=np.float32).reshape(
+                        -1
+                    )
+                )
+
             windows.append(np.ascontiguousarray(pooled, dtype=np.float32))
             labels.append(int(label))
             episode_ids.append(int(record["episode_id"]))
@@ -595,7 +631,7 @@ class OnlineReplay:
             window_end_indices.append(int(end))
             is_end_window.append(bool(use_end))
 
-        return {
+        batch = {
             "windows": torch.from_numpy(np.stack(windows, axis=0)).to(torch.float32),
             "labels": torch.tensor(labels, dtype=torch.long),
             "episode_ids": torch.tensor(episode_ids, dtype=torch.long),
@@ -612,6 +648,15 @@ class OnlineReplay:
             "window_end_indices": torch.tensor(window_end_indices, dtype=torch.long),
             "is_end_window": torch.tensor(is_end_window, dtype=torch.bool),
         }
+        if len(proprio_windows) == len(windows):
+            batch["proprio"] = torch.from_numpy(
+                np.stack(proprio_windows, axis=0).astype(np.float32, copy=False)
+            )
+        if len(lang_embs) == len(windows):
+            batch["lang_emb"] = torch.from_numpy(
+                np.stack(lang_embs, axis=0).astype(np.float32, copy=False)
+            )
+        return batch
 
     def classifier_window_count(self, *, window: int, chunk_size: int) -> int:
         window_env = int(window) * int(chunk_size)

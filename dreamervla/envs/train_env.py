@@ -147,6 +147,7 @@ class DreamerVLAOnlineTrainEnv:
         self._frame_history: list[tuple[Image.Image, Image.Image]] = []
         self._raw_obs: dict[str, Any] | None = None
         self._init_state: np.ndarray | None = None
+        self._init_state_index: int | None = None
         self._elapsed_steps = 0
         self._closed = False
 
@@ -192,6 +193,7 @@ class DreamerVLAOnlineTrainEnv:
         self.set_task(selected_task_id)
 
         init_state_index = self._select_init_state_index(episode_id)
+        self._init_state_index = int(init_state_index)
         self._init_state = np.asarray(self.initial_states[init_state_index], dtype=np.float64)
         self.env.reset()
         raw_obs = self.env.set_init_state(self.initial_states[init_state_index])
@@ -315,6 +317,9 @@ class DreamerVLAOnlineTrainEnv:
             "robot_states": robot_states,
             "states": np.asarray(self.env.sim.get_state().flatten(), dtype=np.float64),
             "init_state": self._init_state.copy(),
+            "init_state_index": int(self._init_state_index)
+            if self._init_state_index is not None
+            else None,
         }
 
     def policy_action_to_env_action(
@@ -645,6 +650,8 @@ class DreamerVLAOnlineTrainEnv:
                 "is_terminal": bool(terminated),
             }
         )
+        if init_state_index is None:
+            init_state_index = getattr(self, "_init_state_index", None)
         if init_state_index is not None:
             info["init_state_index"] = int(init_state_index)
         if policy_action is not None:

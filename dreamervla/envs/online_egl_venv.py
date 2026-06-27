@@ -41,23 +41,18 @@ from dreamervla.envs.rlinf_venv import (
     EnvWorker,
     SubprocEnvWorker,
 )
+from dreamervla.utils.egl_device import apply_egl_device_regime
 
 
 def _apply_egl_device_regime(egl_device_id: int | None) -> None:
     """Set MUJOCO/EGL/CUDA env vars EXACTLY as RLinf does (nvidia_gpu.py:107-114).
 
     Must run in the child BEFORE robosuite/mujoco import so the egl platform and
-    device are locked consistently. ``MUJOCO_EGL_DEVICE_ID`` is kept inside
-    ``CUDA_VISIBLE_DEVICES`` so robosuite's ``binding_utils`` consistency assert
-    (binding_utils.py:29-35) is satisfied rather than bypassed.
+    device are locked consistently. ``MUJOCO_EGL_DEVICE_ID`` is an EGL enumeration
+    index, not a CUDA physical id; startup diagnostics validate that index before
+    robosuite builds the GL context.
     """
-    os.environ["MUJOCO_GL"] = "egl"
-    os.environ["PYOPENGL_PLATFORM"] = "egl"
-    if egl_device_id is not None:
-        device = str(int(egl_device_id))
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = device
-        os.environ["CUDA_VISIBLE_DEVICES"] = device
-        os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+    apply_egl_device_regime(egl_device_id, logger_name=__name__)
 
 
 class _EglEnvFn:

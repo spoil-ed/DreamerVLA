@@ -283,7 +283,7 @@ def build_pipeline_plan(
         cfg.get("master_port", 29500) if master_port is None else master_port
     )
     distributed = bool(cfg.get("distributed", True))
-    selected_render_backend = str(cfg.get("render_backend", "egl"))
+    selected_render_backend = str(cfg.get("render_backend", "osmesa"))
     debug_enabled = bool(cfg.get("debug", False) if debug is None else debug)
     root = Path(run_root).expanduser()
     # Collected episodes live in a stable, per-suite UNIFIED space so reruns

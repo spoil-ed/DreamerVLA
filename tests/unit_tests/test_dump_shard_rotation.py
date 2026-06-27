@@ -20,7 +20,15 @@ class _FakeWriter:
 
 
 def _episode():
-    return [{"task_id": 0, "episode_id": 0, "task_description": "t", "success": True}]
+    return [
+        {
+            "task_id": 0,
+            "episode_id": 0,
+            "init_state_index": 0,
+            "task_description": "t",
+            "success": True,
+        }
+    ]
 
 
 def test_no_rotation_when_disabled():
@@ -89,3 +97,15 @@ def test_episode_metadata_passes_to_writer_from_terminal_step():
             "chunk_size": 8,
             "policy_name": "oft",
         }
+
+
+def test_init_state_index_passes_to_writer_from_episode():
+    _FakeWriter.created = []
+    _FakeWriter.instances = []
+    episode = _episode()
+    episode[0]["init_state_index"] = 17
+    with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
+        w = dw.RolloutDumpWorker("r", "h", demos_per_shard=0)
+        w.init()
+        w.add_episode(episode)
+        assert _FakeWriter.instances[0].kwargs[0]["init_state_index"] == 17

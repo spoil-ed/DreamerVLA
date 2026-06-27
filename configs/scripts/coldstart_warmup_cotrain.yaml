@@ -15,7 +15,7 @@ ngpu: 1
 # One-knob render backend for the cotrain online rollout: egl (GPU offscreen, default)
 # or osmesa (CPU software, stable fallback if egl misbehaves). Threads into the cotrain
 # command as online_rollout.render_backend. Collection always renders osmesa.
-render_backend: egl
+render_backend: osmesa
 # Cotrain engine: sync (DDP pipeline, default) or async (RLinf-style ray overlap —
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.

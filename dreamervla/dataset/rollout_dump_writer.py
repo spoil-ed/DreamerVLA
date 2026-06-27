@@ -80,6 +80,7 @@ class RolloutDumpWriter:
         data_attrs: dict[str, Any] | None = None,
         task_id: int | None = None,
         episode_id: int | None = None,
+        init_state_index: int | None = None,
         task_description: str | None = None,
         episode_success: bool | None = None,
         episode_horizon: int | None = None,
@@ -118,6 +119,9 @@ class RolloutDumpWriter:
 
         T = len(steps)
         demo_key = f"demo_{index}"
+        resolved_init_state_index = _resolve_init_state_index(
+            init_state_index, steps
+        )
 
         # Stack per-step arrays
         actions = np.stack(
@@ -186,6 +190,8 @@ class RolloutDumpWriter:
             demo_grp.attrs["task_id"] = int(task_id)
         if episode_id is not None:
             demo_grp.attrs["episode_id"] = int(episode_id)
+        if resolved_init_state_index is not None:
+            demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
         if task_description is not None:
             demo_grp.attrs["task_description"] = str(task_description)
         if episode_success is not None:
@@ -213,6 +219,8 @@ class RolloutDumpWriter:
             hidden_demo_grp.attrs["task_id"] = int(task_id)
         if episode_id is not None:
             hidden_demo_grp.attrs["episode_id"] = int(episode_id)
+        if resolved_init_state_index is not None:
+            hidden_demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
         hidden_demo_grp.attrs["complete"] = True
 
         self._num_demos += 1
@@ -382,6 +390,20 @@ def _episode_attrs(
         for key, value in attrs.items()
         if _is_hdf5_attr_scalar(value)
     }
+
+
+def _resolve_init_state_index(
+    init_state_index: int | None,
+    steps: list[dict[str, Any]],
+) -> int | None:
+    if init_state_index is not None:
+        return int(init_state_index)
+    if not steps:
+        return None
+    value = steps[0].get("init_state_index")
+    if value is None:
+        return None
+    return int(value)
 
 
 def _is_hdf5_attr_scalar(value: Any) -> bool:

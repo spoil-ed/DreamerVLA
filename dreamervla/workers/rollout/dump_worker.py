@@ -67,6 +67,7 @@ class RolloutDumpWorker(Worker):
             data_attrs=self.data_attrs if index == 0 else None,
             task_id=_optional_int(first.get("task_id")),
             episode_id=_optional_int(first.get("episode_id")),
+            init_state_index=_optional_int(first.get("init_state_index")),
             task_description=first.get("task_description"),
             episode_success=bool(episode[-1].get("success", False)),
             episode_horizon=len(episode),

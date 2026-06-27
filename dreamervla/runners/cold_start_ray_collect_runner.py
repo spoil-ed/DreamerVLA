@@ -807,6 +807,12 @@ def _build_oft_dump_step(
     )
     step["task_id"] = int(info.get("task_id", obs.get("task_id", 0)))
     step["episode_id"] = int(info.get("episode_id", obs.get("episode_id", 0)))
+    init_state_index = info.get(
+        "init_state_index",
+        obs.get("init_state_index", full_record.get("init_state_index")),
+    )
+    if init_state_index is not None:
+        step["init_state_index"] = int(init_state_index)
     step["task_description"] = str(
         info.get("task_description", obs.get("task_description", ""))
     )

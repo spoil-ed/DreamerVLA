@@ -1045,6 +1045,85 @@ def test_ray_runner_top_level_render_backend_is_canonical(monkeypatch) -> None:
     assert runner._egl_device_pool() == []
 
 
+def test_ray_runner_egl_requires_explicit_render_devices(monkeypatch) -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "env": {"num_workers": 4},
+            "inference": {"placement": {"strategy": "packed", "gpu_id": 0}},
+            "learner": {
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 1,
+                    "end_gpu": 1,
+                }
+            },
+        }
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2")
+
+    with pytest.raises(ValueError, match="render_devices.*osmesa"):
+        runner._rollout_env_cfg(use_oft_collect_path=False)
+
+
+def test_ray_runner_egl_rejects_render_compute_overlap() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "render_devices": [1, 2],
+            "env": {"num_workers": 4},
+            "inference": {"placement": {"strategy": "packed", "gpu_id": 0}},
+            "learner": {
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 1,
+                    "end_gpu": 1,
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="not overlap.*render_backend=osmesa"):
+        runner._rollout_env_cfg(use_oft_collect_path=False)
+
+
+def test_ray_runner_egl_pool_uses_explicit_disjoint_render_devices() -> None:
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "render_backend": "egl",
+            "render_devices": [2, 3],
+            "env": {"num_workers": 4},
+            "inference": {"placement": {"strategy": "packed", "gpu_id": 0}},
+            "learner": {
+                "placement": {
+                    "strategy": "packed",
+                    "start_gpu": 1,
+                    "end_gpu": 1,
+                }
+            },
+        }
+    )
+
+    env_cfg = runner._rollout_env_cfg(use_oft_collect_path=False)
+
+    assert env_cfg["egl_device_pool"] == [2, 3]
+
+
 def test_online_cotrain_ray_oft_experiment_accepts_render_backend_override() -> None:
     from pathlib import Path
 
@@ -1088,9 +1167,9 @@ def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> N
     assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
     assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
     assert cfg.ray_data.sequence_length == 12
-    assert cfg.ray_components.world_model.kwargs.model_dim == 4138
-    assert cfg.ray_components.world_model.kwargs.proprio_dim == 0
-    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 0
+    assert cfg.ray_components.world_model.kwargs.model_dim == 4148
+    assert cfg.ray_components.world_model.kwargs.proprio_dim == 8
+    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 10
     assert cfg.ray_components.world_model.kwargs.num_proprio_repeat == 1
     assert cfg.ray_components.world_model.kwargs.lang_dim == 4096
     assert cfg.ray_components.world_model.kwargs.lang_emb_dim == 32
@@ -1098,6 +1177,7 @@ def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> N
     assert cfg.ray_components.world_model.kwargs.action_emb_dim == 10
     assert cfg.ray_components.world_model.kwargs.model_dim == (
         cfg.ray_components.world_model.kwargs.token_dim
+        + cfg.ray_components.world_model.kwargs.proprio_emb_dim
         + cfg.ray_components.world_model.kwargs.lang_emb_dim
         + cfg.ray_components.world_model.kwargs.action_emb_dim
     )
@@ -1239,7 +1319,11 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
     assert cfg.ray_components.policy.kwargs.hidden_state_dim == task_spec.hidden_state_dim
     assert "action_hidden_dim" not in cfg.ray_components.policy.kwargs
     assert cfg.ray_components.policy.kwargs.time_horizon == task_spec.chunk_size
-    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.token_dim
+    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.classifier_latent_dim
+    assert cfg.ray_components.classifier.kwargs.proprio_dim == task_spec.proprio_dim
+    assert cfg.ray_components.classifier.kwargs.proprio_emb_dim == task_spec.proprio_emb_dim
+    assert cfg.ray_components.classifier.kwargs.lang_dim == task_spec.lang_dim
+    assert cfg.ray_components.classifier.kwargs.lang_emb_dim == task_spec.lang_emb_dim
     assert cfg.learner.model_cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
 
     unresolved_wm = OmegaConf.to_yaml(cfg.ray_components.world_model.kwargs, resolve=False)
@@ -1249,7 +1333,9 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
     assert "${task.openvla_oft.input_tokens.token_count}" in unresolved_wm
     assert "${task.openvla_oft.input_tokens.token_dim}" in unresolved_wm
     assert "${task.openvla_oft.input_tokens.hidden_state_dim}" in unresolved_policy
-    assert "${task.openvla_oft.input_tokens.token_dim}" in unresolved_classifier
+    assert "${task.openvla_oft.input_tokens.classifier_latent_dim}" in unresolved_classifier
+    assert "${task.openvla_oft.input_tokens.proprio_dim}" in unresolved_classifier
+    assert "${task.openvla_oft.input_tokens.lang_dim}" in unresolved_classifier
 
 
 def test_ray_runner_loads_init_ckpt_by_component_name(tmp_path) -> None:

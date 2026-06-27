@@ -55,7 +55,7 @@ def test_pipeline_smoke_config_uses_fixed_step_warmup():
     assert OmegaConf.select(cfg, "training.wm_warmup_steps") == 1200
 
 
-def test_oft_backbone_pipeline_uses_traj1_no_proprio_language_wm_profile():
+def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -70,15 +70,20 @@ def test_oft_backbone_pipeline_uses_traj1_no_proprio_language_wm_profile():
     wm = cfg.world_model
     assert cfg.latent_type == "backbone_latent"
     assert cfg.online_rollout.sequence_length == 12
-    assert wm.model_dim == 4138
-    assert wm.proprio_dim == 0
-    assert wm.proprio_emb_dim == 0
+    assert wm.model_dim == 4148
+    assert wm.proprio_dim == 8
+    assert wm.proprio_emb_dim == 10
     assert wm.num_proprio_repeat == 1
     assert wm.lang_dim == 4096
     assert wm.lang_emb_dim == 32
     assert wm.num_lang_repeat == 1
     assert wm.action_emb_dim == 10
-    assert wm.model_dim == wm.token_dim + wm.lang_emb_dim + wm.action_emb_dim
+    assert wm.model_dim == (
+        wm.token_dim
+        + wm.proprio_emb_dim * wm.num_proprio_repeat
+        + wm.lang_emb_dim * wm.num_lang_repeat
+        + wm.action_emb_dim * wm.num_action_repeat
+    )
     assert wm.cosine_loss_scale == 0.0
     assert wm.chunk_rollout_chunks == 1
     assert wm.chunk_rollout_loss_scale == 0.0

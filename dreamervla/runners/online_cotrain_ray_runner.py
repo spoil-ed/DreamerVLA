@@ -10,7 +10,6 @@ without changing the scheduler primitives.
 from __future__ import annotations
 
 import importlib
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +22,10 @@ from dreamervla.runners.base_runner import (
     BaseRunner,
     _atomic_torch_save,
     _materialize_checkpoint_copy,
+)
+from dreamervla.runners.render_device_config import (
+    parse_device_ids,
+    validate_render_device_pool,
 )
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
@@ -1534,15 +1537,49 @@ class OnlineCotrainRayRunner(BaseRunner):
         return " ".join(parts)
 
     def _egl_device_pool(self) -> list[int]:
-        """Physical GPU ids for egl env rendering (default backend). Read from the driver's
-        CUDA_VISIBLE_DEVICES; empty when the render backend is osmesa."""
+        """Explicit physical GPU ids reserved for egl env rendering."""
         backend = str(
             self._select_first(("render_backend", "env.render_backend"), "egl")
         ).lower()
         if backend != "egl":
             return []
-        cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        return [int(x) for x in cvd.split(",") if x.strip().isdigit()]
+        num_envs = self._int_from(("env.num_workers", "num_env_workers"), 1)
+        render_devices = self._select_first(("render_devices", "env.render_devices"), [])
+        return validate_render_device_pool(
+            render_backend=backend,
+            num_envs=num_envs,
+            render_devices=render_devices,
+            compute_devices=self._ray_compute_device_pool(),
+            render_key="render_devices",
+        )
+
+    def _ray_compute_device_pool(self) -> list[int]:
+        """GPU ids used by non-env Ray components from Hydra placement config."""
+        devices: set[int] = set()
+        devices.update(self._packed_placement_devices("inference.placement"))
+        devices.update(self._packed_placement_devices("learner.placement"))
+        devices.update(self._flexible_placement_devices("learner.placement"))
+        return sorted(devices)
+
+    def _packed_placement_devices(self, path: str) -> list[int]:
+        cfg = self._cfg_from(path, {"strategy": "node"})
+        strategy = str(cfg.get("strategy", "node")).strip().lower()
+        if strategy != "packed":
+            return []
+        start = int(cfg.get("gpu_id", cfg.get("start_gpu", 0)))
+        end = int(cfg.get("end_gpu", start))
+        return list(range(start, end + 1))
+
+    def _flexible_placement_devices(self, path: str) -> list[int]:
+        cfg = self._cfg_from(path, {"strategy": "node"})
+        strategy = str(cfg.get("strategy", "node")).strip().lower()
+        if strategy != "flexible":
+            return []
+        groups = cfg.get("accelerator_groups", cfg.get("groups", []))
+        devices: list[int] = []
+        for group in groups or []:
+            devices.extend(parse_device_ids(group))
+        return devices
 
     def _oft_worker_plan(self) -> dict[str, Any]:
         from dreamervla.runners.cold_start_ray_collect_runner import (

@@ -977,10 +977,10 @@ def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
     )
 
     assert "env.num_workers=12" in plan.cotrain_online_cmd
-    assert "render_backend=egl" in plan.cotrain_online_cmd
-    assert "++env.cfg.egl_spawn_stagger_s=2.0" in plan.cotrain_online_cmd
-    assert "++env.cfg.egl_spawn_init_timeout_s=900" in plan.cotrain_online_cmd
-    assert "++env.cfg.egl_max_respawns=5" in plan.cotrain_online_cmd
+    assert "render_backend=osmesa" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_stagger_s=2.0" not in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_init_timeout_s=900" not in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
 
 
 def test_sync_cotrain_phase_warmup_only_has_no_online_steps(tmp_path) -> None:

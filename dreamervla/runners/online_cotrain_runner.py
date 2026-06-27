@@ -60,6 +60,11 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.runners.render_device_config import (
+    cuda_visible_devices_from_env,
+    parse_device_ids,
+    validate_render_device_pool,
+)
 from dreamervla.runners.vec_rollout_env import default_env_factory
 from dreamervla.runners.vectorized_collect import (
     dreamer_image_from_record,
@@ -120,7 +125,14 @@ def build_cotrain_replay_transition(
     return transition
 
 
-def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -> None:
+def validate_rollout_cfg(
+    num_envs: int,
+    render_backend: str,
+    latent_type: str,
+    *,
+    render_devices: Any = None,
+    compute_devices: Any = None,
+) -> None:
     """Early validation for the online rollout knobs (RLinf-style fail-fast).
 
     ``num_envs>1`` enables the vectorized egl path, which supports the OFT
@@ -138,6 +150,13 @@ def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -
                 "vectorized rollout (num_envs>1) supports the OFT action_hidden "
                 "path only; backbone_latent requires num_envs=1"
             )
+        validate_render_device_pool(
+            render_backend=render_backend,
+            num_envs=num_envs,
+            render_devices=render_devices,
+            compute_devices=compute_devices,
+            render_key="online_rollout.render_devices",
+        )
 
 
 def validate_task_conditioning_cfg(
@@ -237,6 +256,7 @@ def build_rollout_vec_env(
     num_envs: int,
     cfg_kwargs: dict[str, Any],
     env_vars: dict[str, str],
+    render_devices: Any = None,
 ) -> Any:
     """Select + construct the rollout vec env for the vectorized cotrain path.
 
@@ -244,10 +264,10 @@ def build_rollout_vec_env(
 
     * ``render_backend == "egl"`` -> ``OnlineEglVecEnv`` (approach 1): each env runs
       through RLinf's vendored ``SubprocVectorEnv`` with RLinf's per-child egl device
-      regime. The physical-GPU pool is read from this process's
-      ``CUDA_VISIBLE_DEVICES`` (mirrors the ray runner's ``_egl_device_pool``; empty ->
-      egl device 0). The adapter applies ``MUJOCO_GL=egl`` + per-child CUDA/EGL device
-      vars itself, so the render env vars are stripped before forwarding.
+      regime. The render-device pool is explicit Hydra config (``online_rollout.
+      render_devices``); it is not inferred from this process's compute
+      ``CUDA_VISIBLE_DEVICES``. The adapter applies ``MUJOCO_GL=egl`` + per-child
+      CUDA/EGL device vars itself, so the render env vars are stripped before forwarding.
     * otherwise -> ``VecRolloutEnv`` (approach 2): the proven osmesa path, unchanged.
 
     Module-level so the backend selection is unit-testable without a GPU / full runner.
@@ -261,8 +281,7 @@ def build_rollout_vec_env(
     if render_backend == "egl":
         from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
 
-        cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        egl_device_pool = [int(x) for x in cvd.split(",") if x.strip().isdigit()]
+        egl_device_pool = parse_device_ids(render_devices)
         adapter_env_vars = {
             k: v for k, v in env_vars.items() if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
         }
@@ -774,14 +793,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
-        # RLinf-aligned default: vectorized egl multi-env rollout (was 1 = legacy
-        # single-env osmesa). 4 matches the shipped cotrain pipeline config, so bare/
-        # ad-hoc runs no longer fall back to single-env osmesa. backbone_latent must
-        # override to 1 (validate_rollout_cfg rejects num_envs>1 for backbone_latent).
+        # Multi-env defaults to the stable osmesa path. EGL is explicit opt-in and
+        # requires render devices that do not overlap the training CUDA devices.
         num_envs = int(OmegaConf.select(oc, "num_envs", default=4))
-        render_backend = str(OmegaConf.select(oc, "render_backend", default="egl"))
+        render_backend = str(OmegaConf.select(oc, "render_backend", default="osmesa"))
+        render_devices = parse_device_ids(
+            OmegaConf.select(oc, "render_devices", default=[])
+        )
         validate_rollout_cfg(
-            num_envs, render_backend, getattr(self, "_latent_type", "action_hidden")
+            num_envs,
+            render_backend,
+            getattr(self, "_latent_type", "action_hidden"),
+            render_devices=render_devices,
+            compute_devices=cuda_visible_devices_from_env(),
         )
 
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
@@ -894,6 +918,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 replay=replay,
                 num_envs=num_envs,
                 render_backend=render_backend,
+                render_devices=render_devices,
                 total_env_steps=total_env_steps,
                 episode_horizon=episode_horizon,
                 env_task_ids=env_task_ids,
@@ -1200,6 +1225,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         replay: OnlineReplay,
         num_envs: int,
         render_backend: str,
+        render_devices: Any,
         total_env_steps: int,
         episode_horizon: int,
         env_task_ids: tuple[int, ...],
@@ -1255,6 +1281,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             num_envs=num_envs,
             cfg_kwargs=cfg_kwargs,
             env_vars=env_vars,
+            render_devices=render_devices,
         )
         try:
             def _train_hook(

@@ -89,6 +89,9 @@ def build_step_record(
     lang = sidecar_to_numpy(lang_emb, dtype=np.float32)
     if lang is not None:
         step["lang_emb"] = lang.reshape(-1)
+    init_state_index = rec.get("init_state_index")
+    if init_state_index is not None:
+        step["init_state_index"] = int(init_state_index)
     return step
 
 

@@ -17,6 +17,8 @@ dataset:
   _target_: dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset
   hdf5_dir: ${task.openvla_oft.hdf5_reward_dir}
   hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  proprio_keys: ${task.openvla_oft.input_tokens.proprio_keys}
+  lang_emb_dir: ${task.openvla_oft.input_tokens.lang_emb_dir}
   expected_model_path: ${task.openvla_oft.ckpt_path}
   expected_encoder_state_ckpt: null
   expected_time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
@@ -29,7 +31,7 @@ dataset:
   reward_mode: per_window_dense
   balanced_length: 50000
   balanced_seed: 0
-  sequence_length: 36
+  sequence_length: 12
   image_size: ${task.image_size}
   image_keys: ${task.image_keys}
   hidden_key: ${task.hidden_key}
@@ -59,9 +61,16 @@ world_model:
   time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
-  action_emb_dim: 10
-  num_action_repeat: 1
-  model_dim: 4106
+  action_emb_dim: ${task.openvla_oft.input_tokens.action_emb_dim}
+  num_action_repeat: ${task.openvla_oft.input_tokens.num_action_repeat}
+  proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+  proprio_reconstruction_loss_scale: 1.0
+  lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+  model_dim: ${task.openvla_oft.input_tokens.model_dim}
   depth: 6
   heads: 16
   dim_head: 128
@@ -71,9 +80,9 @@ world_model:
   num_pred: 1
   max_seq_len: 128
   hidden_loss_scale: 1.0
-  cosine_loss_scale: 0.1
-  chunk_rollout_chunks: 4
-  chunk_rollout_loss_scale: 1.0
+  cosine_loss_scale: 0.0
+  chunk_rollout_chunks: 1
+  chunk_rollout_loss_scale: 0.0
   reward_head_type: binary
   reward_loss_scale: 32.0
   reward_hidden_dim: 1024

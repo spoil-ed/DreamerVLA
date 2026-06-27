@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -1119,7 +1120,7 @@ def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monke
 def test_release_pipeline_warmup_uses_all_collected_episodes_by_default():
     from hydra import compose, initialize_config_dir
 
-    config_dir = "/mnt/data/spoil/workspace/DreamerVLA/configs"
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(
             config_name="train",

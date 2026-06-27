@@ -32,6 +32,7 @@ world_model:
   proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
   proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
   num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+  proprio_reconstruction_loss_scale: 1.0
   lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
   lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
   num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}

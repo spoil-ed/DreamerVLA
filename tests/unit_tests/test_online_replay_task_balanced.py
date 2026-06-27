@@ -96,6 +96,31 @@ def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:
     assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
 
 
+def test_online_replay_classifier_windows_include_dino_wm_proprio_language() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
+    episode = _episode(task_id=2, length=8, success=True)
+    for idx, step in enumerate(episode):
+        step["obs_embedding"] = np.full((2, 4), float(idx), dtype=np.float32)
+        step["proprio"] = np.full((8,), float(idx), dtype=np.float32)
+        step["lang_emb"] = np.arange(6, dtype=np.float32) + 0.25
+    replay.add_episode(episode)
+
+    batch = replay.sample_classifier_windows(
+        1,
+        window=2,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=100,
+    )
+
+    assert batch["windows"].shape == (1, 2, 2, 4)
+    assert batch["is_end_window"].item() is True
+    assert batch["proprio"].shape == (1, 2, 8)
+    assert batch["lang_emb"].shape == (1, 6)
+    assert torch.allclose(batch["proprio"][0, :, 0], torch.tensor([5.0, 7.0]))
+    assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
+
+
 def test_online_replay_training_readiness_requires_each_task() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=3)
 

@@ -253,6 +253,30 @@ def _predict_next_chunk_mb(
     return {k: torch.cat([p[k] for p in parts], dim=0) for k in parts[0]}
 
 
+def _world_model_classifier_input(world_model: nn.Module, latent: Any) -> torch.Tensor:
+    try:
+        return world_model({"mode": "classifier_input", "latent": latent})
+    except ValueError as exc:
+        message = str(exc)
+        if "classifier_input" not in message and "Unknown" not in message:
+            raise
+    return _world_model_actor_input(world_model, latent)
+
+
+def _world_model_classifier_video(
+    world_model: nn.Module, hidden_seq: torch.Tensor
+) -> torch.Tensor:
+    """Map imagined WM-internal states to the external latent seen by classifier."""
+    if hidden_seq.ndim < 3:
+        raise ValueError(
+            f"hidden_seq must be [B,T,...] before classifier projection, got {tuple(hidden_seq.shape)}"
+        )
+    batch, steps = int(hidden_seq.shape[0]), int(hidden_seq.shape[1])
+    flat = hidden_seq.reshape(batch * steps, *hidden_seq.shape[2:])
+    projected = _world_model_classifier_input(world_model, {"hidden": flat})
+    return projected.reshape(batch, steps, *projected.shape[1:])
+
+
 def _imagine_and_score_slice(
     *,
     policy: nn.Module,
@@ -295,6 +319,12 @@ def _imagine_and_score_slice(
     old_log_probs: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
     video_latents: list[torch.Tensor] = []
+    proprio_latents: list[torch.Tensor] = []
+    lang_for_classifier = (
+        current.get("lang")
+        if isinstance(current, Mapping) and isinstance(current.get("lang"), torch.Tensor)
+        else None
+    )
 
     for _ in range(num_chunks):
         actor_feat = (
@@ -352,33 +382,67 @@ def _imagine_and_score_slice(
             next_seq = _predict_next_chunk_mb(
                 chunk_world_model, current, wm_action_chunk, imag_mb
             )
-            hidden_seq = next_seq["hidden_seq"]  # [b, K, ...] all K frames
+            hidden_seq = _world_model_classifier_video(
+                chunk_world_model, next_seq["hidden_seq"]
+            )  # [b, K, ...] all K classifier-visible frames
+            proprio_seq = next_seq.get("proprio_seq")
+            if (
+                bool(getattr(classifier_module, "supports_proprio_conditioning", False))
+                and not isinstance(proprio_seq, torch.Tensor)
+            ):
+                raise ValueError(
+                    "classifier requires proprio conditioning, but world model "
+                    "predict_next_chunk did not return raw proprio_seq"
+                )
             if chunk_granular:
                 # Store ONE pooled frame per chunk (== classifier _chunk_aggregate
                 # over this chunk's K frames). 1/K memory.
                 if chunk_pool == "first":
                     pooled = hidden_seq[:, 0]
+                    pooled_proprio = (
+                        proprio_seq[:, 0] if isinstance(proprio_seq, torch.Tensor) else None
+                    )
                 elif chunk_pool == "mean":
                     pooled = hidden_seq.mean(dim=1)
+                    pooled_proprio = (
+                        proprio_seq.mean(dim=1)
+                        if isinstance(proprio_seq, torch.Tensor)
+                        else None
+                    )
                 else:  # "last"
                     pooled = hidden_seq[:, -1]
+                    pooled_proprio = (
+                        proprio_seq[:, -1] if isinstance(proprio_seq, torch.Tensor) else None
+                    )
                 video_latents.append(pooled.unsqueeze(1).to("cpu"))  # [b, 1, ...]
+                if pooled_proprio is not None:
+                    proprio_latents.append(pooled_proprio.unsqueeze(1).to("cpu"))
             else:
                 video_latents.append(hidden_seq.to("cpu"))
-            current = _detach_latent(
-                {
-                    "history": next_seq["history"],
-                    "actions": next_seq["actions"],
-                    "hidden": next_seq["hidden"],
-                }
-            )
+                if isinstance(proprio_seq, torch.Tensor):
+                    proprio_latents.append(proprio_seq.to("cpu"))
+            next_current = {
+                "history": next_seq["history"],
+                "actions": next_seq["actions"],
+                "hidden": next_seq["hidden"],
+            }
+            next_proprio = next_seq.get("proprio")
+            if isinstance(next_proprio, torch.Tensor):
+                next_current["proprio"] = next_proprio
+            next_lang = next_seq.get("lang")
+            if not isinstance(next_lang, torch.Tensor) and isinstance(current, Mapping):
+                next_lang = current.get("lang")
+            if isinstance(next_lang, torch.Tensor):
+                next_current["lang"] = next_lang
+            current = _detach_latent(next_current)
 
     # predict_success is a per-rollout temporal scan (no cross-rollout coupling),
     # so even within this slice we sweep in ``eval_micro_batch`` sub-batches and
     # never materialize the slice's full [b, num_chunks, latent_dim] video on GPU.
-    # Tokenized WMs emit a 4-D hidden_seq; flatten the trailing token axes to the
-    # flat [b, T, latent_dim] contract the classifier expects. ``pre_pooled`` only
-    # matters on the chunk path (we pooled each chunk while generating).
+    # Tokenized WMs emit a 4-D hidden_seq; keep the token grid intact for the
+    # spatial classifier and pass raw proprio/lang side channels alongside it.
+    # ``pre_pooled`` only matters on the chunk path (we pooled each chunk while
+    # generating).
     b = int(video_latents[0].shape[0])
     mb = max(1, min(int(eval_micro_batch) if eval_micro_batch else b, b))
     complete_parts: list[torch.Tensor] = []
@@ -388,15 +452,32 @@ def _imagine_and_score_slice(
     for s in range(0, b, mb):
         e = min(s + mb, b)
         video_s = torch.cat([v[s:e].to(device) for v in video_latents], dim=1)
-        if video_s.ndim > 3:
-            video_s = video_s.reshape(video_s.shape[0], video_s.shape[1], -1)
+        predict_kwargs: dict[str, Any] = {}
+        if chunk_granular:
+            predict_kwargs["pre_pooled"] = True
+        if bool(getattr(classifier_module, "supports_proprio_conditioning", False)):
+            if len(proprio_latents) != len(video_latents):
+                raise ValueError(
+                    "classifier requires proprio conditioning, but imagined raw "
+                    "proprio is incomplete"
+                )
+            predict_kwargs["proprio"] = torch.cat(
+                [p[s:e].to(device) for p in proprio_latents], dim=1
+            )
+        if bool(getattr(classifier_module, "supports_language_conditioning", False)):
+            if not isinstance(lang_for_classifier, torch.Tensor):
+                raise ValueError(
+                    "classifier requires language conditioning, but current latent "
+                    "does not carry episode lang"
+                )
+            predict_kwargs["lang_emb"] = lang_for_classifier[s:e].to(device)
         with torch.no_grad():
             info_s = classifier_module.predict_success(
                 video_s,
                 threshold=float(classifier_threshold),
                 stride=1,
                 min_steps=classifier_min_steps,
-                **({"pre_pooled": True} if chunk_granular else {}),
+                **predict_kwargs,
             )
         complete_parts.append(info_s["complete"])
         finish_parts.append(info_s["finish_step"])

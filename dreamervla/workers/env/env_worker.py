@@ -20,6 +20,7 @@ import numpy as np
 import ray
 
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.egl_device import apply_egl_device_regime
 
 
 def _build_env_from_cfg(env_cfg: dict[str, Any]) -> Any:
@@ -77,19 +78,7 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
     set_task / current_obs / step / close over the pipe. Transitions are built HERE (they need
     the env object); the parent EnvWorker accumulates them and pushes to the Ray replay.
     """
-    os.environ.setdefault("MUJOCO_GL", "egl")
-    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
-    if egl_device_id is not None:
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = str(int(egl_device_id))
-        # RLinf-faithful device alignment: make CUDA visible on the SAME physical GPU
-        # the egl context renders to. RLinf's env procs set CUDA_VISIBLE_DEVICES +
-        # MUJOCO_EGL_DEVICE_ID together (nvidia_gpu.py); our CPU-placed EnvWorkers
-        # blank CUDA while egl renders on a physical GPU, and that CUDA-absent /
-        # egl-present mismatch is the likely robosuite read_pixels instability under
-        # sustained concurrency. Aligning them here mirrors RLinf without GPU-placing
-        # the Ray actor. Set before the env build (no CUDA/torch init has happened yet).
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(egl_device_id))
-        os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+    apply_egl_device_regime(egl_device_id, logger_name=__name__)
     try:
         env = _build_env_from_cfg(env_cfg)
         cur_task = int(task_id)
@@ -265,7 +254,8 @@ class EnvWorker(Worker):
         # spawn their child simultaneously. Each child cold-starts a FRESH interpreter and builds
         # LIBERO/robosuite/egl — a thundering herd of cold starts that thrashes CPU/disk and can
         # blow a tight init timeout. Stagger the spawns by rank (later ranks ride the warmed page
-        # cache) and use a generous, configurable init timeout.
+        # cache) and use a generous, configurable init timeout. Stagger/respawn are mitigation
+        # for native EGL child crashes; render/compute GPU separation is validated before launch.
         self._egl_device_id = int(egl_device_id)
         stagger_s = float(self.env_cfg.get("egl_spawn_stagger_s", 3.0)) * int(self.local_rank)
         if stagger_s > 0:
@@ -384,7 +374,8 @@ class EnvWorker(Worker):
         The crashed child's env state is gone, so the in-flight episode is discarded
         (it never reaches the replay) and a fresh child is spawned with a clean reset.
         Bounded by ``egl_max_respawns`` so a persistently-crashing env fails loudly
-        instead of thrashing forever.
+        instead of thrashing forever. This is a mitigation for native child death,
+        not a substitute for configuring disjoint egl render devices.
         """
         self._respawn_count += 1
         if self._respawn_count > self._max_respawns:

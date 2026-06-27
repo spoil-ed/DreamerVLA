@@ -104,6 +104,7 @@ openvla_oft:
     lang_dim: 4096
     lang_emb_dim: 32
     num_lang_repeat: 1
+    classifier_latent_dim: 4138
     action_emb_dim: 10
     num_action_repeat: 1
     model_dim: 4148

@@ -249,7 +249,10 @@ def _run_episode(
         to extractor.step(), which applies rotate_images_180=True internally.
         This exactly mirrors how test_inline_matches_offline_sidecar feeds frames.
     """
-    obs, _info = env.reset(episode_id=episode_id, task_id=task_id)
+    obs, reset_info = env.reset(episode_id=episode_id, task_id=task_id)
+    init_state_index = (
+        reset_info.get("init_state_index") if isinstance(reset_info, dict) else None
+    )
     extractor.reset()
 
     # Build the 8-dim proprio state for the extractor from full_record fields.
@@ -307,6 +310,10 @@ def _run_episode(
             },
             "obs_embedding": sidecar_to_numpy(hidden_state),
         }
+        if rec.get("init_state_index") is not None:
+            step["init_state_index"] = int(rec["init_state_index"])
+        elif init_state_index is not None:
+            step["init_state_index"] = int(init_state_index)
         lang_emb = sidecar_to_numpy(getattr(step_out, "lang_emb", None), dtype=np.float32)
         if lang_emb is not None:
             step["lang_emb"] = lang_emb.reshape(-1)

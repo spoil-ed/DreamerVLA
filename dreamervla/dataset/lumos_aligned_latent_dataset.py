@@ -57,12 +57,63 @@ class _DemoRecord:
     """One episode's frozen latent + label metadata."""
 
     obs: np.ndarray  # [T, L] float16, the real RynnVLA obs_embedding
+    proprio: np.ndarray | None  # [T, P] float32 raw proprio, optional
+    lang_emb: np.ndarray | None  # [D] float32 episode-level language embedding, optional
     finish_step: int  # 1-based step where dones first fires (clamped to T)
     complete: bool  # rewards.sum() > 0
     eid: str  # stable episode id like "<file>/<demo_key>"
 
 
-def _load_demo(raw_p: Path, hid_p: Path, demo_key: str) -> _DemoRecord | None:
+def _read_proprio(
+    grp: h5py.Group,
+    *,
+    demo_ref: str,
+    keys: Sequence[str],
+    length: int,
+) -> np.ndarray:
+    obs_group = grp.get("obs")
+    if not isinstance(obs_group, h5py.Group):
+        raise KeyError(f"{demo_ref} missing obs group for proprio_keys={tuple(keys)}")
+    arrays = []
+    for key in keys:
+        if key not in obs_group:
+            raise KeyError(f"{demo_ref} missing obs/{key}")
+        arr = np.asarray(obs_group[key][:length], dtype=np.float32).reshape(length, -1)
+        arrays.append(arr)
+    return np.concatenate(arrays, axis=-1)
+
+
+def _read_lang_emb(
+    hid_p: Path,
+    demo_key: str,
+    *,
+    lang_emb_dir: str | Path | None,
+    lang_emb_key: str,
+) -> np.ndarray | None:
+    if lang_emb_dir is None:
+        return None
+    lang_path = Path(lang_emb_dir) / hid_p.name
+    if not lang_path.is_file():
+        raise FileNotFoundError(f"missing language sidecar: {lang_path}")
+    with h5py.File(str(lang_path), "r") as handle:
+        node = handle.get(f"{demo_key}/{lang_emb_key}")
+        if node is None:
+            raise KeyError(f"{lang_path}:{demo_key} missing {lang_emb_key}")
+        lang = np.asarray(node[...], dtype=np.float32)
+    if lang.ndim != 1:
+        raise ValueError(f"{lang_emb_key} must be a per-demo vector, got {lang.shape}")
+    return lang
+
+
+def _load_demo(
+    raw_p: Path,
+    hid_p: Path,
+    demo_key: str,
+    *,
+    proprio_keys: Sequence[str] | None = None,
+    lang_emb_dir: str | Path | None = None,
+    lang_emb_key: str = "lang_emb",
+) -> _DemoRecord | None:
     """Read one demo. Returns ``None`` if it lacks ``obs_embedding``."""
     with h5py.File(str(hid_p), "r") as hh:
         node = hh.get(f"{demo_key}/obs_embedding")
@@ -81,15 +132,38 @@ def _load_demo(raw_p: Path, hid_p: Path, demo_key: str) -> _DemoRecord | None:
         # CollectedRolloutClassifierDataset.
         _rk = "sparse_rewards" if "sparse_rewards" in grp else "rewards"
         rewards = np.asarray(grp[_rk][...]) if _rk in grp else None
+        proprio = (
+            _read_proprio(
+                grp,
+                demo_ref=f"{raw_p}:{demo_key}",
+                keys=tuple(proprio_keys),
+                length=T,
+            )
+            if proprio_keys
+            else None
+        )
 
     if dones is not None and bool(dones[:T].any()):
         finish_step = int(np.argmax(dones[:T])) + 1
     else:
         finish_step = T
     complete = bool(rewards[:T].sum() > 0) if rewards is not None else True
+    lang_emb = _read_lang_emb(
+        hid_p,
+        demo_key,
+        lang_emb_dir=lang_emb_dir,
+        lang_emb_key=lang_emb_key,
+    )
 
     eid = f"{raw_p.stem}/{demo_key.split('/')[-1]}"
-    return _DemoRecord(obs=obs, finish_step=finish_step, complete=complete, eid=eid)
+    return _DemoRecord(
+        obs=obs,
+        proprio=proprio,
+        lang_emb=lang_emb,
+        finish_step=finish_step,
+        complete=complete,
+        eid=eid,
+    )
 
 
 def _load_all(
@@ -97,11 +171,21 @@ def _load_all(
     *,
     min_T: int,
     label: str,
+    proprio_keys: Sequence[str] | None = None,
+    lang_emb_dir: str | Path | None = None,
+    lang_emb_key: str = "lang_emb",
 ) -> list[_DemoRecord]:
     out: list[_DemoRecord] = []
     skipped = 0
     for raw_p, hid_p, demo_key in pairs:
-        rec = _load_demo(Path(raw_p), Path(hid_p), demo_key)
+        rec = _load_demo(
+            Path(raw_p),
+            Path(hid_p),
+            demo_key,
+            proprio_keys=proprio_keys,
+            lang_emb_dir=lang_emb_dir,
+            lang_emb_key=lang_emb_key,
+        )
         if rec is None or rec.finish_step < min_T:
             skipped += 1
             continue
@@ -136,6 +220,9 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         verbose: bool = True,
         chunk_subsample: int = 1,
         chunk_pool: str = "last",
+        proprio_keys: Sequence[str] | None = None,
+        lang_emb_dir: str | Path | None = None,
+        lang_emb_key: str = "lang_emb",
     ) -> None:
         super().__init__()
         if window < 1:
@@ -156,6 +243,9 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         self.K = int(chunk_subsample)
         self.chunk_pool = chunk_pool
         self.window_env = self.W * self.K  # env-step frames per window
+        self.proprio_keys = tuple(str(key) for key in (proprio_keys or ()))
+        self.lang_emb_dir = Path(lang_emb_dir) if lang_emb_dir is not None else None
+        self.lang_emb_key = str(lang_emb_key)
 
         succ_pairs = _find_demo_pairs(success_dir_raw, success_dir_hidden)
         fail_pairs: list[tuple[Path, Path, str]] = []
@@ -172,8 +262,20 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
             )
 
         self._demos: list[_DemoRecord] = _load_all(
-            succ_pairs, min_T=self.window_env, label="train-succ"
-        ) + _load_all(fail_pairs, min_T=self.window_env, label="train-fail")
+            succ_pairs,
+            min_T=self.window_env,
+            label="train-succ",
+            proprio_keys=self.proprio_keys,
+            lang_emb_dir=self.lang_emb_dir,
+            lang_emb_key=self.lang_emb_key,
+        ) + _load_all(
+            fail_pairs,
+            min_T=self.window_env,
+            label="train-fail",
+            proprio_keys=self.proprio_keys,
+            lang_emb_dir=self.lang_emb_dir,
+            lang_emb_key=self.lang_emb_key,
+        )
         if not self._demos:
             raise RuntimeError("LumosAlignedLatentTrainDataset: no demos loaded")
 
@@ -198,7 +300,7 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
 
     # ---- WebDataset-style infinite stream with per-worker shard ---------
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, int]]:
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
         info = get_worker_info()
         if info is None:
             shard_idx, num_shards = 0, 1
@@ -219,19 +321,21 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
                 obs = rec.obs
                 # 1 end window — label = int(complete)
                 end_window = obs[T - self.window_env : T]
-                yield self._to_tensor(self._pool_window(end_window)), int(rec.complete)
+                end_extra = self._window_extra(rec, T - self.window_env, T)
+                end_item = (self._to_tensor(self._pool_window(end_window)), int(rec.complete))
+                yield (*end_item, end_extra) if end_extra else end_item
                 # 1 random earlier window — label = 0
                 if T - self.S >= self.window_env:
                     ends = range(T - self.S, self.window_env - 1, -self.S)
                     ends_list = list(ends)
                     if ends_list:
                         end = int(rng.choice(ends_list))
-                        yield (
-                            self._to_tensor(
-                                self._pool_window(obs[end - self.window_env : end])
-                            ),
-                            0,
+                        neg_window = obs[end - self.window_env : end]
+                        neg_extra = self._window_extra(
+                            rec, end - self.window_env, end
                         )
+                        neg_item = (self._to_tensor(self._pool_window(neg_window)), 0)
+                        yield (*neg_item, neg_extra) if neg_extra else neg_item
 
     def _to_tensor(self, win: np.ndarray) -> torch.Tensor:
         # fp16 → fp32 here so the model sees a consistent dtype.
@@ -251,13 +355,39 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
             return reshaped[:, 0]
         return reshaped.mean(axis=1)
 
+    def _window_extra(
+        self,
+        rec: _DemoRecord,
+        start: int,
+        end: int,
+    ) -> dict[str, torch.Tensor]:
+        extra: dict[str, torch.Tensor] = {}
+        if rec.proprio is not None:
+            proprio_window = rec.proprio[start:end]
+            extra["proprio"] = torch.from_numpy(
+                np.ascontiguousarray(self._pool_window(proprio_window))
+            ).float()
+        if rec.lang_emb is not None:
+            extra["lang_emb"] = torch.from_numpy(
+                np.ascontiguousarray(rec.lang_emb)
+            ).float()
+        return extra
+
     @staticmethod
     def collate_fn(
-        batch: list[tuple[torch.Tensor, int]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch: list[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]],
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         xs = torch.stack([b[0] for b in batch])  # [B, W, L]
         ys = torch.tensor([b[1] for b in batch], dtype=torch.long)
-        return xs, ys
+        if len(batch[0]) < 3:
+            return xs, ys
+        extras = [b[2] for b in batch if len(b) >= 3]
+        out: dict[str, torch.Tensor] = {}
+        if extras and all("proprio" in extra for extra in extras):
+            out["proprio"] = torch.stack([extra["proprio"] for extra in extras])
+        if extras and all("lang_emb" in extra for extra in extras):
+            out["lang_emb"] = torch.stack([extra["lang_emb"] for extra in extras])
+        return (xs, ys, out) if out else (xs, ys)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +426,9 @@ class LumosAlignedLatentValDataset(Dataset):
         verbose: bool = True,
         chunk_subsample: int = 1,
         chunk_pool: str = "last",
+        proprio_keys: Sequence[str] | None = None,
+        lang_emb_dir: str | Path | None = None,
+        lang_emb_key: str = "lang_emb",
     ) -> None:
         super().__init__()
         if chunk_subsample < 1:
@@ -307,6 +440,9 @@ class LumosAlignedLatentValDataset(Dataset):
         self.K = int(chunk_subsample)
         self.chunk_pool = chunk_pool
         self.window_env = self.W * self.K
+        self.proprio_keys = tuple(str(key) for key in (proprio_keys or ()))
+        self.lang_emb_dir = Path(lang_emb_dir) if lang_emb_dir is not None else None
+        self.lang_emb_key = str(lang_emb_key)
 
         succ_pairs = _find_demo_pairs(success_dir_raw, success_dir_hidden)
         fail_pairs: list[tuple[Path, Path, str]] = []
@@ -322,8 +458,20 @@ class LumosAlignedLatentValDataset(Dataset):
             )
 
         self._demos: list[_DemoRecord] = _load_all(
-            succ_pairs, min_T=self.window_env, label="val-succ"
-        ) + _load_all(fail_pairs, min_T=self.window_env, label="val-fail")
+            succ_pairs,
+            min_T=self.window_env,
+            label="val-succ",
+            proprio_keys=self.proprio_keys,
+            lang_emb_dir=self.lang_emb_dir,
+            lang_emb_key=self.lang_emb_key,
+        ) + _load_all(
+            fail_pairs,
+            min_T=self.window_env,
+            label="val-fail",
+            proprio_keys=self.proprio_keys,
+            lang_emb_dir=self.lang_emb_dir,
+            lang_emb_key=self.lang_emb_key,
+        )
         if not self._demos:
             raise RuntimeError("LumosAlignedLatentValDataset: no demos loaded")
 
@@ -372,23 +520,50 @@ class LumosAlignedLatentValDataset(Dataset):
             "finish_step": int(rec.finish_step),
             "is_end_window": bool(slot.is_end_window),
         }
+        if rec.proprio is not None:
+            proprio_window = rec.proprio[slot.end_idx - self.window_env : slot.end_idx]
+            if self.K > 1:
+                reshaped_proprio = proprio_window.reshape(
+                    self.W, self.K, proprio_window.shape[-1]
+                )
+                if self.chunk_pool == "last":
+                    proprio_pooled = reshaped_proprio[:, -1]
+                elif self.chunk_pool == "first":
+                    proprio_pooled = reshaped_proprio[:, 0]
+                else:
+                    proprio_pooled = reshaped_proprio.mean(axis=1)
+            else:
+                proprio_pooled = proprio_window
+            meta["proprio"] = torch.from_numpy(
+                np.ascontiguousarray(proprio_pooled)
+            ).float()
+        if rec.lang_emb is not None:
+            meta["lang_emb"] = torch.from_numpy(
+                np.ascontiguousarray(rec.lang_emb)
+            ).float()
         x = torch.from_numpy(np.ascontiguousarray(window)).float()
         return x, int(slot.label), meta
 
     # ---- episode-level hook for LUMOS predict_success eval --------------
 
-    def trajectories(self) -> Iterator[tuple[np.ndarray, bool, int, str]]:
-        """Yield ``(obs[T,L], complete, finish_step, eid)`` per demo.
+    def trajectories(self) -> Iterator[tuple[np.ndarray, bool, int, str, dict[str, np.ndarray]]]:
+        """Yield ``(obs[T,L], complete, finish_step, eid, extra)`` per demo.
 
         Cast to fp32 once here so the consumer (episode-level eval) can
         slide stride-1 windows without re-casting.
         """
         for rec in self._demos:
+            extra: dict[str, np.ndarray] = {}
+            if rec.proprio is not None:
+                extra["proprio"] = rec.proprio.astype(np.float32, copy=False)
+            if rec.lang_emb is not None:
+                extra["lang_emb"] = rec.lang_emb.astype(np.float32, copy=False)
             yield (
                 rec.obs.astype(np.float32, copy=False),
                 rec.complete,
                 rec.finish_step,
                 rec.eid,
+                extra,
             )
 
     @staticmethod

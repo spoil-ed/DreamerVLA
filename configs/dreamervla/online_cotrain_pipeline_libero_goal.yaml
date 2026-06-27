@@ -112,14 +112,13 @@ online_rollout:
   rollout_policy_source: dreamer_actor
   warmup_seed_episodes_per_task: 3
   classifier_early_neg_stride: 8
-  # Option 1 — vectorized egl rollout. num_envs>1 routes the online rollout to K
-  # parallel VecRolloutEnv child processes rendering with `render_backend` (egl in
-  # isolated child GL contexts -> no robosuite read_pixels SIGABRT, ~4x faster than
-  # osmesa). num_envs=1 keeps the legacy single-env osmesa path. num_envs is the
-  # main throughput/GPU-memory knob (children share the training GPU) -- tune up if
-  # there is headroom. action_hidden path only (backbone_latent requires num_envs=1).
+  # num_envs>1 routes online rollout to K parallel child processes. Default to
+  # osmesa: stable, CPU-rendered, no GPU render/compute contention. EGL is an
+  # explicit opt-in; when render_backend=egl, render_devices must name GPUs
+  # reserved for rendering and must not overlap the training CUDA devices.
   num_envs: 4
-  render_backend: egl
+  render_backend: osmesa
+  render_devices: []
   debug_total_env_steps: 160
   debug_warmup_steps: 2
   debug_min_replay: 48

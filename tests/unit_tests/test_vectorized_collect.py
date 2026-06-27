@@ -44,6 +44,7 @@ def _fake_full_record(task_id: int, episode_id: int, t: int) -> dict:
         "joint_states": np.zeros(7, np.float64),
         "robot_states": np.zeros(9, np.float64),
         "states": np.zeros(11, np.float64),
+        "init_state_index": int(episode_id) + 100,
     }
 
 
@@ -289,6 +290,22 @@ def test_records_language_embedding_from_decode_result():
     collect_vectorized(vec, exts, infer_with_lang, CaptureWriter(), [(0, 0)], episode_horizon=5)
 
     assert np.array_equal(captured["steps"][0]["lang_emb"], np.arange(6, dtype=np.float32))
+
+
+def test_records_init_state_index_from_reset_record():
+    K = 1
+    vec = FakeVecEnv(K, lambda _t, _e: 2)
+    exts = [FakeExtractor()]
+    captured = {}
+
+    class CaptureWriter(FakeWriter):
+        def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kwargs):
+            captured["steps"] = steps
+            super().write_demo(index, steps, preprocess_config, data_attrs, **kwargs)
+
+    collect_vectorized(vec, exts, fake_infer, CaptureWriter(), [(0, 7)], episode_horizon=5)
+
+    assert captured["steps"][0]["init_state_index"] == 107
 
 
 def test_rotating_writer_slices_demos_through_vectorized_loop(tmp_path):
