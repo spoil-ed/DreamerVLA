@@ -379,6 +379,39 @@ def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     assert runner._classifier_cls_kwargs == {"latent_dim": 3, "window": 2}
 
 
+def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = _FakeDistributed()
+    classifier = torch.nn.Linear(3, 2)
+    ckpt = tmp_path / "classifier.ckpt"
+    torch.save({"model": classifier.state_dict(), "threshold": 0.73}, ckpt)
+
+    monkeypatch.setattr(mod, "build_classifier", lambda cfg: torch.nn.Linear(3, 2))
+    monkeypatch.setattr(mod, "build_optimizer", lambda module, cfg: object())
+    cfg = OmegaConf.create(
+        {
+            "algorithm": {"lumos": {"classifier_threshold": 0.5}},
+            "classifier": {
+                "_target_": "tests.fake.CustomSuccessVerifier",
+                "latent_dim": 3,
+                "window": 2,
+            },
+            "world_model": {"obs_dim": 3},
+            "init": {"classifier_state_ckpt": str(ckpt)},
+            "optim": {"classifier": {"lr": 1.0e-4}},
+        }
+    )
+
+    runner._build_trainable_classifier(cfg)
+
+    assert runner.classifier_threshold == 0.73
+
+
 def test_task_conditioning_validation_is_disabled_by_default():
     from omegaconf import OmegaConf
 
