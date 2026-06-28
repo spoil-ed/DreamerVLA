@@ -4,6 +4,7 @@ import torch
 from omegaconf import OmegaConf
 
 import dreamervla.runners as runners
+from dreamervla.workers.cotrain.messages import StopMsg
 
 
 class _Ready:
@@ -216,6 +217,7 @@ class _FakeRolloutGroup:
     def __init__(self) -> None:
         self.workers = ["rollout0", "rollout1"]
         self.pulled: list[tuple[str, int | None]] = []
+        self.generate_call: tuple[str, str, int] | None = None
 
     def set_global_step(self, global_step: int):
         self.global_step = int(global_step)
@@ -225,8 +227,17 @@ class _FakeRolloutGroup:
         self.pulled.append((str(key), None if local_version is None else int(local_version)))
         return _Ready([None for _ in self.workers])
 
-    def generate(self, env_channel_name: str, rollout_channel_name: str):
-        del env_channel_name, rollout_channel_name
+    def generate(
+        self,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        num_slots: int = 1,
+    ):
+        self.generate_call = (
+            str(env_channel_name),
+            str(rollout_channel_name),
+            int(num_slots),
+        )
         return _Ready(
             [
                 {"rollout/generated": 2.0},
@@ -285,13 +296,14 @@ class _FakeLearnerGroup:
 class _FakeChannel:
     def __init__(self, items: list[object] | None = None) -> None:
         self.items = list(items or [])
-        self.puts: list[object] = []
+        self.puts: list[tuple[str, object]] = []
 
-    def get(self):
+    def get(self, *, key: str = "default"):
+        del key
         return self.items.pop(0)
 
-    def put(self, value):
-        self.puts.append(value)
+    def put(self, value, *, key: str = "default"):
+        self.puts.append((str(key), value))
 
 
 class _FakeReplayGroup:
@@ -335,6 +347,9 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states() -> None:
 
     assert actor.sync_calls == [(None, "policy", 1)]
     assert rollout.pulled == [("policy", None)]
+    assert rollout.generate_call == ("env", "rollout", 1)
+    assert [key for key, _ in groups["env_channel"].puts] == ["0:0", "1:0"]
+    assert all(isinstance(value, StopMsg) for _, value in groups["env_channel"].puts)
     assert actor.loaded_shards == ["real-shard", "wm-shard-0", "wm-shard-1"]
     assert learner.synced == [("world_model", 1), ("classifier", 1)]
     assert wm_env.wm_versions == [1]

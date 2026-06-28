@@ -361,7 +361,7 @@ class BaseTrajectoryEnvWorker(Worker):
 
         for _ in range(self.rollout_epoch):
             for message in self.bootstrap_obs():
-                env_channel.put(message)
+                env_channel.put(message, key=message.key)
 
             target_chunk_steps = self._chunk_steps_per_rollout_epoch()
             chunk_steps_by_slot = [0 for _ in range(self.num_slots)]
@@ -388,14 +388,14 @@ class BaseTrajectoryEnvWorker(Worker):
                         if obs is None:
                             raise RuntimeError("slot has no current observation")
                         message = self._observation_msg(slot_id, obs)
-                        env_channel.put(message)
+                        env_channel.put(message, key=message.key)
             for slot_id in range(self.num_slots):
                 obs = self._obs_by_slot[slot_id]
                 if obs is None:
                     continue
                 message = self._observation_msg(slot_id, obs)
                 message.obs["_final_bootstrap"] = True
-                env_channel.put(message)
+                env_channel.put(message, key=message.key)
                 rollout_channel.get(key=self._slot_key(slot_id))
                 metrics["env/final_bootstrap_requests"] += 1.0
                 metrics["env/episodes_flushed"] += float(

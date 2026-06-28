@@ -22,10 +22,15 @@ def _policy_cfg() -> dict:
     }
 
 
-def _obs(step: int = 0) -> ObservationMsg:
+def _obs(
+    step: int = 0,
+    *,
+    env_rank: int = 0,
+    slot_id: int = 0,
+) -> ObservationMsg:
     return ObservationMsg(
-        env_rank=0,
-        slot_id=0,
+        env_rank=env_rank,
+        slot_id=slot_id,
         task_id=0,
         episode_id=0,
         step=step,
@@ -194,5 +199,42 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
         assert first.step == 0
         assert second.step == 1
         assert first.actions.shape == (2, 3)
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set() -> None:
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-keyed-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-keyed-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        output_channel = Channel.create(output_name)
+        input_channel.put(_obs(step=0, slot_id=0), key="0:0")
+        input_channel.put(_obs(step=10, slot_id=1), key="0:1")
+        input_channel.put(StopMsg(reason="unit-test"), key="0:0")
+        input_channel.put(StopMsg(reason="unit-test"), key="0:1")
+
+        worker = MultiStepRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        stats = worker.generate(input_name, output_name, num_slots=2)
+
+        assert stats == {"rollout/generated": 2.0}
+        assert output_channel.qsize(key="0:0") == 1
+        assert output_channel.qsize(key="0:1") == 1
+        first = output_channel.get(key="0:0")
+        second = output_channel.get(key="0:1")
+        assert isinstance(first, RolloutResultMsg)
+        assert isinstance(second, RolloutResultMsg)
+        assert first.step == 0
+        assert second.step == 10
     finally:
         cluster.shutdown()

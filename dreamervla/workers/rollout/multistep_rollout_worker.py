@@ -122,16 +122,66 @@ class MultiStepRolloutWorker(Worker):
         self,
         input_channel_name: str,
         output_channel_name: str,
+        num_slots: int | None = None,
+        input_key: str | None = None,
     ) -> dict[str, float]:
         """Drain observations from a named channel until a stop message arrives."""
 
         input_channel = Channel.connect(input_channel_name)
         output_channel = Channel.connect(output_channel_name)
+        if input_key is not None:
+            return self._generate_from_key(input_channel, output_channel, str(input_key))
+        if num_slots is not None:
+            return self._generate_from_rank_slot_keys(
+                input_channel,
+                output_channel,
+                int(num_slots),
+            )
+
+        return self._generate_from_key(input_channel, output_channel, "default")
+
+    def _generate_from_key(
+        self,
+        input_channel: Channel,
+        output_channel: Channel,
+        key: str,
+    ) -> dict[str, float]:
         generated = 0
         while True:
-            msg = input_channel.get()
+            msg = input_channel.get(key=str(key))
             if isinstance(msg, StopMsg):
                 break
+            if not isinstance(msg, ObservationMsg):
+                raise TypeError(
+                    "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
+                    f"got {type(msg).__name__}"
+                )
+            result = self.generate_once(msg)
+            output_channel.put(result, key=result.key)
+            generated += 1
+        return {"rollout/generated": float(generated)}
+
+    def _generate_from_rank_slot_keys(
+        self,
+        input_channel: Channel,
+        output_channel: Channel,
+        num_slots: int,
+    ) -> dict[str, float]:
+        if int(num_slots) <= 0:
+            raise ValueError("num_slots must be positive")
+        active_slots = set(range(int(num_slots)))
+        generated = 0
+        slot_cursor = 0
+        while active_slots:
+            slot_id = slot_cursor % int(num_slots)
+            slot_cursor += 1
+            if slot_id not in active_slots:
+                continue
+            key = f"{int(self.rank)}:{int(slot_id)}"
+            msg = input_channel.get(key=key)
+            if isinstance(msg, StopMsg):
+                active_slots.remove(slot_id)
+                continue
             if not isinstance(msg, ObservationMsg):
                 raise TypeError(
                     "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "

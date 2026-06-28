@@ -23,12 +23,13 @@ class _MemoryChannel:
     def __init__(self, initial: list[Any] | None = None) -> None:
         self.queue = list(initial or [])
         self.puts: list[tuple[str, Any]] = []
+        self.gets: list[str] = []
 
     def put(self, item: Any, *, key: str = "default") -> None:
         self.puts.append((str(key), item))
 
     def get(self, *, key: str = "default") -> Any:
-        del key
+        self.gets.append(str(key))
         assert self.queue
         return self.queue.pop(0)
 
@@ -383,9 +384,11 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         worker.init()
         metrics = worker.interact("env", "rollout", "actor")
 
-        assert channels["env"].puts[0][0] == "default"
+        assert channels["env"].puts[0][0] == "0:0"
         assert isinstance(channels["env"].puts[0][1], ObservationMsg)
         assert channels["env"].puts[-1][1].obs["_final_bootstrap"] is True
+        assert channels["env"].puts[-1][0] == "0:0"
+        assert channels["rollout"].gets == ["0:0", "0:0"]
         assert channels["actor"].puts[0][0] == "default"
         assert isinstance(channels["actor"].puts[0][1], TrajectoryShard)
         assert metrics["env/chunk_steps"] == 1.0

@@ -224,11 +224,19 @@ class ManualCotrainRayRunner(BaseRunner):
         env_results = [real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)]
         if wm_env is not None:
             env_results.append(wm_env.interact(env_channel_name, rollout_channel_name, actor_channel_name))
-        rollout_result = rollout.generate(env_channel_name, rollout_channel_name)
+        rollout_result = rollout.generate(
+            env_channel_name,
+            rollout_channel_name,
+            self._envs_per_worker(),
+        )
 
         env_metrics = _sum_metric_lists([result.wait() for result in env_results])
-        for _ in groups["RolloutGroup"].workers:
-            groups["env_channel"].put(StopMsg(reason="global_step_complete"))
+        for rollout_rank, _ in enumerate(groups["RolloutGroup"].workers):
+            for slot_id in range(self._envs_per_worker()):
+                groups["env_channel"].put(
+                    StopMsg(reason="global_step_complete"),
+                    key=f"{int(rollout_rank)}:{int(slot_id)}",
+                )
         rollout_metrics = _sum_metric_lists([rollout_result.wait()])
         expected_shards = int(env_metrics.get("env/trajectory_shards", 0.0))
         shards = [
