@@ -1,0 +1,488 @@
+"""FSDP-capable ActorGroup worker that owns VLA PPO updates."""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from omegaconf import OmegaConf
+from torch import nn
+
+from dreamervla.hybrid_engines.fsdp import FSDPModelManager
+from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
+from dreamervla.scheduler.channel import Channel
+from dreamervla.scheduler.worker import Worker
+from dreamervla.workers.cotrain.messages import (
+    StopMsg,
+    TrajectoryBatch,
+    TrajectoryShard,
+    collate_trajectory_shards,
+)
+
+_DEFAULT_PATCH_STORE = "DreamerVLAActorRolloutPatchStore"
+_EXTRA_FORWARD_KEYS = (
+    "action_token_ids",
+    "input_ids",
+    "attention_mask",
+    "hidden_states",
+)
+
+
+class EmbodiedFSDPActor(Worker):
+    """Trainable VLA actor used by the target manual-cotrain ActorGroup route."""
+
+    def __init__(
+        self,
+        policy_cfg: Any,
+        init_ckpt: Any,
+        train_cfg: Any,
+    ) -> None:
+        super().__init__()
+        self.policy_cfg = _as_plain_dict(policy_cfg)
+        self.init_ckpt = _as_plain_dict(init_ckpt)
+        self.train_cfg = _as_plain_dict(train_cfg)
+        configured_device = str(self.train_cfg.get("device", self.device))
+        if configured_device == "auto":
+            configured_device = self.device
+        self.torch_device = torch.device(configured_device)
+
+        self.global_step = 0
+        self.policy: nn.Module | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
+        self.fsdp_manager: FSDPModelManager | None = None
+        self.syncer: PatchWeightSyncer | None = None
+        self.trajectory_shards: list[TrajectoryShard] = []
+        self.batch: TrajectoryBatch | None = None
+        self.returns: torch.Tensor | None = None
+        self.advantages: torch.Tensor | None = None
+        self._advantage_metrics: dict[str, float] = {}
+
+    def init(self) -> None:
+        """Build policy, optional FSDP wrapper, and optimizer."""
+
+        policy = _build_from_cfg(self.policy_cfg)
+        if not isinstance(policy, nn.Module):
+            raise TypeError("EmbodiedFSDPActor policy must be a torch.nn.Module")
+        policy.to(self.torch_device)
+        if "policy" in self.init_ckpt:
+            policy.load_state_dict(
+                _to_device_state(self.init_ckpt["policy"], self.torch_device)
+            )
+
+        fsdp_cfg = self.train_cfg.get("fsdp")
+        if fsdp_cfg is not None:
+            self.fsdp_manager = FSDPModelManager(**_as_plain_dict(fsdp_cfg))
+            self.fsdp_manager.ensure_process_group()
+            policy = self.fsdp_manager.prepare_model(policy)
+
+        self.policy = policy
+        self.optimizer = self._build_optimizer()
+
+    def set_global_step(self, global_step: int) -> None:
+        """Set runner-visible global progress used by weight-sync versions."""
+
+        self.global_step = int(global_step)
+
+    def load_trajectory_shards(self, shards: list[TrajectoryShard]) -> None:
+        """Store and collate trajectory shards for the next PPO update."""
+
+        self.trajectory_shards = list(shards)
+        self.batch = collate_trajectory_shards(self.trajectory_shards)
+        self.returns = None
+        self.advantages = None
+        self._advantage_metrics = {}
+
+    def recv_rollout_trajectories(
+        self,
+        actor_channel_name: str,
+        expected_shards: int | None = None,
+    ) -> dict[str, float]:
+        """Receive trajectory shards from a named ActorGroup channel."""
+
+        channel = Channel.connect(actor_channel_name)
+        count = 1 if expected_shards is None else max(0, int(expected_shards))
+        shards: list[TrajectoryShard] = []
+        for _ in range(count):
+            msg = channel.get()
+            if isinstance(msg, StopMsg):
+                break
+            if not isinstance(msg, TrajectoryShard):
+                raise TypeError(
+                    "EmbodiedFSDPActor expected TrajectoryShard or StopMsg, "
+                    f"got {type(msg).__name__}"
+                )
+            shards.append(msg)
+        self.load_trajectory_shards(shards)
+        return {"actor/received_shards": float(len(shards))}
+
+    def compute_advantages_and_returns(self) -> dict[str, float]:
+        """Compute trajectory returns and group-relative advantages."""
+
+        batch = self._batch()
+        algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
+        group_size = int(algorithm_cfg.get("group_size", 1))
+        if group_size <= 0:
+            raise ValueError("algorithm_cfg.group_size must be positive")
+
+        returns = _trajectory_returns_from_rewards(
+            batch.rewards.to(self.torch_device, dtype=torch.float32)
+        )
+        trajectory_count = int(returns.numel())
+        if trajectory_count <= 0:
+            raise ValueError("trajectory batch is empty")
+        if trajectory_count % group_size != 0:
+            raise ValueError(
+                "trajectory count must be divisible by algorithm_cfg.group_size "
+                f"for EmbodiedFSDPActor; got {trajectory_count} and {group_size}"
+            )
+
+        advantages = _group_advantage(returns, group_size, eps=1e-6)
+        self.returns = returns.detach()
+        self.advantages = advantages.detach()
+        self._advantage_metrics = {
+            "actor/trajectory_count": float(trajectory_count),
+            "actor/return_mean": float(returns.detach().mean().cpu().item()),
+            "actor/advantage_std": float(
+                advantages.detach().std(unbiased=False).cpu().item()
+            ),
+        }
+        return dict(self._advantage_metrics)
+
+    def run_training(self) -> dict[str, float]:
+        """Run PPO updates over the loaded rollout trajectories."""
+
+        batch = self._batch()
+        if batch.actions.ndim != 4:
+            raise ValueError(
+                "manual cotrain actor training expects chunk-level actions with shape "
+                "[time, batch, chunk, action_dim]"
+            )
+        advantages = self._advantages()
+        policy = self._policy()
+        optimizer = self._optimizer()
+        algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
+        optim_cfg = _as_plain_dict(
+            _as_plain_dict(self.train_cfg.get("optimizers", {})).get("policy", {})
+        )
+
+        update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
+        clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
+        clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
+        clip_ratio_c_value = algorithm_cfg.get("clip_ratio_c", None)
+        clip_ratio_c = (
+            None if clip_ratio_c_value is None else float(clip_ratio_c_value)
+        )
+        clip_log_ratio = float(algorithm_cfg.get("clip_log_ratio", 20.0))
+        entropy_coef = _entropy_coef(algorithm_cfg)
+        zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
+
+        policy.train()
+        losses: list[float] = []
+        ratio_means: list[float] = []
+        entropy_means: list[float] = []
+        grad_norms: list[float] = []
+        ppo_updates = 0
+        for _ in range(update_epochs):
+            optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
+            loss_vecs: list[torch.Tensor] = []
+            ratios: list[torch.Tensor] = []
+            entropies: list[torch.Tensor] = []
+            for step in range(int(batch.rewards.shape[0])):
+                eval_batch = self._eval_inputs_for_step(batch, step)
+                old_logprob = _as_vector(
+                    batch.prev_logprobs[step].to(
+                        self.torch_device,
+                        dtype=torch.float32,
+                    )
+                )
+                advantage = _as_vector(advantages).to(self.torch_device)
+
+                new_logprob, entropy, _ = policy(eval_batch)
+                new_logprob = _as_vector(new_logprob)
+                entropy = _as_vector(entropy)
+                if new_logprob.shape != old_logprob.shape:
+                    raise ValueError(
+                        "policy evaluate log_prob shape must match prev_logprobs; "
+                        f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
+                    )
+                if advantage.shape != old_logprob.shape:
+                    raise ValueError(
+                        "advantage shape must match prev_logprobs; "
+                        f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                    )
+
+                ratio = _ppo_ratio(
+                    new_logprob,
+                    old_logprob,
+                    clip_log_ratio=clip_log_ratio,
+                )
+                loss_vecs.append(
+                    _ppo_clip_term(
+                        ratio,
+                        advantage,
+                        clip_low,
+                        clip_high,
+                        clip_ratio_c=clip_ratio_c,
+                    )
+                )
+                ratios.append(ratio.detach())
+                entropies.append(entropy)
+
+            loss_vec = torch.cat(loss_vecs, dim=0)
+            entropy_vec = torch.cat(entropies, dim=0)
+            loss = loss_vec.mean() - float(entropy_coef) * entropy_vec.mean()
+            loss.backward()
+            grad_norm = self._clip_or_measure_grad_norm(optim_cfg)
+            optimizer.step()
+
+            ppo_updates += 1
+            losses.append(float(loss.detach().cpu().item()))
+            ratio_means.append(float(torch.cat(ratios, dim=0).mean().cpu().item()))
+            entropy_means.append(
+                float(entropy_vec.detach().mean().cpu().item())
+            )
+            grad_norms.append(float(grad_norm))
+
+        policy.train(False)
+        return {
+            "actor/ppo_updates": float(ppo_updates),
+            "actor/loss": _mean(losses),
+            "actor/ratio_mean": _mean(ratio_means),
+            "actor/entropy_mean": _mean(entropy_means),
+            "actor/policy_grad_norm": _mean(grad_norms),
+        }
+
+    def sync_model_to_rollout(
+        self,
+        key: str = "policy",
+        version: int | None = None,
+    ) -> dict[str, float]:
+        """Push the current policy state to RolloutGroup through patch sync."""
+
+        resolved_version = self.global_step if version is None else int(version)
+        state = self.state_dict()
+        if int(self.rank) == 0 and state:
+            self._syncer().push(str(key), state, int(resolved_version))
+        return {f"sync/{key}_version": float(resolved_version)}
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """Return a detached CPU copy of the policy state."""
+
+        state = _export_policy_state_dict(self._policy())
+        return {
+            name: value.detach().cpu().clone()
+            for name, value in state.items()
+        }
+
+    def _build_optimizer(self) -> torch.optim.Optimizer:
+        optimizer_cfgs = _as_plain_dict(self.train_cfg.get("optimizers", {}))
+        policy_optim_cfg = _as_plain_dict(optimizer_cfgs.get("policy", {}))
+        lr = float(policy_optim_cfg.get("lr", self.train_cfg.get("lr", 1e-4)))
+        weight_decay = float(policy_optim_cfg.get("weight_decay", 0.0))
+        params = [param for param in self._policy().parameters() if param.requires_grad]
+        if not params:
+            raise ValueError("EmbodiedFSDPActor policy has no trainable parameters")
+        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+
+    def _eval_inputs_for_step(
+        self,
+        batch: TrajectoryBatch,
+        step: int,
+    ) -> dict[str, torch.Tensor | str]:
+        forward_inputs = batch.forward_inputs
+        if "hidden" not in forward_inputs:
+            raise ValueError("trajectory forward_inputs must include 'hidden'")
+        eval_batch: dict[str, torch.Tensor | str] = {
+            "mode": "evaluate",
+            "hidden": forward_inputs["hidden"][step].to(
+                self.torch_device,
+                dtype=torch.float32,
+            ),
+            "action": batch.actions[step].to(
+                self.torch_device,
+                dtype=torch.float32,
+            ),
+        }
+        for key in _EXTRA_FORWARD_KEYS:
+            if key in forward_inputs:
+                eval_batch[key] = forward_inputs[key][step].to(self.torch_device)
+        return eval_batch
+
+    def _clip_or_measure_grad_norm(self, optim_cfg: dict[str, Any]) -> float:
+        params = [param for param in self._policy().parameters() if param.requires_grad]
+        grad_clip_norm = optim_cfg.get("grad_clip_norm", None)
+        if grad_clip_norm is not None:
+            norm = torch.nn.utils.clip_grad_norm_(params, float(grad_clip_norm))
+            return float(_to_float(norm))
+        return _grad_norm(params)
+
+    def _policy(self) -> nn.Module:
+        if self.policy is None:
+            raise RuntimeError("EmbodiedFSDPActor.init() has not been called")
+        return self.policy
+
+    def _optimizer(self) -> torch.optim.Optimizer:
+        if self.optimizer is None:
+            raise RuntimeError("EmbodiedFSDPActor.init() has not been called")
+        return self.optimizer
+
+    def _batch(self) -> TrajectoryBatch:
+        if self.batch is None:
+            raise RuntimeError("load_trajectory_shards() must be called first")
+        return self.batch
+
+    def _advantages(self) -> torch.Tensor:
+        if self.advantages is None:
+            raise RuntimeError("compute_advantages_and_returns() must be called first")
+        return self.advantages
+
+    def _syncer(self) -> PatchWeightSyncer:
+        if self.syncer is None:
+            syncer_cfg = _as_plain_dict(self.train_cfg.get("syncer", {}))
+            store_name = str(syncer_cfg.get("store_name", _DEFAULT_PATCH_STORE))
+            self.syncer = PatchWeightSyncer(store_name=store_name)
+        return self.syncer
+
+
+def _build_from_cfg(cfg: dict[str, Any]) -> Any:
+    target = cfg.get("target") or cfg.get("_target_") or cfg.get("class_path")
+    if not target:
+        raise ValueError("component config must include target/_target_/class_path")
+
+    kwargs = {
+        key: value
+        for key, value in cfg.items()
+        if key not in {"target", "_target_", "class_path", "kwargs", "init_args"}
+    }
+    kwargs.update(_as_plain_dict(cfg.get("init_args", {})))
+    kwargs.update(_as_plain_dict(cfg.get("kwargs", {})))
+
+    if ":" in str(target):
+        module_name, class_name = str(target).split(":", 1)
+    else:
+        module_name, class_name = str(target).rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)(**kwargs)
+
+
+def _load_grpo_helpers() -> Any:
+    path = Path(__file__).resolve().parents[2] / "algorithms" / "ppo" / "grpo.py"
+    spec = importlib.util.spec_from_file_location(
+        "_dreamervla_embodied_actor_grpo_helpers",
+        path,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load GRPO helpers from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _as_plain_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if OmegaConf.is_config(value):
+        return dict(OmegaConf.to_container(value, resolve=True) or {})
+    return dict(value)
+
+
+def _to_device_state(value: Any, device: torch.device) -> dict[str, torch.Tensor]:
+    return {
+        str(name): torch.as_tensor(tensor).to(device)
+        for name, tensor in dict(value).items()
+    }
+
+
+def _as_vector(value: Any) -> torch.Tensor:
+    tensor = _as_tensor(value)
+    if tensor.ndim == 0:
+        return tensor.reshape(1)
+    if tensor.ndim == 1:
+        return tensor
+    return tensor.reshape(int(tensor.shape[0]), -1).sum(dim=1)
+
+
+def _trajectory_returns_from_rewards(rewards: torch.Tensor) -> torch.Tensor:
+    if rewards.ndim < 2:
+        raise ValueError("trajectory rewards must have at least [time, batch] dimensions")
+    rewards_f = rewards.to(dtype=torch.float32)
+    if rewards_f.ndim == 2:
+        return rewards_f.sum(dim=0)
+    trailing = tuple(range(2, rewards_f.ndim))
+    return rewards_f.sum(dim=(0, *trailing))
+
+
+def _as_tensor(value: Any) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    if isinstance(value, np.ndarray):
+        return torch.from_numpy(value)
+    return torch.as_tensor(value)
+
+
+def _grad_norm(params: list[torch.nn.Parameter]) -> float:
+    norms = [
+        param.grad.detach().norm(2)
+        for param in params
+        if param.grad is not None
+    ]
+    if not norms:
+        return 0.0
+    total = torch.norm(torch.stack(norms), 2)
+    return float(total.detach().cpu().item())
+
+
+def _to_float(value: Any) -> float:
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().cpu().item())
+    return float(value)
+
+
+def _export_policy_state_dict(policy: nn.Module) -> dict[str, torch.Tensor]:
+    if _is_fsdp_module(policy):
+        from torch.distributed.fsdp import (
+            FullStateDictConfig,
+            FullyShardedDataParallel,
+            StateDictType,
+        )
+
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        with FullyShardedDataParallel.state_dict_type(
+            policy,
+            StateDictType.FULL_STATE_DICT,
+            cfg,
+        ):
+            state = policy.state_dict()
+    else:
+        state = policy.state_dict()
+    return {
+        str(name): torch.as_tensor(value)
+        for name, value in dict(state).items()
+    }
+
+
+def _is_fsdp_module(policy: nn.Module) -> bool:
+    try:
+        from torch.distributed.fsdp import FullyShardedDataParallel
+    except Exception:
+        return False
+    return isinstance(policy, FullyShardedDataParallel)
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
+_GRPO_HELPERS = _load_grpo_helpers()
+_entropy_coef = _GRPO_HELPERS._entropy_coef
+_group_advantage = _GRPO_HELPERS._group_advantage
+_ppo_clip_term = _GRPO_HELPERS._ppo_clip_term
+_ppo_ratio = _GRPO_HELPERS._ppo_ratio
+
+__all__ = ["EmbodiedFSDPActor"]

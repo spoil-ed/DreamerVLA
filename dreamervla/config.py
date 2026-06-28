@@ -532,6 +532,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     is_ray_runner = target.endswith(
         (
             "OnlineCotrainRayRunner",
+            "ManualCotrainRayRunner",
             "ColdStartRayCollectRunner",
         )
     )
@@ -558,7 +559,27 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
     _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
+    _require_positive_if_present(cfg, "manual_cotrain.global_steps")
+    _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
+    _require_positive_if_present(cfg, "manual_cotrain.sync_every")
+    _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
+    _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
     _validate_ray_single_node_placement(cfg)
+
+    max_steps = OmegaConf.select(
+        cfg,
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        default=None,
+    )
+    chunk = OmegaConf.select(cfg, "manual_cotrain.num_action_chunks", default=None)
+    if max_steps is not None and chunk is not None:
+        if int(max_steps) % int(chunk) != 0:
+            raise ValueError(
+                "manual_cotrain.max_steps_per_rollout_epoch must be divisible by "
+                "manual_cotrain.num_action_chunks"
+            )
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
@@ -571,35 +592,43 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
 
 
 def _validate_fsdp_config(cfg: DictConfig) -> None:
-    """Fail fast on an unusable learner FSDP block before any worker spawns.
+    """Fail fast on unusable FSDP blocks before any worker spawns.
 
-    The learner builds ``FSDPModelManager(**learner.train_cfg.fsdp)`` inside the
-    Ray actor, so a bad ``strategy``/``precision`` would otherwise only surface
-    after the cluster is up. The accepted strategy set mirrors
+    Workers build ``FSDPModelManager(***.train_cfg.fsdp)`` inside Ray actors, so
+    a bad ``strategy``/``precision`` would otherwise only surface after the
+    cluster is up. The accepted strategy set mirrors
     ``FSDPModelManager`` (none/ddp/fsdp/fsdp1/fsdp2).
     """
 
-    fsdp = OmegaConf.select(cfg, "learner.train_cfg.fsdp", default=None)
-    if fsdp is None:
-        return
+    for base in ("learner.train_cfg.fsdp", "actor.train_cfg.fsdp"):
+        fsdp = OmegaConf.select(cfg, base, default=None)
+        if fsdp is None:
+            continue
 
-    strategy = OmegaConf.select(fsdp, "strategy", default=None)
-    if strategy is not None:
-        normalized = str(strategy).strip().lower()
-        if normalized not in {"", "none", "ddp", "fsdp", "fsdp1", "fsdp2"}:
-            raise ValueError(
-                "learner.train_cfg.fsdp.strategy must be one of "
-                f"none, ddp, fsdp, fsdp1, fsdp2; got {strategy!r}"
-            )
+        strategy = OmegaConf.select(fsdp, "strategy", default=None)
+        if strategy is not None:
+            normalized = str(strategy).strip().lower()
+            if normalized not in {"", "none", "ddp", "fsdp", "fsdp1", "fsdp2"}:
+                raise ValueError(
+                    f"{base}.strategy must be one of "
+                    f"none, ddp, fsdp, fsdp1, fsdp2; got {strategy!r}"
+                )
 
-    precision = OmegaConf.select(fsdp, "precision", default=None)
-    if precision is not None:
-        normalized = str(precision).strip().lower()
-        if normalized not in {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}:
-            raise ValueError(
-                "learner.train_cfg.fsdp.precision must be one of "
-                f"fp32, bf16, or fp16; got {precision!r}"
-            )
+        precision = OmegaConf.select(fsdp, "precision", default=None)
+        if precision is not None:
+            normalized = str(precision).strip().lower()
+            if normalized not in {
+                "fp32",
+                "float32",
+                "bf16",
+                "bfloat16",
+                "fp16",
+                "float16",
+            }:
+                raise ValueError(
+                    f"{base}.precision must be one of fp32, bf16, or fp16; "
+                    f"got {precision!r}"
+                )
 
 
 def _validate_ray_single_node_placement(cfg: DictConfig) -> None:

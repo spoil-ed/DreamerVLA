@@ -35,6 +35,17 @@ CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 
 PipelineMode = Literal["ray", "noray"]
 CotrainPhase = Literal["all", "warmup", "online"]
+_ZERO_GPU_EGL_ERROR = (
+    "render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0"
+)
+_ZERO_GPU_NORAY_ERROR = (
+    "mode=noray does not support ngpu=0 because the no-Ray OFT collector requires CUDA; "
+    "use mode=ray render_backend=osmesa for zero-GPU startup"
+)
+_ZERO_GPU_COMPONENT_PLACEMENT_ERROR = (
+    "cluster.component_placement.* overrides are not supported when ngpu=0; "
+    "remove them or set ngpu>=1"
+)
 
 
 @dataclass(frozen=True)
@@ -117,6 +128,122 @@ def _has_override(overrides: Sequence[str], key: str) -> bool:
     return any(_override_key(item) == key for item in overrides)
 
 
+def _has_override_or_child(overrides: Sequence[str], key: str) -> bool:
+    prefix = f"{key}."
+    return any(
+        (override_key := _override_key(item)) == key
+        or override_key.startswith(prefix)
+        for item in overrides
+    )
+
+
+def _without_override_keys(overrides: Sequence[str], keys: set[str]) -> list[str]:
+    return [item for item in overrides if _override_key(item) not in keys]
+
+
+def _override_value(item: str) -> str | None:
+    text = str(item)
+    if "=" not in text:
+        return None
+    return text.split("=", 1)[1]
+
+
+def _last_int_override(overrides: Sequence[str], key: str) -> int | None:
+    value: int | None = None
+    for item in overrides:
+        if _override_key(item) != key:
+            continue
+        raw = _override_value(item)
+        if raw is None:
+            continue
+        text = raw.strip().strip("'\"")
+        if text.lower() in {"", "null", "none"}:
+            value = None
+            continue
+        try:
+            value = int(float(text))
+        except ValueError:
+            value = None
+    return value
+
+
+def _normalize_render_backend(value: str) -> str:
+    return str(value).strip().strip("'\"").lower()
+
+
+def _effective_render_backend(
+    default: str,
+    overrides: Sequence[str],
+    *,
+    keys: Sequence[str],
+) -> str:
+    backend = str(default)
+    allowed = set(keys)
+    for item in overrides:
+        if _override_key(item) not in allowed:
+            continue
+        value = _override_value(item)
+        if value is not None:
+            backend = value
+    return _normalize_render_backend(backend)
+
+
+def _validate_zero_gpu_render_backend(ngpu: int | None, render_backend: str) -> None:
+    if (
+        _requested_gpu_count(ngpu) == 0
+        and _normalize_render_backend(render_backend) == "egl"
+    ):
+        raise ValueError(_ZERO_GPU_EGL_ERROR)
+
+
+def _validate_zero_gpu_route(mode: PipelineMode, ngpu: int | None) -> None:
+    if mode == "noray" and _requested_gpu_count(ngpu) == 0:
+        raise ValueError(_ZERO_GPU_NORAY_ERROR)
+
+
+def _validate_zero_gpu_component_placement_overrides(
+    ngpu: int | None,
+    overrides: Sequence[str],
+) -> None:
+    if _requested_gpu_count(ngpu) != 0:
+        return
+    if any(
+        (key := _override_key(item)) == "cluster.component_placement"
+        or key.startswith("cluster.component_placement.")
+        for item in overrides
+    ):
+        raise ValueError(_ZERO_GPU_COMPONENT_PLACEMENT_ERROR)
+
+
+def _zero_gpu_ray_collect_overrides(explicit_overrides: Sequence[str]) -> list[str]:
+    defaults = [
+        "collect.num_inference_workers=1",
+        "env.num_workers=1",
+        "++inference.device=cpu",
+    ]
+    return [
+        override
+        for override in defaults
+        if not _has_override(explicit_overrides, _override_key(override))
+    ]
+
+
+def _zero_gpu_sync_cotrain_overrides(explicit_overrides: Sequence[str]) -> list[str]:
+    defaults = [
+        "trainer.device=cpu",
+        "training.distributed_strategy=ddp",
+        "training.fsdp_mixed_precision=fp32",
+        "encoder.torch_dtype=fp32",
+        "optim.precision=fp32",
+        "online_rollout.num_envs=1",
+    ]
+    return [
+        override
+        for override in defaults
+        if not _has_override(explicit_overrides, _override_key(override))
+    ]
+
+
 def _format_hydra_value(value: Any) -> str:
     if value is None:
         return "null"
@@ -182,6 +309,17 @@ def _warmup_control_mapping(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(warmup_controls) if isinstance(warmup_controls, Mapping) else {}
 
 
+def _requested_gpu_count(ngpu: int | None) -> int:
+    count = int(ngpu or 0)
+    if count < 0:
+        raise ValueError(f"ngpu must be >= 0, got {ngpu!r}")
+    return count
+
+
+def _scale_gpu_count(ngpu: int | None) -> int:
+    return max(1, _requested_gpu_count(ngpu))
+
+
 def _scaled_profile_count(
     profile_cfg: Mapping[str, Any],
     key: str,
@@ -194,7 +332,7 @@ def _scaled_profile_count(
     per_gpu = int(raw)
     if per_gpu < 1:
         raise ValueError(f"profile.{key} must be >= 1 when set")
-    return max(1, int(ngpu)) * per_gpu
+    return _scale_gpu_count(ngpu) * per_gpu
 
 
 def _profile_per_gpu_count(profile_cfg: Mapping[str, Any], key: str) -> int | None:
@@ -213,6 +351,8 @@ def _sync_cotrain_scale_overrides(
     ngpu: int,
     explicit_overrides: Sequence[str],
 ) -> list[str]:
+    if _requested_gpu_count(ngpu) == 0:
+        return []
     if _has_override(explicit_overrides, "online_rollout.num_envs"):
         return []
     num_envs = _scaled_profile_count(
@@ -231,7 +371,8 @@ def _ray_online_scale_overrides(
     explicit_overrides: Sequence[str],
 ) -> list[str]:
     overrides: list[str] = []
-    gpu_count = max(1, int(ngpu))
+    requested_gpu_count = _requested_gpu_count(ngpu)
+    gpu_count = _scale_gpu_count(ngpu)
     envs_per_gpu = _profile_per_gpu_count(
         profile_cfg,
         "online_rollout_envs_per_gpu",
@@ -244,7 +385,25 @@ def _ray_online_scale_overrides(
     if not _has_override(explicit_overrides, "render_backend"):
         overrides.append(f"render_backend={render_backend}")
 
-    if render_backend.strip().lower() != "egl":
+    normalized_render_backend = render_backend.strip().lower()
+    if requested_gpu_count == 0:
+        if normalized_render_backend == "egl":
+            raise ValueError(_ZERO_GPU_EGL_ERROR)
+        cpu_defaults = [
+            "cluster.component_placement=null",
+            "inference.placement.strategy=node",
+            "++inference.device=cpu",
+            "learner.placement.strategy=node",
+            "learner.train_cfg.device=cpu",
+            "learner.train_cfg.precision=fp32",
+            "env.num_workers=1",
+        ]
+        for override in cpu_defaults:
+            if not _has_override(explicit_overrides, _override_key(override)):
+                overrides.append(override)
+        return overrides
+
+    if normalized_render_backend != "egl":
         if scaled_envs is not None and not _has_override(
             explicit_overrides, "env.num_workers"
         ):
@@ -288,7 +447,9 @@ def _ray_online_egl_component_placement_overrides(
         return []
 
     overrides: list[str] = []
-    gpu_count = max(1, int(ngpu))
+    gpu_count = _requested_gpu_count(ngpu)
+    if gpu_count < 1:
+        raise ValueError("EGL component placement requires ngpu>=1")
     env_ranks = "0" if gpu_count == 1 else f"0-{gpu_count - 1}"
     actor_rank = gpu_count - 1
     defaults = {
@@ -300,6 +461,88 @@ def _ray_online_egl_component_placement_overrides(
         if not _has_override(explicit_overrides, key):
             overrides.append(f"{key}={value}")
     return overrides
+
+
+def _manual_cotrain_online_overrides(
+    profile_cfg: Mapping[str, Any],
+    *,
+    ngpu: int,
+    explicit_overrides: Sequence[str],
+    online_budget_overrides: Sequence[str] = (),
+) -> list[str]:
+    overrides: list[str] = []
+    defaults: list[str] = []
+    if not _has_override_or_child(explicit_overrides, "cluster.component_placement"):
+        defaults.append("cluster.component_placement=null")
+    defaults.extend(
+        [
+            f"manual_cotrain.ngpu={_requested_gpu_count(ngpu)}",
+            f"+cluster.num_gpus={_requested_gpu_count(ngpu)}",
+        ]
+    )
+    envs_per_worker = _profile_per_gpu_count(
+        profile_cfg,
+        "online_rollout_envs_per_gpu",
+    )
+    default_envs_per_worker = envs_per_worker or 8
+    defaults.append(f"manual_cotrain.envs_per_worker={default_envs_per_worker}")
+    global_steps = _manual_cotrain_global_steps_from_budget(
+        online_budget_overrides,
+        explicit_overrides=explicit_overrides,
+        default_envs_per_worker=default_envs_per_worker,
+    )
+    if global_steps is not None:
+        defaults.append(f"manual_cotrain.global_steps={global_steps}")
+    if _requested_gpu_count(ngpu) == 0:
+        defaults.extend(
+            [
+                "actor.train_cfg.fsdp.strategy=none",
+                "actor.train_cfg.device=cpu",
+                "learner.train_cfg.device=cpu",
+                "rollout.train_cfg.device=cpu",
+            ]
+        )
+    for override in defaults:
+        if not _has_override(explicit_overrides, _override_key(override)):
+            overrides.append(override)
+    return overrides
+
+
+def _manual_cotrain_global_steps_from_budget(
+    online_budget_overrides: Sequence[str],
+    *,
+    explicit_overrides: Sequence[str],
+    default_envs_per_worker: int,
+) -> int | None:
+    if _has_override(explicit_overrides, "manual_cotrain.global_steps"):
+        return None
+    total_env_steps = _last_int_override(
+        [*online_budget_overrides, *explicit_overrides],
+        "online_rollout.total_env_steps",
+    )
+    if total_env_steps is None or total_env_steps <= 0:
+        return None
+    envs_per_worker = (
+        _last_int_override(explicit_overrides, "manual_cotrain.envs_per_worker")
+        or int(default_envs_per_worker)
+    )
+    rollout_epoch = (
+        _last_int_override(explicit_overrides, "manual_cotrain.rollout_epoch")
+        or _last_int_override(explicit_overrides, "algorithm.rollout_epoch")
+        or 16
+    )
+    max_steps = (
+        _last_int_override(
+            explicit_overrides,
+            "manual_cotrain.max_steps_per_rollout_epoch",
+        )
+        or 256
+    )
+    steps_per_global_step = max(
+        1,
+        int(envs_per_worker) * int(rollout_epoch) * int(max_steps),
+    )
+    return max(1, (int(total_env_steps) + steps_per_global_step - 1) // steps_per_global_step)
 
 
 def build_pipeline_plan(
@@ -329,7 +572,10 @@ def build_pipeline_plan(
     python_cmd = str(cfg["python"] if python is None else python)
     # Multi-GPU cotrain runs under torchrun DDP; collection stays single-process
     # (noray = vectorized one-GPU collector; ray = its own worker fan-out).
-    selected_ngpu = int((cfg.get("ngpu", 1) if ngpu is None else ngpu) or 1)
+    selected_ngpu = _requested_gpu_count(
+        cfg.get("ngpu", 1) if ngpu is None else ngpu
+    )
+    _validate_zero_gpu_route(selected_mode, selected_ngpu)
     selected_master_port = int(
         cfg.get("master_port", 29500) if master_port is None else master_port
     )
@@ -363,6 +609,70 @@ def build_pipeline_plan(
         selected_mode,
         label=f"profile.{selected_profile}.collect",
     )
+    collect_profile_items = _render_overrides(collect_profile_cfg, context)
+    if selected_ngpu == 0:
+        collect_profile_items = _without_override_keys(
+            collect_profile_items,
+            {"collect.num_inference_workers", "env.num_workers"},
+        )
+    collect_control_items = _control_overrides(
+        cfg.get("collect"),
+        _collect_control_mapping(cfg, selected_mode),
+        label="collect",
+    )
+    cotrain_profile_items = _render_overrides(profile_cfg["cotrain"], context)
+    warmup_control_items = _control_overrides(
+        cfg.get("warmup"),
+        _warmup_control_mapping(cfg),
+        label="warmup",
+    )
+    cotrain_engine = str(cfg.get("cotrain_engine", "sync")).strip().lower()
+    sync_render_backend = _effective_render_backend(
+        selected_render_backend,
+        [
+            *cotrain_profile_items,
+            *warmup_control_items,
+            *common_overrides,
+            *cotrain_overrides,
+        ],
+        keys=("online_rollout.render_backend",),
+    )
+    _validate_zero_gpu_render_backend(selected_ngpu, sync_render_backend)
+    async_render_backend = _effective_render_backend(
+        selected_render_backend,
+        [*common_overrides, *cotrain_overrides],
+        keys=("render_backend",),
+    )
+    if cotrain_engine == "async":
+        _validate_zero_gpu_render_backend(selected_ngpu, async_render_backend)
+    _validate_zero_gpu_component_placement_overrides(
+        selected_ngpu,
+        [*common_overrides, *cotrain_overrides],
+    )
+    zero_gpu_collect_items = (
+        _zero_gpu_ray_collect_overrides(
+            [
+                *collect_profile_items,
+                *collect_control_items,
+                *common_overrides,
+                *collect_overrides,
+            ]
+        )
+        if selected_ngpu == 0 and selected_mode == "ray"
+        else []
+    )
+    zero_gpu_cotrain_items = (
+        _zero_gpu_sync_cotrain_overrides(
+            [
+                *cotrain_profile_items,
+                *warmup_control_items,
+                *common_overrides,
+                *cotrain_overrides,
+            ]
+        )
+        if selected_ngpu == 0
+        else []
+    )
 
     collect_launch = [python_cmd, "-m"]
     if selected_mode == "noray" and distributed and selected_ngpu > 1:
@@ -382,22 +692,25 @@ def build_pipeline_plan(
         *collect_launch,
         "dreamervla.train",
         *_render_overrides(mode_cfg["collect"], context),
-        *_render_overrides(collect_profile_cfg, context),
+        *collect_profile_items,
     ]
     # Ray env-worker parallelism scales with the GPU count so it is not stuck at the
     # config default of a couple of CPU env workers (a throughput bottleneck on a
     # multi-GPU box). Emitted BEFORE the controls so an explicit collect.num_workers
     # still wins; noray sizes its env concurrency via collect.envs_per_gpu instead.
     ray_env_scale: list[str] = []
-    if selected_mode == "ray":
-        collect_controls = _plain(cfg.get("collect", {}))
-        user_num_workers = (
-            collect_controls.get("num_workers")
-            if isinstance(collect_controls, Mapping)
-            else None
-        )
-        if user_num_workers is None:
-            ray_env_scale = [f"env.num_workers={max(1, selected_ngpu) * 4}"]
+    explicit_collect_overrides = [
+        *collect_profile_items,
+        *zero_gpu_collect_items,
+        *collect_control_items,
+        *common_overrides,
+        *collect_overrides,
+    ]
+    if selected_mode == "ray" and selected_ngpu > 0 and not _has_override(
+        explicit_collect_overrides,
+        "env.num_workers",
+    ):
+        ray_env_scale = [f"env.num_workers={_scale_gpu_count(selected_ngpu) * 4}"]
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
@@ -406,11 +719,8 @@ def build_pipeline_plan(
             f"++collect.hidden_dir={hidden_dir}",
             f"training.out_dir={collect_out}",
             *ray_env_scale,
-            *_control_overrides(
-                cfg.get("collect"),
-                _collect_control_mapping(cfg, selected_mode),
-                label="collect",
-            ),
+            *zero_gpu_collect_items,
+            *collect_control_items,
             *common_overrides,
             *collect_overrides,
         ]
@@ -430,17 +740,14 @@ def build_pipeline_plan(
         "dreamervla.train",
         *_render_overrides(cfg["cotrain"]["base"], context),
         f"training.out_dir={cotrain_out}",
-        *_render_overrides(profile_cfg["cotrain"], context),
+        *cotrain_profile_items,
         *_sync_cotrain_scale_overrides(
             profile_cfg,
             ngpu=selected_ngpu,
             explicit_overrides=[*common_overrides, *cotrain_overrides],
         ),
-        *_control_overrides(
-            cfg.get("warmup"),
-            _warmup_control_mapping(cfg),
-            label="warmup",
-        ),
+        *zero_gpu_cotrain_items,
+        *warmup_control_items,
         *common_overrides,
         *cotrain_overrides,
     ]
@@ -455,7 +762,6 @@ def build_pipeline_plan(
     # cotrain_engine=async: run the sync pipeline warmup ONLY (writes wm/classifier warmup
     # ckpts), consolidate them, then run the ray async overlap online loop initialized from
     # that ckpt. The online phase is NOT wrapped in torchrun (Ray owns placement).
-    cotrain_engine = str(cfg.get("cotrain_engine", "sync")).strip().lower()
     ckpt_dir = cotrain_out / "ckpt"
     warmup_wm_ckpt = ckpt_dir / "wm_warmup.ckpt"
     warmup_cls_ckpt = ckpt_dir / "classifier_warmup.ckpt"
@@ -466,6 +772,29 @@ def build_pipeline_plan(
     if cotrain_engine == "async":
         async_exp = str(cfg.get("cotrain_async_experiment", "online_cotrain_ray_oft"))
         ray_init_ckpt = ckpt_dir / "ray_async_init.ckpt"
+        explicit_online_overrides = [*common_overrides, *cotrain_overrides]
+        ray_online_overrides = _ray_online_scale_overrides(
+            profile_cfg,
+            ngpu=selected_ngpu,
+            render_backend=async_render_backend,
+            explicit_overrides=explicit_online_overrides,
+        )
+        manual_cotrain_overrides = (
+            _manual_cotrain_online_overrides(
+                profile_cfg,
+                ngpu=selected_ngpu,
+                explicit_overrides=[
+                    *explicit_online_overrides,
+                    *ray_online_overrides,
+                ],
+                online_budget_overrides=[
+                    *cotrain_profile_items,
+                    *warmup_control_items,
+                ],
+            )
+            if async_exp.startswith("manual_cotrain_")
+            else []
+        )
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
         cotrain_online_cmd = [
             python_cmd,
@@ -475,12 +804,8 @@ def build_pipeline_plan(
             f"task={task_spec['hydra_task']}",
             f"training.out_dir={cotrain_out}",
             f"init.warmup_ckpt_path={ray_init_ckpt}",
-            *_ray_online_scale_overrides(
-                profile_cfg,
-                ngpu=selected_ngpu,
-                render_backend=selected_render_backend,
-                explicit_overrides=[*common_overrides, *cotrain_overrides],
-            ),
+            *ray_online_overrides,
+            *manual_cotrain_overrides,
             *common_overrides,
             *cotrain_overrides,
         ]
@@ -741,12 +1066,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg_obj = compose(config_name=config_name, overrides=overrides)
     cfg: dict[str, Any] = OmegaConf.to_container(cfg_obj, resolve=True)  # type: ignore[assignment]
     os.environ["DVLA_DATA_ROOT"] = str(cfg.get("data_root") or _data_root())
+    python_cmd = str(cfg["python"])
+    if python_cmd == "python" and not _has_override(overrides, "python"):
+        python_cmd = sys.executable
     plan = build_pipeline_plan(
         mode=str(cfg["mode"]),
         profile=str(cfg["profile"]),
         task=str(cfg["task"]),
         run_root=str(cfg["run_root"]),
-        python=str(cfg["python"]),
+        python=python_cmd,
         launcher_cfg=cfg,
         collect_overrides=_as_str_list(cfg.get("collect_overrides")),
         cotrain_overrides=_as_str_list(cfg.get("cotrain_overrides")),
@@ -816,6 +1144,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     elif plan.cotrain_phase == "online":
         print("PHASE 2/2 START: online cotrain resume from warmup ckpts", flush=True)
+        if (
+            plan.cotrain_engine == "async"
+            and plan.ray_init_ckpt is not None
+            and not plan.ray_init_ckpt.is_file()
+        ):
+            print("PHASE 2/2: consolidate warmup ckpts -> ray async init", flush=True)
+            _consolidate_warmup_state_dicts(
+                plan.warmup_wm_ckpt,
+                plan.warmup_cls_ckpt,
+                plan.ray_init_ckpt,
+            )
         subprocess.run(plan.cotrain_online_cmd, check=True)
     elif plan.cotrain_engine == "async":
         print("PHASE 2a/3: offline warmup (sync, writes warmup ckpts)", flush=True)

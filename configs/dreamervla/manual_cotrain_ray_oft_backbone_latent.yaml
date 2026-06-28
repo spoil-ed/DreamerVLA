@@ -1,0 +1,150 @@
+# @package _global_
+# Target manual-cotrain Ray route for OpenVLA-OFT backbone_latent/query-before tokens.
+#
+# This composes the existing OFT backbone latent component definitions, then
+# switches the runner topology to the manual-notes four-group route.
+defaults:
+  - ray_online_cotrain_oft_backbone_latent
+  - _self_
+
+_target_: dreamervla.runners.ManualCotrainRayRunner
+render_backend: osmesa
+
+manual_cotrain:
+  ngpu: 1
+  global_steps: 1
+  learner_update_step: 1
+  sync_every: 1
+  rollout_epoch: ${algorithm.rollout_epoch}
+  max_steps_per_rollout_epoch: 256
+  num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
+  envs_per_worker: 8
+  task_id: 0
+
+algorithm:
+  group_size: 8
+  rollout_epoch: 16
+  clip_ratio_low: 0.2
+  clip_ratio_high: 0.28
+  clip_ratio_c: 3.0
+  gamma: 0.99
+  gae_lambda: 0.95
+  kl_beta: 0.0
+  entropy_bonus: 0.0
+
+actor:
+  policy_cfg: ${ray_components.policy}
+  init_ckpt: {}
+  train_cfg:
+    device: auto
+    lr: 5.0e-7
+    syncer:
+      store_name: DreamerVLAActorRolloutPatchStore
+    fsdp:
+      strategy: fsdp
+      precision: bf16
+      cpu_offload: false
+      activation_checkpointing: false
+      backend: nccl
+    optimizers:
+      policy:
+        lr: 5.0e-7
+        weight_decay: 0.0
+        grad_clip_norm: 1.0
+        zero_grad_set_to_none: true
+    algorithm_cfg:
+      group_size: ${algorithm.group_size}
+      ppo_update_epochs: 1
+      clip_ratio_low: ${algorithm.clip_ratio_low}
+      clip_ratio_high: ${algorithm.clip_ratio_high}
+      clip_ratio_c: ${algorithm.clip_ratio_c}
+      gamma: ${algorithm.gamma}
+      gae_lambda: ${algorithm.gae_lambda}
+      entropy_coef: 0.0
+      clip_log_ratio: 20.0
+
+rollout:
+  policy_cfg: ${ray_components.policy}
+  encoder_cfg:
+    target: dreamervla.workers.inference.oft_rollout:OFTRolloutBundle
+    kwargs:
+      policy_cfg:
+        model_path: ${task.openvla_oft.ckpt_path}
+        policy_mode: auto
+        num_images_in_input: ${task.openvla_oft.num_images_in_input}
+        unnorm_key: ${task.openvla_oft.dataset_statistics_key}
+      unnorm_key: ${task.openvla_oft.dataset_statistics_key}
+      image_keys: ${task.image_keys}
+      history: ${task.openvla_oft.input_tokens.expected_history}
+      rotate_images_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
+      center_crop: true
+      obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
+      expected_action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
+      expected_include_state: ${task.openvla_oft.input_tokens.expected_include_state}
+      device: cuda
+  init_ckpt: {}
+  train_cfg:
+    device: auto
+    deterministic: false
+    syncer:
+      store_name: DreamerVLAActorRolloutPatchStore
+
+learner:
+  init_ckpt:
+    path: ${init.warmup_ckpt_path}
+    components: [world_model, classifier]
+  model_cfg:
+    policy: null
+    world_model: ${ray_components.world_model}
+    classifier: ${ray_components.classifier}
+  train_cfg:
+    mode: wm_classifier_only
+    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
+    classifier_batch_size: 2
+    classifier_early_neg_stride: 8
+    classifier_threshold: 0.5
+    lr: 1.0e-4
+    device: auto
+    precision: bf16
+    syncer:
+      store_name: DreamerVLALearnerWMClassifierStore
+    algorithm_cfg:
+      group_size: ${algorithm.group_size}
+      rollout_epoch: ${algorithm.rollout_epoch}
+      imag_last: 4
+    optim_cfg:
+      grad_clip_norm: 1.0
+      zero_grad_set_to_none: true
+    optimizers:
+      world_model:
+        lr: 2.0e-6
+        weight_decay: 0.0
+      classifier:
+        lr: 1.0e-4
+        weight_decay: 0.0
+
+env:
+  # Keep inherited legacy env.* keys so existing launcher overrides compose.
+  cfg:
+    action_postprocess: openvla_oft
+  real:
+    cfg: ${env.cfg}
+  wm:
+    cfg:
+      target: dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv
+      kwargs:
+        world_model: ${ray_components.world_model}
+        classifier: ${ray_components.classifier}
+        latent_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+        action_dim: ${task.action_dim}
+        success_threshold: 0.5
+        max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
+        num_envs: ${manual_cotrain.envs_per_worker}
+        device: cpu
+
+replay:
+  cfg:
+    capacity: ${ray_data.replay_capacity}
+    sequence_length: ${ray_data.sequence_length}
+    task_ids: ${ray_data.task_ids}
+    rank: 0
