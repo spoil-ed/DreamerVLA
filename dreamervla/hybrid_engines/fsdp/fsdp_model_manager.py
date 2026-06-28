@@ -26,6 +26,7 @@ class FSDPModelManager:
     cpu_offload: bool = False
     activation_checkpointing: bool = False
     backend: str | None = None
+    use_orig_params: bool = False
 
     def __post_init__(self) -> None:
         self.make_strategy()
@@ -51,6 +52,7 @@ class FSDPModelManager:
             cpu_offload=self.cpu_offload,
             activation_checkpointing=self.activation_checkpointing,
             backend=self.backend,
+            use_orig_params=self.use_orig_params,
         )
 
     def prepare_model(self, model: torch.nn.Module) -> torch.nn.Module:

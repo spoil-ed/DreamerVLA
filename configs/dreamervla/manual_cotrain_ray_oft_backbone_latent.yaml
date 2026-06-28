@@ -46,6 +46,7 @@ actor:
       cpu_offload: false
       activation_checkpointing: false
       backend: nccl
+      use_orig_params: true
     optimizers:
       policy:
         lr: 5.0e-7
@@ -140,7 +141,7 @@ env:
         success_threshold: 0.5
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
         num_envs: ${manual_cotrain.envs_per_worker}
-        device: cpu
+        device: cuda
 
 replay:
   cfg:

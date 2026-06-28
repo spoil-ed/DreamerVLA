@@ -117,6 +117,7 @@ def test_manual_cotrain_oft_wm_env_num_envs_tracks_envs_per_worker() -> None:
     )
 
     assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.envs_per_worker
+    assert cfg.env.wm.cfg.kwargs.device == "cuda"
 
 
 def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess() -> None:
