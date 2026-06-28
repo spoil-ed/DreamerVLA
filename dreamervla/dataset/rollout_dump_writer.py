@@ -35,6 +35,8 @@ from typing import Any
 import h5py
 import numpy as np
 
+_CANONICAL_EPISODE_METADATA_KEYS = frozenset(("global_step", "env_step"))
+
 
 class RolloutDumpWriter:
     """Writes one HDF5 reward file + sidecar HDF5 + preprocess_config.json.
@@ -194,10 +196,6 @@ class RolloutDumpWriter:
             demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
         if task_description is not None:
             demo_grp.attrs["task_description"] = str(task_description)
-        if episode_success is not None:
-            demo_grp.attrs["episode_success"] = bool(episode_success)
-        if episode_horizon is not None:
-            demo_grp.attrs["episode_horizon"] = int(episode_horizon)
         demo_grp.attrs["complete"] = True
         for key, value in _episode_attrs(
             preprocess_config=preprocess_config,
@@ -221,7 +219,18 @@ class RolloutDumpWriter:
             hidden_demo_grp.attrs["episode_id"] = int(episode_id)
         if resolved_init_state_index is not None:
             hidden_demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
+        if task_description is not None:
+            hidden_demo_grp.attrs["task_description"] = str(task_description)
         hidden_demo_grp.attrs["complete"] = True
+        for key, value in _episode_attrs(
+            preprocess_config=preprocess_config,
+            data_attrs=data_attrs,
+            task_description=task_description,
+            episode_success=episode_success,
+            episode_horizon=episode_horizon,
+            episode_metadata=episode_metadata,
+        ).items():
+            hidden_demo_grp.attrs[key] = value
 
         self._num_demos += 1
 
@@ -229,6 +238,7 @@ class RolloutDumpWriter:
         if data_attrs is not None and not self._data_attrs_written:
             for attr_key, attr_val in data_attrs.items():
                 self._reward_data.attrs[attr_key] = attr_val
+                self._hidden_data.attrs[attr_key] = attr_val
             self._data_attrs_written = True
 
         # Write preprocess_config.json on first call (if provided)
@@ -243,6 +253,7 @@ class RolloutDumpWriter:
             return
         self._closed = True
         self._reward_data.attrs["num_demos"] = str(self._num_demos)
+        self._hidden_data.attrs["num_demos"] = str(self._num_demos)
         self._reward_f.close()
         self._hidden_f.close()
 
@@ -372,8 +383,6 @@ def _episode_attrs(
         attrs["task_name"] = str(task_description)
     if episode_success is not None:
         attrs["success"] = bool(episode_success)
-    if episode_horizon is not None:
-        attrs["horizon"] = int(episode_horizon)
     if preprocess_config is not None:
         for key in ("chunk_size", "hidden_key", "hidden_dim", "token_count", "token_dim"):
             if key in preprocess_config:
@@ -384,7 +393,9 @@ def _episode_attrs(
             if token_count is not None and token_dim is not None:
                 attrs["hidden_dim"] = int(token_count) * int(token_dim)
     if episode_metadata is not None:
-        attrs.update(dict(episode_metadata))
+        for key, value in dict(episode_metadata).items():
+            if str(key) in _CANONICAL_EPISODE_METADATA_KEYS:
+                attrs[str(key)] = value
     return {
         str(key): value
         for key, value in attrs.items()

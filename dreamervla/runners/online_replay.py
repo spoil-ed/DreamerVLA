@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 from collections import Counter, deque
 from collections.abc import Mapping
@@ -63,6 +64,116 @@ class OnlineReplay:
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
         self._pending_latest_online_episode_ids: set[int] = set()
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return mutable replay contents and cursors for checkpoint resume."""
+        return {
+            "format_version": 1,
+            "config": {
+                "capacity": int(self.capacity),
+                "sequence_length": int(self.sequence_length),
+                "task_ids": tuple(self.task_ids) if self.task_ids is not None else None,
+                "capacity_mode": str(self.capacity_mode),
+                "failure_prefix_steps": int(self.failure_prefix_steps),
+                "failure_prefix_ratio": float(self.failure_prefix_ratio),
+                "task_balanced": bool(self.task_balanced),
+                "rank": int(self.rank),
+                "replay_sampling": {
+                    "enabled": bool(self.replay_sampling_enabled),
+                    "recent_episode_count": int(self.recent_episode_count),
+                    "latest_online_required": bool(self.latest_online_required),
+                    "mix": dict(self.replay_sampling_mix),
+                },
+            },
+            "episodes_by_task": {
+                int(task_id): [copy.deepcopy(record) for record in records]
+                for task_id, records in self.episodes_by_task.items()
+            },
+            "transitions_by_task": {
+                int(task_id): int(count)
+                for task_id, count in self._transitions_by_task.items()
+            },
+            "current_policy_version": int(self._current_policy_version),
+            "next_episode_id": int(self._next_episode_id),
+            "next_collection_index": int(self._next_collection_index),
+            "next_task_episode_index": {
+                int(task_id): int(count)
+                for task_id, count in self._next_task_episode_index.items()
+            },
+            "pending_latest_online_episode_ids": sorted(
+                int(episode_id)
+                for episode_id in self._pending_latest_online_episode_ids
+            ),
+            "num_transitions": int(self.num_transitions),
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore replay contents and cursors from :meth:`state_dict` output."""
+        if not isinstance(state, Mapping):
+            raise TypeError("OnlineReplay state must be a mapping")
+        episodes_by_task = state.get("episodes_by_task", {})
+        if not isinstance(episodes_by_task, Mapping):
+            raise TypeError("OnlineReplay state episodes_by_task must be a mapping")
+
+        restored: dict[int, deque[dict[str, Any]]] = {}
+        for raw_task_id, raw_records in episodes_by_task.items():
+            task_id = int(raw_task_id)
+            records = list(raw_records or [])
+            if records:
+                restored[task_id] = deque(copy.deepcopy(records))
+        self.episodes_by_task = restored
+
+        raw_transitions = state.get("transitions_by_task")
+        if isinstance(raw_transitions, Mapping):
+            self._transitions_by_task = Counter(
+                {
+                    int(task_id): int(count)
+                    for task_id, count in raw_transitions.items()
+                }
+            )
+        else:
+            self._transitions_by_task = Counter(
+                {
+                    int(task_id): sum(
+                        len(record.get("episode", ())) for record in records
+                    )
+                    for task_id, records in self.episodes_by_task.items()
+                }
+            )
+
+        self._current_policy_version = int(
+            state.get("current_policy_version", state.get("_current_policy_version", 0))
+        )
+        self._next_episode_id = int(
+            state.get("next_episode_id", self._next_record_id("episode_id"))
+        )
+        self._next_collection_index = int(
+            state.get("next_collection_index", self._next_record_id("collection_index"))
+        )
+        raw_next_task = state.get("next_task_episode_index")
+        if isinstance(raw_next_task, Mapping):
+            self._next_task_episode_index = Counter(
+                {int(task_id): int(count) for task_id, count in raw_next_task.items()}
+            )
+        else:
+            self._next_task_episode_index = Counter()
+            for task_id, records in self.episodes_by_task.items():
+                next_idx = 0
+                for record in records:
+                    next_idx = max(next_idx, int(record.get("task_episode_index", -1)) + 1)
+                if next_idx > 0:
+                    self._next_task_episode_index[int(task_id)] = int(next_idx)
+
+        pending = state.get("pending_latest_online_episode_ids", ())
+        self._pending_latest_online_episode_ids = {int(episode_id) for episode_id in pending}
+
+    def _next_record_id(self, key: str) -> int:
+        next_id = 0
+        for records in self.episodes_by_task.values():
+            for record in records:
+                if key in record:
+                    next_id = max(next_id, int(record[key]) + 1)
+        return int(next_id)
 
     @property
     def episodes(self) -> list[dict[str, Any]]:
@@ -129,6 +240,36 @@ class OnlineReplay:
             self._pending_latest_online_episode_ids.add(int(episode_id))
         return record
 
+    def sample_initial_obs_embeddings(
+        self,
+        batch_size: int,
+        *,
+        task_id: int | None = None,
+        key: str = "obs_embedding",
+    ) -> np.ndarray:
+        """Sample first-step hidden observations for WMEnv bootstrap."""
+
+        records = self._valid_records()
+        if task_id is not None:
+            records = [
+                record
+                for record in records
+                if int(record["task_id"]) == int(task_id)
+            ]
+        if not records:
+            raise RuntimeError("online replay has no records for WMEnv bootstrap")
+        latents = []
+        for index in range(int(batch_size)):
+            record = records[index % len(records)]
+            episode = record["episode"]
+            if not episode:
+                raise RuntimeError("online replay record has an empty episode")
+            first = episode[0]
+            if key not in first:
+                raise KeyError(f"replay bootstrap step missing {key!r}")
+            latents.append(np.asarray(first[key], dtype=np.float32))
+        return np.stack(latents, axis=0)
+
     @staticmethod
     def _source_id(source: str) -> int:
         if source == "coldstart":
@@ -143,6 +284,8 @@ class OnlineReplay:
             bool(step.get("success", False))
             or float(step.get("is_terminal", 0.0)) > 0.5
             or float(step.get("reward", 0.0)) > 0.0
+            or float(step.get("sparse_rewards", 0.0)) > 0.5
+            or float(step.get("rewards", 0.0)) > 0.0
             for step in episode
         )
 
@@ -153,6 +296,8 @@ class OnlineReplay:
                 bool(step.get("success", False))
                 or float(step.get("is_terminal", 0.0)) > 0.5
                 or float(step.get("reward", 0.0)) > 0.0
+                or float(step.get("sparse_rewards", 0.0)) > 0.5
+                or float(step.get("rewards", 0.0)) > 0.0
             ):
                 return int(idx) + 1
         return int(len(episode))
@@ -423,19 +568,19 @@ class OnlineReplay:
             [[step["obs_embedding"] for step in window] for window in windows], axis=0
         )
         rewards = np.stack(
-            [[step["reward"] for step in window] for window in windows], axis=0
+            [[_step_reward(step) for step in window] for window in windows], axis=0
         )
         dones = np.stack(
-            [[step["done"] for step in window] for window in windows], axis=0
+            [[_step_done(step) for step in window] for window in windows], axis=0
         )
         is_terminal = np.stack(
-            [[step["is_terminal"] for step in window] for window in windows], axis=0
+            [[_step_is_terminal(step) for step in window] for window in windows], axis=0
         )
         is_last = np.stack(
-            [[step["is_last"] for step in window] for window in windows], axis=0
+            [[_step_is_last(step) for step in window] for window in windows], axis=0
         )
         action_dim = int(
-            np.asarray(windows[0][0]["wm_action"], dtype=np.float32)
+            _step_action(windows[0][0])
             .reshape(-1)
             .shape[0]
         )
@@ -445,13 +590,9 @@ class OnlineReplay:
         current_actions = np.zeros_like(actions)
         for batch_idx, window in enumerate(windows):
             for time_idx in range(self.sequence_length):
-                current_actions[batch_idx, time_idx] = np.asarray(
-                    window[time_idx]["wm_action"], dtype=np.float32
-                )
+                current_actions[batch_idx, time_idx] = _step_action(window[time_idx])
             for time_idx in range(1, self.sequence_length):
-                actions[batch_idx, time_idx] = np.asarray(
-                    window[time_idx - 1]["wm_action"], dtype=np.float32
-                )
+                actions[batch_idx, time_idx] = _step_action(window[time_idx - 1])
         is_first = np.zeros((len(windows), self.sequence_length), dtype=np.bool_)
         is_first[:, 0] = True
         proprio = None
@@ -501,7 +642,9 @@ class OnlineReplay:
             batch["proprio"] = torch.from_numpy(proprio.astype(np.float32, copy=False))
         if lang_emb is not None:
             batch["lang_emb"] = torch.from_numpy(lang_emb.astype(np.float32, copy=False))
-        if bool(include_images):
+        if bool(include_images) and all(
+            "image" in step for window in windows for step in window
+        ):
             images = np.stack(
                 [[step["image"] for step in window] for window in windows], axis=0
             )
@@ -665,6 +808,46 @@ class OnlineReplay:
             for record in self._valid_records()
             if int(record.get("finish_step", len(record["episode"]))) >= window_env
         )
+
+
+def _step_reward(step: Mapping[str, Any]) -> float:
+    if "reward" in step:
+        return float(step["reward"])
+    if "rewards" in step:
+        return float(step["rewards"])
+    return float(step.get("sparse_rewards", 0.0))
+
+
+def _step_done(step: Mapping[str, Any]) -> float:
+    if "done" in step:
+        return float(step["done"])
+    if "dones" in step:
+        return float(step["dones"])
+    return float(step.get("is_last", 0.0))
+
+
+def _step_is_terminal(step: Mapping[str, Any]) -> float:
+    if "is_terminal" in step:
+        return float(step["is_terminal"])
+    if "sparse_rewards" in step:
+        return float(step["sparse_rewards"])
+    return 1.0 if _step_reward(step) > 0.0 else 0.0
+
+
+def _step_is_last(step: Mapping[str, Any]) -> float:
+    if "is_last" in step:
+        return float(step["is_last"])
+    return _step_done(step)
+
+
+def _step_action(step: Mapping[str, Any]) -> np.ndarray:
+    if "wm_action" in step:
+        return np.asarray(step["wm_action"], dtype=np.float32).reshape(-1)
+    if "actions" in step:
+        return np.asarray(step["actions"], dtype=np.float32).reshape(-1)
+    if "action" in step:
+        return np.asarray(step["action"], dtype=np.float32).reshape(-1)
+    raise KeyError("step is missing wm_action/actions/action")
 
 
 _REPLAY_DDP_COLUMNS = (

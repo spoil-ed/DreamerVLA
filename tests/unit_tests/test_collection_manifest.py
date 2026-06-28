@@ -6,12 +6,16 @@ the target episode count by appending new shards instead of overwriting.
 """
 
 import h5py
+import numpy as np
 
 from dreamervla.dataset.collection_manifest import (
     complete_episode_ids_per_task,
     count_collected_episodes,
     count_episodes_per_task,
     format_collection_report,
+    online_rollout_episode_counts,
+    read_online_rollout_manifest,
+    record_online_rollout_episode,
     next_shard_index,
     quarantine_corrupt_shards,
     quarantine_incomplete_shards,
@@ -19,6 +23,7 @@ from dreamervla.dataset.collection_manifest import (
     resume_plan,
     summarize_collection,
     write_manifest,
+    load_online_rollout_episodes,
 )
 
 
@@ -37,6 +42,16 @@ def _write_shard_with_task_ids(path, task_ids) -> None:
         for i, tid in enumerate(task_ids):
             grp = data.create_group(f"demo_{i}")
             grp.attrs["task_id"] = int(tid)
+
+
+def _touch_rollout_pair(root, name: str) -> tuple:
+    reward = root / "reward" / name
+    hidden = root / "hidden" / name
+    reward.parent.mkdir(parents=True, exist_ok=True)
+    hidden.parent.mkdir(parents=True, exist_ok=True)
+    reward.write_bytes(b"reward")
+    hidden.write_bytes(b"hidden")
+    return reward, hidden
 
 
 def _write_reward_hidden_pair(
@@ -105,11 +120,114 @@ def test_next_shard_index_is_one_past_the_highest(tmp_path):
     assert next_shard_index(tmp_path, prefix="shard") == 3
 
 
+def test_next_shard_index_accepts_metadata_named_shards(tmp_path):
+    (tmp_path / "shard_000.hdf5").touch()
+    (tmp_path / "shard_gs000040_success_002.hdf5").touch()
+    assert next_shard_index(tmp_path, prefix="shard") == 3
+
+
 def test_next_shard_index_respects_prefix(tmp_path):
     (tmp_path / "r0_shard_000.hdf5").touch()
     (tmp_path / "r0_shard_001.hdf5").touch()
     (tmp_path / "shard_000.hdf5").touch()  # different prefix, ignored
     assert next_shard_index(tmp_path, prefix="r0_shard") == 2
+
+
+def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
+    root = tmp_path / "online_cotrain_backbone_latent"
+    for episode_id, global_step, success in (
+        (1, 120, True),
+        (2, 121, False),
+        (3, 122, True),
+    ):
+        reward, hidden = _touch_rollout_pair(
+            root, f"cotrain_episode_gs{global_step:06d}_{episode_id:03d}.hdf5"
+        )
+        record_online_rollout_episode(
+            root,
+            reward_path=reward,
+            hidden_path=hidden,
+            task_id=7,
+            episode_id=episode_id,
+            init_state_index=episode_id,
+            success=success,
+            complete=True,
+            global_step=global_step,
+            env_step=1000 + global_step,
+            keep_last_global_steps=2,
+        )
+
+    entries = read_online_rollout_manifest(root)
+
+    assert [int(item["global_step"]) for item in entries] == [121, 122]
+    assert online_rollout_episode_counts(root, task_ids=(7,)) == {7: 4}
+    assert not (
+        root
+        / "episodes"
+        / "task_07"
+        / "global_step000120_success_True"
+        / "ep_000001.h5"
+    ).exists()
+    expected = (
+        root
+        / "episodes"
+        / "task_07"
+        / "global_step000122_success_True"
+        / "ep_000003.h5"
+    )
+    assert expected.is_file()
+    assert set(entries[-1]) == {
+        "global_step",
+        "env_step",
+        "task_id",
+        "episode_id",
+        "init_state_index",
+        "success",
+        "complete",
+        "episode_path",
+        "reward_path",
+        "hidden_path",
+    }
+    assert not (root / "reward" / "cotrain_episode_gs000120_001.hdf5").exists()
+    assert not (root / "hidden" / "cotrain_episode_gs000120_001.hdf5").exists()
+
+
+def test_load_online_rollout_episodes_rebuilds_eight_dim_proprio(tmp_path):
+    root = tmp_path / "online_cotrain_backbone_latent"
+    reward = root / "reward" / "ep.hdf5"
+    hidden = root / "hidden" / "ep.hdf5"
+    _write_reward_hidden_pair(
+        reward,
+        hidden,
+        [{"task_id": 7, "episode_id": 3, "length": 2, "complete": True}],
+    )
+    with h5py.File(reward, "r+") as f:
+        demo = f["data"]["demo_0"]
+        demo.attrs["success"] = True
+        obs = demo["obs"]
+        obs["ee_pos"][...] = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+        obs["ee_ori"][...] = np.array([[7, 8, 9], [10, 11, 12]], dtype=np.float32)
+        obs["gripper_states"][...] = np.array([[13, 14], [15, 16]], dtype=np.float32)
+        demo["robot_states"][...] = np.ones((2, 9), dtype=np.float32) * 99
+    record_online_rollout_episode(
+        root,
+        reward_path=reward,
+        hidden_path=hidden,
+        task_id=7,
+        episode_id=3,
+        init_state_index=3,
+        success=True,
+        complete=True,
+        global_step=40,
+        env_step=123,
+        keep_last_global_steps=8,
+    )
+
+    episodes = load_online_rollout_episodes(root)
+
+    assert len(episodes) == 1
+    assert episodes[0][0]["proprio"].shape == (8,)
+    assert episodes[0][0]["proprio"].tolist() == [1, 2, 3, 7, 8, 9, 13, 14]
 
 
 def test_resume_plan_full_collection_when_nothing_done():

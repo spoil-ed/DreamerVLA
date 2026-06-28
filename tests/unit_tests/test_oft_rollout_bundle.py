@@ -96,6 +96,38 @@ def test_oft_rollout_bundle_loads_on_requested_gpu_and_moves_policy(monkeypatch)
     assert captured["to_device"] == "cuda:2"
 
 
+def test_oft_rollout_bundle_cpu_device_requests_cpu_policy_load(monkeypatch) -> None:
+    import dreamervla.runners.oft_collect_common as common
+    import dreamervla.runners.rollout_hidden_extractor as rhe
+    from dreamervla.workers.inference import oft_rollout
+
+    captured = {}
+
+    class _FakePolicy:
+        pass
+
+    class _FakeDecoder:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+    def _load_policy(cfg, device_ref):
+        captured["device_ref"] = device_ref
+        return _FakePolicy()
+
+    monkeypatch.setattr(common, "load_policy", _load_policy)
+    monkeypatch.setattr(rhe, "OFTBatchedDecoder", _FakeDecoder)
+
+    oft_rollout.OFTRolloutBundle(
+        policy_cfg={"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 1},
+        unnorm_key="libero_goal_no_noops",
+        image_keys=["agentview_rgb"],
+        history=1,
+        device="cpu",
+    )
+
+    assert captured["device_ref"] == "cpu"
+
+
 def test_oft_rollout_bundle_validates_detected_policy_mode(monkeypatch) -> None:
     import pytest
 

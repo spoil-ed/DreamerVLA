@@ -80,6 +80,82 @@ def test_env_worker_pushes_completed_episode_to_remote_replay(monkeypatch) -> No
     assert worker.episode_id == 1
 
 
+def test_env_worker_pushes_completed_episode_to_replay_and_dump(monkeypatch) -> None:
+    from dreamervla.workers.env import env_worker as env_worker_mod
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    class _RemoteAddEpisode:
+        def __init__(self, sink: _Sink) -> None:
+            self._sink = sink
+
+        def remote(self, episode):
+            self._sink.eps.append(list(episode))
+            return {"ok": True}
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.eps = []
+            self.add_episode = _RemoteAddEpisode(self)
+
+    monkeypatch.setattr(env_worker_mod.ray, "get", lambda ref: ref)
+
+    cfg = {
+        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "kwargs": {"horizon": 1, "image_shape": (4, 4, 3), "embedding_dim": 4},
+    }
+    replay = _Sink()
+    dump = _Sink()
+    worker = EnvWorker(cfg, task_id=0, replay=replay, dump=dump)
+    worker.init()
+
+    _obs, done, _info = worker.step(np.zeros(7, np.float32), np.zeros(4, np.float16))
+
+    assert done is True
+    assert len(replay.eps) == 1
+    assert len(dump.eps) == 1
+    assert dump.eps[0] == replay.eps[0]
+
+
+def test_env_worker_stamps_step_metadata_on_completed_episode(monkeypatch) -> None:
+    from dreamervla.workers.env import env_worker as env_worker_mod
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    class _RemoteAddEpisode:
+        def __init__(self, sink: _Sink) -> None:
+            self._sink = sink
+
+        def remote(self, episode):
+            self._sink.eps.append(list(episode))
+            return {"ok": True}
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.eps = []
+            self.add_episode = _RemoteAddEpisode(self)
+
+    monkeypatch.setattr(env_worker_mod.ray, "get", lambda ref: ref)
+
+    cfg = {
+        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "kwargs": {"horizon": 1, "image_shape": (4, 4, 3), "embedding_dim": 4},
+    }
+    dump = _Sink()
+    worker = EnvWorker(cfg, task_id=0, replay=_Sink(), dump=dump)
+    worker.init()
+
+    worker.step(
+        np.zeros(7, np.float32),
+        np.zeros(4, np.float16),
+        step_metadata={
+            "global_step": 10,
+            "env_step": 55,
+        },
+    )
+
+    metadata = dump.eps[0][-1]["episode_metadata"]
+    assert metadata == {"global_step": 10, "env_step": 55}
+
+
 def test_env_worker_copies_state_to_proprio_for_replay() -> None:
     from dreamervla.workers.env.env_worker import EnvWorker
 

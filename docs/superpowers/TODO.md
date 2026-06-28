@@ -4,7 +4,7 @@
 > [HISTORY.md](../HISTORY.md); architecture & rules → [AGENTS.md](../../AGENTS.md). When an item lands,
 > move its line to `HISTORY.md` with the commit hash so this stays the live "what's next".
 
-- Last updated: 2026-06-23
+- Last updated: 2026-06-27
 - Run unit tests in the **`dreamervla`** conda env (clean baseline ≈ 582–593 passed; base env gives
   ~13 spurious failures). The dev box **has 8×H100 but only intermittently** — GPU availability is the
   only real gate, not "missing ckpts / can't run".
@@ -15,8 +15,6 @@
 - **RUN-01 smoke** — RynnVLA multi-GPU save→resume for the helper-routed online DDP. Code landed
   `85788fc`; open = run the multi-GPU save→resume + confirm the two `WORLD_SIZE=1`-only divergences
   (no PG built / no DDP-wrap for a single process) don't affect the real path.
-- **COTRAIN-EGL** — verify the egl 4-env rollout (~4×) + clean exit on a free GPU. Core merged
-  `d25d0fc` + readiness/egl-wiring `0e68754` validated under osmesa.
 - **X-01② (format-breaking)** — unify `online_dreamervla.save_checkpoint` into the BaseRunner envelope
   `{format_version, cfg, state_dicts, pickles}`; top-level `env_step`/`update_step` is a consumer
   contract (`load_training_checkpoint`, `frozen_wm_actor_critic`, 3 diagnostics) → needs a dual-read
@@ -56,13 +54,10 @@
 - **Perf W8** — bf16 + `inference_mode` for frozen eval-only submodules (no-grad paths only).
 - **Perf H3** — replay readiness incremental counts; marginal now the readiness-gate cut its frequency.
 - **Perf H6** — WM KV-cache (follow-on to merged H5 SDPA); CPU equivalence-testable.
-- **prompt-tokenize cache** — `rollout_hidden_extractor.py:230` cache the invariant per-task prompt
-  tokenization (today the tokenizer runs `len(views)`× per step). Always-on, behavior-equivalent.
-  *(in progress)*
 
 ## Structural refactors
 - **MEM-RL-01 remainder + MEM-RL-02** — promote in-update imagination data (currently a local `slices`
-  list in `dino_lumos_step`) to its own explicit host buffer; then **WM-as-env** (RLinf/WoVR
+  list in `dino_lumos_step`) to its own explicit host buffer; then **WM-as-env** (RLinf/manual cotrain
   alignment): make the world model a gym env so imagination is a normal rollout into a separate replay +
   standard micro-batched PPO. Do together — MEM-RL-02 subsumes the remainder.
 - **`online_dreamervla.main()` split (P3)** — dist+checkpoint seams already extracted (1861→1679);

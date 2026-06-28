@@ -12,7 +12,7 @@ DreamerVLA/
 ├── configs/              # Hydra train/experiment/module configs and LIBERO tasks
 ├── scripts/              # Shell launchers for install, data prep, train, eval
 ├── tests/                # Unit and e2e tests
-├── docs/                 # Repository, install, data-layout, and paper notes
+├── docs/                 # Docs index, architecture, reference, tutorials, reports, papers
 ├── data/                 # Runtime datasets, checkpoints, outputs
 ├── third_party/          # Vendored/local upstream checkouts and wheels
 │   ├── LIBERO/           # Local LIBERO checkout

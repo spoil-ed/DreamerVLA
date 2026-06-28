@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from dreamervla.runners.vectorized_collect import build_step_record
+from dreamervla.runners.vectorized_collect import build_step_record, proprio_from_record
 
 
 def build_dump_step(
@@ -31,5 +31,11 @@ def build_dump_step(
     step["sparse_rewards"] = np.uint8(int(sparse_reward))
     step["dones"] = np.uint8(1 if done else 0)
     step["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float16)
+    step["proprio"] = proprio_from_record(full_record)
     step["success"] = bool(done and sparse_reward)
+    step["wm_action"] = np.asarray(action, dtype=np.float32).reshape(-1)
+    step["reward"] = np.float32(reward)
+    step["done"] = np.float32(1.0 if done else 0.0)
+    step["is_terminal"] = np.float32(1.0 if sparse_reward else 0.0)
+    step["is_last"] = np.float32(1.0 if done else 0.0)
     return step

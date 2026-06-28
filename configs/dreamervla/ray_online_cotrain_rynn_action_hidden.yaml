@@ -36,6 +36,10 @@ ray_data:
   sequence_length: 24
   min_replay_episodes: 1
 
+algorithm:
+  group_size: 8
+  rollout_epoch: 16
+
 ray_components:
   encoder:
     target: dreamervla.models.encoder.RynnVLAEncoder
@@ -121,6 +125,14 @@ ray_components:
 env:
   num_workers: 1
   envs_per_worker: 4
+  train:
+    # RLinf manual-cotrain-style WM rollout scale. This is not physical LIBERO env
+    # parallelism; learner.batch_size derives from it together with imag_last
+    # and group_size.
+    total_num_envs: 64
+    group_size: ${algorithm.group_size}
+    max_episode_steps: 512
+    max_steps_per_rollout_epoch: 512
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
@@ -144,6 +156,26 @@ rollout:
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0
   require_classifier_evidence: true
+  dump:
+    enabled: true
+    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_rynn_action_hidden
+    keep_last_global_steps: 8
+    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_rynn_action_hidden/reward
+    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_rynn_action_hidden/hidden
+    shard_prefix: cotrain_episode
+    demos_per_shard: 1
+    preprocess_config:
+      action_head_type: ${task.legacy_action_hidden.expected_action_head_type}
+      history: ${task.legacy_action_hidden.expected_history}
+      include_state: ${task.legacy_action_hidden.expected_include_state}
+      hidden_key: obs_embedding
+      obs_hidden_source: ${task.legacy_action_hidden.expected_obs_hidden_source}
+      chunk_size: ${task.legacy_action_hidden.chunk_size}
+      wm_obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
+    data_attrs:
+      task_suite_name: ${task.suite}
+      env_name: libero
+      source: online_cotrain_ray
 
 replay:
   cfg:
@@ -193,7 +225,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: dreamervla_cotrain
-    batch_size: 2
+    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_threshold: 0.5
@@ -201,14 +233,24 @@ learner:
     device: auto
     precision: bf16
     algorithm_cfg:
-      ppo_rollouts_per_start: 4
+      # RLinf manual-cotrain-style rollout scale:
+      # total_num_envs(64) * rollout_epoch(16) = 1024 imagined trajectories
+      # per PPO update; batch_size is derived as total_num_envs / (imag_last * group_size).
+      group_size: ${algorithm.group_size}
+      rollout_epoch: ${algorithm.rollout_epoch}
+      imag_last: 4
+      ppo_rollouts_per_start: ${algorithm.group_size}
       ppo_update_epochs: 1
+      kl_coef: 0.0
       entropy_coef: 0.0
+      clip_ratio_low: 0.2
+      clip_ratio_high: 0.28
+      clip_ratio_c: 3.0
       lumos:
         chunk_size: ${task.legacy_action_hidden.chunk_size}
-        episode_max_steps: 300
-        ppo_rollouts_per_start_min: 4
-        ppo_rollouts_per_start_max: 16
+        episode_max_steps: ${env.train.max_episode_steps}
+        ppo_rollouts_per_start_min: ${algorithm.group_size}
+        ppo_rollouts_per_start_max: ${algorithm.group_size}
         classifier_min_steps: 4
         filter_zero_variance_groups: true
         update_micro_batch_starts: 1

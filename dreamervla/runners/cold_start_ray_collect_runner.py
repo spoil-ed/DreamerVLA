@@ -150,6 +150,9 @@ class ColdStartRayCollectRunner(BaseRunner):
             "num_images_in_input": collect_cfg["num_images_in_input"],
             "unnorm_key": collect_cfg["unnorm_key"],
         }
+        inference_device = str(
+            self._select_first(("inference.device", "collect.inference_device"), "cuda")
+        )
         env_cfg = self._cfg_from(
             "env.cfg",
             {
@@ -179,7 +182,7 @@ class ColdStartRayCollectRunner(BaseRunner):
             "inference": {
                 "action_dim": collect_cfg["action_dim"],
                 "action_steps": collect_cfg["chunk_size"],
-                "device": "cuda",
+                "device": inference_device,
                 "decoder": {
                     "target": "dreamervla.workers.inference.oft_rollout:OFTRolloutBundle",
                     "kwargs": {
@@ -192,7 +195,7 @@ class ColdStartRayCollectRunner(BaseRunner):
                         "obs_hidden_source": collect_cfg["expected_obs_hidden_source"],
                         "expected_action_head_type": collect_cfg["expected_action_head_type"],
                         "expected_include_state": collect_cfg["expected_include_state"],
-                        "device": "cuda",
+                        "device": inference_device,
                     },
                 },
             },
@@ -261,13 +264,25 @@ class ColdStartRayCollectRunner(BaseRunner):
 
         gpu_id = int(collect_cfg.get("gpu_id", 0))
         num_infer = max(1, int(collect_cfg.get("num_inference_workers", 1)))
-        # Data-parallel inference across a contiguous GPU range [gpu_id, gpu_id+num_infer-1].
-        # Each worker is built with the full num_envs (per-env state indexed by env_id) but
-        # only ever serves its stable env-id shard (env_id % num_infer), so per-env state
-        # stays consistent. num_infer=1 -> single GPU at gpu_id (byte-identical to before).
-        infer_group = WorkerGroup(RolloutInferenceWorker, plan["inference"], {}, num_envs=num_envs).launch(
-            cluster, PackedPlacementStrategy(gpu_id, gpu_id + num_infer - 1, num_gpus_per_worker=1)
-        )
+        inference_device = str(plan["inference"].get("device", "cuda")).strip().lower()
+        if inference_device.startswith("cuda"):
+            # Data-parallel inference across a contiguous GPU range
+            # [gpu_id, gpu_id+num_infer-1]. Each worker is built with the full
+            # num_envs (per-env state indexed by env_id) but only serves its stable
+            # env-id shard (env_id % num_infer), so per-env state stays consistent.
+            infer_placement = PackedPlacementStrategy(
+                gpu_id,
+                gpu_id + num_infer - 1,
+                num_gpus_per_worker=1,
+            )
+        else:
+            infer_placement = NodePlacementStrategy(num_infer)
+        infer_group = WorkerGroup(
+            RolloutInferenceWorker,
+            plan["inference"],
+            {},
+            num_envs=num_envs,
+        ).launch(cluster, infer_placement)
         return {
             "dump": dump_group,
             "envs": env_group,

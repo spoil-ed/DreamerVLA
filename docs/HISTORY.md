@@ -5,7 +5,7 @@
 > `docs/history/`. Architecture & rules → [AGENTS.md](../AGENTS.md); open work → [TODO.md](superpowers/TODO.md).
 > When an item lands, add a line here (with its commit) and remove it from `TODO.md`.
 
-- Last updated: 2026-06-23
+- Last updated: 2026-06-27
 
 ---
 
@@ -53,7 +53,8 @@
 - **Vectorized egl cotrain rollout** (`dreamer_image_from_record` + `build_cotrain_replay_transition`
   + `_vectorized_cotrain_rollout`, knobs `num_envs`/`render_backend`): merged `d25d0fc`, enable_grad
   fix `e23e7da`; validated e2e under osmesa (4-env ~6.4 env/s, warmup+RL+ckpt, clean exit). egl
-  runtime verify still GPU-gated → `TODO.md`.
+  worker-level runtime verified on 2026-06-27: Ray 1 EnvWorker x4 children ran 160 env steps cleanly,
+  disjoint no-Ray 4-env smoke passed, and overlap render/compute placement fails fast (`3f76ce4`).
 
 ## Performance optimizations merged (default-off or byte-identical unless noted)
 | Item | What | Commit |
@@ -74,6 +75,7 @@
 | W3/W4 | manifest-first pretokenize index (guarded/dormant) + per-worker LRU frame cache | `6e09282` |
 | H5 | switchable DINO-WM SDPA (`attn_impl`, default `manual`=byte-identical) | `d4d857a` |
 | H9 | Chameleon `_update_causal_mask` cache (None-mask case) | `c69eb48` |
+| prompt-tokenize cache | OFT rollout-hidden extraction caches invariant per-task prompt tokenization; tests cover once-per-task reuse and byte-equivalent cached text tensors | `6b8f366` |
 
 ## Other shipped features
 - **Data-shard rotation + dual HF/torch checkpoints**: `demos_per_shard`; `training.checkpoint_format`

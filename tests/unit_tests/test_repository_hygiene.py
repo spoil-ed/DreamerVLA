@@ -194,7 +194,9 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert not (project_root / ".claude").exists()
     assert not (project_root / ".cursor").exists()
     assert not (project_root / "configs" / "archive").exists()
-    assert not (project_root / "docs" / "archive").exists()
+    docs_archive = project_root / "docs" / "archive"
+    assert (docs_archive / "plans").is_dir()
+    assert not [p for p in docs_archive.iterdir() if p.is_file()]
     assert not (project_root / "data" / "libero_goal_metainfo.json").exists()
 
     for dirname in ("cli", "trainer", "smoke", "evaluation", "training"):
@@ -248,7 +250,7 @@ def test_files_live_under_their_architecture_domains() -> None:
         ".cursor/",
         "data/",
         "third_party/",
-        "docs/superpowers/",
+        "docs/superpowers/*",
         "docs/TODO.md",
         "docs/task_plan.md",
         "docs/*_plan.md",

@@ -18,6 +18,17 @@ def test_oft_collect_common_exposes_shared_helpers() -> None:
         assert callable(fn)
 
 
+def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
+    import torch
+
+    from dreamervla.runners.oft_collect_common import _policy_device_from_id
+
+    assert _policy_device_from_id(-1) == torch.device("cpu")
+    assert _policy_device_from_id("cpu") == torch.device("cpu")
+    assert _policy_device_from_id(0) == torch.device("cuda:0")
+    assert _policy_device_from_id("cuda:2") == torch.device("cuda:2")
+
+
 def test_vla_latent_spec_derives_flat_dim_from_policy() -> None:
     from dreamervla.runners.oft_collect_common import vla_latent_spec
 
@@ -99,6 +110,50 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     assert plan["dump"]["preprocess_config"]["action_head_type"] == "oft_discrete_token"
     assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "input_token_embedding"
     assert plan["dump"]["preprocess_config"]["num_images_in_input"] == 1
+
+
+def test_oft_collect_plan_respects_cpu_inference_device_override(tmp_path) -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+
+    cfg = {
+        "mode": "oft",
+        "inference": {"device": "cpu"},
+        "collect": {
+            "num_images_in_input": 1,
+            "episode_horizon": 8,
+            "envs_per_gpu": 1,
+            "memory_fraction": 0.8,
+            "episodes_per_task": 1,
+            "task_ids": [0],
+            "policy_mode": "discrete",
+        },
+        "task": {
+            "suite": "libero_goal",
+            "action_dim": 7,
+            "image_resolution": 256,
+            "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+            "openvla_oft": {
+                "ckpt_path": str(tmp_path / "ckpt"),
+                "dataset_statistics_key": "libero_goal_no_noops",
+                "hdf5_reward_dir": str(tmp_path / "reward"),
+                "action_hidden_dir": str(tmp_path / "hidden"),
+                "expected_action_head_type": "oft_discrete_token",
+                "expected_include_state": False,
+                "expected_obs_hidden_source": "input_token_embedding",
+                "expected_prompt_style": "vla_policy",
+                "expected_history": 1,
+                "expected_rotate_images_180": True,
+                "time_horizon": 8,
+                "token_dim": 4096,
+                "chunk_size": 8,
+            },
+        },
+    }
+
+    plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
+
+    assert plan["inference"]["device"] == "cpu"
+    assert plan["inference"]["decoder"]["kwargs"]["device"] == "cpu"
 
 
 def test_collect_rollouts_ray_experiment_composes() -> None:

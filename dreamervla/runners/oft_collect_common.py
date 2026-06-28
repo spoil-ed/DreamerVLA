@@ -155,8 +155,24 @@ def vla_latent_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     }
 
 
-def load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
-    """Load OpenVLAOFTPolicy from checkpoint on the specified GPU.
+def _policy_device_from_id(device_ref: int | str | torch.device) -> torch.device:
+    """Normalize a collector device reference into a torch device."""
+
+    if isinstance(device_ref, torch.device):
+        return device_ref
+    value = str(device_ref).strip().lower()
+    if value in {"", "auto"}:
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if value == "cpu":
+        return torch.device("cpu")
+    if value.startswith("cuda"):
+        return torch.device(value if ":" in value else "cuda:0")
+    gpu_id = int(value)
+    return torch.device("cpu" if gpu_id < 0 else f"cuda:{gpu_id}")
+
+
+def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
+    """Load OpenVLAOFTPolicy from checkpoint on the specified device.
 
     Under torchrun, gpu_id = LOCAL_RANK; CUDA_VISIBLE_DEVICES is NOT
     overridden (torchrun sets it per-process already via LOCAL_RANK env).
@@ -169,7 +185,7 @@ def load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
 
     model_path = resolve_model_path(cfg["model_path"])
 
-    device = torch.device(f"cuda:{gpu_id}")
+    device = _policy_device_from_id(gpu_id)
 
     # Auto-detect head mode (l1 vs discrete) from the checkpoint, mirroring the offline
     # preprocess (resolve_oft_policy_mode).  The one-trajectory cold-start ckpt is DISCRETE

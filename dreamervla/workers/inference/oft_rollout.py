@@ -24,11 +24,11 @@ class OFTRolloutBundle:
         from dreamervla.runners import oft_collect_common
         from dreamervla.runners import rollout_hidden_extractor as rhe
 
-        gpu = _gpu_id_from_device(device)
+        device_ref = _device_ref_from_device(device)
         cfg = dict(policy_cfg)
         cfg.setdefault("unnorm_key", str(unnorm_key))
         cfg.setdefault("_rank", 0)
-        self._policy = oft_collect_common.load_policy(cfg, gpu)
+        self._policy = oft_collect_common.load_policy(cfg, device_ref)
         if expected_action_head_type is not None:
             cfg["expected_action_head_type"] = str(expected_action_head_type)
         if expected_include_state is not None:
@@ -72,10 +72,10 @@ class OFTRolloutBundle:
         )
 
 
-def _gpu_id_from_device(device: str) -> int:
-    value = str(device)
+def _device_ref_from_device(device: str) -> int | str:
+    value = str(device).strip()
     if not value.startswith("cuda"):
-        return -1
+        return value or "cpu"
     if ":" not in value:
         return 0
     return int(value.split(":", 1)[1])

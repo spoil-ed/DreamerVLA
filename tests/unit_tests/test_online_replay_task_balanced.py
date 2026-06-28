@@ -34,6 +34,32 @@ def _episode(task_id: int, length: int, *, success: bool) -> list[dict]:
     ]
 
 
+def _collect_schema_step(
+    task_id: int, t: int, *, success: bool = False, done: bool = False
+) -> dict:
+    return {
+        "obs_embedding": np.full((2,), t, dtype=np.float32),
+        "actions": np.full((1,), t, dtype=np.float32),
+        "rewards": np.float32(1.0 if success else 0.0),
+        "sparse_rewards": np.uint8(1 if success else 0),
+        "dones": np.uint8(1 if done or success else 0),
+        "success": bool(success),
+        "task_id": int(task_id),
+    }
+
+
+def _collect_schema_episode(task_id: int, length: int, *, success: bool) -> list[dict]:
+    return [
+        _collect_schema_step(
+            task_id,
+            t,
+            success=success and t == length - 1,
+            done=t == length - 1,
+        )
+        for t in range(length)
+    ]
+
+
 def test_online_replay_samples_failed_episodes_only_from_prefix() -> None:
     random.seed(0)
     replay = OnlineReplay(
@@ -76,6 +102,59 @@ def test_online_replay_can_sample_without_images() -> None:
     assert "images" not in batch
     assert batch["obs_embedding"].dtype == torch.float32
     assert batch["obs_embedding"].shape == (2, 3, 2)
+
+
+def test_online_replay_samples_collect_schema_steps_without_reward_aliases() -> None:
+    random.seed(0)
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    replay.add_episode(_collect_schema_episode(task_id=2, length=5, success=True))
+
+    batch = replay.sample(1)
+
+    assert batch["rewards"].shape == (1, 3)
+    assert batch["actions"].shape == (1, 3, 1)
+    assert batch["current_actions"].shape == (1, 3, 1)
+    assert "images" not in batch
+
+
+def test_online_replay_state_dict_round_trips_records_and_cursors() -> None:
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_ids=(2, 9),
+        rank=4,
+        replay_sampling={"latest_online_required": True},
+    )
+    replay.set_policy_version(7)
+    online = replay.add_episode(_episode(task_id=2, length=5, success=True), source="online")
+    replay.add_episode(_episode(task_id=9, length=6, success=False), source="coldstart")
+
+    restored = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_ids=(2, 9),
+        rank=4,
+        replay_sampling={"latest_online_required": True},
+    )
+    restored.load_state_dict(replay.state_dict())
+
+    assert online is not None
+    assert restored.num_transitions == replay.num_transitions
+    assert restored.task_stats((2, 9)) == replay.task_stats((2, 9))
+    assert restored._current_policy_version == 7
+    assert restored._next_episode_id == replay._next_episode_id
+    assert restored._next_collection_index == replay._next_collection_index
+    assert restored._next_task_episode_index == replay._next_task_episode_index
+    assert restored._pending_latest_online_episode_ids == {int(online["episode_id"])}
+
+    next_record = restored.add_episode(
+        _episode(task_id=2, length=5, success=False),
+        source="online",
+    )
+
+    assert next_record is not None
+    assert int(next_record["episode_id"]) == int(replay._next_episode_id)
+    assert int(next_record["policy_version"]) == 7
 
 
 def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:

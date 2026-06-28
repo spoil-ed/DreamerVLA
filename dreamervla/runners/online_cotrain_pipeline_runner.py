@@ -6,7 +6,7 @@ buffer (same step functions as the online phase, so zero semantic drift), then
 runs the existing OnlineCotrainRunner online loop with RL enabled. WM and
 classifier warmup checkpoints are saved separately for independent resume.
 
-See docs/superpowers/specs/2026-06-17-offline-warmup-online-cotrain-pipeline-design.md
+See docs/superpowers/specs/archive/2026-06-17-offline-warmup-online-cotrain-pipeline-design.md
 """
 from __future__ import annotations
 
