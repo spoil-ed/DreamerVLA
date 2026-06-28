@@ -16,10 +16,10 @@
 # Vendored verbatim from RLinf ``rlinf/envs/venv/venv.py`` (Apache-2.0) into
 # DreamerVLA so the online-rollout EGL path drives envs through RLinf's exact
 # ``SubprocVectorEnv`` process-isolation machinery (one spawn subprocess per
-# env, send-all-then-recv-all barrier). The DreamerVLA env-protocol + per-child
-# EGL-device adapter built on these classes lives in
-# ``dreamervla/envs/online_egl_venv.py``. Keep THIS file faithful to
-# upstream; put local changes in the adapter, not here.
+# env, send-all-then-recv-all barrier). DreamerVLA's legacy no-Ray EGL adapter
+# built on these classes lives in ``dreamervla/envs/online_egl_venv.py``. The
+# Ray mainline binds EGL at the EnvWorker process via WorkerGroup placement.
+# Keep THIS file faithful to upstream; put local changes in adapters, not here.
 # ---------------------------------------------------------------------------
 
 import cloudpickle

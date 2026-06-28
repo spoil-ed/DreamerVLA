@@ -6,9 +6,12 @@ from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_replay import OnlineReplay
 
 
-def _demo_steps(T, success, emb_dim=16):
+def _demo_steps(T, success, emb_dim=16, *, include_lang=False):
     steps = []
     for t in range(T):
+        ee_pos = np.full(3, 1.0 + t, np.float64)
+        ee_ori = np.full(3, 10.0 + t, np.float64)
+        gripper = np.full(2, 100.0 + t, np.float64)
         steps.append({
             "actions": np.full(7, t, np.float64),
             "rewards": np.float32(0.0),
@@ -19,12 +22,14 @@ def _demo_steps(T, success, emb_dim=16):
             "obs": {
                 "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
                 "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
-                "ee_pos": np.zeros(3, np.float64), "ee_ori": np.zeros(3, np.float64),
-                "ee_states": np.zeros(6, np.float64), "gripper_states": np.zeros(2, np.float64),
+                "ee_pos": ee_pos, "ee_ori": ee_ori,
+                "ee_states": np.zeros(6, np.float64), "gripper_states": gripper,
                 "joint_states": np.zeros(7, np.float64),
             },
             "obs_embedding": np.full(emb_dim, t, np.float16),
         })
+        if include_lang:
+            steps[-1]["lang_emb"] = np.arange(12, dtype=np.float32) + 0.5
     return steps
 
 
@@ -48,6 +53,33 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     assert batch["obs_embedding"].shape[-1] == 16
     assert replay.episodes[0]["episode"][0]["obs_embedding"].dtype == np.float16
     assert batch["obs_embedding"].dtype == torch.float16
+
+
+def test_seed_replay_threads_proprio_and_language_sidecar(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
+        w.write_demo(
+            index=0,
+            steps=_demo_steps(6, success=True, include_lang=True),
+            task_id=2,
+            episode_id=0,
+        )
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2,), rank=0)
+
+    n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)
+
+    assert n == 1
+    first = replay.episodes[0]["episode"][0]
+    np.testing.assert_allclose(
+        first["proprio"],
+        np.array([1, 1, 1, 10, 10, 10, 100, 100], dtype=np.float32),
+    )
+    np.testing.assert_allclose(first["lang_emb"], np.arange(12, dtype=np.float32) + 0.5)
+    batch = replay.sample(1, include_images=False)
+    assert batch["proprio"].shape == (1, 4, 8)
+    assert batch["proprio"].dtype == torch.float32
+    assert batch["lang_emb"].shape == (1, 12)
+    assert batch["lang_emb"].dtype == torch.float32
 
 
 def test_seed_replay_marks_success_only_at_terminal_step(tmp_path):

@@ -66,7 +66,7 @@ encoder:
 
 online_rollout:
   buffer_size: 20000
-  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  sequence_length: 12
   min_replay: 2000
   min_episodes_per_task: 1
   train_trigger: episode_end
@@ -113,9 +113,16 @@ world_model:
   time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
   latent_source: ${task.openvla_oft.input_tokens.latent_source}
-  action_emb_dim: 10
-  num_action_repeat: 1
-  model_dim: 4106
+  action_emb_dim: ${task.openvla_oft.input_tokens.action_emb_dim}
+  num_action_repeat: ${task.openvla_oft.input_tokens.num_action_repeat}
+  proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+  proprio_reconstruction_loss_scale: 1.0
+  lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+  model_dim: ${task.openvla_oft.input_tokens.model_dim}
   depth: 6
   heads: 16
   dim_head: 128
@@ -125,9 +132,9 @@ world_model:
   num_pred: 1
   max_seq_len: 128
   hidden_loss_scale: 1.0
-  cosine_loss_scale: 0.1
-  chunk_rollout_chunks: 4
-  chunk_rollout_loss_scale: 1.0
+  cosine_loss_scale: 0.0
+  chunk_rollout_chunks: 1
+  chunk_rollout_loss_scale: 0.0
   reward_head_type: binary
   reward_loss_scale: 32.0
   reward_hidden_dim: 1024
@@ -172,12 +179,18 @@ critic:
 
 classifier:
   _target_: ${task.openvla_oft.classifier_target}
-  latent_dim: ${task.openvla_oft.input_tokens.token_dim}
+  latent_dim: ${task.openvla_oft.input_tokens.classifier_latent_dim}
   action_dim: ${task.action_dim}
   time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
   token_dim: ${task.openvla_oft.input_tokens.token_dim}
   token_count: ${task.openvla_oft.input_tokens.token_count}
-  token_pool: mean
+  head_type: spatial_tf
+  proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+  lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
   window: 8
   hidden_dim: 1024
   num_layers: 4

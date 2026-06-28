@@ -45,6 +45,8 @@ class _DirectReplay:
             "is_first": torch.zeros(int(batch_size), 3, dtype=torch.bool),
             "is_terminal": torch.zeros(int(batch_size), 3),
             "is_last": torch.zeros(int(batch_size), 3),
+            "proprio": torch.full((int(batch_size), 3, 8), 0.5),
+            "lang_emb": torch.full((int(batch_size), 6), 0.25),
         }
 
     def sample_classifier_windows(
@@ -107,6 +109,19 @@ def _cotrain_train_cfg() -> dict[str, Any]:
     }
 
 
+def _patch_dummy_syncer(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    class _DummySyncer:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        def push(self, *args, **kwargs):
+            del args, kwargs
+
+    monkeypatch.setattr(mod, "ObjectStoreWeightSyncer", _DummySyncer)
+
+
 def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     import dreamervla.workers.actor.learner_worker as mod
 
@@ -117,6 +132,8 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
         assert kwargs["world_model"] is learner.world_model
         assert kwargs["optimizer"] is learner.world_model_optimizer
         assert "obs_embedding" in kwargs["batch"]
+        assert kwargs["batch"]["proprio"].shape == (2, 3, 8)
+        assert kwargs["batch"]["lang_emb"].shape == (2, 6)
         return {
             "loss": 1.25,
             "hidden_rec_loss": 0.25,
@@ -144,12 +161,15 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
             "is_first",
             "is_terminal",
             "is_last",
+            "proprio",
+            "lang_emb",
         }
         return {"actor_loss": 0.75, "returns_mean": 0.25, "actor_grad_norm": 0.125}
 
     monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
     monkeypatch.setattr(mod, "online_classifier_update_step", fake_classifier_step)
     monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
 
     replay = _DirectReplay()
     learner = LearnerWorker(_cotrain_model_cfg(), {}, _cotrain_train_cfg(), replay)
@@ -179,6 +199,47 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
     assert metrics["cls/loss"] == 0.5
     assert metrics["rl/actor_loss"] == 0.75
     assert calls == ["wm", "classifier", "rl", "wm", "classifier", "rl"]
+
+
+def test_dreamervla_cotrain_rl_rollout_epoch_concatenates_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    calls = 0
+
+    def fake_rl_step(**kwargs):
+        nonlocal calls
+        calls += 1
+        obs = kwargs["obs"]
+        assert obs["obs_embedding"].shape == (32, 3, 4)
+        assert obs["actions"].shape == (32, 3, 7)
+        assert obs["proprio"].shape == (32, 3, 8)
+        assert obs["lang_emb"].shape == (32, 6)
+        return {
+            "actor_loss": 0.75,
+            "returns_mean": 0.25,
+            "returns_std": 0.5,
+            "actor_grad_norm": 0.125,
+            "ppo_step_applied": 1.0,
+            "ppo_update_epochs": 1.0,
+        }
+
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
+
+    replay = _DirectReplay()
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["algorithm_cfg"]["rollout_epoch"] = 16
+    learner = LearnerWorker(_cotrain_model_cfg(), {}, train_cfg, replay)
+    learner.init()
+
+    metrics = learner.update("rl", 1)
+
+    assert calls == 1
+    assert replay.sample_calls == 16
+    assert metrics["rl/actor_loss"] == 0.75
+    assert metrics["rl/ppo_step_applied"] == 1.0
 
 
 def test_dreamervla_cotrain_actor_signal_gate_delays_rl(
@@ -213,6 +274,7 @@ def test_dreamervla_cotrain_actor_signal_gate_delays_rl(
     monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
     monkeypatch.setattr(mod, "online_classifier_update_step", fake_classifier_step)
     monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
 
     train_cfg = _cotrain_train_cfg()
     train_cfg["actor_signal_gate"] = {
@@ -243,3 +305,149 @@ def test_dreamervla_cotrain_mode_requires_components() -> None:
 
     with pytest.raises(ValueError, match="world_model"):
         learner.init()
+
+
+def _wm_classifier_only_model_cfg() -> dict[str, Any]:
+    return {
+        "world_model": {
+            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+            "kwargs": {"hidden_dim": 4, "action_dim": 7},
+        },
+        "classifier": {
+            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "kwargs": {"hidden_dim": 4, "window": 3},
+        },
+    }
+
+
+def _wm_classifier_only_train_cfg() -> dict[str, Any]:
+    return {
+        "mode": "wm_classifier_only",
+        "device": "cpu",
+        "precision": "fp32",
+        "batch_size": 2,
+        "classifier_batch_size": 2,
+        "classifier_early_neg_stride": 2,
+        "lr": 0.01,
+        "optim_cfg": {"grad_clip_norm": 1.0, "zero_grad_set_to_none": True},
+    }
+
+
+def test_wm_classifier_only_does_not_require_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    learner = LearnerWorker(
+        _wm_classifier_only_model_cfg(),
+        {},
+        _wm_classifier_only_train_cfg(),
+        replay=None,
+    )
+
+    learner.init()
+
+    assert learner.policy is None
+    assert "policy" not in learner.optimizers
+    assert learner.policy_optimizer is None
+
+
+def test_wm_classifier_only_rejects_policy_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    cfg = _wm_classifier_only_model_cfg()
+    cfg["policy"] = {
+        "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+        "kwargs": {"hidden_dim": 4, "action_dim": 7},
+    }
+    learner = LearnerWorker(cfg, {}, _wm_classifier_only_train_cfg(), replay=None)
+
+    with pytest.raises(ValueError, match="wm_classifier_only.*policy"):
+        learner.init()
+
+
+def test_wm_classifier_only_rejects_fsdp_train_cfg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    train_cfg = _wm_classifier_only_train_cfg()
+    train_cfg["fsdp"] = {"strategy": "none"}
+    learner = LearnerWorker(_wm_classifier_only_model_cfg(), {}, train_cfg, replay=None)
+
+    with pytest.raises(ValueError, match="wm_classifier_only.*FSDP"):
+        learner.init()
+
+
+@pytest.mark.parametrize("missing", ["world_model", "classifier"])
+def test_wm_classifier_only_rejects_missing_required_components(
+    missing: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    cfg = _wm_classifier_only_model_cfg()
+    cfg.pop(missing)
+    learner = LearnerWorker(cfg, {}, _wm_classifier_only_train_cfg(), replay=None)
+
+    with pytest.raises(ValueError, match=missing):
+        learner.init()
+
+
+def test_wm_classifier_only_rejects_rl_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    learner = LearnerWorker(
+        _wm_classifier_only_model_cfg(),
+        {},
+        _wm_classifier_only_train_cfg(),
+        _DirectReplay(),
+    )
+    learner.init()
+
+    with pytest.raises(ValueError, match="wm_classifier_only"):
+        learner.update("rl", 1)
+
+
+def test_wm_classifier_only_cotrain_updates_wm_then_classifier_without_rl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    calls: list[str] = []
+
+    def fake_wm_step(**kwargs):
+        calls.append("wm")
+        assert kwargs["policy"] is None
+        assert kwargs["world_model"] is learner.world_model
+        assert kwargs["optimizer"] is learner.world_model_optimizer
+        return {"loss": 1.0}
+
+    def fake_classifier_step(**kwargs):
+        calls.append("classifier")
+        assert kwargs["classifier"] is learner.classifier
+        assert kwargs["optimizer"] is learner.classifier_optimizer
+        return {"loss": 0.5, "acc": 1.0, "f1": 1.0}
+
+    def fake_rl_step(**kwargs):
+        del kwargs
+        calls.append("rl")
+        raise AssertionError("wm_classifier_only must not run dino_lumos_step")
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+    monkeypatch.setattr(mod, "online_classifier_update_step", fake_classifier_step)
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
+
+    learner = LearnerWorker(
+        _wm_classifier_only_model_cfg(),
+        {},
+        _wm_classifier_only_train_cfg(),
+        _DirectReplay(),
+    )
+    learner.init()
+
+    metrics = learner.update("cotrain", 1)
+
+    assert calls == ["wm", "classifier"]
+    assert metrics["wm/loss"] == 1.0
+    assert metrics["cls/loss"] == 0.5

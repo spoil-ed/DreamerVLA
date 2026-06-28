@@ -18,11 +18,13 @@ from dreamervla.scheduler.hardware import (
 from dreamervla.scheduler.manager import DeviceLockManager, WorkerManager, WorkerRoute
 from dreamervla.scheduler.node import NodeInfo, discover_ray_nodes, probe_local_node
 from dreamervla.scheduler.placement import (
+    ComponentPlacement,
     FlexiblePlacementStrategy,
     NodePlacementStrategy,
     PackedPlacementStrategy,
     Placement,
     PlacementStrategy,
+    ResourceMapPlacementStrategy,
     parse_accelerator_range,
 )
 from dreamervla.scheduler.worker import Worker
@@ -38,6 +40,7 @@ __all__ = [
     "AcceleratorInfo",
     "AsyncResult",
     "AsyncWork",
+    "ComponentPlacement",
     "ComponentScheduler",
     "DeviceLockManager",
     "FlexiblePlacementStrategy",
@@ -46,6 +49,7 @@ __all__ = [
     "PackedPlacementStrategy",
     "Placement",
     "PlacementStrategy",
+    "ResourceMapPlacementStrategy",
     "ScheduledWork",
     "TorchCollectiveGroup",
     "WorkerManager",

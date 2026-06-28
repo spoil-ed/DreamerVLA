@@ -27,6 +27,144 @@ class _TinyChunkWM(torch.nn.Module):
         raise ValueError(f"Unknown mode: {mode}")
 
 
+class _LangRequiringChunkWM(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.predict_calls = 0
+
+    def forward(self, batch):
+        mode = batch["mode"]
+        if mode == "observe_sequence":
+            obs = batch["obs_embedding"]
+            return {
+                "latent": {
+                    "hidden": obs,
+                    "history": obs,
+                    "actions": torch.zeros(obs.shape[0], obs.shape[1], 1),
+                    "lang": batch["lang_emb"],
+                }
+            }
+        if mode == "actor_input":
+            return batch["latent"]["hidden"]
+        if mode == "predict_next_chunk":
+            latent = batch["latent"]
+            if "lang" not in latent:
+                raise ValueError("lang missing from imagined current latent")
+            self.predict_calls += 1
+            hidden = latent["hidden"]
+            hidden_seq = hidden.unsqueeze(1).repeat(1, batch["actions"].shape[1], 1)
+            return {
+                "hidden_seq": hidden_seq,
+                "history": hidden,
+                "actions": batch["actions"],
+                "hidden": hidden,
+            }
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+class _InternalProprioChunkWM(torch.nn.Module):
+    def forward(self, batch):
+        mode = batch["mode"]
+        if mode == "observe_sequence":
+            return {"latent": {"hidden": batch["obs_embedding"]}}
+        if mode == "actor_input":
+            latent = batch["latent"]
+            hidden = latent["hidden"] if isinstance(latent, dict) else latent
+            return hidden[..., :3]
+        if mode == "predict_next_chunk":
+            latent = batch["latent"]
+            hidden = latent["hidden"] if isinstance(latent, dict) else latent
+            hidden_seq = hidden.unsqueeze(1).repeat(1, batch["actions"].shape[1], 1)
+            return {
+                "hidden_seq": hidden_seq,
+                "history": hidden,
+                "actions": batch["actions"],
+                "hidden": hidden,
+            }
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+class _StrictProprioLanguageChunkWM(torch.nn.Module):
+    def forward(self, batch):
+        mode = batch["mode"]
+        if mode == "observe_sequence":
+            obs = batch["obs_embedding"]
+            return {
+                "latent": {
+                    "hidden": obs,
+                    "history": obs,
+                    "actions": torch.zeros(obs.shape[0], obs.shape[1], 1),
+                    "proprio": batch["proprio"],
+                    "lang": batch["lang_emb"],
+                }
+            }
+        if mode == "actor_input":
+            return batch["latent"]["hidden"]
+        if mode == "predict_next_chunk":
+            latent = batch["latent"]
+            hidden = latent["hidden"]
+            proprio = latent["proprio"]
+            hidden_seq = hidden.unsqueeze(1).repeat(1, batch["actions"].shape[1], 1, 1)
+            proprio_seq = proprio.unsqueeze(1).repeat(1, batch["actions"].shape[1], 1)
+            return {
+                "hidden_seq": hidden_seq,
+                "proprio_seq": proprio_seq,
+                "history": hidden,
+                "actions": batch["actions"],
+                "hidden": hidden,
+                "proprio": proprio,
+                "lang": latent["lang"],
+            }
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+class _WidthCheckingClassifier(torch.nn.Module):
+    def predict_success(self, video, threshold, stride=1, min_steps=1):
+        del threshold, stride, min_steps
+        if video.shape[-1] != 3:
+            raise RuntimeError(f"classifier expected width 3, got {video.shape[-1]}")
+        batch = int(video.shape[0])
+        idx = torch.arange(batch, device=video.device)
+        return {
+            "complete": (idx % 2 == 0),
+            "finish_step": torch.zeros(batch, dtype=torch.long, device=video.device),
+        }
+
+
+class _StrictConditionedClassifier(torch.nn.Module):
+    supports_proprio_conditioning = True
+    supports_language_conditioning = True
+
+    def __init__(self):
+        super().__init__()
+        self.seen_video_shape = None
+        self.seen_proprio_shape = None
+        self.seen_lang_shape = None
+
+    def predict_success(
+        self,
+        video,
+        threshold,
+        stride=1,
+        min_steps=1,
+        *,
+        proprio,
+        lang_emb,
+    ):
+        del threshold, stride, min_steps
+        if video.ndim != 4:
+            raise RuntimeError(f"expected token grid video, got {tuple(video.shape)}")
+        self.seen_video_shape = tuple(video.shape)
+        self.seen_proprio_shape = tuple(proprio.shape)
+        self.seen_lang_shape = tuple(lang_emb.shape)
+        batch = int(video.shape[0])
+        idx = torch.arange(batch, device=video.device)
+        return {
+            "complete": (idx % 2 == 0),
+            "finish_step": torch.zeros(batch, dtype=torch.long, device=video.device),
+        }
+
+
 class _DiscriminativeClassifier(torch.nn.Module):
     """One success and one failure in each GRPO group of size 2."""
 
@@ -227,6 +365,85 @@ def test_probability_reward_updates_when_threshold_outcomes_are_constant():
     assert metrics["LUMOS/group_var_keep_frac"] == 1.0
     assert policy.action_value.grad is not None
     assert policy.action_value.grad.abs().item() > 0.0
+
+
+def test_lumos_imagination_preserves_episode_language_across_chunks():
+    policy = _TinyPolicy()
+    world_model = _LangRequiringChunkWM()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=world_model,
+        classifier=_DiscriminativeClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={
+            "obs_embedding": torch.zeros(1, 2, 1),
+            "lang_emb": torch.ones(1, 4),
+        },
+        device=torch.device("cpu"),
+        algorithm_cfg=_cfg(),
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=None,
+    )
+
+    assert world_model.predict_calls == 2
+    assert metrics["ppo_step_applied"] == 1.0
+
+
+def test_lumos_classifier_video_uses_external_latent_width():
+    policy = _TinyPolicy()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=_InternalProprioChunkWM(),
+        classifier=_WidthCheckingClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={"obs_embedding": torch.zeros(1, 2, 5)},
+        device=torch.device("cpu"),
+        algorithm_cfg=_cfg(),
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=None,
+    )
+
+    assert metrics["ppo_step_applied"] == 1.0
+
+
+def test_lumos_classifier_receives_token_grid_raw_proprio_and_language():
+    policy = _TinyPolicy()
+    classifier = _StrictConditionedClassifier()
+    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    metrics = dino_lumos_step(
+        policy=policy,
+        chunk_world_model=_StrictProprioLanguageChunkWM(),
+        classifier=classifier,
+        classifier_threshold=0.5,
+        actor_optimizer=optimizer,
+        obs={
+            "obs_embedding": torch.zeros(1, 2, 2, 3),
+            "proprio": torch.ones(1, 2, 5),
+            "lang_emb": torch.ones(1, 4),
+        },
+        device=torch.device("cpu"),
+        algorithm_cfg=_cfg(),
+        optim_cfg=OmegaConf.create(
+            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
+        ),
+        ref_policy=None,
+    )
+
+    assert classifier.seen_video_shape == (2, 4, 2, 3)
+    assert classifier.seen_proprio_shape == (2, 4, 5)
+    assert classifier.seen_lang_shape == (2, 4)
+    assert metrics["ppo_step_applied"] == 1.0
 
 
 def test_lumos_rollout_bounds_use_configured_max_group_size_with_adaptive_prefix():

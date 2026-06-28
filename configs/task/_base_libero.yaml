@@ -87,13 +87,27 @@ openvla_oft:
     expected_history: ${task.openvla_oft.expected_history}
     expected_include_state: ${task.openvla_oft.expected_include_state}
     expected_rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
-    wm_obs_dim: 2097152
-    token_count: 512
+    num_images_in_input: ${task.openvla_oft.num_images_in_input}
+    patches_per_image: 256
+    token_count: ${dvla_mul:${task.openvla_oft.input_tokens.num_images_in_input},${task.openvla_oft.input_tokens.patches_per_image}}
     token_dim: 4096
+    wm_obs_dim: ${dvla_mul:${task.openvla_oft.input_tokens.token_count},${task.openvla_oft.input_tokens.token_dim}}
     chunk_size: ${task.openvla_oft.chunk_size}
     hidden_state_dim: 4096
     latent_stage: query_before
-    latent_source: OpenVLA-OFT current-frame projected vision patch tokens [512,4096]
+    latent_source: OpenVLA-OFT current-frame projected vision patch tokens [num_images_in_input*patches_per_image,4096]
+    proprio_keys: [ee_pos, ee_ori, gripper_states]
+    proprio_dim: 8
+    proprio_emb_dim: 10
+    num_proprio_repeat: 1
+    lang_emb_dir: ${task.openvla_oft.input_token_hidden_dir}
+    lang_dim: 4096
+    lang_emb_dim: 32
+    num_lang_repeat: 1
+    classifier_latent_dim: 4138
+    action_emb_dim: 10
+    num_action_repeat: 1
+    model_dim: 4148
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel

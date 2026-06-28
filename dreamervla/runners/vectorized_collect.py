@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from dreamervla.envs.image_utils import resize_hwc_uint8
-from dreamervla.runners.oft_collect_common import pop_open_loop_action
+from dreamervla.runners.oft_collect_common import pop_open_loop_action, sidecar_to_numpy
 from dreamervla.utils.progress import AggregateProgress
 
 # Per-step proprio fed to the extractor: ee_pos(3) + ee_ori/axisangle(3) + gripper(2) = 8.
@@ -67,12 +67,13 @@ def extractor_obs_from_record(rec: dict[str, Any]) -> dict[str, Any]:
 
 def build_step_record(
     rec: dict[str, Any],
-    flat_hidden: Any,
+    hidden_state: Any,
     wm_action: Any,
+    lang_emb: Any | None = None,
 ) -> dict[str, Any]:
     """One per-step dict for ``RolloutDumpWriter.write_demo`` (schema per _run_episode)."""
-    emb = flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
-    return {
+    emb = sidecar_to_numpy(hidden_state)
+    step = {
         "actions": np.asarray(wm_action, dtype=np.float64),
         "rewards": np.float32(0.0),
         "sparse_rewards": np.uint8(0),  # set on the terminal frame
@@ -85,6 +86,36 @@ def build_step_record(
         },
         "obs_embedding": emb,
     }
+    lang = sidecar_to_numpy(lang_emb, dtype=np.float32)
+    if lang is not None:
+        step["lang_emb"] = lang.reshape(-1)
+    init_state_index = rec.get("init_state_index")
+    if init_state_index is not None:
+        step["init_state_index"] = int(init_state_index)
+    return step
+
+
+def _decode_action_chunk(result: Any) -> Any:
+    if hasattr(result, "action_chunk"):
+        return result.action_chunk
+    return result[0]
+
+
+def _decode_hidden_state(result: Any) -> Any:
+    if hasattr(result, "hidden_state"):
+        return result.hidden_state
+    return result[1]
+
+
+def _decode_lang_emb(result: Any) -> Any | None:
+    if hasattr(result, "lang_emb"):
+        return result.lang_emb
+    try:
+        if len(result) > 2:
+            return result[2]
+    except TypeError:
+        return None
+    return None
 
 
 def collect_vectorized(
@@ -118,8 +149,9 @@ def collect_vectorized(
             ``step(actions, env_ids)`` (returns per-env (reward, term, trunc, info, record)).
         extractors: list of length ``num_envs``; each has ``reset()`` and
             ``prepare(obs, task_description) -> prep``.  One per slot (isolated history).
-        infer_fn: ``preps -> list[(action_chunk, flat_hidden)]`` (e.g. a closure over
-            ``rollout_hidden_extractor.batched_forward``).  MAY receive mixed prompt lengths.
+        infer_fn: returns tuple-compatible decode outputs with ``action_chunk``,
+            ``hidden_state``, and optional ``lang_emb`` sidecar. MAY receive mixed prompt
+            lengths.
         writer: a RolloutDumpWriter-like object with
             ``write_demo(index, steps, preprocess_config=, data_attrs=)``.
         work_list: ``(task_id, episode_id)`` pairs to collect (consumed in the given order).
@@ -195,16 +227,19 @@ def collect_vectorized(
             # Same open-loop action core (refill chunk + process_action) as the
             # single-env collector and the online cotrain rollout — one shared impl.
             actions.append(
-                pop_open_loop_action(outs[i][0], action_queues[k], action_steps)
+                pop_open_loop_action(_decode_action_chunk(outs[i]), action_queues[k], action_steps)
             )
         step_results = vec_env.step(actions, env_ids=active_ids)
 
         finished: list[int] = []
         for i, k in enumerate(active_ids):
-            _action_chunk, flat_hidden = outs[i]
+            hidden_state = _decode_hidden_state(outs[i])
+            lang_emb = _decode_lang_emb(outs[i])
             reward, terminated, truncated, info, rec_after = step_results[i]
             wm_action = info.get("wm_action", info.get("env_action", actions[i]))
-            slot_steps[k].append(build_step_record(slot_rec[k], flat_hidden, wm_action))
+            slot_steps[k].append(
+                build_step_record(slot_rec[k], hidden_state, wm_action, lang_emb=lang_emb)
+            )
             slot_t[k] += 1
             slot_rec[k] = rec_after
             done = bool(terminated or truncated) or slot_t[k] >= episode_horizon

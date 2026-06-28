@@ -12,7 +12,14 @@ defaults:
 _target_: dreamervla.runners.OnlineCotrainRayRunner
 latent_type: backbone_latent
 seed: 7
-render_backend: egl
+render_backend: osmesa
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env: 0
+    rollout: 1
+    actor: 1
 
 ray_rollout:
   mode: oft_fixed_base
@@ -29,8 +36,12 @@ init:
 ray_data:
   task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   replay_capacity: 20000
-  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  sequence_length: 12
   min_replay_episodes: 1
+
+algorithm:
+  group_size: 8
+  rollout_epoch: 16
 
 # OFT query-before structural components. These shapes do not match the old
 # action-query warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
@@ -47,10 +58,17 @@ ray_components:
       time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
       latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
       latent_source: ${task.openvla_oft.input_tokens.latent_source}
-      action_emb_dim: 10
-      num_action_repeat: 1
+      action_emb_dim: ${task.openvla_oft.input_tokens.action_emb_dim}
+      num_action_repeat: ${task.openvla_oft.input_tokens.num_action_repeat}
+      proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+      proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
+      num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+      proprio_reconstruction_loss_scale: 1.0
+      lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+      lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
+      num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
       grad_checkpoint: true
-      model_dim: 4106
+      model_dim: ${task.openvla_oft.input_tokens.model_dim}
       num_hist: 3
       depth: 6
       heads: 16
@@ -60,9 +78,9 @@ ray_components:
       num_pred: 1
       max_seq_len: 128
       hidden_loss_scale: 1.0
-      cosine_loss_scale: 0.1
-      chunk_rollout_chunks: 4
-      chunk_rollout_loss_scale: 1.0
+      cosine_loss_scale: 0.0
+      chunk_rollout_chunks: 1
+      chunk_rollout_loss_scale: 0.0
       reward_head_type: binary
       reward_loss_scale: 32.0
       reward_hidden_dim: 1024
@@ -95,22 +113,27 @@ ray_components:
   classifier:
     target: dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier
     kwargs:
-      latent_dim: ${task.openvla_oft.input_tokens.token_dim}
+      latent_dim: ${task.openvla_oft.input_tokens.classifier_latent_dim}
       action_dim: ${task.action_dim}
       time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
       token_dim: ${task.openvla_oft.input_tokens.token_dim}
       token_count: ${task.openvla_oft.input_tokens.token_count}
-      token_pool: mean
+      head_type: spatial_tf
+      proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+      proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
+      num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+      lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+      lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
+      num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
       window: 8
       hidden_dim: 1024
-      num_layers: 4
+      num_layers: 12
       num_heads: 8
       mlp_ratio: 4.0
       dropout: 0.1
       granularity: chunk
       chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
       chunk_pool: last
-      head_type: transformer
 
 # Inputs build_oft_worker_plan / _build_collect_cfg read to derive the OFT
 # inference (OFTRolloutBundle) cfg programmatically.
@@ -137,6 +160,15 @@ collect:
 
 env:
   num_workers: 1
+  envs_per_worker: 4
+  train:
+    # RLinf manual-cotrain-style WM rollout scale. This is not physical LIBERO env
+    # parallelism; learner.batch_size derives from it together with imag_last
+    # and group_size.
+    total_num_envs: 64
+    group_size: ${algorithm.group_size}
+    max_episode_steps: 512
+    max_steps_per_rollout_epoch: 512
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
@@ -160,6 +192,28 @@ rollout:
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0
   require_classifier_evidence: true
+  dump:
+    enabled: true
+    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent
+    keep_last_global_steps: 8
+    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent/reward
+    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent/hidden
+    shard_prefix: cotrain_episode
+    demos_per_shard: 1
+    preprocess_config:
+      action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
+      history: ${task.openvla_oft.input_tokens.expected_history}
+      include_state: ${task.openvla_oft.input_tokens.expected_include_state}
+      hidden_key: obs_embedding
+      obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
+      token_count: ${task.openvla_oft.input_tokens.token_count}
+      token_dim: ${task.openvla_oft.input_tokens.token_dim}
+      wm_obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+      chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+    data_attrs:
+      task_suite_name: ${task.suite}
+      env_name: libero
+      source: online_cotrain_ray
 
 replay:
   cfg:
@@ -179,18 +233,11 @@ replay:
 policy:
   cfg: ${ray_components.policy}
 
-# GPU allocation = RLinf-style component placement, COLLOCATE: env rollout (egl rendering),
-# inference, and the learner all share the visible GPU pool. This is the efficient choice
-# for LIBERO OFT cotrain because the bottleneck is CPU env physics (env_step time >> learner
-# time) and the learner is light + infrequent — dedicating GPUs to it (disaggregate) would
-# leave them idle. The env workers render egl round-robin across the whole pool (runner
-# _egl_device_pool); a single inference worker (pool GPU 0) and a single learner (pool GPU 1)
-# time-share those GPUs with rendering. Indices are RELATIVE to the visible GPUs
-# (CUDA_VISIBLE_DEVICES), so the same config works on any 2+ GPU slice.
-#
-# DISAGGREGATE alternative (use for a HEAVY learner, e.g. large-model RL that would contend
-# with inference): give the learner its own GPUs — learner.placement start_gpu/end_gpu over a
-# dedicated range + num_gpus_per_worker>1 (FSDP) — and pin inference to the remaining GPUs.
+# GPU allocation follows RLinf's component placement. This base file is the small
+# two-GPU route; the 6-GPU launcher overrides env.num_workers and
+# cluster.component_placement so EnvWorkers span the full GPU slice. Rollout and
+# actor map to DreamerVLA inference and learner, which are single-worker contracts
+# in this runner.
 inference:
   worker_target: dreamervla.workers.inference.rollout_inference_worker:RolloutInferenceWorker
   placement:
@@ -212,7 +259,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: dreamervla_cotrain
-    batch_size: 2
+    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_threshold: 0.5
@@ -220,15 +267,25 @@ learner:
     device: auto
     precision: bf16
     algorithm_cfg:
-      ppo_rollouts_per_start: 4
+      # RLinf manual-cotrain-style rollout scale:
+      # total_num_envs(64) * rollout_epoch(16) = 1024 imagined trajectories
+      # per PPO update; batch_size is derived as total_num_envs / (imag_last * group_size).
+      group_size: ${algorithm.group_size}
+      rollout_epoch: ${algorithm.rollout_epoch}
+      imag_last: 4
+      ppo_rollouts_per_start: ${algorithm.group_size}
       ppo_update_epochs: 1
+      kl_coef: 0.0
       entropy_coef: 0.0
+      clip_ratio_low: 0.2
+      clip_ratio_high: 0.28
+      clip_ratio_c: 3.0
       lumos:
         chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
-        episode_max_steps: 300
+        episode_max_steps: ${env.train.max_episode_steps}
         classifier_min_steps: 4
-        ppo_rollouts_per_start_min: 4
-        ppo_rollouts_per_start_max: 16
+        ppo_rollouts_per_start_min: ${algorithm.group_size}
+        ppo_rollouts_per_start_max: ${algorithm.group_size}
         filter_zero_variance_groups: true
         update_micro_batch_starts: 1
     optim_cfg:

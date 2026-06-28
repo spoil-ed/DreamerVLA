@@ -54,9 +54,11 @@ def test_build_transition_has_replay_keys_and_dtypes():
     rec = _full_record()
     emb = np.arange(229376, dtype=np.float32)
     wm = np.arange(7, dtype=np.float32)
+    lang_emb = np.arange(6, dtype=np.float32)
     tr = build_cotrain_replay_transition(
         rec, emb, wm, reward=1.5, terminated=True, truncated=False,
         task_id=3, task_description="pick up the bowl", step=4, is_first=False, image_size=64,
+        lang_emb=lang_emb,
     )
     # keys OnlineReplay.sample / add_episode require
     for k in (
@@ -66,6 +68,8 @@ def test_build_transition_has_replay_keys_and_dtypes():
         assert k in tr
     np.testing.assert_array_equal(tr["image"], dreamer_image_from_record(rec, 64))
     np.testing.assert_array_equal(tr["state"], proprio_from_record(rec))
+    np.testing.assert_array_equal(tr["proprio"], proprio_from_record(rec))
+    np.testing.assert_array_equal(tr["lang_emb"], lang_emb)
     np.testing.assert_array_equal(tr["wm_action"], wm)
     assert tr["reward"].dtype == np.float32 and float(tr["reward"]) == 1.5
     assert float(tr["done"]) == 1.0 and bool(tr["is_terminal"]) is True
@@ -113,6 +117,44 @@ def test_validate_rollout_cfg_rejects_zero_envs():
 
     with pytest.raises(ValueError, match="num_envs"):
         validate_rollout_cfg(num_envs=0, render_backend="egl", latent_type="action_hidden")
+
+
+def test_validate_rollout_cfg_requires_render_devices_for_multienv_egl():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="render_devices.*osmesa"):
+        validate_rollout_cfg(
+            num_envs=4,
+            render_backend="egl",
+            latent_type="action_hidden",
+            render_devices=[],
+            compute_devices=[0, 1],
+        )
+
+
+def test_validate_rollout_cfg_rejects_egl_render_compute_overlap():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    with pytest.raises(ValueError, match="not overlap.*render_backend=osmesa"):
+        validate_rollout_cfg(
+            num_envs=4,
+            render_backend="egl",
+            latent_type="action_hidden",
+            render_devices=[1, 2],
+            compute_devices=[0, 1],
+        )
+
+
+def test_validate_rollout_cfg_accepts_disjoint_egl_render_devices():
+    from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
+
+    validate_rollout_cfg(
+        num_envs=4,
+        render_backend="egl",
+        latent_type="action_hidden",
+        render_devices=[2, 3],
+        compute_devices=[0, 1],
+    )
 
 
 def test_rollout_progress_metrics_exposes_empty_denominator_and_active_steps():

@@ -1,173 +1,273 @@
 # AGENTS.md
 
-Canonical brief for AI agents working on Dreamer-VLA. Detailed reference lives in the
-docs linked at the bottom; contribution mechanics live in [CONTRIBUTING.md](CONTRIBUTING.md).
-This file stays short and big-picture — when in doubt, follow the invariants below and
-point readers at the reference docs rather than restating detail here.
+Brief for AI coding agents working on DreamerVLA. For contribution mechanics, commit
+style, and PR process, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**What's done and what's left** are the companion ledgers [docs/HISTORY.md](docs/HISTORY.md)
-(shipped work) and [docs/superpowers/TODO.md](docs/superpowers/TODO.md) (open work). AGENTS.md is the stable
-rules/architecture; those two are the volatile state — read them together to align on any task.
+**Quick orientation:** DreamerVLA is a single-machine VLA + world-model training stack
+for LIBERO. Hydra owns configuration. A `Runner` owns one train/eval job. The current
+mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 
-## What Dreamer-VLA is
+`collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain`
 
-A single-machine, multi-GPU research framework that pairs a **VLA encoder**
-(RynnVLA / OpenVLA-OFT / Chameleon action head) with a **Dreamer-style world model**
-(DreamerV3 RSSM, DINO-WM, TSSM) on the **LIBERO** benchmark. **Hydra** drives config; a
-**Runner** is the training unit. Mainline distributed runs use **torchrun (DDP)** or
-**FSDP**; **Ray is an optional single-machine backend** for rollout / cotrain experiments,
-not a second default topology or a multi-node layer. Python 3.11, type hints + docstrings
-on public APIs.
+The command-level reference is
+[spec/01_complete_loop.md](spec/01_complete_loop.md). Architecture source documents live
+under [spec/](spec/), with [spec/99_manual_notes.md](spec/99_manual_notes.md) as the
+highest-priority user guidance. Keep this file as the repository brief, not a history
+log. Shipped work and open work live in [docs/HISTORY.md](docs/HISTORY.md) and
+[docs/superpowers/TODO.md](docs/superpowers/TODO.md).
 
-Mainline pipeline: **VLA SFT → precompute action-hidden sidecar → action-hidden world
-model (+ classifier) → DreamerVLA actor-critic / LUMOS RL**.
+---
 
-## Code structure
+## Code Structure
 
-- **`dreamervla/`** — the package:
-  - `algorithms/` — PPO family, GRPO, DINO-LUMOS, TD-MPC, DreamerVLA actor-critic; actor/critic/reward heads; `registry.py` for actor-update routes. LUMOS reward is selectable via `algorithm.lumos.reward_model` (registry in `algorithms/reward/`, default `sparse_outcome`); the success verifier (value source `V(e_t)=P(success)`) must satisfy `algorithms/verifier/SuccessVerifier` and is swapped via the `classifier` component's Hydra `_target_`.
-  - `models/` — encoder, world model, VLA backbones (each behind a protocol).
-  - `dataset/`, `preprocess/` — offline datasets + the Hydra-centered sidecar/hidden extraction pipelines.
-  - `runners/` — `BaseRunner` + VLA SFT / WM / classifier / DreamerVLA / eval runners, DDP-FSDP helpers, standalone online/frozen tools, and optional Ray rollout/cotrain runners.
-  - `launchers/` — multi-stage pipeline launchers (e.g. cold-start collect → warmup → cotrain) that compose `dreamervla.train` invocations.
-  - `envs/` — offline (dataset-driven) and online (rollout-driven, `DreamerVLAOnlineTrainEnv`) wrappers.
-  - `diagnostics/` — importable diagnostics, eval CLIs, smoke checks.
-  - `scheduler/`, `workers/`, `hybrid_engines/` — optional Ray-backend primitives; keep them behind Hydra-selected runners and out of the default path.
-  - `utils/` — checkpoint, logger, optim, EMA, viz, shared helpers. `legacy/` — isolated old-artifact utilities; never import from active configs/runners.
-- **`configs/`** — Hydra. `train.yaml` is the grouped train/eval entry; select a recipe with `experiment=<name>` from `experiment/`, which composes the cohesive groups `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`, `evaluation/`, `task/`, and `logger/`.
-- **`scripts/`** — thin, resumable shell launchers only; implementation lives under `dreamervla/` and runs via `python -m`.
-- **`tests/`** — `unit_tests/` and `e2e_tests/` (the latter may spawn subprocs / real env / real ckpts).
-- **`data/`** — runtime inputs/outputs (`datasets/`, `checkpoints/`, `processed_data/`, `outputs/`); **`third_party/`** — vendored upstreams (LIBERO, OpenVLA-OFT, robosuite, …).
+- **`dreamervla/`** - main package:
+  - `train.py` - Hydra entry. Resolves config, validates it, loads `cfg._target_`,
+    then runs `setup -> execute -> teardown`.
+  - `config.py` - early validation for logger backends, actor-update routes, batch
+    shape, resume paths, sidecar contracts, latent dimensions, Ray resources, and FSDP.
+  - `launchers/` - Python launchers. The main pipeline launcher is
+    `coldstart_warmup_cotrain.py`.
+  - `runners/` - `BaseRunner` plus public runner targets. Current mainline runners are
+    `CollectRolloutsRunner`, `ColdStartRayCollectRunner`,
+    `OnlineCotrainPipelineRunner`, `OnlineCotrainRunner`, `ManualCotrainRayRunner`,
+    and `OnlineCotrainRayRunner`.
+    WM, classifier, VLA SFT, and eval runners are also here.
+  - `models/` - VLA encoders/policies, world models, actors, critics, reward heads.
+  - `algorithms/` - LUMOS/PPO-style update code, actor-update registry, reward-model
+    registry, verifier protocol.
+  - `dataset/` and `preprocess/` - LIBERO HDF5 datasets, rollout dumps, manifests,
+    hidden sidecars, and validation utilities.
+  - `envs/` - LIBERO train/eval env wrappers plus `envs/world_model/LatentWorldModelEnv`.
+  - `workers/`, `scheduler/`, `hybrid_engines/` - opt-in Ray async cotrain backend:
+    env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
+  - `diagnostics/` - importable smoke checks and measurement CLIs.
+  - `utils/` - checkpoint, logging, metrics, paths, timers, EGL, HF modules, shared helpers.
+  - `legacy/` - old artifact utilities. Do not import this from active configs or runners.
+- **`configs/`** - Hydra source of truth:
+  - `train.yaml` composes `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
+    `evaluation/`, `logger/`, and `experiment/`.
+  - `configs/scripts/coldstart_warmup_cotrain.yaml` defines the launcher-level pipeline.
+  - `configs/experiment/` selects complete recipes.
+  - `configs/task/` carries LIBERO suite, checkpoint, image/history, and sidecar metadata.
+- **`scripts/`** - thin shell launchers. Implementation belongs in `dreamervla/` and
+  runs via `python -m`.
+- **`tests/`** - `unit_tests/` for contracts and focused behavior; `e2e_tests/` for
+  subprocess, Ray, GPU, or real-environment coverage.
+- **`data/`** - runtime data root when `DVLA_DATA_ROOT` is not set:
+  datasets, checkpoints, collected rollouts, processed data, and outputs.
+- **`third_party/`** - vendored LIBERO/OpenVLA/robosuite-style dependencies.
 
-## How it runs
+---
 
-`python -m dreamervla.train experiment=<name> task=<suite>` →
-`train.py` reads `RANK`/`WORLD_SIZE` (forcing DDP under `torchrun`), runs an early
-`dreamervla.config.validate_cfg` pass, resolves `cfg._target_` to a **Runner**, then
-`setup → execute → teardown`. The runner owns dataset, encoder, world model,
-actor/critic/reward, optimizer, logger, and checkpoints. DDP-vs-FSDP, mixed precision,
-gradient checkpointing, EMA, and LR schedule are `training:` config knobs, not code
-branches. Optional Ray runners may use the worker/scheduler primitives internally but
-remain explicit `experiment=<name>` routes that share the model/data/checkpoint/metric
-contracts of the non-Ray path.
+## Mainline Flow
 
-## Core invariants (the part that matters most)
+Use one of the e2e wrappers:
 
-1. **Hydra is the source of truth.** Real training dims, model widths, horizons, batch
-   sizes, sidecar names, checkpoint paths, and task behavior come from config — not from
-   defaults baked into runner/worker logic. Code defaults are only for synthetic smokes,
-   back-compat, or safe local fallbacks. **Asserts validate, they never decide.** Every
-   parameter is set in Hydra config from the start, never chosen by an `assert`, fallback,
-   or in-function constant; asserts only check that two quantities align
-   (`derived == cfg.value`, `lhs == rhs`), never equal a literal.
-2. **Name by role, not by artifact.** Classes/modules are named for their contract
-   (`OFTBatchedDecoder`, `VecRolloutEnv`, `PixelHiddenSequenceDataset`), never for a
-   concrete model/benchmark/checkpoint/sidecar — unless the class genuinely implements
-   that one external boundary. Bind concrete choices through Hydra targets, registries,
-   protocols, and task configs so one class serves many variants. **Keep models, datasets,
-   and implementation classes decoupled** — each depends on the others only through a
-   protocol / registry / Hydra target, never by importing or hardcoding a concrete sibling,
-   so any model, dataset, or impl can be swapped from config alone.
-   *Hydra-core construction (the rules that prevent the coupling traps we keep hitting):*
-   build every component with `hydra.utils.instantiate(cfg.<component>)` — never
-   `ConcreteClass(...)` in runner/algorithm/worker logic. Give constructors a
-   `__init__(self, cfg=None, **kwargs)` shape so a `_target_` instantiates directly; don't
-   force callers to hand-build a Config dataclass. When rebuilding from a checkpoint, route
-   through ONE `_target_`-aware builder that falls back to the legacy default, so old ckpts
-   load and new ones swap. Select implementations in config (compose/override), never by a
-   runtime `cfg._target_ = "..."` mutation or `isinstance(x, Concrete)` branch. Keep
-   "contract" params (history, dtype, sampling mode) in config too, not baked into the call.
-3. **Derive downstream dims from the VLA + task, not by copying.** World-model,
-   classifier, actor, replay, and sidecar dimensions flow from the selected VLA head +
-   dataset/task metadata via Hydra interpolation. Don't change `wm_obs_dim` / `token_count`
-   / `token_dim` / `chunk_size` / horizon from semantics alone — check the existing sidecar
-   `preprocess_config.json` / HDF5 attrs first; if artifacts are absent, keep it explicit,
-   validate, and mark `TODO(agent)`.
-4. **Keep the two "hidden" concepts separate.** `wm_obs_dim` / `token_count` / `token_dim`
-   describe the external VLA/sidecar latent the WM consumes; `model_dim` / `mlp_dim` /
-   RSSM `deter/stoch/classes` / TSSM `d_model` describe internal WM width. External dims
-   must match sidecar data; internal widths are architecture choices, never inferred from
-   the dataset.
-5. **Anything checkpoint-specific follows the checkpoint.** E.g. OFT `history` (h1/h2) is
-   `num_images_in_input ÷ #cameras` — a property of how the VLA ckpt was SFT'd — derived
-   from the single source `task.openvla_oft.expected_history`. Do not hardcode such values
-   as a fixed "scheme" anywhere.
-6. **Optional components are opt-in.** Build/validate what the active config declares; a
-   route that doesn't define a reward worker, classifier, sidecar field, or logger backend
-   simply doesn't use it. No defensive "not supported because X is missing" branches —
-   prefer registries, protocol capability checks, and narrow validation of declared fields.
-7. **One run, one root.** Each invocation writes under `${training.out_dir}`:
-   `checkpoints/`, `log/tensorboard/`, `log/wandb/`, `video/{train,eval}/`, `diagnostics/`,
-   plus `resolved_config.yaml` and `run_manifest.json` (written by BaseRunner). Don't
-   scatter artifacts across unrelated folders.
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh \
+  task=goal ngpu=6 profile=multi_gpu render_backend=osmesa
 
-## Running & extending
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal ngpu=6 profile=multi_gpu render_backend=egl
+```
 
-- **Recipe, not knobs:** choose one `experiment=<name>`, switch tasks with
-  `task=libero_goal|libero_object|libero_spatial|libero_10`, and override run-tag / GPU
-  count / batch size as ordinary Hydra keys. Registries: [configs/README.md](configs/README.md),
-  [scripts/README.md](scripts/README.md).
-- **Logging:** defaults to `logger=tensorboard_wandb` (W&B online; `runner.logger.wandb_mode=offline`
-  for local). Route metrics through `BaseRunner.log_metrics` with namespaces
-  `train/ eval/ env/ rollout/ time/`; no ad-hoc scalar names, no bare `print` in
-  training-loop code (use the runner logger / `utils/json_logger.py`).
-- **Checkpoints / resume:** saved under `${training.out_dir}/checkpoints/` at
-  `training.checkpoint_every`; resume via `training.resume` + an explicit path or the
-  latest there. Use `BaseRunner.get_global_step_checkpoint_dir` / component-checkpoint
-  helpers rather than hand-built paths.
-- **Eval:** LIBERO Dreamer rollout via `scripts/eval_libero_vla.sh`
-  (`eval.ckpt_kind=dreamer`, `eval.dreamer_policy_source`, `eval.dreamer_actor_input_source`);
-  raw OpenVLA-OFT via `scripts/eval/launch_openvla_oft_*.sh`.
-- **New route:** subclass `BaseRunner` (implement `setup`/`execute`/`teardown`, reuse its
-  distributed + checkpoint plumbing), export it, add the cohesive group YAML + an
-  `experiment/<name>.yaml`; add a shell launcher only if the call differs from
-  `python -m dreamervla.train experiment=<name>`.
-- **New algorithm / WM / encoder:** add a module matching the existing kwargs/return (or
-  protocol), register actor-update routes in `algorithms/registry.py` (referenced via
-  `algorithm.update_type`), and wire through config — never `if algorithm == ...` branches
-  in training loops. Add regression tests under `tests/`.
-- **New env beyond LIBERO:** not a stable surface (data path + reward labels assume LIBERO
-  HDF5 + task metainfo); open an issue first.
-- Operational detail — OOM knobs, exact resume flags, parameter meanings — lives in
-  [docs/PARAMETERS.md](docs/PARAMETERS.md) and the [tutorials](docs/experiment_tutorials/);
-  don't duplicate it here.
+Both scripts set `DVLA_ROOT`, default `DVLA_DATA_ROOT`, activate the `dreamervla`
+conda env when available, set `NCCL_NVLS_ENABLE=0`, and call
+`python -m dreamervla.launchers.coldstart_warmup_cotrain`.
 
-## RLinf discipline
+The launcher composes `configs/scripts/coldstart_warmup_cotrain.yaml`:
 
-RLinf is the reference for *engineering discipline*, not process sprawl: early config
-validation, one-root run artifacts, list-composed metric backends, registry-style
-extension points, and a low-cost smoke/e2e config per mainline recipe. Adopt those habits
-while keeping the single-machine Runner design and Ray as an optional, contract-sharing
-backend.
+- `mode=noray` uses `experiment=collect_rollouts_onetraj`
+  (`CollectRolloutsRunner`) for vectorized collection.
+- `mode=ray` uses `experiment=collect_rollouts_ray`
+  (`ColdStartRayCollectRunner`) for worker-fanout collection.
+- Collection always renders with osmesa and writes
+  `${DVLA_DATA_ROOT}/collected_rollouts/<suite>/{reward,hidden}` plus
+  `collection_manifest.json`.
+- The sync cotrain path uses
+  `experiment=online_cotrain_pipeline_oft_backbone_latent`, which composes
+  `dreamervla=online_cotrain_pipeline_openvla_oft_backbone_latent`.
+- The pipeline runner seeds `OnlineReplay` from collected reward + hidden HDF5 shards,
+  warms up the world model and classifier with the same update functions used online,
+  then runs online cotrain.
+- `cotrain_phase=warmup` writes split warmup checkpoints under
+  `${RUN_ROOT}/cotrain/ckpt/`.
+- `cotrain_phase=online` resumes those warmup checkpoints and skips collection/warmup.
+- `cotrain_engine=async` runs sync warmup first, consolidates a Ray init checkpoint,
+  then starts `experiment=manual_cotrain_ray_oft_backbone_latent`
+  (`ManualCotrainRayRunner`).
 
-## When things go wrong
+Ray async cotrain is explicit and single-node. The target route is manual-notes style:
+`LearnerGroup` owns world-model/classifier updates, `ActorGroup` owns VLA FSDP
+training, `RolloutGroup` owns no-grad policy inference, and `EnvGroup` owns real/WM
+environment interaction.
 
-- Install (LIBERO editable, flash-attn, ColossalAI/TensorNVMe/APEX, egl_probe):
-  [docs/install.md](docs/install.md). OpenVLA-OFT needs the moojink transformers fork —
-  installed into the main env and FATAL-checked by `scripts/install/60_verify.sh`.
-- Rendering: `MUJOCO_GL=egl`, or `MUJOCO_GL=osmesa` (+ `PYOPENGL_PLATFORM=osmesa`) where
-  EGL crashes robosuite `read_pixels`. Smoke: `python -m dreamervla.diagnostics.smoke_libero_online_env`.
-- NCCL/CUDA timeouts under DDP usually mean one rank diverged (NaN, mismatched batch) —
-  read the rank-0 log before blaming the network, and don't remove the DDP sync guards in
-  `dreamervla/algorithms/ppo/outcome.py`.
+## 参考实现与学习要求
+
+manual cotrain 实现应以同级 `RLinf` 工作区作为 Group、Worker、
+channel data flow 和 training loop 组织方式的参考实现。最接近的路线是 RLinf
+WoVR/embodiment，尤其是 `rlinf/runners/embodied_runner.py`、
+`rlinf/workers/env/env_worker.py`、`rlinf/workers/rollout/hf/huggingface_worker.py`
+和 `rlinf/data/embodied_io_struct.py`。
+
+修改 DreamerVLA cotrain 内部实现前，必须理解 RLinf 如何拆分 `ActorGroup`、
+`RolloutGroup` 和 `EnvGroup`：Actor 负责 FSDP training，Rollout 负责 no-grad
+HF/BasePolicy inference 并从 Actor 拉取权重，Env 负责 real/imagined environment
+stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `LearnerGroup`，
+用于 world-model/classifier update。
+
+---
+
+## How Training Runs
+
+`python -m dreamervla.train experiment=<name> task=<suite>` does this:
+
+1. Register DreamerVLA OmegaConf resolvers.
+2. Force `training.distributed_strategy=ddp` when launched under `torchrun` with
+   `WORLD_SIZE > 1`.
+3. Resolve Hydra config and call `dreamervla.config.validate_cfg`.
+4. Resolve `cfg._target_` to a runner class.
+5. Run `BaseRunner.setup()`, `execute()`, and `teardown()`.
+
+`BaseRunner` writes reproducibility artifacts under `${training.out_dir}`:
+
+- `resolved_config.yaml`
+- `run_manifest.json`
+- `checkpoints/`
+- `log/tensorboard/`
+- `log/wandb/`
+- `video/{train,eval}/`
+- `diagnostics/`
+
+Keep one invocation under one run root. Pipeline collection and cotrain are separate
+sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
+
+---
+
+## Configuration Contracts
+
+- **Hydra is the source of truth.** Dims, widths, horizons, batch sizes, checkpoint
+  paths, sidecar names, task behavior, logger backends, precision, DDP/FSDP, and Ray
+  placement come from config.
+- **Validation checks relationships.** It must not choose training behavior. Use
+  assertions and `validate_cfg` to prove values align, not to set hidden defaults.
+- **Use config-selected construction.** Normal components use Hydra `_target_` and
+  `hydra.utils.instantiate`. Ray worker configs use the existing `target` + `kwargs`
+  builders. Do not hardcode concrete model/dataset/worker classes inside train loops.
+- **Name by role.** Prefer contract names such as `OnlineReplay`, `VecRolloutEnv`,
+  `PixelHiddenSequenceDataset`, and `LatentWorldModelEnv`. Do not name core modules after
+  one checkpoint or one artifact unless that external boundary is the whole contract.
+- **Keep hidden concepts separate.** `wm_obs_dim`, `token_count`, `token_dim`,
+  `chunk_size`, and sidecar keys describe external VLA/sidecar data. `model_dim`,
+  RSSM/TSSM width, heads, depth, and MLP sizes describe internal world-model capacity.
+- **Derive downstream shapes from task + sidecar metadata.** For OpenVLA-OFT routes,
+  use `task.openvla_oft.input_tokens.*` and collected HDF5/preprocess metadata. Do not
+  copy dimensions by hand between world model, classifier, actor, replay, and sidecars.
+- **Checkpoint-specific settings follow the checkpoint.** History, image rotation,
+  prompt style, proprio/state inclusion, and action-head type are task/checkpoint
+  metadata. Do not encode them as fixed schemes in runners.
+- **Optional components are opt-in.** Build and validate only what the active config
+  declares. Use registries, protocols, and narrow capability checks instead of broad
+  "not supported" branches.
+
+---
+
+## Metrics, Checkpoints, Evaluation
+
+- Route metrics through `BaseRunner.log_metrics`.
+- Use namespaces: `train/`, `eval/`, `env/`, `rollout/`, `time/`, and `sync/`.
+- Logger backends come from `runner.logger.logger_backends`; defaults use TensorBoard
+  and W&B where the active experiment declares them.
+- Base checkpoints use `${training.out_dir}/checkpoints/global_step_<N>/`.
+- Pipeline warmup checkpoints use `${RUN_ROOT}/cotrain/ckpt/wm_warmup.ckpt` and
+  `${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt`.
+- Use `BaseRunner.get_global_step_checkpoint_dir` and component checkpoint helpers
+  instead of hand-built paths.
+- LIBERO Dreamer/OpenVLA evaluation goes through `scripts/eval_libero_vla.sh` and
+  `configs/scripts/eval_libero_vla.yaml`.
+
+---
+
+## Extension Points
+
+- **New route:** add a `BaseRunner` subclass, export it from `dreamervla.runners`, add a
+  cohesive `configs/<group>/...yaml`, and add an `experiment/<name>.yaml`. Add a shell
+  launcher only when `python -m dreamervla.train experiment=<name>` is not enough.
+- **New actor update:** register an `ActorUpdateRoute` in `dreamervla/algorithms/registry.py`
+  and select it with `algorithm.update_type`.
+- **New LUMOS reward model:** implement the reward protocol and register it in
+  `dreamervla/algorithms/reward/`.
+- **New verifier/classifier:** satisfy `algorithms/verifier/SuccessVerifier` and select
+  it through the `classifier` Hydra component.
+- **New VLA, actor, WM, critic, or dataset:** implement the existing protocol/kwargs
+  contract and wire it through Hydra. Do not add `if model == ...` branches to training
+  loops when a registry or target can express the choice.
+- **New env:** LIBERO is the stable env/data surface today. Adding another env requires
+  task config, rollout record schema, reward labels, and tests.
+
+---
+
+## Optional Components
+
+- Target Ray async cotrain (`ManualCotrainRayRunner`) is available through
+  `manual_cotrain_ray_oft_backbone_latent`.
+- Legacy Ray async cotrain (`OnlineCotrainRayRunner`) remains available only through
+  explicit legacy experiments such as `online_cotrain_ray_oft_backbone_latent`.
+- World-model-env smoke coverage exists through
+  `experiment=online_cotrain_ray_world_model_env_tiny`.
+- RynnVLA, action-hidden, token, pixel, Chameleon, and older Dreamer routes remain in
+  configs and runners as secondary routes. Do not make them the default path unless the
+  active task requests them.
+- `scheduler/`, `workers/`, and `hybrid_engines/` are backend primitives. Keep them
+  behind Hydra-selected runners.
+
+---
+
+## When Things Go Wrong
+
+- Run `bash scripts/install/60_verify.sh` before large OpenVLA-OFT jobs. It checks the
+  OpenVLA-OFT transformer fork and the pinned package set used by the tutorial.
+- OpenVLA-OFT currently expects `peft==0.11.0`; newer `peft` versions can import symbols
+  missing from the transformer fork.
+- Select rollout rendering with the launcher/config knob `render_backend=egl|osmesa`.
+  Collection stays on osmesa.
+- For EGL, Ray async placement owns `CUDA_VISIBLE_DEVICES` and `MUJOCO_EGL_DEVICE_ID`
+  per EnvWorker. Do not bypass the placement contract with ad-hoc env vars.
+- NCCL/CUDA timeouts under DDP usually mean a rank diverged first. Read the rank-0 log
+  and keep the DDP sync guards in `dreamervla/algorithms/ppo/outcome.py`.
+
+---
 
 ## Style
 
-Python 3.11; type hints + docstrings on public APIs. Static config YAML (no computed
-fields — derive in the runner). New behavior needs a test under `tests/`; heavy GPU runs
-go in `tests/e2e_tests/` (gated). Shell files are one-command launchers — no loops,
-`case`, functions, or arg parsers (use Python/Hydra for iteration, dispatch, resume, GPU
-counting); `if` only for run/skip/required-input guards. Commits: Conventional Commits,
-~72-char imperative subject, `git commit -s`. Full mechanics: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Python 3.11.
+- Type hints and docstrings on public APIs.
+- Static YAML only. Derive runtime values in runners or builders, then validate.
+- Shell scripts are one-command launchers. No loops, `case`, functions, or custom arg
+  parsers; use Python/Hydra for iteration and dispatch. `if` is acceptable for
+  run/skip/required-input guards.
+- No bare `print` in training-loop code except concise rank-0 progress lines already
+  used by runners. Prefer runner logging and `utils/json_logger.py`.
+- New behavior needs tests under `tests/`; GPU/Ray/real-env coverage belongs in
+  `tests/e2e_tests/` and must be gated appropriately.
+- Commits use Conventional Commits, about 72 characters, imperative mood, and
+  `git commit -s`.
 
-## Further reading
+---
 
-[**History (done)**](docs/HISTORY.md) · [**TODO (open)**](docs/superpowers/TODO.md) ·
-[Repository structure](docs/repository_structure.md) ·
-[Install](docs/install.md) ·
-[Config registry](configs/README.md) ·
-[Script registry](scripts/README.md) ·
-[Parameter reference](docs/PARAMETERS.md) ·
-[Experiment tutorials](docs/experiment_tutorials/) + [explained](docs/experiment_tutorials/EXPLAINED.md) ·
-[Data layout](docs/data_layout.md) ·
-[README](README.md) / [中文](README.zh-CN.md)
+## Further Reading
+
+- [Architecture overview](spec/00_overview.md)
+- [Complete cotrain loop](spec/01_complete_loop.md)
+- [Ray implementation notes](spec/02_ray.md)
+- [Manual notes](spec/99_manual_notes.md)
+- [Parameter reference](docs/PARAMETERS.md)
+- [Install](docs/install.md)
+- [Data layout](docs/data_layout.md)
+- [Config registry](configs/README.md)
+- [Script registry](scripts/README.md)
+- [Repository structure](docs/repository_structure.md)
+- [Docs index](docs/README.md)
+- [README](README.md) / [中文 README](README.zh-CN.md)

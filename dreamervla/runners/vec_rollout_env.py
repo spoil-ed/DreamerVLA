@@ -87,8 +87,15 @@ def _worker(
                 conn.send(("ok", env.task_description))
             elif cmd == "reset":
                 task_id, episode_id = payload
-                env.reset(episode_id=episode_id, task_id=task_id)
-                conn.send(("ok", env.full_record()))
+                _obs, reset_info = env.reset(episode_id=episode_id, task_id=task_id)
+                record = env.full_record()
+                if (
+                    isinstance(reset_info, dict)
+                    and "init_state_index" in reset_info
+                    and record.get("init_state_index") is None
+                ):
+                    record["init_state_index"] = int(reset_info["init_state_index"])
+                conn.send(("ok", record))
             elif cmd == "step":
                 _obs, reward, terminated, truncated, info = env.step(payload)
                 conn.send(

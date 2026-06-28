@@ -239,6 +239,8 @@ class DreamerVLARunner(BaseRunner):
                     "return_to_go",
                     "return_targets",
                     "task_ids",
+                    "proprio",
+                    "lang_emb",
                 )
                 if (value := batch.get(key)) is not None
             }

@@ -58,7 +58,7 @@ family, create `download/NN_name.sh`, write outputs only under
 | `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
 | `preprocess/20_pretokenize_dataset.sh` | Build image/state trees, conv JSONs, token records, manifests, and YAML configs |
 | `preprocess/30_action_hidden.sh` | Legacy RynnVLA action-hidden sidecar extraction |
-| `preprocess/35_oft_action_hidden.sh` | OpenVLA-OFT hidden_state sidecar extraction; `OFT_LATENT_SCHEME=input_tokens` is the active route, `action_hidden` is legacy-only |
+| `preprocess/35_oft_action_hidden.sh` | OpenVLA-OFT hidden_state sidecar extraction; `OFT_LATENT_SCHEME=input_tokens` is the active route, `action_hidden` remains for compatibility |
 | `preprocess/40_validate.sh` | Validate generated LIBERO preprocessing artifacts |
 | `preprocess/validate_libero_data.sh` | Fast structural validation for LIBERO preprocessing outputs |
 | `preprocess/concat_record_libero.sh` | Concatenate LIBERO record files |

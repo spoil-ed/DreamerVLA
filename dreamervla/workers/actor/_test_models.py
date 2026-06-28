@@ -65,7 +65,13 @@ class TinyLumosPolicy(nn.Module):
             return action, log_prob, {"action_chunk": action}
         if mode == "evaluate":
             action = batch["action"].float()
-            log_prob = -((action - mean) ** 2).mean(dim=(1, 2))
+            if action.ndim == 2:
+                mean_for_action = mean[:, 0, :]
+                reduce_dims = 1
+            else:
+                mean_for_action = mean
+                reduce_dims = (1, 2)
+            log_prob = -((action - mean_for_action) ** 2).mean(dim=reduce_dims)
             entropy = torch.ones_like(log_prob) * 0.5
             return log_prob, entropy, {}
         raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")

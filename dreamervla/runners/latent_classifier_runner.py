@@ -57,6 +57,41 @@ from dreamervla.runners.base_runner import BaseRunner
 # ---------------------------------------------------------------------------
 
 
+def _unpack_classifier_batch(
+    batch: Any,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    if isinstance(batch, (list, tuple)) and len(batch) == 3:
+        xs, ys, extra = batch
+        return xs, ys, dict(extra or {})
+    if isinstance(batch, (list, tuple)) and len(batch) == 2:
+        xs, ys = batch
+        return xs, ys, {}
+    raise TypeError(f"unexpected classifier batch type: {type(batch).__name__}")
+
+
+def _classifier_forward_kwargs(
+    model: LatentSuccessClassifier,
+    extra: dict[str, torch.Tensor],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    kwargs: dict[str, torch.Tensor] = {}
+    if bool(getattr(model, "supports_proprio_conditioning", False)):
+        proprio = extra.get("proprio")
+        if not isinstance(proprio, torch.Tensor):
+            raise ValueError(
+                "classifier requires proprio conditioning, but batch has no proprio"
+            )
+        kwargs["proprio"] = proprio.to(device, non_blocking=True)
+    if bool(getattr(model, "supports_language_conditioning", False)):
+        lang_emb = extra.get("lang_emb")
+        if not isinstance(lang_emb, torch.Tensor):
+            raise ValueError(
+                "classifier requires language conditioning, but batch has no lang_emb"
+            )
+        kwargs["lang_emb"] = lang_emb.to(device, non_blocking=True)
+    return kwargs
+
+
 class LatentClassifierRunner(BaseRunner):
     """Single-GPU epoch-based trainer for LatentSuccessClassifier.
 
@@ -126,6 +161,9 @@ class LatentClassifierRunner(BaseRunner):
             seed=int(OmegaConf.select(self.cfg, "training.seed") or 0),
             chunk_subsample=chunk_subsample,
             chunk_pool=chunk_pool,
+            proprio_keys=OmegaConf.select(d, "proprio_keys", default=None),
+            lang_emb_dir=OmegaConf.select(d, "lang_emb_dir", default=None),
+            lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
         )
         self.val_ds = LumosAlignedLatentValDataset(
             success_dir_raw=d.success_dir_raw,
@@ -136,6 +174,9 @@ class LatentClassifierRunner(BaseRunner):
             stride=int(d.stride_val),
             chunk_subsample=chunk_subsample,
             chunk_pool=chunk_pool,
+            proprio_keys=OmegaConf.select(d, "proprio_keys", default=None),
+            lang_emb_dir=OmegaConf.select(d, "lang_emb_dir", default=None),
+            lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
         )
 
         # ----- dataloaders -----------------------------------------------
@@ -265,14 +306,18 @@ class LatentClassifierRunner(BaseRunner):
         t0 = time.time()
         self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         while self.epoch < num_epochs:
-            for batch_idx, (xs, ys) in enumerate(self.train_loader):
+            for batch_idx, batch in enumerate(self.train_loader):
                 if batch_idx >= steps_per_epoch:
                     break
+                xs, ys, extra = _unpack_classifier_batch(batch)
                 xs = xs.to(self.device, non_blocking=True)
                 ys = ys.to(self.device, non_blocking=True)
+                forward_kwargs = _classifier_forward_kwargs(
+                    self.model, extra, self.device
+                )
 
                 self.model.train()
-                logits = self.model(xs)
+                logits = self.model(xs, **forward_kwargs)
                 loss = loss_fn(logits, ys)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
@@ -376,9 +421,23 @@ class LatentClassifierRunner(BaseRunner):
         self.model.eval()
         probs_l: list[float] = []
         ys_l: list[int] = []
-        for xs, ys, _ in self.val_loader:
+        for batch in self.val_loader:
+            xs, ys, extra_or_meta = batch
             xs = xs.to(self.device, non_blocking=True)
-            logits = self.model(xs)
+            extra: dict[str, torch.Tensor] = {}
+            if isinstance(extra_or_meta, list):
+                if extra_or_meta and all("proprio" in meta for meta in extra_or_meta):
+                    extra["proprio"] = torch.stack(
+                        [meta["proprio"] for meta in extra_or_meta]
+                    )
+                if extra_or_meta and all("lang_emb" in meta for meta in extra_or_meta):
+                    extra["lang_emb"] = torch.stack(
+                        [meta["lang_emb"] for meta in extra_or_meta]
+                    )
+            forward_kwargs = _classifier_forward_kwargs(
+                self.model, extra, self.device
+            )
+            logits = self.model(xs, **forward_kwargs)
             # LUMOS uses sigmoid(logits)[:, 1] — see LUMOS/verl/.../fsdp_workers.py:847
             probs = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
             probs_l.extend(probs.tolist())
@@ -426,15 +485,23 @@ class LatentClassifierRunner(BaseRunner):
         # Collect all windows from all episodes into flat batches, tagged
         # with episode idx; aggregate max per episode.
         flat_xs: list[np.ndarray] = []
+        flat_proprio: list[np.ndarray] = []
+        flat_lang: list[np.ndarray] = []
         flat_ep: list[int] = []
-        for ep_idx, (obs, complete, finish_step, _eid) in enumerate(
-            self.val_ds.trajectories()
-        ):
+        for ep_idx, trajectory in enumerate(self.val_ds.trajectories()):
+            if len(trajectory) == 5:
+                obs, complete, finish_step, _eid, extra = trajectory
+            else:
+                obs, complete, finish_step, _eid = trajectory
+                extra = {}
             T_env = int(min(finish_step, obs.shape[0]))
+            proprio = extra.get("proprio") if isinstance(extra, dict) else None
+            lang_emb = extra.get("lang_emb") if isinstance(extra, dict) else None
             if K > 1:
                 T_chunk = T_env // K
                 if T_chunk < 1:
                     obs_pooled = None
+                    proprio_pooled = None
                     T = 0
                 else:
                     trailing_shape = obs.shape[1:]
@@ -447,9 +514,22 @@ class LatentClassifierRunner(BaseRunner):
                         obs_pooled = reshaped[:, 0]
                     else:
                         obs_pooled = reshaped.mean(axis=1)
+                    if isinstance(proprio, np.ndarray):
+                        reshaped_proprio = proprio[: T_chunk * K].reshape(
+                            T_chunk, K, proprio.shape[-1]
+                        )
+                        if chunk_pool == "last":
+                            proprio_pooled = reshaped_proprio[:, -1]
+                        elif chunk_pool == "first":
+                            proprio_pooled = reshaped_proprio[:, 0]
+                        else:
+                            proprio_pooled = reshaped_proprio.mean(axis=1)
+                    else:
+                        proprio_pooled = None
                     T = T_chunk
             else:
                 obs_pooled = obs
+                proprio_pooled = proprio if isinstance(proprio, np.ndarray) else None
                 T = T_env
             ep_true.append(int(bool(complete)))
             first_end = max(W, min_steps + W)
@@ -459,14 +539,37 @@ class LatentClassifierRunner(BaseRunner):
             ep_max_prob.append(-1.0)  # placeholder; updated below
             for end in range(first_end, T + 1, stride):
                 flat_xs.append(obs_pooled[end - W : end])
+                if proprio_pooled is not None:
+                    flat_proprio.append(proprio_pooled[end - W : end])
+                if isinstance(lang_emb, np.ndarray):
+                    flat_lang.append(lang_emb)
                 flat_ep.append(ep_idx)
 
         if flat_xs:
+            if flat_proprio and len(flat_proprio) != len(flat_xs):
+                raise ValueError("episode eval proprio windows are incomplete")
+            if flat_lang and len(flat_lang) != len(flat_xs):
+                raise ValueError("episode eval language windows are incomplete")
             i = 0
             n = len(flat_xs)
             while i < n:
                 chunk = np.stack(flat_xs[i : i + ep_batch])
-                logits = self.model(torch.from_numpy(chunk).float().to(self.device))
+                extra: dict[str, torch.Tensor] = {}
+                if flat_proprio:
+                    extra["proprio"] = torch.from_numpy(
+                        np.stack(flat_proprio[i : i + ep_batch])
+                    ).float()
+                if flat_lang:
+                    extra["lang_emb"] = torch.from_numpy(
+                        np.stack(flat_lang[i : i + ep_batch])
+                    ).float()
+                forward_kwargs = _classifier_forward_kwargs(
+                    self.model, extra, self.device
+                )
+                logits = self.model(
+                    torch.from_numpy(chunk).float().to(self.device),
+                    **forward_kwargs,
+                )
                 p = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
                 for j, pj in enumerate(p):
                     eid = flat_ep[i + j]

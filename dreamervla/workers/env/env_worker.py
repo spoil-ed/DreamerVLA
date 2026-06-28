@@ -1,15 +1,21 @@
-"""Ray EnvWorker for single-env online rollout collection.
+"""Ray EnvWorker for online rollout collection.
 
-When egl GPU rendering is requested (``env_cfg["egl_device_pool"]`` is set), the env runs in a
-clean ``multiprocessing.spawn`` subprocess so its egl GL context initializes in a FRESH
-interpreter — no Ray/torch/CUDA pollution. This mirrors RLinf's per-env spawn venv and avoids
-the robosuite ``read_pixels`` SIGABRT that hits in-Ray-actor egl at multi-worker concurrency.
-The osmesa / synthetic-test path (no egl pool) stays in-process and unchanged.
+The Ray EGL path follows RLinf's worker-level resource regime: WorkerGroup binds
+each EnvWorker's ``CUDA_VISIBLE_DEVICES`` and ``MUJOCO_EGL_DEVICE_ID`` from
+``cluster.component_placement.env``, then each EnvWorker may host multiple
+spawned LIBERO env slots via ``env.num_envs_per_worker``. The children inherit
+that already-bound regime; they do not pick independent render devices.
+
+``env_cfg["egl_device_pool"]`` remains only as a legacy compatibility path for
+old callers. Native child death is fatal by default; set
+``env_cfg["egl_max_respawns"]`` to opt into dropping the partial episode and
+respawning the affected slot.
 """
 
 from __future__ import annotations
 
 import importlib
+import inspect
 import multiprocessing as mp
 import os
 import time
@@ -19,6 +25,10 @@ import numpy as np
 import ray
 
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.egl_device import (
+    apply_egl_device_regime,
+    log_egl_device_diagnostics_from_env,
+)
 
 
 def _build_env_from_cfg(env_cfg: dict[str, Any]) -> Any:
@@ -37,28 +47,76 @@ def _build_env_from_cfg(env_cfg: dict[str, Any]) -> Any:
     return env_cls(**kwargs)
 
 
-def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):  # noqa: ANN001
+def _record_builder_accepts_lang(record_builder: Any) -> bool:
+    try:
+        sig = inspect.signature(record_builder)
+    except (TypeError, ValueError):
+        return False
+    params = list(sig.parameters.values())
+    if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params):
+        return True
+    positional = [
+        p
+        for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 9
+
+
+def _call_record_builder(
+    record_builder: Any,
+    env: Any,
+    obs: dict[str, Any],
+    action: Any,
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    info: dict[str, Any],
+    obs_embedding: Any,
+    lang_emb: Any | None,
+) -> dict[str, Any]:
+    args = (env, obs, action, reward, terminated, truncated, info, obs_embedding)
+    if _record_builder_accepts_lang(record_builder):
+        return record_builder(*args, lang_emb)
+    return record_builder(*args)
+
+
+def _stamp_step_metadata(
+    transition: dict[str, Any],
+    step_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not step_metadata:
+        return transition
+    metadata = dict(transition.get("episode_metadata") or {})
+    metadata.update(
+        {
+            str(key): value
+            for key, value in dict(step_metadata).items()
+            if value is not None
+        }
+    )
+    transition["episode_metadata"] = metadata
+    return transition
+
+
+def _env_subprocess_main(  # noqa: ANN001
+    conn,
+    env_cfg,
+    task_id,
+    record_builder,
+    egl_device_id,
+    start_episode_id=0,
+):
     """Spawn-child loop: build one env in a fresh interpreter (clean egl context) and serve
     set_task / current_obs / step / close over the pipe. Transitions are built HERE (they need
     the env object); the parent EnvWorker accumulates them and pushes to the Ray replay.
     """
-    os.environ.setdefault("MUJOCO_GL", "egl")
-    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
     if egl_device_id is not None:
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = str(int(egl_device_id))
-        # RLinf-faithful device alignment: make CUDA visible on the SAME physical GPU
-        # the egl context renders to. RLinf's env procs set CUDA_VISIBLE_DEVICES +
-        # MUJOCO_EGL_DEVICE_ID together (nvidia_gpu.py); our CPU-placed EnvWorkers
-        # blank CUDA while egl renders on a physical GPU, and that CUDA-absent /
-        # egl-present mismatch is the likely robosuite read_pixels instability under
-        # sustained concurrency. Aligning them here mirrors RLinf without GPU-placing
-        # the Ray actor. Set before the env build (no CUDA/torch init has happened yet).
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(egl_device_id))
-        os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+        apply_egl_device_regime(egl_device_id, logger_name=__name__)
     try:
         env = _build_env_from_cfg(env_cfg)
         cur_task = int(task_id)
-        episode_id = 0
+        episode_id = int(start_episode_id)
         if hasattr(env, "set_task"):
             env.set_task(cur_task)
         cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
@@ -87,7 +145,15 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                 cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
                 conn.send(("ok", cur_obs))
             elif cmd == "step":
-                action, obs_embedding = payload
+                if isinstance(payload, tuple) and len(payload) == 4:
+                    action, obs_embedding, lang_emb, step_metadata = payload
+                elif isinstance(payload, tuple) and len(payload) == 3:
+                    action, obs_embedding, lang_emb = payload
+                    step_metadata = None
+                else:
+                    action, obs_embedding = payload
+                    lang_emb = None
+                    step_metadata = None
                 obs = cur_obs
                 record_obs = obs
                 if record_builder is not None and hasattr(env, "full_record"):
@@ -97,17 +163,33 @@ def _env_subprocess_main(conn, env_cfg, task_id, record_builder, egl_device_id):
                 info = dict(info or {})
                 info["episode_id"] = episode_id  # current episode (before the done-increment)
                 if record_builder is not None:
-                    transition = record_builder(
-                        env, record_obs, action, reward, terminated, truncated, info, obs_embedding
+                    transition = _call_record_builder(
+                        record_builder,
+                        env,
+                        record_obs,
+                        action,
+                        reward,
+                        terminated,
+                        truncated,
+                        info,
+                        obs_embedding,
+                        lang_emb,
                     )
                 else:
                     transition = env.make_transition(
                         obs, action, reward, terminated, truncated, info
                     )
+                    if "proprio" not in transition and "state" in transition:
+                        transition["proprio"] = np.asarray(
+                            transition["state"], dtype=np.float32
+                        ).reshape(-1)
                     if obs_embedding is not None:
                         transition["obs_embedding"] = np.asarray(
                             obs_embedding, dtype=np.float32
                         )
+                    if lang_emb is not None:
+                        transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
+                _stamp_step_metadata(transition, step_metadata)
                 done = bool(terminated or truncated)
                 if done:
                     episode_id += 1
@@ -162,12 +244,15 @@ class EnvWorker(Worker):
         env_cfg: dict[str, Any],
         task_id: int,
         replay: Any,
+        dump: Any | None = None,
         record_builder: Any | None = None,
     ) -> None:
         super().__init__()
         self.env_cfg = dict(env_cfg)
         self.task_id = int(task_id)
+        self.num_envs = max(1, int(self.env_cfg.get("num_envs_per_worker", 1)))
         self.replay = replay
+        self.dump = dump
         self._record_builder = record_builder
         self.env: Any | None = None
         self.obs: dict[str, Any] | None = None
@@ -175,12 +260,17 @@ class EnvWorker(Worker):
         self.episode_id = 0
         self._proc: Any | None = None
         self._conn: Any | None = None
-        # egl spawn-child crash resilience (Phase 1b): remember the egl device so a
-        # dead child can be respawned, and cap respawns so a persistently-crashing
-        # env fails loudly instead of thrashing.
         self._egl_device_id: int | None = None
-        self._respawn_count = 0
-        self._max_respawns = int(self.env_cfg.get("egl_max_respawns", 5))
+        self._procs: list[Any | None] = [None for _ in range(self.num_envs)]
+        self._conns: list[Any | None] = [None for _ in range(self.num_envs)]
+        self._obs_by_slot: list[dict[str, Any] | None] = [None for _ in range(self.num_envs)]
+        self._episodes_by_slot: list[list[dict[str, Any]]] = [
+            [] for _ in range(self.num_envs)
+        ]
+        self._episode_ids_by_slot: list[int] = [0 for _ in range(self.num_envs)]
+        self._task_ids_by_slot: list[int] = [self.task_id for _ in range(self.num_envs)]
+        self._egl_respawns_by_slot: list[int] = [0 for _ in range(self.num_envs)]
+        self._egl_diagnostics_logged = False
 
     @property
     def _spawned(self) -> bool:
@@ -189,9 +279,22 @@ class EnvWorker(Worker):
     def init(self) -> None:
         pool = self.env_cfg.get("egl_device_pool")
         if pool:
-            self._init_spawn(int(pool[int(self.local_rank) % len(pool)]))
+            for slot_id in range(self.num_envs):
+                self._init_spawn(int(pool[int(self.local_rank) % len(pool)]), slot_id)
+        elif str(self.env_cfg.get("render_backend", "")).lower() == "egl":
+            self._log_worker_egl_diagnostics()
+            for slot_id in range(self.num_envs):
+                self._init_spawn(None, slot_id)
         else:
+            if self.num_envs != 1:
+                raise ValueError("num_envs_per_worker>1 is only supported for render_backend=egl")
             self._init_inproc()
+
+    def _log_worker_egl_diagnostics(self) -> None:
+        if self._egl_diagnostics_logged:
+            return
+        log_egl_device_diagnostics_from_env(logger_name=__name__)
+        self._egl_diagnostics_logged = True
 
     def _init_inproc(self) -> None:
         # The in-process (non-egl) path renders with CPU osmesa. Pin it before _build_env
@@ -206,13 +309,18 @@ class EnvWorker(Worker):
         self.episode = []
         self.episode_id = 0
 
-    def _init_spawn(self, egl_device_id: int) -> None:
+    def _init_spawn(
+        self,
+        egl_device_id: int | None,
+        slot_id: int = 0,
+        *,
+        task_id: int | None = None,
+        start_episode_id: int = 0,
+    ) -> None:
         # WorkerGroup.launch fires every worker's init.remote() at once, so all env workers
-        # spawn their child simultaneously. Each child cold-starts a FRESH interpreter and builds
-        # LIBERO/robosuite/egl — a thundering herd of cold starts that thrashes CPU/disk and can
-        # blow a tight init timeout. Stagger the spawns by rank (later ranks ride the warmed page
-        # cache) and use a generous, configurable init timeout.
-        self._egl_device_id = int(egl_device_id)
+        # spawn their child simultaneously. Each child cold-starts a fresh interpreter and builds
+        # LIBERO/robosuite/EGL; stagger startup to reduce CPU/disk thundering herd during init.
+        self._egl_device_id = None if egl_device_id is None else int(egl_device_id)
         stagger_s = float(self.env_cfg.get("egl_spawn_stagger_s", 3.0)) * int(self.local_rank)
         if stagger_s > 0:
             time.sleep(stagger_s)
@@ -221,7 +329,14 @@ class EnvWorker(Worker):
         parent_conn, child_conn = ctx.Pipe()
         proc = ctx.Process(
             target=_env_subprocess_main,
-            args=(child_conn, self.env_cfg, self.task_id, self._record_builder, egl_device_id),
+            args=(
+                child_conn,
+                self.env_cfg,
+                self.task_id if task_id is None else int(task_id),
+                self._record_builder,
+                egl_device_id,
+                int(start_episode_id),
+            ),
             daemon=True,
         )
         proc.start()
@@ -236,25 +351,68 @@ class EnvWorker(Worker):
         if status != "ready":
             proc.terminate()
             raise RuntimeError(f"EnvWorker spawn subprocess init failed: {payload}")
-        self._proc = proc
-        self._conn = parent_conn
-        self.obs = payload
-        self.episode = []
-        self.episode_id = 0
+        self._set_spawn_slot(
+            int(slot_id),
+            proc,
+            parent_conn,
+            payload,
+            task_id=self.task_id if task_id is None else int(task_id),
+            episode_id=int(start_episode_id),
+        )
 
-    def _rpc(self, cmd: str, payload: Any = None) -> Any:
-        self._conn.send((cmd, payload))
-        status, val = self._conn.recv()
+    def _set_spawn_slot(
+        self,
+        slot_id: int,
+        proc: Any,
+        conn: Any,
+        obs: dict[str, Any],
+        *,
+        task_id: int | None = None,
+        episode_id: int = 0,
+    ) -> None:
+        self._procs[slot_id] = proc
+        self._conns[slot_id] = conn
+        self._obs_by_slot[slot_id] = obs
+        self._episodes_by_slot[slot_id] = []
+        self._episode_ids_by_slot[slot_id] = int(episode_id)
+        if task_id is not None:
+            self._task_ids_by_slot[slot_id] = int(task_id)
+        if slot_id == 0:
+            self._proc = proc
+            self._conn = conn
+            self.obs = obs
+            self.episode = self._episodes_by_slot[0]
+            self.episode_id = self._episode_ids_by_slot[0]
+            self.task_id = self._task_ids_by_slot[0]
+
+    def _rpc(self, cmd: str, payload: Any = None, slot_id: int = 0) -> Any:
+        conn = self._conns[int(slot_id)] if self.num_envs > 1 else self._conn
+        if conn is None:
+            raise RuntimeError("EnvWorker.init() has not been called")
+        conn.send((cmd, payload))
+        status, val = conn.recv()
         if status == "error":
             raise RuntimeError(f"EnvWorker subprocess error: {val}")
         return val
 
-    def current_obs(self) -> dict[str, Any]:
+    def current_obs(self) -> dict[str, Any] | list[dict[str, Any]]:
+        if self.num_envs > 1:
+            if any(obs is None for obs in self._obs_by_slot):
+                raise RuntimeError("EnvWorker.init() has not been called")
+            return [dict(obs) for obs in self._obs_by_slot if obs is not None]
         if self.obs is None:
             raise RuntimeError("EnvWorker.init() has not been called")
         return self.obs
 
     def set_task(self, task_id: int, start_episode_id: int = 0) -> dict[str, Any]:
+        return self.set_task_slot(0, task_id, start_episode_id)
+
+    def set_task_slot(
+        self,
+        slot_id: int,
+        task_id: int,
+        start_episode_id: int = 0,
+    ) -> dict[str, Any]:
         """Switch task and reset, starting from ``start_episode_id``.
 
         episode_id is the init_state selector (env reset uses
@@ -262,16 +420,28 @@ class EnvWorker(Worker):
         scheduler give each episode a DISTINCT init_state and continue past what is
         already collected on resume (default 0 = legacy behaviour).
         """
+        slot_id = int(slot_id)
         self.task_id = int(task_id)
-        self.episode_id = int(start_episode_id)
+        self._task_ids_by_slot[slot_id] = int(task_id)
+        self._episode_ids_by_slot[slot_id] = int(start_episode_id)
         if self._spawned:
-            self.obs = self._rpc("set_task", (self.task_id, self.episode_id))
-            self.episode = []
-            return self.obs
+            obs = self._rpc(
+                "set_task",
+                (self.task_id, self._episode_ids_by_slot[slot_id]),
+                slot_id=slot_id,
+            )
+            self._obs_by_slot[slot_id] = obs
+            self._episodes_by_slot[slot_id] = []
+            if slot_id == 0:
+                self.obs = obs
+                self.episode = self._episodes_by_slot[0]
+                self.episode_id = self._episode_ids_by_slot[0]
+            return obs
         env = self._env()
         if hasattr(env, "set_task"):
             env.set_task(self.task_id)
         self.episode = []
+        self.episode_id = int(start_episode_id)
         self.obs, _ = self._reset_env()
         return self.obs
 
@@ -279,14 +449,31 @@ class EnvWorker(Worker):
         self,
         action: Any,
         obs_embedding: Any = None,
+        lang_emb: Any | None = None,
+        step_metadata: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+        return self.step_slot(0, action, obs_embedding, lang_emb, step_metadata)
+
+    def step_slot(
+        self,
+        slot_id: int,
+        action: Any,
+        obs_embedding: Any = None,
+        lang_emb: Any | None = None,
+        step_metadata: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         if self._spawned:
-            return self._step_spawn(action, obs_embedding)
-        return self._step_inproc(action, obs_embedding)
+            return self._step_spawn_slot(
+                int(slot_id), action, obs_embedding, lang_emb, step_metadata
+            )
+        if int(slot_id) != 0:
+            raise ValueError("in-process EnvWorker only supports slot 0")
+        return self._step_inproc(action, obs_embedding, lang_emb, step_metadata)
 
     def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
         if self._spawned:
-            self._rpc("load_world_model_state", (state_dict, int(version)))
+            for slot_id in range(self.num_envs):
+                self._rpc("load_world_model_state", (state_dict, int(version)), slot_id=slot_id)
             return
         env = self._env()
         if not hasattr(env, "load_world_model_state"):
@@ -295,69 +482,132 @@ class EnvWorker(Worker):
 
     def load_classifier_state(self, state_dict: dict[str, Any], version: int) -> None:
         if self._spawned:
-            self._rpc("load_classifier_state", (state_dict, int(version)))
+            for slot_id in range(self.num_envs):
+                self._rpc("load_classifier_state", (state_dict, int(version)), slot_id=slot_id)
             return
         env = self._env()
         if not hasattr(env, "load_classifier_state"):
             raise RuntimeError("active env does not support classifier state sync")
         env.load_classifier_state(state_dict, int(version))
 
-    def _step_spawn(
-        self, action: Any, obs_embedding: Any
+    def _step_spawn_slot(
+        self,
+        slot_id: int,
+        action: Any,
+        obs_embedding: Any,
+        lang_emb: Any | None,
+        step_metadata: dict[str, Any] | None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         try:
-            transition, obs, done, info = self._rpc("step", (action, obs_embedding))
-        except (EOFError, OSError):
-            # The spawn child died (silent native crash under sustained concurrent
-            # egl). Drop the partial episode and respawn a clean child instead of
-            # killing the whole job.
-            return self._recover_from_child_death()
-        self.episode.append(transition)
-        self.obs = obs
-        if done:
-            self._add_episode_to_replay()
-            self.episode = []
-            self.episode_id += 1
-            return self.obs, True, dict(info or {})
-        return self.obs, False, dict(info or {})
-
-    def _recover_from_child_death(
-        self,
-    ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
-        """Respawn a dead egl child and return an episode boundary.
-
-        The crashed child's env state is gone, so the in-flight episode is discarded
-        (it never reaches the replay) and a fresh child is spawned with a clean reset.
-        Bounded by ``egl_max_respawns`` so a persistently-crashing env fails loudly
-        instead of thrashing forever.
-        """
-        self._respawn_count += 1
-        if self._respawn_count > self._max_respawns:
-            raise RuntimeError(
-                f"EnvWorker egl child died {self._respawn_count} times "
-                f"(rank={self.local_rank}); exceeded egl_max_respawns={self._max_respawns}"
+            transition, obs, done, info = self._rpc(
+                "step",
+                (action, obs_embedding, lang_emb, step_metadata),
+                slot_id=slot_id,
             )
-        print(
-            f"[EnvWorker] egl spawn child died (rank={self.local_rank}); "
-            f"respawn {self._respawn_count}/{self._max_respawns}, dropping partial episode",
-            flush=True,
+        except (EOFError, OSError) as exc:
+            recovered = self._recover_spawn_slot_after_child_death(slot_id)
+            if recovered is not None:
+                obs, respawn_count = recovered
+                return (
+                    obs,
+                    True,
+                    {
+                        "success": False,
+                        "env_crash": True,
+                        "respawned": True,
+                        "respawn_count": int(respawn_count),
+                    },
+                )
+            raise RuntimeError(
+                f"EnvWorker egl child died (rank={self.local_rank}, slot={slot_id}); "
+                "failing the rollout instead of hiding the native crash"
+            ) from exc
+        self._episodes_by_slot[slot_id].append(transition)
+        self._obs_by_slot[slot_id] = obs
+        if slot_id == 0:
+            self.episode = self._episodes_by_slot[0]
+            self.obs = obs
+        if done:
+            self._add_episode_to_replay(slot_id)
+            self._episodes_by_slot[slot_id] = []
+            self._episode_ids_by_slot[slot_id] += 1
+            if slot_id == 0:
+                self.episode = self._episodes_by_slot[0]
+                self.episode_id = self._episode_ids_by_slot[0]
+            return obs, True, dict(info or {})
+        return obs, False, dict(info or {})
+
+    def _recover_spawn_slot_after_child_death(
+        self,
+        slot_id: int,
+    ) -> tuple[dict[str, Any], int] | None:
+        max_respawns = int(self.env_cfg.get("egl_max_respawns", 0) or 0)
+        if max_respawns <= 0:
+            return None
+        slot_id = int(slot_id)
+        respawns = int(self._egl_respawns_by_slot[slot_id])
+        if respawns >= max_respawns:
+            return None
+
+        self._close_spawn_slot(slot_id)
+        self._episodes_by_slot[slot_id] = []
+        start_episode_id = int(self._episode_ids_by_slot[slot_id]) + 1
+        task_id = int(self._task_ids_by_slot[slot_id])
+        self._egl_respawns_by_slot[slot_id] = respawns + 1
+        self._init_spawn(
+            self._egl_device_id,
+            slot_id,
+            task_id=task_id,
+            start_episode_id=start_episode_id,
         )
-        self.episode = []
-        proc = self._proc
+        obs = self._obs_by_slot[slot_id]
+        if obs is None:
+            raise RuntimeError(
+                f"EnvWorker egl respawn did not produce an observation "
+                f"(rank={self.local_rank}, slot={slot_id})"
+            )
+        if slot_id == 0:
+            self.episode = self._episodes_by_slot[0]
+            self.episode_id = self._episode_ids_by_slot[0]
+            self.obs = obs
+        return dict(obs), int(self._egl_respawns_by_slot[slot_id])
+
+    def _close_spawn_slot(self, slot_id: int) -> None:
+        slot_id = int(slot_id)
+        conn = self._conns[slot_id] if self.num_envs > 1 else self._conn
+        proc = self._procs[slot_id] if self.num_envs > 1 else self._proc
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         if proc is not None:
             try:
-                if proc.is_alive():
+                if hasattr(proc, "is_alive") and proc.is_alive():
+                    proc.terminate()
+                elif hasattr(proc, "terminate"):
                     proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
-        self._proc = None
-        self._conn = None
-        self._init_spawn(self._egl_device_id)
-        self.episode_id += 1
-        return self.obs, True, {"env_crash_recovered": True}
+            try:
+                if hasattr(proc, "join"):
+                    proc.join(timeout=10.0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._procs[slot_id] = None
+        self._conns[slot_id] = None
+        self._obs_by_slot[slot_id] = None
+        if slot_id == 0:
+            self._proc = None
+            self._conn = None
+            self.obs = None
 
     def _step_inproc(
-        self, action: Any, obs_embedding: Any
+        self,
+        action: Any,
+        obs_embedding: Any,
+        lang_emb: Any | None,
+        step_metadata: dict[str, Any] | None,
     ) -> tuple[dict[str, Any], bool, dict[str, Any]]:
         env = self._env()
         obs = self.current_obs()
@@ -369,7 +619,8 @@ class EnvWorker(Worker):
         info = dict(info or {})
         info["episode_id"] = self.episode_id  # current episode (before the done-increment)
         if self._record_builder is not None:
-            transition = self._record_builder(
+            transition = _call_record_builder(
+                self._record_builder,
                 env,
                 record_obs,
                 action,
@@ -378,11 +629,18 @@ class EnvWorker(Worker):
                 truncated,
                 info,
                 obs_embedding,
+                lang_emb,
             )
         elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
+            if "proprio" not in transition and "state" in transition:
+                transition["proprio"] = np.asarray(
+                    transition["state"], dtype=np.float32
+                ).reshape(-1)
             if obs_embedding is not None:
                 transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
+            if lang_emb is not None:
+                transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
         else:
             transition = self._make_generic_transition(
                 obs,
@@ -393,7 +651,9 @@ class EnvWorker(Worker):
                 truncated,
                 info,
                 obs_embedding,
+                lang_emb,
             )
+        _stamp_step_metadata(transition, step_metadata)
         self.episode.append(transition)
 
         done = bool(terminated or truncated)
@@ -411,15 +671,23 @@ class EnvWorker(Worker):
 
     def close(self) -> None:
         if self._spawned:
-            try:
-                self._conn.send(("close", None))
-            except Exception:  # noqa: BLE001
-                pass
-            self._proc.join(timeout=10.0)
-            if self._proc.is_alive():
-                self._proc.terminate()
+            for conn in self._conns:
+                if conn is None:
+                    continue
+                try:
+                    conn.send(("close", None))
+                except Exception:  # noqa: BLE001
+                    pass
+            for proc in self._procs:
+                if proc is None:
+                    continue
+                proc.join(timeout=10.0)
+                if proc.is_alive():
+                    proc.terminate()
             self._proc = None
             self._conn = None
+            self._procs = [None for _ in range(self.num_envs)]
+            self._conns = [None for _ in range(self.num_envs)]
             return
         env = self.env
         if env is not None and hasattr(env, "close"):
@@ -430,15 +698,21 @@ class EnvWorker(Worker):
         env = self._env()
         return env.reset(task_id=self.task_id, episode_id=self.episode_id)
 
-    def _add_episode_to_replay(self) -> None:
-        if self.replay is None:
+    def _add_episode_to_replay(self, slot_id: int = 0) -> None:
+        episode = self._episodes_by_slot[int(slot_id)] if self._spawned else self.episode
+        self._push_episode(self.replay, episode)
+        self._push_episode(self.dump, episode)
+
+    @staticmethod
+    def _push_episode(target: Any | None, episode: list[dict[str, Any]]) -> None:
+        if target is None:
             return
-        add_episode = self.replay.add_episode
+        add_episode = target.add_episode
         remote = getattr(add_episode, "remote", None)
         if remote is not None:
-            ray.get(remote(list(self.episode)))
+            ray.get(remote(list(episode)))
         else:
-            add_episode(list(self.episode))
+            add_episode(list(episode))
 
     @staticmethod
     def _make_generic_transition(
@@ -450,8 +724,9 @@ class EnvWorker(Worker):
         truncated: bool,
         info: dict[str, Any],
         obs_embedding: Any,
+        lang_emb: Any | None = None,
     ) -> dict[str, Any]:
-        return {
+        transition = {
             "obs": obs,
             "next_obs": next_obs,
             "actions": np.asarray(action, dtype=np.float32),
@@ -467,6 +742,11 @@ class EnvWorker(Worker):
                 else np.asarray(obs_embedding, dtype=np.float32)
             ),
         }
+        if lang_emb is not None:
+            transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
+        if isinstance(obs, dict) and "state" in obs:
+            transition["proprio"] = np.asarray(obs["state"], dtype=np.float32).reshape(-1)
+        return transition
 
     def _env(self) -> Any:
         if self.env is None:

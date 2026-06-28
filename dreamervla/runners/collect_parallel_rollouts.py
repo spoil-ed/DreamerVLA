@@ -54,6 +54,7 @@ from dreamervla.runners.oft_collect_common import (
     make_preprocess_config,
     oft_open_loop_action,
     resolve_model_path,
+    sidecar_to_numpy,
     vla_latent_spec,
 )
 from dreamervla.utils.paths import data_path, data_root
@@ -248,7 +249,10 @@ def _run_episode(
         to extractor.step(), which applies rotate_images_180=True internally.
         This exactly mirrors how test_inline_matches_offline_sidecar feeds frames.
     """
-    obs, _info = env.reset(episode_id=episode_id, task_id=task_id)
+    obs, reset_info = env.reset(episode_id=episode_id, task_id=task_id)
+    init_state_index = (
+        reset_info.get("init_state_index") if isinstance(reset_info, dict) else None
+    )
     extractor.reset()
 
     # Build the 8-dim proprio state for the extractor from full_record fields.
@@ -279,15 +283,16 @@ def _run_episode(
         # implementation also used by the online cotrain rollout
         # (oft_open_loop_action). process_action (inside it) does the LIBERO
         # gripper binarize/invert required before env.step.
-        action, flat_hidden = oft_open_loop_action(
+        step_out = oft_open_loop_action(
             extractor, extractor_obs, task_description, action_queue, action_steps
         )
+        action, hidden_state = step_out
 
         obs, reward, terminated, truncated, info = env.step(action)
         done = bool(terminated or truncated)
         success = bool(info.get("success", terminated))
 
-        steps.append({
+        step = {
             "actions": np.asarray(info.get("wm_action", info.get("env_action", action)), dtype=np.float64),
             "rewards": np.float32(0.0),
             "sparse_rewards": np.uint8(0),
@@ -303,8 +308,16 @@ def _run_episode(
                 "gripper_states": rec["gripper_states"].astype(np.float64),
                 "joint_states": rec["joint_states"].astype(np.float64),
             },
-            "obs_embedding": flat_hidden.numpy(),
-        })
+            "obs_embedding": sidecar_to_numpy(hidden_state),
+        }
+        if rec.get("init_state_index") is not None:
+            step["init_state_index"] = int(rec["init_state_index"])
+        elif init_state_index is not None:
+            step["init_state_index"] = int(init_state_index)
+        lang_emb = sidecar_to_numpy(getattr(step_out, "lang_emb", None), dtype=np.float32)
+        if lang_emb is not None:
+            step["lang_emb"] = lang_emb.reshape(-1)
+        steps.append(step)
         t += 1
 
     # Post-episode: set dones and sparse_rewards on terminal step.
@@ -350,6 +363,7 @@ def _collect_vectorized_path(
     history: int,
     rotate_images_180: bool,
     image_keys: list[str],
+    obs_hidden_source: str,
     on_episode: Callable[[int, int, int, bool], None] | None = None,
 ) -> int:
     """Drive K env subprocesses with batched VLA inference; returns demos written.
@@ -388,6 +402,7 @@ def _collect_vectorized_path(
                 rotate_images_180=bool(rotate_images_180),
                 center_crop=True,
                 unnorm_key=unnorm_key,
+                obs_hidden_source=str(obs_hidden_source),
             )
             for _ in range(num_envs - 1)
         ]
@@ -396,7 +411,12 @@ def _collect_vectorized_path(
         data_attrs = {"task_suite_name": task_suite_name, "env_name": first_desc}
 
         # Build the batched decoder ONCE (resolves model handles / head mode a single time).
-        decoder = OFTBatchedDecoder(policy, unnorm_key)
+        decoder = OFTBatchedDecoder(
+            policy,
+            unnorm_key,
+            obs_hidden_source=str(obs_hidden_source),
+            image_keys=list(image_keys),
+        )
 
         def infer_fn(preps: list[dict[str, Any]]) -> list[tuple[list[Any], Any]]:
             return decoder.predict_batch(preps)
@@ -527,6 +547,8 @@ def collect_rollouts(
         spec = vla_latent_spec(policy.vla, image_keys)
         cfg["token_count"] = int(spec["token_count"])
         cfg["hidden_dim"] = int(spec["flat_dim"])
+        cfg["patches_per_image"] = int(spec["patches_per_image"])
+        cfg["num_images_in_input"] = int(spec["num_images_in_input"])
     extractor = OFTRolloutHiddenExtractor(
         policy,
         image_keys=image_keys,
@@ -608,6 +630,7 @@ def collect_rollouts(
             history=history,
             rotate_images_180=rotate_images_180,
             image_keys=image_keys,
+            obs_hidden_source=str(cfg["expected_obs_hidden_source"]),
             on_episode=on_episode,
         )
     else:

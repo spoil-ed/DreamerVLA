@@ -5,7 +5,8 @@ defaults:
 name: OpenVLA_Onetraj_ColdStart_LIBERO
 
 # Single source of truth for cold-start collection AND discrete-WM consumption:
-# DISCRETE one-trajectory OFT, single-frame history (h1), no proprio state.
+# DISCRETE one-trajectory OFT, single-frame history (h1), no VLA-side proprio state.
+# Query-before WM routes still read reward-HDF5 proprio as an external observation.
 # Used by experiment=collect_rollouts_onetraj (write) and
 # experiment=oft_discrete_token_world_model_dinowm_chunk (read) via task=...
 # ckpt_path / dataset_statistics_key and the remaining expected_*

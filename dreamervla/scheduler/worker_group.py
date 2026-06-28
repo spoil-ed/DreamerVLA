@@ -31,6 +31,7 @@ class WorkerGroup:
         cluster: Any,
         placement: PlacementStrategy,
         name: str | None = None,
+        env_vars: dict[str, str] | None = None,
     ) -> WorkerGroup:
         """Launch one Ray actor per placement rank and initialize them."""
 
@@ -50,6 +51,7 @@ class WorkerGroup:
                         item,
                         master_addr=master_addr,
                         master_port=master_port,
+                        extra_env_vars=env_vars,
                     )
                 },
             }
@@ -103,19 +105,27 @@ class WorkerGroup:
         *,
         master_addr: str | None = None,
         master_port: int | str | None = None,
+        extra_env_vars: dict[str, str] | None = None,
     ) -> dict[str, str]:
+        visible = WorkerGroup._visible_accelerator_env(placement.visible_accelerators)
         env = {
             "RANK": str(placement.rank),
             "LOCAL_RANK": str(placement.local_rank),
             "WORLD_SIZE": str(placement.local_world_size),
-            "CUDA_VISIBLE_DEVICES": WorkerGroup._visible_accelerator_env(
-                placement.visible_accelerators
-            ),
+            "CUDA_VISIBLE_DEVICES": visible,
         }
+        visible_devices = [part.strip() for part in visible.split(",") if part.strip()]
+        if visible_devices:
+            env["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+            env["MUJOCO_EGL_DEVICE_ID"] = visible_devices[0]
+            env["NCCL_CUMEM_ENABLE"] = "0"
+            env["TORCH_NCCL_AVOID_RECORD_STREAMS"] = "1"
         if master_addr is not None:
             env["MASTER_ADDR"] = str(master_addr)
         if master_port is not None:
             env["MASTER_PORT"] = str(master_port)
+        if extra_env_vars:
+            env.update({str(key): str(value) for key, value in extra_env_vars.items()})
         return env
 
     @staticmethod

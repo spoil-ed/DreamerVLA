@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 from hydra import compose, initialize_config_dir
@@ -46,8 +47,23 @@ def _override_int(overrides: list[str], key: str) -> int:
     return int(matches[0].split("=", 1)[1])
 
 
+def _override_values(overrides: list[str], key: str) -> list[str]:
+    prefix = f"{key}="
+    return [item.split("=", 1)[1] for item in overrides if item.startswith(prefix)]
+
+
 def _override_key(override: str) -> str:
-    return override.split("=", 1)[0].removeprefix("+")
+    return override.split("=", 1)[0].lstrip("+~")
+
+
+def _assert_no_duplicate_override_keys(overrides: list[str]) -> None:
+    keys = [
+        _override_key(item)
+        for item in overrides
+        if "=" in item
+    ]
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    assert duplicates == []
 
 
 def _write_complete_collected_pair(reward, hidden, shard_name: str, task_ids: list[int]) -> None:
@@ -113,6 +129,59 @@ def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path)
         _render(cfg["profiles"][plan.profile]["cotrain"], context),
         plan.cotrain_cmd,
     )
+
+
+def test_launcher_main_defaults_child_python_to_current_interpreter(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    captured: dict[str, str] = {}
+
+    def fake_build_pipeline_plan(**kwargs):
+        captured["python"] = kwargs["python"]
+        return mod.PipelinePlan(
+            mode="ray",
+            profile="smoke",
+            task="goal",
+            run_root=tmp_path,
+            collected_root=tmp_path / "collected",
+            reward_dir=tmp_path / "reward",
+            hidden_dir=tmp_path / "hidden",
+            collect_cmd=[kwargs["python"], "-m", "dreamervla.train"],
+            cotrain_cmd=[kwargs["python"], "-m", "dreamervla.train"],
+        )
+
+    monkeypatch.setattr(mod, "build_pipeline_plan", fake_build_pipeline_plan)
+
+    assert mod.main(["dry_run=true", f"run_root={tmp_path}"]) == 0
+    assert captured["python"] == sys.executable
+
+
+def test_launcher_main_preserves_explicit_python_override(monkeypatch, tmp_path) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    captured: dict[str, str] = {}
+
+    def fake_build_pipeline_plan(**kwargs):
+        captured["python"] = kwargs["python"]
+        return mod.PipelinePlan(
+            mode="ray",
+            profile="smoke",
+            task="goal",
+            run_root=tmp_path,
+            collected_root=tmp_path / "collected",
+            reward_dir=tmp_path / "reward",
+            hidden_dir=tmp_path / "hidden",
+            collect_cmd=[kwargs["python"], "-m", "dreamervla.train"],
+            cotrain_cmd=[kwargs["python"], "-m", "dreamervla.train"],
+        )
+
+    monkeypatch.setattr(mod, "build_pipeline_plan", fake_build_pipeline_plan)
+
+    assert mod.main(["dry_run=true", f"run_root={tmp_path}", "python=python"]) == 0
+    assert captured["python"] == "python"
 
 
 @pytest.mark.parametrize(
@@ -416,12 +485,37 @@ def test_launcher_forwards_demos_per_shard_to_collect(tmp_path, capsys, mode) ->
 def test_ray_collect_scales_env_workers_with_ngpu(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
-    plan = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python", ngpu=6)
-    # ray env-worker count scales with ngpu (6 * 4) instead of the small config default.
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=6,
+    )
+    # ray env-worker count scales with ngpu (6 * 4) when the profile does not set it.
     assert "env.num_workers=24" in plan.collect_cmd
     # noray sizes env concurrency via envs_per_gpu, not env.num_workers.
     noray = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python", ngpu=6)
     assert not any(item.startswith("env.num_workers=") for item in noray.collect_cmd)
+
+
+def test_ray_smoke_profile_num_workers_is_not_overwritten_by_ngpu_autoscale(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="smoke",
+        ngpu=1,
+    )
+
+    env_worker_overrides = [
+        item for item in plan.collect_cmd if item.startswith("env.num_workers=")
+    ]
+    assert env_worker_overrides == ["env.num_workers=2"]
 
 
 def test_multi_gpu_profile_scales_sync_cotrain_rollout_envs_with_ngpu(
@@ -925,6 +1019,16 @@ def test_smoke_profile_uses_fixed_step_warmup_not_replay_epoch() -> None:
     assert "training.warmup_replay_epochs=0" in cotrain
 
 
+def test_smoke_profile_replay_can_retain_one_episode_per_task() -> None:
+    cfg = _launcher_cfg()
+    smoke = cfg["profiles"]["smoke"]
+    task_count = int(cfg["collect_num_tasks"])
+    horizon = _override_int(smoke["collect"]["ray"], "collect.episode_horizon")
+    buffer_size = _override_int(smoke["cotrain"], "online_rollout.buffer_size")
+
+    assert buffer_size >= task_count * horizon
+
+
 def test_launcher_debug_control_appends_training_debug_to_cotrain(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
@@ -952,12 +1056,300 @@ def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
     # 2a: sync pipeline warmup, online RL disabled (total_env_steps=0).
     assert "experiment=online_cotrain_pipeline_oft_backbone_latent" in plan.cotrain_warmup_cmd
     assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
-    # 2c: ray async overlap online, NOT torchrun, init from the consolidated warmup ckpt.
-    assert "experiment=online_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    # 2c: target manual-cotrain ray online, NOT torchrun, init from the consolidated warmup ckpt.
+    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd
     assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
     assert "inference.init_ckpt.path=null" not in plan.cotrain_online_cmd
     assert plan.ray_init_ckpt is not None
+
+
+def test_async_cotrain_online_command_targets_manual_cotrain_runner(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="smoke",
+        ngpu=2,
+        launcher_cfg=cfg,
+    )
+
+    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    assert "manual_cotrain.ngpu=2" in plan.cotrain_online_cmd
+    assert "+cluster.num_gpus=2" in plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=8" in plan.cotrain_online_cmd
+    assert "cluster.component_placement=null" in plan.cotrain_online_cmd
+
+
+@pytest.mark.parametrize("ngpu", [0, 1, 2, 3, 4, 5])
+def test_async_manual_cotrain_online_command_supports_zero_to_five_gpus(
+    tmp_path,
+    ngpu: int,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="smoke",
+        ngpu=ngpu,
+        launcher_cfg=cfg,
+    )
+
+    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    assert f"manual_cotrain.ngpu={ngpu}" in plan.cotrain_online_cmd
+    assert f"+cluster.num_gpus={ngpu}" in plan.cotrain_online_cmd
+    assert "torch.distributed.run" not in plan.cotrain_online_cmd
+    if ngpu == 0:
+        assert "actor.train_cfg.fsdp.strategy=none" in plan.cotrain_online_cmd
+    else:
+        assert "actor.train_cfg.fsdp.strategy=none" not in plan.cotrain_online_cmd
+
+
+def test_async_manual_cotrain_envs_per_worker_uses_profile_and_explicit_override(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+
+    profile_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "profile",
+        python="python",
+        profile="multi_gpu",
+        ngpu=2,
+        launcher_cfg=cfg,
+    )
+    assert "manual_cotrain.envs_per_worker=2" in profile_plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=8" not in profile_plan.cotrain_online_cmd
+
+    override_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "override",
+        python="python",
+        profile="smoke",
+        ngpu=2,
+        launcher_cfg=cfg,
+        cotrain_overrides=["manual_cotrain.envs_per_worker=5"],
+    )
+    assert "manual_cotrain.envs_per_worker=5" in override_plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=8" not in override_plan.cotrain_online_cmd
+
+
+def test_async_manual_cotrain_maps_online_budget_to_global_steps(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "budget",
+        python="python",
+        profile="release",
+        ngpu=1,
+        launcher_cfg=cfg,
+    )
+
+    # release profile: ceil(200000 / (envs_per_worker=8 * rollout_epoch=16 * 256)).
+    assert "manual_cotrain.global_steps=7" in plan.cotrain_online_cmd
+
+    override_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "override",
+        python="python",
+        profile="release",
+        ngpu=1,
+        launcher_cfg=cfg,
+        cotrain_overrides=["manual_cotrain.global_steps=3"],
+    )
+    assert "manual_cotrain.global_steps=3" in override_plan.cotrain_online_cmd
+    assert "manual_cotrain.global_steps=7" not in override_plan.cotrain_online_cmd
+
+
+def test_ngpu_zero_does_not_emit_torchrun_or_gpu_ray_placement(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=0,
+        launcher_cfg={
+            **_launcher_cfg(),
+            "cotrain_engine": "async",
+            "render_backend": "osmesa",
+        },
+    )
+
+    assert "torch.distributed.run" not in plan.cotrain_cmd
+    assert "torch.distributed.run" not in plan.cotrain_warmup_cmd
+    assert _override_values(plan.collect_cmd, "collect.num_inference_workers") == ["1"]
+    assert _override_values(plan.collect_cmd, "env.num_workers") == ["1"]
+    assert "++inference.device=cpu" in plan.collect_cmd
+    assert _override_values(plan.cotrain_cmd, "trainer.device") == ["cpu"]
+    assert _override_values(plan.cotrain_cmd, "training.distributed_strategy") == [
+        "ddp"
+    ]
+    assert _override_values(plan.cotrain_cmd, "online_rollout.num_envs") == ["1"]
+    assert "cluster.component_placement.env=0" not in plan.cotrain_online_cmd
+    assert "cluster.component_placement.rollout=0" not in plan.cotrain_online_cmd
+    assert "cluster.component_placement.actor=0" not in plan.cotrain_online_cmd
+    assert "cluster.component_placement=null" in plan.cotrain_online_cmd
+    assert "+cluster.num_gpus=0" in plan.cotrain_online_cmd
+    assert "inference.placement.strategy=node" in plan.cotrain_online_cmd
+    assert "++inference.device=cpu" in plan.cotrain_online_cmd
+    assert "learner.placement.strategy=node" in plan.cotrain_online_cmd
+    assert "learner.train_cfg.device=cpu" in plan.cotrain_online_cmd
+    assert "learner.train_cfg.precision=fp32" in plan.cotrain_online_cmd
+    assert "env.num_workers=1" in plan.cotrain_online_cmd
+    _assert_no_duplicate_override_keys(plan.cotrain_online_cmd)
+
+
+def test_ngpu_zero_noray_collect_is_rejected(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(ValueError, match="mode=noray does not support ngpu=0"):
+        build_pipeline_plan(
+            mode="noray",
+            run_root=tmp_path,
+            python="python",
+            profile="smoke",
+            ngpu=0,
+        )
+
+
+def test_ngpu_zero_rejects_egl_async_online(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={
+                **_launcher_cfg(),
+                "cotrain_engine": "async",
+                "render_backend": "egl",
+            },
+        )
+
+
+def test_ngpu_zero_rejects_egl_sync_cotrain(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={**_launcher_cfg(), "render_backend": "egl"},
+        )
+
+
+def test_ngpu_zero_rejects_async_cotrain_render_backend_override_to_egl(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={
+                **_launcher_cfg(),
+                "cotrain_engine": "async",
+                "render_backend": "osmesa",
+            },
+            cotrain_overrides=["render_backend=egl"],
+        )
+
+
+def test_ngpu_zero_rejects_sync_online_rollout_backend_override_to_egl(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={**_launcher_cfg(), "render_backend": "osmesa"},
+            cotrain_overrides=["online_rollout.render_backend=egl"],
+        )
+
+
+def test_ngpu_zero_rejects_nested_component_placement_override(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="cluster.component_placement.* overrides are not supported when ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={
+                **_launcher_cfg(),
+                "cotrain_engine": "async",
+                "render_backend": "osmesa",
+            },
+            cotrain_overrides=["cluster.component_placement.env=0"],
+        )
+
+
+def test_ngpu_zero_rejects_root_component_placement_override(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    with pytest.raises(
+        ValueError,
+        match="cluster.component_placement.* overrides are not supported when ngpu=0",
+    ):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=0,
+            launcher_cfg={
+                **_launcher_cfg(),
+                "cotrain_engine": "async",
+                "render_backend": "osmesa",
+            },
+            cotrain_overrides=["cluster.component_placement={env:0}"],
+        )
 
 
 def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
@@ -977,10 +1369,77 @@ def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
     )
 
     assert "env.num_workers=12" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
+    assert "render_backend=osmesa" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_stagger_s=2.0" not in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_spawn_init_timeout_s=900" not in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
+
+
+@pytest.mark.parametrize("ngpu", [1, 2, 3, 4, 5, 6])
+def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
+    tmp_path,
+    ngpu: int,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        profile="multi_gpu",
+        ngpu=ngpu,
+    )
+
+    expected_env_slots = "0" if ngpu == 1 else f"0-{ngpu - 1}"
+    expected_actor_slot = str(ngpu - 1)
+
+    assert f"env.num_workers={ngpu}" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=2" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
+    assert f"cluster.component_placement.env={expected_env_slots}" in plan.cotrain_online_cmd
+    assert "cluster.component_placement.rollout=0" in plan.cotrain_online_cmd
+    assert f"cluster.component_placement.actor={expected_actor_slot}" in plan.cotrain_online_cmd
+    assert "cluster.component_placement=null" not in plan.cotrain_online_cmd
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" in plan.cotrain_online_cmd
-    assert "++env.cfg.egl_max_respawns=5" in plan.cotrain_online_cmd
+    assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
+
+
+def test_async_ray_egl_respects_explicit_online_worker_topology(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        profile="multi_gpu",
+        ngpu=6,
+        cotrain_overrides=[
+            "env.num_workers=3",
+            "env.envs_per_worker=4",
+            "cluster.component_placement.env=0-2",
+            "cluster.component_placement.rollout=3",
+            "cluster.component_placement.actor=5",
+        ],
+    )
+
+    assert plan.cotrain_online_cmd.count("env.num_workers=3") == 1
+    assert plan.cotrain_online_cmd.count("env.envs_per_worker=4") == 1
+    assert "env.num_workers=6" not in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=2" not in plan.cotrain_online_cmd
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.env=0-2") == 1
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.rollout=3") == 1
+    assert plan.cotrain_online_cmd.count("cluster.component_placement.actor=5") == 1
 
 
 def test_sync_cotrain_phase_warmup_only_has_no_online_steps(tmp_path) -> None:
@@ -1015,6 +1474,48 @@ def test_sync_cotrain_phase_online_only_resumes_warmup_ckpts(tmp_path) -> None:
     assert plan.cotrain_phase == "online"
     assert "training.resume=true" in plan.cotrain_online_cmd
     assert "online_rollout.total_env_steps=0" not in plan.cotrain_online_cmd
+
+
+def test_async_cotrain_phase_online_only_consolidates_missing_ray_init_ckpt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import torch
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, **_kwargs):
+            self.calls.append(list(cmd))
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    run_root = tmp_path / "run"
+    ckpt_dir = run_root / "cotrain" / "ckpt"
+    ckpt_dir.mkdir(parents=True)
+    torch.save({"world_model": {"wm": torch.ones(1)}}, ckpt_dir / "wm_warmup.ckpt")
+    torch.save({"classifier": {"cls": torch.zeros(1)}}, ckpt_dir / "classifier_warmup.ckpt")
+
+    exit_code = mod.main(
+        [
+            f"run_root={run_root}",
+            f"data_root={tmp_path}",
+            "cotrain_engine=async",
+            "cotrain_phase=online",
+            "skip_asset_check=false",
+            "collect_num_tasks=1",
+        ]
+    )
+
+    ray_init = ckpt_dir / "ray_async_init.ckpt"
+    assert exit_code == 0
+    assert ray_init.is_file()
+    assert len(rec.calls) == 1
+    assert f"init.warmup_ckpt_path={ray_init}" in rec.calls[0]
 
 
 def test_validate_warmup_outputs_requires_split_ckpts(tmp_path) -> None:

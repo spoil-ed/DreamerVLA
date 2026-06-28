@@ -92,6 +92,7 @@ _WM_LOG_METRIC_KEYS = (
     "hidden_cosine_loss",
     "full_hidden_rec_loss",
     "full_hidden_cosine_loss",
+    "proprio_reconstruction_loss",
 )
 
 
@@ -139,6 +140,8 @@ def world_model_pretrain_step(
         "tokens",
         "actions",
         "current_actions",
+        "proprio",
+        "lang_emb",
         "rewards",
         "dones",
         "is_first",
@@ -203,6 +206,9 @@ def world_model_pretrain_step(
         "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),
         "hidden_pred_norm": _f("hidden_pred_norm"),
         "hidden_target_norm": _f("hidden_target_norm"),
+        "proprio_reconstruction_loss": _f("proprio_reconstruction_loss"),
+        "proprio_pred_norm": _f("proprio_pred_norm"),
+        "proprio_target_norm": _f("proprio_target_norm"),
         "image_static_accuracy": _f("image_static_accuracy"),
         "image_dynamic_accuracy": _f("image_dynamic_accuracy"),
         "image_dynamic_fraction": _f("image_dynamic_fraction"),
@@ -307,8 +313,10 @@ def _latent_batch_dim(value: Any) -> int:
     raise TypeError(f"Cannot infer latent batch size from {type(value).__name__}")
 
 
-def _slice_last_steps(value: Any, steps: int) -> Any:
+def _slice_last_steps(value: Any, steps: int, *, _key: str | None = None) -> Any:
     if isinstance(value, torch.Tensor):
+        if _key == "lang" and value.ndim == 2:
+            return value
         if value.ndim < 2:
             raise ValueError(f"Expected [B,T,...] tensor, got {tuple(value.shape)}")
         return value[:, -steps:]
@@ -316,17 +324,24 @@ def _slice_last_steps(value: Any, steps: int) -> Any:
         return replace(
             value,
             **{
-                field.name: _slice_last_steps(getattr(value, field.name), steps)
+                field.name: _slice_last_steps(
+                    getattr(value, field.name), steps, _key=field.name
+                )
                 for field in fields(value)
             },
         )
     if isinstance(value, dict):
-        return {key: _slice_last_steps(item, steps) for key, item in value.items()}
+        return {
+            key: _slice_last_steps(item, steps, _key=key)
+            for key, item in value.items()
+        }
     return value
 
 
-def _flatten_last_steps(value: Any, steps: int) -> Any:
+def _flatten_last_steps(value: Any, steps: int, *, _key: str | None = None) -> Any:
     if isinstance(value, torch.Tensor):
+        if _key == "lang" and value.ndim == 2:
+            return value.repeat_interleave(int(steps), dim=0)
         if value.ndim < 2:
             raise ValueError(f"Expected [B,T,...] tensor, got {tuple(value.shape)}")
         bsz = int(value.shape[0])
@@ -336,12 +351,17 @@ def _flatten_last_steps(value: Any, steps: int) -> Any:
         return replace(
             value,
             **{
-                field.name: _flatten_last_steps(getattr(value, field.name), steps)
+                field.name: _flatten_last_steps(
+                    getattr(value, field.name), steps, _key=field.name
+                )
                 for field in fields(value)
             },
         )
     if isinstance(value, dict):
-        return {key: _flatten_last_steps(item, steps) for key, item in value.items()}
+        return {
+            key: _flatten_last_steps(item, steps, _key=key)
+            for key, item in value.items()
+        }
     return value
 
 
@@ -364,17 +384,24 @@ def _flatten_strided_steps(value: Any, num_starts: int, min_start: int = 0) -> A
     else:
         idx = torch.unique(torch.linspace(lo, T - 1, steps=n).round().long())
 
-    def _apply(v: Any) -> Any:
+    n_selected = int(idx.numel())
+
+    def _apply(v: Any, key: str | None = None) -> Any:
         if isinstance(v, torch.Tensor):
+            if key == "lang" and v.ndim == 2:
+                return v.repeat_interleave(n_selected, dim=0)
             if v.ndim < 2:
                 raise ValueError(f"Expected [B,T,...] tensor, got {tuple(v.shape)}")
             bsz = int(v.shape[0])
             sel = v.index_select(1, idx.to(v.device))
             return sel.reshape(bsz * sel.shape[1], *v.shape[2:])
         if is_dataclass(v):
-            return replace(v, **{f.name: _apply(getattr(v, f.name)) for f in fields(v)})
+            return replace(
+                v,
+                **{f.name: _apply(getattr(v, f.name), f.name) for f in fields(v)},
+            )
         if isinstance(v, dict):
-            return {key: _apply(item) for key, item in v.items()}
+            return {item_key: _apply(item, item_key) for item_key, item in v.items()}
         return v
 
     return _apply(value)

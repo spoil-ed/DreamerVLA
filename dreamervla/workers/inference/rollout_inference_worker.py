@@ -1,7 +1,8 @@
 """Model-agnostic Ray inference worker for cold-start rollout collection.
 
 Runs a config-injected rollout bundle. One batched forward yields an action and
-obs_embedding per env, with isolated per-env extractor history.
+obs_embedding per env plus optional lang_emb sidecars, with isolated per-env
+extractor history.
 """
 
 from __future__ import annotations
@@ -77,7 +78,10 @@ class RolloutInferenceWorker(Worker):
         results = bundle.predict_batch(preps)
         actions: list[np.ndarray] = []
         hidden: list[np.ndarray] = []
-        for env_id, (action_chunk, flat_hidden) in zip(env_ids, results, strict=True):
+        lang: list[np.ndarray | None] = []
+        has_lang = False
+        for env_id, result in zip(env_ids, results, strict=True):
+            action_chunk, flat_hidden = result
             # Gripper post-process here (single point for the ray path); the EnvWorker
             # must NOT re-apply it. Without it grasping/success fails.
             env_index = int(env_id)
@@ -90,7 +94,15 @@ class RolloutInferenceWorker(Worker):
             )
             actions.append(action)
             hidden.append(obs_embedding.astype(np.float16, copy=False))
+            lang_emb = _optional_lang_emb(result)
+            if lang_emb is None:
+                lang.append(None)
+            else:
+                has_lang = True
+                lang.append(np.asarray(lang_emb, dtype=np.float16).reshape(-1))
         sidecars = {"obs_embedding": hidden} if self._emit_hidden_sidecar else {}
+        if self._emit_hidden_sidecar and has_lang:
+            sidecars["lang_emb"] = lang
         return RolloutBatchOutput(actions=actions, sidecars=sidecars).to_legacy_dict()
 
     def reset_states(self, env_ids: list[int]) -> None:
@@ -117,3 +129,14 @@ class RolloutInferenceWorker(Worker):
         if self._bundle is None:
             raise RuntimeError("RolloutInferenceWorker.init() has not been called")
         return self._bundle
+
+
+def _optional_lang_emb(result: Any) -> Any | None:
+    if hasattr(result, "lang_emb"):
+        return result.lang_emb
+    try:
+        if len(result) > 2:
+            return result[2]
+    except TypeError:
+        return None
+    return None

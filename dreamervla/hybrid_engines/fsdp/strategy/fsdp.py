@@ -47,4 +47,5 @@ class FSDPStrategy(FSDPStrategyBase):
             model,
             cpu_offload=CPUOffload(offload_params=bool(self.cpu_offload)),
             mixed_precision=mixed_precision,
+            use_orig_params=bool(self.use_orig_params),
         )

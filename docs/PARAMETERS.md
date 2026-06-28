@@ -3,8 +3,8 @@
 The single reference for every adjustable parameter. All training is the grouped
 Hydra entry `python -m dreamervla.train experiment=<name> task=<suite>`; everything
 below is a `key=value` override (or a shell-launcher convenience key). Tutorials:
-[`docs/experiment_tutorials/`](experiment_tutorials/); rationale:
-[`docs/experiment_tutorials/EXPLAINED.md`](experiment_tutorials/EXPLAINED.md).
+[`docs/tutorials/experiments/`](tutorials/experiments/); rationale:
+[`docs/tutorials/experiments/EXPLAINED.md`](tutorials/experiments/EXPLAINED.md).
 
 ## Convenience overrides (shell launchers)
 

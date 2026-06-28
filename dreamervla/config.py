@@ -241,6 +241,7 @@ def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
         "task.openvla_oft.input_tokens",
     ):
         _validate_latent_stage_value(cfg, key)
+    _validate_oft_input_token_patch_contract(cfg)
 
     for key in (
         "world_model",
@@ -251,6 +252,27 @@ def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
         _validate_latent_spec(cfg, key, obs_dim_field="obs_dim")
         _validate_latent_stage_contract(cfg, key)
         _validate_chunk_wm_token_space(cfg, key)
+
+
+def _validate_oft_input_token_patch_contract(cfg: DictConfig) -> None:
+    key = "task.openvla_oft.input_tokens"
+    if OmegaConf.select(cfg, key, default=None) is None:
+        return
+
+    token_count = _select_int(cfg, f"{key}.token_count")
+    patches_per_image = _select_int(cfg, f"{key}.patches_per_image")
+    num_images = _select_int(cfg, f"{key}.num_images_in_input")
+    if num_images is None:
+        num_images = _select_int(cfg, "task.openvla_oft.num_images_in_input")
+    if token_count is None or patches_per_image is None or num_images is None:
+        return
+
+    expected = num_images * patches_per_image
+    if token_count != expected:
+        raise ValueError(
+            f"{key}.token_count must equal num_images_in_input * patches_per_image "
+            f"({token_count} != {num_images} * {patches_per_image} = {expected})"
+        )
 
 
 def _validate_latent_stage_value(cfg: DictConfig, key: str) -> None:
@@ -316,10 +338,39 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
                 "ChunkAwareDinoWMWorldModel transformer sizing"
             )
 
+    if (
+        key == "world_model"
+        and _looks_oft_input_token_cfg(cfg)
+        and _select_str(cfg, "_target_") == "dreamervla.runners.LatentWMRunner"
+    ):
+        for required_key in (
+            "proprio_dim",
+            "proprio_emb_dim",
+            "num_proprio_repeat",
+            "lang_dim",
+            "lang_emb_dim",
+            "num_lang_repeat",
+        ):
+            if _select_int(cfg, f"{key}.{required_key}") is None:
+                raise ValueError(
+                    f"{key}.{required_key} must be set for OpenVLA-OFT "
+                    "input-token query_before proprio/language conditioning"
+                )
+        for required_key in ("dataset.proprio_keys", "dataset.lang_emb_dir"):
+            if OmegaConf.select(cfg, required_key, default=None) in (None, ""):
+                raise ValueError(
+                    f"{required_key} must be set for OpenVLA-OFT input-token "
+                    "query_before proprio/language conditioning"
+                )
+
     model_dim = _select_int(cfg, f"{key}.model_dim")
     token_dim = _select_int(cfg, f"{key}.token_dim")
     action_emb_dim = _select_int(cfg, f"{key}.action_emb_dim")
     num_action_repeat = _select_int(cfg, f"{key}.num_action_repeat")
+    proprio_emb_dim = _select_int(cfg, f"{key}.proprio_emb_dim")
+    num_proprio_repeat = _select_int(cfg, f"{key}.num_proprio_repeat")
+    lang_emb_dim = _select_int(cfg, f"{key}.lang_emb_dim")
+    num_lang_repeat = _select_int(cfg, f"{key}.num_lang_repeat")
     if model_dim is None or token_dim is None:
         return
     if action_emb_dim is None:
@@ -335,14 +386,46 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
         raise ValueError(
             f"{key}.num_action_repeat must be > 0, got {num_action_repeat}"
         )
-    expected_model_dim = token_dim + action_emb_dim * num_action_repeat
+    if proprio_emb_dim is None:
+        proprio_emb_dim = 0
+    if proprio_emb_dim < 0:
+        raise ValueError(
+            f"{key}.proprio_emb_dim must be >= 0, got {proprio_emb_dim}"
+        )
+    if num_proprio_repeat is None:
+        num_proprio_repeat = 1
+    if num_proprio_repeat < 1:
+        raise ValueError(
+            f"{key}.num_proprio_repeat must be > 0, got {num_proprio_repeat}"
+        )
+    if lang_emb_dim is None:
+        lang_emb_dim = 0
+    if lang_emb_dim < 0:
+        raise ValueError(f"{key}.lang_emb_dim must be >= 0, got {lang_emb_dim}")
+    if num_lang_repeat is None:
+        num_lang_repeat = 1
+    if num_lang_repeat < 1:
+        raise ValueError(
+            f"{key}.num_lang_repeat must be > 0, got {num_lang_repeat}"
+        )
+    expected_model_dim = (
+        token_dim
+        + proprio_emb_dim * num_proprio_repeat
+        + lang_emb_dim * num_lang_repeat
+        + action_emb_dim * num_action_repeat
+    )
     if model_dim == expected_model_dim:
         return
     raise ValueError(
         f"{key}.model_dim must equal {key}.token_dim + "
+        f"{key}.proprio_emb_dim * {key}.num_proprio_repeat + "
+        f"{key}.lang_emb_dim * {key}.num_lang_repeat + "
         f"{key}.action_emb_dim * {key}.num_action_repeat for "
         "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning "
-        f"({model_dim} != {token_dim} + {action_emb_dim} * {num_action_repeat})"
+        f"({model_dim} != {token_dim} + "
+        f"{proprio_emb_dim} * {num_proprio_repeat} + "
+        f"{lang_emb_dim} * {num_lang_repeat} + "
+        f"{action_emb_dim} * {num_action_repeat})"
     )
 
 
@@ -449,6 +532,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     is_ray_runner = target.endswith(
         (
             "OnlineCotrainRayRunner",
+            "ManualCotrainRayRunner",
             "ColdStartRayCollectRunner",
         )
     )
@@ -475,7 +559,27 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
     _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
+    _require_positive_if_present(cfg, "manual_cotrain.global_steps")
+    _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
+    _require_positive_if_present(cfg, "manual_cotrain.sync_every")
+    _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
+    _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
     _validate_ray_single_node_placement(cfg)
+
+    max_steps = OmegaConf.select(
+        cfg,
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        default=None,
+    )
+    chunk = OmegaConf.select(cfg, "manual_cotrain.num_action_chunks", default=None)
+    if max_steps is not None and chunk is not None:
+        if int(max_steps) % int(chunk) != 0:
+            raise ValueError(
+                "manual_cotrain.max_steps_per_rollout_epoch must be divisible by "
+                "manual_cotrain.num_action_chunks"
+            )
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
@@ -488,35 +592,43 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
 
 
 def _validate_fsdp_config(cfg: DictConfig) -> None:
-    """Fail fast on an unusable learner FSDP block before any worker spawns.
+    """Fail fast on unusable FSDP blocks before any worker spawns.
 
-    The learner builds ``FSDPModelManager(**learner.train_cfg.fsdp)`` inside the
-    Ray actor, so a bad ``strategy``/``precision`` would otherwise only surface
-    after the cluster is up. The accepted strategy set mirrors
+    Workers build ``FSDPModelManager(***.train_cfg.fsdp)`` inside Ray actors, so
+    a bad ``strategy``/``precision`` would otherwise only surface after the
+    cluster is up. The accepted strategy set mirrors
     ``FSDPModelManager`` (none/ddp/fsdp/fsdp1/fsdp2).
     """
 
-    fsdp = OmegaConf.select(cfg, "learner.train_cfg.fsdp", default=None)
-    if fsdp is None:
-        return
+    for base in ("learner.train_cfg.fsdp", "actor.train_cfg.fsdp"):
+        fsdp = OmegaConf.select(cfg, base, default=None)
+        if fsdp is None:
+            continue
 
-    strategy = OmegaConf.select(fsdp, "strategy", default=None)
-    if strategy is not None:
-        normalized = str(strategy).strip().lower()
-        if normalized not in {"", "none", "ddp", "fsdp", "fsdp1", "fsdp2"}:
-            raise ValueError(
-                "learner.train_cfg.fsdp.strategy must be one of "
-                f"none, ddp, fsdp, fsdp1, fsdp2; got {strategy!r}"
-            )
+        strategy = OmegaConf.select(fsdp, "strategy", default=None)
+        if strategy is not None:
+            normalized = str(strategy).strip().lower()
+            if normalized not in {"", "none", "ddp", "fsdp", "fsdp1", "fsdp2"}:
+                raise ValueError(
+                    f"{base}.strategy must be one of "
+                    f"none, ddp, fsdp, fsdp1, fsdp2; got {strategy!r}"
+                )
 
-    precision = OmegaConf.select(fsdp, "precision", default=None)
-    if precision is not None:
-        normalized = str(precision).strip().lower()
-        if normalized not in {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}:
-            raise ValueError(
-                "learner.train_cfg.fsdp.precision must be one of "
-                f"fp32, bf16, or fp16; got {precision!r}"
-            )
+        precision = OmegaConf.select(fsdp, "precision", default=None)
+        if precision is not None:
+            normalized = str(precision).strip().lower()
+            if normalized not in {
+                "fp32",
+                "float32",
+                "bf16",
+                "bfloat16",
+                "fp16",
+                "float16",
+            }:
+                raise ValueError(
+                    f"{base}.precision must be one of fp32, bf16, or fp16; "
+                    f"got {precision!r}"
+                )
 
 
 def _validate_ray_single_node_placement(cfg: DictConfig) -> None:

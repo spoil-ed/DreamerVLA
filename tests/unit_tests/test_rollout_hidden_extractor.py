@@ -173,8 +173,9 @@ def test_input_token_hidden_from_projected_uses_current_frame_views() -> None:
         _Model(),
         image_keys=["agentview_rgb", "eye_in_hand_rgb"],
     )
-    expected = projected[:, -6:, :].reshape(2, -1)
+    expected = projected[:, -6:, :]
     assert torch.equal(hidden, expected)
+    assert hidden.shape == (2, 6, 4)
 
 
 # ── real-model consistency gate (opt-in; skipped unless explicitly enabled) ──

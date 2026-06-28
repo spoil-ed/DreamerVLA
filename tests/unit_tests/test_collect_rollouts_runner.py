@@ -171,6 +171,27 @@ class _EpisodeExtractor:
         )
 
 
+class _DecodeResult:
+    def __init__(self, action_chunk, hidden_state, lang_emb=None):
+        self.action_chunk = action_chunk
+        self.hidden_state = hidden_state
+        self.lang_emb = lang_emb
+
+    def __iter__(self):
+        yield self.action_chunk
+        yield self.hidden_state
+
+
+class _LangEpisodeExtractor(_EpisodeExtractor):
+    def step(self, obs, task_description):
+        action_chunk, hidden_state = super().step(obs, task_description)
+        return _DecodeResult(
+            action_chunk,
+            hidden_state,
+            lang_emb=np.full(8, float(self.calls), dtype=np.float32),
+        )
+
+
 def test_single_episode_executes_action_chunk_open_loop(monkeypatch):
     import dreamervla.runners.collect_parallel_rollouts as mod
     import dreamervla.runners.oft_collect_common as occ
@@ -195,3 +216,25 @@ def test_single_episode_executes_action_chunk_open_loop(monkeypatch):
 
     assert len(steps) == 5
     assert [int(action[0]) for action in env.actions] == [0, 1, 2, 30, 31]
+
+
+def test_single_episode_records_language_embedding(monkeypatch):
+    import dreamervla.runners.collect_parallel_rollouts as mod
+    import dreamervla.runners.oft_collect_common as occ
+
+    monkeypatch.setattr(occ, "process_action", lambda action: np.asarray(action, dtype=np.float64))
+    env = _EpisodeEnv(done_after=2)
+    extractor = _LangEpisodeExtractor()
+
+    steps = mod._run_episode(
+        env=env,
+        extractor=extractor,
+        task_description="task0",
+        episode_id=0,
+        episode_horizon=2,
+        task_id=0,
+        rank=0,
+        action_steps=1,
+    )
+
+    assert np.array_equal(steps[0]["lang_emb"], np.full(8, 1.0, dtype=np.float32))

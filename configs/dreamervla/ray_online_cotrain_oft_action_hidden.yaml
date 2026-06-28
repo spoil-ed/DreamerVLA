@@ -14,7 +14,14 @@ defaults:
 _target_: dreamervla.runners.OnlineCotrainRayRunner
 latent_type: action_hidden
 seed: 7
-render_backend: egl
+render_backend: osmesa
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env: 0
+    rollout: 1
+    actor: 1
 
 ray_rollout:
   mode: oft_fixed_base
@@ -33,6 +40,10 @@ ray_data:
   replay_capacity: 20000
   sequence_length: ${task.openvla_oft.wm_sequence_length}
   min_replay_episodes: 1
+
+algorithm:
+  group_size: 8
+  rollout_epoch: 16
 
 # OFT structural components (== the sync OFT pipeline; shapes match the warmup ckpt).
 ray_components:
@@ -119,7 +130,16 @@ collect:
   hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async/hidden
 
 env:
-  num_workers: 4
+  num_workers: 1
+  envs_per_worker: 4
+  train:
+    # RLinf manual-cotrain-style WM rollout scale. This is not physical LIBERO env
+    # parallelism; learner.batch_size derives from it together with imag_last
+    # and group_size.
+    total_num_envs: 64
+    group_size: ${algorithm.group_size}
+    max_episode_steps: 512
+    max_steps_per_rollout_epoch: 512
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
@@ -143,6 +163,26 @@ rollout:
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0
   require_classifier_evidence: true
+  dump:
+    enabled: true
+    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_action_hidden
+    keep_last_global_steps: 8
+    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_action_hidden/reward
+    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_action_hidden/hidden
+    shard_prefix: cotrain_episode
+    demos_per_shard: 1
+    preprocess_config:
+      action_head_type: ${task.openvla_oft.expected_action_head_type}
+      history: ${task.openvla_oft.expected_history}
+      include_state: ${task.openvla_oft.expected_include_state}
+      hidden_key: obs_embedding
+      obs_hidden_source: ${task.openvla_oft.expected_obs_hidden_source}
+      chunk_size: ${task.openvla_oft.chunk_size}
+      wm_obs_dim: ${task.openvla_oft.wm_obs_dim}
+    data_attrs:
+      task_suite_name: ${task.suite}
+      env_name: libero
+      source: online_cotrain_ray
 
 replay:
   cfg:
@@ -162,18 +202,11 @@ replay:
 policy:
   cfg: ${ray_components.policy}
 
-# GPU allocation = RLinf-style component placement, COLLOCATE: env rollout (egl rendering),
-# inference, and the learner all share the visible GPU pool. This is the efficient choice
-# for LIBERO OFT cotrain because the bottleneck is CPU env physics (env_step time >> learner
-# time) and the learner is light + infrequent — dedicating GPUs to it (disaggregate) would
-# leave them idle. The env workers render egl round-robin across the whole pool (runner
-# _egl_device_pool); a single inference worker (pool GPU 0) and a single learner (pool GPU 1)
-# time-share those GPUs with rendering. Indices are RELATIVE to the visible GPUs
-# (CUDA_VISIBLE_DEVICES), so the same config works on any 2+ GPU slice.
-#
-# DISAGGREGATE alternative (use for a HEAVY learner, e.g. large-model RL that would contend
-# with inference): give the learner its own GPUs — learner.placement start_gpu/end_gpu over a
-# dedicated range + num_gpus_per_worker>1 (FSDP) — and pin inference to the remaining GPUs.
+# GPU allocation follows RLinf's component placement. This base file is the small
+# two-GPU route; the 6-GPU launcher overrides env.num_workers and
+# cluster.component_placement so EnvWorkers span the full GPU slice. Rollout and
+# actor map to DreamerVLA inference and learner, which are single-worker contracts
+# in this runner.
 inference:
   worker_target: dreamervla.workers.inference.rollout_inference_worker:RolloutInferenceWorker
   placement:
@@ -195,7 +228,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: dreamervla_cotrain
-    batch_size: 2
+    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_threshold: 0.5
@@ -203,15 +236,25 @@ learner:
     device: auto
     precision: bf16
     algorithm_cfg:
-      ppo_rollouts_per_start: 4
+      # RLinf manual-cotrain-style rollout scale:
+      # total_num_envs(64) * rollout_epoch(16) = 1024 imagined trajectories
+      # per PPO update; batch_size is derived as total_num_envs / (imag_last * group_size).
+      group_size: ${algorithm.group_size}
+      rollout_epoch: ${algorithm.rollout_epoch}
+      imag_last: 4
+      ppo_rollouts_per_start: ${algorithm.group_size}
       ppo_update_epochs: 1
+      kl_coef: 0.0
       entropy_coef: 0.0
+      clip_ratio_low: 0.2
+      clip_ratio_high: 0.28
+      clip_ratio_c: 3.0
       lumos:
         chunk_size: ${task.openvla_oft.chunk_size}
-        episode_max_steps: 300
+        episode_max_steps: ${env.train.max_episode_steps}
         classifier_min_steps: 4
-        ppo_rollouts_per_start_min: 4
-        ppo_rollouts_per_start_max: 16
+        ppo_rollouts_per_start_min: ${algorithm.group_size}
+        ppo_rollouts_per_start_max: ${algorithm.group_size}
         filter_zero_variance_groups: true
         update_micro_batch_starts: 1
     optim_cfg:

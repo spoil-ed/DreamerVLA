@@ -60,6 +60,11 @@ from dreamervla.runners.online_utils import (
     obs_to_action_hidden,
     obs_to_input_token_embedding,
 )
+from dreamervla.runners.render_device_config import (
+    cuda_visible_devices_from_env,
+    parse_device_ids,
+    validate_render_device_pool,
+)
 from dreamervla.runners.vec_rollout_env import default_env_factory
 from dreamervla.runners.vectorized_collect import (
     dreamer_image_from_record,
@@ -85,6 +90,7 @@ def build_cotrain_replay_transition(
     step: int,
     is_first: bool,
     image_size: int,
+    lang_emb: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Replay transition rebuilt in the parent from a child ``full_record``.
 
@@ -96,9 +102,11 @@ def build_cotrain_replay_transition(
     executed env-scale action)."""
     done = bool(terminated or truncated)
     wm = np.asarray(wm_action, dtype=np.float32).reshape(-1)[:7]
-    return {
+    proprio = proprio_from_record(rec)
+    transition = {
         "image": dreamer_image_from_record(rec, image_size),
-        "state": proprio_from_record(rec),
+        "state": proprio,
+        "proprio": proprio,
         "action": wm,
         "wm_action": wm,
         "obs_embedding": np.asarray(obs_embedding, dtype=np.float32),
@@ -112,9 +120,19 @@ def build_cotrain_replay_transition(
         "step": int(step),
         "task_description": str(task_description),
     }
+    if lang_emb is not None:
+        transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
+    return transition
 
 
-def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -> None:
+def validate_rollout_cfg(
+    num_envs: int,
+    render_backend: str,
+    latent_type: str,
+    *,
+    render_devices: Any = None,
+    compute_devices: Any = None,
+) -> None:
     """Early validation for the online rollout knobs (RLinf-style fail-fast).
 
     ``num_envs>1`` enables the vectorized egl path, which supports the OFT
@@ -132,6 +150,13 @@ def validate_rollout_cfg(num_envs: int, render_backend: str, latent_type: str) -
                 "vectorized rollout (num_envs>1) supports the OFT action_hidden "
                 "path only; backbone_latent requires num_envs=1"
             )
+        validate_render_device_pool(
+            render_backend=render_backend,
+            num_envs=num_envs,
+            render_devices=render_devices,
+            compute_devices=compute_devices,
+            render_key="online_rollout.render_devices",
+        )
 
 
 def validate_task_conditioning_cfg(
@@ -231,6 +256,7 @@ def build_rollout_vec_env(
     num_envs: int,
     cfg_kwargs: dict[str, Any],
     env_vars: dict[str, str],
+    render_devices: Any = None,
 ) -> Any:
     """Select + construct the rollout vec env for the vectorized cotrain path.
 
@@ -238,10 +264,10 @@ def build_rollout_vec_env(
 
     * ``render_backend == "egl"`` -> ``OnlineEglVecEnv`` (approach 1): each env runs
       through RLinf's vendored ``SubprocVectorEnv`` with RLinf's per-child egl device
-      regime. The physical-GPU pool is read from this process's
-      ``CUDA_VISIBLE_DEVICES`` (mirrors the ray runner's ``_egl_device_pool``; empty ->
-      egl device 0). The adapter applies ``MUJOCO_GL=egl`` + per-child CUDA/EGL device
-      vars itself, so the render env vars are stripped before forwarding.
+      regime. The render-device pool is explicit Hydra config (``online_rollout.
+      render_devices``); it is not inferred from this process's compute
+      ``CUDA_VISIBLE_DEVICES``. The adapter applies ``MUJOCO_GL=egl`` + per-child
+      CUDA/EGL device vars itself, so the render env vars are stripped before forwarding.
     * otherwise -> ``VecRolloutEnv`` (approach 2): the proven osmesa path, unchanged.
 
     Module-level so the backend selection is unit-testable without a GPU / full runner.
@@ -255,8 +281,7 @@ def build_rollout_vec_env(
     if render_backend == "egl":
         from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
 
-        cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        egl_device_pool = [int(x) for x in cvd.split(",") if x.strip().isdigit()]
+        egl_device_pool = parse_device_ids(render_devices)
         adapter_env_vars = {
             k: v for k, v in env_vars.items() if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
         }
@@ -477,11 +502,14 @@ class OnlineCotrainRunner(DreamerVLARunner):
         backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
         extractor_attr = "_oft_input_token_extractor" if backbone else "_oft_action_hidden_extractor"
         extractor = getattr(self, extractor_attr, None)
+        self._last_rollout_lang_emb = None
         if extractor is not None:
             if is_first and hasattr(extractor, "reset"):
                 extractor.reset()
-            _chunk, flat_hidden = extractor.step(obs, task_desc)
-            return flat_hidden.reshape(1, -1).to(self.device).float()
+            result = extractor.step(obs, task_desc)
+            self._last_rollout_lang_emb = getattr(result, "lang_emb", None)
+            _chunk, hidden_state = result
+            return self._extractor_hidden_to_obs_embedding(hidden_state, backbone=backbone)
         if backbone:
             return obs_to_input_token_embedding(
                 self.encoder, processor, obs, self.device, getattr(self, "_num_views", 2)
@@ -490,6 +518,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
             return obs_to_action_hidden(
                 self.encoder, processor, obs, self.device, target_token_id
             )
+
+    def _extractor_hidden_to_obs_embedding(self, hidden_state: torch.Tensor, *, backbone: bool) -> torch.Tensor:
+        hidden = hidden_state.to(self.device).float()
+        if backbone:
+            if hidden.ndim == 2:
+                return hidden.unsqueeze(0)
+            if hidden.ndim == 3:
+                return hidden
+            raise ValueError(
+                "backbone latent extractor must return [N,D] or [B,N,D], "
+                f"got {tuple(hidden.shape)}"
+            )
+        return hidden.reshape(1, -1)
 
     @torch.no_grad()
     def _actor_action_and_latent(self, world_model, policy, obs_embedding, latent, prev_action, is_first):
@@ -752,14 +793,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
-        # RLinf-aligned default: vectorized egl multi-env rollout (was 1 = legacy
-        # single-env osmesa). 4 matches the shipped cotrain pipeline config, so bare/
-        # ad-hoc runs no longer fall back to single-env osmesa. backbone_latent must
-        # override to 1 (validate_rollout_cfg rejects num_envs>1 for backbone_latent).
+        # Multi-env defaults to the stable osmesa path. EGL is explicit opt-in and
+        # requires render devices that do not overlap the training CUDA devices.
         num_envs = int(OmegaConf.select(oc, "num_envs", default=4))
-        render_backend = str(OmegaConf.select(oc, "render_backend", default="egl"))
+        render_backend = str(OmegaConf.select(oc, "render_backend", default="osmesa"))
+        render_devices = parse_device_ids(
+            OmegaConf.select(oc, "render_devices", default=[])
+        )
         validate_rollout_cfg(
-            num_envs, render_backend, getattr(self, "_latent_type", "action_hidden")
+            num_envs,
+            render_backend,
+            getattr(self, "_latent_type", "action_hidden"),
+            render_devices=render_devices,
+            compute_devices=cuda_visible_devices_from_env(),
         )
 
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
@@ -872,6 +918,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 replay=replay,
                 num_envs=num_envs,
                 render_backend=render_backend,
+                render_devices=render_devices,
                 total_env_steps=total_env_steps,
                 episode_horizon=episode_horizon,
                 env_task_ids=env_task_ids,
@@ -912,6 +959,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
             transition["obs_embedding"] = (
                 obs_embedding.squeeze(0).detach().cpu().numpy().astype(np.float32)
             )
+            if "state" in transition:
+                transition["proprio"] = np.asarray(
+                    transition["state"], dtype=np.float32
+                ).reshape(-1)
+            lang_emb = getattr(self, "_last_rollout_lang_emb", None)
+            if lang_emb is not None:
+                transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
             episode.append(transition)
             prev_action = torch.from_numpy(wm_action).to(self.device, dtype=obs_embedding.dtype).unsqueeze(0)
 
@@ -1096,7 +1150,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     for k in (
                         "obs_embedding", "actions", "rewards", "dones",
                         "is_first", "is_terminal", "is_last",
+                        "proprio", "lang_emb",
                     )
+                    if k in rl_batch
                 }
                 actor_update_route = knobs["actor_update_route"]
                 if actor_update_route.world_model_arg != "chunk_world_model":
@@ -1169,6 +1225,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         replay: OnlineReplay,
         num_envs: int,
         render_backend: str,
+        render_devices: Any,
         total_env_steps: int,
         episode_horizon: int,
         env_task_ids: tuple[int, ...],
@@ -1224,6 +1281,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             num_envs=num_envs,
             cfg_kwargs=cfg_kwargs,
             env_vars=env_vars,
+            render_devices=render_devices,
         )
         try:
             def _train_hook(
@@ -1345,12 +1403,18 @@ class OnlineCotrainRunner(DreamerVLARunner):
             # the WM latent. (Was: the frozen OFT base action — which left the actor PPO
             # optimizes undeployed.)
             obs_embs: list[Any] = [None] * num_envs
+            lang_embs: list[Any] = [None] * num_envs
             actions = []
             for k in ids:
-                _chunk, flat_hidden = extractors[k].step(
+                result = extractors[k].step(
                     extractor_obs_from_record(recs[k]), slot_desc[k]
                 )
-                obs_embs[k] = flat_hidden.reshape(1, -1).to(self.device).float()
+                lang_embs[k] = getattr(result, "lang_emb", None)
+                _chunk, hidden_state = result
+                backbone = getattr(self, "_latent_type", "action_hidden") == "backbone_latent"
+                obs_embs[k] = self._extractor_hidden_to_obs_embedding(
+                    hidden_state, backbone=backbone
+                )
                 slot_latent[k] = self._update_actor_latent(
                     self.world_model,
                     obs_embs[k],
@@ -1371,7 +1435,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 wm_action = np.asarray(
                     info.get("wm_action", actions[k]), dtype=np.float32
                 ).reshape(-1)[:7]
-                emb = obs_embs[k].reshape(-1).detach().cpu().float().numpy()
+                emb = obs_embs[k].squeeze(0).detach().cpu().float().numpy()
                 tr = build_cotrain_replay_transition(
                     recs[k],
                     np.asarray(emb, dtype=np.float32),
@@ -1384,6 +1448,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     step=slot_step[k],
                     is_first=(slot_step[k] == 0),
                     image_size=image_size,
+                    lang_emb=lang_embs[k],
                 )
                 episodes[k].append(tr)
                 # The next WM observe_next for this slot uses the action just executed.

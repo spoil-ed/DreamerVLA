@@ -42,7 +42,7 @@ scripts/            install、download、preprocess、train、eval 的 shell 入
 tests/              单元测试和 smoke 测试
 third_party/        editable upstream dependencies
 data/               未设置 DVLA_DATA_ROOT 时使用的相对数据目录
-docs/               setup 和数据布局说明
+docs/               文档索引、参考、教程、报告和论文草稿
 ```
 
 `DVLA_DATA_ROOT` 和 `DVLA_ROOT` 相互独立；数据可以放在仓库之外的磁盘或共享存储。

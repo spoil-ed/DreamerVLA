@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,23 +51,59 @@ def pop_open_loop_action(
     return process_action(action_queue.pop(0))
 
 
+@dataclass(frozen=True)
+class OFTOpenLoopStep:
+    """Tuple-compatible rollout step output with optional sidecars."""
+
+    action: np.ndarray
+    hidden_state: Any
+    lang_emb: Any | None = None
+
+    def __iter__(self):
+        yield self.action
+        yield self.hidden_state
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> Any:
+        return (self.action, self.hidden_state)[index]
+
+
+def sidecar_to_numpy(value: Any, dtype: Any | None = None) -> np.ndarray | None:
+    """Convert a torch/numpy/list sidecar to a CPU numpy array."""
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        arr = value.detach().cpu().numpy()
+    elif hasattr(value, "numpy"):
+        arr = value.numpy()
+    else:
+        arr = np.asarray(value)
+    if dtype is not None:
+        arr = arr.astype(dtype, copy=False)
+    return arr
+
+
 def oft_open_loop_action(
     extractor: Any,
     extractor_obs: Any,
     task_description: str,
     action_queue: list,
     action_steps: int | None = None,
-) -> tuple[np.ndarray, Any]:
+) -> OFTOpenLoopStep:
     """One SINGLE-ENV OFT open-loop rollout step — the shared implementation used
     by the collector (``collect_parallel_rollouts``) and the online cotrain rollout
     (``OnlineCotrainRunner._rollout_action``) so the two can never drift. Runs the
-    OFT forward (``extractor.step``) for this frame's ``flat_hidden`` (= the
+    OFT forward (``extractor.step``) for this frame's hidden state (= the
     ``obs_embedding`` the WM/classifier consume), then takes the open-loop action
     via ``pop_open_loop_action`` (the same core the batched vectorized collector
-    uses). Returns ``(action, flat_hidden)``."""
-    action_chunk, flat_hidden = extractor.step(extractor_obs, task_description)
+    uses). Returns a tuple-compatible ``(action, hidden_state)`` with optional
+    ``lang_emb``."""
+    decoded = extractor.step(extractor_obs, task_description)
+    action_chunk, hidden_state = decoded
     action = pop_open_loop_action(action_chunk, action_queue, action_steps)
-    return action, flat_hidden
+    return OFTOpenLoopStep(action, hidden_state, getattr(decoded, "lang_emb", None))
 
 
 def resolve_model_path(model_path: str) -> str:
@@ -100,22 +137,42 @@ def vla_latent_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     )
 
     token_dim = _resolve_token_dim(vla)
+    patches_per_image = int(vla.vision_backbone.get_num_patches())
     token_count, flat_dim = _input_token_sidecar_dims(
         vla,
         image_keys=list(image_keys),
         token_dim=token_dim,
     )
+    num_images_in_input = int(vla.vision_backbone.get_num_images_in_input())
     return {
-        "per_image": int(vla.vision_backbone.get_num_patches()),
-        "views": int(vla.vision_backbone.get_num_images_in_input()),
+        "per_image": int(patches_per_image),
+        "patches_per_image": int(patches_per_image),
+        "views": int(num_images_in_input),
+        "num_images_in_input": int(num_images_in_input),
         "token_dim": int(token_dim),
         "token_count": int(token_count),
         "flat_dim": int(flat_dim),
     }
 
 
-def load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
-    """Load OpenVLAOFTPolicy from checkpoint on the specified GPU.
+def _policy_device_from_id(device_ref: int | str | torch.device) -> torch.device:
+    """Normalize a collector device reference into a torch device."""
+
+    if isinstance(device_ref, torch.device):
+        return device_ref
+    value = str(device_ref).strip().lower()
+    if value in {"", "auto"}:
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if value == "cpu":
+        return torch.device("cpu")
+    if value.startswith("cuda"):
+        return torch.device(value if ":" in value else "cuda:0")
+    gpu_id = int(value)
+    return torch.device("cpu" if gpu_id < 0 else f"cuda:{gpu_id}")
+
+
+def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
+    """Load OpenVLAOFTPolicy from checkpoint on the specified device.
 
     Under torchrun, gpu_id = LOCAL_RANK; CUDA_VISIBLE_DEVICES is NOT
     overridden (torchrun sets it per-process already via LOCAL_RANK env).
@@ -128,7 +185,7 @@ def load_policy(cfg: dict[str, Any], gpu_id: int) -> Any:
 
     model_path = resolve_model_path(cfg["model_path"])
 
-    device = torch.device(f"cuda:{gpu_id}")
+    device = _policy_device_from_id(gpu_id)
 
     # Auto-detect head mode (l1 vs discrete) from the checkpoint, mirroring the offline
     # preprocess (resolve_oft_policy_mode).  The one-trajectory cold-start ckpt is DISCRETE
@@ -211,10 +268,18 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
         token_count = cfg.get("token_count")
         hidden_dim = cfg.get("hidden_dim")
+        patches_per_image = cfg.get("patches_per_image")
         if token_count is not None:
             config["token_count"] = int(token_count)
+            config["obs_embedding_shape"] = [
+                int(token_count),
+                int(cfg["token_dim"]),
+            ]
         if hidden_dim is not None:
             config["hidden_dim"] = int(hidden_dim)
+        if patches_per_image is not None:
+            config["patches_per_image"] = int(patches_per_image)
+        config["hidden_storage_format"] = "tokenized"
     return config
 
 

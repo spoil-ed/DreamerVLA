@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
@@ -14,6 +15,16 @@ class _TinyWM(torch.nn.Module):
 class _TinyClassifier(torch.nn.Module):
     def forward(self, latent):
         return latent.sum(dim=-1, keepdim=True)
+
+
+class _ZeroTwoClassClassifier(torch.nn.Module):
+    def forward(self, latent):
+        return torch.zeros(latent.shape[0], 2, device=latent.device)
+
+
+class _MalformedDictClassifier(torch.nn.Module):
+    def forward(self, latent):
+        return {"unknown": torch.zeros(latent.shape[0], 1, device=latent.device)}
 
 
 def test_latent_world_model_env_step_returns_env_tuple():
@@ -54,6 +65,76 @@ def test_latent_world_model_env_loads_independent_versions():
 
     assert env.wm_version == 5
     assert env.classifier_version == 7
+
+
+def test_latent_world_model_env_converts_two_class_logits_to_success_probability():
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_ZeroTwoClassClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=0.5,
+    )
+
+    env.reset()
+    _next_obs, reward, terminated, truncated, info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+
+    assert reward == pytest.approx(0.5)
+    assert info["success_score"] == pytest.approx(0.5)
+    assert terminated is True
+    assert truncated is False
+
+
+def test_latent_world_model_env_rejects_unknown_classifier_dict_output():
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_MalformedDictClassifier(),
+        latent_dim=2,
+        action_dim=2,
+    )
+
+    env.reset()
+    with pytest.raises(ValueError, match="classifier output dict"):
+        env.step(np.zeros(2, dtype=np.float32))
+
+
+def test_latent_world_model_env_batches_independent_slots() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=10.0,
+        num_envs=3,
+    )
+
+    obs0, _ = env.reset_slot(0, task_id=0, episode_id=0)
+    obs1, _ = env.reset_slot(1, task_id=1, episode_id=11)
+    obs2, _ = env.reset_slot(2, task_id=2, episode_id=22)
+
+    assert obs0["latent"].shape == (2,)
+    assert obs1["episode_id"] == 11
+    assert obs2["task_id"] == 2
+
+    next_obs0, reward0, done0, truncated0, info0 = env.step_slot(
+        0, np.array([1.0, 0.0], dtype=np.float32)
+    )
+    next_obs1, reward1, done1, truncated1, info1 = env.step_slot(
+        1, np.array([0.0, 2.0], dtype=np.float32)
+    )
+
+    assert next_obs0["latent"].tolist() == [1.0, 0.0]
+    assert next_obs1["latent"].tolist() == [0.0, 2.0]
+    assert reward0 == 1.0
+    assert reward1 == 2.0
+    assert done0 is False
+    assert done1 is False
+    assert truncated0 is False
+    assert truncated1 is False
+    assert info0["slot_id"] == 0
+    assert info1["slot_id"] == 1
 
 
 def test_latent_world_model_env_config_modules_make_replay_transition():

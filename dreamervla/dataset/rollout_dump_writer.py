@@ -18,21 +18,24 @@ Schema (reward HDF5, per demo at data/demo_<i>/):
     demo.attrs: init_state (ndarray), num_samples (str(T))
     data group attrs: env meta
 
-Sidecar (same filename, separate dir):
-    data/demo_<i>/obs_embedding  (T, D) float16
+    Sidecar (same filename, separate dir):
+        data/demo_<i>/obs_embedding  (T, D) legacy or (T, N, D) input-token float16
+        data/demo_<i>/lang_emb       (D_lang,) optional demo-level float16
 
 preprocess_config.json is written once to hidden_dir/preprocess_config.json.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
+
+_CANONICAL_EPISODE_METADATA_KEYS = frozenset(("global_step", "env_step"))
 
 
 class RolloutDumpWriter:
@@ -79,6 +82,7 @@ class RolloutDumpWriter:
         data_attrs: dict[str, Any] | None = None,
         task_id: int | None = None,
         episode_id: int | None = None,
+        init_state_index: int | None = None,
         task_description: str | None = None,
         episode_success: bool | None = None,
         episode_horizon: int | None = None,
@@ -101,7 +105,8 @@ class RolloutDumpWriter:
                 ee_states        (6,)              float64
                 gripper_states   (2,)              float64
                 joint_states     (7,)              float64
-            obs_embedding   array-like (D,)       float16
+            obs_embedding   array-like (D,) legacy or (N,D) input-token float16
+            lang_emb         optional array-like (D_lang,) demo-level language embedding
 
         ``preprocess_config`` is written to hidden_dir/preprocess_config.json
         on the first call that provides a non-None value.
@@ -116,6 +121,9 @@ class RolloutDumpWriter:
 
         T = len(steps)
         demo_key = f"demo_{index}"
+        resolved_init_state_index = _resolve_init_state_index(
+            init_state_index, steps
+        )
 
         # Stack per-step arrays
         actions = np.stack(
@@ -138,7 +146,10 @@ class RolloutDumpWriter:
         )  # (T, S)
         obs_embedding = np.stack(
             [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
-        )  # (T, D)
+        )  # (T, D) legacy or (T, N, D) input-token
+        lang_emb = None
+        if steps[0].get("lang_emb") is not None:
+            lang_emb = np.asarray(steps[0]["lang_emb"], dtype=np.float16).reshape(-1)
 
         # obs sub-fields
         obs_keys_dtypes = {
@@ -181,12 +192,10 @@ class RolloutDumpWriter:
             demo_grp.attrs["task_id"] = int(task_id)
         if episode_id is not None:
             demo_grp.attrs["episode_id"] = int(episode_id)
+        if resolved_init_state_index is not None:
+            demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
         if task_description is not None:
             demo_grp.attrs["task_description"] = str(task_description)
-        if episode_success is not None:
-            demo_grp.attrs["episode_success"] = bool(episode_success)
-        if episode_horizon is not None:
-            demo_grp.attrs["episode_horizon"] = int(episode_horizon)
         demo_grp.attrs["complete"] = True
         for key, value in _episode_attrs(
             preprocess_config=preprocess_config,
@@ -201,12 +210,27 @@ class RolloutDumpWriter:
         # Write sidecar HDF5
         hidden_demo_grp = self._hidden_data.create_group(demo_key)
         hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
+        if lang_emb is not None:
+            hidden_demo_grp.create_dataset("lang_emb", data=lang_emb)
         hidden_demo_grp.attrs["num_samples"] = str(T)
         if task_id is not None:
             hidden_demo_grp.attrs["task_id"] = int(task_id)
         if episode_id is not None:
             hidden_demo_grp.attrs["episode_id"] = int(episode_id)
+        if resolved_init_state_index is not None:
+            hidden_demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
+        if task_description is not None:
+            hidden_demo_grp.attrs["task_description"] = str(task_description)
         hidden_demo_grp.attrs["complete"] = True
+        for key, value in _episode_attrs(
+            preprocess_config=preprocess_config,
+            data_attrs=data_attrs,
+            task_description=task_description,
+            episode_success=episode_success,
+            episode_horizon=episode_horizon,
+            episode_metadata=episode_metadata,
+        ).items():
+            hidden_demo_grp.attrs[key] = value
 
         self._num_demos += 1
 
@@ -214,6 +238,7 @@ class RolloutDumpWriter:
         if data_attrs is not None and not self._data_attrs_written:
             for attr_key, attr_val in data_attrs.items():
                 self._reward_data.attrs[attr_key] = attr_val
+                self._hidden_data.attrs[attr_key] = attr_val
             self._data_attrs_written = True
 
         # Write preprocess_config.json on first call (if provided)
@@ -228,6 +253,7 @@ class RolloutDumpWriter:
             return
         self._closed = True
         self._reward_data.attrs["num_demos"] = str(self._num_demos)
+        self._hidden_data.attrs["num_demos"] = str(self._num_demos)
         self._reward_f.close()
         self._hidden_f.close()
 
@@ -357,8 +383,6 @@ def _episode_attrs(
         attrs["task_name"] = str(task_description)
     if episode_success is not None:
         attrs["success"] = bool(episode_success)
-    if episode_horizon is not None:
-        attrs["horizon"] = int(episode_horizon)
     if preprocess_config is not None:
         for key in ("chunk_size", "hidden_key", "hidden_dim", "token_count", "token_dim"):
             if key in preprocess_config:
@@ -369,12 +393,28 @@ def _episode_attrs(
             if token_count is not None and token_dim is not None:
                 attrs["hidden_dim"] = int(token_count) * int(token_dim)
     if episode_metadata is not None:
-        attrs.update(dict(episode_metadata))
+        for key, value in dict(episode_metadata).items():
+            if str(key) in _CANONICAL_EPISODE_METADATA_KEYS:
+                attrs[str(key)] = value
     return {
         str(key): value
         for key, value in attrs.items()
         if _is_hdf5_attr_scalar(value)
     }
+
+
+def _resolve_init_state_index(
+    init_state_index: int | None,
+    steps: list[dict[str, Any]],
+) -> int | None:
+    if init_state_index is not None:
+        return int(init_state_index)
+    if not steps:
+        return None
+    value = steps[0].get("init_state_index")
+    if value is None:
+        return None
+    return int(value)
 
 
 def _is_hdf5_attr_scalar(value: Any) -> bool:

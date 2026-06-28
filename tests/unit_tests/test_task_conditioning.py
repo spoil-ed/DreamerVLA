@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import torch
 
@@ -66,6 +66,74 @@ def test_latent_success_classifier_uses_task_ids_when_enabled() -> None:
     assert model.supports_task_conditioning is True
     assert logits_a.shape == (2, 2)
     assert not torch.allclose(logits_a, logits_b)
+
+
+def test_latent_success_classifier_uses_dino_wm_style_proprio_language_tokens() -> None:
+    LatentSuccessClassifier = _latent_success_classifier_cls()
+    model = LatentSuccessClassifier(
+        latent_dim=9,
+        token_dim=4,
+        token_count=2,
+        token_pool="mean",
+        window=2,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        head_type="linear",
+        proprio_dim=3,
+        proprio_emb_dim=2,
+        lang_dim=5,
+        lang_emb_dim=3,
+    )
+
+    windows = torch.zeros(2, 2, 2, 4)
+    proprio = torch.randn(2, 2, 3)
+    lang = torch.randn(2, 5)
+    logits_a = model(windows, proprio=proprio, lang_emb=lang)
+    logits_b = model(windows, proprio=proprio, lang_emb=lang.flip(0))
+
+    assert model.supports_proprio_conditioning is True
+    assert model.supports_language_conditioning is True
+    assert model.obs_token_dim == 6
+    assert model.state_token_dim == 9
+    assert logits_a.shape == (2, 2)
+    assert not torch.allclose(logits_a, logits_b)
+
+
+def test_latent_success_classifier_predict_success_threads_proprio_language() -> None:
+    LatentSuccessClassifier = _latent_success_classifier_cls()
+    model = LatentSuccessClassifier(
+        latent_dim=9,
+        token_dim=4,
+        token_count=2,
+        token_pool="mean",
+        window=2,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        head_type="linear",
+        proprio_dim=3,
+        proprio_emb_dim=2,
+        lang_dim=5,
+        lang_emb_dim=3,
+        granularity="chunk",
+        chunk_size=2,
+        chunk_pool="last",
+    )
+
+    video = torch.zeros(2, 6, 2, 4)
+    proprio = torch.randn(2, 6, 3)
+    lang = torch.randn(2, 5)
+    out = model.predict_success(
+        video,
+        threshold=0.0,
+        min_steps=0,
+        proprio=proprio,
+        lang_emb=lang,
+    )
+
+    assert set(out) == {"complete", "finish_step", "score", "score_step"}
+    assert out["complete"].shape == (2,)
 
 
 def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:

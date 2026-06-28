@@ -90,7 +90,7 @@ def test_barrier_scatter_gather_matches_vecrolloutenv_api():
     vec = OnlineEglVecEnv(
         num_envs=3,
         cfg_kwargs={},
-        egl_device_pool=[4, 5],
+        egl_device_pool=[0],
         factory=_fake_env_factory,
         start_timeout_s=120.0,
     )
@@ -114,11 +114,11 @@ def test_barrier_scatter_gather_matches_vecrolloutenv_api():
 
 
 def test_per_child_egl_device_regime_is_rlinf_faithful():
-    """Each child gets MUJOCO_GL=egl + a pool device round-robin in CVD/EGL id."""
+    """Each child gets MUJOCO_GL=egl + the configured EGL index in CVD/EGL id."""
     vec = OnlineEglVecEnv(
         num_envs=3,
         cfg_kwargs={},
-        egl_device_pool=[4, 5],  # child0->4, child1->5, child2->4
+        egl_device_pool=[0],
         env_vars={"EXTRA_FLAG": "on"},
         factory=_fake_env_factory,
         start_timeout_s=120.0,
@@ -126,9 +126,9 @@ def test_per_child_egl_device_regime_is_rlinf_faithful():
     try:
         recs = vec.reset(task_ids=[0, 0, 0], episode_ids=[0, 0, 0])
         envs = [r["env"] for r in recs]
-        # device round-robin over the pool, consistent CVD == MUJOCO_EGL_DEVICE_ID
-        assert [e["MUJOCO_EGL_DEVICE_ID"] for e in envs] == ["4", "5", "4"]
-        assert [e["CUDA_VISIBLE_DEVICES"] for e in envs] == ["4", "5", "4"]
+        # consistent CVD == MUJOCO_EGL_DEVICE_ID for robosuite's import-time check
+        assert [e["MUJOCO_EGL_DEVICE_ID"] for e in envs] == ["0", "0", "0"]
+        assert [e["CUDA_VISIBLE_DEVICES"] for e in envs] == ["0", "0", "0"]
         # egl backend locked + extra env vars forwarded, on every child
         for e in envs:
             assert e["MUJOCO_GL"] == "egl"
@@ -141,7 +141,7 @@ def test_per_child_egl_device_regime_is_rlinf_faithful():
 
 def test_subset_step_only_addressed_envs():
     vec = OnlineEglVecEnv(
-        num_envs=3, cfg_kwargs={}, egl_device_pool=[4], factory=_fake_env_factory, start_timeout_s=120.0
+        num_envs=3, cfg_kwargs={}, egl_device_pool=[0], factory=_fake_env_factory, start_timeout_s=120.0
     )
     try:
         vec.reset(task_ids=[0, 0, 0], episode_ids=[0, 0, 0])
@@ -158,7 +158,7 @@ def test_child_init_failure_surfaces():
         OnlineEglVecEnv(
             num_envs=2,
             cfg_kwargs={},
-            egl_device_pool=[4],
+            egl_device_pool=[0],
             factory=_raising_factory,
             start_timeout_s=120.0,
         )

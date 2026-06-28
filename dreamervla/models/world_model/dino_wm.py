@@ -297,8 +297,8 @@ class DinoWMWorldModel(BaseWorldModel):
         return self.obs_proj.weight.device
 
     def _validate_obs_embedding(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        """Return the legacy flat ``[B,T,obs_dim]`` view for compatibility."""
-        return self.tokens_to_flat(self.obs_to_tokens(obs_embedding))
+        """Return the tokenized ``[B,T,N,D]`` view used by the DINO-WM path."""
+        return self.obs_to_tokens(obs_embedding)
 
     def _validate_actions(self, actions: torch.Tensor, steps: int) -> torch.Tensor:
         if actions.ndim == 2:
@@ -1128,7 +1128,7 @@ class DinoWMWorldModel(BaseWorldModel):
             )
         rollout, _ = self._rollout_hidden(obs_embedding, actions)
         out = {
-            "obs_embedding": self.tokens_to_flat(rollout),
+            "obs_embedding": rollout,
             "obs_tokens": rollout,
         }
         if self.reward_enabled:

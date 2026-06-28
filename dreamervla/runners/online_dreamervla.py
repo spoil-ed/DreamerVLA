@@ -345,13 +345,34 @@ def online_classifier_update_step(
     windows = cls_batch["windows"].to(device, non_blocking=True)
     labels = cls_batch["labels"].to(device, non_blocking=True)
     task_ids = cls_batch.get("task_ids")
+    forward_kwargs: dict[str, Any] = {}
+    if bool(getattr(module, "supports_proprio_conditioning", False)):
+        proprio = cls_batch.get("proprio")
+        if not isinstance(proprio, torch.Tensor):
+            raise ValueError(
+                "classifier requires proprio conditioning, but replay "
+                "sample_classifier_windows did not return proprio"
+            )
+        forward_kwargs["proprio"] = proprio.to(device, non_blocking=True)
+    if bool(getattr(module, "supports_language_conditioning", False)):
+        lang_emb = cls_batch.get("lang_emb")
+        if not isinstance(lang_emb, torch.Tensor):
+            raise ValueError(
+                "classifier requires language conditioning, but replay "
+                "sample_classifier_windows did not return lang_emb"
+            )
+        forward_kwargs["lang_emb"] = lang_emb.to(device, non_blocking=True)
     classifier.train()
     if bool(getattr(module, "supports_task_conditioning", False)) and isinstance(
         task_ids, torch.Tensor
     ):
-        logits = classifier(windows, task_ids=task_ids.to(device, non_blocking=True))
+        logits = classifier(
+            windows,
+            task_ids=task_ids.to(device, non_blocking=True),
+            **forward_kwargs,
+        )
     else:
-        logits = classifier(windows)
+        logits = classifier(windows, **forward_kwargs)
     loss = torch.nn.functional.cross_entropy(logits, labels)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()

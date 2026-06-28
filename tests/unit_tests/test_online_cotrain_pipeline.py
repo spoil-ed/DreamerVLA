@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -51,12 +52,16 @@ def test_wm_pretrain_batch_accepts_action_hidden_without_images():
         "dones": torch.zeros(2, 24),
         "is_first": torch.zeros(2, 24, dtype=torch.bool),
         "task_ids": torch.zeros(2, dtype=torch.long),
+        "proprio": torch.zeros(2, 24, 8),
+        "lang_emb": torch.zeros(2, 4096),
     }
 
     wm_batch = runner._build_wm_pretrain_batch(batch)
 
     assert wm_batch is not None
     assert wm_batch["obs_embedding"].dtype == torch.float16
+    assert wm_batch["proprio"].shape == (2, 24, 8)
+    assert wm_batch["lang_emb"].shape == (2, 4096)
     assert "images" not in wm_batch
 
 
@@ -90,6 +95,45 @@ def test_world_model_pretrain_step_uses_configured_bf16_autocast():
     )
 
     assert wm.autocast_seen is True
+
+
+def test_world_model_pretrain_step_forwards_condition_sidecars():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class SidecarRecordingWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+            self.seen: dict[str, torch.Tensor] = {}
+
+        def forward(self, batch):
+            self.seen = dict(batch)
+            loss = self.weight.square()
+            return {"_loss": loss, "loss": loss.detach()}
+
+    wm = SidecarRecordingWM()
+    optimizer = torch.optim.SGD(wm.parameters(), lr=0.01)
+    proprio = torch.zeros(2, 12, 8)
+    lang_emb = torch.zeros(2, 4096)
+
+    world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=optimizer,
+        batch={
+            "obs_embedding": torch.zeros(2, 12, 256, 4096),
+            "actions": torch.zeros(2, 12, 7),
+            "proprio": proprio,
+            "lang_emb": lang_emb,
+        },
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+    )
+
+    assert wm.seen["proprio"] is proprio
+    assert wm.seen["lang_emb"] is lang_emb
 
 
 def test_online_cotrain_actor_update_uses_registry():
@@ -333,6 +377,39 @@ def test_trainable_classifier_preserves_hydra_target(monkeypatch):
 
     assert runner._classifier_target == "tests.fake.CustomSuccessVerifier"
     assert runner._classifier_cls_kwargs == {"latent_dim": 3, "window": 2}
+
+
+def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_runner as mod
+
+    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = _FakeDistributed()
+    classifier = torch.nn.Linear(3, 2)
+    ckpt = tmp_path / "classifier.ckpt"
+    torch.save({"model": classifier.state_dict(), "threshold": 0.73}, ckpt)
+
+    monkeypatch.setattr(mod, "build_classifier", lambda cfg: torch.nn.Linear(3, 2))
+    monkeypatch.setattr(mod, "build_optimizer", lambda module, cfg: object())
+    cfg = OmegaConf.create(
+        {
+            "algorithm": {"lumos": {"classifier_threshold": 0.5}},
+            "classifier": {
+                "_target_": "tests.fake.CustomSuccessVerifier",
+                "latent_dim": 3,
+                "window": 2,
+            },
+            "world_model": {"obs_dim": 3},
+            "init": {"classifier_state_ckpt": str(ckpt)},
+            "optim": {"classifier": {"lr": 1.0e-4}},
+        }
+    )
+
+    runner._build_trainable_classifier(cfg)
+
+    assert runner.classifier_threshold == 0.73
 
 
 def test_task_conditioning_validation_is_disabled_by_default():
@@ -1076,7 +1153,7 @@ def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monke
 def test_release_pipeline_warmup_uses_all_collected_episodes_by_default():
     from hydra import compose, initialize_config_dir
 
-    config_dir = "/mnt/data/spoil/workspace/DreamerVLA/configs"
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(
             config_name="train",
@@ -1119,6 +1196,64 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+
+
+def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
+    from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+
+    runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.world_model = torch.nn.Linear(2, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
+
+    with torch.no_grad():
+        runner.world_model.weight.fill_(3.0)
+    runner._save_wm_warmup_progress(
+        step=7,
+        total=20,
+        metrics={"loss": 0.25},
+        topk_manager=None,
+    )
+    with torch.no_grad():
+        runner.world_model.weight.fill_(9.0)
+
+    restored_step = runner._load_latest_wm_warmup_progress()
+
+    assert restored_step == 7
+    assert not (tmp_path / "ckpt" / "wm_warmup.ckpt").exists()
+    assert (tmp_path / "ckpt" / "warmup_progress" / "wm_step_00000007.ckpt").exists()
+    assert torch.allclose(
+        runner.world_model.weight,
+        torch.full_like(runner.world_model.weight, 3.0),
+    )
+
+
+def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
+    from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+
+    runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.classifier = torch.nn.Linear(2, 2)
+    runner.classifier_optimizer = torch.optim.AdamW(runner.classifier.parameters(), lr=1e-3)
+    runner.classifier_threshold = 0.5
+
+    topk = runner._make_warmup_topk_manager(component="classifier", k=2)
+    for step, f1 in [(1, 0.10), (2, 0.70), (3, 0.30), (4, 0.90)]:
+        runner._save_cls_warmup_progress(
+            step=step,
+            total=10,
+            metrics={"loss": 1.0 - f1, "acc": f1, "f1": f1, "pos_frac": 0.5},
+            topk_manager=topk,
+        )
+
+    names = sorted(p.name for p in (tmp_path / "ckpt" / "warmup_topk" / "classifier").glob("*.ckpt"))
+    assert len(names) == 2
+    assert any("step=00000002" in name and "f1=0.700000" in name for name in names)
+    assert any("step=00000004" in name and "f1=0.900000" in name for name in names)
+    assert not any("step=00000001" in name for name in names)
+    assert not any("step=00000003" in name for name in names)
 
 
 def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
@@ -1241,7 +1376,14 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
 
         def step(self, obs, task_description):
             calls.append(f"step:{task_description}")
-            return [], torch.arange(4, dtype=torch.float16)
+            class DecodeOutput:
+                lang_emb = torch.arange(6, dtype=torch.float16)
+
+                def __iter__(self):
+                    yield []
+                    yield torch.arange(4, dtype=torch.float16).reshape(1, 4)
+
+            return DecodeOutput()
 
     class FakeWorldModel:
         def __call__(self, batch):
@@ -1275,12 +1417,13 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
     )
 
     assert action.shape == (7,)
-    assert obs_embedding.shape == (1, 4)
-    assert latent["hidden"].shape == (1, 4)
+    assert obs_embedding.shape == (1, 1, 4)
+    assert latent["hidden"].shape == (1, 1, 4)
+    assert torch.equal(runner._last_rollout_lang_emb, torch.arange(6, dtype=torch.float16))
     assert calls == [
         "reset",
         "step:Pick up the block",
-        "encode:(1, 4)",
+        "encode:(1, 1, 4)",
         "actor_input",
         "policy:(1, 6)",
     ]

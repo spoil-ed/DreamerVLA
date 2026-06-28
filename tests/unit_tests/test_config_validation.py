@@ -225,8 +225,26 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
     validate_cfg(oft_cfg, world_size=1)
     assert oft_cfg.world_model.latent_stage == "query_before"
     assert oft_cfg.world_model.token_dim == 4096
+    assert oft_cfg.world_model.proprio_dim == 8
+    assert oft_cfg.world_model.proprio_emb_dim == 10
+    assert oft_cfg.world_model.num_proprio_repeat == 1
+    assert oft_cfg.world_model.lang_dim == 4096
+    assert oft_cfg.world_model.lang_emb_dim == 32
+    assert oft_cfg.world_model.num_lang_repeat == 1
     assert oft_cfg.world_model.action_emb_dim == 10
-    assert oft_cfg.world_model.model_dim == 4106
+    assert oft_cfg.world_model.model_dim == 4148
+    assert oft_cfg.world_model.model_dim == (
+        oft_cfg.world_model.token_dim
+        + oft_cfg.world_model.proprio_emb_dim * oft_cfg.world_model.num_proprio_repeat
+        + oft_cfg.world_model.lang_emb_dim * oft_cfg.world_model.num_lang_repeat
+        + oft_cfg.world_model.action_emb_dim * oft_cfg.world_model.num_action_repeat
+    )
+    assert oft_cfg.world_model.cosine_loss_scale == 0.0
+    assert oft_cfg.world_model.chunk_rollout_chunks == 1
+    assert oft_cfg.world_model.chunk_rollout_loss_scale == 0.0
+    assert oft_cfg.dataset.sequence_length == 12
+    assert list(oft_cfg.dataset.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
+    assert oft_cfg.dataset.lang_emb_dir == oft_cfg.task.openvla_oft.input_token_hidden_dir
     assert oft_cfg.world_model.depth == 6
     assert oft_cfg.world_model.heads == 16
     assert oft_cfg.world_model.dim_head == 128
@@ -307,9 +325,56 @@ def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() 
     assert "action_hidden_dim" not in cfg.policy
     assert cfg.policy.head_type == "oft_discrete_token"
     assert cfg.world_model.latent_stage == "query_before"
-    assert cfg.world_model.token_count == 512
+    assert cfg.world_model.token_count == 256
     assert cfg.world_model.token_dim == 4096
+    assert cfg.world_model.obs_dim == 256 * 4096
+    assert cfg.world_model.proprio_dim == 8
+    assert cfg.world_model.proprio_emb_dim == 10
+    assert cfg.world_model.lang_dim == 4096
+    assert cfg.world_model.lang_emb_dim == 32
+    assert cfg.world_model.model_dim == 4148
+    assert cfg.world_model.cosine_loss_scale == 0.0
+    assert cfg.world_model.chunk_rollout_chunks == 1
+    assert cfg.world_model.chunk_rollout_loss_scale == 0.0
+    assert cfg.classifier.latent_dim == 4138
+    assert cfg.classifier.proprio_dim == 8
+    assert cfg.classifier.proprio_emb_dim == 10
+    assert cfg.classifier.lang_dim == 4096
+    assert cfg.classifier.lang_emb_dim == 32
     assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
+
+
+def test_openvla_oft_input_token_lumos_route_uses_proprio_language_contract() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=dreamervla_oft_dino_wm_lumos_input_tokens",
+                "task=openvla_onetraj_libero",
+            ],
+        )
+
+    validate_cfg(cfg, world_size=1)
+    assert cfg.world_model.latent_stage == "query_before"
+    assert cfg.dataset.sequence_length == 12
+    assert list(cfg.dataset.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
+    assert cfg.dataset.lang_emb_dir == cfg.task.openvla_oft.input_token_hidden_dir
+    assert cfg.world_model.proprio_dim == 8
+    assert cfg.world_model.proprio_emb_dim == 10
+    assert cfg.world_model.lang_dim == 4096
+    assert cfg.world_model.lang_emb_dim == 32
+    assert cfg.world_model.model_dim == 4148
+    assert cfg.world_model.model_dim == (
+        cfg.world_model.token_dim
+        + cfg.world_model.proprio_emb_dim * cfg.world_model.num_proprio_repeat
+        + cfg.world_model.lang_emb_dim * cfg.world_model.num_lang_repeat
+        + cfg.world_model.action_emb_dim * cfg.world_model.num_action_repeat
+    )
+    assert cfg.world_model.cosine_loss_scale == 0.0
+    assert cfg.world_model.chunk_rollout_chunks == 1
+    assert cfg.world_model.chunk_rollout_loss_scale == 0.0
 
 
 def test_online_cotrain_action_hidden_route_declares_classifier_target() -> None:
@@ -397,6 +462,27 @@ def test_validate_cfg_rejects_inconsistent_task_latent_spec() -> None:
     )
 
     with pytest.raises(ValueError, match="task.legacy_action_hidden"):
+        validate_cfg(cfg)
+
+
+def test_validate_cfg_rejects_inconsistent_oft_input_token_patch_count() -> None:
+    cfg = OmegaConf.create(
+        {
+            "task": {
+                "openvla_oft": {
+                    "num_images_in_input": 1,
+                    "input_tokens": {
+                        "wm_obs_dim": 2097152,
+                        "token_count": 512,
+                        "token_dim": 4096,
+                        "patches_per_image": 256,
+                    },
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="num_images_in_input \\* patches_per_image"):
         validate_cfg(cfg)
 
 
@@ -572,3 +658,16 @@ def test_train_run_validates_config_before_runner_setup(monkeypatch) -> None:
     train.run(cfg)
 
     assert events == ["validate", "setup", "execute", "teardown"]
+
+
+def test_input_token_classifier_label_smoothing_uses_plain_ce_by_default() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "classifier=openvla_oft_input_token_chunk",
+                "task=openvla_onetraj_libero",
+            ],
+        )
+    assert float(cfg.training.label_smoothing) == 0.0

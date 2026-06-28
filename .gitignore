@@ -36,24 +36,41 @@ wandb/
 .codex/
 .cursor/
 .planning/
+docs/superpowers/*
+!docs/superpowers/TODO.md
+!docs/superpowers/TODO_IMPLEMENTATION_SUMMARY.zh-CN.md
+!docs/superpowers/findings/
+!docs/superpowers/findings/*.md
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-06-27-rlinf-channel-topology.md
+!docs/superpowers/plans/archive/
+!docs/superpowers/plans/archive/*.md
+!docs/superpowers/results/
+!docs/superpowers/results/*.md
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/archive/
+!docs/superpowers/specs/archive/*.md
+docs/TODO.md
 docs/task_plan.md
 docs/*_plan.md
 docs/findings.md
 docs/history.md
 docs/graveyard_candidates_*.md
 
-# LaTeX build artifacts under docs/paper/ (the .tex/.sty/.bib sources stay tracked)
-docs/paper/**/*.pdf
-docs/paper/**/*.aux
-docs/paper/**/*.out
-docs/paper/**/*.bbl
-docs/paper/**/*.blg
-docs/paper/**/*.toc
-docs/paper/**/*.lof
-docs/paper/**/*.lot
-docs/paper/**/*.fls
-docs/paper/**/*.fdb_latexmk
-docs/paper/**/*.synctex.gz
+# LaTeX build artifacts under docs/papers/ (the .tex/.sty/.bib sources stay tracked)
+docs/papers/**/*.pdf
+docs/papers/**/*.aux
+docs/papers/**/*.out
+docs/papers/**/*.bbl
+docs/papers/**/*.blg
+docs/papers/**/*.toc
+docs/papers/**/*.lof
+docs/papers/**/*.lot
+docs/papers/**/*.fls
+docs/papers/**/*.fdb_latexmk
+docs/papers/**/*.synctex.gz
 
 # other
 CLAUDE.local.md

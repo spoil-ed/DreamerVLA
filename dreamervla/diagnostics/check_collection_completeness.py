@@ -12,8 +12,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from dreamervla.dataset.collection_manifest import complete_episode_ids_per_task
 

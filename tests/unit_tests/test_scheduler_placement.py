@@ -5,9 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from dreamervla.scheduler.placement import (
+    ComponentPlacement,
     FlexiblePlacementStrategy,
     NodePlacementStrategy,
     PackedPlacementStrategy,
+    ResourceMapPlacementStrategy,
     parse_accelerator_range,
 )
 
@@ -83,6 +85,43 @@ def test_flexible_placement_accepts_range_strings() -> None:
 def test_flexible_placement_rejects_out_of_range_gpu() -> None:
     with pytest.raises(ValueError, match="GPU"):
         FlexiblePlacementStrategy([[0], [4]]).get_placement(_cluster(num_gpus=4))
+
+
+def test_resource_map_placement_maps_many_workers_to_one_gpu() -> None:
+    placements = ResourceMapPlacementStrategy("2:0-3").get_placement(_cluster(num_gpus=4))
+
+    assert [p.rank for p in placements] == [0, 1, 2, 3]
+    assert [p.visible_accelerators for p in placements] == [["2"], ["2"], ["2"], ["2"]]
+    assert [p.device for p in placements] == ["cuda:2"] * 4
+    assert all(p.local_world_size == 4 for p in placements)
+
+
+def test_resource_map_placement_supports_resource_and_process_grouping() -> None:
+    shared = ResourceMapPlacementStrategy("0-1:0-3").get_placement(_cluster(num_gpus=4))
+    packed = ResourceMapPlacementStrategy("0-3:0-1").get_placement(_cluster(num_gpus=4))
+
+    assert [p.visible_accelerators for p in shared] == [["0"], ["0"], ["1"], ["1"]]
+    assert [p.visible_accelerators for p in packed] == [["0", "1"], ["2", "3"]]
+
+
+def test_component_placement_parses_rlinf_style_component_map() -> None:
+    cfg = {
+        "cluster": {
+            "component_placement": {
+                "env,rollout": "2:0-3",
+                "actor": {"placement": "0-1"},
+            }
+        }
+    }
+
+    placement = ComponentPlacement(cfg)
+
+    env = placement.get_strategy("env").get_placement(_cluster(num_gpus=3))
+    rollout = placement.get_strategy("rollout").get_placement(_cluster(num_gpus=3))
+    actor = placement.get_strategy("actor").get_placement(_cluster(num_gpus=3))
+    assert [p.visible_accelerators for p in env] == [["2"], ["2"], ["2"], ["2"]]
+    assert [p.visible_accelerators for p in rollout] == [["2"], ["2"], ["2"], ["2"]]
+    assert [p.visible_accelerators for p in actor] == [["0"], ["1"]]
 
 
 def test_scheduler_package_exports_flexible_placement() -> None:

@@ -45,6 +45,19 @@ class ReplayWorker(Worker):
             int(batch_size), staleness_threshold=staleness_threshold
         )
 
+    def sample_initial_obs_embeddings(
+        self,
+        batch_size: int,
+        *,
+        task_id: int | None = None,
+        key: str = "obs_embedding",
+    ) -> Any:
+        return self._replay().sample_initial_obs_embeddings(
+            int(batch_size),
+            task_id=task_id,
+            key=str(key),
+        )
+
     def sample_classifier_windows(
         self,
         batch_size: int,
@@ -101,6 +114,12 @@ class ReplayWorker(Worker):
 
     def task_stats(self, task_ids: tuple[int, ...] | None = None) -> dict[str, dict[str, int]]:
         return self._replay().task_stats(task_ids)
+
+    def state_dict(self) -> dict[str, Any]:
+        return self._replay().state_dict()
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self._replay().load_state_dict(state)
 
     def _replay(self) -> Any:
         if self.replay is None:

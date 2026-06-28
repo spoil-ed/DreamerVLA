@@ -46,7 +46,7 @@ scripts/            shell launchers for install, download, preprocess, train, ev
 tests/              unit and smoke tests
 third_party/        editable upstream dependencies
 data/               relative default runtime data root
-docs/               setup and data-layout reference
+docs/               documentation index, references, tutorials, reports, papers
 ```
 
 ## Entry Points

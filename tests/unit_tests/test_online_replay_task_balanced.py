@@ -34,6 +34,32 @@ def _episode(task_id: int, length: int, *, success: bool) -> list[dict]:
     ]
 
 
+def _collect_schema_step(
+    task_id: int, t: int, *, success: bool = False, done: bool = False
+) -> dict:
+    return {
+        "obs_embedding": np.full((2,), t, dtype=np.float32),
+        "actions": np.full((1,), t, dtype=np.float32),
+        "rewards": np.float32(1.0 if success else 0.0),
+        "sparse_rewards": np.uint8(1 if success else 0),
+        "dones": np.uint8(1 if done or success else 0),
+        "success": bool(success),
+        "task_id": int(task_id),
+    }
+
+
+def _collect_schema_episode(task_id: int, length: int, *, success: bool) -> list[dict]:
+    return [
+        _collect_schema_step(
+            task_id,
+            t,
+            success=success and t == length - 1,
+            done=t == length - 1,
+        )
+        for t in range(length)
+    ]
+
+
 def test_online_replay_samples_failed_episodes_only_from_prefix() -> None:
     random.seed(0)
     replay = OnlineReplay(
@@ -76,6 +102,102 @@ def test_online_replay_can_sample_without_images() -> None:
     assert "images" not in batch
     assert batch["obs_embedding"].dtype == torch.float32
     assert batch["obs_embedding"].shape == (2, 3, 2)
+
+
+def test_online_replay_samples_collect_schema_steps_without_reward_aliases() -> None:
+    random.seed(0)
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    replay.add_episode(_collect_schema_episode(task_id=2, length=5, success=True))
+
+    batch = replay.sample(1)
+
+    assert batch["rewards"].shape == (1, 3)
+    assert batch["actions"].shape == (1, 3, 1)
+    assert batch["current_actions"].shape == (1, 3, 1)
+    assert "images" not in batch
+
+
+def test_online_replay_state_dict_round_trips_records_and_cursors() -> None:
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_ids=(2, 9),
+        rank=4,
+        replay_sampling={"latest_online_required": True},
+    )
+    replay.set_policy_version(7)
+    online = replay.add_episode(_episode(task_id=2, length=5, success=True), source="online")
+    replay.add_episode(_episode(task_id=9, length=6, success=False), source="coldstart")
+
+    restored = OnlineReplay(
+        capacity=100,
+        sequence_length=3,
+        task_ids=(2, 9),
+        rank=4,
+        replay_sampling={"latest_online_required": True},
+    )
+    restored.load_state_dict(replay.state_dict())
+
+    assert online is not None
+    assert restored.num_transitions == replay.num_transitions
+    assert restored.task_stats((2, 9)) == replay.task_stats((2, 9))
+    assert restored._current_policy_version == 7
+    assert restored._next_episode_id == replay._next_episode_id
+    assert restored._next_collection_index == replay._next_collection_index
+    assert restored._next_task_episode_index == replay._next_task_episode_index
+    assert restored._pending_latest_online_episode_ids == {int(online["episode_id"])}
+
+    next_record = restored.add_episode(
+        _episode(task_id=2, length=5, success=False),
+        source="online",
+    )
+
+    assert next_record is not None
+    assert int(next_record["episode_id"]) == int(replay._next_episode_id)
+    assert int(next_record["policy_version"]) == 7
+
+
+def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
+    episode = _episode(task_id=2, length=3, success=True)
+    for idx, step in enumerate(episode):
+        step["proprio"] = np.full((8,), float(idx), dtype=np.float32)
+        step["lang_emb"] = np.arange(6, dtype=np.float32) + 0.25
+    replay.add_episode(episode)
+
+    batch = replay.sample(1, include_images=False)
+
+    assert batch["proprio"].shape == (1, 3, 8)
+    assert batch["proprio"].dtype == torch.float32
+    assert batch["lang_emb"].shape == (1, 6)
+    assert batch["lang_emb"].dtype == torch.float32
+    assert torch.allclose(batch["proprio"][0, :, 0], torch.tensor([0.0, 1.0, 2.0]))
+    assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
+
+
+def test_online_replay_classifier_windows_include_dino_wm_proprio_language() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
+    episode = _episode(task_id=2, length=8, success=True)
+    for idx, step in enumerate(episode):
+        step["obs_embedding"] = np.full((2, 4), float(idx), dtype=np.float32)
+        step["proprio"] = np.full((8,), float(idx), dtype=np.float32)
+        step["lang_emb"] = np.arange(6, dtype=np.float32) + 0.25
+    replay.add_episode(episode)
+
+    batch = replay.sample_classifier_windows(
+        1,
+        window=2,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=100,
+    )
+
+    assert batch["windows"].shape == (1, 2, 2, 4)
+    assert batch["is_end_window"].item() is True
+    assert batch["proprio"].shape == (1, 2, 8)
+    assert batch["lang_emb"].shape == (1, 6)
+    assert torch.allclose(batch["proprio"][0, :, 0], torch.tensor([5.0, 7.0]))
+    assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
 
 
 def test_online_replay_training_readiness_requires_each_task() -> None:

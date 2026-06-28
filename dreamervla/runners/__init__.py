@@ -115,6 +115,13 @@ _RUNNER_SPECS: dict[str, _RunnerSpec] = {
         runner_status="optional",
         runner_family="actor",
     ),
+    "ManualCotrainRayRunner": _RunnerSpec(
+        "dreamervla.runners.manual_cotrain_ray_runner",
+        "ManualCotrainRayRunner",
+        runner_name="manual_cotrain_ray",
+        runner_status="current",
+        runner_family="actor",
+    ),
     "ColdStartRayCollectRunner": _RunnerSpec(
         "dreamervla.runners.cold_start_ray_collect_runner",
         "ColdStartRayCollectRunner",

@@ -314,7 +314,13 @@ def _predict_intermediates_chunk(
     end: int,
     want_action: bool = True,
     want_input_tokens: bool = False,
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+) -> tuple[
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
     cfg = components["cfg"]
     vla = components["vla"]
     processor = components["processor"]
@@ -358,12 +364,16 @@ def _predict_intermediates_chunk(
             else None
         )
         input_tokens = None
+        lang_emb = None
         if want_input_tokens:
-            _token_count, input_flat_dim = _input_token_sidecar_dims(
+            input_token_count, _input_flat_dim = _input_token_sidecar_dims(
                 vla, image_keys=image_keys, token_dim=int(args.token_dim)
             )
-            input_tokens = np.zeros((batch, input_flat_dim), dtype=np.float32)
-        return hidden_c, hidden_d, action_hidden, input_tokens
+            input_tokens = np.zeros(
+                (batch, input_token_count, int(args.token_dim)), dtype=np.float32
+            )
+            lang_emb = np.zeros((batch, int(args.token_dim)), dtype=np.float32)
+        return hidden_c, hidden_d, action_hidden, input_tokens, lang_emb
 
     input_ids: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
@@ -441,6 +451,7 @@ def _predict_intermediates_chunk(
             -1,
             input_embeddings.shape[2],
         )
+        lang_emb = language_embeddings.mean(dim=1).float().cpu().numpy()
         projected_patch_embeddings = vla._process_vision_features(
             inputs["pixel_values"], language_embeddings, False
         )
@@ -450,11 +461,9 @@ def _predict_intermediates_chunk(
             # frame's views (input order is [history ... current] x views).
             per_image = int(vla.vision_backbone.get_num_patches())
             current_tokens = projected_patch_embeddings[:, -per_image * len(image_keys) :, :]
-            input_token_emb = (
-                current_tokens.reshape(current_tokens.shape[0], -1).float().cpu().numpy()
-            )
+            input_token_emb = current_tokens.float().cpu().numpy()
         if not want_action:
-            return None, None, None, input_token_emb
+            return None, None, None, input_token_emb, lang_emb
         if proprio_projector is not None and proprio_batch is not None:
             proprio_tensor = torch.as_tensor(
                 proprio_batch,
@@ -511,6 +520,7 @@ def _predict_intermediates_chunk(
         None if hidden_d is None else hidden_d.reshape(hidden_d.shape[0], -1).float().cpu().numpy(),
         actions_hidden_states.float().cpu().numpy(),
         input_token_emb,
+        lang_emb,
     )
 
 
@@ -667,6 +677,8 @@ def _write_source_sidecars(
             )
             out_input.attrs["save_action_hidden"] = False
             out_input.attrs["token_count"] = int(input_token_count)
+            out_input.attrs["token_dim"] = int(args.token_dim)
+            out_input.attrs["hidden_storage_format"] = "tokenized"
         data_group = source["data"]
         out_c_data = None if out_c is None else out_c.create_group("data")
         out_d_data = None if out_d is None else out_d.create_group("data")
@@ -753,22 +765,42 @@ def _write_source_sidecars(
                 action_hidden_dset.attrs["source_dtype"] = "float32"
                 action_hidden_dset.attrs["sequence_dim"] = action_hidden_seq_len
             input_dset = None
+            lang_emb_dset = None
             if demo_input is not None:
                 input_dset = demo_input.create_dataset(
                     args.hidden_key,
-                    shape=(length, input_flat_dim),
+                    shape=(length, input_token_count, int(args.token_dim)),
                     dtype=dtype,
-                    chunks=(min(max(1, int(args.chunk_size)), length), input_flat_dim),
+                    chunks=(
+                        min(max(1, int(args.chunk_size)), length),
+                        input_token_count,
+                        int(args.token_dim),
+                    ),
                     compression=None,
                 )
                 input_dset.attrs["hidden_dim"] = input_flat_dim
                 input_dset.attrs["source_dtype"] = "float32"
                 input_dset.attrs["token_count"] = int(input_token_count)
                 input_dset.attrs["token_dim"] = int(args.token_dim)
+                input_dset.attrs["hidden_storage_format"] = "tokenized"
+                lang_emb_dset = demo_input.create_dataset(
+                    "lang_emb",
+                    shape=(int(args.token_dim),),
+                    dtype=dtype,
+                    compression=None,
+                )
+                lang_emb_dset.attrs["hidden_dim"] = int(args.token_dim)
+                lang_emb_dset.attrs["source_dtype"] = "float32"
 
             for start in range(0, length, int(args.chunk_size)):
                 end = min(start + int(args.chunk_size), length)
-                hidden_c, hidden_d, action_hidden, input_tokens = _predict_intermediates_chunk(
+                (
+                    hidden_c,
+                    hidden_d,
+                    action_hidden,
+                    input_tokens,
+                    lang_emb,
+                ) = _predict_intermediates_chunk(
                     components=components,
                     args=args,
                     obs_group=obs_group,
@@ -794,6 +826,8 @@ def _write_source_sidecars(
                     action_hidden_dset[start:end] = action_hidden.astype(dtype, copy=False)
                 if input_dset is not None and input_tokens is not None:
                     input_dset[start:end] = input_tokens.astype(dtype, copy=False)
+                if lang_emb_dset is not None and lang_emb is not None and start == 0:
+                    lang_emb_dset[...] = lang_emb[0].astype(dtype, copy=False)
                 frames_written += int(end - start)
             demos_written += 1
             pbar.update()
@@ -961,6 +995,7 @@ def main() -> None:
                 base_config,
                 obs_hidden_source="input_token_embedding",
                 save_action_hidden=False,
+                hidden_storage_format="tokenized",
             )
             annotate_preprocess_config(
                 config_input,
