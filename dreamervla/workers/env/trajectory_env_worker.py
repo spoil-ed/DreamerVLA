@@ -355,6 +355,7 @@ class BaseTrajectoryEnvWorker(Worker):
             "env/steps": 0.0,
             "env/trajectory_shards": 0.0,
             "env/episodes_completed": 0.0,
+            "env/episodes_flushed": 0.0,
             "env/final_bootstrap_requests": 0.0,
         }
 
@@ -397,6 +398,9 @@ class BaseTrajectoryEnvWorker(Worker):
                 env_channel.put(message)
                 rollout_channel.get(key=self._slot_key(slot_id))
                 metrics["env/final_bootstrap_requests"] += 1.0
+                metrics["env/episodes_flushed"] += float(
+                    self._flush_partial_episode(slot_id)
+                )
         return metrics
 
     def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
@@ -433,6 +437,11 @@ class BaseTrajectoryEnvWorker(Worker):
             loader = getattr(env, loader_name, None)
             if loader is not None:
                 loader(state_dict, int(version))
+                continue
+            if self.role == "wm_env":
+                raise TypeError(
+                    f"WMEnvWorker env {type(env).__name__} must expose {loader_name}()"
+                )
 
     def close(self) -> None:
         """Close all env slots."""
@@ -545,6 +554,19 @@ class BaseTrajectoryEnvWorker(Worker):
             f"{str(name)}_version": int(version)
             for name, version in self._model_versions.items()
         }
+
+    def _flush_partial_episode(self, slot_id: int) -> int:
+        self._validate_slot(slot_id)
+        episode = self._episodes_by_slot[slot_id]
+        if not episode:
+            return 0
+        flushed = [dict(step) for step in episode]
+        _mark_transition_truncated(flushed[-1])
+        self._push_episode(self.replay, flushed)
+        self._push_episode(self.dump, flushed)
+        self._episodes_by_slot[slot_id] = []
+        self._episode_ids_by_slot[slot_id] += 1
+        return 1
 
     def _bootstrap_wm_initial_latents_from_replay(self) -> None:
         if self.role != "wm_env" or self.replay is None:
@@ -707,3 +729,34 @@ class WMEnvWorker(BaseTrajectoryEnvWorker):
             dump=dump,
             rank_offset=rank_offset,
         )
+
+
+def _same_scalar_kind(value: Any, replacement: bool | float) -> Any:
+    if isinstance(value, np.ndarray):
+        return np.asarray(replacement, dtype=value.dtype)
+    if isinstance(value, np.generic):
+        return type(value)(replacement)
+    if isinstance(value, bool):
+        return bool(replacement)
+    if isinstance(value, int):
+        return int(replacement)
+    if isinstance(value, float):
+        return float(replacement)
+    return replacement
+
+
+def _mark_transition_truncated(step: dict[str, Any]) -> None:
+    if "done" in step:
+        step["done"] = _same_scalar_kind(step["done"], True)
+    if "dones" in step:
+        step["dones"] = _same_scalar_kind(step["dones"], True)
+    if "is_last" in step:
+        step["is_last"] = _same_scalar_kind(step["is_last"], True)
+    else:
+        step["is_last"] = True
+    if "is_terminal" in step:
+        step["is_terminal"] = _same_scalar_kind(step["is_terminal"], False)
+    else:
+        step["is_terminal"] = False
+    if "discount" in step:
+        step["discount"] = _same_scalar_kind(step["discount"], 1.0)

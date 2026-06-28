@@ -84,6 +84,9 @@ class LearnerWorker(Worker):
 
     def init(self) -> None:
         self.precision = _resolve_precision(self.train_cfg, self.torch_device)
+        mode = str(self.train_cfg.get("mode", "synthetic_ppo"))
+        if mode == "wm_classifier_only" and self.train_cfg.get("fsdp") is not None:
+            raise ValueError("wm_classifier_only LearnerWorker must not enable FSDP")
         self.fsdp_manager = _build_fsdp_manager(self.train_cfg)
         self.components = self._build_components()
         self.policy = self.components.get("policy")
@@ -172,6 +175,14 @@ class LearnerWorker(Worker):
                 raise ValueError(
                     "wm_classifier_only requires components: "
                     f"{', '.join(missing)}"
+                )
+            unexpected = sorted(
+                name for name in components if name not in {"world_model", "classifier"}
+            )
+            if unexpected:
+                raise ValueError(
+                    "wm_classifier_only only accepts world_model and classifier "
+                    f"components; got {', '.join(unexpected)}"
                 )
         elif "policy" not in components:
             raise ValueError("LearnerWorker model_cfg must include a policy component")

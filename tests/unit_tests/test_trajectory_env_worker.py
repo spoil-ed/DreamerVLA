@@ -337,6 +337,26 @@ def test_trajectory_env_worker_applies_pending_state_sync_after_init() -> None:
         worker.close()
 
 
+def test_wm_env_worker_requires_component_state_loaders() -> None:
+    worker = WMEnvWorker(
+        env_cfg=_no_sidecar_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    try:
+        worker.init()
+
+        with pytest.raises(TypeError, match="load_world_model_state"):
+            worker.load_world_model_state({"weight": 1}, version=4)
+        with pytest.raises(TypeError, match="load_classifier_state"):
+            worker.load_classifier_state({"weight": 2}, version=5)
+    finally:
+        worker.close()
+
+
 def test_interact_routes_observations_rollout_results_and_trajectory(
     monkeypatch,
 ) -> None:
@@ -374,5 +394,53 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         assert metrics["env/trajectory_shards"] == 1.0
         assert metrics["env/episodes_completed"] == 1.0
         assert metrics["env/final_bootstrap_requests"] == 1.0
+    finally:
+        worker.close()
+
+
+def test_interact_flushes_partial_episode_at_rollout_epoch_boundary(
+    monkeypatch,
+) -> None:
+    replay = _MemoryReplay()
+    worker = RealEnvWorker(
+        env_cfg={
+            "target": "dreamervla.workers.env._test_envs:CounterEnv",
+            "kwargs": {"horizon": 10, "embedding_dim": 4},
+        },
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+        replay=replay,
+    )
+    one_step = replace(
+        _rollout_result(),
+        actions=np.zeros((1, 3), dtype=np.float32),
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([one_step, one_step]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        metrics = worker.interact("env", "rollout", "actor")
+
+        assert metrics["env/episodes_flushed"] == 1.0
+        assert len(replay.episodes) == 1
+        assert len(replay.episodes[0]) == 1
+        last_step = replay.episodes[0][-1]
+        assert bool(last_step["is_last"]) is True
+        assert bool(last_step["is_terminal"]) is False
+        assert float(last_step["discount"]) == 1.0
+        assert worker._episode_ids_by_slot[0] == 1
+        assert worker._episodes_by_slot[0] == []
     finally:
         worker.close()

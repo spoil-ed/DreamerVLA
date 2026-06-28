@@ -351,6 +351,33 @@ def test_wm_classifier_only_does_not_require_policy(
     assert learner.policy_optimizer is None
 
 
+def test_wm_classifier_only_rejects_policy_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    cfg = _wm_classifier_only_model_cfg()
+    cfg["policy"] = {
+        "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+        "kwargs": {"hidden_dim": 4, "action_dim": 7},
+    }
+    learner = LearnerWorker(cfg, {}, _wm_classifier_only_train_cfg(), replay=None)
+
+    with pytest.raises(ValueError, match="wm_classifier_only.*policy"):
+        learner.init()
+
+
+def test_wm_classifier_only_rejects_fsdp_train_cfg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    train_cfg = _wm_classifier_only_train_cfg()
+    train_cfg["fsdp"] = {"strategy": "none"}
+    learner = LearnerWorker(_wm_classifier_only_model_cfg(), {}, train_cfg, replay=None)
+
+    with pytest.raises(ValueError, match="wm_classifier_only.*FSDP"):
+        learner.init()
+
+
 @pytest.mark.parametrize("missing", ["world_model", "classifier"])
 def test_wm_classifier_only_rejects_missing_required_components(
     missing: str,
