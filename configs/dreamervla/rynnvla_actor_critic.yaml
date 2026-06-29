@@ -1,5 +1,5 @@
 # @package _global_
-# Dreamer actor-critic on the DINO-WM-style full RynnVLA action-hidden world model.
+# Dreamer actor-critic on the WM-style full RynnVLA action-hidden world model.
 # WM external VLA latent-observation shape is derived from time_horizon * action_dim * token_dim.
 defaults:
   - _self_
@@ -32,7 +32,7 @@ training:
   use_ema: false
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  # Only an attached feature backbone/encoder is frozen.  The DINO-WM predictor
+  # Only an attached feature backbone/encoder is frozen.  The WM predictor
   # and reward head keep receiving supervised WM/reward updates.
   run_wm_phase: true
   run_actor_critic_phase: true

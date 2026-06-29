@@ -103,6 +103,64 @@ def test_runner_builds_group_names_from_target_topology() -> None:
     assert names == ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
 
 
+def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> None:
+    launched: list[tuple[str, str | None]] = []
+
+    class _CaptureWorkerGroup:
+        def __init__(self, worker_cls, *args, **kwargs):
+            del args, kwargs
+            self.worker_cls = worker_cls
+            self.workers = [object()]
+
+        def launch(self, cluster, placement, name=None, env_vars=None):
+            del cluster, placement, env_vars
+            launched.append((self.worker_cls.__name__, name))
+            return self
+
+    class _FakeChannel:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    monkeypatch.setattr(manual_runner, "WorkerGroup", _CaptureWorkerGroup)
+    monkeypatch.setattr(
+        manual_runner.Channel,
+        "create",
+        staticmethod(lambda name: _FakeChannel(str(name))),
+    )
+    cfg = _cfg(ngpu=2)
+    cfg.replay = {"cfg": {"target": "test:Replay"}}
+    cfg.env = {
+        "real": {"cfg": {"target": "test:RealEnv"}},
+        "wm": {"cfg": {"target": "test:WMEnv"}},
+    }
+    cfg.rollout = {
+        "policy_cfg": {"target": "test:Policy"},
+        "train_cfg": {"device": "cpu"},
+    }
+    cfg.actor.policy_cfg = {"target": "test:Policy"}
+    cfg.actor.train_cfg.device = "cpu"
+    cfg.learner = {
+        "model_cfg": {
+            "world_model": {"target": "test:WorldModel"},
+            "classifier": {"target": "test:Classifier"},
+        },
+        "train_cfg": {"mode": "wm_classifier_only", "device": "cpu"},
+    }
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+
+    runner._build_groups(cluster=object())
+
+    assert launched == [
+        ("ReplayWorker", "ReplayWorker"),
+        ("RealEnvWorker", "RealEnvWorker"),
+        ("WMEnvWorker", "WMEnvWorker"),
+        ("MultiStepRolloutWorker", "MultiStepRolloutWorker"),
+        ("EmbodiedFSDPActor", "EmbodiedFSDPActor"),
+        ("LearnerWorker", "LearnerWorker"),
+    ]
+    assert all(name is None or not name.startswith("Manual") for _, name in launched)
+
+
 def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
     runner = runners.ManualCotrainRayRunner(
         _cfg(ngpu=6, wm_rollout_multiplier=4)
@@ -110,6 +168,31 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
 
     assert runner._max_steps_per_rollout_epoch() == 2
     assert runner._wm_max_steps_per_rollout_epoch() == 8
+
+
+@pytest.mark.parametrize(
+    ("field", "accessor"),
+    [
+        ("global_steps", "_global_steps"),
+        ("sync_every", "_sync_every"),
+        ("learner_update_step", "_learner_update_step"),
+        ("rollout_epoch", "_rollout_epoch"),
+        ("max_steps_per_rollout_epoch", "_max_steps_per_rollout_epoch"),
+        ("wm_rollout_multiplier", "_wm_rollout_multiplier"),
+        ("num_action_chunks", "_num_action_chunks"),
+        ("envs_per_worker", "_envs_per_worker"),
+    ],
+)
+def test_manual_runner_rejects_non_positive_loop_controls_without_coercion(
+    field: str,
+    accessor: str,
+) -> None:
+    cfg = _cfg()
+    cfg.manual_cotrain[field] = 0
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    with pytest.raises(ValueError, match=f"manual_cotrain.{field}"):
+        getattr(runner, accessor)()
 
 
 def test_split_actor_shard_counts_preserves_group_size_groups() -> None:
@@ -596,6 +679,8 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states() -> None:
     assert metrics["sync/load_component_states_s"] == 0.5
     assert metrics["replay_buffer/size"] == 3.0
     assert metrics["replay_buffer/transitions"] == 7.0
+    assert metrics["learner/updates"] == 1.0
+    assert metrics["train/learner_updates"] == 1.0
     assert "time/manual_cotrain/set_global_step_s" in metrics
     assert "time/manual_cotrain/actor_to_rollout_sync_s" in metrics
     assert "time/manual_cotrain/env_interact_and_rollout_generate_s" in metrics
@@ -663,6 +748,15 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
     payload = torch.load(ckpt, map_location="cpu", weights_only=False)
     manifest_path = ckpt.parent / "manual_cotrain_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    canonical_manifest_path = (
+        tmp_path
+        / "checkpoints"
+        / "global_step_1"
+        / "manual_cotrain_manifest.json"
+    )
+    canonical_manifest = json.loads(
+        canonical_manifest_path.read_text(encoding="utf-8")
+    )
     assert actor.state_dict_calls == [None]
     assert payload["global_step"] == 1
     assert sorted(payload["state_dicts"]) == ["classifier", "policy", "world_model"]
@@ -672,6 +766,42 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
     assert manifest["components"]["world_model"]["path"] == "manual_cotrain.ckpt"
     assert manifest["components"]["classifier"]["path"] == "manual_cotrain.ckpt"
     assert manifest["versions"]["global_step"] == 1
+    assert manifest["versions"]["policy_version"] == 1
+    assert manifest["versions"]["world_model_version"] == 1
+    assert manifest["versions"]["classifier_version"] == 1
+    assert manifest["versions"]["actor_policy_version"] == 1
+    assert manifest["versions"]["rollout_policy_version"] == 1
+    assert manifest["versions"]["wm_version"] == 1
+    assert manifest["run"] == {
+        "root": "../..",
+        "resolved_config": "../../resolved_config.yaml",
+        "run_manifest": "../../run_manifest.json",
+    }
+    assert canonical_manifest["global_step"] == 1
+    assert (
+        canonical_manifest["components"]["policy"]["path"]
+        == "../manual_cotrain_step_1/manual_cotrain.ckpt"
+    )
+    assert canonical_manifest["run"] == manifest["run"]
+    assert not (canonical_manifest_path.parent / "manual_cotrain.ckpt").exists()
+    alias_payload = manual_runner._load_manual_resume_payload(
+        str(canonical_manifest_path),
+        required=True,
+    )
+    assert alias_payload is not None
+    assert alias_payload["global_step"] == 1
+    canonical_dir_payload = manual_runner._load_manual_resume_payload(
+        str(canonical_manifest_path.parent),
+        required=True,
+    )
+    legacy_dir_payload = manual_runner._load_manual_resume_payload(
+        str(ckpt.parent),
+        required=True,
+    )
+    assert canonical_dir_payload is not None
+    assert legacy_dir_payload is not None
+    assert canonical_dir_payload["global_step"] == 1
+    assert legacy_dir_payload["global_step"] == 1
     assert torch.equal(
         payload["state_dicts"]["policy"]["policy.weight"],
         torch.ones(1),

@@ -12,7 +12,7 @@
   本文件中的用户手写内容。
 - AI assistant 只能在用户要求时补充代码现状、风险、遗漏点或 `Current vs Target` 差异；
   补充内容不得覆盖、替换或重排用户的第一性指导。
-- 当这里与 `00_overview.md`、`01_complete_loop.md`、`02_ray.md` 不一致时，先把差异记录到
+- 当这里与 `00_overview.md`、`04_complete_loop.md`、`02_naming.md` 不一致时，先把差异记录到
   `Current vs Target`，再决定是否更新主文档或代码。
 - 确认后的内容再整理进主文档；未确认内容保留在这里。
 

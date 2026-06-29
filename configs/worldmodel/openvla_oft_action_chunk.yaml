@@ -78,7 +78,7 @@ world_model:
   action_emb_dim: 10
   num_action_repeat: 1
   model_dim: 4106
-  # DINO-WM balanced predictor (query_after / action-hidden, seq=168): FULL-WIDTH attention
+  # WM balanced predictor (query_after / action-hidden, seq=168): FULL-WIDTH attention
   # inner = heads*dim_head = 4096 = model_dim (no compression of the dense 4096-d VLA tokens
   # => accuracy); LEAN FFN mlp_dim = model_dim (efficiency). Short sequence makes full-width
   # nearly free here. ~610M total (<1B). See the tutorial md for the per-profile table.

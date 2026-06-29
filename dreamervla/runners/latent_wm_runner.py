@@ -9,9 +9,9 @@ from dreamervla.runners.dreamerv3_pixel_runner import DreamerV3PixelRunner
 
 
 class LatentWMTrainingRunner(DreamerV3PixelRunner):
-    """DINO-WM-style trainer for full RynnVLA action-token hidden sidecars."""
+    """Latent WM trainer for full RynnVLA action-token hidden sidecars."""
 
-    runner_name = "dino_wm"
+    runner_name = "wm"
     runner_status = "secondary"
     runner_family = "world_model"
 
@@ -29,7 +29,7 @@ class LatentWMTrainingRunner(DreamerV3PixelRunner):
         ):
             if self.global_step == 0:
                 self._print(
-                    "[rynn-dino-wm] viz is disabled for hidden-only predictor training."
+                    "[wm] viz is disabled for hidden-only predictor training."
                 )
 
     def _progress_postfix(self, row: dict[str, Any], max_steps: int) -> dict[str, Any]:

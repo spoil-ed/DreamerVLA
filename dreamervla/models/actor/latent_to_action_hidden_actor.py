@@ -17,7 +17,7 @@ class LatentToActionHiddenActor(BaseActor):
     """Bridge tokenized WM latents to VLA action-head slots.
 
     Scheme-B world models predict input-side image-token latents, not
-    action-query latents.  This actor keeps the DINO-WM token boundary:
+    action-query latents.  This actor keeps the WM token boundary:
     it accepts ``[B,N,D]`` or flat ``[B,N*D]`` latents, lets learned action
     queries attend to those source tokens, and decodes the resulting action
     slots with the usual L1 action output head.

@@ -32,7 +32,7 @@ overridable directly.
 | --- | --- |
 | `experiment/` | top-level recipe (VLA SFT / world-model / classifier / DreamerVLA / eval / online cotrain / collect) |
 | `VLA/` | VLA backbone + finetune strategy (rynnvla / openvla_oft, full / one-trajectory) |
-| `worldmodel/` | DINO-WM architecture + input mode (action-chunk / input-token / discrete-token) |
+| `worldmodel/` | WM architecture + input mode (action-chunk / input-token / discrete-token) |
 | `classifier/` | latent success classifier (outcome-reward LUMOS) |
 | `dreamervla/` | actor-critic / LUMOS training (all inherit `_base_lumos`) |
 | `evaluation/` | LIBERO rollout eval (`libero_vla`) |
@@ -84,7 +84,7 @@ overridable directly.
 | `dataset.stride` | `1` | window stride |
 | `dataset.max_files` / `max_demos_per_file` / `max_windows` | `null` | smoke-run caps |
 
-## `world_model.*` — DINO-WM chunk predictor
+## `world_model.*` — WM chunk predictor
 
 `obs_dim = time_horizon × action_dim × token_dim`. `model_dim` and the dims below must
 match the WM checkpoint being loaded.

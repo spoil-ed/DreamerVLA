@@ -2,7 +2,7 @@
 # Legacy action-hidden classifier route. This consumes query-after action-hidden
 # sidecars ([chunk*action_dim, token_dim]) and stays on the historical
 # transformer/vector contract for existing checkpoints/tutorials. Do not use it
-# as the DINO-WM query-before [vision|proprio|language] classifier template.
+# as the WM query-before [vision|proprio|language] classifier template.
 # LatentSuccessClassifier — CHUNK-LEVEL variant aligned 1:1 with the
 # action-level small_tf baseline, with ONLY the time unit reinterpreted:
 #

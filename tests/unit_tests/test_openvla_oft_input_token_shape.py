@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -181,3 +182,14 @@ def test_dino_wm_rollout_returns_tokenized_obs_embedding() -> None:
 
     assert out["obs_embedding"].shape == (2, 3, 2, 4)
     assert out["obs_tokens"].shape == (2, 3, 2, 4)
+
+
+def test_dino_wm_source_uses_role_based_wm_wording() -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "models"
+        / "world_model"
+        / "dino_wm.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source

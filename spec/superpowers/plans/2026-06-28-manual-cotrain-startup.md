@@ -13,7 +13,7 @@
 ## Source Of Truth
 
 - Primary architecture source: `spec/99_manual_notes.md`.
-- Supporting architecture docs: `spec/00_overview.md`, `spec/01_complete_loop.md`, and `spec/02_ray.md`.
+- Supporting architecture docs: `spec/00_overview.md`, `spec/04_complete_loop.md`, and `spec/02_naming.md`.
 - Do not use migrated `docs/` architecture copies as source-of-truth.
 - `99_manual_notes.md` may only be edited for repository naming alignment. Do not change its design logic or flow.
 

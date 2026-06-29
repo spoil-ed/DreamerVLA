@@ -31,7 +31,7 @@ Sidecar attrs expected by the WM route
 Reference sidecar:
 `data/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2/`.
 
-This is the RynnVLA-002 latent contract.  The DINO-WM token axis is an
+This is the RynnVLA-002 latent contract.  The WM token axis is an
 action-slot axis (`time_horizon × action_dim`), so downstream actor code can
 decode it with the original action head.
 
@@ -48,11 +48,11 @@ WM consumes `token_count=35 × token_dim=1024` per frame
 (`task.legacy_action_hidden.*` in `configs/task/libero_goal.yaml`):
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:
-`dreamervla_rynn_dino_wm_lumos` / `_actor_critic` · Eval:
+`dreamervla_rynn_wm_lumos` / `_actor_critic` · Eval:
 `bash scripts/eval_libero_vla.sh`.
 
 ## Workflow verification (2026-06-12, CPU interface level)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 
@@ -14,9 +15,15 @@ EXPERIMENT_MODULES = {
         "VLA",
         "openvla_oft_l1_one_trajectory",
     ),
+    "world_model_wm_chunk": ("worldmodel", "rynnvla_action_chunk_wm"),
     "world_model_dinowm_step": ("worldmodel", "rynnvla_action_step"),
+    "world_model_wm_step": ("worldmodel", "rynnvla_action_step"),
     "world_model_dinowm_chunk": ("worldmodel", "rynnvla_action_chunk"),
     "world_model_dinowm_chunk_input_tokens": (
+        "worldmodel",
+        "rynnvla_input_token_chunk",
+    ),
+    "world_model_wm_chunk_input_tokens": (
         "worldmodel",
         "rynnvla_input_token_chunk",
     ),
@@ -24,11 +31,23 @@ EXPERIMENT_MODULES = {
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
+    "oft_world_model_wm_chunk": (
+        "worldmodel",
+        "openvla_oft_input_token_chunk",
+    ),
     "oft_discrete_token_world_model_dinowm_chunk": (
         "worldmodel",
         "openvla_oft_discrete_token_action_chunk",
     ),
+    "oft_discrete_token_world_model_wm_chunk": (
+        "worldmodel",
+        "openvla_oft_discrete_token_action_chunk",
+    ),
     "oft_world_model_dinowm_chunk_input_tokens": (
+        "worldmodel",
+        "openvla_oft_input_token_chunk",
+    ),
+    "oft_world_model_wm_chunk_input_tokens": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
@@ -49,7 +68,15 @@ EXPERIMENT_MODULES = {
         "dreamervla",
         "rynnvla_actor_critic",
     ),
+    "dreamervla_rynn_wm_actor_critic": (
+        "dreamervla",
+        "rynnvla_actor_critic",
+    ),
     "dreamervla_rynn_dino_wm_lumos": (
+        "dreamervla",
+        "rynnvla_lumos",
+    ),
+    "dreamervla_rynn_wm_lumos": (
         "dreamervla",
         "rynnvla_lumos",
     ),
@@ -57,7 +84,15 @@ EXPERIMENT_MODULES = {
         "dreamervla",
         "rynnvla_input_token_lumos",
     ),
+    "dreamervla_rynn_wm_lumos_input_tokens": (
+        "dreamervla",
+        "rynnvla_input_token_lumos",
+    ),
     "dreamervla_oft_dino_wm_lumos": (
+        "dreamervla",
+        "openvla_oft_input_token_lumos",
+    ),
+    "dreamervla_oft_wm_lumos": (
         "dreamervla",
         "openvla_oft_input_token_lumos",
     ),
@@ -65,7 +100,15 @@ EXPERIMENT_MODULES = {
         "dreamervla",
         "openvla_oft_discrete_token_lumos",
     ),
+    "dreamervla_oft_discrete_token_wm_lumos": (
+        "dreamervla",
+        "openvla_oft_discrete_token_lumos",
+    ),
     "dreamervla_oft_dino_wm_lumos_input_tokens": (
+        "dreamervla",
+        "openvla_oft_input_token_lumos",
+    ),
+    "dreamervla_oft_wm_lumos_input_tokens": (
         "dreamervla",
         "openvla_oft_input_token_lumos",
     ),
@@ -82,6 +125,24 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
     if extra_overrides is not None:
         overrides.extend(extra_overrides)
     return compose(config_name="train", overrides=overrides)
+
+
+def test_world_model_package_exports_role_based_wm_aliases() -> None:
+    from dreamervla.models.world_model import (
+        ChunkAwareDinoWMWorldModel,
+        ChunkAwareWorldModel,
+        DinoWMWorldModel,
+        WorldModel,
+    )
+    from dreamervla.models.world_model.wm import WorldModel as ModuleWorldModel
+    from dreamervla.models.world_model.wm_chunk import (
+        ChunkAwareWorldModel as ModuleChunkAwareWorldModel,
+    )
+
+    assert WorldModel is DinoWMWorldModel
+    assert ChunkAwareWorldModel is ChunkAwareDinoWMWorldModel
+    assert ModuleWorldModel is DinoWMWorldModel
+    assert ModuleChunkAwareWorldModel is ChunkAwareDinoWMWorldModel
 
 
 def test_openvla_oft_lumos_main_route_uses_input_tokens() -> None:
@@ -116,6 +177,7 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "CollectRolloutsRunner",
         "OnlineCotrainPipelineRunner",
         "OnlineCotrainRayRunner",
+        "ManualCotrainRayRunner",
         "ColdStartRayCollectRunner",
     }
 
@@ -129,6 +191,20 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         assert callable(cls.execute)
         assert callable(cls.run)
         assert callable(cls.teardown)
+
+
+def test_latent_wm_implementation_uses_role_based_wm_name() -> None:
+    from dreamervla.runners import latent_wm_runner
+
+    assert latent_wm_runner.LatentWMTrainingRunner.runner_name == "wm"
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "runners"
+        / "latent_wm_runner.py"
+    ).read_text(encoding="utf-8")
+    assert "dino_wm" not in source
+    assert "dino-wm" not in source
 
 
 def test_runner_directory_contains_route_specific_runners() -> None:
@@ -240,11 +316,17 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "dreamervla_rynn_dino_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_rynn_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_discrete_token_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_discrete_token_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
+        "dreamervla_oft_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
         "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
@@ -273,6 +355,197 @@ def test_train_config_experiments_compose_through_stage_modules() -> None:
             module_cfg = compose(config_name=f"{group_name}/{module_name}")
             assert new_cfg._target_ == module_cfg._target_
             assert "workspace" not in new_cfg
+
+
+def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("world_model_wm_chunk")
+        legacy = _compose_experiment("world_model_dinowm_chunk")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert (
+        role_based.world_model._target_
+        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
+    )
+    assert (
+        legacy.world_model._target_
+        == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
+    )
+    assert get_class(role_based.world_model._target_) is get_class(
+        legacy.world_model._target_
+    )
+
+
+def test_role_based_wm_step_experiment_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("world_model_wm_step")
+        legacy = _compose_experiment("world_model_dinowm_step")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert role_based.world_model._target_ == legacy.world_model._target_
+
+
+def test_role_based_wm_input_token_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("world_model_wm_chunk_input_tokens")
+        legacy = _compose_experiment("world_model_dinowm_chunk_input_tokens")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert (
+        role_based.dataset.expected_obs_hidden_source
+        == legacy.dataset.expected_obs_hidden_source
+    )
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.world_model.token_count == legacy.world_model.token_count
+
+
+def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("oft_world_model_wm_chunk")
+        legacy = _compose_experiment("oft_world_model_dinowm_chunk")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert role_based.world_model._target_ == legacy.world_model._target_
+
+
+def test_role_based_oft_wm_input_token_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("oft_world_model_wm_chunk_input_tokens")
+        legacy = _compose_experiment("oft_world_model_dinowm_chunk_input_tokens")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert (
+        role_based.dataset.expected_obs_hidden_source
+        == legacy.dataset.expected_obs_hidden_source
+    )
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.world_model.token_count == legacy.world_model.token_count
+
+
+def test_role_based_oft_discrete_token_wm_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("oft_discrete_token_world_model_wm_chunk")
+        legacy = _compose_experiment("oft_discrete_token_world_model_dinowm_chunk")
+
+    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.dataset._target_ == legacy.dataset._target_
+    assert (
+        role_based.dataset.expected_action_head_type
+        == legacy.dataset.expected_action_head_type
+    )
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.world_model.obs_dim == legacy.world_model.obs_dim
+
+
+def test_role_based_rynn_wm_lumos_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_rynn_wm_lumos")
+        legacy = _compose_experiment("dreamervla_rynn_dino_wm_lumos")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.critic._target_ == legacy.critic._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_role_based_rynn_wm_actor_critic_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_rynn_wm_actor_critic")
+        legacy = _compose_experiment("dreamervla_rynn_dino_wm_actor_critic")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.critic._target_ == legacy.critic._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_role_based_rynn_wm_input_token_lumos_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_rynn_wm_lumos_input_tokens")
+        legacy = _compose_experiment("dreamervla_rynn_dino_wm_lumos_input_tokens")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_role_based_oft_wm_lumos_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_oft_wm_lumos")
+        legacy = _compose_experiment("dreamervla_oft_dino_wm_lumos")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_role_based_oft_wm_input_token_lumos_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_oft_wm_lumos_input_tokens")
+        legacy = _compose_experiment("dreamervla_oft_dino_wm_lumos_input_tokens")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_role_based_oft_discrete_token_wm_lumos_alias_matches_legacy_route() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        role_based = _compose_experiment("dreamervla_oft_discrete_token_wm_lumos")
+        legacy = _compose_experiment("dreamervla_oft_discrete_token_dino_wm_lumos")
+
+    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
+    assert role_based._target_ == legacy._target_
+    assert role_based.policy._target_ == legacy.policy._target_
+    assert role_based.policy.head_type == legacy.policy.head_type
+    assert role_based.dataset.expected_action_head_type == legacy.dataset.expected_action_head_type
+    assert role_based.world_model._target_ == legacy.world_model._target_
+    assert role_based.algorithm.update_type == legacy.algorithm.update_type
+
+
+def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    train_dreamervla_config = (
+        config_dir / "scripts" / "train_dreamervla.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment: dreamervla_rynn_wm_lumos" in train_dreamervla_config
 
 
 def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
@@ -398,6 +671,13 @@ def test_train_config_resolves_public_default_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     assert not (config_dir / "archive").exists()
 
+    train_config = (config_dir / "train.yaml").read_text(encoding="utf-8")
+    train_wm_config = (config_dir / "scripts" / "train_wm.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "experiment: world_model_wm_chunk" in train_config
+    assert "experiment: world_model_wm_chunk" in train_wm_config
+
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
         assert cfg._target_ == "dreamervla.runners.LatentWMRunner"
@@ -407,7 +687,7 @@ def test_train_config_resolves_public_default_experiment() -> None:
         )
         assert (
             cfg.world_model._target_
-            == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
+            == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
         )
         assert "dinowm_chunk" in cfg.training.out_dir
 
@@ -418,6 +698,20 @@ def test_cli_default_uses_current_public_runner_target() -> None:
     config_name, overrides = _parse_hydra_like_args([])
     assert config_name == "train"
     assert overrides == []
+
+
+def test_train_help_uses_role_based_wm_examples(capsys) -> None:
+    from dreamervla.train import _parse_hydra_like_args
+
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_hydra_like_args(["--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "experiment=world_model_wm_chunk" in help_text
+    assert "experiment=dreamervla_rynn_wm_actor_critic" in help_text
+    assert "dinowm" not in help_text
+    assert "dino_wm" not in help_text
 
 
 def test_implementation_runner_classes_are_not_public_aliases() -> None:

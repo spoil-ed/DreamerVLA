@@ -9,6 +9,8 @@ GRPO within-group advantage variance is non-zero and the gradient is non-trivial
 Modeled on ``tests/unit_tests/test_lumos_microbatch_equivalence.py``.
 """
 
+from pathlib import Path
+
 import torch
 from omegaconf import OmegaConf
 
@@ -20,6 +22,17 @@ N_STARTS = 3  # B_eff = 6 rollouts; mb_starts=1 -> three group-aligned slices
 HORIZON = 2
 K = 2
 ACTION_DIM = 1
+
+
+def test_dense_ppo_messages_use_role_based_wm_wording():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "algorithms"
+        / "ppo"
+        / "dense.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source
 
 
 class _DetWM(torch.nn.Module):

@@ -56,7 +56,7 @@ world_model:
   # O(1), numerically identical. Keeps batch_size=96 within 80GB during WM warmup.
   grad_checkpoint: true
   model_dim: 4106
-  # DINO-WM balanced predictor (query_after / action-hidden, seq = num_hist*token_count = 168):
+  # WM balanced predictor (query_after / action-hidden, seq = num_hist*token_count = 168):
   # FULL-WIDTH attention inner = heads*dim_head = 4096 = model_dim — no compression of the
   # dense 4096-d VLA tokens (accuracy); LEAN FFN mlp_dim = model_dim (efficiency). The short
   # 168-token sequence makes full-width attention nearly free here, so capacity is spent where

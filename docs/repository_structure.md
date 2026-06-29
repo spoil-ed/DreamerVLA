@@ -79,16 +79,16 @@ VLA SFT:
   openvla_oft_hdf5_one_trajectory_l1
 
 World model / classifier:
-  world_model_dinowm_step
-  world_model_dinowm_chunk
-  oft_world_model_dinowm_chunk
+  world_model_wm_step
+  world_model_wm_chunk
+  oft_world_model_wm_chunk
   latent_classifier_libero_goal_chunk
   oft_latent_classifier_chunk
 
 DreamerVLA:
-  dreamervla_rynn_dino_wm_actor_critic
-  dreamervla_rynn_dino_wm_lumos
-  dreamervla_oft_dino_wm_lumos
+  dreamervla_rynn_wm_actor_critic
+  dreamervla_rynn_wm_lumos
+  dreamervla_oft_wm_lumos
 
 Evaluation:
   eval_libero_vla

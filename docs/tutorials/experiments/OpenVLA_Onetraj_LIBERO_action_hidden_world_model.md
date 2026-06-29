@@ -37,7 +37,7 @@ bash scripts/preprocess/prepare_libero_data.sh \
 ## 2. World model
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero \
+bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk task=openvla_onetraj_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
@@ -51,7 +51,7 @@ bash scripts/train_wm.sh experiment=oft_latent_classifier_chunk task=openvla_one
 ## 4. DreamerVLA (lumos)
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_oft_dino_wm_lumos task=openvla_onetraj_libero \
+bash scripts/train_dreamervla.sh experiment=dreamervla_oft_wm_lumos task=openvla_onetraj_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=2 -- \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
@@ -99,7 +99,7 @@ PY="PYTHONPATH=. python"
 
 # WM smoke
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.train \
-  experiment=oft_world_model_dinowm_chunk task=openvla_onetraj_libero logger=tensorboard \
+  experiment=oft_world_model_wm_chunk task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_wm_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \
@@ -117,7 +117,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.tr
 # DreamerVLA lumos smoke (memory-bounded imagination)
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $PY -m dreamervla.train \
-  experiment=dreamervla_oft_dino_wm_lumos task=openvla_onetraj_libero logger=tensorboard \
+  experiment=dreamervla_oft_wm_lumos task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_dvla_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 dataloader.multiprocessing_context=null dataloader.persistent_workers=false \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \

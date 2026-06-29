@@ -1,5 +1,5 @@
 # @package _global_
-# Scheme B: DINO-WM over frame-level RynnVLA input image-token latents.
+# Scheme B: WM over frame-level RynnVLA input image-token latents.
 defaults:
   - rynnvla_action_chunk
   - _self_

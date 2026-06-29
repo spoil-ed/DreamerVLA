@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /worldmodel: rynnvla_action_chunk_wm
+  - _self_

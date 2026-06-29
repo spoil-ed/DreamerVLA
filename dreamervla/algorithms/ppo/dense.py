@@ -260,7 +260,7 @@ def dino_lumos_dense_step(
     target_critic: nn.Module | None = None,
     critic_optimizer: torch.optim.Optimizer | None = None,
 ) -> dict[str, float]:
-    """One PPO/GRPO-like update using DINO-WM imagined trajectory rewards.
+    """One PPO/GRPO-like update using WM imagined trajectory rewards.
 
     The world model is used as a frozen imagination environment for this RL
     update.  It may still be trained by the separate supervised WM phase.
@@ -390,7 +390,7 @@ def dino_lumos_dense_step(
                 )
 
     if not actor_feats:
-        raise RuntimeError("DINO-WM PPO requires at least one imagined actor step.")
+        raise RuntimeError("WM PPO requires at least one imagined actor step.")
 
     # The advantage is built from the imagined rewards (+ optional TD-MPC terminal
     # value) ONLY — it never depends on the policy re-evaluation forwards — so we

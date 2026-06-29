@@ -1,5 +1,5 @@
 # @package _global_
-# Chunk-aware DINO-WM predictor (true Plan B) over RynnVLA legacy action hidden.
+# Chunk-aware WM predictor (true Plan B) over RynnVLA legacy action hidden.
 # External VLA latent-observation shape is derived from time_horizon * action_dim * token_dim.
 #
 # Objective: autoregressive K-step prediction.
@@ -9,7 +9,7 @@
 #   reward head (trained on TARGET hiddens, matching parent's convention).
 #
 # Checkpoint compatibility:
-#   This DINO-WM-style concat architecture is not shape-compatible with older
+#   This WM-style concat architecture is not shape-compatible with older
 #   model_dim=1024 projection/mask-token chunk checkpoints.
 
 defaults:
@@ -85,7 +85,7 @@ dataloader:
   multiprocessing_context: null
 
 world_model:
-  # DINO-WM-style chunk transition: action is encoded and concatenated to every
+  # WM-style chunk transition: action is encoded and concatenated to every
   # obs token channel; chunk rollout is autoregressive over predicted hiddens.
   _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}

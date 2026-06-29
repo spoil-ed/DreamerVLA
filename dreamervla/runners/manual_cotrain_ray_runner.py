@@ -8,6 +8,7 @@ EnvGroup owns real/WM env interaction.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 import time
 from pathlib import Path
@@ -121,7 +122,7 @@ class ManualCotrainRayRunner(BaseRunner):
             replay_group = WorkerGroup(
                 ReplayWorker,
                 self._cfg_dict("replay.cfg"),
-            ).launch(cluster, NodePlacementStrategy(1), name="ManualReplay")
+            ).launch(cluster, NodePlacementStrategy(1), name="ReplayWorker")
             replay = replay_group.workers[0]
 
         real_env_group = WorkerGroup(
@@ -139,7 +140,7 @@ class ManualCotrainRayRunner(BaseRunner):
         ).launch(
             cluster,
             self._placement_for(plan.env_specs[0].gpu_ids),
-            name="ManualRealEnvWorker",
+            name="RealEnvWorker",
         )
         wm_gpus = [spec.gpu_ids[0] for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
@@ -160,7 +161,7 @@ class ManualCotrainRayRunner(BaseRunner):
             ).launch(
                 cluster,
                 ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in wm_gpus)),
-                name="ManualWMEnvWorker",
+                name="WMEnvWorker",
             )
 
         rollout_group = WorkerGroup(
@@ -172,7 +173,7 @@ class ManualCotrainRayRunner(BaseRunner):
         ).launch(
             cluster,
             self._resource_map_for_specs(plan.rollout_specs),
-            name="ManualRolloutWorker",
+            name="MultiStepRolloutWorker",
         )
 
         actor_group = WorkerGroup(
@@ -183,7 +184,7 @@ class ManualCotrainRayRunner(BaseRunner):
         ).launch(
             cluster,
             self._resource_map_for_specs(plan.actor_specs),
-            name="ManualActor",
+            name="EmbodiedFSDPActor",
         )
 
         learner_group = WorkerGroup(
@@ -195,7 +196,7 @@ class ManualCotrainRayRunner(BaseRunner):
         ).launch(
             cluster,
             self._placement_for(plan.learner_spec.gpu_ids),
-            name="ManualLearner",
+            name="LearnerWorker",
         )
 
         return {
@@ -296,7 +297,9 @@ class ManualCotrainRayRunner(BaseRunner):
 
         learner_metrics: dict[str, float] = {}
         if global_step % self._learner_update_step() == 0:
-            learner_metrics = _merge_metric_lists([learner.update("cotrain", 1).wait()])
+            learner_metrics = _with_train_learner_aliases(
+                _merge_metric_lists([learner.update("cotrain", 1).wait()])
+            )
             if self._publish_learner_weights():
                 learner.sync_weights("world_model", global_step).wait()
                 learner.sync_weights("classifier", global_step).wait()
@@ -360,34 +363,41 @@ class ManualCotrainRayRunner(BaseRunner):
         return int(OmegaConf.select(self.cfg, "manual_cotrain.ngpu", default=1))
 
     def _global_steps(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.global_steps", default=1)))
+        return self._positive_manual_int("global_steps", default=1)
 
     def _sync_every(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.sync_every", default=1)))
+        return self._positive_manual_int("sync_every", default=1)
 
     def _learner_update_step(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.learner_update_step", default=1)))
+        return self._positive_manual_int("learner_update_step", default=1)
 
     def _rollout_epoch(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.rollout_epoch", default=1)))
+        return self._positive_manual_int("rollout_epoch", default=1)
 
     def _max_steps_per_rollout_epoch(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.max_steps_per_rollout_epoch", default=1)))
+        return self._positive_manual_int("max_steps_per_rollout_epoch", default=1)
 
     def _wm_rollout_multiplier(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.wm_rollout_multiplier", default=1)))
+        return self._positive_manual_int("wm_rollout_multiplier", default=1)
 
     def _wm_max_steps_per_rollout_epoch(self) -> int:
         return self._max_steps_per_rollout_epoch() * self._wm_rollout_multiplier()
 
     def _num_action_chunks(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.num_action_chunks", default=1)))
+        return self._positive_manual_int("num_action_chunks", default=1)
 
     def _envs_per_worker(self) -> int:
-        return max(1, int(OmegaConf.select(self.cfg, "manual_cotrain.envs_per_worker", default=1)))
+        return self._positive_manual_int("envs_per_worker", default=1)
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
+
+    def _positive_manual_int(self, field: str, *, default: int) -> int:
+        path = f"manual_cotrain.{field}"
+        value = int(OmegaConf.select(self.cfg, path, default=default))
+        if value <= 0:
+            raise ValueError(f"{path} must be positive, got {value}")
+        return value
 
     def _env_rollout_timeout_s(self) -> float:
         return float(
@@ -702,14 +712,45 @@ class ManualCotrainRayRunner(BaseRunner):
             },
             ckpt_path,
         )
+        run_metadata = self._manual_checkpoint_run_metadata(ckpt_dir)
         manifest = _manual_checkpoint_manifest(
             global_step=int(global_step),
             metrics=metrics,
             ckpt_name=ckpt_path.name,
             state_dicts=state_dicts,
             has_replay=replay_state is not None,
+            run=run_metadata,
         )
         _atomic_write_json(ckpt_dir / "manual_cotrain_manifest.json", manifest)
+        canonical_dir = self.get_global_step_checkpoint_dir(int(global_step))
+        if canonical_dir != ckpt_dir:
+            canonical_dir.mkdir(parents=True, exist_ok=True)
+            alias_payload = (Path("..") / ckpt_dir.name / ckpt_path.name).as_posix()
+            alias_manifest = _manual_checkpoint_manifest(
+                global_step=int(global_step),
+                metrics=metrics,
+                ckpt_name=alias_payload,
+                state_dicts=state_dicts,
+                has_replay=replay_state is not None,
+                run=self._manual_checkpoint_run_metadata(canonical_dir),
+            )
+            _atomic_write_json(
+                canonical_dir / "manual_cotrain_manifest.json",
+                alias_manifest,
+            )
+
+    def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
+        return {
+            "root": _relative_path(self.get_run_dir(), manifest_dir),
+            "resolved_config": _relative_path(
+                self.get_resolved_config_path(),
+                manifest_dir,
+            ),
+            "run_manifest": _relative_path(
+                self.get_run_manifest_path(),
+                manifest_dir,
+            ),
+        }
 
     @staticmethod
     def _placement_for(gpu_ids: list[int]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
@@ -734,6 +775,13 @@ def _merge_metric_lists(items: list[Any]) -> dict[str, float]:
         else:
             merged.update(_float_metrics(values))
     return merged
+
+
+def _with_train_learner_aliases(metrics: dict[str, float]) -> dict[str, float]:
+    out = dict(metrics)
+    if "learner/updates" in out and "train/learner_updates" not in out:
+        out["train/learner_updates"] = float(out["learner/updates"])
+    return out
 
 
 def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
@@ -943,15 +991,26 @@ def _manual_checkpoint_manifest(
     ckpt_name: str,
     state_dicts: dict[str, dict[str, Any]],
     has_replay: bool,
+    run: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    policy_version = int(metrics.get("sync/policy_version", global_step))
+    rollout_policy_version = int(
+        metrics.get("sync/rollout_policy_version", policy_version)
+    )
+    world_model_version = int(
+        metrics.get("sync/world_model_version", global_step)
+    )
+    classifier_version = int(
+        metrics.get("sync/classifier_version", global_step)
+    )
     versions = {
         "global_step": int(global_step),
-        "actor_policy_version": int(metrics.get("sync/policy_version", global_step)),
-        "rollout_policy_version": int(
-            metrics.get("sync/rollout_policy_version", metrics.get("sync/policy_version", global_step))
-        ),
-        "wm_version": int(metrics.get("sync/world_model_version", global_step)),
-        "classifier_version": int(metrics.get("sync/classifier_version", global_step)),
+        "policy_version": policy_version,
+        "world_model_version": world_model_version,
+        "classifier_version": classifier_version,
+        "actor_policy_version": policy_version,
+        "rollout_policy_version": rollout_policy_version,
+        "wm_version": world_model_version,
     }
     return {
         "schema_version": 1,
@@ -972,11 +1031,21 @@ def _manual_checkpoint_manifest(
             "size": float(metrics.get("replay_buffer/size", 0.0)),
             "transitions": float(metrics.get("replay_buffer/transitions", 0.0)),
         },
+        "run": dict(run or {}),
         "metrics_keys": sorted(str(key) for key in metrics),
     }
 
 
+def _relative_path(target: Path, start: Path) -> str:
+    return Path(os.path.relpath(target, start)).as_posix()
+
+
 def _checkpoint_payload_path(path: Path) -> Path:
+    if path.is_dir():
+        manifest_path = path / "manual_cotrain_manifest.json"
+        if manifest_path.is_file():
+            return _checkpoint_payload_path(manifest_path)
+        return path / "manual_cotrain.ckpt"
     if path.name == "manual_cotrain_manifest.json":
         manifest = json.loads(path.read_text(encoding="utf-8"))
         components = manifest.get("components", {})

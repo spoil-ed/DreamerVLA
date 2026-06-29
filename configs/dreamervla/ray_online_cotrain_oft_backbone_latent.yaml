@@ -1,7 +1,7 @@
 # @package _global_
 # Single-node Ray async online cotrain route for OpenVLA-OFT backbone_latent.
 #
-# This is the DINO-WM-style OpenVLA-OFT route before the action query: the WM
+# This is the WM-style OpenVLA-OFT route before the action query: the WM
 # consumes current-frame projected vision patch tokens from
 # task.openvla_oft.input_tokens, and the actor bridges those predicted latents
 # back to discrete OpenVLA action-token slots.

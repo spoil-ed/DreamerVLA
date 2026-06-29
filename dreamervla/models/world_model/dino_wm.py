@@ -10,7 +10,7 @@ from dreamervla.models.world_model.base_world_model import BaseWorldModel
 
 
 class DinoWMWorldModel(BaseWorldModel):
-    """DINO-WM-style predictor over full RynnVLA action-token hidden states.
+    """WM-style predictor over full RynnVLA action-token hidden states.
 
     The model accepts either legacy flattened sidecars or tokenized RynnVLA
     action hidden states. Internally it keeps the ``time_horizon * action_dim``
@@ -297,7 +297,7 @@ class DinoWMWorldModel(BaseWorldModel):
         return self.obs_proj.weight.device
 
     def _validate_obs_embedding(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        """Return the tokenized ``[B,T,N,D]`` view used by the DINO-WM path."""
+        """Return the tokenized ``[B,T,N,D]`` view used by the WM path."""
         return self.obs_to_tokens(obs_embedding)
 
     def _validate_actions(self, actions: torch.Tensor, steps: int) -> torch.Tensor:
@@ -1117,7 +1117,7 @@ class DinoWMWorldModel(BaseWorldModel):
     ) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], torch.Tensor]:
         if obs_0 is not None or act is not None:
             if obs_0 is None or act is None:
-                raise ValueError("DINO-WM-style rollout requires both obs_0 and act")
+                raise ValueError("WM-style rollout requires both obs_0 and act")
             rollout, z_rollout = self._rollout_hidden(
                 self._obs_embedding_from_obs(obs_0), act
             )

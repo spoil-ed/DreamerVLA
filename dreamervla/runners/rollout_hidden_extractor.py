@@ -96,9 +96,9 @@ def input_token_hidden_from_projected(
 ) -> torch.Tensor:
     """Return current-frame projected vision patch tokens for input-token sidecars.
 
-    DINO-WM keeps frame observations as patch-token batches ``[B, N, D]``.  The
-    flat-equivalent ``N * D`` is metadata only and must not become the sidecar
-    storage shape.
+    WM input-token sidecars keep frame observations as patch-token batches
+    ``[B, N, D]``.  The flat-equivalent ``N * D`` is metadata only and must not
+    become the sidecar storage shape.
     """
     per_image = int(model.vision_backbone.get_num_patches())
     token_count = per_image * len(list(image_keys))

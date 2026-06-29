@@ -136,6 +136,17 @@ def test_latent_success_classifier_predict_success_threads_proprio_language() ->
     assert out["complete"].shape == (2,)
 
 
+def test_latent_success_classifier_messages_use_role_based_wm_wording() -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "models"
+        / "reward"
+        / "latent_success_classifier.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source
+
+
 def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:
     from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
 

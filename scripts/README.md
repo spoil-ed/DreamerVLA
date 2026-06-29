@@ -81,7 +81,7 @@ Common launcher flags stay intentionally small:
     bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 
-    bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+    bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
       gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20
 
 LIBERO preprocessing GPU and worker controls:

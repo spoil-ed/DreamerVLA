@@ -178,6 +178,13 @@ def test_input_token_hidden_from_projected_uses_current_frame_views() -> None:
     assert hidden.shape == (2, 6, 4)
 
 
+def test_rollout_hidden_extractor_docs_use_role_based_wm_wording() -> None:
+    source = (
+        PROJECT_ROOT / "dreamervla" / "runners" / "rollout_hidden_extractor.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source
+
+
 # ── real-model consistency gate (opt-in; skipped unless explicitly enabled) ──
 
 _SKIP_CKPT = f"OFT checkpoint not found at {OFT_CKPT}"
