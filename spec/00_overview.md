@@ -10,13 +10,10 @@
 | 文件 | 作用 |
 | --- | --- |
 | [`00_overview.md`](00_overview.md) | 目标主线架构、核心 group、训练形态、关键边界。 |
-| [`01_complete_loop.md`](01_complete_loop.md) | 端到端 loop：collect、warmup、cotrain、eval。 |
-| [`02_ray.md`](02_ray.md) | Ray worker graph、placement、channel、同步的实现形态。 |
-| [`03_current_implementation.md`](03_current_implementation.md) | 当前代码已落地的 route、group、placement、global step 和验证状态。 |
-| [`04_rlinf_alignment.md`](04_rlinf_alignment.md) | 与 RLinf WoVR/embodiment 的 group/worker/channel 对齐。 |
-| [`05_cotrain_data_contracts.md`](05_cotrain_data_contracts.md) | message、trajectory shape、sidecar 数据契约。 |
-| [`06_sync_checkpoint_metrics.md`](06_sync_checkpoint_metrics.md) | 权重同步、warmup checkpoint bridge、manual checkpoint、metrics namespace。 |
-| [`07_validation_matrix.md`](07_validation_matrix.md) | unit、tiny smoke、GPU/LIBERO 验证矩阵。 |
+| [`01_goal.md`](01_goal.md) | 项目目标、长期 architecture 原则和主线边界。 |
+| [`02_naming.md`](02_naming.md) | 正式命名、模块命名、worker 命名和兼容命名规则。 |
+| [`03_coding_style.md`](03_coding_style.md) | 面向长期 RL 系统维护的编码风格、接口设计和结构化数据规则。 |
+| [`04_complete_loop.md`](04_complete_loop.md) | 端到端 loop：collect、warmup、manual cotrain、eval。 |
 
 ## Main Idea
 
@@ -45,7 +42,7 @@ WMEnv bootstrap 提供数据，但它不是 ActorGroup PPO 的数据通道。
 
 ## Training Shape
 
-端到端训练分为四段（详见 [`01_complete_loop.md`](01_complete_loop.md)）：
+端到端训练分为四段（详见 [`04_complete_loop.md`](04_complete_loop.md)）：
 
 1. `collect`：用 VLA/OFT 在真实 LIBERO 中采集初始 rollout，写出 hidden sidecar（例如
    `obs_embedding`）和 reward 数据，为 warmup 提供监督。
@@ -106,7 +103,5 @@ _target_=dreamervla.runners.ManualCotrainRayRunner
 它创建 `LearnerGroup`、`ActorGroup`、`RolloutGroup`、`RealEnvGroup`、可选 `WMEnvGroup` 和可选
 `ReplayGroup`，并已按 chunk-level trajectory contract 连接 Env/Rollout/Actor。当前剩余重点不是
 拓扑代码是否存在，而是目标 GPU/LIBERO 机器上完整跑通 async cold-start -> warmup ->
-manual cotrain，并完成一次 global step。实现事实见
-[`03_current_implementation.md`](03_current_implementation.md)，数据契约见
-[`05_cotrain_data_contracts.md`](05_cotrain_data_contracts.md)，验证矩阵见
-[`07_validation_matrix.md`](07_validation_matrix.md)。
+manual cotrain，并完成一次 global step。当前主线 loop、数据流、同步、checkpoint 和验证关注点见
+[`04_complete_loop.md`](04_complete_loop.md)。
