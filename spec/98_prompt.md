@@ -24,7 +24,7 @@ It is not current architecture source of truth. Use it only to understand earlie
    `/mnt/data/spoil/workspace/DreamerVLA/spec`
 
 2. 你可以对 `99_manual_notes.md` 进行少量修改，但修改内容**仅限于统一和对齐仓库中的命名**，以避免当前名称不一致带来的混乱。不要修改其中的设计逻辑、流程或其他内容。
-3. `/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-wovr-alignment.zh-CN.md`内为已有的方案，请你阅读，并分子代理做好详细的计划
+3. `/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-alignment.zh-CN.md`内为已有的方案，请你阅读，并分子代理做好详细的计划
 ---
 
 ## 执行策略
@@ -55,7 +55,7 @@ It is not current architecture source of truth. Use it only to understand earlie
 
 2. 请充分学习并理解当前仓库和 RLinf 中关于 **Group** 的设计与使用方式，在开始实现前确保已经掌握相关机制。
 
-3. 建议先尝试完整跑通 RLinf 中的 **WoVR** 方案。只有真正理解 WoVR 的运行流程、组件关系以及启动方式后，才能更准确地实现 DreamerVLA 的 cotrain 流程。
+3. 建议先尝试完整跑通 RLinf 中的 **embodied** 方案。只有真正理解该方案的运行流程、组件关系以及启动方式后，才能更准确地实现 DreamerVLA 的 cotrain 流程。
 
 ---
 
@@ -72,7 +72,7 @@ It is not current architecture source of truth. Use it only to understand earlie
 最终实现必须严格按照：
 
 `/mnt/data/spoil/workspace/DreamerVLA/spec/99_manual_notes.md`
-`/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-wovr-alignment.zh-CN.md`中的计划实现中的说明来启动 cotrain。
+`/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-alignment.zh-CN.md`中的计划实现中的说明来启动 cotrain。
 
 ---
 
@@ -85,5 +85,5 @@ It is not current architecture source of truth. Use it only to understand earlie
 * 支持使用 **0–5 张 GPU** 启动训练；
 * 能够进行长时间训练，只需要能够成功启动并完成一次完整的global_step即可；
 * 实现过程中应优先保证与当前仓库的兼容性，而不是引入新的设计。
-* 完整实现 `/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-wovr-alignment.zh-CN.md` 内的计划。
+* 完整实现 `/mnt/data/spoil/workspace/DreamerVLA/docs/superpowers/plans/2026-06-28-manual-cotrain-rlinf-alignment.zh-CN.md` 内的计划。
 以上是本次任务的核心目标，请始终围绕该目标推进实现。

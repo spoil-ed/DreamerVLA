@@ -21,6 +21,44 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "dreamervla.launchers.train" in eval_script
 
 
+def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    removed_word = "wo" + "vr"
+    active_roots = [
+        project_root / "AGENTS.md",
+        project_root / "README.md",
+        project_root / "README.zh-CN.md",
+        project_root / "SETUP.md",
+        project_root / "configs",
+        project_root / "docs",
+        project_root / "dreamervla",
+        project_root / "scripts",
+        project_root / "spec",
+    ]
+    skip_paths = {
+        project_root / "spec" / "99_manual_notes.md",
+    }
+    skip_parts = {"archive", "__pycache__"}
+    checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
+
+    offenders: list[str] = []
+    for root in active_roots:
+        paths = [root] if root.is_file() else root.rglob("*")
+        for path in paths:
+            if not path.is_file() or path in skip_paths:
+                continue
+            relative_parts = path.relative_to(project_root).parts
+            if any(part in skip_parts for part in relative_parts):
+                continue
+            if path.suffix not in checked_suffixes:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if removed_word in text.lower() or removed_word in path.name.lower():
+                offenders.append(str(path.relative_to(project_root)))
+
+    assert offenders == []
+
+
 def test_readme_prefers_role_based_wm_route_examples() -> None:
     project_root = Path(__file__).resolve().parents[2]
     readme = (project_root / "README.md").read_text(encoding="utf-8")
