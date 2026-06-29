@@ -39,10 +39,15 @@ class ReplayWorker(Worker):
         self._replay().set_policy_version(int(version))
 
     def sample(
-        self, batch_size: int, staleness_threshold: int | None = None
+        self,
+        batch_size: int,
+        staleness_threshold: int | None = None,
+        include_images: bool = True,
     ) -> dict[str, Any]:
         return self._replay().sample(
-            int(batch_size), staleness_threshold=staleness_threshold
+            int(batch_size),
+            staleness_threshold=staleness_threshold,
+            include_images=bool(include_images),
         )
 
     def sample_initial_obs_embeddings(

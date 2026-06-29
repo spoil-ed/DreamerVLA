@@ -29,6 +29,10 @@ class OFTRolloutBundle:
         cfg.setdefault("unnorm_key", str(unnorm_key))
         cfg.setdefault("_rank", 0)
         self._policy = oft_collect_common.load_policy(cfg, device_ref)
+        selected_image_keys = _select_image_keys_for_policy(
+            image_keys,
+            cfg.get("num_images_in_input", len(image_keys)),
+        )
         if expected_action_head_type is not None:
             cfg["expected_action_head_type"] = str(expected_action_head_type)
         if expected_include_state is not None:
@@ -40,10 +44,10 @@ class OFTRolloutBundle:
             self._policy,
             str(unnorm_key),
             obs_hidden_source=obs_hidden_source,
-            image_keys=image_keys,
+            image_keys=selected_image_keys,
         )
         self._unnorm_key = str(unnorm_key)
-        self._image_keys = list(image_keys)
+        self._image_keys = selected_image_keys
         self._history = int(history)
         self._rotate = bool(rotate_images_180)
         self._center_crop = bool(center_crop)
@@ -79,3 +83,20 @@ def _device_ref_from_device(device: str) -> int | str:
     if ":" not in value:
         return 0
     return int(value.split(":", 1)[1])
+
+
+def _select_image_keys_for_policy(
+    image_keys: list[str],
+    num_images_in_input: object,
+) -> list[str]:
+    """Select the camera keys consumed by an OFT checkpoint."""
+
+    keys = [str(key) for key in image_keys]
+    count = int(num_images_in_input)
+    if count < 1:
+        raise ValueError(f"num_images_in_input must be >= 1, got {count}")
+    if count > len(keys):
+        raise ValueError(
+            f"num_images_in_input={count} exceeds configured image_keys={keys!r}"
+        )
+    return keys[:count]

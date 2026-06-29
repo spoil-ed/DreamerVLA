@@ -22,8 +22,17 @@ class _ChannelActor:
     async def put(self, item: Any, key: str = "default") -> None:
         await self._queue(key).put(item)
 
-    async def get(self, key: str = "default") -> Any:
-        return await self._queue(key).get()
+    async def get(self, key: str = "default", timeout_s: float | None = None) -> Any:
+        queue = self._queue(key)
+        if timeout_s is None:
+            return await queue.get()
+        try:
+            return await asyncio.wait_for(queue.get(), timeout=float(timeout_s))
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"timed out waiting for channel key {key!r} "
+                f"after {float(timeout_s):.3f}s"
+            ) from exc
 
     async def get_batch(self, n: int, key: str = "default") -> list[Any]:
         return [await self._queue(key).get() for _ in range(int(n))]
@@ -80,8 +89,8 @@ class Channel:
     def put(self, item: Any, *, key: str = "default") -> None:
         ray.get(self._actor.put.remote(item, str(key)))
 
-    def get(self, *, key: str = "default") -> Any:
-        return ray.get(self._actor.get.remote(str(key)))
+    def get(self, *, key: str = "default", timeout_s: float | None = None) -> Any:
+        return ray.get(self._actor.get.remote(str(key), timeout_s))
 
     def get_batch(self, n: int, *, key: str = "default") -> list[Any]:
         return list(ray.get(self._actor.get_batch.remote(int(n), str(key))))
@@ -99,8 +108,13 @@ class Channel:
     def put_no_wait(self, item: Any, *, key: str = "default") -> AsyncWork:
         return AsyncWork(self._actor.put.remote(item, str(key)))
 
-    def get_no_wait(self, *, key: str = "default") -> AsyncWork:
-        return AsyncWork(self._actor.get.remote(str(key)))
+    def get_no_wait(
+        self,
+        *,
+        key: str = "default",
+        timeout_s: float | None = None,
+    ) -> AsyncWork:
+        return AsyncWork(self._actor.get.remote(str(key), timeout_s))
 
     def get_batch_no_wait(self, n: int, *, key: str = "default") -> AsyncWork:
         return AsyncWork(self._actor.get_batch.remote(int(n), str(key)))

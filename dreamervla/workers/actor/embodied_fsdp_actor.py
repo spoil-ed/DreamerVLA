@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import time
 from pathlib import Path
 from typing import Any
 
@@ -105,9 +106,18 @@ class EmbodiedFSDPActor(Worker):
 
         channel = Channel.connect(actor_channel_name)
         count = 1 if expected_shards is None else max(0, int(expected_shards))
+        get_start = time.perf_counter()
+        if count <= 0:
+            messages: list[Any] = []
+        else:
+            get_batch = getattr(channel, "get_batch", None)
+            if callable(get_batch):
+                messages = list(get_batch(count))
+            else:
+                messages = [channel.get() for _ in range(count)]
+        channel_get_s = float(time.perf_counter() - get_start)
         shards: list[TrajectoryShard] = []
-        for _ in range(count):
-            msg = channel.get()
+        for msg in messages:
             if isinstance(msg, StopMsg):
                 break
             if not isinstance(msg, TrajectoryShard):
@@ -116,8 +126,14 @@ class EmbodiedFSDPActor(Worker):
                     f"got {type(msg).__name__}"
                 )
             shards.append(msg)
+        load_start = time.perf_counter()
         self.load_trajectory_shards(shards)
-        return {"actor/received_shards": float(len(shards))}
+        load_s = float(time.perf_counter() - load_start)
+        return {
+            "actor/received_shards": float(len(shards)),
+            "actor/channel_get_batch_s": channel_get_s,
+            "actor/load_trajectory_shards_s": load_s,
+        }
 
     def compute_advantages_and_returns(self) -> dict[str, float]:
         """Compute trajectory returns and group-relative advantages."""
@@ -128,8 +144,10 @@ class EmbodiedFSDPActor(Worker):
         if group_size <= 0:
             raise ValueError("algorithm_cfg.group_size must be positive")
 
+        loss_mask = batch.loss_mask.to(self.torch_device, dtype=torch.float32)
         returns = _trajectory_returns_from_rewards(
-            batch.rewards.to(self.torch_device, dtype=torch.float32)
+            batch.rewards.to(self.torch_device, dtype=torch.float32),
+            loss_mask=loss_mask,
         )
         trajectory_count = int(returns.numel())
         if trajectory_count <= 0:
@@ -145,6 +163,7 @@ class EmbodiedFSDPActor(Worker):
         self.advantages = advantages.detach()
         self._advantage_metrics = {
             "actor/trajectory_count": float(trajectory_count),
+            "actor/loss_mask_sum": float(loss_mask.detach().sum().cpu().item()),
             "actor/return_mean": float(returns.detach().mean().cpu().item()),
             "actor/advantage_std": float(
                 advantages.detach().std(unbiased=False).cpu().item()
@@ -162,6 +181,7 @@ class EmbodiedFSDPActor(Worker):
                 "[time, batch, chunk, action_dim]"
             )
         advantages = self._advantages()
+        loss_mask = batch.loss_mask.to(self.torch_device, dtype=torch.bool)
         policy = self._policy()
         optimizer = self._optimizer()
         algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
@@ -192,6 +212,12 @@ class EmbodiedFSDPActor(Worker):
             ratios: list[torch.Tensor] = []
             entropies: list[torch.Tensor] = []
             for step in range(int(batch.rewards.shape[0])):
+                step_mask = _as_vector(loss_mask[step]).to(
+                    self.torch_device,
+                    dtype=torch.bool,
+                )
+                if not bool(step_mask.any().item()):
+                    continue
                 eval_batch = self._eval_inputs_for_step(batch, step)
                 old_logprob = _as_vector(
                     batch.prev_logprobs[step].to(
@@ -214,6 +240,10 @@ class EmbodiedFSDPActor(Worker):
                         "advantage shape must match prev_logprobs; "
                         f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
                     )
+                old_logprob = old_logprob[step_mask]
+                advantage = advantage[step_mask]
+                new_logprob = new_logprob[step_mask]
+                entropy = entropy[step_mask]
 
                 ratio = _ppo_ratio(
                     new_logprob,
@@ -232,6 +262,8 @@ class EmbodiedFSDPActor(Worker):
                 ratios.append(ratio.detach())
                 entropies.append(entropy)
 
+            if not loss_vecs:
+                raise ValueError("trajectory loss_mask has no valid training steps")
             loss_vec = torch.cat(loss_vecs, dim=0)
             entropy_vec = torch.cat(entropies, dim=0)
             loss = loss_vec.mean() - float(entropy_coef) * entropy_vec.mean()
@@ -264,10 +296,35 @@ class EmbodiedFSDPActor(Worker):
         """Push the current policy state to RolloutGroup through patch sync."""
 
         resolved_version = self.global_step if version is None else int(version)
+        export_start = time.perf_counter()
         state = self.state_dict()
+        export_s = float(time.perf_counter() - export_start)
+        push_s = 0.0
         if int(self.rank) == 0 and state:
-            self._syncer().push(str(key), state, int(resolved_version))
-        return {f"sync/{key}_version": float(resolved_version)}
+            push_start = time.perf_counter()
+            syncer = self._syncer()
+            syncer.push(str(key), state, int(resolved_version))
+            push_s = float(time.perf_counter() - push_start)
+            syncer_metrics = dict(getattr(syncer, "last_push_metrics", {}) or {})
+        else:
+            syncer_metrics = {}
+        num_tensors = float(len(state))
+        num_bytes = float(
+            sum(
+                value.numel() * value.element_size()
+                for value in state.values()
+                if isinstance(value, torch.Tensor)
+            )
+        )
+        metrics = {
+            f"sync/{key}_version": float(resolved_version),
+            f"sync/{key}_export_s": export_s,
+            f"sync/{key}_push_s": push_s,
+            f"sync/{key}_tensors": num_tensors,
+            f"sync/{key}_bytes": num_bytes,
+        }
+        metrics.update(syncer_metrics)
+        return metrics
 
     def state_dict(self) -> dict[str, torch.Tensor]:
         """Return a detached CPU copy of the policy state."""
@@ -406,14 +463,25 @@ def _as_vector(value: Any) -> torch.Tensor:
     return tensor.reshape(int(tensor.shape[0]), -1).sum(dim=1)
 
 
-def _trajectory_returns_from_rewards(rewards: torch.Tensor) -> torch.Tensor:
+def _trajectory_returns_from_rewards(
+    rewards: torch.Tensor,
+    *,
+    loss_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     if rewards.ndim < 2:
         raise ValueError("trajectory rewards must have at least [time, batch] dimensions")
     rewards_f = rewards.to(dtype=torch.float32)
     if rewards_f.ndim == 2:
-        return rewards_f.sum(dim=0)
-    trailing = tuple(range(2, rewards_f.ndim))
-    return rewards_f.sum(dim=(0, *trailing))
+        reward_by_chunk = rewards_f
+    else:
+        trailing = tuple(range(2, rewards_f.ndim))
+        reward_by_chunk = rewards_f.sum(dim=trailing)
+    if loss_mask is not None:
+        reward_by_chunk = reward_by_chunk * loss_mask.to(
+            device=reward_by_chunk.device,
+            dtype=reward_by_chunk.dtype,
+        )
+    return reward_by_chunk.sum(dim=0)
 
 
 def _as_tensor(value: Any) -> torch.Tensor:

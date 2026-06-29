@@ -57,3 +57,9 @@ def test_none_threshold_is_treated_as_default():
     spy = _SpyReplay()
     ReplayClient(spy).sample(4, staleness_threshold=None)
     assert spy.calls == [(4, {})]
+
+
+def test_forwards_include_images_when_explicitly_disabled():
+    spy = _SpyReplay()
+    ReplayClient(spy).sample(6, include_images=False)
+    assert spy.calls == [(6, {"include_images": False})]

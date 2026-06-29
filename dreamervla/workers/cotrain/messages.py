@@ -59,6 +59,7 @@ class TrajectoryShard:
     prev_values: torch.Tensor | None
     forward_inputs: dict[str, torch.Tensor]
     versions: dict[str, torch.Tensor]
+    loss_mask: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class TrajectoryBatch:
     prev_values: torch.Tensor | None
     forward_inputs: dict[str, torch.Tensor]
     versions: dict[str, torch.Tensor]
+    loss_mask: torch.Tensor
     task_ids: torch.Tensor
     episode_ids: torch.Tensor
 
@@ -119,7 +121,8 @@ def _validate_step_batch_dim(
     return value_batch_size
 
 
-def _validate_shard_shape(shard: TrajectoryShard, steps: int) -> int:
+def _validate_shard_shape(shard: TrajectoryShard) -> tuple[int, int]:
+    steps = int(as_tensor(shard.actions).shape[0])
     batch_size = _validate_step_batch_dim("actions", shard.actions, steps)
     _validate_step_batch_dim("rewards", shard.rewards, steps, batch_size=batch_size)
     _validate_step_batch_dim("dones", shard.dones, steps, batch_size=batch_size)
@@ -138,11 +141,51 @@ def _validate_shard_shape(shard: TrajectoryShard, steps: int) -> int:
         _validate_step_batch_dim(
             f"versions[{key!r}]", value, steps, batch_size=batch_size
         )
+    if shard.loss_mask is not None:
+        _validate_step_batch_dim(
+            "loss_mask", shard.loss_mask, steps, batch_size=batch_size
+        )
     if len(shard.episode_ids) != batch_size:
         raise ValueError(
             "episode_ids length must match trajectory shard batch dimension"
         )
-    return batch_size
+    return steps, batch_size
+
+
+def _pad_step_batch(value: Any, steps: int, *, pad_value: bool | float = 0.0) -> torch.Tensor:
+    tensor = as_tensor(value).detach().cpu()
+    current_steps = int(tensor.shape[0])
+    if current_steps == int(steps):
+        return tensor
+    if current_steps > int(steps):
+        raise ValueError("cannot pad trajectory tensor to a shorter step dimension")
+    pad_shape = (int(steps) - current_steps, *tuple(tensor.shape[1:]))
+    pad = torch.full(
+        pad_shape,
+        pad_value,
+        dtype=tensor.dtype,
+        device=tensor.device,
+    )
+    return torch.cat([tensor, pad], dim=0)
+
+
+def _shard_loss_mask(shard: TrajectoryShard, steps: int, batch_size: int) -> torch.Tensor:
+    if shard.loss_mask is not None:
+        return _pad_step_batch(shard.loss_mask, steps).float()
+    actual_steps = int(as_tensor(shard.actions).shape[0])
+    mask = torch.zeros(int(steps), int(batch_size), dtype=torch.float32)
+    if actual_steps <= 0:
+        return mask
+    dones = as_tensor(shard.dones).detach().cpu().bool()
+    if dones.ndim > 2:
+        done_by_step = dones.reshape(actual_steps, int(batch_size), -1).any(dim=2)
+    else:
+        done_by_step = dones.reshape(actual_steps, int(batch_size))
+    alive = torch.ones(int(batch_size), dtype=torch.bool)
+    for step in range(actual_steps):
+        mask[step] = alive.to(dtype=torch.float32)
+        alive = alive & ~done_by_step[step]
+    return mask
 
 
 def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
@@ -151,13 +194,15 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
     if not shards:
         raise ValueError("collate_trajectory_shards requires at least one shard")
 
-    steps = int(as_tensor(shards[0].actions).shape[0])
     forward_keys = set(shards[0].forward_inputs)
     version_keys = set(shards[0].versions)
 
     batch_sizes: list[int] = []
+    steps_by_shard: list[int] = []
     for shard in shards:
-        batch_sizes.append(_validate_shard_shape(shard, steps))
+        steps, batch_size = _validate_shard_shape(shard)
+        steps_by_shard.append(steps)
+        batch_sizes.append(batch_size)
         if set(shard.forward_inputs) != forward_keys:
             raise ValueError("trajectory shards must share forward_input keys")
         if set(shard.versions) != version_keys:
@@ -168,25 +213,51 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
         raise ValueError("trajectory shards must consistently include prev_values")
 
     prev_values = None
+    max_steps = max(steps_by_shard)
     if all(has_prev_values):
         prev_values = _cat_step_batch(
-            [shard.prev_values for shard in shards if shard.prev_values is not None]
+            [
+                _pad_step_batch(shard.prev_values, max_steps)
+                for shard in shards
+                if shard.prev_values is not None
+            ]
         )
 
     return TrajectoryBatch(
-        actions=_cat_step_batch([shard.actions for shard in shards]),
-        rewards=_cat_step_batch([shard.rewards for shard in shards]).float(),
-        dones=_cat_step_batch([shard.dones for shard in shards]).bool(),
-        prev_logprobs=_cat_step_batch([shard.prev_logprobs for shard in shards]).float(),
+        actions=_cat_step_batch(
+            [_pad_step_batch(shard.actions, max_steps) for shard in shards]
+        ),
+        rewards=_cat_step_batch(
+            [_pad_step_batch(shard.rewards, max_steps) for shard in shards]
+        ).float(),
+        dones=_cat_step_batch(
+            [_pad_step_batch(shard.dones, max_steps, pad_value=True) for shard in shards]
+        ).bool(),
+        prev_logprobs=_cat_step_batch(
+            [_pad_step_batch(shard.prev_logprobs, max_steps) for shard in shards]
+        ).float(),
         prev_values=prev_values,
         forward_inputs={
-            key: _cat_step_batch([shard.forward_inputs[key] for shard in shards])
+            key: _cat_step_batch(
+                [
+                    _pad_step_batch(shard.forward_inputs[key], max_steps)
+                    for shard in shards
+                ]
+            )
             for key in sorted(forward_keys)
         },
         versions={
-            key: _cat_step_batch([shard.versions[key] for shard in shards])
+            key: _cat_step_batch(
+                [_pad_step_batch(shard.versions[key], max_steps) for shard in shards]
+            )
             for key in sorted(version_keys)
         },
+        loss_mask=_cat_step_batch(
+            [
+                _shard_loss_mask(shard, max_steps, batch_size)
+                for shard, batch_size in zip(shards, batch_sizes, strict=True)
+            ]
+        ),
         task_ids=torch.tensor(
             [
                 int(shard.task_id)

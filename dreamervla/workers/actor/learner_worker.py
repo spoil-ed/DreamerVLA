@@ -405,7 +405,10 @@ class LearnerWorker(Worker):
         os.replace(tmp_path, path)
 
     def _dreamervla_wm_update_once(self) -> dict[str, float]:
-        batch = self._replay_client().sample(int(self.train_cfg.get("batch_size", 2)))
+        batch = self._replay_client().sample(
+            int(self.train_cfg.get("batch_size", 2)),
+            include_images=False,
+        )
         with self._precision().context():
             raw = world_model_pretrain_step(
                 policy=self.components.get("policy"),
@@ -535,6 +538,7 @@ class LearnerWorker(Worker):
             replay.sample(
                 int(batch_size),
                 staleness_threshold=staleness_threshold,
+                include_images=False,
             )
             for _ in range(epoch_count)
         ]
@@ -695,7 +699,11 @@ class ReplayClient:
         self.replay = replay
 
     def sample(
-        self, batch_size: int, *, staleness_threshold: int | None = None
+        self,
+        batch_size: int,
+        *,
+        staleness_threshold: int | None = None,
+        include_images: bool | None = None,
     ) -> dict[str, Any]:
         # Forward the Phase 4 staleness gate only when it is set, so the default
         # path stays a byte-identical 1-arg call and minimal replay backends
@@ -705,6 +713,8 @@ class ReplayClient:
             if staleness_threshold is None
             else {"staleness_threshold": int(staleness_threshold)}
         )
+        if include_images is not None:
+            kwargs["include_images"] = bool(include_images)
         return self._call("sample", int(batch_size), **kwargs)
 
     def sample_classifier_windows(

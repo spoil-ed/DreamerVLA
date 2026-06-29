@@ -564,6 +564,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.sync_every")
     _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
     _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
     _validate_ray_single_node_placement(cfg)
@@ -580,6 +581,9 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "manual_cotrain.max_steps_per_rollout_epoch must be divisible by "
                 "manual_cotrain.num_action_chunks"
             )
+    _validate_manual_cotrain_group_geometry(cfg)
+    _validate_manual_cotrain_replay_window(cfg)
+    _validate_manual_cotrain_classifier_window(cfg)
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
@@ -589,6 +593,134 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "learner.train_cfg.precision must be one of "
                 f"fp32, bf16, or fp16; got {precision!r}"
             )
+
+
+def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
+    """Validate manual-cotrain rollout slots against actor GRPO grouping."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("ManualCotrainRayRunner"):
+        return
+
+    envs_per_worker_raw = OmegaConf.select(
+        cfg,
+        "manual_cotrain.envs_per_worker",
+        default=None,
+    )
+    group_size_raw = OmegaConf.select(
+        cfg,
+        "actor.train_cfg.algorithm_cfg.group_size",
+        default=OmegaConf.select(cfg, "algorithm.group_size", default=None),
+    )
+    if envs_per_worker_raw is None or group_size_raw is None:
+        return
+
+    ngpu = int(OmegaConf.select(cfg, "manual_cotrain.ngpu", default=1))
+    env_workers = ngpu if ngpu > 0 else 1
+    envs_per_worker = int(envs_per_worker_raw)
+    rollout_epoch = int(
+        OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1)
+    )
+    group_size = int(group_size_raw)
+    if group_size <= 0:
+        raise ValueError("actor.train_cfg.algorithm_cfg.group_size must be positive")
+
+    logical_trajectory_count = env_workers * envs_per_worker * rollout_epoch
+    if logical_trajectory_count % group_size != 0:
+        raise ValueError(
+            "manual cotrain logical trajectory count must be divisible by "
+            "actor.train_cfg.algorithm_cfg.group_size: "
+            f"manual_cotrain.ngpu={ngpu}, "
+            f"manual_cotrain.envs_per_worker={envs_per_worker}, "
+            f"manual_cotrain.rollout_epoch={rollout_epoch}, "
+            f"logical trajectory count={logical_trajectory_count}, "
+            f"group_size={group_size}"
+        )
+
+
+def _validate_manual_cotrain_replay_window(cfg: DictConfig) -> None:
+    """Validate that EnvWorker can produce replay windows used by LearnerWorker."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("ManualCotrainRayRunner"):
+        return
+
+    sequence_length_raw = OmegaConf.select(cfg, "replay.cfg.sequence_length", default=None)
+    max_steps_raw = OmegaConf.select(
+        cfg,
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        default=None,
+    )
+    if sequence_length_raw is None or max_steps_raw is None:
+        return
+
+    sequence_length = int(sequence_length_raw)
+    max_steps = int(max_steps_raw)
+    if sequence_length <= 0:
+        raise ValueError("replay.cfg.sequence_length must be positive")
+    if max_steps < sequence_length:
+        raise ValueError(
+            "manual_cotrain.max_steps_per_rollout_epoch must be >= "
+            "replay.cfg.sequence_length so LearnerWorker can sample full replay "
+            f"sequences; got {max_steps} and {sequence_length}"
+        )
+
+
+def _validate_manual_cotrain_classifier_window(cfg: DictConfig) -> None:
+    """Validate rollout length against classifier replay-window sampling."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("ManualCotrainRayRunner"):
+        return
+
+    max_steps_raw = OmegaConf.select(
+        cfg,
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        default=None,
+    )
+    window_raw = OmegaConf.select(
+        cfg,
+        "learner.model_cfg.classifier.kwargs.window",
+        default=OmegaConf.select(
+            cfg,
+            "learner.model_cfg.classifier.window",
+            default=None,
+        ),
+    )
+    if max_steps_raw is None or window_raw is None:
+        return
+
+    chunk_size_raw = OmegaConf.select(
+        cfg,
+        "learner.model_cfg.classifier.kwargs.chunk_size",
+        default=OmegaConf.select(
+            cfg,
+            "learner.model_cfg.classifier.chunk_size",
+            default=OmegaConf.select(
+                cfg,
+                "manual_cotrain.num_action_chunks",
+                default=None,
+            ),
+        ),
+    )
+    if chunk_size_raw is None:
+        return
+
+    max_steps = int(max_steps_raw)
+    window = int(window_raw)
+    chunk_size = int(chunk_size_raw)
+    if window <= 0:
+        raise ValueError("classifier window must be positive")
+    if chunk_size <= 0:
+        raise ValueError("classifier chunk_size must be positive")
+    required_steps = window * chunk_size
+    if max_steps < required_steps:
+        raise ValueError(
+            "manual_cotrain.max_steps_per_rollout_epoch must cover classifier "
+            "window sampling: classifier window requires "
+            f"{required_steps} physical steps "
+            f"(window={window}, chunk_size={chunk_size}), got {max_steps}"
+        )
 
 
 def _validate_fsdp_config(cfg: DictConfig) -> None:

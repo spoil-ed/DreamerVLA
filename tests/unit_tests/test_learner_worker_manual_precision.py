@@ -34,7 +34,14 @@ class _DirectReplay:
         self.sample_calls = 0
         self.classifier_calls = 0
 
-    def sample(self, batch_size: int) -> dict[str, torch.Tensor]:
+    def sample(
+        self,
+        batch_size: int,
+        *,
+        include_images: bool = True,
+        staleness_threshold: int | None = None,
+    ) -> dict[str, torch.Tensor]:
+        del include_images, staleness_threshold
         self.sample_calls += 1
         return {
             "obs_embedding": torch.ones(int(batch_size), 3, 4),
@@ -68,6 +75,25 @@ class _DirectReplay:
     def classifier_window_count(self, *, window: int, chunk_size: int) -> int:
         del window, chunk_size
         return 3
+
+
+class _ImageSensitiveReplay(_DirectReplay):
+    def __init__(self) -> None:
+        super().__init__()
+        self.include_images_calls: list[bool] = []
+
+    def sample(
+        self,
+        batch_size: int,
+        *,
+        include_images: bool = True,
+        staleness_threshold: int | None = None,
+    ) -> dict[str, torch.Tensor]:
+        del staleness_threshold
+        self.include_images_calls.append(bool(include_images))
+        if include_images:
+            raise AssertionError("latent learner updates must not request replay images")
+        return super().sample(batch_size)
 
 
 def _cotrain_model_cfg() -> dict[str, Any]:
@@ -199,6 +225,58 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
     assert metrics["cls/loss"] == 0.5
     assert metrics["rl/actor_loss"] == 0.75
     assert calls == ["wm", "classifier", "rl", "wm", "classifier", "rl"]
+
+
+def test_dreamervla_wm_update_samples_replay_without_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    def fake_wm_step(**kwargs):
+        assert "images" not in kwargs["batch"]
+        return {"loss": 1.25}
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+    _patch_dummy_syncer(monkeypatch)
+
+    replay = _ImageSensitiveReplay()
+    learner = LearnerWorker(_cotrain_model_cfg(), {}, _cotrain_train_cfg(), replay)
+    learner.init()
+
+    metrics = learner.update("wm", 1)
+
+    assert metrics["wm/loss"] == 1.25
+    assert replay.include_images_calls == [False]
+
+
+def test_dreamervla_rl_update_samples_replay_without_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    def fake_rl_step(**kwargs):
+        assert "images" not in kwargs["obs"]
+        return {
+            "actor_loss": 0.75,
+            "returns_mean": 0.25,
+            "returns_std": 0.5,
+            "actor_grad_norm": 0.125,
+            "ppo_step_applied": 1.0,
+        }
+
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
+
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["algorithm_cfg"]["rollout_epoch"] = 3
+    replay = _ImageSensitiveReplay()
+    learner = LearnerWorker(_cotrain_model_cfg(), {}, train_cfg, replay)
+    learner.init()
+
+    metrics = learner.update("rl", 1)
+
+    assert metrics["rl/actor_loss"] == 0.75
+    assert replay.include_images_calls == [False, False, False]
 
 
 def test_dreamervla_cotrain_rl_rollout_epoch_concatenates_once(

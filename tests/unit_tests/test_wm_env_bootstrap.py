@@ -15,8 +15,15 @@ class _IdentityWM(nn.Module):
 
 
 class _ReplayWithInitialEmbeddings:
-    def __init__(self, latents: np.ndarray) -> None:
+    def __init__(
+        self,
+        latents: np.ndarray,
+        lang_embs: np.ndarray | None = None,
+        proprios: np.ndarray | None = None,
+    ) -> None:
         self.latents = np.asarray(latents, dtype=np.float32)
+        self.lang_embs = None if lang_embs is None else np.asarray(lang_embs, dtype=np.float32)
+        self.proprios = None if proprios is None else np.asarray(proprios, dtype=np.float32)
 
     def size(self) -> int:
         return int(self.latents.shape[0])
@@ -28,9 +35,20 @@ class _ReplayWithInitialEmbeddings:
         task_id: int | None = None,
         key: str = "obs_embedding",
     ) -> np.ndarray:
-        del task_id, key
+        del task_id
+        source = self.latents
+        if key == "lang_emb":
+            if self.lang_embs is None:
+                raise KeyError("lang_emb")
+            source = self.lang_embs
+        elif key == "proprio":
+            if self.proprios is None:
+                raise KeyError("proprio")
+            source = self.proprios
+        elif key != "obs_embedding":
+            raise KeyError(key)
         values = [
-            self.latents[index % self.latents.shape[0]]
+            source[index % source.shape[0]]
             for index in range(int(batch_size))
         ]
         return np.stack(values, axis=0)
@@ -113,5 +131,91 @@ def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
 
         assert messages[0].obs["latent"].tolist() == [5.0, 6.0]
         assert messages[1].obs["latent"].tolist() == [7.0, 8.0]
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_bootstraps_initial_lang_embs_from_replay() -> None:
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "lang_dim": 3,
+                "num_envs": 2,
+                "device": "cpu",
+            },
+        },
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+        replay=_ReplayWithInitialEmbeddings(
+            np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+            lang_embs=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32),
+        ),
+    )
+    try:
+        worker.init()
+        messages = worker.bootstrap_obs()
+
+        assert messages[0].obs["lang_emb"].tolist() == [1.0, 2.0, 3.0]
+        assert messages[1].obs["lang_emb"].tolist() == [4.0, 5.0, 6.0]
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "proprio_dim": 2,
+                "num_envs": 2,
+                "device": "cpu",
+            },
+        },
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+        replay=_ReplayWithInitialEmbeddings(
+            np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+            proprios=np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        ),
+    )
+    try:
+        worker.init()
+        messages = worker.bootstrap_obs()
+
+        assert messages[0].obs["proprio"].tolist() == [1.0, 2.0]
+        assert messages[1].obs["proprio"].tolist() == [3.0, 4.0]
     finally:
         worker.close()
