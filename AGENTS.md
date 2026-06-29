@@ -10,7 +10,7 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 `collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain`
 
 The command-level reference is
-[spec/01_complete_loop.md](spec/01_complete_loop.md). Architecture source documents live
+[spec/04_complete_loop.md](spec/04_complete_loop.md). Architecture source documents live
 under [spec/](spec/), with [spec/99_manual_notes.md](spec/99_manual_notes.md) as the
 highest-priority user guidance. Keep this file as the repository brief, not a history
 log. Shipped work and open work live in [docs/HISTORY.md](docs/HISTORY.md) and
@@ -260,8 +260,10 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 ## Further Reading
 
 - [Architecture overview](spec/00_overview.md)
-- [Complete cotrain loop](spec/01_complete_loop.md)
-- [Ray implementation notes](spec/02_ray.md)
+- [Project goals](spec/01_goal.md)
+- [Naming principles](spec/02_naming.md)
+- [Coding style](spec/03_coding_style.md)
+- [Complete cotrain loop](spec/04_complete_loop.md)
 - [Manual notes](spec/99_manual_notes.md)
 - [Parameter reference](docs/PARAMETERS.md)
 - [Install](docs/install.md)
