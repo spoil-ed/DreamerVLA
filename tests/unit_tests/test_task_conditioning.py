@@ -68,7 +68,7 @@ def test_latent_success_classifier_uses_task_ids_when_enabled() -> None:
     assert not torch.allclose(logits_a, logits_b)
 
 
-def test_latent_success_classifier_uses_dino_wm_style_proprio_language_tokens() -> None:
+def test_latent_success_classifier_uses_wm_style_proprio_language_tokens() -> None:
     LatentSuccessClassifier = _latent_success_classifier_cls()
     model = LatentSuccessClassifier(
         latent_dim=9,
@@ -144,13 +144,15 @@ def test_latent_success_classifier_messages_use_role_based_wm_wording() -> None:
         / "reward"
         / "latent_success_classifier.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()
 
 
 def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:
-    from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
+    from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
 
-    wm = ChunkAwareDinoWMWorldModel(
+    wm = ChunkAwareWorldModel(
         chunk_size=2,
         obs_dim=8,
         action_dim=7,

@@ -114,7 +114,7 @@ env:
   target_token_id: 10004
 
 world_model:
-  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  _target_: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}

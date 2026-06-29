@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /dreamervla: rynnvla_lumos
-  - _self_

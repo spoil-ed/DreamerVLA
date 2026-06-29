@@ -9,7 +9,7 @@ point readers at the reference docs rather than restating detail here.
 
 A single-machine, multi-GPU research framework that pairs a **VLA encoder**
 (RynnVLA / OpenVLA-OFT / Chameleon action head) with a **Dreamer-style world model**
-(DreamerV3 RSSM, DINO-WM, TSSM) on the **LIBERO** benchmark. **Hydra** drives config; a
+(DreamerV3 RSSM, WM, TSSM) on the **LIBERO** benchmark. **Hydra** drives config; a
 **Runner** is the training unit. Mainline distributed runs use **torchrun (DDP)** or
 **FSDP**; **Ray is an optional single-machine backend** for rollout / cotrain experiments,
 not a second default topology or a multi-node layer. Python 3.11, type hints + docstrings
@@ -21,7 +21,7 @@ model (+ classifier) → DreamerVLA actor-critic / WMPO-outcome RL**.
 ## Code structure
 
 - **`dreamervla/`** — the package:
-  - `algorithms/` — PPO family, GRPO, DINO-WMPO, TD-MPC, DreamerVLA actor-critic; actor/critic/reward heads; `registry.py` for actor-update routes.
+  - `algorithms/` — PPO family, GRPO, WMPO, TD-MPC, DreamerVLA actor-critic; actor/critic/reward heads; `registry.py` for actor-update routes.
   - `models/` — encoder, world model, VLA backbones (each behind a protocol).
   - `dataset/`, `preprocess/` — offline datasets + the Hydra-centered sidecar/hidden extraction pipelines.
   - `runners/` — `BaseRunner` + VLA SFT / WM / classifier / DreamerVLA / eval runners, DDP-FSDP helpers, standalone online/frozen tools, and optional Ray rollout/cotrain runners.

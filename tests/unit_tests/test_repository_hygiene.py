@@ -5,6 +5,18 @@ import subprocess
 from pathlib import Path
 
 
+_REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
+_REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
+_REMOVED_DASHED_WM_LABEL = "DINO" + "-WM"
+
+
+def _assert_no_removed_wm_wording(text: str) -> None:
+    lower = text.lower()
+    assert _REMOVED_UNDERSCORE_WM_ROUTE not in lower
+    assert _REMOVED_COMPACT_WM_ROUTE not in lower
+    assert _REMOVED_DASHED_WM_LABEL not in text
+
+
 def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
@@ -59,29 +71,80 @@ def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
     assert offenders == []
 
 
+def test_active_sources_do_not_use_removed_world_model_naming() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    removed_fragments = (
+        "dino" + "_wm",
+        "dino" + "wm",
+        "dino" + "-wm",
+        "dino" + "wm" + "world" + "model",
+        "chunkaware" + "dino" + "wm" + "world" + "model",
+        "wm" + "world" + "model",
+    )
+    active_roots = [
+        project_root / "AGENTS.md",
+        project_root / "README.md",
+        project_root / "README.zh-CN.md",
+        project_root / "SETUP.md",
+        project_root / "configs",
+        project_root / "docs",
+        project_root / "dreamervla",
+        project_root / "scripts",
+        project_root / "spec",
+        project_root / "tests" / "unit_tests",
+    ]
+    skip_paths = {
+        project_root / "spec" / "99_manual_notes.md",
+    }
+    skip_parts = {"archive", "__pycache__"}
+    checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
+
+    offenders: list[str] = []
+    for root in active_roots:
+        paths = [root] if root.is_file() else root.rglob("*")
+        for path in paths:
+            if not path.is_file() or path in skip_paths:
+                continue
+            relative_parts = path.relative_to(project_root).parts
+            if any(part in skip_parts for part in relative_parts):
+                continue
+            if path.suffix not in checked_suffixes:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            path_name = path.name.lower()
+            if any(
+                fragment in text or fragment in path_name
+                for fragment in removed_fragments
+            ):
+                offenders.append(str(path.relative_to(project_root)))
+
+    assert offenders == []
+
+
 def test_readme_prefers_role_based_wm_route_examples() -> None:
     project_root = Path(__file__).resolve().parents[2]
     readme = (project_root / "README.md").read_text(encoding="utf-8")
 
-    assert "experiment=world_model_wm_chunk" in readme
+    assert "experiment=world_model_chunk" in readme
     assert "experiment=dreamervla_rynn_wm_lumos" in readme
-    assert "experiment=world_model_dinowm_chunk" not in readme
-    assert "experiment=dreamervla_rynn_dino_wm_lumos" not in readme
+    assert f"experiment=world_model_{_REMOVED_COMPACT_WM_ROUTE}_chunk" not in readme
+    assert (
+        f"experiment=dreamervla_rynn_{_REMOVED_UNDERSCORE_WM_ROUTE}_lumos"
+        not in readme
+    )
 
 
 def test_setup_guide_prefers_role_based_wm_route_examples() -> None:
     project_root = Path(__file__).resolve().parents[2]
     setup = (project_root / "SETUP.md").read_text(encoding="utf-8")
 
-    assert "experiment=world_model_wm_chunk" in setup
-    assert "experiment=world_model_wm_chunk_input_tokens" in setup
-    assert "experiment=oft_world_model_wm_chunk_input_tokens" in setup
-    assert "experiment=oft_discrete_token_world_model_wm_chunk" in setup
+    assert "experiment=world_model_chunk" in setup
+    assert "experiment=world_model_chunk_input_tokens" in setup
+    assert "experiment=oft_world_model_chunk_input_tokens" in setup
+    assert "experiment=oft_discrete_token_world_model_chunk" in setup
     assert "experiment=dreamervla_rynn_wm_lumos" in setup
     assert "experiment=dreamervla_rynn_wm_lumos_input_tokens" in setup
-    assert "DINO-WM" not in setup
-    assert "dino_wm" not in setup
-    assert "dinowm" not in setup
+    _assert_no_removed_wm_wording(setup)
 
 
 def test_configs_readme_prefers_role_based_wm_route_examples() -> None:
@@ -90,13 +153,11 @@ def test_configs_readme_prefers_role_based_wm_route_examples() -> None:
         encoding="utf-8"
     )
 
-    assert "experiment=world_model_wm_chunk" in configs_readme
+    assert "experiment=world_model_chunk" in configs_readme
     assert "dreamervla_rynn_wm_lumos" in configs_readme
-    assert "oft_world_model_wm_chunk" in configs_readme
+    assert "oft_world_model_chunk" in configs_readme
     assert "dreamervla_oft_wm_lumos" in configs_readme
-    assert "dinowm" not in configs_readme
-    assert "dino_wm" not in configs_readme
-    assert "DINO-WM" not in configs_readme
+    _assert_no_removed_wm_wording(configs_readme)
 
 
 def test_scripts_readme_prefers_role_based_wm_route_examples() -> None:
@@ -105,10 +166,8 @@ def test_scripts_readme_prefers_role_based_wm_route_examples() -> None:
         encoding="utf-8"
     )
 
-    assert "experiment=world_model_wm_chunk" in scripts_readme
-    assert "dinowm" not in scripts_readme
-    assert "dino_wm" not in scripts_readme
-    assert "DINO-WM" not in scripts_readme
+    assert "experiment=world_model_chunk" in scripts_readme
+    _assert_no_removed_wm_wording(scripts_readme)
 
 
 def test_route_reference_prefers_role_based_wm_route_examples() -> None:
@@ -117,12 +176,10 @@ def test_route_reference_prefers_role_based_wm_route_examples() -> None:
         encoding="utf-8"
     )
 
-    assert "world_model_wm_chunk" in route_reference
+    assert "world_model_chunk" in route_reference
     assert "dreamervla_rynn_wm_lumos" in route_reference
     assert "dreamervla_oft_discrete_token_wm_lumos" in route_reference
-    assert "dinowm" not in route_reference
-    assert "dino_wm" not in route_reference
-    assert "DINO-WM" not in route_reference
+    _assert_no_removed_wm_wording(route_reference)
 
 
 def test_experiment_tutorial_index_prefers_role_based_wm_route_examples() -> None:
@@ -131,13 +188,11 @@ def test_experiment_tutorial_index_prefers_role_based_wm_route_examples() -> Non
         project_root / "docs" / "tutorials" / "experiments" / "README.md"
     ).read_text(encoding="utf-8")
 
-    assert "world_model_wm_chunk" in tutorial_index
+    assert "world_model_chunk" in tutorial_index
     assert "dreamervla_rynn_wm_lumos" in tutorial_index
-    assert "oft_discrete_token_world_model_wm_chunk" in tutorial_index
+    assert "oft_discrete_token_world_model_chunk" in tutorial_index
     assert "dreamervla_oft_discrete_token_wm_lumos" in tutorial_index
-    assert "dinowm" not in tutorial_index
-    assert "dino_wm" not in tutorial_index
-    assert "DINO-WM" not in tutorial_index
+    _assert_no_removed_wm_wording(tutorial_index)
 
 
 def test_rynnvla_tutorial_prefers_role_based_wm_route_examples() -> None:
@@ -146,12 +201,10 @@ def test_rynnvla_tutorial_prefers_role_based_wm_route_examples() -> None:
         project_root / "docs" / "tutorials" / "experiments" / "RynnVLA_LIBERO.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=world_model_wm_chunk" in tutorial
+    assert "experiment=world_model_chunk" in tutorial
     assert "experiment=dreamervla_rynn_wm_lumos" in tutorial
     assert "experiment=dreamervla_rynn_wm_actor_critic" in tutorial
-    assert "dinowm" not in tutorial
-    assert "dino_wm" not in tutorial
-    assert "DINO-WM" not in tutorial
+    _assert_no_removed_wm_wording(tutorial)
 
 
 def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None:
@@ -164,11 +217,9 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
         / "OpenVLA_Onetraj_LIBERO.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_discrete_token_world_model_wm_chunk" in tutorial
+    assert "experiment=oft_discrete_token_world_model_chunk" in tutorial
     assert "experiment=dreamervla_oft_discrete_token_wm_lumos" in tutorial
-    assert "dinowm" not in tutorial
-    assert "dino_wm" not in tutorial
-    assert "DINO-WM" not in tutorial
+    _assert_no_removed_wm_wording(tutorial)
 
 
 def test_openvla_action_hidden_tutorial_prefers_role_based_wm_route_examples() -> None:
@@ -181,11 +232,9 @@ def test_openvla_action_hidden_tutorial_prefers_role_based_wm_route_examples() -
         / "OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_world_model_wm_chunk" in tutorial
+    assert "experiment=oft_world_model_chunk" in tutorial
     assert "experiment=dreamervla_oft_wm_lumos" in tutorial
-    assert "dinowm" not in tutorial
-    assert "dino_wm" not in tutorial
-    assert "DINO-WM" not in tutorial
+    _assert_no_removed_wm_wording(tutorial)
 
 
 def test_openvla_backbone_latent_tutorial_prefers_role_based_wm_route_examples() -> None:
@@ -198,11 +247,9 @@ def test_openvla_backbone_latent_tutorial_prefers_role_based_wm_route_examples()
         / "OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_world_model_wm_chunk_input_tokens" in tutorial
+    assert "experiment=oft_world_model_chunk_input_tokens" in tutorial
     assert "experiment=dreamervla_oft_wm_lumos_input_tokens" in tutorial
-    assert "dinowm" not in tutorial
-    assert "dino_wm" not in tutorial
-    assert "DINO-WM" not in tutorial
+    _assert_no_removed_wm_wording(tutorial)
 
 
 def test_openvla_coldstart_collection_tutorial_prefers_role_based_wm_route_examples() -> None:
@@ -215,10 +262,8 @@ def test_openvla_coldstart_collection_tutorial_prefers_role_based_wm_route_examp
         / "OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_discrete_token_world_model_wm_chunk" in tutorial
-    assert "dinowm" not in tutorial
-    assert "dino_wm" not in tutorial
-    assert "DINO-WM" not in tutorial
+    assert "experiment=oft_discrete_token_world_model_chunk" in tutorial
+    _assert_no_removed_wm_wording(tutorial)
 
 
 def test_parameter_reference_uses_role_based_wm_wording() -> None:
@@ -229,7 +274,7 @@ def test_parameter_reference_uses_role_based_wm_wording() -> None:
 
     assert "WM architecture" in parameter_reference
     assert "WM chunk predictor" in parameter_reference
-    assert "DINO-WM" not in parameter_reference
+    _assert_no_removed_wm_wording(parameter_reference)
 
 
 def test_repository_structure_prefers_role_based_wm_route_examples() -> None:
@@ -238,12 +283,10 @@ def test_repository_structure_prefers_role_based_wm_route_examples() -> None:
         project_root / "docs" / "repository_structure.md"
     ).read_text(encoding="utf-8")
 
-    assert "world_model_wm_chunk" in repository_structure
+    assert "world_model_chunk" in repository_structure
     assert "dreamervla_rynn_wm_lumos" in repository_structure
     assert "dreamervla_oft_wm_lumos" in repository_structure
-    assert "dinowm" not in repository_structure
-    assert "dino_wm" not in repository_structure
-    assert "DINO-WM" not in repository_structure
+    _assert_no_removed_wm_wording(repository_structure)
 
 
 def test_rynnvla_model_dataset_reference_prefers_role_based_wm_route_examples() -> None:
@@ -253,11 +296,9 @@ def test_rynnvla_model_dataset_reference_prefers_role_based_wm_route_examples() 
     ).read_text(encoding="utf-8")
 
     assert "WM token axis" in reference
-    assert "experiment=world_model_wm_chunk" in reference
+    assert "experiment=world_model_chunk" in reference
     assert "dreamervla_rynn_wm_lumos" in reference
-    assert "dinowm" not in reference
-    assert "dino_wm" not in reference
-    assert "DINO-WM" not in reference
+    _assert_no_removed_wm_wording(reference)
 
 
 def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() -> None:
@@ -270,11 +311,9 @@ def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() 
         / "openvla_oft_libero_goal.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_world_model_wm_chunk" in reference
+    assert "experiment=oft_world_model_chunk" in reference
     assert "dreamervla_oft_wm_lumos" in reference
-    assert "dinowm" not in reference
-    assert "dino_wm" not in reference
-    assert "DINO-WM" not in reference
+    _assert_no_removed_wm_wording(reference)
 
 
 def test_experiment_explainer_uses_role_based_wm_wording() -> None:
@@ -285,7 +324,7 @@ def test_experiment_explainer_uses_role_based_wm_wording() -> None:
 
     assert "WM chunk predictor" in explainer
     assert "WM paradigm" in explainer
-    assert "DINO-WM" not in explainer
+    _assert_no_removed_wm_wording(explainer)
 
 
 def test_ppo_imagine_diagnostic_docstring_uses_role_based_wm_wording() -> None:
@@ -298,7 +337,7 @@ def test_ppo_imagine_diagnostic_docstring_uses_role_based_wm_wording() -> None:
     ).read_text(encoding="utf-8")
 
     assert "WM imagined PPO routes" in source
-    assert "DINO-WM" not in source
+    _assert_no_removed_wm_wording(source)
 
 
 def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:
@@ -311,7 +350,7 @@ def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:
     ).read_text(encoding="utf-8")
 
     assert "--ckpt /path/to/wm_run/ckpt/latest.ckpt" in source
-    assert "dinowm_chunk" not in source
+    assert f"{_REMOVED_COMPACT_WM_ROUTE}_chunk" not in source
 
 
 def test_active_docs_and_launchers_only_reference_existing_route_configs() -> None:
@@ -712,7 +751,7 @@ def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
     config_text = "\n".join(
         path.read_text(encoding="utf-8") for path in (project_root / "configs").rglob("*.yaml")
     )
-    assert "dreamervla.models.world_model.dreamerv3_torch.DinoWMWorldModel" not in config_text
+    assert "dreamervla.models.world_model.dreamerv3_torch.WorldModel" not in config_text
 
 
 def test_active_configs_do_not_describe_ignored_targets() -> None:

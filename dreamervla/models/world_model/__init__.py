@@ -4,8 +4,6 @@ from .chameleon_latent_action import (
     ChameleonLatentActionWorldModel,
     ChameleonLatentFlowWorldModel,
 )
-from .dino_wm import DinoWMWorldModel
-from .dino_wm_chunk import ChunkAwareDinoWMWorldModel
 from .dreamer_v3_pixel_backbone_world_model import (
     DreamerV3PixelBackboneWorldModel,
 )
@@ -26,8 +24,6 @@ __all__ = [
     "DreamerV3PixelWorldModel",
     "DreamerV3TokenFromPixelWorldModel",
     "DreamerV3TokenWorldModel",
-    "DinoWMWorldModel",
-    "ChunkAwareDinoWMWorldModel",
     "WorldModel",
     "ChunkAwareWorldModel",
     "BinaryRewardHead",

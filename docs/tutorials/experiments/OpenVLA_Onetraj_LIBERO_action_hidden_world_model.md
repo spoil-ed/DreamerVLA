@@ -37,7 +37,7 @@ bash scripts/preprocess/prepare_libero_data.sh \
 ## 2. World model
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk task=openvla_onetraj_libero \
+bash scripts/train_wm.sh experiment=oft_world_model_chunk task=openvla_onetraj_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
@@ -99,7 +99,7 @@ PY="PYTHONPATH=. python"
 
 # WM smoke
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa WANDB_MODE=disabled $PY -m dreamervla.train \
-  experiment=oft_world_model_wm_chunk task=openvla_onetraj_libero logger=tensorboard \
+  experiment=oft_world_model_chunk task=openvla_onetraj_libero logger=tensorboard \
   training.out_dir=/tmp/oft_onetraj_wm_smoke training.num_epochs=1 \
   dataloader.batch_size=1 dataloader.num_workers=0 \
   task.hdf5_reward_dir=$RW task.openvla_oft.hdf5_reward_dir=$RW task.openvla_oft.action_hidden_dir=$SC \

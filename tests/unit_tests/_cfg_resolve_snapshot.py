@@ -11,7 +11,7 @@ Usage:
 
 `name` is a config selection passed straight to hydra overrides, e.g.
     dreamervla=openvla_oft_lumos
-    experiment=dreamervla_oft_dino_wm_lumos
+    experiment=dreamervla_oft_wm_lumos
 The label written is the override value's leaf (after '=').
 """
 

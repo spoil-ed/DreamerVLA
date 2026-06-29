@@ -51,14 +51,14 @@ bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=rynnvla_libero 
 ## 5. World model
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=rynnvla_libero \
+bash scripts/train_wm.sh experiment=world_model_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=16 num_workers=4
 ```
 
 Smoke:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=rynnvla_libero \
+bash scripts/train_wm.sh experiment=world_model_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=0 num_epochs=1 out_dir=/tmp/rynnvla_libero_wm_smoke
 ```
 

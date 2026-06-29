@@ -182,7 +182,9 @@ def test_rollout_hidden_extractor_docs_use_role_based_wm_wording() -> None:
     source = (
         PROJECT_ROOT / "dreamervla" / "runners" / "rollout_hidden_extractor.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()
 
 
 # ── real-model consistency gate (opt-in; skipped unless explicitly enabled) ──

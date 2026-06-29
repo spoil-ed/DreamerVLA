@@ -164,6 +164,12 @@ class TinyLumosWorldModel(nn.Module):
             return {"latent": self.obs_proj(batch["obs_embedding"].float())}
         if mode == "actor_input":
             return self._latent_hidden(batch["latent"])
+        if mode == "predict_next":
+            latent = self._latent_hidden(batch["latent"])
+            action = batch.get("action", batch.get("actions")).float()
+            if action.ndim == 3:
+                action = action[:, -1]
+            return latent + self.action_proj(action)
         if mode == "predict_next_chunk":
             latent = self._latent_hidden(batch["latent"])
             actions = batch["actions"].float()
@@ -203,7 +209,7 @@ class TinySuccessClassifier(nn.Module):
         nn.init.zeros_(self.linear.weight)
         nn.init.zeros_(self.linear.bias)
 
-    def forward(self, windows: torch.Tensor) -> torch.Tensor:
+    def forward(self, windows: torch.Tensor, **_: object) -> torch.Tensor:
         if windows.ndim == 2:
             hidden = windows.float()
         else:

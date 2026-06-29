@@ -50,4 +50,6 @@ def test_latent_to_action_hidden_actor_docs_use_role_based_wm_wording() -> None:
         / "actor"
         / "latent_to_action_hidden_actor.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()

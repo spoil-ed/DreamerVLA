@@ -1,5 +1,0 @@
-# @package _global_
-defaults:
-  - override /dreamervla: openvla_oft_discrete_token_lumos
-  - override /task: openvla_onetraj_libero
-  - _self_

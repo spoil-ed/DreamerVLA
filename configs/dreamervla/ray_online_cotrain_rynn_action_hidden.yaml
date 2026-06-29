@@ -56,7 +56,7 @@ ray_components:
       pool: mean
       freeze_backbone: true
   world_model:
-    target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+    target: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
     kwargs:
       chunk_size: ${task.legacy_action_hidden.chunk_size}
       obs_dim: ${task.legacy_action_hidden.wm_obs_dim}

@@ -48,7 +48,7 @@ WM consumes `token_count=35 × token_dim=1024` per frame
 (`task.legacy_action_hidden.*` in `configs/task/libero_goal.yaml`):
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal
+bash scripts/train_wm.sh experiment=world_model_chunk task=libero_goal
 ```
 
 Classifier: `latent_classifier_libero_goal_chunk` · DreamerVLA:

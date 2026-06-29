@@ -8,8 +8,6 @@
 # with `wandb login` (or export WANDB_API_KEY in your own shell, outside the repo).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-
 # --- EDIT THESE PLACEHOLDERS -------------------------------------------------
 REMOTE_HOST="gpu-host.example.com"        # GPU training machine hostname / IP
 REMOTE_USER="your-remote-user"            # SSH user on the GPU machine
@@ -24,7 +22,7 @@ INTERVAL="60"                              # seconds between rounds
 LOG_FILE="${LOCAL_MIRROR_DIR}/wandb_relay.log"
 # -----------------------------------------------------------------------------
 
-python "${SCRIPT_DIR}/wandb_relay_sync.py" \
+python -m dreamervla.diagnostics.wandb_relay_sync \
   --remote-host "${REMOTE_HOST}" \
   --remote-user "${REMOTE_USER}" \
   --remote-wandb-dir "${REMOTE_WANDB_DIR}" \

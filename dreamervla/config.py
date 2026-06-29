@@ -189,7 +189,7 @@ def _validate_chunk_wm_sequence_length_for_component(
     key: str,
 ) -> None:
     target = _component_target(cfg, key)
-    if target is None or not target.endswith("ChunkAwareDinoWMWorldModel"):
+    if target is None or not target.endswith("ChunkAwareWorldModel"):
         return
 
     num_hist = _select_int(cfg, f"{key}.num_hist")
@@ -328,14 +328,14 @@ def _matching_task_latent_stage(cfg: DictConfig, key: str) -> str | None:
 
 def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
     target = _component_target(cfg, key)
-    if target is None or not target.endswith("ChunkAwareDinoWMWorldModel"):
+    if target is None or not target.endswith("ChunkAwareWorldModel"):
         return
 
     for required_key in ("depth", "heads", "dim_head", "mlp_dim"):
         if _select_int(cfg, f"{key}.{required_key}") is None:
             raise ValueError(
                 f"{key}.{required_key} must be set in Hydra config for "
-                "ChunkAwareDinoWMWorldModel transformer sizing"
+                "ChunkAwareWorldModel transformer sizing"
             )
 
     if (
@@ -376,7 +376,7 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
     if action_emb_dim is None:
         raise ValueError(
             f"{key}.action_emb_dim must be set for "
-            "ChunkAwareDinoWMWorldModel WM concat conditioning"
+            "ChunkAwareWorldModel WM concat conditioning"
         )
     if action_emb_dim < 1:
         raise ValueError(f"{key}.action_emb_dim must be > 0, got {action_emb_dim}")
@@ -421,7 +421,7 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
         f"{key}.proprio_emb_dim * {key}.num_proprio_repeat + "
         f"{key}.lang_emb_dim * {key}.num_lang_repeat + "
         f"{key}.action_emb_dim * {key}.num_action_repeat for "
-        "ChunkAwareDinoWMWorldModel WM concat conditioning "
+        "ChunkAwareWorldModel WM concat conditioning "
         f"({model_dim} != {token_dim} + "
         f"{proprio_emb_dim} * {num_proprio_repeat} + "
         f"{lang_emb_dim} * {num_lang_repeat} + "

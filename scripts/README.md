@@ -19,6 +19,7 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline WM/classifier warmup |
 | `e2e_manual_cotrain_async.sh` | Current manual async OpenVLA-OFT cotrain route; user supplies only `resume`, `ckpt`, and `gpus` |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
+| `run_wandb_relay_sync.sh` | CPU-side W&B offline relay helper for air-gapped GPU runs |
 | `start_ray.sh` | Start a local single-node Ray head for manual backend debugging |
 | `check_ray.sh` | Inspect the active Ray cluster status |
 
@@ -81,7 +82,7 @@ Common launcher flags stay intentionally small:
     bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 
-    bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
+    bash scripts/train_wm.sh experiment=world_model_chunk task=libero_goal \
       gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20
 
 LIBERO preprocessing GPU and worker controls:
@@ -223,6 +224,7 @@ Python modules:
 | `dreamervla.diagnostics.validate_oft_rynn_style_sidecar` | Sidecar schema validation |
 | `dreamervla.diagnostics.validate_real_rollout_relabel` | Real-rollout relabel validation |
 | `dreamervla.diagnostics.visualize_dreamervla_reward` | Reward visualization |
+| `dreamervla.diagnostics.wandb_relay_sync` | W&B offline relay sync helper |
 | `dreamervla.diagnostics.smoke_libero_online_env` | LIBERO online env smoke test |
 
 ## Legacy Utilities

@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
+from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
 
 
-def _tiny_chunk_wm(**overrides) -> ChunkAwareDinoWMWorldModel:
+def _tiny_chunk_wm(**overrides) -> ChunkAwareWorldModel:
     cfg = {
         "obs_dim": 8,
         "action_dim": 2,
@@ -32,7 +32,7 @@ def _tiny_chunk_wm(**overrides) -> ChunkAwareDinoWMWorldModel:
         "reward_head_type": "none",
     }
     cfg.update(overrides)
-    return ChunkAwareDinoWMWorldModel(**cfg)
+    return ChunkAwareWorldModel(**cfg)
 
 
 def _run_chunk_rollout(wm, seed: int = 0):
@@ -73,7 +73,7 @@ def test_chunk_rollout_grad_checkpoint_is_numerically_equivalent() -> None:
         assert torch.allclose(grads_plain[key], grads_ckpt[key], atol=1e-6), key
 
 
-def test_chunk_wm_requires_dinowm_concat_model_dim() -> None:
+def test_chunk_wm_requires_wm_concat_model_dim() -> None:
     with pytest.raises(ValueError, match="model_dim.*token_dim.*action_emb_dim"):
         _tiny_chunk_wm(model_dim=4)
 
@@ -84,9 +84,11 @@ def test_chunk_wm_source_uses_role_based_wm_wording() -> None:
         / "dreamervla"
         / "models"
         / "world_model"
-        / "dino_wm_chunk.py"
+        / "wm_chunk.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()
 
 
 def test_encode_concats_action_to_each_obs_token_without_adding_slots() -> None:

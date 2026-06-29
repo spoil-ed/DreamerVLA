@@ -1,7 +1,0 @@
-# @package _global_
-defaults:
-  - rynnvla_action_chunk
-  - _self_
-
-world_model:
-  _target_: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel

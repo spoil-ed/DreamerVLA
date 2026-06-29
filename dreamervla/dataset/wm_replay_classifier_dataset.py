@@ -306,7 +306,7 @@ class WMReplayClassifierDataset(IterableDataset):
     def _imagine_one(self, obs: np.ndarray, actions: np.ndarray) -> np.ndarray:
         """Return imagined latent sequence as float32 numpy.
 
-        Rynn-DINO chunk WMs emit tokenized hidden ``[T_out,N,token_dim]``;
+        RynnVLA chunk WMs emit tokenized hidden ``[T_out,N,token_dim]``;
         older flat WMs continue to emit ``[T_out,obs_dim]``.
         """
         T = int(obs.shape[0])

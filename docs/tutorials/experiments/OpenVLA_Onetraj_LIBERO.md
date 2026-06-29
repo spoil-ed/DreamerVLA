@@ -60,14 +60,14 @@ python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
 ## 4. World model (discrete-token)
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_wm_chunk \
+bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_chunk \
   task=openvla_onetraj_libero gpus=0 ngpu=1 batch_size=2 num_workers=4
 ```
 
 Smoke:
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_wm_chunk \
+bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_chunk \
   task=openvla_onetraj_libero gpus=0 ngpu=1 batch_size=1 num_workers=0 num_epochs=1 \
   out_dir=/tmp/openvla_onetraj_libero_discrete_wm_smoke
 ```

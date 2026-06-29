@@ -20,7 +20,7 @@ from dreamervla.models.actor import (
     VLAActionHeadActor,
 )
 from dreamervla.models.reward import LatentSuccessClassifier
-from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
+from dreamervla.models.world_model.wm import WorldModel
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 
@@ -432,8 +432,8 @@ def test_latent_to_openvla_discrete_actor_bridges_input_tokens_without_l1_head()
     assert torch.allclose(entropy, torch.full((2,), 6 * torch.log(torch.tensor(4.0))))
 
 
-def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
-    model = DinoWMWorldModel(
+def test_rynn_wm_derives_flat_action_hidden_dimensions() -> None:
+    model = WorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,
@@ -450,8 +450,8 @@ def test_rynn_dino_wm_derives_flat_action_hidden_dimensions() -> None:
     assert model.obs_dim == 5 * 3 * 4
 
 
-def test_rynn_dino_wm_accepts_tokenized_action_hidden_without_flattening() -> None:
-    model = DinoWMWorldModel(
+def test_rynn_wm_accepts_tokenized_action_hidden_without_flattening() -> None:
+    model = WorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,
@@ -471,8 +471,8 @@ def test_rynn_dino_wm_accepts_tokenized_action_hidden_without_flattening() -> No
     assert torch.allclose(model.obs_to_tokens(flat)[:, 0], tokens)
 
 
-def test_rynn_dino_wm_encode_latent_preserves_action_hidden_tokens() -> None:
-    model = DinoWMWorldModel(
+def test_rynn_wm_encode_latent_preserves_action_hidden_tokens() -> None:
+    model = WorldModel(
         obs_dim=None,
         action_dim=3,
         token_count=None,

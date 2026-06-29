@@ -41,7 +41,7 @@ init:
   vla_ckpt_path: ${task.vla_ckpt_path}
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
-  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_dino_wm_fullhidden/m1024_d6_rollout8_reward32_bs80/fixed_branch_20260523_195333/ckpt/step_00002000.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_wm_fullhidden/m1024_d6_rollout8_reward32_bs80/fixed_branch_20260523_195333/ckpt/step_00002000.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
   load_dreamervla_critic: false
@@ -90,7 +90,7 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  _target_: dreamervla.models.world_model.dino_wm.DinoWMWorldModel
+  _target_: dreamervla.models.world_model.wm.WorldModel
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}
   token_count: ${task.legacy_action_hidden.token_count}

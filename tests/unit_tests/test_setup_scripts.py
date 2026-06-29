@@ -408,7 +408,7 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
         [
             "bash",
             "scripts/train_wm.sh",
-            "experiment=world_model_dinowm_chunk",
+            "experiment=world_model_chunk",
             "task=libero_goal",
             "gpus=2,3",
             "ngpu=2",
@@ -431,7 +431,7 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     assert "CUDA_VISIBLE_DEVICES=2,3" in log_text
     assert "--nproc-per-node=2" in log_text
     assert "--config-name train" in log_text
-    assert "experiment=world_model_dinowm_chunk" in log_text
+    assert "experiment=world_model_chunk" in log_text
     assert "task=libero_goal" in log_text
     assert "dataloader.batch_size=7" in log_text
     assert "dataloader.num_workers=0" in log_text
@@ -812,12 +812,13 @@ def test_release_scripts_tree_is_curated() -> None:
         "e2e_coldstart_warmup_cotrain_ray.sh",
         "e2e_manual_cotrain_async.sh",
         "eval_libero_vla.sh",
-        "install_env.sh",
-        "preprocess_libero.sh",
-        "start_ray.sh",
-        "train_dreamervla.sh",
-        "train_vla.sh",
-        "train_wm.sh",
+            "install_env.sh",
+            "preprocess_libero.sh",
+            "run_wandb_relay_sync.sh",
+            "start_ray.sh",
+            "train_dreamervla.sh",
+            "train_vla.sh",
+            "train_wm.sh",
     }
     assert top_level_dirs == {
         "download",
@@ -869,6 +870,25 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
         "--nproc-per-node",
         "--standalone",
     }
+    allowed_by_script = {
+        "scripts/run_wandb_relay_sync.sh": {
+            "--dry-run",
+            "--exclude",
+            "--interval",
+            "--local-mirror-dir",
+            "--lock-file",
+            "--log-file",
+            "--once",
+            "--remote-host",
+            "--remote-user",
+            "--remote-wandb-dir",
+            "--rsync-bin",
+            "--ssh-port",
+            "--wandb-bin",
+            "--wandb-entity",
+            "--wandb-project",
+        }
+    }
     offenders: dict[str, list[str]] = {}
 
     for script in sorted((root / "scripts").rglob("*.sh")):
@@ -884,9 +904,11 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
             flags = sorted(
                 set(re.findall(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", command))
             )
-            bad = [flag for flag in flags if flag not in allowed_flags]
+            script_key = str(script.relative_to(root))
+            script_allowed = allowed_flags | allowed_by_script.get(script_key, set())
+            bad = [flag for flag in flags if flag not in script_allowed]
             if bad:
-                offenders.setdefault(str(script.relative_to(root)), []).extend(bad)
+                offenders.setdefault(script_key, []).extend(bad)
 
     assert offenders == {}
 

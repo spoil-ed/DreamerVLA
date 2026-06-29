@@ -388,7 +388,7 @@ training the WM on them, point the route at the sidecar and align the expected
 attrs, e.g.:
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_wm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_chunk task=libero_goal \
   task.openvla_oft.ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
   task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/<task>/<sidecar_dir>" \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
@@ -399,14 +399,14 @@ bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_wm_chunk task
 World model:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
 
 # Scheme B frame-token WM:
-bash scripts/train_wm.sh experiment=world_model_wm_chunk_input_tokens task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_chunk_input_tokens task=libero_goal \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
-bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk_input_tokens task=libero_goal
+bash scripts/train_wm.sh experiment=oft_world_model_chunk_input_tokens task=libero_goal
 ```
 
 Classifier:
@@ -498,6 +498,6 @@ test -d "${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/libero_goal/no_noop
 Smoke train:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_chunk task=libero_goal \
   out_dir=/tmp/dvla_wm_smoke max_steps=1 num_workers=0
 ```

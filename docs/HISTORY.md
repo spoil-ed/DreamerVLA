@@ -16,7 +16,7 @@
   classifier/ dreamervla/ evaluation/ task/ logger/`. Thin shell launchers (`train_vla.sh`,
   `train_wm.sh`, `train_dreamervla.sh`, `eval_libero_vla.sh`) forward `key=value`.
 - Active routes: VLA SFT (rynnvla / openvla_oft, full + one-trajectory), world-model
-  (`*_dinowm_chunk`, input-token, discrete-token), classifiers, three `dreamervla_*` recipes
+  (`*_wm_chunk`, input-token, discrete-token), classifiers, three `dreamervla_*` recipes
   (actor_critic, rynn/oft LUMOS), `eval_libero_vla`.
 
 ## Ray backend — single-node RLinf alignment (opt-in; `ray_rlinf_alignment_implemented.md` has the full record)
@@ -73,7 +73,7 @@
 | H4/B | per-step grad-norm/cosine gated behind `optim.grad_diagnostics` (default OFF) | `889d3cb` |
 | W6 | PPO actor backward micro-batched over B_eff (`lumos.update_micro_batch_starts`, default=original) | `016b900` |
 | W3/W4 | manifest-first pretokenize index (guarded/dormant) + per-worker LRU frame cache | `6e09282` |
-| H5 | switchable DINO-WM SDPA (`attn_impl`, default `manual`=byte-identical) | `d4d857a` |
+| H5 | switchable WM SDPA (`attn_impl`, default `manual`=byte-identical) | `d4d857a` |
 | H9 | Chameleon `_update_causal_mask` cache (None-mask case) | `c69eb48` |
 | prompt-tokenize cache | OFT rollout-hidden extraction caches invariant per-task prompt tokenization; tests cover once-per-task reuse and byte-equivalent cached text tensors | `6b8f366` |
 

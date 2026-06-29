@@ -19,7 +19,7 @@ bash scripts/preprocess/prepare_libero_data.sh task=openvla_onetraj_libero \
   env.OFT_CKPT="${OFT_CKPT}"
 
 # 2. world model (backbone/input-token latent)
-bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk_input_tokens \
+bash scripts/train_wm.sh experiment=oft_world_model_chunk_input_tokens \
   task=openvla_onetraj_libero gpus=0 ngpu=1 batch_size=2
 
 # 3. classifier

@@ -2,7 +2,7 @@
 
 Same **reward form** as ``dino_lumos_dense_step`` (dense per-step state-reward
 decoded from the WM hidden at every imagined env-step), but the rollout is
-driven by ``ChunkAwareDinoWMWorldModel.predict_next_chunk`` so each
+driven by ``ChunkAwareWorldModel.predict_next_chunk`` so each
 actor decision produces a K-step action chunk that the WM consumes in one
 call.
 

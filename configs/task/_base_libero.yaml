@@ -110,7 +110,7 @@ openvla_oft:
     model_dim: 4148
   sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
-  wm_target: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  wm_target: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
   classifier_target: dreamervla.models.reward.LatentSuccessClassifier
   actor_target: dreamervla.models.actor.RynnVLAActionHiddenActor
   actor_head_type: legacy

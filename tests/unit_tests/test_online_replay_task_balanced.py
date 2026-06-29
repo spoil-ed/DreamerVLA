@@ -175,7 +175,7 @@ def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:
     assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
 
 
-def test_online_replay_classifier_windows_include_dino_wm_proprio_language() -> None:
+def test_online_replay_classifier_windows_include_wm_proprio_language() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
     episode = _episode(task_id=2, length=8, success=True)
     for idx, step in enumerate(episode):

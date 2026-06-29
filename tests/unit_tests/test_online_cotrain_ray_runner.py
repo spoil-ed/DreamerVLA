@@ -1788,7 +1788,7 @@ def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
     )
     assert (
         cfg.learner.model_cfg.world_model.target
-        == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
+        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
     )
     assert (
         cfg.learner.model_cfg.classifier.target
