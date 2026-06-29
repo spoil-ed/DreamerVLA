@@ -873,18 +873,12 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
     allowed_by_script = {
         "scripts/run_wandb_relay_sync.sh": {
             "--dry-run",
-            "--exclude",
             "--interval",
-            "--local-mirror-dir",
             "--lock-file",
             "--log-file",
             "--once",
-            "--remote-host",
-            "--remote-user",
-            "--remote-wandb-dir",
-            "--rsync-bin",
-            "--ssh-port",
             "--wandb-bin",
+            "--wandb-dir",
             "--wandb-entity",
             "--wandb-project",
         }
