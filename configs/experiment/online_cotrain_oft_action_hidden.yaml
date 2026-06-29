@@ -7,8 +7,8 @@
 # NOTE the online env-rollout policy is the RynnVLA one-trajectory VLA (the ~40%
 # success seed) because DreamerVLAOnlineTrainEnv emits the action_query latent
 # via RynnVLAEncoder. The OFT one-trajectory checkpoint is handled by the OFFLINE
-# OFT action-hidden path (experiment=dreamervla_oft_dino_wm_lumos); see the
-# tutorial doc. This is a policy/action-latent WM, NOT the original pixel DINO-WM.
+# OFT action-hidden path (experiment=dreamervla_oft_wm_lumos); see the
+# tutorial doc. This is a policy/action-latent WM, NOT the original pixel WM.
 defaults:
   - /task: libero_goal
   - _self_

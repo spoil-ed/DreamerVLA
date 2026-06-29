@@ -1,5 +1,5 @@
 name: train_wm
-experiment: world_model_dinowm_chunk
+experiment: world_model_wm_chunk
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false

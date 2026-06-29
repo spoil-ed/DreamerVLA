@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from pathlib import Path
 
 import pytest
 import torch
@@ -75,6 +76,17 @@ def test_chunk_rollout_grad_checkpoint_is_numerically_equivalent() -> None:
 def test_chunk_wm_requires_dinowm_concat_model_dim() -> None:
     with pytest.raises(ValueError, match="model_dim.*token_dim.*action_emb_dim"):
         _tiny_chunk_wm(model_dim=4)
+
+
+def test_chunk_wm_source_uses_role_based_wm_wording() -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "models"
+        / "world_model"
+        / "dino_wm_chunk.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source
 
 
 def test_encode_concats_action_to_each_obs_token_without_adding_slots() -> None:

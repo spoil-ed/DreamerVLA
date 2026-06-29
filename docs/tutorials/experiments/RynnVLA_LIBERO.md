@@ -51,14 +51,14 @@ bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=rynnvla_libero 
 ## 5. World model
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=16 num_workers=4
 ```
 
 Smoke:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=rynnvla_libero \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=2 num_workers=0 num_epochs=1 out_dir=/tmp/rynnvla_libero_wm_smoke
 ```
 
@@ -74,7 +74,7 @@ bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk task=ryn
 ## 7. DreamerVLA
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_lumos task=rynnvla_libero \
+bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_wm_lumos task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=2 \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
   init.classifier_state_ckpt="${DVLA_DATA_ROOT}/outputs/classifier/<run>/checkpoints/latest.ckpt"
@@ -83,7 +83,7 @@ bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_lumos task=r
 Actor-critic fallback (no classifier):
 
 ```bash
-bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_actor_critic task=rynnvla_libero \
+bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_wm_actor_critic task=rynnvla_libero \
   gpus=0 ngpu=1 batch_size=4 num_workers=2 \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT}/outputs/worldmodel/<run>/checkpoints/latest.ckpt"
 ```

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_actor_classes_are_importable_from_split_modules() -> None:
     from dreamervla.models.actor import (
@@ -38,3 +40,14 @@ def test_actor_classes_are_importable_from_split_modules() -> None:
     assert RynnVLAActionHiddenActor is SplitRynnVLAActionHiddenActor
     assert VLAActionHeadActor is SplitVLAActionHeadActor
     assert VLAPolicy is SplitVLAPolicy
+
+
+def test_latent_to_action_hidden_actor_docs_use_role_based_wm_wording() -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "dreamervla"
+        / "models"
+        / "actor"
+        / "latent_to_action_hidden_actor.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM" not in source

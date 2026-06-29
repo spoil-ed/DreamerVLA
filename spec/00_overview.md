@@ -1,107 +1,47 @@
 # Architecture Overview
 
-状态：目标主线架构入口
+DreamerVLA 是一个单机 LIBERO VLA + world model 训练栈。Hydra 选择实验配置，
+`dreamervla.train` 加载 `_target_` Runner，Runner 拥有一次 train/eval job 的完整生命周期。
 
-`spec/` 是 DreamerVLA 当前 architecture 的根目录。主线判断以
-[`99_manual_notes.md`](99_manual_notes.md) 的用户第一性指导为准：它定义目标拓扑、抽象边界
-和不可破坏约束，是受保护的第一性来源。除非用户明确要求，AI assistant 不得移动、改写或删除
-其中的用户手写内容。
+主线流程：
 
-| 文件 | 作用 |
+```text
+collect rollouts -> seed replay/data -> warm up world model + classifier -> online cotrain -> eval
+```
+
+## Repository Shape
+
+| 路径 | 职责 |
 | --- | --- |
-| [`00_overview.md`](00_overview.md) | 目标主线架构、核心 group、训练形态、关键边界。 |
-| [`01_goal.md`](01_goal.md) | 项目目标、长期 architecture 原则和主线边界。 |
-| [`02_naming.md`](02_naming.md) | 正式命名、模块命名、worker 命名和兼容命名规则。 |
-| [`03_coding_style.md`](03_coding_style.md) | 面向长期 RL 系统维护的编码风格、接口设计和结构化数据规则。 |
-| [`04_complete_loop.md`](04_complete_loop.md) | 端到端 loop：collect、warmup、manual cotrain、eval。 |
+| `dreamervla/train.py` | 统一 Hydra 训练入口：resolve config、validate、实例化 Runner。 |
+| `dreamervla/config.py` | 早期配置关系校验。 |
+| `dreamervla/launchers/` | 组合多阶段命令；主线是 `coldstart_warmup_cotrain.py`。 |
+| `dreamervla/runners/` | 训练/评估 job 入口；Runner 负责 setup、execute、teardown。 |
+| `dreamervla/models/` | VLA、encoder、actor、critic、world model、reward/classifier。 |
+| `dreamervla/dataset/`, `dreamervla/preprocess/` | rollout、sidecar、HDF5、manifest 和预处理。 |
+| `dreamervla/envs/` | LIBERO 真实环境和 world-model environment 包装。 |
+| `dreamervla/workers/`, `scheduler/`, `hybrid_engines/` | Ray/manual cotrain 的 worker、placement、channel、FSDP 和权重同步。 |
+| `configs/` | Hydra source of truth。 |
+| `scripts/` | 薄 shell 入口，转发到 Python/Hydra。 |
+| `tests/` | 单元测试和 e2e/smoke 覆盖。 |
 
-## Main Idea
+## Current Mainline
 
-DreamerVLA 的主线是一个**持续滚动的在线 cotrain 周期**：rollout 不断产生新数据，env 侧用
-world model 推进想象轨迹，VLA policy 和 world model/classifier 在同一个 loop 里分别更新，
-再各自同步回采样侧。整个周期被拆成四个角色清晰的 group。
-
-| Group | Worker | 是否 FSDP | 职责 |
-| --- | --- | --- | --- |
-| LearnerGroup | `LearnerWorker` | 否 | 训练 world model 和 classifier/reward model，不碰 VLA。 |
-| ActorGroup | `EmbodiedFSDPActor` | 是 | 训练 VLA policy：PPO loss、backward、optimizer step、FSDP 通信。 |
-| RolloutGroup | `MultiStepRolloutWorker` | 否 | 普通 HF/BasePolicy 推理副本，`eval/no_grad`，只做 `obs -> action chunk`。 |
-| EnvGroup | `RealEnvWorker` / `WMEnvWorker` | 否 | 执行真实 LIBERO 或 latent WMEnv，按 chunk 组装 trajectory。 |
-
-两条关键边界：
-
-- **ActorGroup 与 RolloutGroup 分离**：RolloutWorker 是行为策略推理副本，用于采样；ActorWorker
-  是学习中的策略，用于更新参数。即使二者是同一份 VLA 架构，也不能合并。
-- **LearnerGroup 只管环境模型**：它训练 world model 和 classifier/reward model，绝不训练 VLA。
-  WMEnvWorker 用到的 reward model 就是这个 classifier，主线不再引入额外 verifier。
-
-`EnvWorker` 是基类接口；真实环境由 `RealEnvWorker` 承担，world-model environment 由
-`WMEnvWorker` 承担。WMEnvWorker 内部加载 world model 和 classifier，从 LearnerGroup 定期同步
-这两者的权重。Ray 层另有一个可选 `ReplayGroup`（`ReplayWorker`），为 WM/classifier 训练和
-WMEnv bootstrap 提供数据，但它不是 ActorGroup PPO 的数据通道。
-
-## Training Shape
-
-端到端训练分为四段（详见 [`04_complete_loop.md`](04_complete_loop.md)）：
-
-1. `collect`：用 VLA/OFT 在真实 LIBERO 中采集初始 rollout，写出 hidden sidecar（例如
-   `obs_embedding`）和 reward 数据，为 warmup 提供监督。
-2. `warmup`：用 collect/precompute 数据训练 world model 和 classifier。
-3. `cotrain`：EnvGroup + RolloutGroup 采 chunk-level trajectory，直接经 actor channel 送入
-   ActorGroup 做 PPO；LearnerGroup 按节拍更新 WM/cls 并同步给 WMEnvWorker。
-4. `eval`：训练信号可以来自 WMEnv trajectory reward，但最终指标仍以真实 LIBERO eval 为准。
-
-主线最重要的形态变化是：**Actor PPO 不再从 replay 采样**。trajectory 由 EnvGroup 在 rollout
-内组装好，沿 batch 维切分后直接通过 actor channel 发给 ActorGroup。
-
-## Placement
-
-目标 placement 不假设每张卡角色相同。对 `N` 张 GPU，默认形态是：
+当前主线围绕 OpenVLA-OFT one-trajectory cold start：
 
 ```text
-GPU0:
-  RealEnvWorker + RolloutWorker + LearnerWorker
-
-GPU1..GPU(N-1):
-  WMEnvWorker + RolloutWorker + ActorGroup rank
+scripts/e2e_coldstart_warmup_cotrain_noray.sh
+scripts/e2e_coldstart_warmup_cotrain_ray.sh
 ```
 
-这不是固定八卡假设：八卡 = 1 张真实环境卡 + 7 张 WMEnv/Actor 卡；六卡 = 1 + 5。`N=1` 时所有
-角色落在 GPU0；`N=0` 是 CPU startup 模式，actor FSDP strategy 为 `none`。ActorGroup 只在 actor
-ranks 内部用 FSDP，rank 间的参数 shard、梯度同步和 optimizer state 全部由 FSDP/NCCL 管理。
+这两个脚本调用 `python -m dreamervla.launchers.coldstart_warmup_cotrain`。launcher 根据
+`configs/scripts/coldstart_warmup_cotrain.yaml` 生成 collection 和 cotrain 阶段命令。
 
-## Sync Principle
+## Stable Boundaries
 
-主线有三类相互独立的同步：
-
-1. **ActorGroup 内部**：FSDP/NCCL 负责，不经过 WeightSyncer，不手动复制 rank 权重。
-2. **ActorGroup -> RolloutGroup**：每隔 `sync_every` 个 global step，rollout 前从 actor 同步 VLA。
-   使用 patch sync——rollout 端持有本地 HF policy 副本，把 actor rank0 发布的 delta apply 到
-   本地 `state_dict`。
-3. **LearnerGroup -> WMEnvWorker**：LearnerGroup 更新 WM/cls 后，把新版本显式拷给 WMEnvWorker。
-
-## Reward / PPO
-
-主线使用 **trajectory 级别 reward**，advantage 走 group-relative/GRPO 归一化，因此不需要
-final obs bootstrap value。final bootstrap value 只属于未来可选的 value-based PPO/GAE 分支
-（`requires_bootstrap_value`、`prev_values`、`returns`）；当前主线把它当成 diagnostics 占位，
-不参与训练。
-
-ActorGroup 训练 PPO 的关键数据是 `old_logprobs + rewards/dones + forward_inputs`。Actor 用
-`forward_inputs` 重新跑当前 VLA 得到 `new_logprobs`，再用 `new/old logprob ratio` 做 PPO
-clipped loss。`forward_inputs` 必须完整到能让 Actor 对**同一个 action chunk** 重算 logprob。
-
-## Current Implementation
-
-当前 manual route 已落地为 `ManualCotrainRayRunner`：
-
-```text
-experiment=manual_cotrain_ray_oft_backbone_latent
-_target_=dreamervla.runners.ManualCotrainRayRunner
-```
-
-它创建 `LearnerGroup`、`ActorGroup`、`RolloutGroup`、`RealEnvGroup`、可选 `WMEnvGroup` 和可选
-`ReplayGroup`，并已按 chunk-level trajectory contract 连接 Env/Rollout/Actor。当前剩余重点不是
-拓扑代码是否存在，而是目标 GPU/LIBERO 机器上完整跑通 async cold-start -> warmup ->
-manual cotrain，并完成一次 global step。当前主线 loop、数据流、同步、checkpoint 和验证关注点见
-[`04_complete_loop.md`](04_complete_loop.md)。
+- Hydra 决定组件和参数；训练 loop 不硬编码具体模型类。
+- Runner 拥有一个 job；Worker 只做自己的 runtime 角色。
+- ActorGroup 训练 VLA；RolloutGroup 做 no-grad policy inference。
+- LearnerGroup 训练 world model 和 classifier/reward model。
+- EnvGroup 只负责真实环境或 WMEnv step 和 trajectory assembly。
+- Replay 是数据与 resume 设施，不是 Actor PPO 的隐藏替代通道。

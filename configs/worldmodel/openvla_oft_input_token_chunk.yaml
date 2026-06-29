@@ -1,5 +1,5 @@
 # @package _global_
-# Scheme B: DINO-WM over frame-level OpenVLA-OFT projected vision tokens.
+# Scheme B: WM over frame-level OpenVLA-OFT projected vision tokens.
 defaults:
   - openvla_oft_action_chunk
   - _self_
@@ -40,7 +40,7 @@ world_model:
   cosine_loss_scale: 0.0
   chunk_rollout_chunks: 1
   chunk_rollout_loss_scale: 0.0
-  # DINO-WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
+  # WM lean-debottlenecked predictor (query_before / input-token, seq=1536):
   # half-width attention inner = heads*dim_head = 2048 = 0.5*model_dim (8x the old
   # compact inner=256), lean FFN mlp_dim = 2048. ~313M total. The 1536-token sequence
   # is ~9x query_after's, so capacity is kept lean here on purpose (efficiency).

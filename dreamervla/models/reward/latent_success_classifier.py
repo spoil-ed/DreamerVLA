@@ -114,7 +114,7 @@ class LatentSuccessClassifier(nn.Module):
             self.supports_proprio_conditioning or self.supports_language_conditioning
         ) and int(cfg.latent_dim) != int(self.state_token_dim):
             raise ValueError(
-                "LatentSuccessClassifier DINO-WM conditioning requires "
+                "LatentSuccessClassifier WM conditioning requires "
                 "latent_dim == token_dim + proprio_emb_dim * num_proprio_repeat "
                 "+ lang_emb_dim * num_lang_repeat, "
                 f"got latent_dim={int(cfg.latent_dim)}, token_dim={int(cfg.token_dim)}, "
@@ -306,7 +306,7 @@ class LatentSuccessClassifier(nn.Module):
             if token_pool == "flat":
                 if self.supports_proprio_conditioning or self.supports_language_conditioning:
                     raise ValueError(
-                        "DINO-WM proprio/lang classifier inputs must preserve token "
+                        "WM proprio/lang classifier inputs must preserve token "
                         "structure or use token_pool='mean' fallback; token_pool='flat' "
                         "would flatten the token grid."
                     )

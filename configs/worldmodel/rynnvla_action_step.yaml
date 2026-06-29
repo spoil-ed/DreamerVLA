@@ -1,5 +1,5 @@
 # @package _global_
-# DINO-WM-style predictor over full legacy RynnVLA action hidden.
+# WM-style predictor over full legacy RynnVLA action hidden.
 # External VLA latent-observation shape is derived from time_horizon * action_dim * token_dim.
 # Primary objective: minimize next-frame latent prediction loss
 #   obs_embedding[:, t] -> obs_embedding[:, t + 1].
@@ -32,7 +32,7 @@ training:
   save_final: true
 
 dataset:
-  # DINO-WM mainline pretraining: teacher-forced multi-frame next-latent
+  # WM mainline pretraining: teacher-forced multi-frame next-latent
   # prediction + open-loop rollout + binary reward head.  The reward head
   # requires a `rewards` field, so the balanced terminal dataset is used
   # (per_window_dense puts +1 on every step of a terminal-ending window).
@@ -92,7 +92,7 @@ world_model:
   max_seq_len: 128
   hidden_loss_scale: 1.0
   cosine_loss_scale: 0.1
-  # Mainline DINO-WM defaults: teacher-forced multi-frame next-latent
+  # Mainline WM defaults: teacher-forced multi-frame next-latent
   # prediction (always on) + open-loop autoregressive rollout (horizon=8) for
   # imagination stability + binary reward head for PPO imagined reward.
   rollout_loss_scale: 1.0

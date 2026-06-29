@@ -28,6 +28,261 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     ).is_file()
 
 
+def test_readme_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    readme = (project_root / "README.md").read_text(encoding="utf-8")
+
+    assert "experiment=world_model_wm_chunk" in readme
+    assert "experiment=dreamervla_rynn_wm_lumos" in readme
+    assert "experiment=world_model_dinowm_chunk" not in readme
+    assert "experiment=dreamervla_rynn_dino_wm_lumos" not in readme
+
+
+def test_setup_guide_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    setup = (project_root / "SETUP.md").read_text(encoding="utf-8")
+
+    assert "experiment=world_model_wm_chunk" in setup
+    assert "experiment=world_model_wm_chunk_input_tokens" in setup
+    assert "experiment=oft_world_model_wm_chunk_input_tokens" in setup
+    assert "experiment=oft_discrete_token_world_model_wm_chunk" in setup
+    assert "experiment=dreamervla_rynn_wm_lumos" in setup
+    assert "experiment=dreamervla_rynn_wm_lumos_input_tokens" in setup
+    assert "DINO-WM" not in setup
+    assert "dino_wm" not in setup
+    assert "dinowm" not in setup
+
+
+def test_configs_readme_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    configs_readme = (project_root / "configs" / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "experiment=world_model_wm_chunk" in configs_readme
+    assert "dreamervla_rynn_wm_lumos" in configs_readme
+    assert "oft_world_model_wm_chunk" in configs_readme
+    assert "dreamervla_oft_wm_lumos" in configs_readme
+    assert "dinowm" not in configs_readme
+    assert "dino_wm" not in configs_readme
+    assert "DINO-WM" not in configs_readme
+
+
+def test_scripts_readme_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    scripts_readme = (project_root / "scripts" / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "experiment=world_model_wm_chunk" in scripts_readme
+    assert "dinowm" not in scripts_readme
+    assert "dino_wm" not in scripts_readme
+    assert "DINO-WM" not in scripts_readme
+
+
+def test_route_reference_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    route_reference = (project_root / "docs" / "reference" / "routes.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "world_model_wm_chunk" in route_reference
+    assert "dreamervla_rynn_wm_lumos" in route_reference
+    assert "dreamervla_oft_discrete_token_wm_lumos" in route_reference
+    assert "dinowm" not in route_reference
+    assert "dino_wm" not in route_reference
+    assert "DINO-WM" not in route_reference
+
+
+def test_experiment_tutorial_index_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial_index = (
+        project_root / "docs" / "tutorials" / "experiments" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "world_model_wm_chunk" in tutorial_index
+    assert "dreamervla_rynn_wm_lumos" in tutorial_index
+    assert "oft_discrete_token_world_model_wm_chunk" in tutorial_index
+    assert "dreamervla_oft_discrete_token_wm_lumos" in tutorial_index
+    assert "dinowm" not in tutorial_index
+    assert "dino_wm" not in tutorial_index
+    assert "DINO-WM" not in tutorial_index
+
+
+def test_rynnvla_tutorial_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial = (
+        project_root / "docs" / "tutorials" / "experiments" / "RynnVLA_LIBERO.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=world_model_wm_chunk" in tutorial
+    assert "experiment=dreamervla_rynn_wm_lumos" in tutorial
+    assert "experiment=dreamervla_rynn_wm_actor_critic" in tutorial
+    assert "dinowm" not in tutorial
+    assert "dino_wm" not in tutorial
+    assert "DINO-WM" not in tutorial
+
+
+def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial = (
+        project_root
+        / "docs"
+        / "tutorials"
+        / "experiments"
+        / "OpenVLA_Onetraj_LIBERO.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=oft_discrete_token_world_model_wm_chunk" in tutorial
+    assert "experiment=dreamervla_oft_discrete_token_wm_lumos" in tutorial
+    assert "dinowm" not in tutorial
+    assert "dino_wm" not in tutorial
+    assert "DINO-WM" not in tutorial
+
+
+def test_openvla_action_hidden_tutorial_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial = (
+        project_root
+        / "docs"
+        / "tutorials"
+        / "experiments"
+        / "OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=oft_world_model_wm_chunk" in tutorial
+    assert "experiment=dreamervla_oft_wm_lumos" in tutorial
+    assert "dinowm" not in tutorial
+    assert "dino_wm" not in tutorial
+    assert "DINO-WM" not in tutorial
+
+
+def test_openvla_backbone_latent_tutorial_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial = (
+        project_root
+        / "docs"
+        / "tutorials"
+        / "experiments"
+        / "OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=oft_world_model_wm_chunk_input_tokens" in tutorial
+    assert "experiment=dreamervla_oft_wm_lumos_input_tokens" in tutorial
+    assert "dinowm" not in tutorial
+    assert "dino_wm" not in tutorial
+    assert "DINO-WM" not in tutorial
+
+
+def test_openvla_coldstart_collection_tutorial_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    tutorial = (
+        project_root
+        / "docs"
+        / "tutorials"
+        / "experiments"
+        / "OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=oft_discrete_token_world_model_wm_chunk" in tutorial
+    assert "dinowm" not in tutorial
+    assert "dino_wm" not in tutorial
+    assert "DINO-WM" not in tutorial
+
+
+def test_parameter_reference_uses_role_based_wm_wording() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    parameter_reference = (project_root / "docs" / "PARAMETERS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "WM architecture" in parameter_reference
+    assert "WM chunk predictor" in parameter_reference
+    assert "DINO-WM" not in parameter_reference
+
+
+def test_repository_structure_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    repository_structure = (
+        project_root / "docs" / "repository_structure.md"
+    ).read_text(encoding="utf-8")
+
+    assert "world_model_wm_chunk" in repository_structure
+    assert "dreamervla_rynn_wm_lumos" in repository_structure
+    assert "dreamervla_oft_wm_lumos" in repository_structure
+    assert "dinowm" not in repository_structure
+    assert "dino_wm" not in repository_structure
+    assert "DINO-WM" not in repository_structure
+
+
+def test_rynnvla_model_dataset_reference_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    reference = (
+        project_root / "docs" / "reference" / "model_datasets" / "rynnvla_libero_goal.md"
+    ).read_text(encoding="utf-8")
+
+    assert "WM token axis" in reference
+    assert "experiment=world_model_wm_chunk" in reference
+    assert "dreamervla_rynn_wm_lumos" in reference
+    assert "dinowm" not in reference
+    assert "dino_wm" not in reference
+    assert "DINO-WM" not in reference
+
+
+def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    reference = (
+        project_root
+        / "docs"
+        / "reference"
+        / "model_datasets"
+        / "openvla_oft_libero_goal.md"
+    ).read_text(encoding="utf-8")
+
+    assert "experiment=oft_world_model_wm_chunk" in reference
+    assert "dreamervla_oft_wm_lumos" in reference
+    assert "dinowm" not in reference
+    assert "dino_wm" not in reference
+    assert "DINO-WM" not in reference
+
+
+def test_experiment_explainer_uses_role_based_wm_wording() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    explainer = (
+        project_root / "docs" / "tutorials" / "experiments" / "EXPLAINED.md"
+    ).read_text(encoding="utf-8")
+
+    assert "WM chunk predictor" in explainer
+    assert "WM paradigm" in explainer
+    assert "DINO-WM" not in explainer
+
+
+def test_ppo_imagine_diagnostic_docstring_uses_role_based_wm_wording() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    source = (
+        project_root
+        / "dreamervla"
+        / "diagnostics"
+        / "diagnose_ppo_imagine_vs_real.py"
+    ).read_text(encoding="utf-8")
+
+    assert "WM imagined PPO routes" in source
+    assert "DINO-WM" not in source
+
+
+def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    source = (
+        project_root
+        / "dreamervla"
+        / "diagnostics"
+        / "eval_chunkwm_closeloop.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--ckpt /path/to/wm_run/ckpt/latest.ckpt" in source
+    assert "dinowm_chunk" not in source
+
+
 def test_active_docs_and_launchers_only_reference_existing_route_configs() -> None:
     project_root = Path(__file__).resolve().parents[2]
     config_dir = project_root / "configs"

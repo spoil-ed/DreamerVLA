@@ -1,7 +1,7 @@
 # @package _global_
 # Legacy action-hidden classifier route. This consumes query-after action-hidden
 # sidecars ([chunk*action_dim, token_dim]) and stays on the historical
-# transformer/vector contract for existing checkpoints/tutorials. The DINO-WM
+# transformer/vector contract for existing checkpoints/tutorials. The WM
 # query-before [vision|proprio|language] classifier lives in
 # openvla_oft_input_token_chunk.yaml.
 defaults:

@@ -292,7 +292,7 @@ Expected: PASS after Task 1 implementation.
 Run:
 
 ```bash
-rg -n "RolloutInferenceWorker|InferenceWorker|LearnerWorker|EnvWorkers\\.EnvWorkers|ActorWorker|RolloutWorker" spec/99_manual_notes.md spec/00_overview.md spec/01_complete_loop.md spec/02_ray.md
+rg -n "RolloutInferenceWorker|InferenceWorker|LearnerWorker|EnvWorkers\\.EnvWorkers|ActorWorker|RolloutWorker" spec/99_manual_notes.md spec/00_overview.md spec/04_complete_loop.md spec/02_naming.md
 ```
 
 Expected: report the terms currently present.

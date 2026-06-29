@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Diagnose whether DINO-WM imagined PPO routes match real LIBERO rollout.
+"""Diagnose whether WM imagined PPO routes match real LIBERO rollout.
 
 This is intentionally a diagnostic script, not a training/eval path.  For a
 fixed LIBERO task/init state it:

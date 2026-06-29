@@ -17,7 +17,7 @@ Reports cos sim + MSE per env-step (averaged over demos) for both modes.
 
 Usage:
     python -m dreamervla.diagnostics.eval_chunkwm_closeloop \
-        --ckpt data/outputs/worldmodel/dinowm_chunk/<run>/ckpt/latest.ckpt \
+        --ckpt /path/to/wm_run/ckpt/latest.ckpt \
         --num-demos 16 --num-chunks 20 --device cuda:4
 """
 

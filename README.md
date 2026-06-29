@@ -63,19 +63,19 @@ docs/               documentation index, references, tutorials, reports, papers
 | Preprocess | `bash scripts/preprocess/prepare_libero_data.sh task=libero_goal` |
 | VLA SFT | `bash scripts/train_vla.sh experiment=vla_rynnvla_action_head task=libero_goal` |
 | One-trajectory VLA | `bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal` |
-| World model | `bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal` |
+| World model | `bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal` |
 | Classifier | `bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk` |
-| DreamerVLA | `bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_dino_wm_lumos task=libero_goal` |
+| DreamerVLA | `bash scripts/train_dreamervla.sh experiment=dreamervla_rynn_wm_lumos task=libero_goal` |
 | Eval | `bash scripts/eval_libero_vla.sh gpus=0 eval.ckpt_path=<ckpt> eval.ckpt_kind=vla` |
 
 Common overrides:
 
 ```bash
 DVLA_DATA_ROOT=data
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 run_tag=my_run
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
   training.out_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/<stage>/<run>"
 ```
 

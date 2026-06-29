@@ -1,3 +1,11 @@
+# Historical Prompt Reference
+
+This file is historical/reference prompt context.
+
+It is not current architecture source of truth. Use it only to understand earlier task framing; current architecture facts live in `spec/README.md`, `00_overview.md` through `05_ray_runtime.md`, and the highest-priority user guidance in `99_manual_notes.md`.
+
+---
+
 实现 [明确目标]；
 完成标准是 [测试/构建/指标/产物] 通过；
 不要修改 [边界/公共 API/数据库 schema]；

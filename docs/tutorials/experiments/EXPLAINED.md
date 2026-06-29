@@ -43,9 +43,9 @@ snake_case `task=` token with the CamelCase artifact directory.
   one-trajectory baseline (discrete tokens, not the L1 Gaussian route — the L1 route is
   a separate, not-yet-validated gap).
 
-## World model architecture (DINO-WM chunk predictor)
+## World model architecture (WM chunk predictor)
 
-The world model is the DINO-WM paradigm migrated onto **discrete** OpenVLA-OFT latents
+The world model is the WM paradigm migrated onto **discrete** OpenVLA-OFT latents
 (no L1 head). The action is encoded and concatenated to every obs token channel;
 `predict_next_chunk` rolls K env-steps autoregressively. Training uses `num_hist=3`
 autoregressive recursion (a 3-term window, free-running).

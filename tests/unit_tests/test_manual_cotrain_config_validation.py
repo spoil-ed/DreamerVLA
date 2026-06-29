@@ -39,6 +39,53 @@ def test_manual_cotrain_allows_zero_gpu() -> None:
     validate_cfg(_cfg(ngpu=0))
 
 
+def test_manual_cotrain_rejects_negative_gpu_count() -> None:
+    cfg = _cfg(ngpu=-1)
+    with pytest.raises(ValueError, match="manual_cotrain.ngpu"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_negative_task_id() -> None:
+    cfg = _cfg(task_id=-1)
+    with pytest.raises(ValueError, match="manual_cotrain.task_id"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_negative_env_rollout_timeout() -> None:
+    cfg = _cfg(env_rollout_timeout_s=-1.0)
+    with pytest.raises(ValueError, match="manual_cotrain.env_rollout_timeout_s"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_fractional_negative_env_rollout_timeout() -> None:
+    cfg = _cfg(env_rollout_timeout_s=-0.5)
+    with pytest.raises(ValueError, match="manual_cotrain.env_rollout_timeout_s"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_negative_checkpoint_interval() -> None:
+    cfg = _cfg(checkpoint_every=-1)
+    with pytest.raises(ValueError, match="manual_cotrain.checkpoint_every"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("ngpu", 1.5),
+        ("task_id", 1.5),
+        ("checkpoint_every", 1.5),
+    ),
+)
+def test_manual_cotrain_rejects_fractional_discrete_non_negative_controls(
+    field: str,
+    value: float,
+) -> None:
+    cfg = _cfg(**{field: value})
+    with pytest.raises(ValueError, match=f"manual_cotrain.{field}"):
+        validate_cfg(cfg)
+
+
 def test_manual_cotrain_rejects_non_divisible_chunk_steps() -> None:
     cfg = _cfg(max_steps_per_rollout_epoch=5, num_action_chunks=2)
     with pytest.raises(ValueError, match="must be divisible"):

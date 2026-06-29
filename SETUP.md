@@ -353,7 +353,7 @@ OFT_IMAGE_KEYS=agentview_rgb \
 bash scripts/preprocess/35_oft_action_hidden.sh
 ```
 
-Scheme B input-token sidecars feed frame-level DINO-WM routes.  RynnVLA uses
+Scheme B input-token sidecars feed frame-level WM routes.  RynnVLA uses
 current-frame Chameleon VQ input-token embeddings; OFT uses current-frame
 projected vision patch tokens:
 
@@ -388,7 +388,7 @@ training the WM on them, point the route at the sidecar and align the expected
 attrs, e.g.:
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=oft_discrete_token_world_model_wm_chunk task=libero_goal \
   task.openvla_oft.ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" \
   task.openvla_oft.action_hidden_dir="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/<task>/<sidecar_dir>" \
   task.openvla_oft.expected_action_head_type=oft_discrete_token \
@@ -399,14 +399,14 @@ bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk task=libero_goa
 World model:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=16 \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
 
 # Scheme B frame-token WM:
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk_input_tokens task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk_input_tokens task=libero_goal \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf"
-bash scripts/train_wm.sh experiment=oft_world_model_dinowm_chunk_input_tokens task=libero_goal
+bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk_input_tokens task=libero_goal
 ```
 
 Classifier:
@@ -421,7 +421,7 @@ DreamerVLA:
 
 ```bash
 bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_lumos \
+  experiment=dreamervla_rynn_wm_lumos \
   task=libero_goal \
   gpus=0,1,2,3 ngpu=4 batch_size=4 \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
@@ -430,7 +430,7 @@ bash scripts/train_dreamervla.sh \
 
 # Scheme B uses a bridge actor from frame tokens to action slots:
 bash scripts/train_dreamervla.sh \
-  experiment=dreamervla_rynn_dino_wm_lumos_input_tokens \
+  experiment=dreamervla_rynn_wm_lumos_input_tokens \
   task=libero_goal \
   task.vla_ckpt_path="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/vla/<run>/checkpoints/latest_hf" \
   init.world_model_state_ckpt="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/outputs/worldmodel/<run>/checkpoints/latest.ckpt" \
@@ -498,6 +498,6 @@ test -d "${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/processed_data/libero_goal/no_noop
 Smoke train:
 
 ```bash
-bash scripts/train_wm.sh experiment=world_model_dinowm_chunk task=libero_goal \
+bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_goal \
   out_dir=/tmp/dvla_wm_smoke max_steps=1 num_workers=0
 ```

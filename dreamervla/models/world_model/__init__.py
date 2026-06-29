@@ -15,6 +15,8 @@ from .dreamer_v3_token_world_model import DreamerV3TokenWorldModel
 from .reward_heads import BinaryRewardHead, SymexpTwoHotHead
 from .tssm_backbone_world_model import TSSMBackboneWorldModel
 from .tssm_token_backbone_world_model import TSSMTokenBackboneWorldModel
+from .wm import WorldModel
+from .wm_chunk import ChunkAwareWorldModel
 
 __all__ = [
     "BaseWorldModel",
@@ -26,6 +28,8 @@ __all__ = [
     "DreamerV3TokenWorldModel",
     "DinoWMWorldModel",
     "ChunkAwareDinoWMWorldModel",
+    "WorldModel",
+    "ChunkAwareWorldModel",
     "BinaryRewardHead",
     "SymexpTwoHotHead",
     "TSSMBackboneWorldModel",

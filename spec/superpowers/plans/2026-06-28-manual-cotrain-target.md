@@ -13,7 +13,7 @@
 ## Source Of Truth
 
 - `spec/99_manual_notes.md` is the implementation target.
-- `spec/02_ray.md` defines the same target graph and explicitly lists the current-code gap.
+- `spec/04_complete_loop.md` defines the target graph and records the current manual cotrain route.
 - Existing `OnlineCotrainRayRunner` is only a reference for config loading, checkpoints, logging, rollout dump, and Ray startup patterns.
 - Existing `dreamervla/algorithms/ppo/grpo.py` PPO helpers are reused for ratio/clip/group advantage; do not duplicate PPO math.
 - Existing `dreamervla/hybrid_engines/weight_syncer/patch.py` is reused for Actor -> Rollout patch sync.

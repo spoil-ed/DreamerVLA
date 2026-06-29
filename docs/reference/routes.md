@@ -26,9 +26,9 @@ bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
 | --- | --- | --- |
 | VLA SFT | `vla_rynnvla_action_head`, `vla_sft_one_trajectory` | `VLASFTRunner` |
 | OpenVLA-OFT SFT | `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory`, `openvla_oft_hdf5_one_trajectory_l1` | `OpenVLAOFTRunner` |
-| world model | `world_model_dinowm_step`, `world_model_dinowm_chunk`, `oft_world_model_dinowm_chunk`, `oft_discrete_token_world_model_dinowm_chunk` | `LatentWMRunner` |
+| world model | `world_model_wm_step`, `world_model_wm_chunk`, `oft_world_model_wm_chunk`, `oft_discrete_token_world_model_wm_chunk` | `LatentWMRunner` |
 | classifier | `latent_classifier_libero_goal_chunk`, `oft_latent_classifier_chunk` | `LatentClassifierRunner` |
-| DreamerVLA offline/online LUMOS | `dreamervla_rynn_dino_wm_lumos`, `dreamervla_oft_dino_wm_lumos`, `dreamervla_oft_discrete_token_dino_wm_lumos` | `JointDreamerVLARunner` |
+| DreamerVLA offline/online LUMOS | `dreamervla_rynn_wm_lumos`, `dreamervla_oft_wm_lumos`, `dreamervla_oft_discrete_token_wm_lumos` | `JointDreamerVLARunner` |
 | eval | `eval_libero_vla` | `EmbodiedEvalRunner` |
 
 ## Optional Or Legacy Routes

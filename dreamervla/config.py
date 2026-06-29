@@ -376,7 +376,7 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
     if action_emb_dim is None:
         raise ValueError(
             f"{key}.action_emb_dim must be set for "
-            "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning"
+            "ChunkAwareDinoWMWorldModel WM concat conditioning"
         )
     if action_emb_dim < 1:
         raise ValueError(f"{key}.action_emb_dim must be > 0, got {action_emb_dim}")
@@ -421,7 +421,7 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
         f"{key}.proprio_emb_dim * {key}.num_proprio_repeat + "
         f"{key}.lang_emb_dim * {key}.num_lang_repeat + "
         f"{key}.action_emb_dim * {key}.num_action_repeat for "
-        "ChunkAwareDinoWMWorldModel DINO-WM concat conditioning "
+        "ChunkAwareDinoWMWorldModel WM concat conditioning "
         f"({model_dim} != {token_dim} + "
         f"{proprio_emb_dim} * {num_proprio_repeat} + "
         f"{lang_emb_dim} * {num_lang_repeat} + "
@@ -559,6 +559,10 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
     _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
+    _require_non_negative_int_if_present(cfg, "manual_cotrain.ngpu")
+    _require_non_negative_int_if_present(cfg, "manual_cotrain.task_id")
+    _require_non_negative_if_present(cfg, "manual_cotrain.env_rollout_timeout_s")
+    _require_non_negative_int_if_present(cfg, "manual_cotrain.checkpoint_every")
     _require_positive_if_present(cfg, "manual_cotrain.global_steps")
     _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
     _require_positive_if_present(cfg, "manual_cotrain.sync_every")
@@ -1006,6 +1010,23 @@ def _require_positive_if_present(cfg: DictConfig, key: str) -> None:
         return
     if int(value) <= 0:
         raise ValueError(f"{key} must be > 0, got {value!r}")
+
+
+def _require_non_negative_if_present(cfg: DictConfig, key: str) -> None:
+    value = OmegaConf.select(cfg, key, default=None)
+    if value is None:
+        return
+    if float(value) < 0:
+        raise ValueError(f"{key} must be >= 0, got {value!r}")
+
+
+def _require_non_negative_int_if_present(cfg: DictConfig, key: str) -> None:
+    value = OmegaConf.select(cfg, key, default=None)
+    if value is None:
+        return
+    int_value = int(value)
+    if float(value) != float(int_value) or int_value < 0:
+        raise ValueError(f"{key} must be a non-negative integer, got {value!r}")
 
 
 def _normalize_backends(value: Any) -> list[str]:

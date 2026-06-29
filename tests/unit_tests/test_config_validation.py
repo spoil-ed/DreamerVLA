@@ -550,6 +550,76 @@ def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
         validate_cfg(cfg)
 
 
+def test_config_validation_messages_use_role_based_wm_wording() -> None:
+    config_source = (
+        Path(__file__).resolve().parents[2] / "dreamervla" / "config.py"
+    ).read_text(encoding="utf-8")
+    assert "DINO-WM concat conditioning" not in config_source
+
+
+def test_worldmodel_config_comments_use_role_based_wm_wording() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs" / "worldmodel"
+    offenders = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in config_dir.glob("*.yaml")
+        if "DINO-WM" in path.read_text(encoding="utf-8")
+    }
+    assert offenders == {}
+
+
+def test_dreamervla_config_comments_use_role_based_wm_wording() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs" / "dreamervla"
+    offenders = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in config_dir.glob("*.yaml")
+        if "DINO-WM" in path.read_text(encoding="utf-8")
+    }
+    assert offenders == {}
+
+
+def test_classifier_config_comments_use_role_based_wm_wording() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs" / "classifier"
+    offenders = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in config_dir.glob("*.yaml")
+        if "DINO-WM" in path.read_text(encoding="utf-8")
+    }
+    assert offenders == {}
+
+
+def test_online_cotrain_oft_action_hidden_comments_use_role_based_wm_alias() -> None:
+    config_path = (
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "experiment"
+        / "online_cotrain_oft_action_hidden.yaml"
+    )
+    comment_text = "\n".join(
+        line for line in config_path.read_text(encoding="utf-8").splitlines()
+        if line.lstrip().startswith("#")
+    )
+
+    assert "experiment=dreamervla_oft_wm_lumos" in comment_text
+    assert "experiment=dreamervla_oft_dino_wm_lumos" not in comment_text
+    assert "DINO-WM" not in comment_text
+
+
+def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:
+    config_path = (
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "task"
+        / "openvla_onetraj_coldstart_libero.yaml"
+    )
+    comment_text = "\n".join(
+        line for line in config_path.read_text(encoding="utf-8").splitlines()
+        if line.lstrip().startswith("#")
+    )
+
+    assert "experiment=oft_discrete_token_world_model_wm_chunk" in comment_text
+    assert "experiment=oft_discrete_token_world_model_dinowm_chunk" not in comment_text
+
+
 def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> None:
     cfg = OmegaConf.create(
         {

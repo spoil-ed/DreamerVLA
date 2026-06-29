@@ -177,7 +177,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 ## Metrics, Checkpoints, Evaluation
 
 - Route metrics through `BaseRunner.log_metrics`.
-- Use namespaces: `train/`, `eval/`, `env/`, `rollout/`, `time/`, and `sync/`.
+- Use namespaces: `train/`, `eval/`, `env/`, `rollout/`, `replay_buffer/`,
+  `time/`, and `sync/`.
 - Logger backends come from `runner.logger.logger_backends`; defaults use TensorBoard
   and W&B where the active experiment declares them.
 - Base checkpoints use `${training.out_dir}/checkpoints/global_step_<N>/`.

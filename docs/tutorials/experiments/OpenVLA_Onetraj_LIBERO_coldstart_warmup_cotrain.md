@@ -26,7 +26,7 @@ task=goal|object|spatial|10
 先进入仓库，设置数据目录，安装环境：
 
 ```bash
-cd /mnt/data/spoil/workspace/DreamerVLA
+cd DreamerVLA
 export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-$(pwd -P)/data}"
 
 bash scripts/install_env.sh

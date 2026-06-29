@@ -28,7 +28,7 @@ class _DinoStyleFeedForward(nn.Module):
 
 
 class _DinoStyleAttention(nn.Module):
-    """DINO-WM-style attention with residual dim independent of QKV inner dim."""
+    """WM-style attention with residual dim independent of QKV inner dim."""
 
     def __init__(
         self,
@@ -142,11 +142,11 @@ class _DinoStyleTransformer(nn.Module):
 
 
 class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
-    """Chunk WM over original VLA hidden tokens with DINO-WM-style conditioning.
+    """Chunk WM over original VLA hidden tokens with WM-style conditioning.
 
     The transition model keeps each observation token in source token space and
     concatenates an encoded action to every observation token channel, matching
-    the default DINO-WM ``concat_dim=1`` pattern.  A chunk is rolled out
+    the default WM ``concat_dim=1`` pattern.  A chunk is rolled out
     autoregressively: every step predicts ``e_{t+1}`` from the latest
     ``num_hist`` latent frames conditioned on the current action, then slides
     the predicted observation tokens into the next history.
@@ -262,7 +262,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         self.model_dim = int(requested_model_dim)
         if self.model_dim != expected_model_dim:
             raise ValueError(
-                "ChunkAwareDinoWMWorldModel uses DINO-WM concat conditioning; "
+                "ChunkAwareDinoWMWorldModel uses WM concat conditioning; "
                 "set model_dim == token_dim + proprio_emb_dim * num_proprio_repeat "
                 "+ lang_emb_dim * num_lang_repeat + action_emb_dim * "
                 "num_action_repeat, "
@@ -363,7 +363,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             self.freeze_input_embeddings()
 
     # ------------------------------------------------------------------ #
-    # DINO-WM-style action concat transition                             #
+    # WM-style action concat transition                                  #
     # ------------------------------------------------------------------ #
     def _module_dtype(self) -> torch.dtype:
         return self.action_proj[-1].weight.dtype
@@ -478,7 +478,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             actions = lang_emb
             lang_emb = None
         if actions is None:
-            raise ValueError("actions are required for DINO-WM conditioning")
+            raise ValueError("actions are required for WM conditioning")
         actions = self._validate_actions(actions, int(obs_tokens.shape[1]))
         parts = [obs_tokens]
         if self.lang_condition_dim > 0:
@@ -553,7 +553,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         flat = z.reshape(bsz, steps * slots, dim)
         if flat.shape[1] > self.pos_embedding.shape[1]:
             raise ValueError(
-                "ChunkAwareDinoWMWorldModel DINO-WM predictor is configured for "
+                "ChunkAwareDinoWMWorldModel WM predictor is configured for "
                 f"num_hist={self.pos_context_len} frames; got {steps} frames"
             )
         flat = flat + self.pos_embedding[:, : flat.shape[1]].to(
@@ -1126,7 +1126,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         """Load a chunk WM checkpoint using config stored in the checkpoint.
 
         This helper expects a checkpoint whose config matches the current
-        DINO-WM-style concat-action architecture.  Older projection or
+        WM-style concat-action architecture.  Older projection or
         mask-token chunk checkpoints are not shape-compatible.
         """
         sd = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
