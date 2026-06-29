@@ -179,28 +179,32 @@ checkpoints/manual_cotrain_step_<N>/manual_cotrain_manifest.json
 
 其中 `manual_cotrain_manifest.json` 是 resume 的索引文件，记录 `global_step`、actor/rollout/world-model/classifier 版本和 replay 信息。
 
-## W&B Offline Relay Sync (Air-Gapped GPU Training)
+## W&B Offline Sync (Shared Disk, Air-Gapped GPU)
 
-这一节解决一个常见部署问题：**GPU 训练机不能联网，CPU 机器可以联网**。GPU 机只能把
-W&B 日志写成本地 offline run，CPU "relay" 机器周期性地把这些 offline run 拉过来再上传到
-W&B cloud。
+这一节解决一个常见部署问题：**GPU 训练机不能联网，但和一台能联网的机器共享同一块硬盘**
+（NFS / 共享挂载）。GPU 机只能把 W&B 日志写成本地 offline run；在线机器**直接读取共享盘上
+的这些 offline run**，周期性地用 `wandb sync` 上传到 W&B cloud。因为是共享盘，**不需要 SSH、
+不需要 rsync、也不需要任何拷贝**——在线机直接对共享盘上的目录跑 `wandb sync` 就行。
 
 它是一个独立的辅助工具，不改训练流程：
 
-- `dreamervla.diagnostics.wandb_relay_sync` — relay 主程序（周期性 rsync + `wandb sync`）。
+- `dreamervla.diagnostics.wandb_relay_sync` — 周期性对共享盘上的 `wandb/` 目录跑
+  `wandb sync --sync-all`（带 lock、日志、dry-run、错误隔离）。
 - `scripts/run_wandb_relay_sync.sh` — 启动模板，先改占位符再运行。
 
-注意这是 **near-real-time（近实时）**，不是严格实时：CPU 机每隔一段时间同步一轮。每轮独立、
-可恢复、幂等；某一轮失败不会影响 GPU 机的训练，下一轮继续重试。
+`wandb sync --sync-all` 是**幂等**的：某个 offline run 成功上传后，wandb 会在它旁边写一个
+`.synced` 标记，下一轮就跳过它。所以这个循环只会上传**尚未同步过的 run**，不会重复上传。
+某一轮失败也不会影响 GPU 机的训练，下一轮继续重试。
 
-### GPU 机：写本地 offline run（训练命令不用改）
+### GPU 机：把 offline run 写到共享盘（训练命令不用改）
 
-训练命令本身不变，只要保证 W&B 写到本地、用 offline 模式。两种方式任选其一：
+训练命令本身不变，只要保证两点：W&B 用 **offline 模式**，且 run 的输出目录落在**共享盘**上
+（这样在线机才看得到）。让 `DVLA_DATA_ROOT` 指向共享盘即可。
 
 仓库原生方式（推荐，走 Hydra logger 组）：
 
 ```bash
-# 在已有训练命令后追加 logger 覆盖即可
+export DVLA_DATA_ROOT=/shared/DreamerVLA/data          # 共享盘上的输出根
 bash scripts/e2e_manual_cotrain_async.sh \
   resume=false gpus=1,2,3,4,5 \
   logger=tensorboard_wandb runner.logger.wandb_mode=offline \
@@ -211,7 +215,7 @@ bash scripts/e2e_manual_cotrain_async.sh \
 
 ```bash
 export WANDB_MODE=offline
-export WANDB_DIR="${DVLA_DATA_ROOT}/outputs"     # 或你明确指定的日志目录
+export WANDB_DIR=/shared/DreamerVLA/data/outputs       # 共享盘上的日志目录
 export WANDB_PROJECT="dreamervla"
 export WANDB_ENTITY="your-wandb-entity"
 ```
@@ -219,39 +223,35 @@ export WANDB_ENTITY="your-wandb-entity"
 offline run 会写到 cotrain run 的日志目录下，实际落点形如：
 
 ```text
-${DVLA_DATA_ROOT}/outputs/<run>/cotrain/log/wandb/.../wandb/offline-run-*
+/shared/DreamerVLA/data/outputs/<run>/cotrain/log/wandb/all/wandb/offline-run-*
 ```
 
-其中**直接包含 `offline-run-*` 的那个 `wandb/` 目录**，就是后面 relay 要填的
-`--remote-wandb-dir`。GPU 机这边到此为止，relay 只读取、绝不修改它。
+其中**直接包含 `offline-run-*` 的那个 `wandb/` 目录**，就是后面要填的 `--wandb-dir`。
 
-### CPU relay 机：登录 W&B 并准备 SSH 访问
+### 在线机：登录 W&B
 
 ```bash
 pip install wandb          # 确保有 `wandb` 命令
 wandb login                # 或：export WANDB_API_KEY=...（只在本机，别写进 repo）
 ```
 
-确认能从 relay 机用 SSH/rsync 访问 GPU 机（建议配置免密钥登录）：
+确认这台机器能在共享盘上读到 offline run（`--wandb-dir` 要填**在线机这边能读到 `offline-run-*`
+的那个 `wandb/` 目录**，挂载路径若和 GPU 机不同以在线机为准）：
 
 ```bash
-ssh -p 22 your-remote-user@gpu-host.example.com 'ls /path/to/.../cotrain/log/wandb'
+ls /shared/DreamerVLA/data/outputs/<run>/cotrain/log/wandb/all/wandb
 ```
 
-如果**不能直接 SSH**，可以用 NFS / 共享文件系统 / 其他文件同步方式，把 GPU 机的 `wandb/`
-目录暴露到 relay 机本地，再把 `--remote-host` 指向可达地址、`--remote-wandb-dir` 指向能读到
-offline run 的路径即可。
+### dry-run 自检（不上传）
 
-### dry-run 自检（不连接、不上传）
-
-先编辑 `scripts/run_wandb_relay_sync.sh` 顶部的占位符（host、user、路径、project、entity），
-然后做一次 dry-run，确认拼出来的 `rsync` 和 `wandb sync` 命令正确：
+先编辑 `scripts/run_wandb_relay_sync.sh` 顶部的占位符（`WANDB_DIR`、project、entity），
+然后做一次 dry-run，确认拼出来的 `wandb sync` 命令正确：
 
 ```bash
 bash scripts/run_wandb_relay_sync.sh --dry-run --once
 ```
 
-dry-run 只打印将要执行的命令，不会连接 GPU 机，也不会上传 W&B。
+dry-run 只打印将要执行的命令，不会上传 W&B。
 
 ### 单次真实同步（第一次验证）
 
@@ -259,8 +259,8 @@ dry-run 只打印将要执行的命令，不会连接 GPU 机，也不会上传 
 bash scripts/run_wandb_relay_sync.sh --once
 ```
 
-它会拉取一次远端 `wandb/` 到本地 mirror，然后 `wandb sync` 上传。退出码 `0` 表示这一轮
-成功，非 `0` 表示这一轮失败（看日志原因）。
+它会对共享盘上的 `wandb/` 跑一次 `wandb sync`，把尚未同步的 offline run 上传。退出码 `0`
+表示这一轮成功，非 `0` 表示这一轮失败（看日志原因）。
 
 ### 长期运行
 
@@ -274,22 +274,27 @@ bash scripts/run_wandb_relay_sync.sh
 nohup bash scripts/run_wandb_relay_sync.sh > wandb_relay.out 2>&1 &
 ```
 
-Ctrl-C 或 `kill <pid>`（SIGTERM）会在当前一轮后干净退出。本地 mirror 目录默认不清理，
-也绝不会删除 GPU 机上的任何文件。
+Ctrl-C 或 `kill <pid>`（SIGTERM）会在当前一轮后干净退出。它绝不会删除或改动 GPU 机写的
+run 数据；只有 wandb 自己会在 run 目录旁写 `.synced` 标记和 `debug-cli.log`（见 FAQ）。
 
 ### 常见问题（FAQ）
 
-- **`wandb: command not found`**：relay 机没装 wandb。`pip install wandb`，或用
+- **`wandb: command not found`**：在线机没装 wandb。`pip install wandb`，或用
   `--wandb-bin /full/path/to/wandb` 指定绝对路径。
-- **上传失败、提示未登录 / API key 错误**：在 relay 机执行 `wandb login`（或正确设置
-  `WANDB_API_KEY`）。API key 只放 relay 机，不要写进 repo、脚本或配置。
+- **上传失败、提示未登录 / API key 错误**：在在线机执行 `wandb login`（或正确设置
+  `WANDB_API_KEY`）。API key 只放在线机，不要写进 repo、脚本或配置。
 - **云端找不到 run**：通常是 `--wandb-project` / `--wandb-entity` 配错。确认它们和你
-  W&B 账号下的 project/entity 一致；relay 命令会显式带上 `-p`/`-e`。
-- **rsync permission denied**：relay 机没有读 GPU 机目录的权限。确认 SSH 用户、SSH key、
-  以及该用户对 `--remote-wandb-dir` 有读权限。relay 只读，不需要写权限。
-- **正在写入的 run 第一轮上传不完整**：训练还在写的 offline run，第一轮可能只传到当时的
-  进度，这是正常的；后续轮次会继续同步，训练结束后的某一轮会把它补全。
-- **不小心启动了多个 relay**：本地 mirror 下的 lock file（默认
-  `<local-mirror-dir>/.wandb_relay.lock`）会阻止并发；第二个进程会报错退出。
-- **它是 near-real-time，不是实时**：每轮之间有 `--interval` 间隔；需要更快就调小 interval，
-  但这只是缩短延迟，不会变成严格实时流式上传。
+  W&B 账号下的 project/entity 一致；命令会显式带上 `-p`/`-e`。
+- **`--wandb-dir` 找不到 / 读不到**：确认共享盘已挂载、路径指向**直接包含 `offline-run-*`
+  的那个 `wandb/` 目录**，且当前用户对它有读权限。
+- **会不会动到 GPU 的 run 数据**：本工具自身不写 run；但 `wandb sync` 成功后会在 run 目录旁
+  写一个很小的 `.synced` 标记（用于幂等跳过）和一个 `debug-cli.log`。这两者都不碰 run 的
+  `.wandb` 数据本身。如果完全不想在共享盘上落任何额外文件，可以先把 `wandb/` 拷到本机再 sync。
+- **每个 run 只会上传一次（重要）**：`--sync-all` 上传成功后即标记 `.synced` 并在后续轮次
+  跳过它。所以**已经结束的 run 会被完整上传**；而一个**还在写的长 run**，如果在写到一半时被
+  同步，只会传到当时的进度、之后不再补传。若想让一个长 run 在训练过程中持续增量上传，请改用
+  `wandb sync --append`（本工具默认用 `--sync-all`，更适合按 run 粒度的周期上传）。
+- **不小心启动了多个进程**：lock file（默认 `<wandb-dir>/.wandb_relay.lock`）会阻止并发；
+  第二个进程会报错退出。可用 `--lock-file` 指定到本机本地路径。
+- **它是周期上传，不是实时流**：每轮之间有 `--interval` 间隔；调小 interval 只是缩短延迟，
+  不会变成严格实时上传。
