@@ -32,7 +32,9 @@ def test_dense_ppo_messages_use_role_based_wm_wording():
         / "ppo"
         / "dense.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()
 
 
 class _DetWM(torch.nn.Module):

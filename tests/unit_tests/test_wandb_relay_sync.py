@@ -1,23 +1,9 @@
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = REPO_ROOT / "scripts" / "wandb_relay_sync.py"
-
-
-def _load():
-    spec = importlib.util.spec_from_file_location("wandb_relay_sync", MODULE_PATH)
-    mod = importlib.util.module_from_spec(spec)
-    # Register before exec so @dataclass can resolve the module via sys.modules.
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-relay = _load()
+relay = importlib.import_module("dreamervla.diagnostics.wandb_relay_sync")
 
 
 def _min_argv(**over):

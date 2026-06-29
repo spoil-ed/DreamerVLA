@@ -24,7 +24,7 @@ hydra:
   output_subdir: .hydra
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/dinowm_chunk/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/chunk/${now:%Y%m%d_%H%M%S}}
   device: cuda:0
   distributed_strategy: single
   data_parallel: false
@@ -87,7 +87,7 @@ dataloader:
 world_model:
   # WM-style chunk transition: action is encoded and concatenated to every
   # obs token channel; chunk rollout is autoregressive over predicted hiddens.
-  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  _target_: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   # Close-loop multi-chunk rollout loss to cure WM-internal autoregressive drift.
   # N=4 means chunks 1..3 are rolled forward from chunk 0's predicted hidden

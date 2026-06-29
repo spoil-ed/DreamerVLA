@@ -14,7 +14,7 @@ from dreamervla.dataset.pixel_sequence_dataset import PixelSequenceDataset
 
 CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "configs")
 QB = [
-    "experiment=oft_world_model_dinowm_chunk",
+    "experiment=oft_world_model_chunk",
     "task=openvla_onetraj_libero",
     "worldmodel=openvla_oft_input_token_chunk",
 ]

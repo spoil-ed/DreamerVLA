@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /worldmodel: rynnvla_action_step
-  - _self_

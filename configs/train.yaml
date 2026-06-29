@@ -7,4 +7,4 @@ defaults:
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb
-  - experiment: world_model_wm_chunk
+  - experiment: world_model_chunk

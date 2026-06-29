@@ -187,7 +187,7 @@ W&B cloud。
 
 它是一个独立的辅助工具，不改训练流程：
 
-- `scripts/wandb_relay_sync.py` — relay 主程序（周期性 rsync + `wandb sync`）。
+- `dreamervla.diagnostics.wandb_relay_sync` — relay 主程序（周期性 rsync + `wandb sync`）。
 - `scripts/run_wandb_relay_sync.sh` — 启动模板，先改占位符再运行。
 
 注意这是 **near-real-time（近实时）**，不是严格实时：CPU 机每隔一段时间同步一轮。每轮独立、

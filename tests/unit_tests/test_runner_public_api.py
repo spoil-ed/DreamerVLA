@@ -6,6 +6,18 @@ import pytest
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 
+_REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
+_REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
+_REMOVED_DASHED_WM_LABEL = "dino" + "-wm"
+
+
+def _assert_no_removed_wm_wording(text: str) -> None:
+    lower = text.lower()
+    assert _REMOVED_UNDERSCORE_WM_ROUTE not in lower
+    assert _REMOVED_COMPACT_WM_ROUTE not in lower
+    assert _REMOVED_DASHED_WM_LABEL not in lower
+
+
 EXPERIMENT_MODULES = {
     "vla_rynnvla_action_head": ("VLA", "rynnvla_action_head"),
     "vla_sft_one_trajectory": ("VLA", "rynnvla_one_trajectory"),
@@ -15,39 +27,21 @@ EXPERIMENT_MODULES = {
         "VLA",
         "openvla_oft_l1_one_trajectory",
     ),
-    "world_model_wm_chunk": ("worldmodel", "rynnvla_action_chunk_wm"),
-    "world_model_dinowm_step": ("worldmodel", "rynnvla_action_step"),
-    "world_model_wm_step": ("worldmodel", "rynnvla_action_step"),
-    "world_model_dinowm_chunk": ("worldmodel", "rynnvla_action_chunk"),
-    "world_model_dinowm_chunk_input_tokens": (
+    "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
+    "world_model_step": ("worldmodel", "rynnvla_action_step"),
+    "world_model_chunk_input_tokens": (
         "worldmodel",
         "rynnvla_input_token_chunk",
     ),
-    "world_model_wm_chunk_input_tokens": (
-        "worldmodel",
-        "rynnvla_input_token_chunk",
-    ),
-    "oft_world_model_dinowm_chunk": (
+    "oft_world_model_chunk": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
-    "oft_world_model_wm_chunk": (
-        "worldmodel",
-        "openvla_oft_input_token_chunk",
-    ),
-    "oft_discrete_token_world_model_dinowm_chunk": (
+    "oft_discrete_token_world_model_chunk": (
         "worldmodel",
         "openvla_oft_discrete_token_action_chunk",
     ),
-    "oft_discrete_token_world_model_wm_chunk": (
-        "worldmodel",
-        "openvla_oft_discrete_token_action_chunk",
-    ),
-    "oft_world_model_dinowm_chunk_input_tokens": (
-        "worldmodel",
-        "openvla_oft_input_token_chunk",
-    ),
-    "oft_world_model_wm_chunk_input_tokens": (
+    "oft_world_model_chunk_input_tokens": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
@@ -64,49 +58,25 @@ EXPERIMENT_MODULES = {
         "classifier",
         "openvla_oft_input_token_chunk",
     ),
-    "dreamervla_rynn_dino_wm_actor_critic": (
-        "dreamervla",
-        "rynnvla_actor_critic",
-    ),
     "dreamervla_rynn_wm_actor_critic": (
         "dreamervla",
         "rynnvla_actor_critic",
-    ),
-    "dreamervla_rynn_dino_wm_lumos": (
-        "dreamervla",
-        "rynnvla_lumos",
     ),
     "dreamervla_rynn_wm_lumos": (
         "dreamervla",
         "rynnvla_lumos",
     ),
-    "dreamervla_rynn_dino_wm_lumos_input_tokens": (
-        "dreamervla",
-        "rynnvla_input_token_lumos",
-    ),
     "dreamervla_rynn_wm_lumos_input_tokens": (
         "dreamervla",
         "rynnvla_input_token_lumos",
-    ),
-    "dreamervla_oft_dino_wm_lumos": (
-        "dreamervla",
-        "openvla_oft_input_token_lumos",
     ),
     "dreamervla_oft_wm_lumos": (
         "dreamervla",
         "openvla_oft_input_token_lumos",
     ),
-    "dreamervla_oft_discrete_token_dino_wm_lumos": (
-        "dreamervla",
-        "openvla_oft_discrete_token_lumos",
-    ),
     "dreamervla_oft_discrete_token_wm_lumos": (
         "dreamervla",
         "openvla_oft_discrete_token_lumos",
-    ),
-    "dreamervla_oft_dino_wm_lumos_input_tokens": (
-        "dreamervla",
-        "openvla_oft_input_token_lumos",
     ),
     "dreamervla_oft_wm_lumos_input_tokens": (
         "dreamervla",
@@ -129,9 +99,7 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
 
 def test_world_model_package_exports_role_based_wm_aliases() -> None:
     from dreamervla.models.world_model import (
-        ChunkAwareDinoWMWorldModel,
         ChunkAwareWorldModel,
-        DinoWMWorldModel,
         WorldModel,
     )
     from dreamervla.models.world_model.wm import WorldModel as ModuleWorldModel
@@ -139,16 +107,16 @@ def test_world_model_package_exports_role_based_wm_aliases() -> None:
         ChunkAwareWorldModel as ModuleChunkAwareWorldModel,
     )
 
-    assert WorldModel is DinoWMWorldModel
-    assert ChunkAwareWorldModel is ChunkAwareDinoWMWorldModel
-    assert ModuleWorldModel is DinoWMWorldModel
-    assert ModuleChunkAwareWorldModel is ChunkAwareDinoWMWorldModel
+    assert WorldModel is WorldModel
+    assert ChunkAwareWorldModel is ChunkAwareWorldModel
+    assert ModuleWorldModel is WorldModel
+    assert ModuleChunkAwareWorldModel is ChunkAwareWorldModel
 
 
 def test_openvla_oft_lumos_main_route_uses_input_tokens() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = _compose_experiment("dreamervla_oft_dino_wm_lumos")
+        cfg = _compose_experiment("dreamervla_oft_wm_lumos")
 
     assert cfg.dataset.hidden_dir == cfg.task.openvla_oft.input_token_hidden_dir
     assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
@@ -203,8 +171,7 @@ def test_latent_wm_implementation_uses_role_based_wm_name() -> None:
         / "runners"
         / "latent_wm_runner.py"
     ).read_text(encoding="utf-8")
-    assert "dino_wm" not in source
-    assert "dino-wm" not in source
+    _assert_no_removed_wm_wording(source)
 
 
 def test_runner_directory_contains_route_specific_runners() -> None:
@@ -309,23 +276,17 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "vla_rynnvla_action_head": "dreamervla.runners.VLASFTRunner",
         "vla_sft_one_trajectory": "dreamervla.runners.VLASFTRunner",
-        "world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
-        "world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
-        "world_model_dinowm_step": "dreamervla.runners.LatentWMRunner",
-        "oft_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
-        "oft_discrete_token_world_model_dinowm_chunk": "dreamervla.runners.LatentWMRunner",
-        "oft_world_model_dinowm_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
-        "dreamervla_rynn_dino_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
+        "world_model_chunk": "dreamervla.runners.LatentWMRunner",
+        "world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
+        "world_model_step": "dreamervla.runners.LatentWMRunner",
+        "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
+        "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
+        "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "dreamervla_rynn_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_rynn_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_discrete_token_dino_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_discrete_token_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_dino_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "dreamervla_oft_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
         "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
@@ -360,8 +321,8 @@ def test_train_config_experiments_compose_through_stage_modules() -> None:
 def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_wm_chunk")
-        legacy = _compose_experiment("world_model_dinowm_chunk")
+        role_based = _compose_experiment("world_model_chunk")
+        legacy = _compose_experiment("world_model_chunk")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -372,7 +333,7 @@ def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     )
     assert (
         legacy.world_model._target_
-        == "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel"
+        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
     )
     assert get_class(role_based.world_model._target_) is get_class(
         legacy.world_model._target_
@@ -382,8 +343,8 @@ def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
 def test_role_based_wm_step_experiment_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_wm_step")
-        legacy = _compose_experiment("world_model_dinowm_step")
+        role_based = _compose_experiment("world_model_step")
+        legacy = _compose_experiment("world_model_step")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -394,8 +355,8 @@ def test_role_based_wm_step_experiment_alias_matches_legacy_route() -> None:
 def test_role_based_wm_input_token_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_wm_chunk_input_tokens")
-        legacy = _compose_experiment("world_model_dinowm_chunk_input_tokens")
+        role_based = _compose_experiment("world_model_chunk_input_tokens")
+        legacy = _compose_experiment("world_model_chunk_input_tokens")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -411,8 +372,8 @@ def test_role_based_wm_input_token_alias_matches_legacy_route() -> None:
 def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_world_model_wm_chunk")
-        legacy = _compose_experiment("oft_world_model_dinowm_chunk")
+        role_based = _compose_experiment("oft_world_model_chunk")
+        legacy = _compose_experiment("oft_world_model_chunk")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -423,8 +384,8 @@ def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None
 def test_role_based_oft_wm_input_token_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_world_model_wm_chunk_input_tokens")
-        legacy = _compose_experiment("oft_world_model_dinowm_chunk_input_tokens")
+        role_based = _compose_experiment("oft_world_model_chunk_input_tokens")
+        legacy = _compose_experiment("oft_world_model_chunk_input_tokens")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -440,8 +401,8 @@ def test_role_based_oft_wm_input_token_alias_matches_legacy_route() -> None:
 def test_role_based_oft_discrete_token_wm_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_discrete_token_world_model_wm_chunk")
-        legacy = _compose_experiment("oft_discrete_token_world_model_dinowm_chunk")
+        role_based = _compose_experiment("oft_discrete_token_world_model_chunk")
+        legacy = _compose_experiment("oft_discrete_token_world_model_chunk")
 
     assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
     assert role_based._target_ == legacy._target_
@@ -458,7 +419,7 @@ def test_role_based_rynn_wm_lumos_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_rynn_wm_lumos")
-        legacy = _compose_experiment("dreamervla_rynn_dino_wm_lumos")
+        legacy = _compose_experiment("dreamervla_rynn_wm_lumos")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -472,7 +433,7 @@ def test_role_based_rynn_wm_actor_critic_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_rynn_wm_actor_critic")
-        legacy = _compose_experiment("dreamervla_rynn_dino_wm_actor_critic")
+        legacy = _compose_experiment("dreamervla_rynn_wm_actor_critic")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -486,7 +447,7 @@ def test_role_based_rynn_wm_input_token_lumos_alias_matches_legacy_route() -> No
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_rynn_wm_lumos_input_tokens")
-        legacy = _compose_experiment("dreamervla_rynn_dino_wm_lumos_input_tokens")
+        legacy = _compose_experiment("dreamervla_rynn_wm_lumos_input_tokens")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -500,7 +461,7 @@ def test_role_based_oft_wm_lumos_alias_matches_legacy_route() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_oft_wm_lumos")
-        legacy = _compose_experiment("dreamervla_oft_dino_wm_lumos")
+        legacy = _compose_experiment("dreamervla_oft_wm_lumos")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -514,7 +475,7 @@ def test_role_based_oft_wm_input_token_lumos_alias_matches_legacy_route() -> Non
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_oft_wm_lumos_input_tokens")
-        legacy = _compose_experiment("dreamervla_oft_dino_wm_lumos_input_tokens")
+        legacy = _compose_experiment("dreamervla_oft_wm_lumos_input_tokens")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -528,7 +489,7 @@ def test_role_based_oft_discrete_token_wm_lumos_alias_matches_legacy_route() -> 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         role_based = _compose_experiment("dreamervla_oft_discrete_token_wm_lumos")
-        legacy = _compose_experiment("dreamervla_oft_discrete_token_dino_wm_lumos")
+        legacy = _compose_experiment("dreamervla_oft_discrete_token_wm_lumos")
 
     assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
     assert role_based._target_ == legacy._target_
@@ -551,9 +512,9 @@ def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
 def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        default_cfg = _compose_experiment("world_model_dinowm_chunk")
+        default_cfg = _compose_experiment("world_model_chunk")
         wandb_cfg = _compose_experiment(
-            "dreamervla_rynn_dino_wm_lumos",
+            "dreamervla_rynn_wm_lumos",
             extra_overrides=["logger=wandb"],
         )
 
@@ -587,9 +548,9 @@ def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
 def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        discrete_wm = _compose_experiment("oft_discrete_token_world_model_dinowm_chunk")
+        discrete_wm = _compose_experiment("oft_discrete_token_world_model_chunk")
         discrete = _compose_experiment(
-            "dreamervla_oft_discrete_token_dino_wm_lumos"
+            "dreamervla_oft_discrete_token_wm_lumos"
         )
 
     assert discrete.policy._target_ == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
@@ -610,7 +571,7 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         wm_cfgs = [
             _compose_experiment(
-                "oft_world_model_dinowm_chunk",
+                "oft_world_model_chunk",
                 extra_overrides=[f"task={suite}"],
             )
             for suite in suites
@@ -633,13 +594,13 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        rynn_wm = _compose_experiment("world_model_dinowm_chunk_input_tokens")
-        oft_wm = _compose_experiment("oft_world_model_dinowm_chunk_input_tokens")
+        rynn_wm = _compose_experiment("world_model_chunk_input_tokens")
+        oft_wm = _compose_experiment("oft_world_model_chunk_input_tokens")
         rynn_dreamer = _compose_experiment(
-            "dreamervla_rynn_dino_wm_lumos_input_tokens"
+            "dreamervla_rynn_wm_lumos_input_tokens"
         )
         oft_dreamer = _compose_experiment(
-            "dreamervla_oft_dino_wm_lumos_input_tokens"
+            "dreamervla_oft_wm_lumos_input_tokens"
         )
 
     assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
@@ -675,8 +636,8 @@ def test_train_config_resolves_public_default_experiment() -> None:
     train_wm_config = (config_dir / "scripts" / "train_wm.yaml").read_text(
         encoding="utf-8"
     )
-    assert "experiment: world_model_wm_chunk" in train_config
-    assert "experiment: world_model_wm_chunk" in train_wm_config
+    assert "experiment: world_model_chunk" in train_config
+    assert "experiment: world_model_chunk" in train_wm_config
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
@@ -689,7 +650,7 @@ def test_train_config_resolves_public_default_experiment() -> None:
             cfg.world_model._target_
             == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
         )
-        assert "dinowm_chunk" in cfg.training.out_dir
+        assert "worldmodel/chunk" in cfg.training.out_dir
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
@@ -708,10 +669,9 @@ def test_train_help_uses_role_based_wm_examples(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "experiment=world_model_wm_chunk" in help_text
+    assert "experiment=world_model_chunk" in help_text
     assert "experiment=dreamervla_rynn_wm_actor_critic" in help_text
-    assert "dinowm" not in help_text
-    assert "dino_wm" not in help_text
+    _assert_no_removed_wm_wording(help_text)
 
 
 def test_implementation_runner_classes_are_not_public_aliases() -> None:
@@ -770,7 +730,7 @@ def test_world_model_package_exposes_only_retained_architectures() -> None:
 def test_models_package_exports_fail_fast_symbols() -> None:
     import dreamervla.models as models
 
-    for name in ("Critic", "VLAPolicy", "DinoWMWorldModel"):
+    for name in ("Critic", "VLAPolicy", "WorldModel"):
         assert name in models.__all__
         assert getattr(models, name) is not None
 

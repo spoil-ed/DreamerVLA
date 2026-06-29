@@ -39,7 +39,7 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=osmesa python -m dreamervla.train \
 
 ```bash
 python -m dreamervla.train \
-  experiment=oft_discrete_token_world_model_wm_chunk \
+  experiment=oft_discrete_token_world_model_chunk \
   task=openvla_onetraj_coldstart_libero \
   task.openvla_oft.hdf5_reward_dir=/tmp/dvla_collect/reward \
   task.openvla_oft.action_hidden_dir=/tmp/dvla_collect/hidden

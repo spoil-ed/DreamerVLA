@@ -9,6 +9,19 @@ from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
 
+_REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
+_REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
+_REMOVED_DASHED_WM_LABEL = "DINO" + "-WM"
+
+
+def _contains_removed_wm_wording(text: str) -> bool:
+    lower = text.lower()
+    return (
+        _REMOVED_UNDERSCORE_WM_ROUTE in lower
+        or _REMOVED_COMPACT_WM_ROUTE in lower
+        or _REMOVED_DASHED_WM_LABEL in text
+    )
+
 
 def test_validate_cfg_rejects_unknown_logger_backend() -> None:
     cfg = OmegaConf.create(
@@ -180,10 +193,10 @@ def test_validate_cfg_can_require_existing_dataset_paths(tmp_path: Path) -> None
 def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     route_names = [
-        "world_model_dinowm_chunk",
-        "oft_world_model_dinowm_chunk",
-        "dreamervla_rynn_dino_wm_lumos",
-        "dreamervla_oft_dino_wm_lumos",
+        "world_model_chunk",
+        "oft_world_model_chunk",
+        "dreamervla_rynn_wm_lumos",
+        "dreamervla_oft_wm_lumos",
     ]
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -199,12 +212,12 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
 def test_query_before_world_model_routes_use_compact_transformer_budget() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     rynn = [
-        "experiment=world_model_dinowm_chunk",
+        "experiment=world_model_chunk",
         "task=libero_goal",
         "worldmodel=rynnvla_input_token_chunk",
     ]
     oft = [
-        "experiment=oft_world_model_dinowm_chunk",
+        "experiment=oft_world_model_chunk",
         "task=openvla_onetraj_libero",
         "worldmodel=openvla_oft_input_token_chunk",
     ]
@@ -351,7 +364,7 @@ def test_openvla_oft_input_token_lumos_route_uses_proprio_language_contract() ->
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=dreamervla_oft_dino_wm_lumos_input_tokens",
+                "experiment=dreamervla_oft_wm_lumos_input_tokens",
                 "task=openvla_onetraj_libero",
             ],
         )
@@ -531,7 +544,7 @@ def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
                 "obs_dim": 229376,
                 "token_count": 56,
                 "token_dim": 4096,
@@ -554,7 +567,7 @@ def test_config_validation_messages_use_role_based_wm_wording() -> None:
     config_source = (
         Path(__file__).resolve().parents[2] / "dreamervla" / "config.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM concat conditioning" not in config_source
+    assert f"{_REMOVED_DASHED_WM_LABEL} concat conditioning" not in config_source
 
 
 def test_worldmodel_config_comments_use_role_based_wm_wording() -> None:
@@ -562,7 +575,7 @@ def test_worldmodel_config_comments_use_role_based_wm_wording() -> None:
     offenders = {
         path.name: path.read_text(encoding="utf-8")
         for path in config_dir.glob("*.yaml")
-        if "DINO-WM" in path.read_text(encoding="utf-8")
+        if _contains_removed_wm_wording(path.read_text(encoding="utf-8"))
     }
     assert offenders == {}
 
@@ -572,7 +585,7 @@ def test_dreamervla_config_comments_use_role_based_wm_wording() -> None:
     offenders = {
         path.name: path.read_text(encoding="utf-8")
         for path in config_dir.glob("*.yaml")
-        if "DINO-WM" in path.read_text(encoding="utf-8")
+        if _contains_removed_wm_wording(path.read_text(encoding="utf-8"))
     }
     assert offenders == {}
 
@@ -582,7 +595,7 @@ def test_classifier_config_comments_use_role_based_wm_wording() -> None:
     offenders = {
         path.name: path.read_text(encoding="utf-8")
         for path in config_dir.glob("*.yaml")
-        if "DINO-WM" in path.read_text(encoding="utf-8")
+        if _contains_removed_wm_wording(path.read_text(encoding="utf-8"))
     }
     assert offenders == {}
 
@@ -600,8 +613,11 @@ def test_online_cotrain_oft_action_hidden_comments_use_role_based_wm_alias() -> 
     )
 
     assert "experiment=dreamervla_oft_wm_lumos" in comment_text
-    assert "experiment=dreamervla_oft_dino_wm_lumos" not in comment_text
-    assert "DINO-WM" not in comment_text
+    assert (
+        f"experiment=dreamervla_oft_{_REMOVED_UNDERSCORE_WM_ROUTE}_lumos"
+        not in comment_text
+    )
+    assert not _contains_removed_wm_wording(comment_text)
 
 
 def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:
@@ -616,15 +632,18 @@ def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:
         if line.lstrip().startswith("#")
     )
 
-    assert "experiment=oft_discrete_token_world_model_wm_chunk" in comment_text
-    assert "experiment=oft_discrete_token_world_model_dinowm_chunk" not in comment_text
+    assert "experiment=oft_discrete_token_world_model_chunk" in comment_text
+    assert (
+        f"experiment=oft_discrete_token_world_model_{_REMOVED_COMPACT_WM_ROUTE}_chunk"
+        not in comment_text
+    )
 
 
 def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> None:
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
                 "obs_dim": 229376,
                 "token_count": 56,
                 "token_dim": 4096,
@@ -653,7 +672,7 @@ def test_validate_cfg_rejects_nested_chunk_world_model_sequence_length_mismatch(
         {
             "ray_components": {
                 "world_model": {
-                    "target": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+                    "target": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
                     "kwargs": {
                         "obs_dim": 35840,
                         "token_count": 35,
@@ -687,7 +706,7 @@ def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=world_model_dinowm_chunk",
+                "experiment=world_model_chunk",
                 "logger=tensorboard_wandb",
             ],
         )

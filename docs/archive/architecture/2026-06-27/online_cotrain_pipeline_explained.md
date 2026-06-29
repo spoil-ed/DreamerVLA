@@ -67,7 +67,7 @@ episode 结束；`LUMOS/success_rate` 为 0 说明 classifier 在想象轨迹里
 | WM update step | `dreamervla/algorithms/dreamervla.py::world_model_pretrain_step` |
 | classifier update step | `dreamervla/runners/online_dreamervla.py::online_classifier_update_step` |
 | LUMOS / PPO update | `dreamervla/algorithms/ppo/outcome.py::dino_lumos_step` |
-| current OFT chunk WM | `dreamervla/models/world_model/dino_wm_chunk.py` |
+| current OFT chunk WM | `dreamervla/models/world_model/wm_chunk.py` |
 | success classifier | `dreamervla/models/reward/latent_success_classifier.py` |
 | pipeline experiment | `configs/experiment/online_cotrain_pipeline_oft_action_hidden.yaml` |
 | pipeline config body | `configs/dreamervla/online_cotrain_pipeline_libero_goal.yaml` |
@@ -367,7 +367,7 @@ return scalar metrics
 当前 OFT action-hidden route 使用：
 
 ```text
-ChunkAwareDinoWMWorldModel.chunk_loss
+ChunkAwareWorldModel.chunk_loss
 ```
 
 它的训练目标是 chunk dynamics：
@@ -407,7 +407,7 @@ actions 仍然来自真实 demo
 | `full_hidden_rec_loss` | `actor_hidden_states` 完整 token hidden 序列 | masked MSE | 只对启用 sequence decoder 且 batch 有完整 actor hidden 的 WM 有意义 |
 | `full_hidden_cosine_loss` | `actor_hidden_states` 完整 token hidden 序列 | masked cosine | 同上，检查完整 token 序列方向对齐 |
 
-当前 OFT chunk WM (`dino_wm_chunk.py`) 主要产出：
+当前 OFT chunk WM (`wm_chunk.py`) 主要产出：
 
 ```text
 hidden_mse

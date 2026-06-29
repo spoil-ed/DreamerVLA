@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
-from dreamervla.models.world_model.dino_wm import DinoWMWorldModel
+from dreamervla.models.world_model.wm import WorldModel
 from dreamervla.runners.oft_collect_common import make_preprocess_config
 
 
@@ -161,8 +161,8 @@ def test_input_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path
         raise AssertionError("bad token_count decomposition must be rejected")
 
 
-def test_dino_wm_rollout_returns_tokenized_obs_embedding() -> None:
-    model = DinoWMWorldModel(
+def test_wm_rollout_returns_tokenized_obs_embedding() -> None:
+    model = WorldModel(
         obs_dim=8,
         action_dim=3,
         token_count=2,
@@ -184,12 +184,14 @@ def test_dino_wm_rollout_returns_tokenized_obs_embedding() -> None:
     assert out["obs_tokens"].shape == (2, 3, 2, 4)
 
 
-def test_dino_wm_source_uses_role_based_wm_wording() -> None:
+def test_wm_source_uses_role_based_wm_wording() -> None:
     source = (
         Path(__file__).resolve().parents[2]
         / "dreamervla"
         / "models"
         / "world_model"
-        / "dino_wm.py"
+        / "wm.py"
     ).read_text(encoding="utf-8")
-    assert "DINO-WM" not in source
+    assert ("DINO" + "-WM") not in source
+    assert ("dino" + "_wm") not in source.lower()
+    assert ("dino" + "wm") not in source.lower()

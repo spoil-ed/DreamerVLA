@@ -79,9 +79,9 @@ VLA SFT:
   openvla_oft_hdf5_one_trajectory_l1
 
 World model / classifier:
-  world_model_wm_step
-  world_model_wm_chunk
-  oft_world_model_wm_chunk
+  world_model_step
+  world_model_chunk
+  oft_world_model_chunk
   latent_classifier_libero_goal_chunk
   oft_latent_classifier_chunk
 

@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
-from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
+from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -90,7 +90,7 @@ def _load_world_model_state(sd: dict, ckpt_path: Path) -> dict:
 
 def load_chunk_wm(
     ckpt_path: str, device: torch.device, config_path: str | None = None
-) -> ChunkAwareDinoWMWorldModel:
+) -> ChunkAwareWorldModel:
     ckpt_file = Path(ckpt_path)
     sd = torch.load(ckpt_file, map_location="cpu", weights_only=False)
     wm_cfg_blob = _load_world_model_config(sd, ckpt_file, config_path)
@@ -128,7 +128,7 @@ def load_chunk_wm(
     ):
         if k in wm_cfg_blob:
             kwargs[k] = wm_cfg_blob[k]
-    wm = ChunkAwareDinoWMWorldModel(chunk_size=chunk_size, **kwargs)
+    wm = ChunkAwareWorldModel(chunk_size=chunk_size, **kwargs)
     model_state = _load_world_model_state(sd, ckpt_file)
     missing, unexpected = wm.load_state_dict(model_state, strict=False)
     print(
@@ -156,7 +156,7 @@ def load_demo(
 
 
 def truncate_demo_to_wm_context(
-    wm: ChunkAwareDinoWMWorldModel,
+    wm: ChunkAwareWorldModel,
     obs: np.ndarray,
     actions: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -167,7 +167,7 @@ def truncate_demo_to_wm_context(
 
 @torch.no_grad()
 def rollout(
-    wm: ChunkAwareDinoWMWorldModel,
+    wm: ChunkAwareWorldModel,
     obs: torch.Tensor,  # [T, obs_dim] or [T,N,token_dim]
     actions: torch.Tensor,  # [T, action_dim]
     num_chunks: int,

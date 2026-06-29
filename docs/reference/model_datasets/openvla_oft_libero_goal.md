@@ -62,7 +62,7 @@ WM consumes `token_count=56 × token_dim=4096` per frame
 (`task.openvla_oft.*` in `configs/task/libero_goal.yaml`):
 
 ```bash
-bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk task=libero_goal
+bash scripts/train_wm.sh experiment=oft_world_model_chunk task=libero_goal
 # discrete sidecars: override ckpt_path / action_hidden_dir /
 # expected_action_head_type=oft_discrete_token / expected_history=1 /
 # expected_include_state=false (see SETUP.md)

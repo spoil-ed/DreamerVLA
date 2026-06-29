@@ -7,12 +7,12 @@ from dreamervla.diagnostics.eval_chunkwm_closeloop import (
     load_chunk_wm,
     truncate_demo_to_wm_context,
 )
-from dreamervla.models.world_model.dino_wm_chunk import ChunkAwareDinoWMWorldModel
+from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
 
 
 def _tiny_wm_cfg() -> dict:
     return {
-        "_target_": "dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel",
+        "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
         "chunk_size": 2,
         "obs_dim": 8,
         "action_dim": 2,
@@ -43,7 +43,7 @@ def _tiny_wm_cfg() -> dict:
 
 def test_eval_chunkwm_loader_accepts_pipeline_split_warmup_ckpt(tmp_path) -> None:
     cfg = _tiny_wm_cfg()
-    wm = ChunkAwareDinoWMWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
+    wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
 
     run_dir = tmp_path / "cotrain"
     ckpt_dir = run_dir / "ckpt"
@@ -63,7 +63,7 @@ def test_eval_chunkwm_loader_accepts_pipeline_split_warmup_ckpt(tmp_path) -> Non
 def test_eval_chunkwm_truncates_demo_to_world_model_context() -> None:
     cfg = _tiny_wm_cfg()
     cfg["max_seq_len"] = 5
-    wm = ChunkAwareDinoWMWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
+    wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
     obs = torch.zeros(12, cfg["obs_dim"]).numpy()
     actions = torch.zeros(10, cfg["action_dim"]).numpy()
 

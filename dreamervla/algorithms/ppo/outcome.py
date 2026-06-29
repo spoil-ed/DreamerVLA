@@ -9,7 +9,7 @@ places ``float(complete)`` at ``finish_step``; ``probability_outcome`` places
 the verifier's best ``p(success)`` at ``score_step``.
 
 This is the DreamerVLA-side reproduction of the LUMOS/verl PPO loop. The
-rollout drives the WM in chunk mode (``ChunkAwareDinoWMWorldModel.
+rollout drives the WM in chunk mode (``ChunkAwareWorldModel.
 predict_next_chunk``) so one WM call advances ``action_chunks_len`` env
 steps in lockstep with the RynnVLA actor's K-step action chunk.
 

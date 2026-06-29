@@ -27,10 +27,10 @@ files under `${training.out_dir}/log/wandb`. W&B defaults to online mode; set
 `runner.logger.wandb_mode=offline` for local-only W&B logs:
 
 ```bash
-python -m dreamervla.train experiment=world_model_wm_chunk
-python -m dreamervla.train experiment=world_model_wm_chunk runner.logger.wandb_mode=offline
-python -m dreamervla.train experiment=world_model_wm_chunk logger=tensorboard
-python -m dreamervla.train experiment=world_model_wm_chunk logger=wandb
+python -m dreamervla.train experiment=world_model_chunk
+python -m dreamervla.train experiment=world_model_chunk runner.logger.wandb_mode=offline
+python -m dreamervla.train experiment=world_model_chunk logger=tensorboard
+python -m dreamervla.train experiment=world_model_chunk logger=wandb
 ```
 
 Optional Ray backend resource knobs live in explicit config groups:
@@ -124,8 +124,8 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | VLA one-trajectory SFT | `scripts/train_vla.sh experiment=vla_sft_one_trajectory` | `vla_sft_one_trajectory` |
 | OpenVLA-OFT one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory` | `openvla_oft_hdf5_one_trajectory` |
 | OpenVLA-OFT L1 one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1` | `openvla_oft_hdf5_one_trajectory_l1` |
-| WM training | `scripts/train_wm.sh` | `world_model_wm_chunk` |
-| OpenVLA hidden_state WM training | `scripts/train_wm.sh experiment=oft_world_model_wm_chunk` | `oft_world_model_wm_chunk` |
+| WM training | `scripts/train_wm.sh` | `world_model_chunk` |
+| OpenVLA hidden_state WM training | `scripts/train_wm.sh experiment=oft_world_model_chunk` | `oft_world_model_chunk` |
 | DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_wm_lumos` |
 | OpenVLA hidden_state DreamerVLA | `scripts/train_dreamervla.sh experiment=dreamervla_oft_wm_lumos` | `dreamervla_oft_wm_lumos` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
@@ -139,10 +139,10 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `openvla_oft_hdf5` | `VLA/openvla_oft` |
 | `openvla_oft_hdf5_one_trajectory` | `VLA/openvla_oft_one_trajectory` |
 | `openvla_oft_hdf5_one_trajectory_l1` | `VLA/openvla_oft_l1_one_trajectory` |
-| `world_model_wm_step` | `worldmodel/rynnvla_action_step` |
-| `world_model_wm_chunk` | `worldmodel/rynnvla_action_chunk` |
-| `oft_world_model_wm_chunk` | `worldmodel/openvla_oft_input_token_chunk` |
-| `oft_discrete_token_world_model_wm_chunk` | `worldmodel/openvla_oft_discrete_token_action_chunk` |
+| `world_model_step` | `worldmodel/rynnvla_action_step` |
+| `world_model_chunk` | `worldmodel/rynnvla_action_chunk` |
+| `oft_world_model_chunk` | `worldmodel/openvla_oft_input_token_chunk` |
+| `oft_discrete_token_world_model_chunk` | `worldmodel/openvla_oft_discrete_token_action_chunk` |
 | `latent_classifier_libero_goal_chunk` | `classifier/rynnvla_action_chunk` |
 | `oft_latent_classifier_chunk` | `classifier/openvla_oft_input_token_chunk` |
 | `dreamervla_rynn_wm_actor_critic` | `dreamervla/rynnvla_actor_critic` |
@@ -187,9 +187,9 @@ Switch tasks with Hydra, for example:
 ```bash
 bash scripts/train_vla.sh task=libero_object
 bash scripts/train_vla.sh experiment=vla_sft_one_trajectory task=libero_goal
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=libero_spatial
-bash scripts/train_wm.sh experiment=world_model_wm_chunk task=rynnvla_libero
-bash scripts/train_wm.sh experiment=oft_world_model_wm_chunk task=openvla_onetraj_libero
+bash scripts/train_wm.sh experiment=world_model_chunk task=libero_spatial
+bash scripts/train_wm.sh experiment=world_model_chunk task=rynnvla_libero
+bash scripts/train_wm.sh experiment=oft_world_model_chunk task=openvla_onetraj_libero
 ```
 
 OpenVLA-OFT DreamerVLA/WM defaults use WM query-before

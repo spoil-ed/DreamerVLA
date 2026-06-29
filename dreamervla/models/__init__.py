@@ -12,11 +12,11 @@ from dreamervla.models.registry import (
     registered_model_types,
     validate_model_type,
 )
-from dreamervla.models.world_model import DinoWMWorldModel
+from dreamervla.models.world_model import WorldModel
 
 __all__ = [
     "Critic",
-    "DinoWMWorldModel",
+    "WorldModel",
     "VLAPolicy",
     "get_model",
     "register_model",

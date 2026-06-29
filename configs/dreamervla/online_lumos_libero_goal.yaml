@@ -43,7 +43,7 @@ init:
   vla_ckpt_path: ${task.vla_ckpt_path}
   encoder_state_ckpt: null
   require_encoder_state_ckpt: false
-  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_dino_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_wm_action_hidden/chunkaware_pinned/step_00017000.ckpt
   classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/libero_goal/lumos_aligned_small_tf/ckpt/best_episode_f10.9514_th0.59.ckpt
   dreamervla_state_ckpt: null
   load_dreamervla_world_model: false
@@ -96,7 +96,7 @@ dataloader:
   multiprocessing_context: forkserver
 
 world_model:
-  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  _target_: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}

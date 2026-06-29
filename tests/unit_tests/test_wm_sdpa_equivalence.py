@@ -1,6 +1,6 @@
 """CPU equivalence test for the H5 switchable SDPA attention path.
 
-The DINO-WM chunk attention (`_DinoStyleAttention`) gains an ``attn_impl`` flag
+The WM chunk attention (`_WMStyleAttention`) gains an ``attn_impl`` flag
 defaulting to ``"manual"`` (the existing hand-rolled QK^T softmax) with an opt-in
 ``"sdpa"`` path through ``F.scaled_dot_product_attention``.  With dropout disabled
 and the modules in eval mode the two paths must agree within float tolerance
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamervla.models.world_model.dino_wm_chunk import _DinoStyleAttention
+from dreamervla.models.world_model.wm_chunk import _WMStyleAttention
 
 # Float32 CPU tolerance: SDPA's fused reduction differs from the manual matmul.
 _ATOL = 1e-5
@@ -22,8 +22,8 @@ _RTOL = 1e-4
 def _make_pair(dim: int, heads: int, dim_head: int):
     """Return (manual, sdpa) attention modules sharing identical weights."""
     torch.manual_seed(0)
-    manual = _DinoStyleAttention(dim, heads=heads, dim_head=dim_head, dropout=0.0)
-    sdpa = _DinoStyleAttention(
+    manual = _WMStyleAttention(dim, heads=heads, dim_head=dim_head, dropout=0.0)
+    sdpa = _WMStyleAttention(
         dim, heads=heads, dim_head=dim_head, dropout=0.0, attn_impl="sdpa"
     )
     sdpa.load_state_dict(manual.state_dict())
@@ -33,7 +33,7 @@ def _make_pair(dim: int, heads: int, dim_head: int):
 
 
 def _reference_manual_forward(
-    module: _DinoStyleAttention,
+    module: _WMStyleAttention,
     x: torch.Tensor,
     mask: torch.Tensor | None,
 ) -> torch.Tensor:
@@ -83,7 +83,7 @@ def test_sdpa_matches_manual_with_additive_mask() -> None:
 
 def test_manual_path_is_byte_for_byte_unchanged() -> None:
     torch.manual_seed(0)
-    manual = _DinoStyleAttention(32, heads=4, dim_head=8, dropout=0.0)
+    manual = _WMStyleAttention(32, heads=4, dim_head=8, dropout=0.0)
     manual.eval()
     torch.manual_seed(3)
     x = torch.randn(2, 6, 32)
@@ -103,13 +103,13 @@ def test_manual_path_is_byte_for_byte_unchanged() -> None:
 
 
 def test_manual_is_the_default_attn_impl() -> None:
-    module = _DinoStyleAttention(32, heads=4, dim_head=8, dropout=0.0)
+    module = _WMStyleAttention(32, heads=4, dim_head=8, dropout=0.0)
     assert module.attn_impl == "manual"
 
 
 def test_invalid_attn_impl_rejected() -> None:
     try:
-        _DinoStyleAttention(32, heads=4, dim_head=8, attn_impl="bogus")
+        _WMStyleAttention(32, heads=4, dim_head=8, attn_impl="bogus")
     except ValueError:
         return
     raise AssertionError("expected ValueError for invalid attn_impl")

@@ -12,7 +12,7 @@ training:
 init:
   vla_ckpt_path: ${task.vla_ckpt_path}
   # Use the better-trained m1024 step_10000 ckpt (continued training to convergence).
-  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_dino_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/step_00010000.ckpt
+  world_model_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/worldmodel/rynn_wm_action_hidden/m1024_d6/resume_gpu7_20260524_213615/ckpt/step_00010000.ckpt
   # LatentSuccessClassifier (frozen) for the LUMOS reward. Required when
   # algorithm.update_type=LUMOS.
   classifier_state_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dreamervla/outcome_classifier/libero_goal/v2_wm_replay/best.ckpt
@@ -59,7 +59,7 @@ dataloader:
 world_model:
   # WM-style chunk variant: action is encoded and concatenated to every
   # obs token channel; predict_next_chunk rolls K env-steps autoregressively.
-  _target_: dreamervla.models.world_model.dino_wm_chunk.ChunkAwareDinoWMWorldModel
+  _target_: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
   chunk_size: ${task.legacy_action_hidden.chunk_size}
   obs_dim: ${task.legacy_action_hidden.wm_obs_dim}
   action_dim: ${task.action_dim}

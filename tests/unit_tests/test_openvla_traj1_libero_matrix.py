@@ -121,9 +121,9 @@ def test_openvla_traj1_libero_tasks_define_vla_dataset_contract(
     "experiment",
     [
         "openvla_oft_hdf5_one_trajectory",
-        "oft_discrete_token_world_model_dinowm_chunk",
-        "oft_discrete_token_world_model_wm_chunk",
-        "dreamervla_oft_discrete_token_dino_wm_lumos",
+        "oft_discrete_token_world_model_chunk",
+        "oft_discrete_token_world_model_chunk",
+        "dreamervla_oft_discrete_token_wm_lumos",
         "dreamervla_oft_discrete_token_wm_lumos",
         "online_cotrain_pipeline_oft_action_hidden",
     ],

@@ -81,6 +81,6 @@ hybrid placement modes · Channel key-routing as a target.
 DIAG-06 (doc-only diagnostics), MOD-07 (`official` OFT action-model), Pixel-WM loss scaffolding (genuinely
 diverges), ALG-02, UDA-06/04, MOD-05 (vendored OFT loader), HF `register()` triplets, JSONL `JsonLogger`,
 RUN-09, `_decode_bpe` vs reconstructor, divergent diagnostics device-resolution, KL k1 estimator.
-`ChunkAwareDinoWMWorldModel(DinoWMWorldModel)` inheritance is already swappable (not a violation).
+`ChunkAwareWorldModel(WorldModel)` inheritance is already swappable (not a violation).
 Optional **OFT Phase 5** generalization (object/spatial/10 suites) — same transformers fork + gripper fix
 should carry over; not yet run per-suite.
