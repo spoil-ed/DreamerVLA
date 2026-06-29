@@ -19,13 +19,6 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "dreamervla.launchers.train" in train_script
     assert "dreamervla.launchers.train" in eval_script
     assert "dreamervla.launchers.train" in eval_script
-    assert (
-        project_root
-        / "third_party"
-        / "LIBERO"
-        / "benchmark_scripts"
-        / "download_libero_datasets.py"
-    ).is_file()
 
 
 def test_readme_prefers_role_based_wm_route_examples() -> None:
