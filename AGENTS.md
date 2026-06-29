@@ -108,7 +108,7 @@ environment interaction.
 
 manual cotrain 实现应以同级 `RLinf` 工作区作为 Group、Worker、
 channel data flow 和 training loop 组织方式的参考实现。最接近的路线是 RLinf
-WoVR/embodiment，尤其是 `rlinf/runners/embodied_runner.py`、
+embodiment，尤其是 `rlinf/runners/embodied_runner.py`、
 `rlinf/workers/env/env_worker.py`、`rlinf/workers/rollout/hf/huggingface_worker.py`
 和 `rlinf/data/embodied_io_struct.py`。
 
