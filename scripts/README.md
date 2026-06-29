@@ -17,6 +17,7 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `collect_parallel.sh` | Data-parallel Ray cold-start collection (one job per GPU), merged into one dir for the warmup/cotrain launcher (`skip_collect=true`) |
 | `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline WM/classifier warmup |
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Pure-Hydra cold-start collection followed by offline WM/classifier warmup |
+| `e2e_manual_cotrain_async.sh` | Current manual async OpenVLA-OFT cotrain route; user supplies only `resume`, `ckpt`, and `gpus` |
 | `eval_libero_vla.sh` | LIBERO rollout eval for VLA or Dreamer checkpoints |
 | `start_ray.sh` | Start a local single-node Ray head for manual backend debugging |
 | `check_ray.sh` | Inspect the active Ray cluster status |
@@ -169,6 +170,7 @@ Check resume completeness before a long run with:
 
     bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
     bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true
+    bash scripts/e2e_manual_cotrain_async.sh resume=false gpus=1,2,3,4,5 dry_run=true
 
 ## Evaluation
 

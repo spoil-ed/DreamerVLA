@@ -810,6 +810,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "download_assets.sh",
         "e2e_coldstart_warmup_cotrain_noray.sh",
         "e2e_coldstart_warmup_cotrain_ray.sh",
+        "e2e_manual_cotrain_async.sh",
         "eval_libero_vla.sh",
         "install_env.sh",
         "preprocess_libero.sh",
