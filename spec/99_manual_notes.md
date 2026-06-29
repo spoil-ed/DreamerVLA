@@ -129,28 +129,6 @@ for rollout_epoch in 16:
 
 ## Current vs Target
 
-在这里记录当前代码与目标方案的差异。
-
-- 代码主线已对齐目标四组拓扑：
-  `ManualCotrainRayRunner` 使用 `LearnerGroup` 更新 world model/classifier，
-  `ActorGroup` 用 `EmbodiedFSDPActor` 做 VLA/FSDP 训练，`RolloutGroup` 用
-  `MultiStepRolloutWorker` 做 no-grad 推理并从 Actor 拉权重，`RealEnvGroup`/`WMEnvGroup`
-  负责真实与 imagined 环境交互。
-- Actor -> Rollout 同步已按目标边界处理：FSDP Actor 的所有 rank 参与 full state_dict
-  导出，只有 rank0 写入 WeightSyncer；Runner 不再只调用 rank0 执行同步，Rollout 端按本地
-  version 拉取最新 policy patch。
-- 真实环境 rollout 已补齐 OpenVLA-OFT query-before 主线数据流：真实 env obs 不需要预先带
-  `obs_embedding`，RolloutWorker 通过 `OFTRolloutBundle` 生成 `obs_embedding`/`lang_emb`，
-  EnvWorker 把这些 sidecar、policy/model version 写入 replay transition，并在 step 前执行
-  OpenVLA-OFT action postprocess。
-- async coldstart -> warmup -> manual cotrain launcher 已补齐主线控制：manual online command
-  使用 `manual_cotrain_ray_oft_backbone_latent`，从 warmup split ckpt 合并
-  `ray_async_init.ckpt`，按 online env-step 预算推导 `manual_cotrain.global_steps`，并避免
-  EGL nested placement 与 root `cluster.component_placement=null` 冲突。
-- 剩余差异主要是运行级验证而非代码契约：仍需要在目标 GPU/LIBERO 机器上跑完整
-  `scripts/e2e_coldstart_warmup_cotrain_ray.sh cotrain_engine=async`，确认 Ray placement、
-  EGL/MuJoCo、OpenVLA-OFT checkpoint 加载和长时间 replay 写入都稳定。
-
 ## Open Questions
 
 在这里记录需要讨论的问题。

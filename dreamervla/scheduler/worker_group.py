@@ -184,3 +184,21 @@ class WorkerGroupFuncResult:
             return True
         ready, _ = ray.wait(self.refs, num_returns=len(self.refs), timeout=0)
         return len(ready) == len(self.refs)
+
+    def ready(self) -> list[Any]:
+        """Return completed refs without blocking."""
+
+        if not self.refs:
+            return []
+        if not all(isinstance(ref, ray.ObjectRef) for ref in self.refs):
+            return list(self.refs)
+        ready, _ = ray.wait(self.refs, num_returns=len(self.refs), timeout=0)
+        return list(ready)
+
+    @staticmethod
+    def wait_refs(refs: list[Any]) -> list[Any]:
+        """Resolve a subset returned by :meth:`ready`."""
+
+        if not refs:
+            return []
+        return [ray.get(ref) if isinstance(ref, ray.ObjectRef) else ref for ref in refs]

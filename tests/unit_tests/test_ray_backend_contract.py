@@ -66,3 +66,20 @@ def test_worker_group_gpu_env_vars_include_rlinf_egl_regime(monkeypatch) -> None
     assert env["MUJOCO_EGL_DEVICE_ID"] == "2"
     assert env["MUJOCO_GL"] == "egl"
     assert env["PYOPENGL_PLATFORM"] == "egl"
+
+
+def test_channel_get_timeout_reports_key() -> None:
+    import ray
+
+    from dreamervla.scheduler import Channel, Cluster
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        channel = Channel.create("test-channel-timeout")
+
+        with pytest.raises(TimeoutError, match="missing-key"):
+            channel.get(key="missing-key", timeout_s=0.01)
+    finally:
+        cluster.shutdown()

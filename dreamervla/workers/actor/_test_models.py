@@ -77,6 +77,27 @@ class TinyLumosPolicy(nn.Module):
         raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")
 
 
+class CountingTinyLumosPolicy(TinyLumosPolicy):
+    """Tiny LUMOS policy that counts forward calls for rollout batching tests."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+        )
+        self.register_buffer("forward_calls", torch.zeros((), dtype=torch.long))
+
+    def forward(self, batch):  # type: ignore[override]
+        self.forward_calls += 1
+        return super().forward(batch)
+
+
 class TinyCheckpointPolicy(TinyTrainablePolicy):
     """Policy exposing the gradient-checkpointing hook used by FSDP tests."""
 

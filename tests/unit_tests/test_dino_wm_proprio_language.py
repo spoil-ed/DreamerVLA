@@ -120,6 +120,49 @@ def test_predict_next_chunk_threads_proprio_and_lang() -> None:
     assert out["lang"] is lang
 
 
+def test_predict_next_forward_threads_batch_lang_emb() -> None:
+    wm, _ = _qb_world_model()
+    wm.eval()
+    bsz, hist, slots = 2, wm.num_hist, wm.token_count
+    history = torch.randn(bsz, hist, slots, wm.obs_token_dim)
+    lang = torch.randn(bsz, wm.lang_dim)
+
+    out = wm(
+        {
+            "mode": "predict_next",
+            "latent": history[:, -1],
+            "actions": torch.zeros(bsz, 1, wm.action_dim),
+            "lang_emb": lang,
+        }
+    )
+
+    assert out["hidden"].shape == (bsz, slots, wm.obs_token_dim)
+    assert out["lang"] is lang
+
+
+def test_predict_next_forward_folds_batch_proprio_into_raw_tokens() -> None:
+    wm, _ = _qb_world_model()
+    wm.eval()
+    bsz, slots = 2, wm.token_count
+    hidden = torch.randn(bsz, slots, wm.token_dim)
+    lang = torch.randn(bsz, wm.lang_dim)
+    proprio = torch.randn(bsz, wm.proprio_dim)
+
+    out = wm(
+        {
+            "mode": "predict_next",
+            "latent": hidden,
+            "actions": torch.zeros(bsz, 1, wm.action_dim),
+            "lang_emb": lang,
+            "proprio": proprio,
+        }
+    )
+
+    assert out["hidden"].shape == (bsz, slots, wm.obs_token_dim)
+    assert out["proprio"].shape == (bsz, wm.proprio_dim)
+    assert out["lang"] is lang
+
+
 def test_chunk_loss_trains_raw_proprio_head_for_classifier_scoring() -> None:
     wm, _ = _qb_world_model()
     bsz, steps, slots = 2, wm.num_hist + wm.chunk_size, wm.token_count

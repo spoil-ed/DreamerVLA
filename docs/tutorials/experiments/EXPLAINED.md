@@ -148,4 +148,4 @@ for the full OpenVLA-OFT / RLinf action contract and root-cause record.
   — the OpenVLA-OFT / RLinf action contract and the shared standalone / no-Ray / Ray
   rollout core.
 - [`spec/`](../../../spec/00_overview.md) — architecture entry points for overview,
-  complete loop, and Ray implementation.
+  complete loop, Ray implementation, current implementation, and data contracts.

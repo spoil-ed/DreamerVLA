@@ -15,8 +15,11 @@ manual_cotrain:
   global_steps: 1
   learner_update_step: 1
   sync_every: 1
+  requires_bootstrap_value: false
+  wm_env_write_replay: false
   rollout_epoch: ${algorithm.rollout_epoch}
   max_steps_per_rollout_epoch: 256
+  wm_rollout_multiplier: 4
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
   envs_per_worker: 8
   task_id: 0
@@ -128,6 +131,7 @@ env:
   # Keep inherited legacy env.* keys so existing launcher overrides compose.
   cfg:
     action_postprocess: openvla_oft
+    egl_max_respawns: 4
   real:
     cfg: ${env.cfg}
   wm:
@@ -138,6 +142,8 @@ env:
         classifier: ${ray_components.classifier}
         latent_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
         action_dim: ${task.action_dim}
+        lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
+        proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
         success_threshold: 0.5
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
         num_envs: ${manual_cotrain.envs_per_worker}

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import uuid
+import warnings
 
 import numpy as np
+import pytest
 import ray
 import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg, StopMsg
+from dreamervla.workers.inference.oft_rollout import _select_image_keys_for_policy
 from dreamervla.workers.rollout.multistep_rollout_worker import (
     MultiStepRolloutWorker,
     _obs_embedding_from_obs,
+    _to_cpu_tensor,
 )
 
 
@@ -22,10 +26,22 @@ def _policy_cfg() -> dict:
     }
 
 
-def _obs(step: int = 0) -> ObservationMsg:
+def _counting_policy_cfg() -> dict:
+    return {
+        "target": "dreamervla.workers.actor._test_models:CountingTinyLumosPolicy",
+        "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
+    }
+
+
+def _obs(
+    step: int = 0,
+    *,
+    env_rank: int = 0,
+    slot_id: int = 0,
+) -> ObservationMsg:
     return ObservationMsg(
-        env_rank=0,
-        slot_id=0,
+        env_rank=env_rank,
+        slot_id=slot_id,
         task_id=0,
         episode_id=0,
         step=step,
@@ -76,6 +92,66 @@ def test_generate_once_accepts_obs_embedding_and_returns_forward_inputs() -> Non
     assert out.forward_inputs["hidden"].shape == (1, 4)
     assert out.forward_inputs["action"].shape == (1, 2, 3)
     assert out.versions["policy"] == 0
+    assert out.versions["actor_policy_version"] == 0
+    assert out.versions["rollout_policy_version"] == 0
+    assert out.versions["global_step"] == 0
+
+
+def test_generate_once_propagates_component_versions_from_env_message() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu", "policy_version": 5},
+    )
+    worker.init()
+    worker.set_global_step(17)
+    obs = _obs()
+    obs.versions.update(
+        {
+            "global_step": 13,
+            "world_model_version": 7,
+            "wm_version": 7,
+            "classifier_version": 9,
+            "reward_or_classifier_version": 9,
+        }
+    )
+
+    out = worker.generate_once(obs)
+
+    assert out.versions["policy"] == 5
+    assert out.versions["actor_policy_version"] == 5
+    assert out.versions["rollout_policy_version"] == 5
+    assert out.versions["global_step"] == 13
+    assert out.versions["world_model_version"] == 7
+    assert out.versions["wm_version"] == 7
+    assert out.versions["classifier_version"] == 9
+    assert out.versions["reward_or_classifier_version"] == 9
+
+
+def test_generate_batch_uses_one_policy_forward_for_multiple_observations() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_counting_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+
+    results = worker.generate_batch(
+        [
+            _obs(step=0, slot_id=0),
+            _obs(step=10, slot_id=1),
+        ]
+    )
+
+    assert len(results) == 2
+    assert int(worker._policy().forward_calls.item()) == 1
+    assert [result.slot_id for result in results] == [0, 1]
+    assert [result.step for result in results] == [0, 10]
+    assert all(result.actions.shape == (2, 3) for result in results)
+    assert all(result.forward_inputs["hidden"].shape == (1, 4) for result in results)
+    assert all(result.forward_inputs["action"].shape == (1, 2, 3) for result in results)
 
 
 def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> None:
@@ -96,6 +172,15 @@ def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> N
     assert out.forward_inputs["lang_emb"].tolist() == [5.5, 5.5]
     assert out.forward_inputs["action"].shape == (1, 2, 3)
     assert out.versions["policy"] == 0
+
+
+def test_oft_rollout_selects_image_keys_from_checkpoint_num_images() -> None:
+    keys = ["agentview_rgb", "eye_in_hand_rgb"]
+
+    assert _select_image_keys_for_policy(keys, 1) == ["agentview_rgb"]
+    assert _select_image_keys_for_policy(keys, 2) == keys
+    with pytest.raises(ValueError, match="exceeds configured image_keys"):
+        _select_image_keys_for_policy(keys, 3)
 
 
 def test_generate_once_preserves_lang_emb_and_marks_final_bootstrap() -> None:
@@ -121,6 +206,18 @@ def test_obs_embedding_from_obs_accepts_wm_latent() -> None:
     hidden = _obs_embedding_from_obs({"latent": np.zeros(4, dtype=np.float32)})
 
     assert hidden.shape == (4,)
+
+
+def test_to_cpu_tensor_copies_readonly_numpy_without_warning() -> None:
+    value = np.ones((2,), dtype=np.float32)
+    value.setflags(write=False)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tensor = _to_cpu_tensor(value)
+
+    assert tensor.tolist() == [1.0, 1.0]
+    assert caught == []
 
 
 def test_empty_encoder_cfg_is_treated_as_no_encoder() -> None:
@@ -155,7 +252,10 @@ def test_sync_model_from_actor_applies_patch_syncer() -> None:
         changed = {key: value + 1.0 for key, value in state.items()}
         worker._syncer().push("policy", changed, 1)
 
-        assert worker.sync_model_from_actor("policy", local_version=0) == 1
+        sync_metrics = worker.sync_model_from_actor("policy", local_version=0)
+        assert sync_metrics["sync/rollout_policy_version"] == 1.0
+        assert sync_metrics["sync/rollout_policy_updated"] == 1.0
+        assert sync_metrics["sync/rollout_policy_pull_s"] >= 0.0
         synced = worker.state_dict()
         assert torch.allclose(next(iter(synced.values())), next(iter(changed.values())))
     finally:
@@ -185,7 +285,11 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
 
         stats = worker.generate(input_name, output_name)
 
-        assert stats == {"rollout/generated": 2.0}
+        assert stats["rollout/generated"] == 2.0
+        assert stats["rollout/channel_get_s"] >= 0.0
+        assert stats["rollout/policy_forward_s"] >= 0.0
+        assert stats["rollout/channel_put_s"] >= 0.0
+        assert stats["rollout/loop_s"] >= 0.0
         assert output_channel.qsize(key="0:0") == 2
         first = output_channel.get(key="0:0")
         second = output_channel.get(key="0:0")
@@ -194,5 +298,79 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
         assert first.step == 0
         assert second.step == 1
         assert first.actions.shape == (2, 3)
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set() -> None:
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-keyed-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-keyed-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        output_channel = Channel.create(output_name)
+        input_channel.put(_obs(step=0, slot_id=0), key="0:0")
+        input_channel.put(_obs(step=10, slot_id=1), key="0:1")
+        input_channel.put(StopMsg(reason="unit-test"), key="0:0")
+        input_channel.put(StopMsg(reason="unit-test"), key="0:1")
+
+        worker = MultiStepRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        stats = worker.generate(input_name, output_name, num_slots=2)
+
+        assert stats["rollout/generated"] == 2.0
+        assert stats["rollout/channel_get_s"] >= 0.0
+        assert stats["rollout/policy_forward_s"] >= 0.0
+        assert stats["rollout/channel_put_s"] >= 0.0
+        assert stats["rollout/loop_s"] >= 0.0
+        assert output_channel.qsize(key="0:0") == 1
+        assert output_channel.qsize(key="0:1") == 1
+        first = output_channel.get(key="0:0")
+        second = output_channel.get(key="0:1")
+        assert isinstance(first, RolloutResultMsg)
+        assert isinstance(second, RolloutResultMsg)
+        assert first.step == 0
+        assert second.step == 10
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_wraps_rank_slot_failures_with_channel_key() -> None:
+    class FailingRolloutWorker(MultiStepRolloutWorker):
+        def generate_batch(
+            self,
+            obs_msgs: list[ObservationMsg],
+        ) -> list[RolloutResultMsg]:
+            del obs_msgs
+            raise ValueError("encoder failed")
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-keyed-fail-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-keyed-fail-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        Channel.create(output_name)
+        input_channel.put(_obs(step=0, slot_id=0), key="0:0")
+
+        worker = FailingRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        with pytest.raises(RuntimeError, match=r"rank=0.*keys=0:0.*encoder failed"):
+            worker.generate(input_name, output_name, num_slots=1)
     finally:
         cluster.shutdown()

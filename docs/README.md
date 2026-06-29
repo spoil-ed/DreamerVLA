@@ -10,6 +10,7 @@ This directory is organized by document lifetime and reader intent.
 - [`repository_structure.md`](repository_structure.md): repository layout.
 - [`data_layout.md`](data_layout.md): runtime data and artifact layout.
 - [`debug_log.md`](debug_log.md): local debug log kept at the docs root for active editing.
+- [`reference/routes.md`](reference/routes.md): experiment/runner route matrix.
 
 ## Directories
 

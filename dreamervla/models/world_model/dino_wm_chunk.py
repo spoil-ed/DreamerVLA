@@ -434,6 +434,27 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         tiled = emb[:, :, None, :].expand(-1, -1, vision_tokens.shape[2], -1)
         return torch.cat([vision_tokens, tiled], dim=-1)
 
+    def _proprio_for_steps(
+        self,
+        proprio_raw: torch.Tensor | None,
+        steps: int,
+    ) -> torch.Tensor | None:
+        if proprio_raw is None:
+            return None
+        proprio = proprio_raw.to(device=self._module_device(), dtype=self._module_dtype())
+        if proprio.ndim == 2:
+            return proprio[:, None].expand(-1, int(steps), -1)
+        if proprio.ndim != 3:
+            raise ValueError(
+                f"proprio must be [B,P] or [B,T,P], got {tuple(proprio.shape)}"
+            )
+        if proprio.shape[1] == int(steps):
+            return proprio
+        if proprio.shape[1] > int(steps):
+            return proprio[:, -int(steps) :]
+        pad = proprio[:, :1].expand(-1, int(steps) - proprio.shape[1], -1)
+        return torch.cat([pad, proprio], dim=1)
+
     def _raw_proprio_from_obs_tokens(self, obs_tokens: torch.Tensor) -> torch.Tensor:
         """Decode predicted proprio tokens back to raw proprio for classifier scoring."""
         if self.proprio_condition_dim == 0:
@@ -521,6 +542,12 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         lang: torch.Tensor | None = None,
     ) -> torch.Tensor:
         obs_tokens = self._obs_tokens_from_obs(obs)
+        proprio = obs.get("proprio") if isinstance(obs, dict) else None
+        if obs_tokens.shape[-1] == self.token_dim and self.proprio_condition_dim > 0:
+            obs_tokens = self._observation_tokens(
+                obs_tokens,
+                self._proprio_for_steps(proprio, int(obs_tokens.shape[1])),
+            )
         z = self._condition_tokens(obs_tokens, lang, act)
         bsz, steps, slots, dim = z.shape
         flat = z.reshape(bsz, steps * slots, dim)
@@ -577,6 +604,13 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
             return latent["lang"]
         return None
 
+    def _latent_proprio(
+        self, latent: dict[str, torch.Tensor] | torch.Tensor
+    ) -> torch.Tensor | None:
+        if isinstance(latent, dict) and isinstance(latent.get("proprio"), torch.Tensor):
+            return latent["proprio"]
+        return None
+
     def _latent_hidden(
         self, latent: dict[str, torch.Tensor] | torch.Tensor
     ) -> torch.Tensor:
@@ -619,6 +653,7 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         history = self._latent_history(latent)
         bsz = int(history.shape[0])
         lang = self._latent_lang(latent)
+        proprio = self._latent_proprio(latent)
         action = actions[:, 0] if actions.ndim == 3 else actions
         if action.ndim != 2 or action.shape[-1] != self.action_dim:
             raise ValueError(
@@ -629,7 +664,17 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         action_history[:, -1] = action.to(
             device=action_history.device, dtype=action_history.dtype
         )
-        z = self.encode(history, action_history, lang)
+        model_history = history
+        if (
+            proprio is not None
+            and model_history.shape[-1] == self.token_dim
+            and self.proprio_condition_dim > 0
+        ):
+            model_history = self._observation_tokens(
+                model_history,
+                self._proprio_for_steps(proprio, int(model_history.shape[1])),
+            )
+        z = self.encode(model_history, action_history, lang)
         pred_z = self.predict(z)
         next_hidden = pred_z[:, -1][..., : self.obs_token_dim]
         next_proprio = (
@@ -639,7 +684,10 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
         )
 
         if self.num_hist > 1:
-            next_history = torch.cat([history[:, 1:], next_hidden[:, None]], dim=1)
+            next_history = torch.cat(
+                [model_history[:, 1:], next_hidden[:, None]],
+                dim=1,
+            )
             next_action_history = torch.cat(
                 [
                     action_history[:, 1:],
@@ -1031,12 +1079,33 @@ class ChunkAwareDinoWMWorldModel(DinoWMWorldModel):
     # ------------------------------------------------------------------ #
     # Routing                                                            #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _latent_with_batch_sidecars(
+        latent: dict[str, torch.Tensor] | torch.Tensor,
+        batch: dict[str, Any],
+    ) -> dict[str, torch.Tensor] | torch.Tensor:
+        if "lang_emb" not in batch and "proprio" not in batch:
+            return latent
+        if isinstance(latent, dict):
+            enriched = dict(latent)
+        else:
+            enriched = {"hidden": latent}
+        if "lang_emb" in batch and "lang" not in enriched:
+            enriched["lang"] = batch["lang_emb"]
+        if "proprio" in batch and "proprio" not in enriched:
+            enriched["proprio"] = batch["proprio"]
+        return enriched
+
     def loss(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:  # type: ignore[override]
         return self.chunk_loss(batch)
 
     def forward(self, batch: dict[str, Any]) -> Any:  # type: ignore[override]
         if isinstance(batch, dict) and batch.get("mode") == "predict_next_chunk":
-            return self.predict_next_chunk(batch["latent"], batch["actions"])
+            latent = self._latent_with_batch_sidecars(batch["latent"], batch)
+            return self.predict_next_chunk(latent, batch["actions"])
+        if isinstance(batch, dict) and batch.get("mode") == "predict_next":
+            latent = self._latent_with_batch_sidecars(batch["latent"], batch)
+            return self.predict_next(latent, batch["actions"])
         if isinstance(batch, dict) and batch.get("mode") == "classifier_input":
             return self.actor_input(batch["latent"])
         if isinstance(batch, dict) and batch.get("mode") == "chunk_loss":

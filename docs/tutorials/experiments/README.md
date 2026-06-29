@@ -18,7 +18,7 @@ Normal changes are Hydra overrides, e.g.
 | [OFT backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `openvla_onetraj_libero` | `oft_world_model_dinowm_chunk_input_tokens`, `dreamervla_oft_dino_wm_lumos_input_tokens`, `online_cotrain_oft_backbone_latent` |
 | [Cold-start rollout collection](OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_onetraj`, `oft_discrete_token_world_model_dinowm_chunk` |
 | [Cold-start collect + warmup + cotrain](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_ray`, `online_cotrain_pipeline_oft_action_hidden` |
-| [Ray online cotrain backend](../../../spec/02_ray.md) | synthetic / gated real smoke | `online_cotrain_ray_*`, `collect_rollouts_ray*` |
+| [Ray/manual cotrain backend](../../../spec/02_ray.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, legacy `online_cotrain_ray_*` |
 
 The `task=` token is snake_case; on-disk data artifacts keep their historical
 `task.artifact_name` directories (e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths
@@ -31,6 +31,6 @@ inside the commands mix the two — this is intentional (see EXPLAINED.md).
 - [Architecture index](../../../spec/00_overview.md) — target-mainline group topology.
 - [Complete loop](../../../spec/01_complete_loop.md) — collect, warmup, cotrain,
   trajectory PPO, checkpoint, and eval coverage.
-- [Ray implementation](../../../spec/02_ray.md) — worker groups, placement, channels, and current code gap.
+- [Ray implementation](../../../spec/02_ray.md) — worker groups, placement, channels, and current implementation status.
 - [Cold-start cotrain bracket checklist](../../reports/audits/online_cotrain_bracket_resolution_checklist.md) —
   focused review checklist for bracket/order issues in the cotrain path.

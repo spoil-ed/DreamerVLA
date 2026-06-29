@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -26,12 +27,18 @@ class LatentWorldModelEnv:
         image_shape: tuple[int, int, int] = (4, 4, 3),
         device: str | torch.device = "cpu",
         initial_latent: Any | None = None,
+        lang_dim: int = 0,
+        initial_lang_emb: Any | None = None,
+        proprio_dim: int = 0,
+        initial_proprio: Any | None = None,
         num_envs: int = 1,
     ) -> None:
         self.world_model = _build_component(world_model)
         self.classifier = None if classifier is None else _build_component(classifier)
         self.latent_dim = int(latent_dim)
         self.action_dim = int(action_dim)
+        self.lang_dim = int(lang_dim)
+        self.proprio_dim = int(proprio_dim)
         self.num_envs = int(num_envs)
         self.success_threshold = float(success_threshold)
         self.max_episode_steps = int(max_episode_steps)
@@ -39,17 +46,40 @@ class LatentWorldModelEnv:
         self.device = torch.device(device)
         if self.num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        if self.lang_dim < 0:
+            raise ValueError("lang_dim must be non-negative")
+        if self.proprio_dim < 0:
+            raise ValueError("proprio_dim must be non-negative")
         self.wm_version = 0
         self.classifier_version = 0
         self._initial_latent = initial_latent
+        self._initial_lang_emb = initial_lang_emb
+        self._initial_proprio = initial_proprio
         self._latent = torch.zeros(
             (self.num_envs, self.latent_dim),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._lang_emb = torch.zeros(
+            (self.num_envs, self.lang_dim),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._proprio = torch.zeros(
+            (self.num_envs, self.proprio_dim),
             dtype=torch.float32,
             device=self.device,
         )
         self._elapsed_steps = np.zeros((self.num_envs,), dtype=np.int64)
         self._task_ids = np.zeros((self.num_envs,), dtype=np.int64)
         self._episode_ids = np.zeros((self.num_envs,), dtype=np.int64)
+        self._wm_forward_calls = 0
+        self._classifier_forward_calls = 0
+        self._wm_forward_time_s = 0.0
+        self._classifier_forward_time_s = 0.0
+        self._batch_size_sum = 0
+        self._batch_size_min: int | None = None
+        self._batch_size_max = 0
         self.world_model.to(self.device).eval()
         if self.classifier is not None:
             self.classifier.to(self.device).eval()
@@ -79,6 +109,10 @@ class LatentWorldModelEnv:
         self._episode_ids[slot] = int(episode_id)
         self._elapsed_steps[slot] = 0
         self._latent[slot] = self._initial_latent_for_slot(slot).detach()
+        if self.lang_dim > 0:
+            self._lang_emb[slot] = self._initial_lang_for_slot(slot).detach()
+        if self.proprio_dim > 0:
+            self._proprio[slot] = self._initial_proprio_for_slot(slot).detach()
         return self._obs(slot), {
             "slot_id": slot,
             "task_id": int(self._task_ids[slot]),
@@ -144,6 +178,51 @@ class LatentWorldModelEnv:
             f"{self.latent_dim} or {self.num_envs * self.latent_dim}"
         )
 
+    def set_initial_lang_embs(self, lang_embs: Any) -> None:
+        """Set the language embedding sidecar used by future slot resets."""
+
+        if self.lang_dim <= 0:
+            return
+        lang = torch.as_tensor(lang_embs, dtype=torch.float32, device=self.device)
+        if lang.numel() == self.lang_dim:
+            self._initial_lang_emb = (
+                lang.reshape(self.lang_dim).detach().cpu().numpy()
+            )
+            return
+        if lang.numel() == self.num_envs * self.lang_dim:
+            self._initial_lang_emb = (
+                lang.reshape(self.num_envs, self.lang_dim).detach().cpu().numpy()
+            )
+            return
+        raise ValueError(
+            f"initial lang_embs have {lang.numel()} values; expected "
+            f"{self.lang_dim} or {self.num_envs * self.lang_dim}"
+        )
+
+    def set_initial_proprios(self, proprios: Any) -> None:
+        """Set the raw proprio state sidecar used by future slot resets."""
+
+        if self.proprio_dim <= 0:
+            return
+        proprio = torch.as_tensor(proprios, dtype=torch.float32, device=self.device)
+        if proprio.numel() == self.proprio_dim:
+            self._initial_proprio = (
+                proprio.reshape(self.proprio_dim).detach().cpu().numpy()
+            )
+            return
+        if proprio.numel() == self.num_envs * self.proprio_dim:
+            self._initial_proprio = (
+                proprio.reshape(self.num_envs, self.proprio_dim)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            return
+        raise ValueError(
+            f"initial proprios have {proprio.numel()} values; expected "
+            f"{self.proprio_dim} or {self.num_envs * self.proprio_dim}"
+        )
+
     @torch.no_grad()
     def step_batch(
         self,
@@ -165,30 +244,60 @@ class LatentWorldModelEnv:
             return [], [], [], [], []
         for slot_id in slots:
             self._validate_slot(slot_id)
+        batch_size = len(slots)
+        self._batch_size_sum += int(batch_size)
+        self._batch_size_max = max(self._batch_size_max, int(batch_size))
+        self._batch_size_min = (
+            int(batch_size)
+            if self._batch_size_min is None
+            else min(self._batch_size_min, int(batch_size))
+        )
         action_t = torch.as_tensor(
             np.asarray(actions, dtype=np.float32).copy(),
             dtype=torch.float32,
             device=self.device,
-        ).reshape(len(slots), -1)
+        ).reshape(batch_size, -1)
         if action_t.shape[-1] != self.action_dim:
             raise ValueError(
                 f"actions have {action_t.shape[-1]} values; expected {self.action_dim}"
             )
         batch = {
-            "latent": self._latent[slots].reshape(len(slots), self.latent_dim),
-            "action": action_t.reshape(len(slots), self.action_dim),
+            "mode": "predict_next",
+            "latent": self._latent[slots].reshape(batch_size, self.latent_dim),
+            "action": action_t.reshape(batch_size, self.action_dim),
+            "actions": action_t.reshape(batch_size, 1, self.action_dim),
         }
-        next_latent = self._extract_latent(self.world_model(batch)).reshape(
-            len(slots), -1
-        )
-        if next_latent.shape[-1] != self.latent_dim:
-            raise ValueError(
-                f"world_model returned {next_latent.shape[-1]} latent values; "
-                f"expected {self.latent_dim}"
+        if self.lang_dim > 0:
+            batch["lang_emb"] = self._lang_emb[slots].reshape(
+                batch_size, self.lang_dim
             )
+        if self.proprio_dim > 0:
+            batch["proprio"] = self._proprio[slots].reshape(
+                batch_size, self.proprio_dim
+            )
+        wm_start = time.perf_counter()
+        wm_out = self.world_model(batch)
+        self._wm_forward_calls += 1
+        self._wm_forward_time_s += float(time.perf_counter() - wm_start)
+        next_latent = self._coerce_latent_shape(
+            self._extract_latent(wm_out),
+            batch_size=batch_size,
+        )
         self._latent[slots] = next_latent.detach()
+        next_lang = self._extract_lang_emb(wm_out)
+        if next_lang is not None:
+            self._lang_emb[slots] = next_lang.reshape(batch_size, self.lang_dim).detach()
+        next_proprio = self._extract_proprio(wm_out)
+        if next_proprio is not None:
+            self._proprio[slots] = next_proprio.reshape(
+                batch_size, self.proprio_dim
+            ).detach()
         self._elapsed_steps[slots] += 1
-        scores = self._score_batch(self._latent[slots])
+        score_start = time.perf_counter()
+        scores = self._score_batch(self._latent[slots], slots=slots)
+        if self.classifier is not None:
+            self._classifier_forward_calls += 1
+            self._classifier_forward_time_s += float(time.perf_counter() - score_start)
 
         observations: list[dict[str, Any]] = []
         rewards: list[float] = []
@@ -216,6 +325,34 @@ class LatentWorldModelEnv:
             truncations.append(truncated)
             infos.append(info)
         return observations, rewards, terminations, truncations, infos
+
+    def get_metrics(self, *, reset: bool = False) -> dict[str, float]:
+        """Return world-model env inference counters for runtime validation."""
+
+        metrics = {
+            "model_forwards": float(self._wm_forward_calls),
+            "wm_forward_calls": float(self._wm_forward_calls),
+            "classifier_forward_calls": float(self._classifier_forward_calls),
+            "wm_forward_time_s": float(self._wm_forward_time_s),
+            "classifier_forward_time_s": float(self._classifier_forward_time_s),
+            "batch_size_sum": float(self._batch_size_sum),
+            "batch_size_avg": float(
+                self._batch_size_sum / max(1, self._wm_forward_calls)
+            ),
+            "batch_size_min": float(
+                0 if self._batch_size_min is None else self._batch_size_min
+            ),
+            "batch_size_max": float(self._batch_size_max),
+        }
+        if reset:
+            self._wm_forward_calls = 0
+            self._classifier_forward_calls = 0
+            self._wm_forward_time_s = 0.0
+            self._classifier_forward_time_s = 0.0
+            self._batch_size_sum = 0
+            self._batch_size_min = None
+            self._batch_size_max = 0
+        return metrics
 
     def chunk_step(
         self,
@@ -273,7 +410,7 @@ class LatentWorldModelEnv:
         latent = np.asarray(obs["latent"], dtype=np.float32).reshape(self.latent_dim)
         action_arr = np.asarray(action, dtype=np.float32).reshape(self.action_dim)
         info = dict(info or {})
-        return {
+        transition = {
             "image": np.zeros(self.image_shape, dtype=np.uint8),
             "state": latent.copy(),
             "action": action_arr.copy(),
@@ -298,29 +435,72 @@ class LatentWorldModelEnv:
                 info.get("classifier_version", self.classifier_version)
             ),
         }
+        if "lang_emb" in obs:
+            transition["lang_emb"] = np.asarray(
+                obs["lang_emb"],
+                dtype=np.float32,
+            ).reshape(self.lang_dim)
+        if "proprio" in obs:
+            transition["proprio"] = np.asarray(
+                obs["proprio"],
+                dtype=np.float32,
+            ).reshape(self.proprio_dim)
+        return transition
 
     def _obs(self, slot_id: int = 0) -> dict[str, Any]:
         self._validate_slot(slot_id)
-        return {
+        obs = {
             "latent": self._latent[slot_id]
             .detach()
             .cpu()
             .numpy()
-            .astype(np.float32, copy=False),
+            .astype(np.float32, copy=True),
             "task_id": int(self._task_ids[slot_id]),
             "episode_id": int(self._episode_ids[slot_id]),
             "step": int(self._elapsed_steps[slot_id]),
             "task_description": f"task {self._task_ids[slot_id]}",
             "is_first": bool(self._elapsed_steps[slot_id] == 0),
         }
+        if self.lang_dim > 0:
+            obs["lang_emb"] = (
+                self._lang_emb[slot_id]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=True)
+            )
+        if self.proprio_dim > 0:
+            proprio = (
+                self._proprio[slot_id]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=True)
+            )
+            obs["proprio"] = proprio
+            obs["state"] = proprio
+        return obs
 
     def _score(self, latent: torch.Tensor) -> float:
         return float(self._score_batch(latent.reshape(1, self.latent_dim))[0])
 
-    def _score_batch(self, latent: torch.Tensor) -> torch.Tensor:
+    def _score_batch(
+        self,
+        latent: torch.Tensor,
+        *,
+        slots: Sequence[int] | None = None,
+    ) -> torch.Tensor:
         if self.classifier is None:
             return torch.zeros(latent.shape[0], dtype=torch.float32, device=self.device)
-        raw = self.classifier(latent.reshape(latent.shape[0], self.latent_dim))
+        classifier_cfg = getattr(self.classifier, "cfg", None)
+        window = getattr(classifier_cfg, "window", None)
+        if window is None:
+            raw = self.classifier(latent.reshape(latent.shape[0], self.latent_dim))
+        else:
+            raw = self.classifier(
+                self._classifier_latent_window(latent, window=int(window)),
+                **self._classifier_sidecars(latent.shape[0], int(window), slots),
+            )
         raw_is_logits = not isinstance(raw, dict)
         if isinstance(raw, dict):
             if "success" in raw:
@@ -351,15 +531,129 @@ class LatentWorldModelEnv:
             )
         return scores
 
+    def _classifier_latent_window(
+        self,
+        latent: torch.Tensor,
+        *,
+        window: int,
+    ) -> torch.Tensor:
+        if int(window) <= 0:
+            raise ValueError(f"classifier window must be positive, got {window}")
+        return (
+            latent.reshape(latent.shape[0], 1, self.latent_dim)
+            .expand(-1, int(window), -1)
+            .contiguous()
+        )
+
+    def _classifier_sidecars(
+        self,
+        batch_size: int,
+        window: int,
+        slots: Sequence[int] | None,
+    ) -> dict[str, torch.Tensor]:
+        if slots is None:
+            slot_ids = list(range(int(batch_size)))
+        else:
+            slot_ids = [int(slot) for slot in slots]
+        sidecars: dict[str, torch.Tensor] = {
+            "task_ids": torch.as_tensor(
+                [int(self._task_ids[slot]) for slot in slot_ids],
+                dtype=torch.long,
+                device=self.device,
+            )
+        }
+        if self.proprio_dim > 0:
+            sidecars["proprio"] = (
+                self._proprio[slot_ids]
+                .reshape(int(batch_size), 1, self.proprio_dim)
+                .expand(-1, int(window), -1)
+                .contiguous()
+            )
+        if self.lang_dim > 0:
+            sidecars["lang_emb"] = self._lang_emb[slot_ids].reshape(
+                int(batch_size), self.lang_dim
+            )
+        return sidecars
+
     def _extract_latent(self, value: Any) -> torch.Tensor:
         if isinstance(value, dict):
-            for key in ("next_latent", "latent", "state"):
+            for key in ("next_latent", "hidden", "latent", "state"):
                 if key in value:
                     return torch.as_tensor(value[key], dtype=torch.float32, device=self.device)
             raise ValueError(
-                "world_model output dict must include next_latent, latent, or state"
+                "world_model output dict must include next_latent, hidden, latent, or state"
             )
         return torch.as_tensor(value, dtype=torch.float32, device=self.device)
+
+    def _coerce_latent_shape(
+        self,
+        latent: torch.Tensor,
+        *,
+        batch_size: int,
+    ) -> torch.Tensor:
+        batch = int(batch_size)
+        if latent.numel() == batch * self.latent_dim:
+            return latent.reshape(batch, self.latent_dim)
+        if latent.ndim >= 3 and int(latent.shape[0]) == batch:
+            token_count = int(np.prod(tuple(int(dim) for dim in latent.shape[1:-1])))
+            if (
+                token_count > 0
+                and self.latent_dim % token_count == 0
+                and self.latent_dim < int(np.prod(tuple(int(dim) for dim in latent.shape[1:])))
+            ):
+                visual_dim = self.latent_dim // token_count
+                if 0 < visual_dim < int(latent.shape[-1]):
+                    return latent[..., :visual_dim].reshape(batch, self.latent_dim)
+        returned = int(latent.reshape(batch, -1).shape[-1]) if latent.numel() % batch == 0 else int(latent.numel())
+        raise ValueError(
+            f"world_model returned {returned} latent values; expected {self.latent_dim}"
+        )
+
+    def _extract_lang_emb(self, value: Any) -> torch.Tensor | None:
+        if self.lang_dim <= 0 or not isinstance(value, dict):
+            return None
+        for key in ("lang_emb", "lang"):
+            if key in value:
+                lang = torch.as_tensor(
+                    value[key],
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                if lang.ndim == 0 or int(lang.shape[-1]) != self.lang_dim:
+                    raise ValueError(
+                        f"world_model returned lang embedding with shape {tuple(lang.shape)}; "
+                        f"expected trailing dim {self.lang_dim}"
+                    )
+                if lang.reshape(-1).numel() % self.lang_dim != 0:
+                    raise ValueError(
+                        f"world_model returned {lang.numel()} lang values; "
+                        f"expected a multiple of {self.lang_dim}"
+                    )
+                return lang
+        return None
+
+    def _extract_proprio(self, value: Any) -> torch.Tensor | None:
+        if self.proprio_dim <= 0 or not isinstance(value, dict):
+            return None
+        for key in ("proprio", "state"):
+            if key in value:
+                proprio = torch.as_tensor(
+                    value[key],
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                if proprio.ndim == 0 or int(proprio.shape[-1]) != self.proprio_dim:
+                    raise ValueError(
+                        f"world_model returned proprio with shape {tuple(proprio.shape)}; "
+                        f"expected trailing dim {self.proprio_dim}"
+                    )
+                if proprio.reshape(-1).numel() % self.proprio_dim != 0:
+                    raise ValueError(
+                        f"world_model returned {proprio.numel()} proprio values; "
+                        f"expected a multiple of {self.proprio_dim}"
+                    )
+                return proprio
+        return None
 
     def _initial_latent_for_slot(self, slot_id: int) -> torch.Tensor:
         if self._initial_latent is None:
@@ -376,6 +670,48 @@ class LatentWorldModelEnv:
         raise ValueError(
             f"initial_latent has {latent.numel()} values; expected {self.latent_dim} "
             f"or {self.num_envs * self.latent_dim}"
+        )
+
+    def _initial_lang_for_slot(self, slot_id: int) -> torch.Tensor:
+        if self.lang_dim <= 0:
+            return torch.zeros(0, dtype=torch.float32, device=self.device)
+        if self._initial_lang_emb is None:
+            return torch.zeros(self.lang_dim, dtype=torch.float32, device=self.device)
+        lang = torch.as_tensor(
+            self._initial_lang_emb,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if lang.numel() == self.lang_dim:
+            return lang.reshape(self.lang_dim)
+        if lang.numel() == self.num_envs * self.lang_dim:
+            return lang.reshape(self.num_envs, self.lang_dim)[slot_id]
+        raise ValueError(
+            f"initial_lang_emb has {lang.numel()} values; expected {self.lang_dim} "
+            f"or {self.num_envs * self.lang_dim}"
+        )
+
+    def _initial_proprio_for_slot(self, slot_id: int) -> torch.Tensor:
+        if self.proprio_dim <= 0:
+            return torch.zeros(0, dtype=torch.float32, device=self.device)
+        if self._initial_proprio is None:
+            return torch.zeros(
+                self.proprio_dim,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        proprio = torch.as_tensor(
+            self._initial_proprio,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if proprio.numel() == self.proprio_dim:
+            return proprio.reshape(self.proprio_dim)
+        if proprio.numel() == self.num_envs * self.proprio_dim:
+            return proprio.reshape(self.num_envs, self.proprio_dim)[slot_id]
+        raise ValueError(
+            f"initial_proprio has {proprio.numel()} values; expected {self.proprio_dim} "
+            f"or {self.num_envs * self.proprio_dim}"
         )
 
     def _validate_slot(self, slot_id: int) -> None:

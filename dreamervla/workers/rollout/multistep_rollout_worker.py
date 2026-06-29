@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from typing import Any
 
 import numpy as np
@@ -77,8 +78,24 @@ class MultiStepRolloutWorker(Worker):
 
         if not isinstance(obs_msg, ObservationMsg):
             raise TypeError("generate_once expects an ObservationMsg")
-        hidden, encoder_extra = self._hidden_and_encoder_extra(obs_msg)
-        hidden_t = _to_device_float_tensor(hidden, self.torch_device).reshape(1, -1)
+        return self.generate_batch([obs_msg])[0]
+
+    @torch.no_grad()
+    def generate_batch(self, obs_msgs: list[ObservationMsg]) -> list[RolloutResultMsg]:
+        """Sample action chunks for a batch of observations in one policy call."""
+
+        if not obs_msgs:
+            return []
+        for obs_msg in obs_msgs:
+            if not isinstance(obs_msg, ObservationMsg):
+                raise TypeError("generate_batch expects ObservationMsg items")
+        hidden_rows: list[torch.Tensor] = []
+        encoder_extras: list[dict[str, Any]] = []
+        for obs_msg in obs_msgs:
+            hidden, encoder_extra = self._hidden_and_encoder_extra(obs_msg)
+            hidden_rows.append(_to_device_float_tensor(hidden, self.torch_device).reshape(1, -1))
+            encoder_extras.append(dict(encoder_extra))
+        hidden_t = torch.cat(hidden_rows, dim=0)
 
         policy = self._policy()
         action, log_prob, extra = policy(
@@ -90,46 +107,100 @@ class MultiStepRolloutWorker(Worker):
             }
         )
         action_cpu = _to_cpu_tensor(action)
-        forward_inputs = {
-            "hidden": hidden_t.detach().cpu(),
-            "action": action_cpu,
-        }
-        lang_emb = obs_msg.obs.get("lang_emb", encoder_extra.get("lang_emb"))
-        if lang_emb is not None:
-            forward_inputs["lang_emb"] = _to_cpu_tensor(lang_emb)
-        if isinstance(extra, dict):
+        log_prob_cpu = _to_cpu_tensor(log_prob).reshape(len(obs_msgs), -1)
+        extra = extra if isinstance(extra, dict) else {}
+
+        results: list[RolloutResultMsg] = []
+        for index, obs_msg in enumerate(obs_msgs):
+            action_i = action_cpu[index : index + 1]
+            forward_inputs = {
+                "hidden": hidden_t[index : index + 1].detach().cpu(),
+                "action": action_i,
+            }
+            lang_emb = obs_msg.obs.get(
+                "lang_emb",
+                encoder_extras[index].get("lang_emb"),
+            )
+            if lang_emb is not None:
+                forward_inputs["lang_emb"] = _to_cpu_tensor(lang_emb)
             for key in _EXTRA_FORWARD_KEYS:
                 if key in extra and extra[key] is not None:
-                    forward_inputs[key] = _to_cpu_tensor(extra[key])
-        versions = {"policy": int(self.versions.get("policy", 0))}
-        if bool(obs_msg.obs.get("_final_bootstrap", False)):
-            versions["final_bootstrap"] = 1
+                    value = extra[key]
+                    if isinstance(value, torch.Tensor) and value.shape[:1] == (len(obs_msgs),):
+                        value = value[index : index + 1]
+                    forward_inputs[key] = _to_cpu_tensor(value)
 
-        return RolloutResultMsg(
-            env_rank=obs_msg.env_rank,
-            slot_id=obs_msg.slot_id,
-            task_id=obs_msg.task_id,
-            episode_id=obs_msg.episode_id,
-            step=obs_msg.step,
-            actions=_squeeze_batch(action_cpu),
-            prev_logprobs=_to_cpu_tensor(log_prob).reshape(-1),
-            prev_values=None,
-            forward_inputs=forward_inputs,
-            versions=versions,
-        )
+            policy_version = int(self.versions.get("policy", 0))
+            versions = {
+                "policy": policy_version,
+                "actor_policy_version": policy_version,
+                "rollout_policy_version": policy_version,
+                "global_step": int(obs_msg.versions.get("global_step", self.global_step)),
+            }
+            for name in (
+                "world_model_version",
+                "wm_version",
+                "classifier_version",
+                "reward_or_classifier_version",
+            ):
+                if name in obs_msg.versions:
+                    versions[name] = int(obs_msg.versions[name])
+            if bool(obs_msg.obs.get("_final_bootstrap", False)):
+                versions["final_bootstrap"] = 1
+
+            results.append(
+                RolloutResultMsg(
+                    env_rank=obs_msg.env_rank,
+                    slot_id=obs_msg.slot_id,
+                    task_id=obs_msg.task_id,
+                    episode_id=obs_msg.episode_id,
+                    step=obs_msg.step,
+                    actions=_squeeze_batch(action_i),
+                    prev_logprobs=log_prob_cpu[index],
+                    prev_values=None,
+                    forward_inputs=forward_inputs,
+                    versions=versions,
+                )
+            )
+        return results
 
     def generate(
         self,
         input_channel_name: str,
         output_channel_name: str,
+        num_slots: int | None = None,
+        input_key: str | None = None,
     ) -> dict[str, float]:
         """Drain observations from a named channel until a stop message arrives."""
 
         input_channel = Channel.connect(input_channel_name)
         output_channel = Channel.connect(output_channel_name)
+        if input_key is not None:
+            return self._generate_from_key(input_channel, output_channel, str(input_key))
+        if num_slots is not None:
+            return self._generate_from_rank_slot_keys(
+                input_channel,
+                output_channel,
+                int(num_slots),
+            )
+
+        return self._generate_from_key(input_channel, output_channel, "default")
+
+    def _generate_from_key(
+        self,
+        input_channel: Channel,
+        output_channel: Channel,
+        key: str,
+    ) -> dict[str, float]:
         generated = 0
+        channel_get_s = 0.0
+        policy_forward_s = 0.0
+        channel_put_s = 0.0
+        loop_start = time.perf_counter()
         while True:
-            msg = input_channel.get()
+            get_start = time.perf_counter()
+            msg = input_channel.get(key=str(key))
+            channel_get_s += time.perf_counter() - get_start
             if isinstance(msg, StopMsg):
                 break
             if not isinstance(msg, ObservationMsg):
@@ -137,16 +208,119 @@ class MultiStepRolloutWorker(Worker):
                     "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
                     f"got {type(msg).__name__}"
                 )
-            result = self.generate_once(msg)
+            _sync_if_cuda(self.torch_device)
+            forward_start = time.perf_counter()
+            result = self._generate_once_with_context(msg, key=str(key))
+            _sync_if_cuda(self.torch_device)
+            policy_forward_s += time.perf_counter() - forward_start
+            put_start = time.perf_counter()
             output_channel.put(result, key=result.key)
+            channel_put_s += time.perf_counter() - put_start
             generated += 1
-        return {"rollout/generated": float(generated)}
+        return _rollout_loop_metrics(
+            generated=generated,
+            loop_s=time.perf_counter() - loop_start,
+            channel_get_s=channel_get_s,
+            policy_forward_s=policy_forward_s,
+            channel_put_s=channel_put_s,
+        )
+
+    def _generate_from_rank_slot_keys(
+        self,
+        input_channel: Channel,
+        output_channel: Channel,
+        num_slots: int,
+    ) -> dict[str, float]:
+        if int(num_slots) <= 0:
+            raise ValueError("num_slots must be positive")
+        active_slots = set(range(int(num_slots)))
+        generated = 0
+        slot_cursor = 0
+        channel_get_s = 0.0
+        policy_forward_s = 0.0
+        channel_put_s = 0.0
+        loop_start = time.perf_counter()
+        while active_slots:
+            messages: list[tuple[str, ObservationMsg]] = []
+            for _ in range(len(active_slots)):
+                slot_id = slot_cursor % int(num_slots)
+                slot_cursor += 1
+                if slot_id not in active_slots:
+                    continue
+                key = f"{int(self.rank)}:{int(slot_id)}"
+                get_start = time.perf_counter()
+                msg = input_channel.get(key=key)
+                channel_get_s += time.perf_counter() - get_start
+                if isinstance(msg, StopMsg):
+                    active_slots.remove(slot_id)
+                    continue
+                if not isinstance(msg, ObservationMsg):
+                    raise TypeError(
+                        "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
+                        f"got {type(msg).__name__}"
+                    )
+                messages.append((key, msg))
+            if not messages:
+                continue
+            _sync_if_cuda(self.torch_device)
+            forward_start = time.perf_counter()
+            results = self._generate_batch_with_context(
+                [msg for _, msg in messages],
+                keys=[key for key, _ in messages],
+            )
+            _sync_if_cuda(self.torch_device)
+            policy_forward_s += time.perf_counter() - forward_start
+            for result in results:
+                put_start = time.perf_counter()
+                output_channel.put(result, key=result.key)
+                channel_put_s += time.perf_counter() - put_start
+                generated += 1
+        return _rollout_loop_metrics(
+            generated=generated,
+            loop_s=time.perf_counter() - loop_start,
+            channel_get_s=channel_get_s,
+            policy_forward_s=policy_forward_s,
+            channel_put_s=channel_put_s,
+        )
+
+    def _generate_once_with_context(
+        self,
+        msg: ObservationMsg,
+        *,
+        key: str,
+    ) -> RolloutResultMsg:
+        try:
+            return self.generate_once(msg)
+        except Exception as exc:
+            raise RuntimeError(
+                "RolloutWorker.generate failed "
+                f"rank={int(self.rank)} key={str(key)} "
+                f"env_rank={int(msg.env_rank)} slot_id={int(msg.slot_id)} "
+                f"episode_id={int(msg.episode_id)} step={int(msg.step)}: {exc}"
+            ) from exc
+
+    def _generate_batch_with_context(
+        self,
+        msgs: list[ObservationMsg],
+        *,
+        keys: list[str],
+    ) -> list[RolloutResultMsg]:
+        try:
+            return self.generate_batch(msgs)
+        except Exception as exc:
+            details = ",".join(
+                f"{key}/env={int(msg.env_rank)}/slot={int(msg.slot_id)}/ep={int(msg.episode_id)}/step={int(msg.step)}"
+                for key, msg in zip(keys, msgs, strict=True)
+            )
+            raise RuntimeError(
+                f"RolloutWorker.generate_batch failed rank={int(self.rank)} keys={details}: {exc}"
+            ) from exc
 
     def sync_model_from_actor(
         self,
         key: str = "policy",
         local_version: int | None = None,
-    ) -> int | None:
+    ) -> dict[str, float]:
         """Apply the latest ActorGroup policy patch to the local rollout copy."""
 
         resolved_local_version = (
@@ -154,10 +328,21 @@ class MultiStepRolloutWorker(Worker):
             if local_version is None
             else int(local_version)
         )
-        version = self._syncer().pull(str(key), self._policy(), resolved_local_version)
+        pull_start = time.perf_counter()
+        syncer = self._syncer()
+        version = syncer.pull(str(key), self._policy(), resolved_local_version)
+        pull_s = float(time.perf_counter() - pull_start)
         if version is not None:
             self.versions[str(key)] = int(version)
-        return version
+        metrics = {
+            f"sync/rollout_{key}_pull_s": pull_s,
+            f"sync/rollout_{key}_version": float(
+                resolved_local_version if version is None else int(version)
+            ),
+            f"sync/rollout_{key}_updated": float(version is not None),
+        }
+        metrics.update(dict(getattr(syncer, "last_pull_metrics", {}) or {}))
+        return metrics
 
     def state_dict(self) -> dict[str, torch.Tensor]:
         """Return a detached CPU policy state dict."""
@@ -298,6 +483,31 @@ def _build_from_cfg(cfg: dict[str, Any]) -> Any:
     return getattr(module, class_name)(**kwargs)
 
 
+def _sync_if_cuda(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def _rollout_loop_metrics(
+    *,
+    generated: int,
+    loop_s: float,
+    channel_get_s: float,
+    policy_forward_s: float,
+    channel_put_s: float,
+) -> dict[str, float]:
+    generated_f = float(generated)
+    loop_s = float(loop_s)
+    return {
+        "rollout/generated": generated_f,
+        "rollout/loop_s": loop_s,
+        "rollout/channel_get_s": float(channel_get_s),
+        "rollout/policy_forward_s": float(policy_forward_s),
+        "rollout/channel_put_s": float(channel_put_s),
+        "rollout/generated_per_s": generated_f / max(loop_s, 1e-9),
+    }
+
+
 def _as_plain_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -317,7 +527,7 @@ def _to_cpu_tensor(value: Any) -> torch.Tensor:
     if isinstance(value, torch.Tensor):
         return value.detach().cpu()
     if isinstance(value, np.ndarray):
-        return torch.from_numpy(value).detach().cpu()
+        return torch.from_numpy(np.array(value, copy=True)).detach().cpu()
     return torch.as_tensor(value).detach().cpu()
 
 

@@ -75,14 +75,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 ```
 
 With `profile=multi_gpu ngpu=6`, the launcher expands the Hydra concurrency from
-the profile: sync cotrain gets `online_rollout.num_envs=12`; Ray async online
-(`cotrain_engine=async`) gets `env.num_workers=12` for osmesa, or
-`env.num_workers=6` and `env.envs_per_worker=2` for EGL unless explicitly
-overridden. For EGL, the launcher also expands RLinf-style
-`cluster.component_placement`: env workers span GPU 0-5, rollout inference stays a
-single worker on GPU 0, and the learner/actor stays a single worker on GPU 5. Each
-worker owns `CUDA_VISIBLE_DEVICES` and `MUJOCO_EGL_DEVICE_ID`; child env slots
-inherit that regime.
+the profile: sync cotrain gets `online_rollout.num_envs=12`; Ray async manual cotrain
+(`cotrain_engine=async`) derives `manual_cotrain.ngpu=6` and
+`manual_cotrain.envs_per_worker=2` unless explicitly overridden. The manual route then
+uses its own placement planner: GPU0 hosts the real env, rollout worker, and learner;
+GPU1-5 host WMEnv workers, rollout workers, and ActorGroup FSDP ranks. Each EGL env
+worker owns its render device; child env slots inherit that regime.
 
 ### Mainline Hydra Config
 
@@ -111,42 +109,38 @@ classifier:
 
 The Ray async online phase is selected by `cotrain_engine=async`. The launcher first
 runs the same sync warmup-only phase, writes `ray_async_init.ckpt`, then starts
-`experiment=online_cotrain_ray_oft_backbone_latent` (or the action-hidden async
-experiment selected by `cotrain_async_experiment`). Those Ray configs already carry
-the RLinf-style placement contract:
+`experiment=manual_cotrain_ray_oft_backbone_latent` by default. That route follows the
+manual-notes four-group topology:
 
 ```yaml
-render_backend: osmesa  # override with render_backend=egl
-cluster:
-  component_placement:
-    env: 0
-    rollout: 1
-    actor: 1
-env:
-  num_workers: 1
-  envs_per_worker: 4
-```
-
-With `render_backend=egl`, the base experiment is the small two-GPU default: GPU 0
-is the EnvWorker/render GPU and GPU 1 hosts rollout inference plus learner/actor.
-For a 6-GPU production run, use the launcher form above (`profile=multi_gpu ngpu=6
-cotrain_engine=async render_backend=egl`); it overrides the Ray online phase to:
-
-```yaml
-cluster:
-  component_placement:
-    env: 0-5
-    rollout: 0
-    actor: 5
-env:
-  num_workers: 6
+_target_: dreamervla.runners.ManualCotrainRayRunner
+manual_cotrain:
+  ngpu: 6
   envs_per_worker: 2
+  rollout_epoch: 16
+  max_steps_per_rollout_epoch: 256
+  num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
 ```
 
-Do not set `rollout: all` or `actor: all` for this DreamerVLA Ray runner yet.
-Unlike RLinf's full embodied stack, this runner only shards env workers; rollout
-inference and learner are single-worker contracts and startup validation rejects
-multi-worker compute placement.
+For a 6-GPU production run, use the launcher form above
+(`profile=multi_gpu ngpu=6 cotrain_engine=async render_backend=egl`). The effective
+manual placement is:
+
+```text
+GPU0:
+  RealEnvWorker
+  MultiStepRolloutWorker
+  LearnerWorker
+
+GPU1..GPU5:
+  WMEnvWorker
+  MultiStepRolloutWorker
+  EmbodiedFSDPActor rank
+```
+
+Do not tune this route through old `online_cotrain_ray_*` placement assumptions unless
+you explicitly choose the legacy runner. Manual cotrain placement is driven by
+`manual_cotrain.ngpu` and `manual_cotrain.envs_per_worker`.
 
 ### Run Stages Separately
 
@@ -214,13 +208,13 @@ rank 0 streams progress, and the launcher prints one **aggregate** summary
 `multi_gpu` batch sizes are per-GPU (global = value × `ngpu`); lower them on OOM. Add
 `cotrain_engine=async` for the RLinf-style rollout⟂training overlap loop (Ray only).
 
-### Ray async control plane and WorldModelEnv
+### Manual Ray async control plane and WorldModelEnv
 
-Ray async cotrain still uses the normal Dreamer-VLA Runner lifecycle. The
-`OnlineCotrainRayRunner` is the control plane: it starts ReplayWorker,
-EnvWorker, inference/policy worker, and LearnerWorker; schedules rollout rounds;
-tracks `policy`, `world_model`, and `classifier` versions; and synchronizes those
-versions only at rollout boundaries.
+Ray async cotrain still uses the normal DreamerVLA Runner lifecycle. The
+`ManualCotrainRayRunner` is the current control plane: it starts ReplayWorker,
+LearnerGroup, ActorGroup, RolloutGroup, RealEnvGroup, and optional WMEnvGroup;
+schedules global steps; tracks `policy`, `world_model`, and `classifier` versions;
+and synchronizes those versions only at rollout/update boundaries.
 
 There are two EnvWorker backends:
 
@@ -230,27 +224,24 @@ There are two EnvWorker backends:
   `LatentWorldModelEnv` computes `next_obs, reward, done, info` from the current
   world model and classifier/verifier snapshot.
 
-Policy hidden outputs are optional. The policy worker's required contract is
-action selection from observations; hidden sidecars are only emitted when the
-active route asks for them. The tiny route
-`experiment=online_cotrain_ray_world_model_env_tiny` sets
-`inference.cfg.emit_hidden_sidecar=false` and proves that sampling can complete
-because `WorldModelEnv` constructs replay fields from its own latent state.
+Policy hidden outputs are route-dependent. In the manual OpenVLA-OFT route,
+RolloutGroup can encode real image observations through `OFTRolloutBundle`, emit
+`obs_embedding`/`lang_emb`, and return complete `forward_inputs` for ActorGroup PPO.
+WMEnv can bootstrap initial latent/lang/proprio state from replay when those sidecars
+exist.
 
-Use this low-cost smoke before running large LIBERO cotrain changes:
+Use the manual tiny smoke before running large LIBERO cotrain changes:
 
 ```bash
-PYTHONPATH=. WANDB_MODE=offline HYDRA_FULL_ERROR=1 \
+PYTHONPATH=. WANDB_MODE=offline \
 python -m dreamervla.train \
-  experiment=online_cotrain_ray_world_model_env_tiny \
-  logger=tensorboard \
-  training.out_dir=/tmp/dvla_world_model_env_smoke \
-  rollout.steps=9
+  experiment=manual_cotrain_ray_tiny \
+  training.out_dir=/tmp/dvla_manual_cotrain_tiny_smoke
 ```
 
-Expected final metrics include `sync/policy_version`, `sync/wm_version`, and
-`sync/classifier_version`. These versions are published by LearnerWorker after
-learning and applied by the Runner at the next sampling boundary.
+Expected output includes the manual group banner and one completed short global step.
+The older `online_cotrain_ray_world_model_env_tiny` route remains a legacy
+WorldModelEnv smoke, not the current manual-cotrain control plane.
 
 ## Output
 
