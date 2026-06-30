@@ -302,11 +302,16 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
         cluster.shutdown()
 
 
-def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set() -> None:
+def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set(monkeypatch) -> None:
     if ray.is_initialized():
         ray.shutdown()
     cluster = Cluster()
     try:
+        traces: list[str] = []
+        monkeypatch.setattr(
+            "dreamervla.workers.rollout.multistep_rollout_worker._hs_trace",
+            traces.append,
+        )
         input_name = f"test-rollout-keyed-in-{uuid.uuid4().hex}"
         output_name = f"test-rollout-keyed-out-{uuid.uuid4().hex}"
         input_channel = Channel.create(input_name)
@@ -339,6 +344,16 @@ def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set() -> None
         assert isinstance(second, RolloutResultMsg)
         assert first.step == 0
         assert second.step == 10
+        assert any(
+            "[rollout rank=0] recv action request batch_size=2" in line
+            for line in traces
+        )
+        assert any(
+            "[rollout rank=0] send action response batch_size=2" in line
+            for line in traces
+        )
+        assert any("[rollout rank=0] recv StopMsg key=0:0" in line for line in traces)
+        assert any("[rollout rank=0] generate exit generated=2" in line for line in traces)
     finally:
         cluster.shutdown()
 

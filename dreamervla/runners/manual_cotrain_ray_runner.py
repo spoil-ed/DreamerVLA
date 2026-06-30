@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +27,12 @@ from dreamervla.scheduler.placement import (
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
+from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
+from dreamervla.workers.cotrain.messages import StopMsg
 from dreamervla.workers.cotrain.placement import (
     ManualCotrainPlacementPlan,
     build_manual_cotrain_placement,
 )
-from dreamervla.workers.cotrain.messages import StopMsg
 from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker, WMEnvWorker
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRolloutWorker
@@ -252,9 +253,11 @@ class ManualCotrainRayRunner(BaseRunner):
                 replay_group.set_policy_version(global_step).wait()
         stage_start = mark_stage("actor_to_rollout_sync", stage_start)
 
+        _hs_trace(f"[global_step={global_step}] EnvGroup.interact start")
         env_results = [real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)]
         if wm_env is not None:
             env_results.append(wm_env.interact(env_channel_name, rollout_channel_name, actor_channel_name))
+        _hs_trace(f"[global_step={global_step}] RolloutGroup.generate start")
         rollout_result = rollout.generate(
             env_channel_name,
             rollout_channel_name,
@@ -271,14 +274,20 @@ class ManualCotrainRayRunner(BaseRunner):
             rollout_result,
             timeout_s=self._env_rollout_timeout_s(),
         )
+        _hs_trace(f"[global_step={global_step}] EnvGroup.interact done")
         stage_start = mark_stage("env_interact_and_rollout_generate", stage_start)
         for rollout_rank, _ in enumerate(groups["RolloutGroup"].workers):
             for slot_id in range(self._envs_per_worker()):
+                key = f"{int(rollout_rank)}:{int(slot_id)}"
+                _hs_trace(
+                    f"[env rank={int(rollout_rank)}] send StopMsg key={key}"
+                )
                 groups["env_channel"].put(
                     StopMsg(reason="global_step_complete"),
-                    key=f"{int(rollout_rank)}:{int(slot_id)}",
+                    key=key,
                 )
         rollout_metrics = _sum_metric_lists([rollout_result.wait()])
+        _hs_trace(f"[global_step={global_step}] RolloutGroup.generate done")
         expected_shards = int(env_metrics.get("env/trajectory_shards", 0.0))
         actor_recv_metrics = self._receive_actor_trajectories(
             groups,
@@ -934,7 +943,9 @@ def _wait_env_metrics_with_rollout_guard(
             raise TimeoutError(
                 "EnvGroup.interact did not finish before "
                 f"manual_cotrain.env_rollout_timeout_s={float(timeout_s):.1f}s; "
-                "RolloutGroup.generate is still running or waiting for StopMsg"
+                "RolloutGroup.generate is still running or waiting for StopMsg. "
+                "Set DVLA_COTRAIN_HANDSHAKE_TRACE=1 before launching to log "
+                "EnvGroup/RolloutGroup action handshakes."
             )
         time.sleep(max(0.0, float(poll_s)))
     return _sum_metric_lists([result.wait() for result in env_results])

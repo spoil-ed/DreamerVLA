@@ -6,12 +6,12 @@ from typing import Any
 import numpy as np
 import pytest
 
+import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
 from dreamervla.workers.cotrain.messages import (
     ObservationMsg,
     RolloutResultMsg,
     TrajectoryShard,
 )
-import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
 from dreamervla.workers.env.trajectory_env_worker import (
     BaseTrajectoryEnvWorker,
     RealEnvWorker,
@@ -632,6 +632,8 @@ def test_wm_env_worker_requires_component_state_loaders() -> None:
 def test_interact_routes_observations_rollout_results_and_trajectory(
     monkeypatch,
 ) -> None:
+    traces: list[str] = []
+    monkeypatch.setattr(trajectory_env_worker, "_hs_trace", traces.append)
     worker = RealEnvWorker(
         env_cfg=_counter_env_cfg(),
         num_slots=1,
@@ -683,6 +685,26 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         assert metrics["env/real_env/actor_put_s"] >= 0.0
         assert metrics["env/real_env/actor_put_flush_s"] >= 0.0
         assert metrics["env/real_env/interact_loop_s"] >= 0.0
+        assert any("[env rank=0 role=real_env] reset start" in line for line in traces)
+        assert any("[env rank=0 role=real_env] reset done" in line for line in traces)
+        assert any(
+            "[env rank=0 role=real_env] send action request batch_size=1 key=0:0"
+            in line
+            for line in traces
+        )
+        assert any(
+            "[env rank=0 role=real_env] recv action response batch_size=1 key=0:0"
+            in line
+            for line in traces
+        )
+        assert any(
+            "[env rank=0 role=real_env] step 0 start key=0:0" in line
+            for line in traces
+        )
+        assert any(
+            "[env rank=0 role=real_env] step 0 done key=0:0" in line
+            for line in traces
+        )
     finally:
         worker.close()
 

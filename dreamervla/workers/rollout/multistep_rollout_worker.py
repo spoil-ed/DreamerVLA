@@ -14,6 +14,7 @@ from torch import nn
 from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
+from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg, StopMsg
 
 _DEFAULT_PATCH_STORE = "DreamerVLAActorRolloutPatchStore"
@@ -198,25 +199,47 @@ class MultiStepRolloutWorker(Worker):
         channel_put_s = 0.0
         loop_start = time.perf_counter()
         while True:
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
+            )
             get_start = time.perf_counter()
             msg = input_channel.get(key=str(key))
             channel_get_s += time.perf_counter() - get_start
             if isinstance(msg, StopMsg):
+                _hs_trace(
+                    f"[rollout rank={int(self.rank)}] recv StopMsg key={key}"
+                )
                 break
             if not isinstance(msg, ObservationMsg):
                 raise TypeError(
                     "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
                     f"got {type(msg).__name__}"
                 )
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] recv action request "
+                f"batch_size=1 key={key}"
+            )
             _sync_if_cuda(self.torch_device)
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] policy forward start batch_size=1"
+            )
             forward_start = time.perf_counter()
             result = self._generate_once_with_context(msg, key=str(key))
             _sync_if_cuda(self.torch_device)
             policy_forward_s += time.perf_counter() - forward_start
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] policy forward done batch_size=1"
+            )
             put_start = time.perf_counter()
             output_channel.put(result, key=result.key)
             channel_put_s += time.perf_counter() - put_start
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] send action response batch_size=1"
+            )
             generated += 1
+        _hs_trace(
+            f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}"
+        )
         return _rollout_loop_metrics(
             generated=generated,
             loop_s=time.perf_counter() - loop_start,
@@ -248,21 +271,40 @@ class MultiStepRolloutWorker(Worker):
                 if slot_id not in active_slots:
                     continue
                 key = f"{int(self.rank)}:{int(slot_id)}"
+                _hs_trace(
+                    f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
+                )
                 get_start = time.perf_counter()
                 msg = input_channel.get(key=key)
                 channel_get_s += time.perf_counter() - get_start
                 if isinstance(msg, StopMsg):
                     active_slots.remove(slot_id)
+                    _hs_trace(
+                        f"[rollout rank={int(self.rank)}] recv StopMsg key={key} "
+                        f"remaining={len(active_slots)}"
+                    )
                     continue
                 if not isinstance(msg, ObservationMsg):
                     raise TypeError(
                         "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
                         f"got {type(msg).__name__}"
                     )
+                _hs_trace(
+                    f"[rollout rank={int(self.rank)}] recv action request OK key={key}"
+                )
                 messages.append((key, msg))
             if not messages:
                 continue
+            keys_csv = ",".join(key for key, _ in messages)
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] recv action request "
+                f"batch_size={len(messages)} keys={keys_csv}"
+            )
             _sync_if_cuda(self.torch_device)
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] policy forward start "
+                f"batch_size={len(messages)}"
+            )
             forward_start = time.perf_counter()
             results = self._generate_batch_with_context(
                 [msg for _, msg in messages],
@@ -270,11 +312,22 @@ class MultiStepRolloutWorker(Worker):
             )
             _sync_if_cuda(self.torch_device)
             policy_forward_s += time.perf_counter() - forward_start
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] policy forward done "
+                f"batch_size={len(messages)}"
+            )
             for result in results:
                 put_start = time.perf_counter()
                 output_channel.put(result, key=result.key)
                 channel_put_s += time.perf_counter() - put_start
                 generated += 1
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] send action response "
+                f"batch_size={len(results)}"
+            )
+        _hs_trace(
+            f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}"
+        )
         return _rollout_loop_metrics(
             generated=generated,
             loop_s=time.perf_counter() - loop_start,
@@ -450,8 +503,8 @@ def _hidden_and_extra_from_encoded(value: Any) -> tuple[Any, dict[str, Any]]:
         raise ValueError(
             "encoded observation mapping must include obs_embedding, hidden, or latent"
         )
-    if hasattr(value, "lang_emb") and getattr(value, "lang_emb") is not None:
-        extra["lang_emb"] = getattr(value, "lang_emb")
+    if hasattr(value, "lang_emb") and value.lang_emb is not None:
+        extra["lang_emb"] = value.lang_emb
     try:
         hidden = value[1]
     except (TypeError, IndexError) as exc:

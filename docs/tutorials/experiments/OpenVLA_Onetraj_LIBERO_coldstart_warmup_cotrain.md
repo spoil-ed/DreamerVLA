@@ -72,6 +72,63 @@ bash scripts/e2e_manual_cotrain_async.sh \
 
 `gpus=1,2,3,4,5` 会在进程内重新编号，所以程序里的 visible GPU0 对应物理 GPU1。
 
+### 从已有 warmup 权重直接进入 cotrain
+
+如果 collection 和 offline warmup 已经跑完，且 `${RUN_ROOT}/cotrain/ckpt/` 下已经有：
+
+```text
+wm_warmup.ckpt
+classifier_warmup.ckpt
+```
+
+推荐仍然走 coldstart launcher，只把 phase 切到 online。它会跳过 collection/warmup，
+必要时把两个 warmup checkpoint 合并成 manual Ray runner 需要的 `ray_async_init.ckpt`：
+
+```bash
+mkdir -p logs
+export RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<run>"
+
+DVLA_COTRAIN_HANDSHAKE_TRACE=1 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal ngpu=6 profile=multi_gpu \
+  cotrain_engine=async cotrain_phase=online \
+  run_root="${RUN_ROOT}" render_backend=egl \
+  manual_cotrain.envs_per_worker=2 \
+  manual_cotrain.global_steps=25 \
+  > logs/cotrain_ray_async_online_from_warmup.log 2>&1
+```
+
+如果你已经有 `${RUN_ROOT}/cotrain/ckpt/ray_async_init.ckpt`，也可以直接启动
+manual cotrain runner：
+
+```bash
+mkdir -p logs
+export RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<run>"
+
+DVLA_COTRAIN_HANDSHAKE_TRACE=1 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+python -m dreamervla.train \
+  experiment=manual_cotrain_ray_oft_backbone_latent \
+  task=openvla_onetraj_coldstart_libero \
+  training.out_dir="${RUN_ROOT}/cotrain" \
+  init.warmup_ckpt_path="${RUN_ROOT}/cotrain/ckpt/ray_async_init.ckpt" \
+  render_backend=egl env.num_workers=6 env.envs_per_worker=2 \
+  cluster.component_placement.env=0-5 \
+  cluster.component_placement.rollout=0 \
+  cluster.component_placement.actor=5 \
+  ++env.cfg.egl_spawn_stagger_s=2.0 \
+  ++env.cfg.egl_spawn_init_timeout_s=900 \
+  manual_cotrain.ngpu=6 +cluster.num_gpus=6 \
+  manual_cotrain.envs_per_worker=2 \
+  manual_cotrain.global_steps=25 \
+  > logs/cotrain_manual_async_from_warmup.log 2>&1
+```
+
+`DVLA_COTRAIN_HANDSHAKE_TRACE=1` 会输出 env/rollout action 握手日志，用来定位
+EnvGroup 卡在 reset、step、action request/response，还是 RolloutGroup 卡在 policy
+forward 或 StopMsg。
+
 排障或对比时可以使用以下入口：
 
 ```bash

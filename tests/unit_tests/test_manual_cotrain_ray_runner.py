@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-import torch
 import pytest
+import torch
 from omegaconf import OmegaConf
 
 import dreamervla.runners as runners
@@ -607,6 +607,11 @@ class _EarlyFailedRollout:
         raise RuntimeError("rank0 failed key=0:0")
 
 
+class _RunningRollout:
+    def ready(self):
+        return []
+
+
 def test_wait_env_metrics_surfaces_rollout_failure_before_env_wait() -> None:
     with pytest.raises(RuntimeError, match="rank0 failed key=0:0"):
         _wait_env_metrics_with_rollout_guard(
@@ -617,7 +622,19 @@ def test_wait_env_metrics_surfaces_rollout_failure_before_env_wait() -> None:
         )
 
 
-def test_run_global_step_syncs_actor_policy_and_wm_env_states() -> None:
+def test_wait_env_metrics_timeout_points_to_handshake_trace() -> None:
+    with pytest.raises(TimeoutError, match="DVLA_COTRAIN_HANDSHAKE_TRACE=1"):
+        _wait_env_metrics_with_rollout_guard(
+            [_NeverReady()],
+            _RunningRollout(),
+            timeout_s=0.001,
+            poll_s=0.0,
+        )
+
+
+def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> None:
+    traces: list[str] = []
+    monkeypatch.setattr(manual_runner, "_hs_trace", traces.append)
     cfg = _cfg(ngpu=2)
     cfg.actor.train_cfg.algorithm_cfg.group_size = 1
     runner = runners.ManualCotrainRayRunner(cfg)
@@ -654,6 +671,11 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states() -> None:
     assert events.index("actor_recv_start") < events.index("env_wait")
     assert [key for key, _ in groups["env_channel"].puts] == ["0:0", "1:0"]
     assert all(isinstance(value, StopMsg) for _, value in groups["env_channel"].puts)
+    assert "[global_step=1] EnvGroup.interact start" in traces
+    assert "[global_step=1] RolloutGroup.generate start" in traces
+    assert "[global_step=1] EnvGroup.interact done" in traces
+    assert "[env rank=0] send StopMsg key=0:0" in traces
+    assert "[env rank=1] send StopMsg key=1:0" in traces
     assert actor.recv_calls == [((0,), "actor", 1), ((1,), "actor", 1)]
     assert actor.load_calls == 0
     assert len(actor.loaded_shards) == 2

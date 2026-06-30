@@ -13,16 +13,17 @@ import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.egl_device import (
+    apply_egl_device_regime,
+    log_egl_device_diagnostics_from_env,
+)
+from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
     ObservationMsg,
     RolloutResultMsg,
     TrajectoryShard,
-    as_tensor,
     _shard_loss_mask,
-)
-from dreamervla.utils.egl_device import (
-    apply_egl_device_regime,
-    log_egl_device_diagnostics_from_env,
+    as_tensor,
 )
 
 _ACTOR_PUT_FLUSH_EVERY = 64
@@ -554,7 +555,6 @@ class BaseTrajectoryEnvWorker(Worker):
                 f"({self.num_action_chunks})"
             )
 
-        chunk_len = int(actions_np.shape[0])
         action_dim = int(actions_np.shape[-1])
         rewards = np.zeros((self.num_action_chunks,), dtype=np.float32)
         dones = np.zeros((self.num_action_chunks,), dtype=np.bool_)
@@ -679,10 +679,20 @@ class BaseTrajectoryEnvWorker(Worker):
         pending_actor_puts: list[Any] = []
         for _ in range(self.rollout_epoch):
             self._reset_actor_shard_buffers()
+            _hs_trace(
+                f"[env rank={int(self.rank)} role={self.role}] "
+                f"reset start num_slots={int(self.num_slots)}"
+            )
             for message in self.bootstrap_obs():
                 put_start = time.perf_counter()
                 env_channel.put(message, key=message.key)
                 metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"send action request batch_size=1 key={message.key} "
+                    "phase=bootstrap"
+                )
+            _hs_trace(f"[env rank={int(self.rank)} role={self.role}] reset done")
 
             target_chunk_steps = self._chunk_steps_per_rollout_epoch()
             chunk_steps_by_slot = [0 for _ in range(self.num_slots)]
@@ -691,12 +701,28 @@ class BaseTrajectoryEnvWorker(Worker):
                     if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
                         continue
                     key = self._slot_key(slot_id)
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response WAIT key={key}"
+                    )
                     get_start = time.perf_counter()
                     result = rollout_channel.get(key=key)
                     metrics["env/rollout_get_s"] += time.perf_counter() - get_start
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response batch_size=1 key={key}"
+                    )
                     apply_start = time.perf_counter()
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"step {int(chunk_steps_by_slot[slot_id])} start key={key}"
+                    )
                     shard = self.apply_rollout_result(result)
                     metrics["env/apply_step_s"] += time.perf_counter() - apply_start
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"step {int(chunk_steps_by_slot[slot_id])} done key={key}"
+                    )
                     self._buffer_actor_shard(shard)
                     chunk_steps_by_slot[slot_id] += 1
                     metrics["env/chunk_steps"] += 1.0
@@ -733,7 +759,13 @@ class BaseTrajectoryEnvWorker(Worker):
                         message = self._observation_msg(slot_id, obs)
                         put_start = time.perf_counter()
                         env_channel.put(message, key=message.key)
-                        metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                        metrics["env/channel_put_obs_s"] += (
+                            time.perf_counter() - put_start
+                        )
+                        _hs_trace(
+                            f"[env rank={int(self.rank)} role={self.role}] "
+                            f"send action request batch_size=1 key={message.key}"
+                        )
             for slot_id in range(self.num_slots):
                 put_s, emitted = self._flush_buffered_actor_shard(
                     slot_id,
@@ -750,10 +782,28 @@ class BaseTrajectoryEnvWorker(Worker):
                     message.obs["_final_bootstrap"] = True
                     put_start = time.perf_counter()
                     env_channel.put(message, key=message.key)
-                    metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                    metrics["env/channel_put_obs_s"] += (
+                        time.perf_counter() - put_start
+                    )
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"send action request batch_size=1 key={message.key} "
+                        "phase=final_bootstrap"
+                    )
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response WAIT key={self._slot_key(slot_id)} "
+                        "phase=final_bootstrap"
+                    )
                     get_start = time.perf_counter()
                     rollout_channel.get(key=self._slot_key(slot_id))
                     metrics["env/rollout_get_s"] += time.perf_counter() - get_start
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        "recv action response batch_size=1 "
+                        f"key={self._slot_key(slot_id)} "
+                        "phase=final_bootstrap"
+                    )
                     metrics["env/final_bootstrap_requests"] += 1.0
                 metrics["env/episodes_flushed"] += float(
                     self._flush_partial_episode(slot_id)
@@ -762,6 +812,10 @@ class BaseTrajectoryEnvWorker(Worker):
             pending_actor_puts
         )
         metrics["env/interact_loop_s"] += time.perf_counter() - interact_start
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] interact done "
+            f"chunk_steps={int(metrics['env/chunk_steps'])}"
+        )
         return self._finalize_interact_metrics(metrics)
 
     def _new_interact_metrics(self) -> dict[str, float]:
@@ -882,19 +936,34 @@ class BaseTrajectoryEnvWorker(Worker):
         pending_actor_puts: list[Any] = []
         for _ in range(self.rollout_epoch):
             self._reset_actor_shard_buffers()
+            _hs_trace(
+                f"[env rank={int(self.rank)} role={self.role}] "
+                f"reset start num_slots={int(self.num_slots)}"
+            )
             for message in self.bootstrap_obs():
                 put_start = time.perf_counter()
                 env_channel.put(message, key=message.key)
                 metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"send action request batch_size=1 key={message.key} "
+                    "phase=bootstrap"
+                )
+            _hs_trace(f"[env rank={int(self.rank)} role={self.role}] reset done")
 
             target_chunk_steps = self._chunk_steps_per_rollout_epoch()
             chunk_steps_by_slot = [0 for _ in range(self.num_slots)]
             while any(steps < target_chunk_steps for steps in chunk_steps_by_slot):
                 results: list[RolloutResultMsg] = []
+                keys: list[str] = []
                 for slot_id in range(self.num_slots):
                     if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
                         continue
                     key = self._slot_key(slot_id)
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response WAIT key={key}"
+                    )
                     get_start = time.perf_counter()
                     result = rollout_channel.get(key=key)
                     metrics["env/rollout_get_s"] += time.perf_counter() - get_start
@@ -904,9 +973,31 @@ class BaseTrajectoryEnvWorker(Worker):
                             f"got {type(result).__name__}"
                         )
                     results.append(result)
+                    keys.append(key)
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response batch_size=1 key={key}"
+                    )
                 apply_start = time.perf_counter()
+                keys_csv = ",".join(keys)
+                first_step = (
+                    min(
+                        int(chunk_steps_by_slot[int(result.slot_id)])
+                        for result in results
+                    )
+                    if results
+                    else 0
+                )
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"step {first_step} start batch_size={len(results)} keys={keys_csv}"
+                )
                 applied = self._apply_wm_rollout_results_batch(results)
                 metrics["env/apply_step_s"] += time.perf_counter() - apply_start
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"step {first_step} done batch_size={len(results)} keys={keys_csv}"
+                )
                 for shard, shard_metrics in applied:
                     self._buffer_actor_shard(shard)
                     slot_id = int(shard.slot_id)
@@ -939,7 +1030,13 @@ class BaseTrajectoryEnvWorker(Worker):
                         message = self._observation_msg(slot_id, obs)
                         put_start = time.perf_counter()
                         env_channel.put(message, key=message.key)
-                        metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                        metrics["env/channel_put_obs_s"] += (
+                            time.perf_counter() - put_start
+                        )
+                        _hs_trace(
+                            f"[env rank={int(self.rank)} role={self.role}] "
+                            f"send action request batch_size=1 key={message.key}"
+                        )
             for slot_id in range(self.num_slots):
                 put_s, emitted = self._flush_buffered_actor_shard(
                     slot_id,
@@ -956,16 +1053,38 @@ class BaseTrajectoryEnvWorker(Worker):
                     message.obs["_final_bootstrap"] = True
                     put_start = time.perf_counter()
                     env_channel.put(message, key=message.key)
-                    metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+                    metrics["env/channel_put_obs_s"] += (
+                        time.perf_counter() - put_start
+                    )
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"send action request batch_size=1 key={message.key} "
+                        "phase=final_bootstrap"
+                    )
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        f"recv action response WAIT key={self._slot_key(slot_id)} "
+                        "phase=final_bootstrap"
+                    )
                     get_start = time.perf_counter()
                     rollout_channel.get(key=self._slot_key(slot_id))
                     metrics["env/rollout_get_s"] += time.perf_counter() - get_start
+                    _hs_trace(
+                        f"[env rank={int(self.rank)} role={self.role}] "
+                        "recv action response batch_size=1 "
+                        f"key={self._slot_key(slot_id)} "
+                        "phase=final_bootstrap"
+                    )
                     metrics["env/final_bootstrap_requests"] += 1.0
                 metrics["env/episodes_flushed"] += float(
                     self._flush_partial_episode(slot_id)
                 )
         metrics["env/actor_put_flush_s"] += self._flush_actor_puts(
             pending_actor_puts
+        )
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] interact done "
+            f"chunk_steps={int(metrics['env/chunk_steps'])}"
         )
         return self._finalize_interact_metrics(metrics)
 
