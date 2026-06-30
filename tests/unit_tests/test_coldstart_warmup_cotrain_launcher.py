@@ -1363,7 +1363,7 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" in plan.cotrain_online_cmd
-    assert "manual_cotrain.env_rollout_timeout_s=1500" in plan.cotrain_online_cmd
+    assert "+manual_cotrain.env_rollout_timeout_s=1500" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
 
 
@@ -1494,10 +1494,13 @@ def test_async_cotrain_online_command_uses_valid_ray_hydra_keys(tmp_path) -> Non
 
     cfg = _launcher_cfg()
     cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
     plan = build_pipeline_plan(
         mode="ray",
         run_root=tmp_path,
         python="python",
+        profile="multi_gpu",
+        ngpu=2,
         launcher_cfg=cfg,
         cotrain_overrides=["manual_cotrain.global_steps=4", "env.num_workers=1"],
     )

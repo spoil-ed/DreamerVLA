@@ -499,7 +499,7 @@ def _manual_cotrain_online_overrides(
         render_backend=render_backend,
     )
     if rollout_timeout_s is not None:
-        defaults.append(f"manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
+        defaults.append(f"+manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
     if _requested_gpu_count(ngpu) == 0:
         defaults.extend(
             [
