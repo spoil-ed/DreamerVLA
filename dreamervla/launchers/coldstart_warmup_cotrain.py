@@ -467,6 +467,7 @@ def _manual_cotrain_online_overrides(
     profile_cfg: Mapping[str, Any],
     *,
     ngpu: int,
+    render_backend: str,
     explicit_overrides: Sequence[str],
     online_budget_overrides: Sequence[str] = (),
 ) -> list[str]:
@@ -493,6 +494,12 @@ def _manual_cotrain_online_overrides(
     )
     if global_steps is not None:
         defaults.append(f"manual_cotrain.global_steps={global_steps}")
+    rollout_timeout_s = _manual_cotrain_env_rollout_timeout_s(
+        profile_cfg,
+        render_backend=render_backend,
+    )
+    if rollout_timeout_s is not None:
+        defaults.append(f"manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
     if _requested_gpu_count(ngpu) == 0:
         defaults.extend(
             [
@@ -506,6 +513,23 @@ def _manual_cotrain_online_overrides(
         if not _has_override(explicit_overrides, _override_key(override)):
             overrides.append(override)
     return overrides
+
+
+def _manual_cotrain_env_rollout_timeout_s(
+    profile_cfg: Mapping[str, Any],
+    *,
+    render_backend: str,
+) -> int | None:
+    if str(render_backend).strip().lower() != "egl":
+        return None
+    egl_cfg = _plain(profile_cfg).get("ray_online_egl_spawn", {})
+    if not isinstance(egl_cfg, Mapping):
+        return None
+    raw = egl_cfg.get("init_timeout_s")
+    if raw is None:
+        return None
+    init_timeout_s = int(float(raw))
+    return max(1200, init_timeout_s + 600)
 
 
 def _manual_cotrain_global_steps_from_budget(
@@ -785,6 +809,7 @@ def build_pipeline_plan(
             _manual_cotrain_online_overrides(
                 profile_cfg,
                 ngpu=selected_ngpu,
+                render_backend=async_render_backend,
                 explicit_overrides=[
                     *explicit_online_overrides,
                     *ray_online_overrides,
