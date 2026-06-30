@@ -60,3 +60,11 @@ Real LIBERO collection
 - Sync cotrain experiment：`online_cotrain_pipeline_oft_backbone_latent`
 - Manual Ray experiment：`manual_cotrain_ray_oft_backbone_latent`
 - Eval config：`configs/scripts/eval_libero_vla.yaml`
+
+## TODO
+
+- 编排解耦：各 stage 的 runner 已经进程级解耦（每个 stage = 一次 `python -m dreamervla.train
+  experiment=<x>` -> 一个 `_target_`，无进程内耦合）。对固定、无跨阶段穿线的 recipe，可考虑用薄 shell
+  `cmd1 && cmd2 && cmd3` 顺序激活各 runner（更直观）。但跨阶段胶水（路径穿线、`ngpu>1` 的 torchrun 包裹、
+  ray/noray collect 选择、episode 级续采、async warmup/online 拆相、manifest）仍应留在可单测的 Python
+  launcher，遵循「薄 shell、逻辑走 `python -m`」。落地范围 = 无胶水路径的 shell 便捷封装，不是替换 launcher。

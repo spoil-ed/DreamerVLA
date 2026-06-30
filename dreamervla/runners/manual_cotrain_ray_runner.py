@@ -66,11 +66,18 @@ class ManualCotrainRayRunner(BaseRunner):
         try:
             cluster.require_single_node()
             groups = self._build_groups(cluster)
+            _hs_trace("[manual-cotrain] resume payload load start")
             resume_payload = self._manual_resume_payload()
             resume_step = 0
             if resume_payload is not None:
                 resume_step = int(resume_payload.get("global_step", 0))
+                _hs_trace(
+                    f"[manual-cotrain] restore resume state start step={resume_step}"
+                )
                 self._restore_manual_resume_state(groups, resume_payload)
+                _hs_trace("[manual-cotrain] restore resume state done")
+            else:
+                _hs_trace("[manual-cotrain] no resume payload")
             print(
                 "[manual-cotrain] groups="
                 + ",".join(self._target_group_names()),
@@ -110,6 +117,7 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _build_groups(self, cluster: Cluster) -> dict[str, Any]:
         plan = self._placement_plan()
+        _hs_trace(f"[build_groups] start ngpu={int(plan.ngpu)}")
         env_channel_name = f"manual-cotrain-env-{uuid.uuid4().hex}"
         rollout_channel_name = f"manual-cotrain-rollout-{uuid.uuid4().hex}"
         actor_channel_name = f"manual-cotrain-actor-{uuid.uuid4().hex}"
@@ -120,12 +128,15 @@ class ManualCotrainRayRunner(BaseRunner):
         replay = None
         replay_cfg = OmegaConf.select(self.cfg, "replay.cfg", default=None)
         if replay_cfg is not None:
+            _hs_trace("[build_groups] launch ReplayWorker start")
             replay_group = WorkerGroup(
                 ReplayWorker,
                 self._cfg_dict("replay.cfg"),
             ).launch(cluster, NodePlacementStrategy(1), name="ReplayWorker")
             replay = replay_group.workers[0]
+            _hs_trace("[build_groups] launch ReplayWorker done")
 
+        _hs_trace("[build_groups] launch RealEnvWorker start")
         real_env_group = WorkerGroup(
             RealEnvWorker,
             self._real_env_cfg(),
@@ -143,9 +154,11 @@ class ManualCotrainRayRunner(BaseRunner):
             self._placement_for(plan.env_specs[0].gpu_ids),
             name="RealEnvWorker",
         )
+        _hs_trace("[build_groups] launch RealEnvWorker done")
         wm_gpus = [spec.gpu_ids[0] for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
         if wm_gpus:
+            _hs_trace(f"[build_groups] launch WMEnvWorker start gpus={wm_gpus}")
             wm_env_group = WorkerGroup(
                 WMEnvWorker,
                 self._cfg_dict("env.wm.cfg"),
@@ -164,7 +177,9 @@ class ManualCotrainRayRunner(BaseRunner):
                 ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in wm_gpus)),
                 name="WMEnvWorker",
             )
+            _hs_trace("[build_groups] launch WMEnvWorker done")
 
+        _hs_trace("[build_groups] launch MultiStepRolloutWorker start")
         rollout_group = WorkerGroup(
             MultiStepRolloutWorker,
             self._cfg_dict("rollout.policy_cfg", "actor.policy_cfg"),
@@ -176,7 +191,9 @@ class ManualCotrainRayRunner(BaseRunner):
             self._resource_map_for_specs(plan.rollout_specs),
             name="MultiStepRolloutWorker",
         )
+        _hs_trace("[build_groups] launch MultiStepRolloutWorker done")
 
+        _hs_trace("[build_groups] launch EmbodiedFSDPActor start")
         actor_group = WorkerGroup(
             EmbodiedFSDPActor,
             self._cfg_dict("actor.policy_cfg"),
@@ -187,7 +204,9 @@ class ManualCotrainRayRunner(BaseRunner):
             self._resource_map_for_specs(plan.actor_specs),
             name="EmbodiedFSDPActor",
         )
+        _hs_trace("[build_groups] launch EmbodiedFSDPActor done")
 
+        _hs_trace("[build_groups] launch LearnerWorker start")
         learner_group = WorkerGroup(
             LearnerWorker,
             self._cfg_dict("learner.model_cfg"),
@@ -199,6 +218,8 @@ class ManualCotrainRayRunner(BaseRunner):
             self._placement_for(plan.learner_spec.gpu_ids),
             name="LearnerWorker",
         )
+        _hs_trace("[build_groups] launch LearnerWorker done")
+        _hs_trace("[build_groups] all groups launched")
 
         return {
             "LearnerGroup": learner_group,

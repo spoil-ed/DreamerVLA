@@ -9,8 +9,8 @@ source of truth; this table is a reader index.
 | --- | --- | --- | --- |
 | collect, Ray | `experiment=collect_rollouts_ray` | `ColdStartRayCollectRunner` | current |
 | collect, no-Ray | `experiment=collect_rollouts_onetraj` | `CollectRolloutsRunner` | current |
-| sync warmup + cotrain baseline | `experiment=online_cotrain_pipeline_oft_backbone_latent` | `OnlineCotrainPipelineRunner` | current baseline |
-| async manual cotrain | `experiment=manual_cotrain_ray_oft_backbone_latent` | `ManualCotrainRayRunner` | current manual route |
+| sync warmup + cotrain baseline | `experiment=openvla_onetraj_libero_cotrain_noray` | `OnlineCotrainPipelineRunner` | current baseline |
+| async manual cotrain | `experiment=openvla_onetraj_libero_cotrain_ray` | `ManualCotrainRayRunner` | current manual route |
 | tiny manual smoke | `experiment=manual_cotrain_ray_tiny` | `ManualCotrainRayRunner` | local smoke |
 
 Pipeline launcher:

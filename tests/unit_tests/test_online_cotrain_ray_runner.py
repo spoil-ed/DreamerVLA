@@ -1087,7 +1087,7 @@ def test_ray_runner_reserves_episode_ids_from_rollout_dump_resume() -> None:
     "path",
     [
         "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
-        "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
+        "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
         "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
@@ -1115,7 +1115,7 @@ def test_ray_lumos_configs_use_non_degenerate_grpo_groups(path: str) -> None:
     "path",
     [
         "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
-        "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
+        "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
         "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
@@ -1158,7 +1158,7 @@ def test_ray_lumos_configs_expose_rlinf_rollout_scale(path: str) -> None:
             "online_cotrain_action_hidden",
         ),
         (
-            "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
+            "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
             "online_cotrain_backbone_latent",
         ),
         (
@@ -1190,7 +1190,7 @@ def test_ray_cotrain_configs_dump_one_hdf5_per_episode(
     "path",
     [
         "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
-        "configs/dreamervla/ray_online_cotrain_oft_backbone_latent.yaml",
+        "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
         "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
@@ -1693,7 +1693,7 @@ def test_online_cotrain_ray_oft_backbone_classifier_depth_matches_warmup() -> No
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         warmup_cfg = compose(
             config_name="train",
-            overrides=["experiment=online_cotrain_pipeline_oft_backbone_latent"],
+            overrides=["experiment=openvla_onetraj_libero_cotrain_noray"],
         )
         ray_cfg = compose(
             config_name="train",

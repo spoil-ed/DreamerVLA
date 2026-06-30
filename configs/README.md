@@ -126,8 +126,7 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | OpenVLA-OFT L1 one-trajectory SFT | `scripts/train_vla.sh experiment=openvla_oft_hdf5_one_trajectory_l1` | `openvla_oft_hdf5_one_trajectory_l1` |
 | WM training | `scripts/train_wm.sh` | `world_model_chunk` |
 | OpenVLA hidden_state WM training | `scripts/train_wm.sh experiment=oft_world_model_chunk` | `oft_world_model_chunk` |
-| DreamerVLA training | `scripts/train_dreamervla.sh` | `dreamervla_rynn_wm_lumos` |
-| OpenVLA hidden_state DreamerVLA | `scripts/train_dreamervla.sh experiment=dreamervla_oft_wm_lumos` | `dreamervla_oft_wm_lumos` |
+| DreamerVLA cotrain pipeline | `scripts/train_dreamervla.sh` | `openvla_onetraj_libero_cotrain_noray` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Experiments
@@ -145,12 +144,8 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `oft_discrete_token_world_model_chunk` | `worldmodel/openvla_oft_discrete_token_action_chunk` |
 | `latent_classifier_libero_goal_chunk` | `classifier/rynnvla_action_chunk` |
 | `oft_latent_classifier_chunk` | `classifier/openvla_oft_input_token_chunk` |
-| `dreamervla_rynn_wm_actor_critic` | `dreamervla/rynnvla_actor_critic` |
-| `dreamervla_rynn_wm_lumos` | `dreamervla/rynnvla_lumos` |
-| `dreamervla_oft_wm_lumos` | `dreamervla/openvla_oft_input_token_lumos` |
-| `dreamervla_oft_discrete_token_wm_lumos` | `dreamervla/openvla_oft_discrete_token_lumos` |
-| `online_lumos_libero_goal` | `dreamervla/online_lumos_libero_goal` |
-| `online_cotrain_ray_oft` | `dreamervla/ray_online_cotrain_oft_backbone_latent` |
+| `openvla_onetraj_libero_cotrain_noray` | `dreamervla/openvla_onetraj_libero_cotrain_noray` |
+| `openvla_onetraj_libero_cotrain_ray` | `dreamervla/openvla_onetraj_libero_cotrain_ray` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 
 Module configs use Hydra defaults to include the task config:

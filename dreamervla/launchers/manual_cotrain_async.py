@@ -156,7 +156,7 @@ def build_launch(argv: list[str]) -> ManualCotrainLaunch:
             sys.executable,
             "-m",
             "dreamervla.train",
-            "experiment=manual_cotrain_ray_oft_backbone_latent",
+            "experiment=openvla_onetraj_libero_cotrain_ray",
             "task=openvla_onetraj_coldstart_libero",
             "render_backend=egl",
             f"training.out_dir={out_dir}",

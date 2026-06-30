@@ -1,5 +1,5 @@
 name: train_dreamervla
-experiment: dreamervla_rynn_wm_lumos
+experiment: openvla_onetraj_libero_cotrain_noray
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false

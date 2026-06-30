@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /dreamervla: ray_online_cotrain_oft_backbone_latent
-  - _self_

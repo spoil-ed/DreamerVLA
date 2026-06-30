@@ -1,5 +1,0 @@
-# @package _global_
-# Ray async online cotrain for OpenVLA-OFT backbone_latent/query-before tokens.
-defaults:
-  - override /dreamervla: ray_online_cotrain_oft_backbone_latent
-  - _self_

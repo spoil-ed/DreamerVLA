@@ -1,0 +1,4 @@
+# @package _global_
+defaults:
+  - override /dreamervla: openvla_onetraj_libero_cotrain_ray
+  - _self_

@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /dreamervla: online_lumos_libero_goal
-  - _self_

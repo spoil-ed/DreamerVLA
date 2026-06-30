@@ -64,7 +64,7 @@ def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(
             config_name="train",
-            overrides=["experiment=online_cotrain_pipeline_oft_backbone_latent"],
+            overrides=["experiment=openvla_onetraj_libero_cotrain_noray"],
         )
 
     wm = cfg.world_model

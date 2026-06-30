@@ -770,7 +770,9 @@ def build_pipeline_plan(
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
         cotrain_online_cmd = [*cotrain_cmd, "training.resume=true"]
     if cotrain_engine == "async":
-        async_exp = str(cfg.get("cotrain_async_experiment", "online_cotrain_ray_oft"))
+        async_exp = str(
+            cfg.get("cotrain_async_experiment", "openvla_onetraj_libero_cotrain_ray")
+        )
         ray_init_ckpt = ckpt_dir / "ray_async_init.ckpt"
         explicit_online_overrides = [*common_overrides, *cotrain_overrides]
         ray_online_overrides = _ray_online_scale_overrides(
@@ -792,7 +794,7 @@ def build_pipeline_plan(
                     *warmup_control_items,
                 ],
             )
-            if async_exp.startswith("manual_cotrain_")
+            if async_exp.startswith("openvla_onetraj_libero_cotrain_ray")
             else []
         )
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]

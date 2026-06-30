@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /dreamervla: openvla_oft_input_token_lumos
-  - _self_

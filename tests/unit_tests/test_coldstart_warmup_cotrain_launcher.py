@@ -1054,10 +1054,10 @@ def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:
 
     assert plan.cotrain_engine == "async"
     # 2a: sync pipeline warmup, online RL disabled (total_env_steps=0).
-    assert "experiment=online_cotrain_pipeline_oft_backbone_latent" in plan.cotrain_warmup_cmd
+    assert "experiment=openvla_onetraj_libero_cotrain_noray" in plan.cotrain_warmup_cmd
     assert "online_rollout.total_env_steps=0" in plan.cotrain_warmup_cmd
     # 2c: target manual-cotrain ray online, NOT torchrun, init from the consolidated warmup ckpt.
-    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    assert "experiment=openvla_onetraj_libero_cotrain_ray" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd
     assert any(x.startswith("init.warmup_ckpt_path=") for x in plan.cotrain_online_cmd)
     assert "inference.init_ckpt.path=null" not in plan.cotrain_online_cmd
@@ -1078,7 +1078,7 @@ def test_async_cotrain_online_command_targets_manual_cotrain_runner(tmp_path) ->
         launcher_cfg=cfg,
     )
 
-    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    assert "experiment=openvla_onetraj_libero_cotrain_ray" in plan.cotrain_online_cmd
     assert "manual_cotrain.ngpu=2" in plan.cotrain_online_cmd
     assert "+cluster.num_gpus=2" in plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=8" in plan.cotrain_online_cmd
@@ -1103,7 +1103,7 @@ def test_async_manual_cotrain_online_command_supports_zero_to_five_gpus(
         launcher_cfg=cfg,
     )
 
-    assert "experiment=manual_cotrain_ray_oft_backbone_latent" in plan.cotrain_online_cmd
+    assert "experiment=openvla_onetraj_libero_cotrain_ray" in plan.cotrain_online_cmd
     assert f"manual_cotrain.ngpu={ngpu}" in plan.cotrain_online_cmd
     assert f"+cluster.num_gpus={ngpu}" in plan.cotrain_online_cmd
     assert "torch.distributed.run" not in plan.cotrain_online_cmd

@@ -187,7 +187,6 @@ env:
       max_steps: 300
 
 rollout:
-  steps: 200000
   min_replay_episodes: ${ray_data.min_replay_episodes}
   min_replay_transitions: ${ray_data.sequence_length}
   min_sampleable_windows: 0

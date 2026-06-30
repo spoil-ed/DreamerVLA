@@ -252,7 +252,7 @@ def _compose_train_config(*overrides: str):
 
 def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     cfg = _compose_train_config(
-        "experiment=manual_cotrain_ray_oft_backbone_latent",
+        "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
 
@@ -267,7 +267,7 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
 
 def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
     cfg = _compose_train_config(
-        "experiment=manual_cotrain_ray_oft_backbone_latent",
+        "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
     OmegaConf.resolve(cfg)
@@ -278,7 +278,7 @@ def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
 
 def test_manual_cotrain_oft_wm_env_num_envs_tracks_envs_per_worker() -> None:
     cfg = _compose_train_config(
-        "experiment=manual_cotrain_ray_oft_backbone_latent",
+        "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
 
@@ -288,7 +288,7 @@ def test_manual_cotrain_oft_wm_env_num_envs_tracks_envs_per_worker() -> None:
 
 def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess() -> None:
     cfg = _compose_train_config(
-        "experiment=manual_cotrain_ray_oft_backbone_latent",
+        "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
 

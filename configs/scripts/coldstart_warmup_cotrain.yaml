@@ -20,7 +20,7 @@ render_backend: osmesa
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
 cotrain_engine: sync
-cotrain_async_experiment: manual_cotrain_ray_oft_backbone_latent
+cotrain_async_experiment: openvla_onetraj_libero_cotrain_ray
 # Cotrain phase: all (default), warmup (write warmup ckpts only), or online
 # (resume from warmup ckpts under run_root/cotrain and run the online phase only).
 cotrain_phase: all
@@ -157,7 +157,7 @@ modes:
 
 cotrain:
   base:
-    - experiment=online_cotrain_pipeline_oft_backbone_latent
+    - experiment=openvla_onetraj_libero_cotrain_noray
     - task={hydra_task}
     # logger comes from the experiment default (tensorboard + wandb offline); do not
     # force logger=tensorboard here or it would drop the W&B backend.

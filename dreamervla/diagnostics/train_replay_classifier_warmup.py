@@ -196,7 +196,7 @@ def _evaluate(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", default="online_cotrain_pipeline_oft_backbone_latent")
+    parser.add_argument("--experiment", default="openvla_onetraj_libero_cotrain_noray")
     parser.add_argument("--task", default="openvla_onetraj_coldstart_libero")
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--hidden-dir", required=True)
