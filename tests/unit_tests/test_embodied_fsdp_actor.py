@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import uuid
+from dataclasses import replace
 
 import pytest
 import ray
 import torch
+from torch import nn
 
+import dreamervla.workers.actor.embodied_fsdp_actor as embodied_fsdp_actor
 from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.workers.actor._test_models import TinyLumosPolicy
-import dreamervla.workers.actor.embodied_fsdp_actor as embodied_fsdp_actor
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.cotrain.messages import TrajectoryShard, collate_trajectory_shards
 from dreamervla.workers.env.trajectory_env_worker import _concat_trajectory_shards
@@ -129,6 +130,46 @@ class _MemoryActorChannel:
         return out
 
 
+class _OutstandingGraphProbe:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.backward_calls = 0
+
+
+class _FailIfPreviousGraphLive(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, value: torch.Tensor, probe: _OutstandingGraphProbe) -> torch.Tensor:
+        if probe.active:
+            raise RuntimeError("previous actor step graph is still live")
+        probe.active += 1
+        probe.max_active = max(probe.max_active, probe.active)
+        ctx.probe = probe
+        return value.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:
+        ctx.probe.active -= 1
+        ctx.probe.backward_calls += 1
+        return grad_output.clone(), None
+
+
+class _GraphProbePolicy(nn.Module):
+    def __init__(self, probe: _OutstandingGraphProbe) -> None:
+        super().__init__()
+        self.probe = probe
+        self.logprob = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, None]:
+        bsz = int(batch["hidden"].shape[0])
+        logprob = _FailIfPreviousGraphLive.apply(
+            self.logprob.expand(bsz),
+            self.probe,
+        )
+        entropy = torch.zeros_like(logprob)
+        return logprob, entropy, None
+
+
 def test_actor_group_computes_group_advantages_from_trajectory_rewards() -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
     actor.init()
@@ -223,6 +264,30 @@ def test_actor_run_training_masks_padded_variable_length_trajectories() -> None:
     assert actor.returns is not None
     assert actor.returns.tolist() == [0.0, 6.0]
     assert train_metrics["actor/ppo_updates"] == 1.0
+
+
+def test_actor_run_training_backprops_each_step_before_next_forward() -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    probe = _OutstandingGraphProbe()
+    policy = _GraphProbePolicy(probe)
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=1e-3)
+
+    actor.load_trajectory_shards(
+        [
+            _variable_length_shard(steps=3, slot_id=0, reward=0.0),
+            _variable_length_shard(steps=3, slot_id=1, reward=1.0),
+        ]
+    )
+    actor.compute_advantages_and_returns()
+
+    metrics = actor.run_training()
+
+    assert metrics["actor/ppo_updates"] == 1.0
+    assert probe.max_active == 1
+    assert probe.backward_calls == 3
+    assert probe.active == 0
 
 
 def test_actor_run_training_updates_policy_parameters() -> None:

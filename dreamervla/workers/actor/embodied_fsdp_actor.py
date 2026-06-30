@@ -208,9 +208,12 @@ class EmbodiedFSDPActor(Worker):
         ppo_updates = 0
         for _ in range(update_epochs):
             optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
-            loss_vecs: list[torch.Tensor] = []
-            ratios: list[torch.Tensor] = []
-            entropies: list[torch.Tensor] = []
+            valid_count = int(loss_mask.sum().detach().cpu().item())
+            if valid_count <= 0:
+                raise ValueError("trajectory loss_mask has no valid training steps")
+            epoch_loss = 0.0
+            ratio_sum = 0.0
+            entropy_sum = 0.0
             for step in range(int(batch.rewards.shape[0])):
                 step_mask = _as_vector(loss_mask[step]).to(
                     self.torch_device,
@@ -250,33 +253,28 @@ class EmbodiedFSDPActor(Worker):
                     old_logprob,
                     clip_log_ratio=clip_log_ratio,
                 )
-                loss_vecs.append(
-                    _ppo_clip_term(
-                        ratio,
-                        advantage,
-                        clip_low,
-                        clip_high,
-                        clip_ratio_c=clip_ratio_c,
-                    )
+                ppo_clip = _ppo_clip_term(
+                    ratio,
+                    advantage,
+                    clip_low,
+                    clip_high,
+                    clip_ratio_c=clip_ratio_c,
                 )
-                ratios.append(ratio.detach())
-                entropies.append(entropy)
+                loss = (
+                    ppo_clip.sum() - float(entropy_coef) * entropy.sum()
+                ) / float(valid_count)
+                loss.backward()
 
-            if not loss_vecs:
-                raise ValueError("trajectory loss_mask has no valid training steps")
-            loss_vec = torch.cat(loss_vecs, dim=0)
-            entropy_vec = torch.cat(entropies, dim=0)
-            loss = loss_vec.mean() - float(entropy_coef) * entropy_vec.mean()
-            loss.backward()
+                epoch_loss += float(loss.detach().cpu().item())
+                ratio_sum += float(ratio.detach().sum().cpu().item())
+                entropy_sum += float(entropy.detach().sum().cpu().item())
             grad_norm = self._clip_or_measure_grad_norm(optim_cfg)
             optimizer.step()
 
             ppo_updates += 1
-            losses.append(float(loss.detach().cpu().item()))
-            ratio_means.append(float(torch.cat(ratios, dim=0).mean().cpu().item()))
-            entropy_means.append(
-                float(entropy_vec.detach().mean().cpu().item())
-            )
+            losses.append(epoch_loss)
+            ratio_means.append(ratio_sum / float(valid_count))
+            entropy_means.append(entropy_sum / float(valid_count))
             grad_norms.append(float(grad_norm))
 
         policy.train(False)
