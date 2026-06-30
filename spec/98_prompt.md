@@ -6,11 +6,10 @@ It is not current architecture source of truth. Use it only to understand earlie
 
 ---
 
-实现 [明确目标]；
-完成标准是 [测试/构建/指标/产物] 通过；
-不要修改 [边界/公共 API/数据库 schema]；
-每个 checkpoint 后运行 [验证命令]；达成标准后停止并总结；
-如果被阻塞，报告证据和需要我补充的资料、验证信息或者真机测试结果。
+/goal 3卡是空卡 实现稳定collect数据；
+完成标准是显存占用率高利用率高；
+不要修改 边界/公共 API/基本实现逻辑；
+开启loop，每轮固定报告一次遇到的问题和解决方案。
 
 
 可以补充一个「参考实现与学习要求」章节，同样保持忠实于你的原意：
