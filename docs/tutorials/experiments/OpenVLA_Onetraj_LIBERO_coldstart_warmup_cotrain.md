@@ -100,6 +100,82 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   > logs/cotrain_ray_egl.log 2>&1
 ```
 
+## Standalone Data Collection（单卡 EGL，多卡并行）
+
+只想**单独采集 rollout 数据**（不跑完整 cotrain，例如补 seed replay、把空闲卡用满）时，用下面这套已验证的配方：**每张空闲卡跑一个独立的单卡 `collect_rollouts_ray` 作业**。这样多卡只是“多份单卡作业”，互不干扰，单卡也能稳定写出。
+
+核心原则：
+
+- **用 EGL 在 GPU 上渲染**（`++env.render_backend=egl`），不要用 osmesa——osmesa 是 CPU 软渲染，GPU 利用率自然很低。
+- **每个作业按物理卡号 pin `CUDA_VISIBLE_DEVICES`**，进程内就是 GPU0，OFT 推理 worker 和 EGL 渲染都落在这一张卡上，不会串到别的卡。
+- **不要设 `collect.egl_device_pool`、也不要手动 export `MUJOCO_GL`**——让 `render_backend=egl` 这个 config 来驱动 EnvWorker 的 EGL 子进程路径即可。
+- `env.num_workers=6`（6 个并行 EGL 环境）是实测稳定的甜点；要更高吞吐优先**多卡并行**，而不是单卡堆 env 数。
+
+单卡启动（存成 `collect_card.sh`，参数：物理卡号、task_ids）：
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd /path/to/DreamerVLA
+export DVLA_DATA_ROOT=$PWD/data
+PY=/home/user01/miniconda3/envs/dreamervla/bin/python   # 必须用 dreamervla 环境
+
+GPU="$1"; TASKS="$2"; EPISODES="${3:-30}"; NW="${4:-6}"
+ROOT=$DVLA_DATA_ROOT/outputs/collect_egl_g${GPU}; G0=$ROOT/coldstart_g0
+mkdir -p "$ROOT/logs"
+
+env CUDA_VISIBLE_DEVICES="$GPU" NCCL_NVLS_ENABLE=0 "$PY" -m dreamervla.train \
+  experiment=collect_rollouts_ray task=openvla_onetraj_coldstart_libero logger=tensorboard \
+  "collect.task_ids=[${TASKS}]" collect.episodes_per_task="$EPISODES" collect.episode_horizon=64 \
+  ++env.render_backend=egl env.num_workers="$NW" collect.memory_fraction=0.85 \
+  "task.openvla_oft.hdf5_reward_dir=$G0/reward" "task.openvla_oft.input_token_hidden_dir=$G0/hidden" \
+  "++collect.hdf5_reward_dir=$G0/reward" "++collect.hidden_dir=$G0/hidden" \
+  '++collect.oft_latent_spec.expected_action_head_type=${task.openvla_oft.input_tokens.expected_action_head_type}' \
+  '++collect.oft_latent_spec.expected_obs_hidden_source=${task.openvla_oft.input_tokens.expected_obs_hidden_source}' \
+  '++collect.oft_latent_spec.expected_prompt_style=${task.openvla_oft.input_tokens.expected_prompt_style}' \
+  '++collect.oft_latent_spec.expected_history=${task.openvla_oft.input_tokens.expected_history}' \
+  '++collect.oft_latent_spec.expected_include_state=${task.openvla_oft.input_tokens.expected_include_state}' \
+  '++collect.oft_latent_spec.expected_rotate_images_180=${task.openvla_oft.input_tokens.expected_rotate_images_180}' \
+  '++collect.oft_latent_spec.token_dim=${task.openvla_oft.input_tokens.token_dim}' \
+  '++collect.oft_latent_spec.token_count=${task.openvla_oft.input_tokens.token_count}' \
+  '++collect.oft_latent_spec.wm_obs_dim=${task.openvla_oft.input_tokens.wm_obs_dim}' \
+  '++collect.oft_latent_spec.chunk_size=${task.openvla_oft.input_tokens.chunk_size}' \
+  "training.out_dir=$ROOT/collect"
+```
+
+> `++collect.oft_latent_spec.*` 这一整段和仓库官方采集脚本
+> `configs/scripts/coldstart_warmup_cotrain.yaml`（129–156 行）采集步用的是同一套——
+> 它让 collect 侧的 latent 契约对齐 task 配置。`${task.openvla_oft.input_tokens.*}`
+> 是 Hydra 插值，**必须用单引号**包住，否则 bash 会先去做变量替换而报 `bad substitution`。
+
+三张空闲卡并行（GPU1/2/3，各占一张卡、各写各的目录、各自后台）：
+
+```bash
+nohup bash collect_card.sh 1 "0,1,2,3" 30 6 > logs/collect_g1.log 2>&1 &
+nohup bash collect_card.sh 2 "4,5,6"   30 6 > logs/collect_g2.log 2>&1 &
+nohup bash collect_card.sh 3 "7,8,9"   30 6 > logs/collect_g3.log 2>&1 &
+```
+
+实测（3 卡 × 6 env/卡，`openvla_onetraj_coldstart_libero`）：
+
+- **显存** ≈ 18 GB/卡（OFT 模型本体 ~14 GB + EGL/环境缓冲）。
+- **利用率** 峰值 52–72%，呈**突发型**——OFT 是 chunk 推理（每 8 个 env step 才一次 policy 前向），推理与渲染交替，所以不是持续 100%，这是正常现象，不是 bug。
+- **产出** 每卡稳定写出 `coldstart_g0/hidden`（12–16 GB）+ `coldstart_g0/reward`（2.2–2.9 GB），3 卡合计约 47 GB 真实数据；shard 体积持续增长即代表在稳定写入。
+
+判断是否健康：`tail -f logs/collect_g1.log` 看到 `collect N · …ep/s` 的 N 在涨，且
+`du -h .../coldstart_g0/hidden/ray_shard_000.hdf5` 体积在涨，就是稳定采集。
+
+### 采集踩坑速查（问题 → 解决）
+
+| 现象 | 根因 | 解决 |
+| --- | --- | --- |
+| GPU 利用率长期个位数 | 用了 osmesa（CPU 软渲染） | `++env.render_backend=egl` |
+| env 初始化卡死/极慢 | 只 export 了 `MUJOCO_GL=egl`，没开 `render_backend=egl` config，EnvWorker 没走 EGL 子进程 spawn | 用 config 驱动 EGL，**不要**手动 export `MUJOCO_GL` |
+| 静默写出几 KB 空 shard、0 episode | 设了 `collect.egl_device_pool=[<物理卡号>]`，EGL 索引被当成 CUDA 物理 id，设备错位 | 删掉 `egl_device_pool`，改成每卡 pin `CUDA_VISIBLE_DEVICES` |
+| 推理 worker 跑到繁忙的 GPU0 上 | 没 pin `CUDA_VISIBLE_DEVICES`，inference 默认落 GPU0 | 每个作业 pin 一张物理卡 |
+| 0 episode 失败 | 单卡 env 数堆太高（如 12/卡），EGL context 起不全 | 单卡用 6 env；要更高吞吐靠**多卡并行**，不要单卡堆 env |
+| 看着像挂了就被 kill | EGL 首个 env 要建子进程 EGL context，约 1–5 分钟 | 等到看到 `COLDSTART COLLECT` 横幅 / 首个 episode 写出再判断 |
+
 ## Validation
 
 启动后先看日志：
