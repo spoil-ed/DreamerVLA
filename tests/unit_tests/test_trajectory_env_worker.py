@@ -572,6 +572,102 @@ def test_spawned_real_env_worker_respawns_hung_child_when_step_timeout_enabled(
     assert old_proc.terminated is True
 
 
+def test_spawned_real_env_worker_resets_respawn_budget_after_success(
+    monkeypatch,
+) -> None:
+    class _OkConn:
+        def send(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def poll(self, timeout: float | None = None) -> bool:
+            del timeout
+            return True
+
+        def recv(self) -> Any:
+            return (
+                "ok",
+                (
+                    {"policy_action": np.zeros((7,), dtype=np.float32)},
+                    {"step": 1},
+                    0.0,
+                    False,
+                    {},
+                ),
+            )
+
+    class _DeadConn:
+        def send(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def poll(self, timeout: float | None = None) -> bool:
+            del timeout
+            return True
+
+        def recv(self) -> Any:
+            raise EOFError
+
+    class _Proc:
+        def terminate(self) -> None:
+            return None
+
+        def join(self, timeout: float | None = None) -> None:
+            self.join_timeout = timeout
+
+    worker = RealEnvWorker(
+        env_cfg={"render_backend": "egl", "egl_max_respawns": 1},
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    worker._spawned_env = True
+    worker._spawn_procs[0] = _Proc()
+    worker._spawn_conns[0] = _OkConn()
+    worker._obs_by_slot[0] = {"step": 0}
+    worker._episodes_by_slot[0] = []
+    worker._egl_respawns_by_slot[0] = 1
+    calls: list[tuple[int, int]] = []
+
+    def fake_init_spawn_slot(
+        slot_id: int,
+        *,
+        task_id: int | None = None,
+        start_episode_id: int = 0,
+    ) -> None:
+        del task_id
+        calls.append((int(slot_id), int(start_episode_id)))
+        worker._spawn_procs[int(slot_id)] = _Proc()
+        worker._spawn_conns[int(slot_id)] = object()
+        worker._obs_by_slot[int(slot_id)] = {"step": 0}
+        worker._episode_ids_by_slot[int(slot_id)] = int(start_episode_id)
+
+    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
+
+    _obs, _reward, done, _info = worker._step_slot(
+        0,
+        np.zeros((7,), dtype=np.float32),
+        transition_sidecars={},
+    )
+    assert done is False
+    assert worker._egl_respawns_by_slot[0] == 0
+
+    worker._spawn_conns[0] = _DeadConn()
+    obs, reward, done, info = worker._step_slot(
+        0,
+        np.zeros((7,), dtype=np.float32),
+        transition_sidecars={},
+    )
+
+    assert obs["step"] == 0
+    assert reward == 0.0
+    assert done is True
+    assert info["env_crash"] is True
+    assert info["respawned"] is True
+    assert info["respawn_count"] == 1
+    assert calls == [(0, 1)]
+
+
 def test_real_env_worker_postprocesses_openvla_oft_env_action_without_overwriting_policy_action() -> None:
     replay = _MemoryReplay()
     worker = RealEnvWorker(

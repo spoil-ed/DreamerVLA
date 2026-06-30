@@ -1767,6 +1767,13 @@ class BaseTrajectoryEnvWorker(Worker):
                 slot_id=slot_id,
                 timeout_s=self._spawn_step_timeout_s(),
             )
+            if self._egl_respawns_by_slot[slot_id] > 0:
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"respawn budget reset slot={int(slot_id)} "
+                    "after successful step"
+                )
+                self._egl_respawns_by_slot[slot_id] = 0
         except (EOFError, OSError, BrokenPipeError, TimeoutError) as exc:
             recovered = self._recover_spawn_slot_after_child_death(slot_id)
             if recovered is not None:
@@ -1786,10 +1793,14 @@ class BaseTrajectoryEnvWorker(Worker):
                         "respawn_count": int(respawn_count),
                     },
                 )
+            max_respawns = int(self.env_cfg.get("egl_max_respawns", 0) or 0)
+            respawns = int(self._egl_respawns_by_slot[int(slot_id)])
             raise RuntimeError(
                 f"RealEnvWorker EGL child failed (rank={self.local_rank}, "
-                f"slot={int(slot_id)}): {exc}; set env.cfg.egl_max_respawns>0 "
-                "to drop the partial episode and respawn the slot"
+                f"slot={int(slot_id)}): {exc!r}; "
+                f"respawns={respawns}/{max_respawns}; set "
+                "env.cfg.egl_max_respawns>0 to drop the partial episode and "
+                "respawn the slot"
             ) from exc
         self._episodes_by_slot[slot_id].append(dict(transition))
         self._obs_by_slot[slot_id] = dict(next_obs)
@@ -1806,12 +1817,26 @@ class BaseTrajectoryEnvWorker(Worker):
     ) -> tuple[dict[str, Any], int] | None:
         max_respawns = int(self.env_cfg.get("egl_max_respawns", 0) or 0)
         if max_respawns <= 0:
+            _hs_trace(
+                f"[env rank={int(self.rank)} role={self.role}] "
+                f"respawn disabled slot={int(slot_id)}"
+            )
             return None
         slot_id = int(slot_id)
         respawns = int(self._egl_respawns_by_slot[slot_id])
         if respawns >= max_respawns:
+            _hs_trace(
+                f"[env rank={int(self.rank)} role={self.role}] "
+                f"respawn exhausted slot={int(slot_id)} "
+                f"respawns={respawns}/{max_respawns}"
+            )
             return None
 
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] "
+            f"respawn start slot={int(slot_id)} "
+            f"respawn={respawns + 1}/{max_respawns}"
+        )
         self._close_spawn_slot(slot_id)
         self._episodes_by_slot[slot_id] = []
         start_episode_id = int(self._episode_ids_by_slot[slot_id]) + 1
@@ -1828,6 +1853,11 @@ class BaseTrajectoryEnvWorker(Worker):
                 f"RealEnvWorker EGL respawn produced no observation "
                 f"(rank={self.local_rank}, slot={slot_id})"
             )
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] "
+            f"respawn done slot={int(slot_id)} "
+            f"respawn_count={int(self._egl_respawns_by_slot[slot_id])}"
+        )
         return dict(obs), int(self._egl_respawns_by_slot[slot_id])
 
     def _close_spawn_slot(self, slot_id: int) -> None:
