@@ -1363,7 +1363,7 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" in plan.cotrain_online_cmd
-    assert "+manual_cotrain.env_rollout_timeout_s=1500" in plan.cotrain_online_cmd
+    assert "+manual_cotrain.env_rollout_timeout_s=2400" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
 
 

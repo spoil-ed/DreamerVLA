@@ -529,7 +529,7 @@ def _manual_cotrain_env_rollout_timeout_s(
     if raw is None:
         return None
     init_timeout_s = int(float(raw))
-    return max(1200, init_timeout_s + 600)
+    return max(2400, init_timeout_s + 600)
 
 
 def _manual_cotrain_global_steps_from_budget(
