@@ -20,7 +20,7 @@ Single GPU. Usage example::
     CUDA_VISIBLE_DEVICES=7 \\
         python -u \\
         python -m dreamervla.runners.collect_online_rollouts_for_classifier \\
-            --config configs/dreamervla/online_lumos_libero_goal.yaml \\
+            --config configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml \\
             --world-model-ckpt data/outputs/worldmodel/.../step_00002000.ckpt \\
             --vla-ckpt-path ${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}/checkpoints/VLA_model_256/libero_goal \\
             --task-suite libero_goal --task-ids 0,1,2,3,4,5,6,7,8,9 \\
@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_actor_critic.yaml"),
+        default=str(PROJECT_ROOT / "configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml"),
         help="Defaults to the legacy RynnVLA action-hidden config that matches the m1024 chunk WM "
         "and the *_legacy_action_hidden_vla_policy_h2 obs_embedding sidecars used by the "
         "WMReplayClassifierDataset.",

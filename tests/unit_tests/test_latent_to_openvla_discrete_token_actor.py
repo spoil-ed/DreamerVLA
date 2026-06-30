@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn as nn
-from hydra import compose, initialize_config_dir
 
 from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
     LatentToOpenVLADiscreteTokenActor,
@@ -124,30 +121,3 @@ def test_actor_is_discrete_with_no_l1_head() -> None:
     assert not hasattr(actor, "output_projection")
 
 
-def test_backbone_latent_online_route_wires_discrete_actor() -> None:
-    # The query_before (backbone-latent) online LUMOS route uses the discrete bridge,
-    # the lean ~313M WM, and the online input-token obs source — i.e. it is wired
-    # end-to-end and no longer raises NotImplementedError.
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "dreamervla=openvla_oft_input_token_lumos",
-                "task=openvla_onetraj_libero",
-            ],
-        )
-
-    assert cfg.policy._target_.endswith("LatentToOpenVLAHiddenStateActor")
-    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
-    assert "action_hidden_dim" not in cfg.policy
-    assert cfg.policy.head_type == "oft_discrete_token"
-    # Lean-debottlenecked query_before WM profile (~313M).
-    assert cfg.world_model.latent_stage == "query_before"
-    assert cfg.world_model.dim_head == 128
-    assert cfg.world_model.mlp_dim == 2048
-
-    # Online input-token obs source exists (replaces the old NotImplementedError).
-    from dreamervla.runners.online_utils import obs_to_input_token_embedding
-
-    assert callable(obs_to_input_token_embedding)

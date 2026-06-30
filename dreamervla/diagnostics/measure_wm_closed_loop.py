@@ -11,7 +11,7 @@ Usage:
   python -m dreamervla.diagnostics.measure_wm_closed_loop \
     --ckpt <wm_ckpt> \
     --hidden-hdf5-dir <dir> --reward-hdf5-dir <dir> \
-    --actor-cfg configs/dreamervla/rynnvla_actor_critic.yaml \
+    --actor-cfg configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml \
     --out-json <out.json>
 """
 

@@ -314,51 +314,6 @@ def test_release_profiles_keep_full_coldstart_pool_for_warmup() -> None:
         assert buffer_size >= 160_000
 
 
-@pytest.mark.parametrize(
-    "task_name",
-    list(_launcher_cfg()["tasks"]),
-)
-def test_oft_cotrain_recipe_derives_structure_from_task_vla_config(task_name) -> None:
-    hydra_task = _launcher_cfg()["tasks"][task_name]["hydra_task"]
-    root = Path(__file__).resolve().parents[2]
-    with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=online_cotrain_pipeline_oft_action_hidden",
-                f"task={hydra_task}",
-            ],
-        )
-    OmegaConf.resolve(cfg)
-    oft = cfg.task.openvla_oft
-
-    assert cfg.env.task_suite_name == cfg.task.suite
-    assert cfg.encoder._target_ == "dreamervla.models.encoder.OpenVLAOFTPolicy"
-    assert cfg.encoder.model_path == oft.ckpt_path
-    assert cfg.encoder.num_images_in_input == oft.num_images_in_input
-    assert cfg.world_model._target_ == oft.wm_target
-    assert cfg.world_model.obs_dim == oft.wm_obs_dim
-    assert cfg.world_model.token_count == oft.token_count
-    assert cfg.world_model.token_dim == oft.token_dim
-    assert cfg.world_model.chunk_size == oft.chunk_size
-    assert cfg.world_model.time_horizon == oft.time_horizon
-    assert cfg.policy._target_ == oft.actor_target
-    assert cfg.policy.action_hidden_dim == oft.token_dim
-    assert cfg.policy.time_horizon == oft.chunk_size
-    assert cfg.policy.head_type == oft.actor_head_type
-    assert cfg.policy.adapter_type == oft.actor_adapter_type
-    assert cfg.policy.adapter_hidden_dim == oft.actor_adapter_hidden_dim
-    assert cfg.policy.init_lm_head_ckpt == oft.ckpt_path
-    assert cfg.policy.vocab_size == oft.vocab_size
-    assert cfg.policy.action_token_bins == oft.action_token_bins
-    assert cfg.policy.min_action == oft.min_action
-    assert cfg.policy.max_action == oft.max_action
-    assert cfg.classifier._target_ == oft.classifier_target
-    assert cfg.classifier.latent_dim == oft.token_dim
-    assert cfg.classifier.chunk_size == oft.chunk_size
-    assert cfg.algorithm.lumos.chunk_size == oft.chunk_size
-
-
 def test_launcher_dry_run_prints_both_commands(tmp_path, capsys) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import main
 
@@ -1543,7 +1498,7 @@ def test_async_cotrain_online_command_uses_valid_ray_hydra_keys(tmp_path) -> Non
         run_root=tmp_path,
         python="python",
         launcher_cfg=cfg,
-        cotrain_overrides=["rollout.steps=4", "env.num_workers=1"],
+        cotrain_overrides=["manual_cotrain.global_steps=4", "env.num_workers=1"],
     )
     overrides = [
         item

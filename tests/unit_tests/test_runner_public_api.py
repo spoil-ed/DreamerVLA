@@ -58,34 +58,6 @@ EXPERIMENT_MODULES = {
         "classifier",
         "openvla_oft_input_token_chunk",
     ),
-    "dreamervla_rynn_wm_actor_critic": (
-        "dreamervla",
-        "rynnvla_actor_critic",
-    ),
-    "dreamervla_rynn_wm_lumos": (
-        "dreamervla",
-        "rynnvla_lumos",
-    ),
-    "dreamervla_rynn_wm_lumos_input_tokens": (
-        "dreamervla",
-        "rynnvla_input_token_lumos",
-    ),
-    "dreamervla_oft_wm_lumos": (
-        "dreamervla",
-        "openvla_oft_input_token_lumos",
-    ),
-    "dreamervla_oft_discrete_token_wm_lumos": (
-        "dreamervla",
-        "openvla_oft_discrete_token_lumos",
-    ),
-    "dreamervla_oft_wm_lumos_input_tokens": (
-        "dreamervla",
-        "openvla_oft_input_token_lumos",
-    ),
-    "online_lumos_libero_goal": (
-        "dreamervla",
-        "online_lumos_libero_goal",
-    ),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
 
@@ -111,20 +83,6 @@ def test_world_model_package_exports_role_based_wm_aliases() -> None:
     assert ChunkAwareWorldModel is ChunkAwareWorldModel
     assert ModuleWorldModel is WorldModel
     assert ModuleChunkAwareWorldModel is ChunkAwareWorldModel
-
-
-def test_openvla_oft_lumos_main_route_uses_input_tokens() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = _compose_experiment("dreamervla_oft_wm_lumos")
-
-    assert cfg.dataset.hidden_dir == cfg.task.openvla_oft.input_token_hidden_dir
-    assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
-    assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
-    assert cfg.world_model.token_count == cfg.task.openvla_oft.input_tokens.token_count
-    assert cfg.policy._target_ == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
-    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
-    assert "action_hidden_dim" not in cfg.policy
 
 
 def test_runner_public_api_exports_route_specific_names() -> None:
@@ -282,12 +240,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
-        "dreamervla_rynn_wm_actor_critic": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_rynn_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_discrete_token_wm_lumos": "dreamervla.runners.JointDreamerVLARunner",
-        "dreamervla_oft_wm_lumos_input_tokens": "dreamervla.runners.JointDreamerVLARunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
         "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
         "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
@@ -415,98 +367,13 @@ def test_role_based_oft_discrete_token_wm_alias_matches_legacy_route() -> None:
     assert role_based.world_model.obs_dim == legacy.world_model.obs_dim
 
 
-def test_role_based_rynn_wm_lumos_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_rynn_wm_lumos")
-        legacy = _compose_experiment("dreamervla_rynn_wm_lumos")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.critic._target_ == legacy.critic._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
-def test_role_based_rynn_wm_actor_critic_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_rynn_wm_actor_critic")
-        legacy = _compose_experiment("dreamervla_rynn_wm_actor_critic")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.critic._target_ == legacy.critic._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
-def test_role_based_rynn_wm_input_token_lumos_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_rynn_wm_lumos_input_tokens")
-        legacy = _compose_experiment("dreamervla_rynn_wm_lumos_input_tokens")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
-def test_role_based_oft_wm_lumos_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_oft_wm_lumos")
-        legacy = _compose_experiment("dreamervla_oft_wm_lumos")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
-def test_role_based_oft_wm_input_token_lumos_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_oft_wm_lumos_input_tokens")
-        legacy = _compose_experiment("dreamervla_oft_wm_lumos_input_tokens")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.dataset.expected_obs_hidden_source == legacy.dataset.expected_obs_hidden_source
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
-def test_role_based_oft_discrete_token_wm_lumos_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("dreamervla_oft_discrete_token_wm_lumos")
-        legacy = _compose_experiment("dreamervla_oft_discrete_token_wm_lumos")
-
-    assert role_based._target_ == "dreamervla.runners.JointDreamerVLARunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.policy._target_ == legacy.policy._target_
-    assert role_based.policy.head_type == legacy.policy.head_type
-    assert role_based.dataset.expected_action_head_type == legacy.dataset.expected_action_head_type
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.algorithm.update_type == legacy.algorithm.update_type
-
-
 def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     train_dreamervla_config = (
         config_dir / "scripts" / "train_dreamervla.yaml"
     ).read_text(encoding="utf-8")
 
-    assert "experiment: dreamervla_rynn_wm_lumos" in train_dreamervla_config
+    assert "experiment: openvla_onetraj_libero_cotrain_noray" in train_dreamervla_config
 
 
 def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
@@ -514,7 +381,7 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         default_cfg = _compose_experiment("world_model_chunk")
         wandb_cfg = _compose_experiment(
-            "dreamervla_rynn_wm_lumos",
+            "world_model_chunk",
             extra_overrides=["logger=wandb"],
         )
 
@@ -549,17 +416,7 @@ def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         discrete_wm = _compose_experiment("oft_discrete_token_world_model_chunk")
-        discrete = _compose_experiment(
-            "dreamervla_oft_discrete_token_wm_lumos"
-        )
 
-    assert discrete.policy._target_ == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
-    assert discrete.policy.head_type == "oft_discrete_token"
-    assert discrete.policy.init_lm_head_ckpt == discrete.task.openvla_oft.ckpt_path
-    assert discrete.task.openvla_oft.expected_action_head_type == "oft_discrete_token"
-    assert discrete.dataset.expected_include_state is False
-    assert discrete.dataset.expected_history == 1
-    assert discrete.dataset.hidden_dir.endswith("_h1")
     assert discrete_wm.dataset.expected_action_head_type == "oft_discrete_token"
     assert discrete_wm.dataset.hidden_dir.endswith("_h1")
 
@@ -596,12 +453,6 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         rynn_wm = _compose_experiment("world_model_chunk_input_tokens")
         oft_wm = _compose_experiment("oft_world_model_chunk_input_tokens")
-        rynn_dreamer = _compose_experiment(
-            "dreamervla_rynn_wm_lumos_input_tokens"
-        )
-        oft_dreamer = _compose_experiment(
-            "dreamervla_oft_wm_lumos_input_tokens"
-        )
 
     assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
     assert rynn_wm.world_model.token_count == 2048
@@ -612,20 +463,6 @@ def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> Non
     assert oft_wm.world_model.token_count == 512
     assert oft_wm.world_model.token_dim == 4096
     assert "input_token" in oft_wm.dataset.hidden_dir
-
-    assert rynn_dreamer.policy._target_ == "dreamervla.models.actor.LatentToActionHiddenActor"
-    assert rynn_dreamer.policy.source_token_count == 2048
-    assert rynn_dreamer.policy.action_hidden_dim == 1024
-
-    assert (
-        oft_dreamer.policy._target_
-        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
-    )
-    assert oft_dreamer.policy.source_token_count == 512
-    assert oft_dreamer.policy.hidden_state_dim == 4096
-    assert "action_hidden_dim" not in oft_dreamer.policy
-    assert oft_dreamer.policy.head_type == "oft_discrete_token"
-    assert oft_dreamer.policy.init_lm_head_ckpt == oft_dreamer.task.openvla_oft.ckpt_path
 
 
 def test_train_config_resolves_public_default_experiment() -> None:

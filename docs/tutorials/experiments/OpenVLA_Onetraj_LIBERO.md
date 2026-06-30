@@ -21,6 +21,10 @@ collect rollouts -> seed replay -> warmup world model/classifier -> online manua
 task=goal|object|spatial|10
 ```
 
+cotrain 之前的离线 world model warmup 走 discrete-token WM 路由
+`experiment=oft_discrete_token_world_model_chunk`（DreamerVLA 别名
+`experiment=dreamervla_oft_discrete_token_wm_lumos`）。
+
 ## Setup
 
 先进入仓库，设置数据目录，安装环境：
@@ -121,7 +125,7 @@ python -m dreamervla.train \
   `task.openvla_oft.ckpt_path` 自动加载。
 - RL 超参（`group_size=8` / `rollout_epoch=16` / `max_steps_per_rollout_epoch=256` /
   `env.train.total_num_envs=64` / `global_steps=1000` / gamma / gae_lambda / clip 等）已按
-  RLinf WoVR 对齐写进配置默认，命令行无需重复；要短跑临时加 `manual_cotrain.global_steps=<N>`。
+  RLinf 对齐写进配置默认，命令行无需重复；要短跑临时加 `manual_cotrain.global_steps=<N>`。
 - `manual_cotrain.ngpu=N`（0–6）= 本机 GPU 数：GPU0=real_env，GPU1..N-1=wm_env，配 N 个
   rollout worker。默认 osmesa，要 EGL 加 `render_backend=egl`。
 - `DVLA_COTRAIN_HANDSHAKE_TRACE=1` 打印 env/rollout 握手与 `[build_groups]` 各 worker init
@@ -173,7 +177,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 set -euo pipefail
 cd /path/to/DreamerVLA
 export DVLA_DATA_ROOT=$PWD/data
-PY=/home/user01/miniconda3/envs/dreamervla/bin/python   # 必须用 dreamervla 环境
+PY=/path/to/miniconda3/envs/dreamervla/bin/python   # 必须用 dreamervla 环境
 
 GPU="$1"; TASKS="$2"; EPISODES="${3:-30}"; NW="${4:-6}"
 ROOT=$DVLA_DATA_ROOT/outputs/collect_egl_g${GPU}; G0=$ROOT/coldstart_g0

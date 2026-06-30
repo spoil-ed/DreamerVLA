@@ -1158,7 +1158,7 @@ def test_release_pipeline_warmup_uses_all_collected_episodes_by_default():
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=online_cotrain_pipeline_oft_action_hidden",
+                "experiment=openvla_onetraj_libero_cotrain_noray",
                 "task=openvla_onetraj_coldstart_libero",
             ],
         )

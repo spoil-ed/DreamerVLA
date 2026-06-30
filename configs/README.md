@@ -148,6 +148,11 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `openvla_onetraj_libero_cotrain_ray` | `dreamervla/openvla_onetraj_libero_cotrain_ray` |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 
+The earlier DreamerVLA LUMOS route aliases (`dreamervla_rynn_wm_lumos`,
+`dreamervla_oft_wm_lumos`, and their token/discrete-token variants) were
+consolidated into the `openvla_onetraj_libero_cotrain_*` mainline above; see
+`docs/reference/routes.md` for the historical role-based mapping.
+
 Module configs use Hydra defaults to include the task config:
 
 ```yaml

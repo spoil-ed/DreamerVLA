@@ -195,8 +195,6 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
     route_names = [
         "world_model_chunk",
         "oft_world_model_chunk",
-        "dreamervla_rynn_wm_lumos",
-        "dreamervla_oft_wm_lumos",
     ]
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -262,148 +260,6 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
     assert oft_cfg.world_model.heads == 16
     assert oft_cfg.world_model.dim_head == 128
     assert oft_cfg.world_model.mlp_dim == 2048
-
-
-def test_openvla_oft_coldstart_warmup_route_uses_documented_balanced_profile(
-    tmp_path: Path,
-) -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    reward_dir = tmp_path / "reward"
-    hidden_dir = tmp_path / "hidden"
-    reward_dir.mkdir()
-    hidden_dir.mkdir()
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=online_cotrain_pipeline_oft_action_hidden",
-                "task=openvla_onetraj_coldstart_libero",
-                f"offline_warmup.data_dir={reward_dir}",
-                f"offline_warmup.hidden_dir={hidden_dir}",
-            ],
-        )
-
-    validate_cfg(cfg, world_size=1)
-    assert cfg.world_model.latent_stage == "query_after"
-    assert cfg.world_model.token_count == 56
-    assert cfg.world_model.token_dim == 4096
-    assert cfg.world_model.action_emb_dim == 10
-    assert cfg.world_model.num_action_repeat == 1
-    assert cfg.world_model.model_dim == 4106
-    assert cfg.world_model.num_hist == 3
-    assert cfg.world_model.chunk_size == 8
-    assert cfg.world_model.chunk_rollout_chunks == 4
-    assert cfg.online_rollout.sequence_length == (
-        cfg.world_model.num_hist
-        + cfg.world_model.chunk_rollout_chunks * cfg.world_model.chunk_size
-        + 1
-    )
-    assert cfg.world_model.depth == 6
-    assert cfg.world_model.heads == 16
-    assert cfg.world_model.dim_head == 256
-    assert cfg.world_model.mlp_dim == 4096
-    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
-
-    runner = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
-    encoder_cfg = runner.build_encoder_cfg(cfg)
-    assert "tokenizer_path" not in encoder_cfg
-    assert "text_tokenizer_path" not in encoder_cfg
-    assert "chameleon_vqgan_config" not in encoder_cfg
-    assert "action_head_type" not in encoder_cfg
-
-
-def test_openvla_oft_backbone_online_route_uses_discrete_input_token_contract() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=online_cotrain_oft_backbone_latent",
-                "task=openvla_onetraj_libero",
-            ],
-        )
-
-    validate_cfg(cfg, world_size=1)
-    assert cfg.latent_type == "backbone_latent"
-    assert cfg.encoder._target_ == "dreamervla.models.encoder.OpenVLAOFTPolicy"
-    assert cfg.env.obs_hidden_source == "input_token_embedding"
-    assert cfg.env.action_head_type == "oft_discrete_token"
-    assert (
-        cfg.policy._target_
-        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
-    )
-    assert cfg.policy.hidden_state_dim == cfg.task.openvla_oft.input_tokens.hidden_state_dim
-    assert "action_hidden_dim" not in cfg.policy
-    assert cfg.policy.head_type == "oft_discrete_token"
-    assert cfg.world_model.latent_stage == "query_before"
-    assert cfg.world_model.token_count == 256
-    assert cfg.world_model.token_dim == 4096
-    assert cfg.world_model.obs_dim == 256 * 4096
-    assert cfg.world_model.proprio_dim == 8
-    assert cfg.world_model.proprio_emb_dim == 10
-    assert cfg.world_model.lang_dim == 4096
-    assert cfg.world_model.lang_emb_dim == 32
-    assert cfg.world_model.model_dim == 4148
-    assert cfg.world_model.cosine_loss_scale == 0.0
-    assert cfg.world_model.chunk_rollout_chunks == 1
-    assert cfg.world_model.chunk_rollout_loss_scale == 0.0
-    assert cfg.classifier.latent_dim == 4138
-    assert cfg.classifier.proprio_dim == 8
-    assert cfg.classifier.proprio_emb_dim == 10
-    assert cfg.classifier.lang_dim == 4096
-    assert cfg.classifier.lang_emb_dim == 32
-    assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
-
-
-def test_openvla_oft_input_token_lumos_route_uses_proprio_language_contract() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=dreamervla_oft_wm_lumos_input_tokens",
-                "task=openvla_onetraj_libero",
-            ],
-        )
-
-    validate_cfg(cfg, world_size=1)
-    assert cfg.world_model.latent_stage == "query_before"
-    assert cfg.dataset.sequence_length == 12
-    assert list(cfg.dataset.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
-    assert cfg.dataset.lang_emb_dir == cfg.task.openvla_oft.input_token_hidden_dir
-    assert cfg.world_model.proprio_dim == 8
-    assert cfg.world_model.proprio_emb_dim == 10
-    assert cfg.world_model.lang_dim == 4096
-    assert cfg.world_model.lang_emb_dim == 32
-    assert cfg.world_model.model_dim == 4148
-    assert cfg.world_model.model_dim == (
-        cfg.world_model.token_dim
-        + cfg.world_model.proprio_emb_dim * cfg.world_model.num_proprio_repeat
-        + cfg.world_model.lang_emb_dim * cfg.world_model.num_lang_repeat
-        + cfg.world_model.action_emb_dim * cfg.world_model.num_action_repeat
-    )
-    assert cfg.world_model.cosine_loss_scale == 0.0
-    assert cfg.world_model.chunk_rollout_chunks == 1
-    assert cfg.world_model.chunk_rollout_loss_scale == 0.0
-
-
-def test_online_cotrain_action_hidden_route_declares_classifier_target() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=online_cotrain_oft_action_hidden",
-                "task=libero_goal",
-            ],
-        )
-
-    validate_cfg(cfg, world_size=1)
-    assert cfg.classifier._target_ == "dreamervla.models.reward.LatentSuccessClassifier"
 
 
 @pytest.mark.parametrize(
@@ -598,26 +454,6 @@ def test_classifier_config_comments_use_role_based_wm_wording() -> None:
         if _contains_removed_wm_wording(path.read_text(encoding="utf-8"))
     }
     assert offenders == {}
-
-
-def test_online_cotrain_oft_action_hidden_comments_use_role_based_wm_alias() -> None:
-    config_path = (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "experiment"
-        / "online_cotrain_oft_action_hidden.yaml"
-    )
-    comment_text = "\n".join(
-        line for line in config_path.read_text(encoding="utf-8").splitlines()
-        if line.lstrip().startswith("#")
-    )
-
-    assert "experiment=dreamervla_oft_wm_lumos" in comment_text
-    assert (
-        f"experiment=dreamervla_oft_{_REMOVED_UNDERSCORE_WM_ROUTE}_lumos"
-        not in comment_text
-    )
-    assert not _contains_removed_wm_wording(comment_text)
 
 
 def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:

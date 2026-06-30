@@ -222,50 +222,6 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
     _assert_no_removed_wm_wording(tutorial)
 
 
-def test_openvla_action_hidden_tutorial_prefers_role_based_wm_route_examples() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    tutorial = (
-        project_root
-        / "docs"
-        / "tutorials"
-        / "experiments"
-        / "OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md"
-    ).read_text(encoding="utf-8")
-
-    assert "experiment=oft_world_model_chunk" in tutorial
-    assert "experiment=dreamervla_oft_wm_lumos" in tutorial
-    _assert_no_removed_wm_wording(tutorial)
-
-
-def test_openvla_backbone_latent_tutorial_prefers_role_based_wm_route_examples() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    tutorial = (
-        project_root
-        / "docs"
-        / "tutorials"
-        / "experiments"
-        / "OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md"
-    ).read_text(encoding="utf-8")
-
-    assert "experiment=oft_world_model_chunk_input_tokens" in tutorial
-    assert "experiment=dreamervla_oft_wm_lumos_input_tokens" in tutorial
-    _assert_no_removed_wm_wording(tutorial)
-
-
-def test_openvla_coldstart_collection_tutorial_prefers_role_based_wm_route_examples() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    tutorial = (
-        project_root
-        / "docs"
-        / "tutorials"
-        / "experiments"
-        / "OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md"
-    ).read_text(encoding="utf-8")
-
-    assert "experiment=oft_discrete_token_world_model_chunk" in tutorial
-    _assert_no_removed_wm_wording(tutorial)
-
-
 def test_parameter_reference_uses_role_based_wm_wording() -> None:
     project_root = Path(__file__).resolve().parents[2]
     parameter_reference = (project_root / "docs" / "PARAMETERS.md").read_text(

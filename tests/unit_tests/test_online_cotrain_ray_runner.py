@@ -1086,9 +1086,7 @@ def test_ray_runner_reserves_episode_ids_from_rollout_dump_resume() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
         "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
-        "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
 def test_ray_lumos_configs_use_non_degenerate_grpo_groups(path: str) -> None:
@@ -1114,9 +1112,7 @@ def test_ray_lumos_configs_use_non_degenerate_grpo_groups(path: str) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
         "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
-        "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
 def test_ray_lumos_configs_expose_rlinf_rollout_scale(path: str) -> None:
@@ -1154,16 +1150,8 @@ def test_ray_lumos_configs_expose_rlinf_rollout_scale(path: str) -> None:
     ("path", "subdir"),
     [
         (
-            "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
-            "online_cotrain_action_hidden",
-        ),
-        (
             "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
             "online_cotrain_backbone_latent",
-        ),
-        (
-            "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
-            "online_cotrain_rynn_action_hidden",
         ),
     ],
 )
@@ -1189,9 +1177,7 @@ def test_ray_cotrain_configs_dump_one_hdf5_per_episode(
 @pytest.mark.parametrize(
     "path",
     [
-        "configs/dreamervla/ray_online_cotrain_oft_action_hidden.yaml",
         "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
-        "configs/dreamervla/ray_online_cotrain_rynn_action_hidden.yaml",
     ],
 )
 def test_ray_real_configs_use_component_placement_for_egl_mainline(path: str) -> None:
@@ -1602,121 +1588,6 @@ def test_ray_runner_flattens_worker_slot_observations() -> None:
     assert flattened == [{"env_id": 0}, {"env_id": 1}, {"env_id": 2}, {"env_id": 3}]
 
 
-def test_online_cotrain_ray_oft_experiment_accepts_render_backend_override() -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=online_cotrain_ray_oft_action_hidden",
-                "render_backend=osmesa",
-            ],
-        )
-
-    assert cfg.render_backend == "osmesa"
-
-
-def test_online_cotrain_ray_oft_backbone_latent_uses_input_token_contract() -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=["experiment=online_cotrain_ray_oft_backbone_latent"],
-        )
-
-    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
-    runner.cfg = cfg
-    plan = runner._oft_worker_plan()
-
-    task_spec = cfg.task.openvla_oft.input_tokens
-    assert cfg.latent_type == "backbone_latent"
-    assert cfg.ray_components.world_model.kwargs.latent_stage == "query_before"
-    assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
-    assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
-    assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
-    assert cfg.ray_data.sequence_length == 12
-    assert cfg.ray_components.world_model.kwargs.model_dim == 4148
-    assert cfg.ray_components.world_model.kwargs.proprio_dim == 8
-    assert cfg.ray_components.world_model.kwargs.proprio_emb_dim == 10
-    assert cfg.ray_components.world_model.kwargs.num_proprio_repeat == 1
-    assert cfg.ray_components.world_model.kwargs.lang_dim == 4096
-    assert cfg.ray_components.world_model.kwargs.lang_emb_dim == 32
-    assert cfg.ray_components.world_model.kwargs.num_lang_repeat == 1
-    assert cfg.ray_components.world_model.kwargs.action_emb_dim == 10
-    assert cfg.ray_components.world_model.kwargs.model_dim == (
-        cfg.ray_components.world_model.kwargs.token_dim
-        + cfg.ray_components.world_model.kwargs.proprio_emb_dim
-        + cfg.ray_components.world_model.kwargs.lang_emb_dim
-        + cfg.ray_components.world_model.kwargs.action_emb_dim
-    )
-    assert cfg.ray_components.world_model.kwargs.cosine_loss_scale == 0.0
-    assert cfg.ray_components.world_model.kwargs.chunk_rollout_chunks == 1
-    assert cfg.ray_components.world_model.kwargs.chunk_rollout_loss_scale == 0.0
-    assert (
-        cfg.ray_components.policy.target
-        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
-    )
-    assert cfg.ray_components.policy.kwargs.source_token_count == task_spec.token_count
-    assert cfg.ray_components.policy.kwargs.hidden_state_dim == task_spec.hidden_state_dim
-    assert "action_hidden_dim" not in cfg.ray_components.policy.kwargs
-    assert cfg.ray_components.classifier.kwargs.token_count == task_spec.token_count
-    assert cfg.env.cfg.kwargs.obs_hidden_source == "input_token_embedding"
-    assert plan["collect"]["expected_obs_hidden_source"] == "input_token_embedding"
-    assert plan["collect"]["token_count"] == task_spec.token_count
-    assert plan["collect"]["hidden_dim"] == task_spec.wm_obs_dim
-    assert plan["env"]["kwargs"]["obs_hidden_source"] == "input_token_embedding"
-    assert (
-        plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"]
-        == "input_token_embedding"
-    )
-    assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "input_token_embedding"
-    assert plan["dump"]["preprocess_config"]["token_count"] == task_spec.token_count
-    assert plan["dump"]["preprocess_config"]["hidden_dim"] == task_spec.wm_obs_dim
-
-
-def test_online_cotrain_ray_oft_backbone_classifier_depth_matches_warmup() -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        warmup_cfg = compose(
-            config_name="train",
-            overrides=["experiment=openvla_onetraj_libero_cotrain_noray"],
-        )
-        ray_cfg = compose(
-            config_name="train",
-            overrides=["experiment=online_cotrain_ray_oft_backbone_latent"],
-        )
-
-    assert ray_cfg.ray_components.classifier.kwargs.num_layers == warmup_cfg.classifier.num_layers
-
-
-def test_online_cotrain_ray_oft_alias_uses_backbone_latent_route() -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name="train", overrides=["experiment=online_cotrain_ray_oft"])
-
-    assert cfg.latent_type == "backbone_latent"
-    assert cfg.env.cfg.kwargs.obs_hidden_source == "input_token_embedding"
-    assert cfg.ray_components.world_model.kwargs.latent_stage == "query_before"
-
-
 def test_ray_oft_rollout_env_cfg_reuses_collect_plan(monkeypatch) -> None:
     from omegaconf import OmegaConf
 
@@ -1761,78 +1632,6 @@ def test_ray_oft_rollout_env_cfg_reuses_collect_plan(monkeypatch) -> None:
     assert env_cfg["kwargs"]["task_ids"] == [1]
     assert env_cfg["kwargs"]["full_record"] is True
     assert "egl_device_pool" not in env_cfg
-
-
-def test_online_cotrain_ray_oft_experiment_composes_real_components() -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-    from omegaconf import OmegaConf
-
-    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name="train", overrides=["experiment=online_cotrain_ray_oft"])
-
-    assert cfg._target_.endswith("OnlineCotrainRayRunner")
-    assert cfg.learner.train_cfg.mode == "dreamervla_cotrain"
-    assert cfg.ray_components.policy.target == cfg.learner.model_cfg.policy.target
-    assert cfg.ray_components.world_model.target == cfg.learner.model_cfg.world_model.target
-    assert cfg.ray_components.classifier.target == cfg.learner.model_cfg.classifier.target
-    assert cfg.ray_data.sequence_length == cfg.replay.cfg.sequence_length
-    task_spec = cfg.task.openvla_oft.input_tokens
-    assert (
-        cfg.learner.model_cfg.policy.target
-        == "dreamervla.models.actor.LatentToOpenVLAHiddenStateActor"
-    )
-    assert (
-        cfg.learner.model_cfg.world_model.target
-        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
-    )
-    assert (
-        cfg.learner.model_cfg.classifier.target
-        == "dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier"
-    )
-    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
-    runner.cfg = cfg
-    plan = runner._oft_worker_plan()
-    assert cfg.ray_rollout.mode == "oft_fixed_base"
-    assert plan["collect"]["model_path"] == cfg.task.openvla_oft.ckpt_path
-    assert plan["inference"]["decoder"]["target"].endswith("OFTRolloutBundle")
-    assert (
-        cfg.ray_components.policy.kwargs.time_horizon
-        == cfg.learner.model_cfg.policy.kwargs.time_horizon
-    )
-    assert cfg.replay.cfg.sequence_length >= cfg.learner.model_cfg.classifier.kwargs.window
-
-    assert plan["collect"]["action_dim"] == cfg.task.action_dim
-    assert plan["inference"]["action_steps"] == task_spec.chunk_size
-    assert task_spec.wm_obs_dim == task_spec.token_count * task_spec.token_dim
-    assert cfg.ray_components.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
-    assert cfg.ray_components.world_model.kwargs.token_count == task_spec.token_count
-    assert cfg.ray_components.world_model.kwargs.token_dim == task_spec.token_dim
-    assert cfg.ray_components.world_model.kwargs.chunk_size == task_spec.chunk_size
-    assert cfg.ray_components.policy.kwargs.hidden_state_dim == task_spec.hidden_state_dim
-    assert "action_hidden_dim" not in cfg.ray_components.policy.kwargs
-    assert cfg.ray_components.policy.kwargs.time_horizon == task_spec.chunk_size
-    assert cfg.ray_components.classifier.kwargs.latent_dim == task_spec.classifier_latent_dim
-    assert cfg.ray_components.classifier.kwargs.proprio_dim == task_spec.proprio_dim
-    assert cfg.ray_components.classifier.kwargs.proprio_emb_dim == task_spec.proprio_emb_dim
-    assert cfg.ray_components.classifier.kwargs.lang_dim == task_spec.lang_dim
-    assert cfg.ray_components.classifier.kwargs.lang_emb_dim == task_spec.lang_emb_dim
-    assert cfg.learner.model_cfg.world_model.kwargs.obs_dim == task_spec.wm_obs_dim
-
-    unresolved_wm = OmegaConf.to_yaml(cfg.ray_components.world_model.kwargs, resolve=False)
-    unresolved_policy = OmegaConf.to_yaml(cfg.ray_components.policy.kwargs, resolve=False)
-    unresolved_classifier = OmegaConf.to_yaml(cfg.ray_components.classifier.kwargs, resolve=False)
-    assert "${task.openvla_oft.input_tokens.wm_obs_dim}" in unresolved_wm
-    assert "${task.openvla_oft.input_tokens.token_count}" in unresolved_wm
-    assert "${task.openvla_oft.input_tokens.token_dim}" in unresolved_wm
-    assert "${task.openvla_oft.input_tokens.hidden_state_dim}" in unresolved_policy
-    assert "${task.openvla_oft.input_tokens.classifier_latent_dim}" in unresolved_classifier
-    assert "${task.openvla_oft.input_tokens.proprio_dim}" in unresolved_classifier
-    assert "${task.openvla_oft.input_tokens.lang_dim}" in unresolved_classifier
 
 
 def test_ray_runner_loads_init_ckpt_by_component_name(tmp_path) -> None:

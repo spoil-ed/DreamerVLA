@@ -52,7 +52,7 @@ def test_coldstart_plan_uses_dvla_root_data_interpolation(tmp_path: Path) -> Non
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=online_cotrain_pipeline_oft_action_hidden",
+                "experiment=openvla_onetraj_libero_cotrain_noray",
                 "task=openvla_onetraj_coldstart_libero",
             ],
         )

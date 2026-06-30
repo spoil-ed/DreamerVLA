@@ -47,7 +47,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "--config",
-        default=str(PROJECT_ROOT / "configs/dreamervla/rynnvla_lumos.yaml"),
+        default=str(PROJECT_ROOT / "configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml"),
     )
     p.add_argument(
         "--ckpt",
