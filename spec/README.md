@@ -13,6 +13,7 @@ Hydra 配置。
 | [`03_coding_style.md`](03_coding_style.md) | 实现约束：Hydra、Runner、Worker、数据、checkpoint、metrics。 |
 | [`04_complete_loop.md`](04_complete_loop.md) | 主线 `collect -> warmup -> cotrain -> eval` 数据流。 |
 | [`05_ray_runtime.md`](05_ray_runtime.md) | Ray/manual cotrain 的 group、worker、placement 和同步边界。 |
+| [`06_routes.md`](06_routes.md) | 主线与支线路由的权威清单：一眼看清唯一主线是什么。 |
 | [`99_manual_notes.md`](99_manual_notes.md) | 用户第一性指导，保留原文；扩写架构时再参考。 |
 
 ## Source Rule

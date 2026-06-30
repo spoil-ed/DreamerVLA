@@ -57,8 +57,8 @@ Real LIBERO collection
 ## Main Configs
 
 - Launcher config：`configs/scripts/coldstart_warmup_cotrain.yaml`
-- Sync cotrain experiment：`online_cotrain_pipeline_oft_backbone_latent`
-- Manual Ray experiment：`manual_cotrain_ray_oft_backbone_latent`
+- Sync cotrain experiment：`openvla_onetraj_libero_cotrain_noray`
+- Manual Ray experiment：`openvla_onetraj_libero_cotrain_ray`
 - Eval config：`configs/scripts/eval_libero_vla.yaml`
 
 ## TODO

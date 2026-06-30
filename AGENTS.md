@@ -9,7 +9,11 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 
 `collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain`
 
-The command-level reference is
+The mainline experiments are `collect_rollouts_ray` / `collect_rollouts_onetraj`,
+`openvla_onetraj_libero_cotrain_noray` (sync pipeline) and
+`openvla_onetraj_libero_cotrain_ray` (Ray async manual cotrain), then `eval_libero_vla`.
+Everything else is a secondary route or a test fixture — the authoritative mainline vs
+secondary split is [spec/06_routes.md](spec/06_routes.md). The command-level reference is
 [spec/04_complete_loop.md](spec/04_complete_loop.md). Architecture source documents live
 under [spec/](spec/), with [spec/99_manual_notes.md](spec/99_manual_notes.md) as the
 highest-priority user guidance. Keep this file as the repository brief, not a history
@@ -87,8 +91,8 @@ The launcher composes `configs/scripts/coldstart_warmup_cotrain.yaml`:
   `${DVLA_DATA_ROOT}/collected_rollouts/<suite>/{reward,hidden}` plus
   `collection_manifest.json`.
 - The sync cotrain path uses
-  `experiment=online_cotrain_pipeline_oft_backbone_latent`, which composes
-  `dreamervla=online_cotrain_pipeline_openvla_oft_backbone_latent`.
+  `experiment=openvla_onetraj_libero_cotrain_noray`, which composes
+  `dreamervla=openvla_onetraj_libero_cotrain_noray`.
 - The pipeline runner seeds `OnlineReplay` from collected reward + hidden HDF5 shards,
   warms up the world model and classifier with the same update functions used online,
   then runs online cotrain.
@@ -96,7 +100,7 @@ The launcher composes `configs/scripts/coldstart_warmup_cotrain.yaml`:
   `${RUN_ROOT}/cotrain/ckpt/`.
 - `cotrain_phase=online` resumes those warmup checkpoints and skips collection/warmup.
 - `cotrain_engine=async` runs sync warmup first, consolidates a Ray init checkpoint,
-  then starts `experiment=manual_cotrain_ray_oft_backbone_latent`
+  then starts `experiment=openvla_onetraj_libero_cotrain_ray`
   (`ManualCotrainRayRunner`).
 
 Ray async cotrain is explicit and single-node. The target route is manual-notes style:
@@ -212,15 +216,15 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 
 ## Optional Components
 
-- Target Ray async cotrain (`ManualCotrainRayRunner`) is available through
-  `manual_cotrain_ray_oft_backbone_latent`.
-- Legacy Ray async cotrain (`OnlineCotrainRayRunner`) remains available only through
-  explicit legacy experiments such as `online_cotrain_ray_oft_backbone_latent`.
-- World-model-env smoke coverage exists through
-  `experiment=online_cotrain_ray_world_model_env_tiny`.
-- RynnVLA, action-hidden, token, pixel, Chameleon, and older Dreamer routes remain in
-  configs and runners as secondary routes. Do not make them the default path unless the
-  active task requests them.
+- Target Ray async cotrain (`ManualCotrainRayRunner`) is the mainline, available through
+  `experiment=openvla_onetraj_libero_cotrain_ray`.
+- Legacy Ray async cotrain (`OnlineCotrainRayRunner`) survives only as the shared base
+  config `dreamervla/openvla_onetraj_libero_cotrain_ray_base` and the Ray smoke fixtures
+  (`online_cotrain_ray_synthetic`, `online_cotrain_ray_dreamervla_tiny`); it has no
+  standalone mainline experiment.
+- RynnVLA (alternative VLA backbone) and the OpenVLA-OFT VLA/WM/classifier stage variants
+  remain as secondary routes; the full mainline-vs-secondary list is in
+  [spec/06_routes.md](spec/06_routes.md). Do not make them the default path.
 - `scheduler/`, `workers/`, and `hybrid_engines/` are backend primitives. Keep them
   behind Hydra-selected runners.
 

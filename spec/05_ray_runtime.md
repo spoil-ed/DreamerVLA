@@ -37,7 +37,7 @@ GPU1..GPU(N-1):
 
 ## Entrypoints
 
-- `experiment=manual_cotrain_ray_oft_backbone_latent`
+- `experiment=openvla_onetraj_libero_cotrain_ray`
 - `_target_=dreamervla.runners.ManualCotrainRayRunner`
 - wrapper：`scripts/e2e_manual_cotrain_async.sh`
 
