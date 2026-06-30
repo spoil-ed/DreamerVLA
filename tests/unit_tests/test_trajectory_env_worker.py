@@ -378,7 +378,14 @@ def test_spawned_real_env_worker_records_child_transition() -> None:
         "policy_version": 4,
     }
 
-    def fake_rpc(cmd: str, payload: Any = None, *, slot_id: int = 0) -> Any:
+    def fake_rpc(
+        cmd: str,
+        payload: Any = None,
+        *,
+        slot_id: int = 0,
+        timeout_s: float | None = None,
+    ) -> Any:
+        assert timeout_s == 120.0
         assert cmd == "step"
         assert slot_id == 0
         env_action, policy_action, sidecars = payload
@@ -387,7 +394,7 @@ def test_spawned_real_env_worker_records_child_transition() -> None:
         assert sidecars["policy_version"] == 4
         return transition, {"step": 1}, 1.0, True, {"success": True}
 
-    worker._spawn_rpc = fake_rpc  # type: ignore[method-assign]
+    worker._spawn_rpc_with_timeout = fake_rpc  # type: ignore[method-assign]
 
     try:
         worker._step_slot(
@@ -407,6 +414,10 @@ def test_spawned_real_env_worker_respawns_dead_child_when_enabled(monkeypatch) -
     class _DeadConn:
         def send(self, *_args: Any, **_kwargs: Any) -> None:
             return None
+
+        def poll(self, timeout: float | None = None) -> bool:
+            del timeout
+            return True
 
         def recv(self) -> Any:
             raise EOFError
@@ -464,6 +475,100 @@ def test_spawned_real_env_worker_respawns_dead_child_when_enabled(monkeypatch) -
     assert info["respawn_count"] == 1
     assert calls == [(0, 1)]
     assert worker._episodes_by_slot[0] == []
+    assert old_proc.terminated is True
+
+
+def test_spawned_real_env_worker_respawns_hung_child_when_step_timeout_enabled(
+    monkeypatch,
+) -> None:
+    class _HungConn:
+        def __init__(self) -> None:
+            self.poll_timeout: float | None = None
+            self.closed = False
+            self.sent: list[Any] = []
+
+        def send(self, payload: Any) -> None:
+            self.sent.append(payload)
+
+        def poll(self, timeout: float | None = None) -> bool:
+            self.poll_timeout = timeout
+            return False
+
+        def recv(self) -> Any:
+            raise AssertionError("step response recv should be guarded by poll timeout")
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def is_alive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def join(self, timeout: float | None = None) -> None:
+            self.join_timeout = timeout
+
+    worker = RealEnvWorker(
+        env_cfg={
+            "render_backend": "egl",
+            "egl_max_respawns": 1,
+            "egl_step_timeout_s": 0.25,
+        },
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    old_proc = _Proc()
+    old_conn = _HungConn()
+    worker._spawned_env = True
+    worker._spawn_procs[0] = old_proc
+    worker._spawn_conns[0] = old_conn
+    worker._obs_by_slot[0] = {"step": 0}
+    worker._episodes_by_slot[0] = [{"partial": 1}]
+    calls: list[tuple[int, int]] = []
+
+    def fake_init_spawn_slot(
+        slot_id: int,
+        *,
+        task_id: int | None = None,
+        start_episode_id: int = 0,
+    ) -> None:
+        del task_id
+        calls.append((int(slot_id), int(start_episode_id)))
+        worker._spawn_procs[int(slot_id)] = _Proc()
+        worker._spawn_conns[int(slot_id)] = object()
+        worker._obs_by_slot[int(slot_id)] = {
+            "step": 0,
+            "episode_id": int(start_episode_id),
+        }
+        worker._episode_ids_by_slot[int(slot_id)] = int(start_episode_id)
+
+    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
+
+    obs, reward, done, info = worker._step_slot(
+        0,
+        np.zeros((7,), dtype=np.float32),
+        transition_sidecars={},
+    )
+
+    assert obs["episode_id"] == 1
+    assert reward == 0.0
+    assert done is True
+    assert info["env_crash"] is True
+    assert info["env_timeout"] is True
+    assert info["respawned"] is True
+    assert info["respawn_count"] == 1
+    assert calls == [(0, 1)]
+    assert worker._episodes_by_slot[0] == []
+    assert old_conn.poll_timeout == 0.25
+    assert old_conn.closed is True
     assert old_proc.terminated is True
 
 

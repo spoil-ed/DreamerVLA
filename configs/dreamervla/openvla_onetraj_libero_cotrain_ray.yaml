@@ -132,6 +132,7 @@ env:
   cfg:
     action_postprocess: openvla_oft
     egl_max_respawns: 4
+    egl_step_timeout_s: 120.0
   real:
     cfg: ${env.cfg}
   wm:

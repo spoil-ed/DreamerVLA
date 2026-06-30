@@ -1693,15 +1693,45 @@ class BaseTrajectoryEnvWorker(Worker):
             self._task_ids_by_slot[slot_id] = int(task_id)
 
     def _spawn_rpc(self, cmd: str, payload: Any = None, *, slot_id: int = 0) -> Any:
+        return self._spawn_rpc_with_timeout(
+            cmd,
+            payload,
+            slot_id=slot_id,
+            timeout_s=None,
+        )
+
+    def _spawn_rpc_with_timeout(
+        self,
+        cmd: str,
+        payload: Any = None,
+        *,
+        slot_id: int = 0,
+        timeout_s: float | None = None,
+    ) -> Any:
         self._validate_slot(slot_id)
         conn = self._spawn_conns[int(slot_id)]
         if conn is None:
             raise RuntimeError("RealEnvWorker spawn slot has not been initialized")
         conn.send((cmd, payload))
+        if timeout_s is not None and not conn.poll(float(timeout_s)):
+            raise TimeoutError(
+                "RealEnvWorker subprocess RPC timed out "
+                f"(rank={self.local_rank}, slot={int(slot_id)}, cmd={cmd!r}, "
+                f"timeout={float(timeout_s):.3f}s)"
+            )
         status, value = conn.recv()
         if status == "error":
             raise RuntimeError(f"RealEnvWorker subprocess error: {value}")
         return value
+
+    def _spawn_step_timeout_s(self) -> float | None:
+        raw = self.env_cfg.get("egl_step_timeout_s", 120.0)
+        if raw is None:
+            return None
+        timeout = float(raw)
+        if timeout <= 0:
+            return None
+        return timeout
 
     def _reset_spawn_slot(self, slot_id: int) -> dict[str, Any]:
         self._validate_slot(slot_id)
@@ -1727,7 +1757,7 @@ class BaseTrajectoryEnvWorker(Worker):
         policy_action = np.asarray(action, dtype=np.float32).reshape(-1)
         env_action = self._env_action_from_policy_action(policy_action)
         try:
-            transition, next_obs, reward, done, info = self._spawn_rpc(
+            transition, next_obs, reward, done, info = self._spawn_rpc_with_timeout(
                 "step",
                 (
                     np.asarray(env_action, dtype=np.float32).reshape(-1),
@@ -1735,13 +1765,15 @@ class BaseTrajectoryEnvWorker(Worker):
                     dict(transition_sidecars or {}),
                 ),
                 slot_id=slot_id,
+                timeout_s=self._spawn_step_timeout_s(),
             )
-        except (EOFError, OSError, BrokenPipeError) as exc:
+        except (EOFError, OSError, BrokenPipeError, TimeoutError) as exc:
             recovered = self._recover_spawn_slot_after_child_death(slot_id)
             if recovered is not None:
                 obs, respawn_count = recovered
                 self._last_apply_env_crashes = 1
                 self._last_apply_env_respawns = 1
+                timeout_info = {"env_timeout": True} if isinstance(exc, TimeoutError) else {}
                 return (
                     obs,
                     0.0,
@@ -1749,14 +1781,15 @@ class BaseTrajectoryEnvWorker(Worker):
                     {
                         "success": False,
                         "env_crash": True,
+                        **timeout_info,
                         "respawned": True,
                         "respawn_count": int(respawn_count),
                     },
                 )
             raise RuntimeError(
-                f"RealEnvWorker EGL child died (rank={self.local_rank}, "
-                f"slot={int(slot_id)}); set env.cfg.egl_max_respawns>0 to "
-                "drop the partial episode and respawn the slot"
+                f"RealEnvWorker EGL child failed (rank={self.local_rank}, "
+                f"slot={int(slot_id)}): {exc}; set env.cfg.egl_max_respawns>0 "
+                "to drop the partial episode and respawn the slot"
             ) from exc
         self._episodes_by_slot[slot_id].append(dict(transition))
         self._obs_by_slot[slot_id] = dict(next_obs)

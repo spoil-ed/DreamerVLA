@@ -301,6 +301,7 @@ def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess
         == cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
     )
     assert cfg.env.real.cfg.action_postprocess == "openvla_oft"
+    assert cfg.env.real.cfg.egl_step_timeout_s == 120.0
 
 
 def test_manual_runner_injects_top_level_render_backend_into_real_env_cfg() -> None:
