@@ -507,7 +507,7 @@ def test_train_help_uses_role_based_wm_examples(capsys) -> None:
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
     assert "experiment=world_model_chunk" in help_text
-    assert "experiment=dreamervla_rynn_wm_actor_critic" in help_text
+    assert "experiment=openvla_onetraj_libero_cotrain_ray" in help_text
     _assert_no_removed_wm_wording(help_text)
 
 

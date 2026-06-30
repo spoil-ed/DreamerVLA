@@ -162,7 +162,7 @@ env:
   num_workers: 1
   envs_per_worker: 4
   train:
-    # RLinf manual-cotrain-style WM rollout scale. This is not physical LIBERO env
+    # Manual-cotrain-style WM rollout scale. This is not physical LIBERO env
     # parallelism; learner.batch_size derives from it together with imag_last
     # and group_size.
     total_num_envs: 64
@@ -232,7 +232,7 @@ replay:
 policy:
   cfg: ${ray_components.policy}
 
-# GPU allocation follows RLinf's component placement. This base file is the small
+# GPU allocation follows the component-placement contract. This base file is the small
 # two-GPU route; the 6-GPU launcher overrides env.num_workers and
 # cluster.component_placement so EnvWorkers span the full GPU slice. Rollout and
 # actor map to DreamerVLA inference and learner, which are single-worker contracts
@@ -266,7 +266,7 @@ learner:
     device: auto
     precision: bf16
     algorithm_cfg:
-      # RLinf manual-cotrain-style rollout scale:
+      # Manual-cotrain-style rollout scale:
       # total_num_envs(64) * rollout_epoch(16) = 1024 imagined trajectories
       # per PPO update; batch_size is derived as total_num_envs / (imag_last * group_size).
       group_size: ${algorithm.group_size}

@@ -61,7 +61,7 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
                 "Examples:\n"
                 "  python -m dreamervla.train experiment=vla_rynnvla_action_head training.num_epochs=5\n"
                 "  python -m dreamervla.train experiment=world_model_chunk training.num_epochs=20\n"
-                "  python -m dreamervla.train experiment=dreamervla_rynn_wm_actor_critic task=libero_object"
+                "  python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_ray task=openvla_onetraj_coldstart_libero"
             )
             raise SystemExit(0)
         if arg in ("--config-name", "-cn"):

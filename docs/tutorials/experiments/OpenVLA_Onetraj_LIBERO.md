@@ -124,8 +124,8 @@ python -m dreamervla.train \
 - `init.warmup_ckpt_path`：LearnerWorker 载入 world_model + classifier；OFT policy 由
   `task.openvla_oft.ckpt_path` 自动加载。
 - RL 超参（`group_size=8` / `rollout_epoch=16` / `max_steps_per_rollout_epoch=256` /
-  `env.train.total_num_envs=64` / `global_steps=1000` / gamma / gae_lambda / clip 等）已按
-  RLinf 对齐写进配置默认，命令行无需重复；要短跑临时加 `manual_cotrain.global_steps=<N>`。
+  `env.train.total_num_envs=64` / `global_steps=1000` / gamma / gae_lambda / clip 等）已
+  写进配置默认，命令行无需重复；要短跑临时加 `manual_cotrain.global_steps=<N>`。
 - `manual_cotrain.ngpu=N`（0–6）= 本机 GPU 数：GPU0=real_env，GPU1..N-1=wm_env，配 N 个
   rollout worker。默认 osmesa，要 EGL 加 `render_backend=egl`。
 - `DVLA_COTRAIN_HANDSHAKE_TRACE=1` 打印 env/rollout 握手与 `[build_groups]` 各 worker init

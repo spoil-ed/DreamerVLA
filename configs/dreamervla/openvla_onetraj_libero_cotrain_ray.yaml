@@ -12,7 +12,7 @@ render_backend: osmesa
 
 manual_cotrain:
   ngpu: 1
-  global_steps: 1000  # RLinf max_epochs
+  global_steps: 1000  # cotrain epochs
   learner_update_step: 1
   sync_every: 1
   requires_bootstrap_value: false
