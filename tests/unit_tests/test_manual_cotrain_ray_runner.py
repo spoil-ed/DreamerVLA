@@ -320,7 +320,7 @@ def test_manual_runner_injects_top_level_render_backend_into_real_env_cfg() -> N
 
     real_env_cfg = runner._real_env_cfg()
 
-    assert real_env_cfg["render_backend"] == "egl"
+    assert real_env_cfg["render_backend"] == "osmesa"
     assert real_env_cfg["num_envs_per_worker"] == 1
     assert real_env_cfg["action_postprocess"] == "openvla_oft"
     assert real_env_cfg["spawn_env_slots"] is False

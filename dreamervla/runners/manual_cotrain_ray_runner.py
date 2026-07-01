@@ -602,9 +602,12 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _real_env_cfg(self) -> dict[str, Any]:
         cfg = self._cfg_dict("env.real.cfg")
-        cfg.setdefault("render_backend", self._render_backend())
-        cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
         cfg.setdefault("spawn_env_slots", False)
+        if "render_backend" not in cfg:
+            cfg["render_backend"] = (
+                self._render_backend() if bool(cfg["spawn_env_slots"]) else "osmesa"
+            )
+        cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
         return cfg
 
     def _cfg_dict(self, path: str, fallback: str | None = None) -> dict[str, Any]:

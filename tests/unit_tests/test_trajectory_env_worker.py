@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import Any
 
@@ -330,6 +331,31 @@ def test_real_env_worker_respects_explicit_spawn_slots_false_for_egl_backend(mon
         assert len(build_calls) == 2
         assert worker._spawned_env is False
         assert len(worker.envs) == 2
+    finally:
+        worker.close()
+
+
+def test_real_env_worker_pins_osmesa_for_inproc_non_egl_backend(monkeypatch) -> None:
+    cfg = dict(_counter_env_cfg())
+    cfg["render_backend"] = "osmesa"
+    cfg["spawn_env_slots"] = False
+    worker = RealEnvWorker(
+        env_cfg=cfg,
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    monkeypatch.delenv("MUJOCO_GL", raising=False)
+    monkeypatch.delenv("PYOPENGL_PLATFORM", raising=False)
+
+    try:
+        worker.init()
+
+        assert os.environ["MUJOCO_GL"] == "osmesa"
+        assert os.environ["PYOPENGL_PLATFORM"] == "osmesa"
+        assert worker._spawned_env is False
     finally:
         worker.close()
 

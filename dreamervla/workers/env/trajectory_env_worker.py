@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import multiprocessing as mp
+import os
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -521,6 +522,7 @@ class BaseTrajectoryEnvWorker(Worker):
             self._init_spawn_slots()
             self._apply_pending_component_states()
             return
+        self._pin_inproc_render_backend()
         first_env = _build_env_from_cfg(self.env_cfg)
         if hasattr(first_env, "reset_slot") and hasattr(first_env, "step_slot"):
             env_count = getattr(first_env, "num_envs", None)
@@ -545,6 +547,15 @@ class BaseTrajectoryEnvWorker(Worker):
                 env.set_task(task_id)
         self._bootstrap_wm_initial_latents_from_replay()
         self._apply_pending_component_states()
+
+    def _pin_inproc_render_backend(self) -> None:
+        if self.role != "real_env":
+            return
+        render_backend = str(self.env_cfg.get("render_backend", "")).strip().lower()
+        if render_backend == "egl":
+            return
+        os.environ.setdefault("MUJOCO_GL", "osmesa")
+        os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
     def bootstrap_obs(self) -> list[ObservationMsg]:
         """Reset each slot and emit the first observation for rollout inference."""
