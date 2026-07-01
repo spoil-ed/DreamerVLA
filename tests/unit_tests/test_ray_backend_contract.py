@@ -36,6 +36,34 @@ def test_ray_dependency_is_declared_for_fresh_installs() -> None:
     assert "ray[default]" not in requirements
 
 
+def test_cluster_defaults_ray_task_event_capacity(monkeypatch) -> None:
+    import os
+
+    import dreamervla.scheduler.cluster as cluster_module
+    from dreamervla.scheduler.cluster import Cluster
+
+    monkeypatch.delenv("RAY_task_events_max_num_task_in_gcs", raising=False)
+    monkeypatch.setattr(cluster_module.ray, "is_initialized", lambda: True)
+
+    Cluster()
+
+    assert os.environ["RAY_task_events_max_num_task_in_gcs"] == "1000000"
+
+
+def test_cluster_respects_explicit_ray_task_event_capacity(monkeypatch) -> None:
+    import os
+
+    import dreamervla.scheduler.cluster as cluster_module
+    from dreamervla.scheduler.cluster import Cluster
+
+    monkeypatch.setenv("RAY_task_events_max_num_task_in_gcs", "42")
+    monkeypatch.setattr(cluster_module.ray, "is_initialized", lambda: True)
+
+    Cluster()
+
+    assert os.environ["RAY_task_events_max_num_task_in_gcs"] == "42"
+
+
 def test_packed_placement_rejects_non_positive_gpus_per_worker() -> None:
     from dreamervla.scheduler.placement import PackedPlacementStrategy
 

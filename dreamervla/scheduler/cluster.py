@@ -25,6 +25,7 @@ class Cluster:
             )
 
         os.environ.setdefault("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
+        os.environ.setdefault("RAY_task_events_max_num_task_in_gcs", "1000000")
         if not ray.is_initialized():
             init_kwargs = self._init_kwargs(cfg)
             ray.init(**init_kwargs)

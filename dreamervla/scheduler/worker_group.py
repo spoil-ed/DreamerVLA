@@ -46,6 +46,7 @@ class WorkerGroup:
                 # Asking Ray to also assign num_gpus can conflict with runtime_env
                 # CUDA_VISIBLE_DEVICES for non-zero local GPU ids on Ray 2.47.
                 "num_gpus": 0,
+                "enable_task_events": False,
                 "runtime_env": {
                     "env_vars": self._env_vars(
                         item,

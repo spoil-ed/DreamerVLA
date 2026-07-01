@@ -169,6 +169,7 @@ def test_worker_group_launch_assigns_shared_single_node_rendezvous(monkeypatch) 
     assert [env["RANK"] for env in envs] == ["0", "1"]
     assert {env["MASTER_ADDR"] for env in envs} == {"127.0.0.1"}
     assert {env["MASTER_PORT"] for env in envs} == {"29601"}
+    assert [item["enable_task_events"] for item in captured] == [False, False]
 
 
 def test_worker_group_send_recv_routes_one_rank() -> None:
