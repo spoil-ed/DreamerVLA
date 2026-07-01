@@ -559,7 +559,6 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
     _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
-    _require_non_negative_if_present(cfg, "env.cfg.egl_step_timeout_s")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.ngpu")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.task_id")
     _require_non_negative_if_present(cfg, "manual_cotrain.env_rollout_timeout_s")

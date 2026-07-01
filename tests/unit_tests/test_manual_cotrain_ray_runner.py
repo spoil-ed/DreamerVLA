@@ -301,7 +301,7 @@ def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess
         == cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
     )
     assert cfg.env.real.cfg.action_postprocess == "openvla_oft"
-    assert cfg.env.real.cfg.egl_step_timeout_s == 120.0
+    assert "egl_step_timeout_s" not in cfg.env.real.cfg
 
 
 def test_manual_runner_injects_top_level_render_backend_into_real_env_cfg() -> None:
@@ -323,7 +323,24 @@ def test_manual_runner_injects_top_level_render_backend_into_real_env_cfg() -> N
     assert real_env_cfg["render_backend"] == "osmesa"
     assert real_env_cfg["num_envs_per_worker"] == 1
     assert real_env_cfg["action_postprocess"] == "openvla_oft"
-    assert real_env_cfg["spawn_env_slots"] is False
+    assert "spawn_env_slots" not in real_env_cfg
+
+
+def test_manual_runner_rejects_legacy_real_env_spawn_slots_config() -> None:
+    cfg = _cfg(ngpu=2)
+    cfg.env = {
+        "real": {
+            "cfg": {
+                "target": "dreamervla.workers.env._test_envs:CounterEnv",
+                "kwargs": {"horizon": 1},
+                "spawn_env_slots": True,
+            }
+        }
+    }
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+
+    with pytest.raises(ValueError, match="spawn_env_slots"):
+        runner._real_env_cfg()
 
 
 def test_manual_cotrain_tiny_wm_env_num_envs_tracks_envs_per_worker_and_disables_loggers() -> None:
@@ -671,13 +688,13 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert rollout.pulled == [("policy", None)]
     assert rollout.generate_call == ("env", "rollout", 1)
     assert events.index("actor_recv_start") < events.index("env_wait")
-    assert [key for key, _ in groups["env_channel"].puts] == ["0:0", "1:0"]
+    assert [key for key, _ in groups["env_channel"].puts] == ["0", "1"]
     assert all(isinstance(value, StopMsg) for _, value in groups["env_channel"].puts)
     assert "[global_step=1] EnvGroup.interact start" in traces
     assert "[global_step=1] RolloutGroup.generate start" in traces
     assert "[global_step=1] EnvGroup.interact done" in traces
-    assert "[env rank=0] send StopMsg key=0:0" in traces
-    assert "[env rank=1] send StopMsg key=1:0" in traces
+    assert "[env rank=0] send StopMsg key=0" in traces
+    assert "[env rank=1] send StopMsg key=1" in traces
     assert actor.recv_calls == [((0,), "actor", 1), ((1,), "actor", 1)]
     assert actor.load_calls == 0
     assert len(actor.loaded_shards) == 2

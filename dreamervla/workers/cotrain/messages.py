@@ -25,6 +25,18 @@ class ObservationMsg:
 
 
 @dataclass(frozen=True)
+class ObservationBatchMsg:
+    """Rank-scoped observation batch sent from one EnvWorker to RolloutWorker."""
+
+    env_rank: int
+    observations: list[ObservationMsg]
+
+    @property
+    def key(self) -> str:
+        return str(int(self.env_rank))
+
+
+@dataclass(frozen=True)
 class RolloutResultMsg:
     """Rollout policy output plus ActorGroup training inputs."""
 
@@ -42,6 +54,18 @@ class RolloutResultMsg:
     @property
     def key(self) -> str:
         return f"{int(self.env_rank)}:{int(self.slot_id)}"
+
+
+@dataclass(frozen=True)
+class RolloutResultBatchMsg:
+    """Rank-scoped rollout result batch returned to one EnvWorker."""
+
+    env_rank: int
+    results: list[RolloutResultMsg]
+
+    @property
+    def key(self) -> str:
+        return str(int(self.env_rank))
 
 
 @dataclass(frozen=True)

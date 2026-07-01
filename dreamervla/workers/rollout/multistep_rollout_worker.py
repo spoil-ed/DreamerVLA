@@ -15,7 +15,13 @@ from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
-from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg, StopMsg
+from dreamervla.workers.cotrain.messages import (
+    ObservationBatchMsg,
+    ObservationMsg,
+    RolloutResultBatchMsg,
+    RolloutResultMsg,
+    StopMsg,
+)
 
 _DEFAULT_PATCH_STORE = "DreamerVLAActorRolloutPatchStore"
 _EXTRA_FORWARD_KEYS = (
@@ -179,7 +185,7 @@ class MultiStepRolloutWorker(Worker):
         if input_key is not None:
             return self._generate_from_key(input_channel, output_channel, str(input_key))
         if num_slots is not None:
-            return self._generate_from_rank_slot_keys(
+            return self._generate_from_rank_batch_key(
                 input_channel,
                 output_channel,
                 int(num_slots),
@@ -248,7 +254,7 @@ class MultiStepRolloutWorker(Worker):
             channel_put_s=channel_put_s,
         )
 
-    def _generate_from_rank_slot_keys(
+    def _generate_from_rank_batch_key(
         self,
         input_channel: Channel,
         output_channel: Channel,
@@ -256,74 +262,89 @@ class MultiStepRolloutWorker(Worker):
     ) -> dict[str, float]:
         if int(num_slots) <= 0:
             raise ValueError("num_slots must be positive")
-        active_slots = set(range(int(num_slots)))
+        key = str(int(self.rank))
         generated = 0
-        slot_cursor = 0
         channel_get_s = 0.0
         policy_forward_s = 0.0
         channel_put_s = 0.0
         loop_start = time.perf_counter()
-        while active_slots:
-            messages: list[tuple[str, ObservationMsg]] = []
-            for _ in range(len(active_slots)):
-                slot_id = slot_cursor % int(num_slots)
-                slot_cursor += 1
-                if slot_id not in active_slots:
-                    continue
-                key = f"{int(self.rank)}:{int(slot_id)}"
-                _hs_trace(
-                    f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
+        while True:
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
+            )
+            get_start = time.perf_counter()
+            msg = input_channel.get(key=key)
+            channel_get_s += time.perf_counter() - get_start
+            if isinstance(msg, StopMsg):
+                _hs_trace(f"[rollout rank={int(self.rank)}] recv StopMsg key={key}")
+                break
+            if not isinstance(msg, ObservationBatchMsg):
+                raise TypeError(
+                    "MultiStepRolloutWorker.generate expected ObservationBatchMsg "
+                    f"or StopMsg, got {type(msg).__name__}"
                 )
-                get_start = time.perf_counter()
-                msg = input_channel.get(key=key)
-                channel_get_s += time.perf_counter() - get_start
-                if isinstance(msg, StopMsg):
-                    active_slots.remove(slot_id)
-                    _hs_trace(
-                        f"[rollout rank={int(self.rank)}] recv StopMsg key={key} "
-                        f"remaining={len(active_slots)}"
-                    )
-                    continue
-                if not isinstance(msg, ObservationMsg):
+            if int(msg.env_rank) != int(self.rank):
+                raise ValueError(
+                    "observation batch env_rank must match rollout rank: "
+                    f"got {int(msg.env_rank)}, expected {int(self.rank)}"
+                )
+            observations = list(msg.observations)
+            if not observations:
+                raise ValueError("ObservationBatchMsg.observations must not be empty")
+            if len(observations) > int(num_slots):
+                raise ValueError(
+                    "observation batch is larger than configured num_slots: "
+                    f"{len(observations)} > {int(num_slots)}"
+                )
+            for obs_msg in observations:
+                if not isinstance(obs_msg, ObservationMsg):
                     raise TypeError(
-                        "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
-                        f"got {type(msg).__name__}"
+                        "ObservationBatchMsg must contain ObservationMsg items, "
+                        f"got {type(obs_msg).__name__}"
                     )
-                _hs_trace(
-                    f"[rollout rank={int(self.rank)}] recv action request OK key={key}"
-                )
-                messages.append((key, msg))
-            if not messages:
-                continue
-            keys_csv = ",".join(key for key, _ in messages)
+                if int(obs_msg.env_rank) != int(self.rank):
+                    raise ValueError(
+                        "observation env_rank must match rollout rank: "
+                        f"got {int(obs_msg.env_rank)}, expected {int(self.rank)}"
+                    )
+            keys = [obs_msg.key for obs_msg in observations]
+            keys_csv = ",".join(keys)
+            _hs_trace(
+                f"[rollout rank={int(self.rank)}] recv action request OK key={key}"
+            )
             _hs_trace(
                 f"[rollout rank={int(self.rank)}] recv action request "
-                f"batch_size={len(messages)} keys={keys_csv}"
+                f"batch_size={len(observations)} key={key} keys={keys_csv}"
             )
             _sync_if_cuda(self.torch_device)
             _hs_trace(
                 f"[rollout rank={int(self.rank)}] policy forward start "
-                f"batch_size={len(messages)}"
+                f"batch_size={len(observations)}"
             )
             forward_start = time.perf_counter()
             results = self._generate_batch_with_context(
-                [msg for _, msg in messages],
-                keys=[key for key, _ in messages],
+                observations,
+                keys=keys,
             )
             _sync_if_cuda(self.torch_device)
             policy_forward_s += time.perf_counter() - forward_start
             _hs_trace(
                 f"[rollout rank={int(self.rank)}] policy forward done "
-                f"batch_size={len(messages)}"
+                f"batch_size={len(observations)}"
             )
-            for result in results:
-                put_start = time.perf_counter()
-                output_channel.put(result, key=result.key)
-                channel_put_s += time.perf_counter() - put_start
-                generated += 1
+            result_batch = RolloutResultBatchMsg(
+                env_rank=int(msg.env_rank),
+                results=list(results),
+            )
+            put_start = time.perf_counter()
+            output_channel.put(result_batch, key=result_batch.key)
+            channel_put_s += time.perf_counter() - put_start
+            generated += len(results)
+            result_keys_csv = ",".join(result.key for result in results)
             _hs_trace(
                 f"[rollout rank={int(self.rank)}] send action response "
-                f"batch_size={len(results)}"
+                f"batch_size={len(results)} key={result_batch.key} "
+                f"keys={result_keys_csv}"
             )
         _hs_trace(
             f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}"

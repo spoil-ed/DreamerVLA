@@ -9,7 +9,9 @@ from dreamervla.workers.cotrain.placement import (
 )
 
 _MESSAGE_EXPORTS = {
+    "ObservationBatchMsg",
     "ObservationMsg",
+    "RolloutResultBatchMsg",
     "RolloutResultMsg",
     "StopMsg",
     "TrajectoryBatch",
@@ -20,8 +22,10 @@ _MESSAGE_EXPORTS = {
 
 __all__ = [
     "ManualCotrainPlacementPlan",
+    "ObservationBatchMsg",
     "ObservationMsg",
     "RolePlacement",
+    "RolloutResultBatchMsg",
     "RolloutResultMsg",
     "StopMsg",
     "TrajectoryBatch",

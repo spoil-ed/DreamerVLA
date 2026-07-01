@@ -423,18 +423,6 @@ def _ray_online_scale_overrides(
         )
     )
 
-    egl_cfg = _plain(profile_cfg).get("ray_online_egl_spawn", {})
-    if not isinstance(egl_cfg, Mapping):
-        return overrides
-    egl_targets = {
-        "stagger_s": "env.cfg.egl_spawn_stagger_s",
-        "init_timeout_s": "env.cfg.egl_spawn_init_timeout_s",
-    }
-    for source_key, target_key in egl_targets.items():
-        value = egl_cfg.get(source_key)
-        if value is None or _has_override(explicit_overrides, target_key):
-            continue
-        overrides.append(f"++{target_key}={_format_hydra_value(value)}")
     return overrides
 
 
@@ -522,14 +510,10 @@ def _manual_cotrain_env_rollout_timeout_s(
 ) -> int | None:
     if str(render_backend).strip().lower() != "egl":
         return None
-    egl_cfg = _plain(profile_cfg).get("ray_online_egl_spawn", {})
-    if not isinstance(egl_cfg, Mapping):
-        return None
-    raw = egl_cfg.get("init_timeout_s")
+    raw = _plain(profile_cfg).get("ray_online_env_rollout_timeout_s", 2400)
     if raw is None:
         return None
-    init_timeout_s = int(float(raw))
-    return max(2400, init_timeout_s + 600)
+    return int(float(raw))
 
 
 def _manual_cotrain_global_steps_from_budget(

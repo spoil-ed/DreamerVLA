@@ -111,3 +111,35 @@ def test_channel_get_timeout_reports_key() -> None:
             channel.get(key="missing-key", timeout_s=0.01)
     finally:
         cluster.shutdown()
+
+
+def test_channel_actor_disables_ray_task_events(monkeypatch) -> None:
+    import dreamervla.scheduler.channel as channel_module
+
+    captured: list[dict] = []
+
+    class _RemoteMethod:
+        def remote(self, *args, **kwargs):
+            del args, kwargs
+            return 0
+
+    class _Actor:
+        qsize = _RemoteMethod()
+
+    class _RemoteClass:
+        @staticmethod
+        def options(**options):
+            captured.append(options)
+            return _RemoteClass
+
+        @staticmethod
+        def remote(*args, **kwargs):
+            del args, kwargs
+            return _Actor()
+
+    monkeypatch.setattr(channel_module, "_ChannelActor", _RemoteClass)
+    monkeypatch.setattr(channel_module.ray, "get", lambda ref: ref)
+
+    channel_module.Channel.create("test-channel-task-events")
+
+    assert captured[0]["enable_task_events"] is False

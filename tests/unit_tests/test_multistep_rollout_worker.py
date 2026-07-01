@@ -10,7 +10,13 @@ import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
-from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg, StopMsg
+from dreamervla.workers.cotrain.messages import (
+    ObservationBatchMsg,
+    ObservationMsg,
+    RolloutResultBatchMsg,
+    RolloutResultMsg,
+    StopMsg,
+)
 from dreamervla.workers.inference.oft_rollout import _select_image_keys_for_policy
 from dreamervla.workers.rollout.multistep_rollout_worker import (
     MultiStepRolloutWorker,
@@ -48,6 +54,10 @@ def _obs(
         obs={"obs_embedding": np.ones(4, dtype=np.float32)},
         versions={"policy": 0},
     )
+
+
+def _obs_batch(*observations: ObservationMsg, env_rank: int = 0) -> ObservationBatchMsg:
+    return ObservationBatchMsg(env_rank=int(env_rank), observations=list(observations))
 
 
 def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> ObservationMsg:
@@ -302,7 +312,7 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
         cluster.shutdown()
 
 
-def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set(monkeypatch) -> None:
+def test_generate_reads_rank_keyed_observation_batches_when_num_slots_is_set(monkeypatch) -> None:
     if ray.is_initialized():
         ray.shutdown()
     cluster = Cluster()
@@ -316,10 +326,11 @@ def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set(monkeypat
         output_name = f"test-rollout-keyed-out-{uuid.uuid4().hex}"
         input_channel = Channel.create(input_name)
         output_channel = Channel.create(output_name)
-        input_channel.put(_obs(step=0, slot_id=0), key="0:0")
-        input_channel.put(_obs(step=10, slot_id=1), key="0:1")
-        input_channel.put(StopMsg(reason="unit-test"), key="0:0")
-        input_channel.put(StopMsg(reason="unit-test"), key="0:1")
+        input_channel.put(
+            _obs_batch(_obs(step=0, slot_id=0), _obs(step=10, slot_id=1)),
+            key="0",
+        )
+        input_channel.put(StopMsg(reason="unit-test"), key="0")
 
         worker = MultiStepRolloutWorker(
             policy_cfg=_policy_cfg(),
@@ -336,12 +347,10 @@ def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set(monkeypat
         assert stats["rollout/policy_forward_s"] >= 0.0
         assert stats["rollout/channel_put_s"] >= 0.0
         assert stats["rollout/loop_s"] >= 0.0
-        assert output_channel.qsize(key="0:0") == 1
-        assert output_channel.qsize(key="0:1") == 1
-        first = output_channel.get(key="0:0")
-        second = output_channel.get(key="0:1")
-        assert isinstance(first, RolloutResultMsg)
-        assert isinstance(second, RolloutResultMsg)
+        assert output_channel.qsize(key="0") == 1
+        batch = output_channel.get(key="0")
+        assert isinstance(batch, RolloutResultBatchMsg)
+        first, second = batch.results
         assert first.step == 0
         assert second.step == 10
         assert any(
@@ -352,7 +361,7 @@ def test_generate_reads_rank_slot_keyed_channels_when_num_slots_is_set(monkeypat
             "[rollout rank=0] send action response batch_size=2" in line
             for line in traces
         )
-        assert any("[rollout rank=0] recv StopMsg key=0:0" in line for line in traces)
+        assert any("[rollout rank=0] recv StopMsg key=0" in line for line in traces)
         assert any("[rollout rank=0] generate exit generated=2" in line for line in traces)
     finally:
         cluster.shutdown()
@@ -375,7 +384,7 @@ def test_generate_wraps_rank_slot_failures_with_channel_key() -> None:
         output_name = f"test-rollout-keyed-fail-out-{uuid.uuid4().hex}"
         input_channel = Channel.create(input_name)
         Channel.create(output_name)
-        input_channel.put(_obs(step=0, slot_id=0), key="0:0")
+        input_channel.put(_obs_batch(_obs(step=0, slot_id=0)), key="0")
 
         worker = FailingRolloutWorker(
             policy_cfg=_policy_cfg(),

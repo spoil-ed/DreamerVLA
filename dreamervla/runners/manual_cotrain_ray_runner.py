@@ -298,15 +298,12 @@ class ManualCotrainRayRunner(BaseRunner):
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact done")
         stage_start = mark_stage("env_interact_and_rollout_generate", stage_start)
         for rollout_rank, _ in enumerate(groups["RolloutGroup"].workers):
-            for slot_id in range(self._envs_per_worker()):
-                key = f"{int(rollout_rank)}:{int(slot_id)}"
-                _hs_trace(
-                    f"[env rank={int(rollout_rank)}] send StopMsg key={key}"
-                )
-                groups["env_channel"].put(
-                    StopMsg(reason="global_step_complete"),
-                    key=key,
-                )
+            key = str(int(rollout_rank))
+            _hs_trace(f"[env rank={int(rollout_rank)}] send StopMsg key={key}")
+            groups["env_channel"].put(
+                StopMsg(reason="global_step_complete"),
+                key=key,
+            )
         rollout_metrics = _sum_metric_lists([rollout_result.wait()])
         _hs_trace(f"[global_step={global_step}] RolloutGroup.generate done")
         expected_shards = int(env_metrics.get("env/trajectory_shards", 0.0))
@@ -602,11 +599,13 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _real_env_cfg(self) -> dict[str, Any]:
         cfg = self._cfg_dict("env.real.cfg")
-        cfg.setdefault("spawn_env_slots", False)
-        if "render_backend" not in cfg:
-            cfg["render_backend"] = (
-                self._render_backend() if bool(cfg["spawn_env_slots"]) else "osmesa"
+        raw_spawn_slots = cfg.pop("spawn_env_slots", False)
+        if str(raw_spawn_slots).strip().lower() in {"1", "true", "yes", "y", "on"}:
+            raise ValueError(
+                "env.real.cfg.spawn_env_slots has been removed from manual cotrain"
             )
+        if "render_backend" not in cfg:
+            cfg["render_backend"] = "osmesa"
         cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
         return cfg
 

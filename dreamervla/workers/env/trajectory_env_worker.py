@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import multiprocessing as mp
 import os
 import time
 from collections.abc import Mapping
@@ -14,13 +13,11 @@ import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
-from dreamervla.utils.egl_device import (
-    apply_egl_device_regime,
-    log_egl_device_diagnostics_from_env,
-)
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
+    ObservationBatchMsg,
     ObservationMsg,
+    RolloutResultBatchMsg,
     RolloutResultMsg,
     TrajectoryShard,
     _shard_loss_mask,
@@ -45,20 +42,6 @@ def _plain_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     raise TypeError(f"expected mapping config, got {type(value).__name__}")
-
-
-def _config_bool(value: Any, *, name: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, np.integer)):
-        return bool(value)
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
-    raise ValueError(f"{name} must be a boolean, got {value!r}")
 
 
 def _state_dict_nbytes(state_dict: Mapping[str, Any]) -> int:
@@ -314,124 +297,6 @@ def _make_env_transition(
     }, obs)
 
 
-def _trajectory_env_subprocess_main(  # noqa: ANN001
-    conn,
-    env_cfg: dict[str, Any],
-    task_id: int,
-    egl_device_id: int | None,
-    start_episode_id: int = 0,
-) -> None:
-    """Host one real env slot in a fresh process.
-
-    LIBERO/robosuite/EGL can abort inside native rendering. Keeping the simulator
-    in a child process lets the Ray worker preserve channels and respawn only the
-    affected slot.
-    """
-
-    if egl_device_id is not None:
-        apply_egl_device_regime(egl_device_id, logger_name=__name__)
-    try:
-        env = _build_env_from_cfg(env_cfg)
-        cur_task = int(task_id)
-        episode_id = int(start_episode_id)
-        if hasattr(env, "set_task"):
-            env.set_task(cur_task)
-        cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
-        conn.send(("ready", cur_obs))
-    except Exception as exc:  # noqa: BLE001
-        conn.send(("error", repr(exc)))
-        conn.close()
-        return
-    try:
-        while True:
-            cmd, payload = conn.recv()
-            if cmd == "close":
-                break
-            if cmd == "current_obs":
-                conn.send(("ok", cur_obs))
-                continue
-            if cmd == "set_task":
-                if isinstance(payload, tuple):
-                    cur_task, episode_id = int(payload[0]), int(payload[1])
-                else:
-                    cur_task, episode_id = int(payload), 0
-                if hasattr(env, "set_task"):
-                    env.set_task(cur_task)
-                cur_obs, _ = env.reset(task_id=cur_task, episode_id=episode_id)
-                conn.send(("ok", cur_obs))
-                continue
-            if cmd == "load_world_model_state":
-                state_dict, version = payload
-                loader = getattr(env, "load_world_model_state", None)
-                if loader is None:
-                    conn.send(("error", "active env does not support world model state sync"))
-                else:
-                    loader(state_dict, int(version))
-                    conn.send(("ok", None))
-                continue
-            if cmd == "load_classifier_state":
-                state_dict, version = payload
-                loader = getattr(env, "load_classifier_state", None)
-                if loader is None:
-                    conn.send(("error", "active env does not support classifier state sync"))
-                else:
-                    loader(state_dict, int(version))
-                    conn.send(("ok", None))
-                continue
-            if cmd != "step":
-                conn.send(("error", f"unknown cmd {cmd!r}"))
-                continue
-
-            env_action, policy_action, transition_sidecars = payload
-            obs = cur_obs
-            next_obs, reward, terminated, truncated, info = env.step(env_action)
-            info = dict(info or {})
-            info.setdefault(
-                "wm_action",
-                np.asarray(env_action, dtype=np.float32).reshape(-1),
-            )
-            done = bool(terminated or truncated)
-            transition_obs = dict(obs)
-            if transition_sidecars:
-                transition_obs.update(dict(transition_sidecars))
-            transition = _make_env_transition(
-                env,
-                transition_obs,
-                dict(next_obs),
-                policy_action,
-                float(reward),
-                bool(terminated),
-                bool(truncated),
-                info,
-            )
-            if done:
-                episode_id += 1
-                cur_obs, reset_info = env.reset(
-                    task_id=cur_task,
-                    episode_id=episode_id,
-                )
-                merged_info = dict(info)
-                merged_info["reset_info"] = reset_info
-                conn.send(("step", (transition, cur_obs, float(reward), True, merged_info)))
-            else:
-                cur_obs = next_obs
-                conn.send(("step", (transition, cur_obs, float(reward), False, info)))
-    except EOFError:
-        pass
-    except Exception as exc:  # noqa: BLE001
-        try:
-            conn.send(("error", repr(exc)))
-        except Exception:  # noqa: BLE001
-            pass
-    finally:
-        try:
-            if hasattr(env, "close"):
-                env.close()
-        except Exception:  # noqa: BLE001
-            pass
-        conn.close()
-
-
 class BaseTrajectoryEnvWorker(Worker):
     """EnvWorker that turns action chunks into step-major trajectory shards."""
 
@@ -499,12 +364,6 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_physical_steps = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
-        self._spawned_env = False
-        self._spawn_procs: list[Any | None] = [None for _ in range(self.num_slots)]
-        self._spawn_conns: list[Any | None] = [None for _ in range(self.num_slots)]
-        self._egl_device_id: int | None = None
-        self._egl_respawns_by_slot: list[int] = [0 for _ in range(self.num_slots)]
-        self._egl_diagnostics_logged = False
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible progress metadata for observations and replay."""
@@ -514,14 +373,9 @@ class BaseTrajectoryEnvWorker(Worker):
     def init(self) -> None:
         """Build all local env slots."""
 
-        if self._spawned_env and all(conn is not None for conn in self._spawn_conns):
-            return
         if self.envs:
             return
-        if self._should_spawn_env_slots():
-            self._init_spawn_slots()
-            self._apply_pending_component_states()
-            return
+        self._reject_legacy_spawn_config()
         self._pin_inproc_render_backend()
         first_env = _build_env_from_cfg(self.env_cfg)
         if hasattr(first_env, "reset_slot") and hasattr(first_env, "step_slot"):
@@ -556,6 +410,15 @@ class BaseTrajectoryEnvWorker(Worker):
             return
         os.environ.setdefault("MUJOCO_GL", "osmesa")
         os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+
+    def _reject_legacy_spawn_config(self) -> None:
+        raw = self.env_cfg.get("spawn_env_slots", False)
+        enabled = str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+        if enabled:
+            raise ValueError(
+                "env_cfg.spawn_env_slots has been removed from manual cotrain; "
+                "EnvWorker slots now run in the Ray actor process."
+            )
 
     def bootstrap_obs(self) -> list[ObservationMsg]:
         """Reset each slot and emit the first observation for rollout inference."""
@@ -708,46 +571,46 @@ class BaseTrajectoryEnvWorker(Worker):
                 f"[env rank={int(self.rank)} role={self.role}] "
                 f"reset start num_slots={int(self.num_slots)}"
             )
-            for message in self.bootstrap_obs():
-                put_start = time.perf_counter()
-                env_channel.put(message, key=message.key)
-                metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
-                _hs_trace(
-                    f"[env rank={int(self.rank)} role={self.role}] "
-                    f"send action request batch_size=1 key={message.key} "
-                    "phase=bootstrap"
-                )
+            self._put_observation_batch(
+                env_channel,
+                self.bootstrap_obs(),
+                metrics,
+                phase="bootstrap",
+            )
             _hs_trace(f"[env rank={int(self.rank)} role={self.role}] reset done")
 
             target_chunk_steps = self._chunk_steps_per_rollout_epoch()
             chunk_steps_by_slot = [0 for _ in range(self.num_slots)]
             while any(steps < target_chunk_steps for steps in chunk_steps_by_slot):
-                for slot_id in range(self.num_slots):
-                    if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
-                        continue
-                    key = self._slot_key(slot_id)
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response WAIT key={key}"
+                active_slot_ids = [
+                    slot_id
+                    for slot_id in range(self.num_slots)
+                    if chunk_steps_by_slot[slot_id] < target_chunk_steps
+                ]
+                results = self._get_rollout_result_batch(
+                    rollout_channel,
+                    active_slot_ids,
+                    metrics,
+                )
+                keys_csv = ",".join(result.key for result in results)
+                first_step = (
+                    min(
+                        int(chunk_steps_by_slot[int(result.slot_id)])
+                        for result in results
                     )
-                    get_start = time.perf_counter()
-                    result = rollout_channel.get(key=key)
-                    metrics["env/rollout_get_s"] += time.perf_counter() - get_start
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response batch_size=1 key={key}"
-                    )
+                    if results
+                    else 0
+                )
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"step {first_step} start batch_size={len(results)} keys={keys_csv}"
+                )
+                next_messages: list[ObservationMsg] = []
+                for result in results:
+                    slot_id = int(result.slot_id)
                     apply_start = time.perf_counter()
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"step {int(chunk_steps_by_slot[slot_id])} start key={key}"
-                    )
                     shard = self.apply_rollout_result(result)
                     metrics["env/apply_step_s"] += time.perf_counter() - apply_start
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"step {int(chunk_steps_by_slot[slot_id])} done key={key}"
-                    )
                     self._buffer_actor_shard(shard)
                     chunk_steps_by_slot[slot_id] += 1
                     metrics["env/chunk_steps"] += 1.0
@@ -781,16 +644,15 @@ class BaseTrajectoryEnvWorker(Worker):
                         obs = self._obs_by_slot[slot_id]
                         if obs is None:
                             raise RuntimeError("slot has no current observation")
-                        message = self._observation_msg(slot_id, obs)
-                        put_start = time.perf_counter()
-                        env_channel.put(message, key=message.key)
-                        metrics["env/channel_put_obs_s"] += (
-                            time.perf_counter() - put_start
-                        )
-                        _hs_trace(
-                            f"[env rank={int(self.rank)} role={self.role}] "
-                            f"send action request batch_size=1 key={message.key}"
-                        )
+                        next_messages.append(self._observation_msg(slot_id, obs))
+                _hs_trace(
+                    f"[env rank={int(self.rank)} role={self.role}] "
+                    f"step {first_step} done batch_size={len(results)} keys={keys_csv}"
+                )
+                if next_messages:
+                    self._put_observation_batch(env_channel, next_messages, metrics)
+            final_bootstrap_messages: list[ObservationMsg] = []
+            final_bootstrap_slot_ids: list[int] = []
             for slot_id in range(self.num_slots):
                 put_s, emitted = self._flush_buffered_actor_shard(
                     slot_id,
@@ -805,33 +667,26 @@ class BaseTrajectoryEnvWorker(Worker):
                 if self.request_final_bootstrap:
                     message = self._observation_msg(slot_id, obs)
                     message.obs["_final_bootstrap"] = True
-                    put_start = time.perf_counter()
-                    env_channel.put(message, key=message.key)
-                    metrics["env/channel_put_obs_s"] += (
-                        time.perf_counter() - put_start
-                    )
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"send action request batch_size=1 key={message.key} "
-                        "phase=final_bootstrap"
-                    )
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response WAIT key={self._slot_key(slot_id)} "
-                        "phase=final_bootstrap"
-                    )
-                    get_start = time.perf_counter()
-                    rollout_channel.get(key=self._slot_key(slot_id))
-                    metrics["env/rollout_get_s"] += time.perf_counter() - get_start
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        "recv action response batch_size=1 "
-                        f"key={self._slot_key(slot_id)} "
-                        "phase=final_bootstrap"
-                    )
-                    metrics["env/final_bootstrap_requests"] += 1.0
+                    final_bootstrap_messages.append(message)
+                    final_bootstrap_slot_ids.append(slot_id)
                 metrics["env/episodes_flushed"] += float(
                     self._flush_partial_episode(slot_id)
+                )
+            if final_bootstrap_messages:
+                self._put_observation_batch(
+                    env_channel,
+                    final_bootstrap_messages,
+                    metrics,
+                    phase="final_bootstrap",
+                )
+                self._get_rollout_result_batch(
+                    rollout_channel,
+                    final_bootstrap_slot_ids,
+                    metrics,
+                    phase="final_bootstrap",
+                )
+                metrics["env/final_bootstrap_requests"] += float(
+                    len(final_bootstrap_messages)
                 )
         metrics["env/actor_put_flush_s"] += self._flush_actor_puts(
             pending_actor_puts
@@ -965,46 +820,29 @@ class BaseTrajectoryEnvWorker(Worker):
                 f"[env rank={int(self.rank)} role={self.role}] "
                 f"reset start num_slots={int(self.num_slots)}"
             )
-            for message in self.bootstrap_obs():
-                put_start = time.perf_counter()
-                env_channel.put(message, key=message.key)
-                metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
-                _hs_trace(
-                    f"[env rank={int(self.rank)} role={self.role}] "
-                    f"send action request batch_size=1 key={message.key} "
-                    "phase=bootstrap"
-                )
+            self._put_observation_batch(
+                env_channel,
+                self.bootstrap_obs(),
+                metrics,
+                phase="bootstrap",
+            )
             _hs_trace(f"[env rank={int(self.rank)} role={self.role}] reset done")
 
             target_chunk_steps = self._chunk_steps_per_rollout_epoch()
             chunk_steps_by_slot = [0 for _ in range(self.num_slots)]
             while any(steps < target_chunk_steps for steps in chunk_steps_by_slot):
-                results: list[RolloutResultMsg] = []
-                keys: list[str] = []
-                for slot_id in range(self.num_slots):
-                    if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
-                        continue
-                    key = self._slot_key(slot_id)
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response WAIT key={key}"
-                    )
-                    get_start = time.perf_counter()
-                    result = rollout_channel.get(key=key)
-                    metrics["env/rollout_get_s"] += time.perf_counter() - get_start
-                    if not isinstance(result, RolloutResultMsg):
-                        raise TypeError(
-                            "WMEnvWorker batched interact expected RolloutResultMsg, "
-                            f"got {type(result).__name__}"
-                        )
-                    results.append(result)
-                    keys.append(key)
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response batch_size=1 key={key}"
-                    )
+                active_slot_ids = [
+                    slot_id
+                    for slot_id in range(self.num_slots)
+                    if chunk_steps_by_slot[slot_id] < target_chunk_steps
+                ]
+                results = self._get_rollout_result_batch(
+                    rollout_channel,
+                    active_slot_ids,
+                    metrics,
+                )
                 apply_start = time.perf_counter()
-                keys_csv = ",".join(keys)
+                keys_csv = ",".join(result.key for result in results)
                 first_step = (
                     min(
                         int(chunk_steps_by_slot[int(result.slot_id)])
@@ -1036,6 +874,9 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/episodes_completed"] += float(
                         shard_metrics["completed_episodes"]
                     )
+                next_messages: list[ObservationMsg] = []
+                for shard, _shard_metrics in applied:
+                    slot_id = int(shard.slot_id)
                     if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
                         put_s, emitted = self._flush_buffered_actor_shard(
                             slot_id,
@@ -1052,16 +893,11 @@ class BaseTrajectoryEnvWorker(Worker):
                         obs = self._obs_by_slot[slot_id]
                         if obs is None:
                             raise RuntimeError("slot has no current observation")
-                        message = self._observation_msg(slot_id, obs)
-                        put_start = time.perf_counter()
-                        env_channel.put(message, key=message.key)
-                        metrics["env/channel_put_obs_s"] += (
-                            time.perf_counter() - put_start
-                        )
-                        _hs_trace(
-                            f"[env rank={int(self.rank)} role={self.role}] "
-                            f"send action request batch_size=1 key={message.key}"
-                        )
+                        next_messages.append(self._observation_msg(slot_id, obs))
+                if next_messages:
+                    self._put_observation_batch(env_channel, next_messages, metrics)
+            final_bootstrap_messages: list[ObservationMsg] = []
+            final_bootstrap_slot_ids: list[int] = []
             for slot_id in range(self.num_slots):
                 put_s, emitted = self._flush_buffered_actor_shard(
                     slot_id,
@@ -1076,33 +912,26 @@ class BaseTrajectoryEnvWorker(Worker):
                 if self.request_final_bootstrap:
                     message = self._observation_msg(slot_id, obs)
                     message.obs["_final_bootstrap"] = True
-                    put_start = time.perf_counter()
-                    env_channel.put(message, key=message.key)
-                    metrics["env/channel_put_obs_s"] += (
-                        time.perf_counter() - put_start
-                    )
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"send action request batch_size=1 key={message.key} "
-                        "phase=final_bootstrap"
-                    )
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        f"recv action response WAIT key={self._slot_key(slot_id)} "
-                        "phase=final_bootstrap"
-                    )
-                    get_start = time.perf_counter()
-                    rollout_channel.get(key=self._slot_key(slot_id))
-                    metrics["env/rollout_get_s"] += time.perf_counter() - get_start
-                    _hs_trace(
-                        f"[env rank={int(self.rank)} role={self.role}] "
-                        "recv action response batch_size=1 "
-                        f"key={self._slot_key(slot_id)} "
-                        "phase=final_bootstrap"
-                    )
-                    metrics["env/final_bootstrap_requests"] += 1.0
+                    final_bootstrap_messages.append(message)
+                    final_bootstrap_slot_ids.append(slot_id)
                 metrics["env/episodes_flushed"] += float(
                     self._flush_partial_episode(slot_id)
+                )
+            if final_bootstrap_messages:
+                self._put_observation_batch(
+                    env_channel,
+                    final_bootstrap_messages,
+                    metrics,
+                    phase="final_bootstrap",
+                )
+                self._get_rollout_result_batch(
+                    rollout_channel,
+                    final_bootstrap_slot_ids,
+                    metrics,
+                    phase="final_bootstrap",
+                )
+                metrics["env/final_bootstrap_requests"] += float(
+                    len(final_bootstrap_messages)
                 )
         metrics["env/actor_put_flush_s"] += self._flush_actor_puts(
             pending_actor_puts
@@ -1292,18 +1121,6 @@ class BaseTrajectoryEnvWorker(Worker):
         }.get(str(component))
         if loader_name is None:
             raise ValueError(f"unknown component state {component!r}")
-        if self._spawned_env:
-            for slot_id in range(self.num_slots):
-                try:
-                    self._spawn_rpc(
-                        loader_name,
-                        (state_dict, int(version)),
-                        slot_id=slot_id,
-                    )
-                except RuntimeError:
-                    if self.role == "wm_env":
-                        raise
-            return
         for env in self.envs:
             loader = getattr(env, loader_name, None)
             if loader is not None:
@@ -1317,15 +1134,6 @@ class BaseTrajectoryEnvWorker(Worker):
     def close(self) -> None:
         """Close all env slots."""
 
-        if self._spawned_env:
-            for slot_id in range(self.num_slots):
-                self._close_spawn_slot(slot_id)
-            self._spawned_env = False
-            self._spawn_procs = [None for _ in range(self.num_slots)]
-            self._spawn_conns = [None for _ in range(self.num_slots)]
-            self._obs_by_slot = [None for _ in range(self.num_slots)]
-            self._episodes_by_slot = [[] for _ in range(self.num_slots)]
-            return
         for env in self.envs:
             close = getattr(env, "close", None)
             if close is not None:
@@ -1337,8 +1145,6 @@ class BaseTrajectoryEnvWorker(Worker):
 
     def _reset_slot(self, slot_id: int) -> dict[str, Any]:
         self._validate_slot(slot_id)
-        if self._spawned_env:
-            return self._reset_spawn_slot(slot_id)
         env = self._env_for_slot(slot_id)
         task_id = int(self._task_ids_by_slot[slot_id])
         episode_id = int(self._episode_ids_by_slot[slot_id])
@@ -1362,12 +1168,6 @@ class BaseTrajectoryEnvWorker(Worker):
         self._validate_slot(slot_id)
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
-        if self._spawned_env:
-            return self._step_spawn_slot(
-                slot_id,
-                action,
-                transition_sidecars=transition_sidecars,
-            )
         env = self._env_for_slot(slot_id)
         obs = self._obs_by_slot[slot_id]
         if obs is None:
@@ -1599,14 +1399,130 @@ class BaseTrajectoryEnvWorker(Worker):
             versions=self._model_version_sidecars(),
         )
 
-    def _slot_key(self, slot_id: int) -> str:
-        return f"{int(self.rank) + int(self.rank_offset)}:{int(slot_id)}"
+    def _rank_key(self) -> str:
+        return str(int(self.rank) + int(self.rank_offset))
+
+    def _observation_batch_msg(
+        self,
+        messages: list[ObservationMsg],
+    ) -> ObservationBatchMsg:
+        if not messages:
+            raise ValueError("cannot send an empty observation batch")
+        env_rank = int(self._rank_key())
+        slots_seen: set[int] = set()
+        for message in messages:
+            if not isinstance(message, ObservationMsg):
+                raise TypeError(
+                    "observation batches must contain ObservationMsg items, "
+                    f"got {type(message).__name__}"
+                )
+            if int(message.env_rank) != env_rank:
+                raise ValueError(
+                    "observation batch env_rank mismatch: "
+                    f"got {int(message.env_rank)}, expected {env_rank}"
+                )
+            slot_id = int(message.slot_id)
+            self._validate_slot(slot_id)
+            if slot_id in slots_seen:
+                raise ValueError(f"duplicate observation for slot_id {slot_id}")
+            slots_seen.add(slot_id)
+        return ObservationBatchMsg(env_rank=env_rank, observations=list(messages))
+
+    def _put_observation_batch(
+        self,
+        env_channel: Channel,
+        messages: list[ObservationMsg],
+        metrics: dict[str, float],
+        *,
+        phase: str | None = None,
+    ) -> None:
+        if not messages:
+            return
+        batch = self._observation_batch_msg(messages)
+        put_start = time.perf_counter()
+        env_channel.put(batch, key=batch.key)
+        metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
+        keys_csv = ",".join(message.key for message in messages)
+        phase_suffix = f" phase={str(phase)}" if phase is not None else ""
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] "
+            f"send action request batch_size={len(messages)} "
+            f"key={batch.key} keys={keys_csv}{phase_suffix}"
+        )
+
+    def _get_rollout_result_batch(
+        self,
+        rollout_channel: Channel,
+        expected_slot_ids: list[int],
+        metrics: dict[str, float],
+        *,
+        phase: str | None = None,
+    ) -> list[RolloutResultMsg]:
+        if not expected_slot_ids:
+            return []
+        expected_rank = int(self._rank_key())
+        expected_slots = [int(slot_id) for slot_id in expected_slot_ids]
+        expected_set = set(expected_slots)
+        if len(expected_set) != len(expected_slots):
+            raise ValueError("expected_slot_ids must not contain duplicates")
+        for slot_id in expected_slots:
+            self._validate_slot(slot_id)
+
+        key = str(expected_rank)
+        phase_suffix = f" phase={str(phase)}" if phase is not None else ""
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] "
+            f"recv action response WAIT key={key}{phase_suffix}"
+        )
+        get_start = time.perf_counter()
+        msg = rollout_channel.get(key=key)
+        metrics["env/rollout_get_s"] += time.perf_counter() - get_start
+        if not isinstance(msg, RolloutResultBatchMsg):
+            raise TypeError(
+                "EnvWorker expected RolloutResultBatchMsg from rollout channel, "
+                f"got {type(msg).__name__}"
+            )
+        if int(msg.env_rank) != expected_rank:
+            raise ValueError(
+                "rollout result batch env_rank mismatch: "
+                f"got {int(msg.env_rank)}, expected {expected_rank}"
+            )
+
+        by_slot: dict[int, RolloutResultMsg] = {}
+        for result in msg.results:
+            if not isinstance(result, RolloutResultMsg):
+                raise TypeError(
+                    "rollout result batches must contain RolloutResultMsg items, "
+                    f"got {type(result).__name__}"
+                )
+            if int(result.env_rank) != expected_rank:
+                raise ValueError(
+                    "rollout result env_rank mismatch: "
+                    f"got {int(result.env_rank)}, expected {expected_rank}"
+                )
+            slot_id = int(result.slot_id)
+            self._validate_slot(slot_id)
+            if slot_id in by_slot:
+                raise ValueError(f"duplicate rollout result for slot_id {slot_id}")
+            by_slot[slot_id] = result
+
+        actual_set = set(by_slot)
+        if actual_set != expected_set:
+            raise ValueError(
+                "rollout result batch slot mismatch: "
+                f"got {sorted(actual_set)}, expected {sorted(expected_set)}"
+            )
+
+        results = [by_slot[slot_id] for slot_id in expected_slots]
+        keys_csv = ",".join(result.key for result in results)
+        _hs_trace(
+            f"[env rank={int(self.rank)} role={self.role}] "
+            f"recv action response batch_size={len(results)} "
+            f"key={key} keys={keys_csv}{phase_suffix}"
+        )
+        return results
 
     def _ensure_initialized(self) -> None:
-        if self._spawned_env:
-            if any(conn is None for conn in self._spawn_conns):
-                raise RuntimeError("BaseTrajectoryEnvWorker.init() has not been called")
-            return
         expected_envs = 1 if self._batched_env else self.num_slots
         if len(self.envs) != expected_envs:
             raise RuntimeError("BaseTrajectoryEnvWorker.init() has not been called")
@@ -1614,311 +1530,6 @@ class BaseTrajectoryEnvWorker(Worker):
     def _validate_slot(self, slot_id: int) -> None:
         if not 0 <= int(slot_id) < self.num_slots:
             raise ValueError(f"slot_id {slot_id} is out of range")
-
-    def _should_spawn_env_slots(self) -> bool:
-        if self.role != "real_env":
-            return False
-        if "spawn_env_slots" in self.env_cfg:
-            return _config_bool(self.env_cfg.get("spawn_env_slots"), name="env_cfg.spawn_env_slots")
-        if self.env_cfg.get("egl_device_pool"):
-            return True
-        return str(self.env_cfg.get("render_backend", "")).strip().lower() == "egl"
-
-    def _init_spawn_slots(self) -> None:
-        self._spawned_env = True
-        self.envs = []
-        self._log_worker_egl_diagnostics()
-        for slot_id in range(self.num_slots):
-            self._init_spawn_slot(
-                slot_id,
-                task_id=int(self._task_ids_by_slot[slot_id]),
-                start_episode_id=int(self._episode_ids_by_slot[slot_id]),
-            )
-
-    def _log_worker_egl_diagnostics(self) -> None:
-        if self._egl_diagnostics_logged:
-            return
-        log_egl_device_diagnostics_from_env(logger_name=__name__)
-        self._egl_diagnostics_logged = True
-
-    def _init_spawn_slot(
-        self,
-        slot_id: int,
-        *,
-        task_id: int | None = None,
-        start_episode_id: int = 0,
-    ) -> None:
-        self._validate_slot(slot_id)
-        egl_device_id = self._spawn_egl_device_id()
-        self._egl_device_id = egl_device_id
-        stagger_s = float(self.env_cfg.get("egl_spawn_stagger_s", 3.0)) * int(self.local_rank)
-        if stagger_s > 0:
-            time.sleep(stagger_s)
-        init_timeout_s = float(self.env_cfg.get("egl_spawn_init_timeout_s", 900.0))
-        ctx = mp.get_context("spawn")
-        parent_conn, child_conn = ctx.Pipe()
-        proc = ctx.Process(
-            target=_trajectory_env_subprocess_main,
-            args=(
-                child_conn,
-                dict(self.env_cfg),
-                self.task_id if task_id is None else int(task_id),
-                egl_device_id,
-                int(start_episode_id),
-            ),
-            daemon=True,
-        )
-        proc.start()
-        child_conn.close()
-        if not parent_conn.poll(init_timeout_s):
-            proc.terminate()
-            raise RuntimeError(
-                "RealEnvWorker spawn subprocess timed out during init "
-                f"(rank={self.local_rank}, slot={int(slot_id)}, "
-                f"timeout={init_timeout_s:.0f}s)"
-            )
-        status, payload = parent_conn.recv()
-        if status != "ready":
-            proc.terminate()
-            raise RuntimeError(
-                "RealEnvWorker spawn subprocess init failed "
-                f"(rank={self.local_rank}, slot={int(slot_id)}): {payload}"
-            )
-        self._set_spawn_slot(
-            int(slot_id),
-            proc,
-            parent_conn,
-            payload,
-            task_id=self.task_id if task_id is None else int(task_id),
-            episode_id=int(start_episode_id),
-        )
-
-    def _spawn_egl_device_id(self) -> int | None:
-        pool = self.env_cfg.get("egl_device_pool")
-        if not pool:
-            return None
-        return int(pool[int(self.local_rank) % len(pool)])
-
-    def _set_spawn_slot(
-        self,
-        slot_id: int,
-        proc: Any,
-        conn: Any,
-        obs: dict[str, Any],
-        *,
-        task_id: int | None = None,
-        episode_id: int = 0,
-    ) -> None:
-        self._validate_slot(slot_id)
-        self._spawned_env = True
-        self._spawn_procs[slot_id] = proc
-        self._spawn_conns[slot_id] = conn
-        self._obs_by_slot[slot_id] = dict(obs)
-        self._episodes_by_slot[slot_id] = []
-        self._episode_ids_by_slot[slot_id] = int(episode_id)
-        if task_id is not None:
-            self._task_ids_by_slot[slot_id] = int(task_id)
-
-    def _spawn_rpc(self, cmd: str, payload: Any = None, *, slot_id: int = 0) -> Any:
-        return self._spawn_rpc_with_timeout(
-            cmd,
-            payload,
-            slot_id=slot_id,
-            timeout_s=None,
-        )
-
-    def _spawn_rpc_with_timeout(
-        self,
-        cmd: str,
-        payload: Any = None,
-        *,
-        slot_id: int = 0,
-        timeout_s: float | None = None,
-    ) -> Any:
-        self._validate_slot(slot_id)
-        conn = self._spawn_conns[int(slot_id)]
-        if conn is None:
-            raise RuntimeError("RealEnvWorker spawn slot has not been initialized")
-        conn.send((cmd, payload))
-        if timeout_s is not None and not conn.poll(float(timeout_s)):
-            raise TimeoutError(
-                "RealEnvWorker subprocess RPC timed out "
-                f"(rank={self.local_rank}, slot={int(slot_id)}, cmd={cmd!r}, "
-                f"timeout={float(timeout_s):.3f}s)"
-            )
-        status, value = conn.recv()
-        if status == "error":
-            raise RuntimeError(f"RealEnvWorker subprocess error: {value}")
-        return value
-
-    def _spawn_step_timeout_s(self) -> float | None:
-        raw = self.env_cfg.get("egl_step_timeout_s", 120.0)
-        if raw is None:
-            return None
-        timeout = float(raw)
-        if timeout <= 0:
-            return None
-        return timeout
-
-    def _reset_spawn_slot(self, slot_id: int) -> dict[str, Any]:
-        self._validate_slot(slot_id)
-        task_id = int(self._task_ids_by_slot[slot_id])
-        episode_id = int(self._episode_ids_by_slot[slot_id])
-        obs = self._spawn_rpc(
-            "set_task",
-            (task_id, episode_id),
-            slot_id=slot_id,
-        )
-        self._obs_by_slot[slot_id] = dict(obs)
-        self._episodes_by_slot[slot_id] = []
-        return dict(obs)
-
-    def _step_spawn_slot(
-        self,
-        slot_id: int,
-        action: Any,
-        *,
-        transition_sidecars: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
-        self._validate_slot(slot_id)
-        policy_action = np.asarray(action, dtype=np.float32).reshape(-1)
-        env_action = self._env_action_from_policy_action(policy_action)
-        try:
-            transition, next_obs, reward, done, info = self._spawn_rpc_with_timeout(
-                "step",
-                (
-                    np.asarray(env_action, dtype=np.float32).reshape(-1),
-                    policy_action,
-                    dict(transition_sidecars or {}),
-                ),
-                slot_id=slot_id,
-                timeout_s=self._spawn_step_timeout_s(),
-            )
-            if self._egl_respawns_by_slot[slot_id] > 0:
-                _hs_trace(
-                    f"[env rank={int(self.rank)} role={self.role}] "
-                    f"respawn budget reset slot={int(slot_id)} "
-                    "after successful step"
-                )
-                self._egl_respawns_by_slot[slot_id] = 0
-        except (EOFError, OSError, BrokenPipeError, TimeoutError) as exc:
-            recovered = self._recover_spawn_slot_after_child_death(slot_id)
-            if recovered is not None:
-                obs, respawn_count = recovered
-                self._last_apply_env_crashes = 1
-                self._last_apply_env_respawns = 1
-                timeout_info = {"env_timeout": True} if isinstance(exc, TimeoutError) else {}
-                return (
-                    obs,
-                    0.0,
-                    True,
-                    {
-                        "success": False,
-                        "env_crash": True,
-                        **timeout_info,
-                        "respawned": True,
-                        "respawn_count": int(respawn_count),
-                    },
-                )
-            max_respawns = int(self.env_cfg.get("egl_max_respawns", 0) or 0)
-            respawns = int(self._egl_respawns_by_slot[int(slot_id)])
-            raise RuntimeError(
-                f"RealEnvWorker EGL child failed (rank={self.local_rank}, "
-                f"slot={int(slot_id)}): {exc!r}; "
-                f"respawns={respawns}/{max_respawns}; set "
-                "env.cfg.egl_max_respawns>0 to drop the partial episode and "
-                "respawn the slot"
-            ) from exc
-        self._episodes_by_slot[slot_id].append(dict(transition))
-        self._obs_by_slot[slot_id] = dict(next_obs)
-        if bool(done):
-            self._push_replay_episode(self._episodes_by_slot[slot_id])
-            self._push_episode(self.dump, self._episodes_by_slot[slot_id])
-            self._episodes_by_slot[slot_id] = []
-            self._episode_ids_by_slot[slot_id] += 1
-        return dict(next_obs), float(reward), bool(done), dict(info or {})
-
-    def _recover_spawn_slot_after_child_death(
-        self,
-        slot_id: int,
-    ) -> tuple[dict[str, Any], int] | None:
-        max_respawns = int(self.env_cfg.get("egl_max_respawns", 0) or 0)
-        if max_respawns <= 0:
-            _hs_trace(
-                f"[env rank={int(self.rank)} role={self.role}] "
-                f"respawn disabled slot={int(slot_id)}"
-            )
-            return None
-        slot_id = int(slot_id)
-        respawns = int(self._egl_respawns_by_slot[slot_id])
-        if respawns >= max_respawns:
-            _hs_trace(
-                f"[env rank={int(self.rank)} role={self.role}] "
-                f"respawn exhausted slot={int(slot_id)} "
-                f"respawns={respawns}/{max_respawns}"
-            )
-            return None
-
-        _hs_trace(
-            f"[env rank={int(self.rank)} role={self.role}] "
-            f"respawn start slot={int(slot_id)} "
-            f"respawn={respawns + 1}/{max_respawns}"
-        )
-        self._close_spawn_slot(slot_id)
-        self._episodes_by_slot[slot_id] = []
-        start_episode_id = int(self._episode_ids_by_slot[slot_id]) + 1
-        task_id = int(self._task_ids_by_slot[slot_id])
-        self._egl_respawns_by_slot[slot_id] = respawns + 1
-        self._init_spawn_slot(
-            slot_id,
-            task_id=task_id,
-            start_episode_id=start_episode_id,
-        )
-        obs = self._obs_by_slot[slot_id]
-        if obs is None:
-            raise RuntimeError(
-                f"RealEnvWorker EGL respawn produced no observation "
-                f"(rank={self.local_rank}, slot={slot_id})"
-            )
-        _hs_trace(
-            f"[env rank={int(self.rank)} role={self.role}] "
-            f"respawn done slot={int(slot_id)} "
-            f"respawn_count={int(self._egl_respawns_by_slot[slot_id])}"
-        )
-        return dict(obs), int(self._egl_respawns_by_slot[slot_id])
-
-    def _close_spawn_slot(self, slot_id: int) -> None:
-        self._validate_slot(slot_id)
-        conn = self._spawn_conns[slot_id]
-        proc = self._spawn_procs[slot_id]
-        if conn is not None:
-            try:
-                if hasattr(conn, "send"):
-                    conn.send(("close", None))
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                if hasattr(conn, "close"):
-                    conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-        if proc is not None:
-            try:
-                if hasattr(proc, "is_alive") and proc.is_alive():
-                    if hasattr(proc, "terminate"):
-                        proc.terminate()
-                elif hasattr(proc, "terminate"):
-                    proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                if hasattr(proc, "join"):
-                    proc.join(timeout=10.0)
-            except Exception:  # noqa: BLE001
-                pass
-        self._spawn_conns[slot_id] = None
-        self._spawn_procs[slot_id] = None
-        self._obs_by_slot[slot_id] = None
 
 
 class RealEnvWorker(BaseTrajectoryEnvWorker):

@@ -9,7 +9,9 @@ import pytest
 
 import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
 from dreamervla.workers.cotrain.messages import (
+    ObservationBatchMsg,
     ObservationMsg,
+    RolloutResultBatchMsg,
     RolloutResultMsg,
     TrajectoryShard,
 )
@@ -116,6 +118,10 @@ def _rollout_result() -> RolloutResultMsg:
 
 def _rollout_result_for_slot(slot_id: int) -> RolloutResultMsg:
     return replace(_rollout_result(), slot_id=int(slot_id), episode_id=int(slot_id))
+
+
+def _rollout_batch(*results: RolloutResultMsg, env_rank: int = 0) -> RolloutResultBatchMsg:
+    return RolloutResultBatchMsg(env_rank=int(env_rank), results=list(results))
 
 
 def _sidecar_rollout_result(action: np.ndarray | None = None) -> RolloutResultMsg:
@@ -304,10 +310,9 @@ def test_real_env_worker_attaches_rollout_sidecars_to_no_embedding_env_records()
         worker.close()
 
 
-def test_real_env_worker_respects_explicit_spawn_slots_false_for_egl_backend(monkeypatch) -> None:
+def test_real_env_worker_builds_egl_slots_in_process(monkeypatch) -> None:
     cfg = dict(_counter_env_cfg())
     cfg["render_backend"] = "egl"
-    cfg["spawn_env_slots"] = False
     worker = RealEnvWorker(
         env_cfg=cfg,
         num_slots=2,
@@ -329,16 +334,33 @@ def test_real_env_worker_respects_explicit_spawn_slots_false_for_egl_backend(mon
         worker.init()
 
         assert len(build_calls) == 2
-        assert worker._spawned_env is False
+        assert not hasattr(worker, "_spawned_env")
+        assert not hasattr(worker, "_init_spawn_slots")
         assert len(worker.envs) == 2
     finally:
         worker.close()
 
 
+def test_real_env_worker_rejects_legacy_spawn_slots_config() -> None:
+    cfg = dict(_counter_env_cfg())
+    cfg["render_backend"] = "egl"
+    cfg["spawn_env_slots"] = True
+    worker = RealEnvWorker(
+        env_cfg=cfg,
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+
+    with pytest.raises(ValueError, match="spawn_env_slots"):
+        worker.init()
+
+
 def test_real_env_worker_pins_osmesa_for_inproc_non_egl_backend(monkeypatch) -> None:
     cfg = dict(_counter_env_cfg())
     cfg["render_backend"] = "osmesa"
-    cfg["spawn_env_slots"] = False
     worker = RealEnvWorker(
         env_cfg=cfg,
         num_slots=1,
@@ -355,375 +377,9 @@ def test_real_env_worker_pins_osmesa_for_inproc_non_egl_backend(monkeypatch) -> 
 
         assert os.environ["MUJOCO_GL"] == "osmesa"
         assert os.environ["PYOPENGL_PLATFORM"] == "osmesa"
-        assert worker._spawned_env is False
+        assert not hasattr(worker, "_spawned_env")
     finally:
         worker.close()
-
-
-def test_real_env_worker_uses_spawned_slots_when_explicitly_enabled_for_egl_backend(monkeypatch) -> None:
-    cfg = dict(_counter_env_cfg())
-    cfg["render_backend"] = "egl"
-    cfg["spawn_env_slots"] = True
-    worker = RealEnvWorker(
-        env_cfg=cfg,
-        num_slots=2,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-        task_id=0,
-    )
-    calls: list[int] = []
-
-    def fail_inproc_build(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("explicitly spawned EGL real env slots must not be built in the Ray actor")
-
-    def fake_init_spawn_slot(slot_id: int, *, task_id: int | None = None, start_episode_id: int = 0) -> None:
-        del task_id
-        calls.append(int(slot_id))
-        worker._spawned_env = True
-        worker._spawn_procs[int(slot_id)] = object()
-        worker._spawn_conns[int(slot_id)] = object()
-        worker._obs_by_slot[int(slot_id)] = {
-            "image": np.zeros((4, 4, 3), dtype=np.uint8),
-            "state": np.zeros((2,), dtype=np.float32),
-            "obs_embedding": np.zeros((4,), dtype=np.float32),
-            "task_id": 0,
-            "episode_id": int(start_episode_id),
-            "step": 0,
-            "task_description": "task 0",
-            "is_first": True,
-        }
-
-    monkeypatch.setattr(trajectory_env_worker, "_build_env_from_cfg", fail_inproc_build)
-    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
-
-    worker.init()
-
-    assert calls == [0, 1]
-    assert worker._spawned_env is True
-    assert worker.envs == []
-
-
-def test_spawned_real_env_worker_records_child_transition() -> None:
-    replay = _MemoryReplay()
-    worker = RealEnvWorker(
-        env_cfg={"render_backend": "egl"},
-        num_slots=1,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-        task_id=0,
-        replay=replay,
-    )
-    worker._spawned_env = True
-    worker._spawn_procs[0] = object()
-    worker._spawn_conns[0] = object()
-    worker._obs_by_slot[0] = {"step": 0, "state": np.zeros((2,), dtype=np.float32)}
-    transition = {
-        "state": np.zeros((2,), dtype=np.float32),
-        "action": np.zeros((7,), dtype=np.float32),
-        "reward": np.float32(1.0),
-        "done": np.float32(1.0),
-        "discount": np.float32(0.0),
-        "is_first": True,
-        "is_terminal": True,
-        "is_last": True,
-        "task_id": 0,
-        "episode_id": 0,
-        "step": 0,
-        "task_description": "task 0",
-        "obs_embedding": np.ones((4,), dtype=np.float32),
-        "policy_version": 4,
-    }
-
-    def fake_rpc(
-        cmd: str,
-        payload: Any = None,
-        *,
-        slot_id: int = 0,
-        timeout_s: float | None = None,
-    ) -> Any:
-        assert timeout_s == 120.0
-        assert cmd == "step"
-        assert slot_id == 0
-        env_action, policy_action, sidecars = payload
-        np.testing.assert_allclose(env_action, np.zeros((7,), dtype=np.float32))
-        np.testing.assert_allclose(policy_action, np.zeros((7,), dtype=np.float32))
-        assert sidecars["policy_version"] == 4
-        return transition, {"step": 1}, 1.0, True, {"success": True}
-
-    worker._spawn_rpc_with_timeout = fake_rpc  # type: ignore[method-assign]
-
-    try:
-        worker._step_slot(
-            0,
-            np.zeros((7,), dtype=np.float32),
-            transition_sidecars={"obs_embedding": np.ones((4,), dtype=np.float32), "policy_version": 4},
-        )
-
-        assert len(replay.episodes) == 1
-        assert replay.episodes[0][0]["policy_version"] == 4
-        assert worker._episode_ids_by_slot[0] == 1
-    finally:
-        worker.close()
-
-
-def test_spawned_real_env_worker_respawns_dead_child_when_enabled(monkeypatch) -> None:
-    class _DeadConn:
-        def send(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-
-        def poll(self, timeout: float | None = None) -> bool:
-            del timeout
-            return True
-
-        def recv(self) -> Any:
-            raise EOFError
-
-    class _Proc:
-        def __init__(self) -> None:
-            self.terminated = False
-
-        def is_alive(self) -> bool:
-            return False
-
-        def terminate(self) -> None:
-            self.terminated = True
-
-        def join(self, timeout: float | None = None) -> None:
-            self.join_timeout = timeout
-
-    worker = RealEnvWorker(
-        env_cfg={"render_backend": "egl", "egl_max_respawns": 1},
-        num_slots=1,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-        task_id=0,
-    )
-    old_proc = _Proc()
-    worker._spawned_env = True
-    worker._spawn_procs[0] = old_proc
-    worker._spawn_conns[0] = _DeadConn()
-    worker._obs_by_slot[0] = {"step": 0}
-    worker._episodes_by_slot[0] = [{"partial": 1}]
-    calls: list[tuple[int, int]] = []
-
-    def fake_init_spawn_slot(slot_id: int, *, task_id: int | None = None, start_episode_id: int = 0) -> None:
-        del task_id
-        calls.append((int(slot_id), int(start_episode_id)))
-        worker._spawn_procs[int(slot_id)] = _Proc()
-        worker._spawn_conns[int(slot_id)] = object()
-        worker._obs_by_slot[int(slot_id)] = {"step": 0, "episode_id": int(start_episode_id)}
-        worker._episode_ids_by_slot[int(slot_id)] = int(start_episode_id)
-
-    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
-
-    obs, reward, done, info = worker._step_slot(
-        0,
-        np.zeros((7,), dtype=np.float32),
-        transition_sidecars={},
-    )
-
-    assert obs["episode_id"] == 1
-    assert reward == 0.0
-    assert done is True
-    assert info["env_crash"] is True
-    assert info["respawned"] is True
-    assert info["respawn_count"] == 1
-    assert calls == [(0, 1)]
-    assert worker._episodes_by_slot[0] == []
-    assert old_proc.terminated is True
-
-
-def test_spawned_real_env_worker_respawns_hung_child_when_step_timeout_enabled(
-    monkeypatch,
-) -> None:
-    class _HungConn:
-        def __init__(self) -> None:
-            self.poll_timeout: float | None = None
-            self.closed = False
-            self.sent: list[Any] = []
-
-        def send(self, payload: Any) -> None:
-            self.sent.append(payload)
-
-        def poll(self, timeout: float | None = None) -> bool:
-            self.poll_timeout = timeout
-            return False
-
-        def recv(self) -> Any:
-            raise AssertionError("step response recv should be guarded by poll timeout")
-
-        def close(self) -> None:
-            self.closed = True
-
-    class _Proc:
-        def __init__(self) -> None:
-            self.terminated = False
-
-        def is_alive(self) -> bool:
-            return True
-
-        def terminate(self) -> None:
-            self.terminated = True
-
-        def join(self, timeout: float | None = None) -> None:
-            self.join_timeout = timeout
-
-    worker = RealEnvWorker(
-        env_cfg={
-            "render_backend": "egl",
-            "egl_max_respawns": 1,
-            "egl_step_timeout_s": 0.25,
-        },
-        num_slots=1,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-        task_id=0,
-    )
-    old_proc = _Proc()
-    old_conn = _HungConn()
-    worker._spawned_env = True
-    worker._spawn_procs[0] = old_proc
-    worker._spawn_conns[0] = old_conn
-    worker._obs_by_slot[0] = {"step": 0}
-    worker._episodes_by_slot[0] = [{"partial": 1}]
-    calls: list[tuple[int, int]] = []
-
-    def fake_init_spawn_slot(
-        slot_id: int,
-        *,
-        task_id: int | None = None,
-        start_episode_id: int = 0,
-    ) -> None:
-        del task_id
-        calls.append((int(slot_id), int(start_episode_id)))
-        worker._spawn_procs[int(slot_id)] = _Proc()
-        worker._spawn_conns[int(slot_id)] = object()
-        worker._obs_by_slot[int(slot_id)] = {
-            "step": 0,
-            "episode_id": int(start_episode_id),
-        }
-        worker._episode_ids_by_slot[int(slot_id)] = int(start_episode_id)
-
-    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
-
-    obs, reward, done, info = worker._step_slot(
-        0,
-        np.zeros((7,), dtype=np.float32),
-        transition_sidecars={},
-    )
-
-    assert obs["episode_id"] == 1
-    assert reward == 0.0
-    assert done is True
-    assert info["env_crash"] is True
-    assert info["env_timeout"] is True
-    assert info["respawned"] is True
-    assert info["respawn_count"] == 1
-    assert calls == [(0, 1)]
-    assert worker._episodes_by_slot[0] == []
-    assert old_conn.poll_timeout == 0.25
-    assert old_conn.closed is True
-    assert old_proc.terminated is True
-
-
-def test_spawned_real_env_worker_resets_respawn_budget_after_success(
-    monkeypatch,
-) -> None:
-    class _OkConn:
-        def send(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-
-        def poll(self, timeout: float | None = None) -> bool:
-            del timeout
-            return True
-
-        def recv(self) -> Any:
-            return (
-                "ok",
-                (
-                    {"policy_action": np.zeros((7,), dtype=np.float32)},
-                    {"step": 1},
-                    0.0,
-                    False,
-                    {},
-                ),
-            )
-
-    class _DeadConn:
-        def send(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-
-        def poll(self, timeout: float | None = None) -> bool:
-            del timeout
-            return True
-
-        def recv(self) -> Any:
-            raise EOFError
-
-    class _Proc:
-        def terminate(self) -> None:
-            return None
-
-        def join(self, timeout: float | None = None) -> None:
-            self.join_timeout = timeout
-
-    worker = RealEnvWorker(
-        env_cfg={"render_backend": "egl", "egl_max_respawns": 1},
-        num_slots=1,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-        task_id=0,
-    )
-    worker._spawned_env = True
-    worker._spawn_procs[0] = _Proc()
-    worker._spawn_conns[0] = _OkConn()
-    worker._obs_by_slot[0] = {"step": 0}
-    worker._episodes_by_slot[0] = []
-    worker._egl_respawns_by_slot[0] = 1
-    calls: list[tuple[int, int]] = []
-
-    def fake_init_spawn_slot(
-        slot_id: int,
-        *,
-        task_id: int | None = None,
-        start_episode_id: int = 0,
-    ) -> None:
-        del task_id
-        calls.append((int(slot_id), int(start_episode_id)))
-        worker._spawn_procs[int(slot_id)] = _Proc()
-        worker._spawn_conns[int(slot_id)] = object()
-        worker._obs_by_slot[int(slot_id)] = {"step": 0}
-        worker._episode_ids_by_slot[int(slot_id)] = int(start_episode_id)
-
-    monkeypatch.setattr(worker, "_init_spawn_slot", fake_init_spawn_slot, raising=False)
-
-    _obs, _reward, done, _info = worker._step_slot(
-        0,
-        np.zeros((7,), dtype=np.float32),
-        transition_sidecars={},
-    )
-    assert done is False
-    assert worker._egl_respawns_by_slot[0] == 0
-
-    worker._spawn_conns[0] = _DeadConn()
-    obs, reward, done, info = worker._step_slot(
-        0,
-        np.zeros((7,), dtype=np.float32),
-        transition_sidecars={},
-    )
-
-    assert obs["step"] == 0
-    assert reward == 0.0
-    assert done is True
-    assert info["env_crash"] is True
-    assert info["respawned"] is True
-    assert info["respawn_count"] == 1
-    assert calls == [(0, 1)]
 
 
 def test_real_env_worker_postprocesses_openvla_oft_env_action_without_overwriting_policy_action() -> None:
@@ -903,7 +559,10 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([_rollout_result(), _rollout_result()]),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -916,11 +575,12 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         worker.init()
         metrics = worker.interact("env", "rollout", "actor")
 
-        assert channels["env"].puts[0][0] == "0:0"
-        assert isinstance(channels["env"].puts[0][1], ObservationMsg)
-        assert channels["env"].puts[-1][1].obs["_final_bootstrap"] is True
-        assert channels["env"].puts[-1][0] == "0:0"
-        assert channels["rollout"].gets == ["0:0", "0:0"]
+        assert channels["env"].puts[0][0] == "0"
+        assert isinstance(channels["env"].puts[0][1], ObservationBatchMsg)
+        assert len(channels["env"].puts[0][1].observations) == 1
+        assert channels["env"].puts[-1][1].observations[0].obs["_final_bootstrap"] is True
+        assert channels["env"].puts[-1][0] == "0"
+        assert channels["rollout"].gets == ["0", "0"]
         assert channels["actor"].puts[0][0] == "default"
         assert channels["actor"].put_no_wait_calls[0][0] == "default"
         assert isinstance(channels["actor"].puts[0][1], TrajectoryShard)
@@ -947,21 +607,21 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         assert any("[env rank=0 role=real_env] reset start" in line for line in traces)
         assert any("[env rank=0 role=real_env] reset done" in line for line in traces)
         assert any(
-            "[env rank=0 role=real_env] send action request batch_size=1 key=0:0"
+            "[env rank=0 role=real_env] send action request batch_size=1 key=0"
             in line
             for line in traces
         )
         assert any(
-            "[env rank=0 role=real_env] recv action response batch_size=1 key=0:0"
+            "[env rank=0 role=real_env] recv action response batch_size=1 key=0"
             in line
             for line in traces
         )
         assert any(
-            "[env rank=0 role=real_env] step 0 start key=0:0" in line
+            "[env rank=0 role=real_env] step 0 start batch_size=1 keys=0:0" in line
             for line in traces
         )
         assert any(
-            "[env rank=0 role=real_env] step 0 done key=0:0" in line
+            "[env rank=0 role=real_env] step 0 done batch_size=1 keys=0:0" in line
             for line in traces
         )
     finally:
@@ -980,7 +640,10 @@ def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([_rollout_result(), _rollout_result()]),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1022,7 +685,7 @@ def test_wm_env_worker_does_not_write_imagined_rollouts_to_replay_by_default(
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([_rollout_result()]),
+        "rollout": _MemoryChannel([_rollout_batch(_rollout_result())]),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1153,10 +816,14 @@ def test_wm_env_worker_batches_slots_with_step_batch(monkeypatch) -> None:
         "env": _MemoryChannel(),
         "rollout": _MemoryChannel(
             [
-                _rollout_result_for_slot(0),
-                _rollout_result_for_slot(1),
-                _rollout_result_for_slot(0),
-                _rollout_result_for_slot(1),
+                _rollout_batch(
+                    _rollout_result_for_slot(0),
+                    _rollout_result_for_slot(1),
+                ),
+                _rollout_batch(
+                    _rollout_result_for_slot(0),
+                    _rollout_result_for_slot(1),
+                ),
             ]
         ),
         "actor": _MemoryChannel(),
@@ -1210,7 +877,10 @@ def test_interact_flushes_partial_episode_at_rollout_epoch_boundary(
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([one_step, one_step]),
+        "rollout": _MemoryChannel([
+            _rollout_batch(one_step),
+            _rollout_batch(one_step),
+        ]),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(

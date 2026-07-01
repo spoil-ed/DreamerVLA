@@ -76,6 +76,7 @@ class Channel:
                 namespace="DreamerVLA",
                 lifetime="detached",
                 max_concurrency=100,
+                enable_task_events=False,
             )
             .remote(int(maxsize))
         )
