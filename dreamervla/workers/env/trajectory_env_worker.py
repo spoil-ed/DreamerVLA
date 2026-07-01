@@ -370,6 +370,18 @@ class BaseTrajectoryEnvWorker(Worker):
 
         self.global_step = int(global_step)
 
+    def configure_rollout_epoch(self, rollout_epoch: int) -> dict[str, float]:
+        """Update this worker's per-slot trajectory count for the next interaction."""
+
+        value = int(rollout_epoch)
+        if value <= 0:
+            raise ValueError(f"rollout_epoch must be positive, got {value}")
+        self.rollout_epoch = value
+        return {
+            "env/rollout_epoch": float(value),
+            f"env/{self.role}/rollout_epoch": float(value),
+        }
+
     def init(self) -> None:
         """Build all local env slots."""
 

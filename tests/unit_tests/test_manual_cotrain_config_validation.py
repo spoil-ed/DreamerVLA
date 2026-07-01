@@ -98,6 +98,18 @@ def test_manual_cotrain_rejects_non_positive_wm_rollout_multiplier() -> None:
         validate_cfg(cfg)
 
 
+@pytest.mark.parametrize("value", (0, -1, 1.5))
+def test_manual_cotrain_rejects_bad_wm_rollout_target_trajectories(
+    value: float,
+) -> None:
+    cfg = _cfg(wm_rollout_target_trajectories=value)
+    with pytest.raises(
+        ValueError,
+        match="manual_cotrain.wm_rollout_target_trajectories",
+    ):
+        validate_cfg(cfg)
+
+
 @pytest.mark.parametrize("field", ("real_rollout_epoch", "wm_rollout_epoch"))
 def test_manual_cotrain_rejects_non_positive_split_rollout_epochs(
     field: str,
@@ -144,6 +156,59 @@ def test_manual_cotrain_geometry_counts_split_real_and_wm_rollout_epochs() -> No
 
     cfg.manual_cotrain.real_rollout_epoch = 4
     validate_cfg(cfg)
+
+
+def test_manual_cotrain_geometry_uses_wm_target_trajectories_when_present() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        rollout_epoch=16,
+        real_rollout_epoch=4,
+        wm_rollout_epoch=999,
+        wm_rollout_target_trajectories=1024,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_wm_target_not_divisible_by_envs_per_worker() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        real_rollout_epoch=4,
+        wm_rollout_target_trajectories=1025,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    with pytest.raises(ValueError, match="wm_rollout_target_trajectories"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_wm_target_too_small_for_worker_count() -> None:
+    cfg = _cfg(
+        ngpu=6,
+        envs_per_worker=8,
+        real_rollout_epoch=4,
+        wm_rollout_target_trajectories=8,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    with pytest.raises(ValueError, match="too small"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_geometry_rejects_bad_target_plus_real_total() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        real_rollout_epoch=4,
+        wm_rollout_target_trajectories=1020,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    with pytest.raises(ValueError, match="logical trajectory count"):
+        validate_cfg(cfg)
 
 
 def test_manual_cotrain_accepts_env_slots_divisible_by_actor_group_size() -> None:

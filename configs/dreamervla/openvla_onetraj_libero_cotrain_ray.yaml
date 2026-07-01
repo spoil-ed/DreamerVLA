@@ -20,8 +20,9 @@ manual_cotrain:
   rollout_epoch: ${algorithm.rollout_epoch}
   real_rollout_epoch: 4
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
-  max_steps_per_rollout_epoch: 256
-  wm_rollout_multiplier: 4
+  wm_rollout_target_trajectories: 1024
+  max_steps_per_rollout_epoch: 512
+  wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
   envs_per_worker: 8
   task_id: 0

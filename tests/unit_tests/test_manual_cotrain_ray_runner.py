@@ -38,6 +38,7 @@ def _cfg(
     checkpoint_every: int = 0,
     publish_learner_weights: bool = False,
     wm_rollout_multiplier: int | None = None,
+    wm_rollout_target_trajectories: int | None = None,
 ):
     manual_cotrain = {
         "ngpu": ngpu,
@@ -53,6 +54,10 @@ def _cfg(
     }
     if wm_rollout_multiplier is not None:
         manual_cotrain["wm_rollout_multiplier"] = int(wm_rollout_multiplier)
+    if wm_rollout_target_trajectories is not None:
+        manual_cotrain["wm_rollout_target_trajectories"] = int(
+            wm_rollout_target_trajectories
+        )
     return OmegaConf.create(
         {
             "_target_": "dreamervla.runners.ManualCotrainRayRunner",
@@ -117,6 +122,13 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
             launched.append((self.worker_cls.__name__, name))
             return self
 
+        def execute_on(self, *ranks):
+            del ranks
+            return self
+
+        def configure_rollout_epoch(self, rollout_epoch):
+            return _Ready({"env/rollout_epoch": float(rollout_epoch)})
+
     class _FakeChannel:
         def __init__(self, name: str) -> None:
             self.name = name
@@ -170,6 +182,38 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
     assert runner._wm_max_steps_per_rollout_epoch() == 8
 
 
+def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
+    cfg = _cfg(ngpu=4, wm_rollout_target_trajectories=1024)
+    cfg.manual_cotrain.envs_per_worker = 2
+    cfg.manual_cotrain.real_rollout_epoch = 4
+    cfg.manual_cotrain.wm_rollout_epoch = 999
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    assert runner._wm_rollout_epochs_by_worker(3) == [171, 171, 170]
+
+    class _Group:
+        def __init__(self, count: int) -> None:
+            self.workers = [object() for _ in range(count)]
+
+    expected = runner._configured_expected_trajectory_shards(
+        {
+            "RealEnvGroup": _Group(1),
+            "WMEnvGroup": _Group(3),
+        }
+    )
+
+    assert expected == 1032
+
+
+def test_runner_uses_wm_rollout_epoch_fallback_without_target() -> None:
+    cfg = _cfg(ngpu=4)
+    cfg.manual_cotrain.envs_per_worker = 2
+    cfg.manual_cotrain.wm_rollout_epoch = 7
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    assert runner._wm_rollout_epochs_by_worker(3) == [7, 7, 7]
+
+
 @pytest.mark.parametrize(
     ("field", "accessor"),
     [
@@ -179,6 +223,7 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
         ("rollout_epoch", "_rollout_epoch"),
         ("real_rollout_epoch", "_real_rollout_epoch"),
         ("wm_rollout_epoch", "_wm_rollout_epoch"),
+        ("wm_rollout_target_trajectories", "_wm_rollout_target_trajectories"),
         ("max_steps_per_rollout_epoch", "_max_steps_per_rollout_epoch"),
         ("wm_rollout_multiplier", "_wm_rollout_multiplier"),
         ("num_action_chunks", "_num_action_chunks"),
@@ -264,7 +309,9 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.algorithm.rollout_epoch == 16
     assert cfg.manual_cotrain.real_rollout_epoch == 4
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
-    assert cfg.manual_cotrain.wm_rollout_multiplier == 4
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
+    assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
+    assert cfg.manual_cotrain.wm_rollout_multiplier == 1
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28
 

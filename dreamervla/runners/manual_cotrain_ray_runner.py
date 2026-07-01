@@ -158,12 +158,14 @@ class ManualCotrainRayRunner(BaseRunner):
         wm_gpus = [spec.gpu_ids[0] for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
         if wm_gpus:
+            wm_rollout_epochs = self._wm_rollout_epochs_by_worker(len(wm_gpus))
+            initial_wm_rollout_epoch = wm_rollout_epochs[0]
             _hs_trace(f"[build_groups] launch WMEnvWorker start gpus={wm_gpus}")
             wm_env_group = WorkerGroup(
                 WMEnvWorker,
                 self._cfg_dict("env.wm.cfg"),
                 self._envs_per_worker(),
-                self._wm_rollout_epoch(),
+                initial_wm_rollout_epoch,
                 self._wm_max_steps_per_rollout_epoch(),
                 self._num_action_chunks(),
                 task_id=self._task_id(),
@@ -177,6 +179,8 @@ class ManualCotrainRayRunner(BaseRunner):
                 ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in wm_gpus)),
                 name="WMEnvWorker",
             )
+            for rank, rollout_epoch in enumerate(wm_rollout_epochs):
+                wm_env_group.execute_on(rank).configure_rollout_epoch(rollout_epoch).wait()
             _hs_trace("[build_groups] launch WMEnvWorker done")
 
         _hs_trace("[build_groups] launch MultiStepRolloutWorker start")
@@ -413,6 +417,47 @@ class ManualCotrainRayRunner(BaseRunner):
             default=self._rollout_epoch(),
         )
 
+    def _wm_rollout_target_trajectories(self) -> int | None:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.wm_rollout_target_trajectories",
+            default=None,
+        )
+        if value is None:
+            return None
+        target = int(value)
+        if target <= 0:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories must be positive, "
+                f"got {target}"
+            )
+        return target
+
+    def _wm_rollout_epochs_by_worker(self, worker_count: int) -> list[int]:
+        workers = int(worker_count)
+        if workers <= 0:
+            return []
+        target = self._wm_rollout_target_trajectories()
+        if target is None:
+            return [self._wm_rollout_epoch() for _ in range(workers)]
+        envs_per_worker = self._envs_per_worker()
+        if target % envs_per_worker != 0:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories must be divisible by "
+                "manual_cotrain.envs_per_worker; "
+                f"got {target} and {envs_per_worker}"
+            )
+        total_worker_epochs = target // envs_per_worker
+        if total_worker_epochs < workers:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories is too small to give "
+                "each WM worker at least one rollout_epoch; "
+                f"got target={target}, envs_per_worker={envs_per_worker}, "
+                f"wm_workers={workers}"
+            )
+        base, extra = divmod(total_worker_epochs, workers)
+        return [base + (1 if rank < extra else 0) for rank in range(workers)]
+
     def _max_steps_per_rollout_epoch(self) -> int:
         return self._positive_manual_int("max_steps_per_rollout_epoch", default=1)
 
@@ -594,13 +639,11 @@ class ManualCotrainRayRunner(BaseRunner):
     def _configured_expected_trajectory_shards(self, groups: dict[str, Any]) -> int:
         real_workers = _worker_count(groups.get("RealEnvGroup"))
         wm_workers = _worker_count(groups.get("WMEnvGroup"))
-        return int(
-            self._envs_per_worker()
-            * (
-                real_workers * self._real_rollout_epoch()
-                + wm_workers * self._wm_rollout_epoch()
-            )
+        real_shards = self._envs_per_worker() * real_workers * self._real_rollout_epoch()
+        wm_shards = self._envs_per_worker() * sum(
+            self._wm_rollout_epochs_by_worker(wm_workers)
         )
+        return int(real_shards + wm_shards)
 
     def _render_backend(self) -> str:
         return str(

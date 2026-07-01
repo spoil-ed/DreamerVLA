@@ -569,6 +569,10 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.real_rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_epoch")
+    _require_positive_int_if_present(
+        cfg,
+        "manual_cotrain.wm_rollout_target_trajectories",
+    )
     _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
@@ -642,13 +646,37 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             default=rollout_epoch,
         )
     )
+    wm_rollout_target = OmegaConf.select(
+        cfg,
+        "manual_cotrain.wm_rollout_target_trajectories",
+        default=None,
+    )
     group_size = int(group_size_raw)
     if group_size <= 0:
         raise ValueError("actor.train_cfg.algorithm_cfg.group_size must be positive")
 
-    logical_trajectory_count = envs_per_worker * (
-        real_workers * real_rollout_epoch + wm_workers * wm_rollout_epoch
-    )
+    real_trajectory_count = envs_per_worker * real_workers * real_rollout_epoch
+    if wm_workers > 0 and wm_rollout_target is not None:
+        wm_trajectory_count = int(wm_rollout_target)
+        if wm_trajectory_count % envs_per_worker != 0:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories must be divisible by "
+                "manual_cotrain.envs_per_worker: "
+                f"wm_rollout_target_trajectories={wm_trajectory_count}, "
+                f"envs_per_worker={envs_per_worker}"
+            )
+        total_wm_worker_epochs = wm_trajectory_count // envs_per_worker
+        if total_wm_worker_epochs < wm_workers:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories is too small to give "
+                "each WM worker at least one rollout_epoch: "
+                f"wm_rollout_target_trajectories={wm_trajectory_count}, "
+                f"envs_per_worker={envs_per_worker}, "
+                f"wm_workers={wm_workers}"
+            )
+    else:
+        wm_trajectory_count = envs_per_worker * wm_workers * wm_rollout_epoch
+    logical_trajectory_count = real_trajectory_count + wm_trajectory_count
     if logical_trajectory_count % group_size != 0:
         raise ValueError(
             "manual cotrain logical trajectory count must be divisible by "
@@ -658,6 +686,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             f"manual_cotrain.rollout_epoch={rollout_epoch}, "
             f"manual_cotrain.real_rollout_epoch={real_rollout_epoch}, "
             f"manual_cotrain.wm_rollout_epoch={wm_rollout_epoch}, "
+            f"manual_cotrain.wm_rollout_target_trajectories={wm_rollout_target}, "
             f"logical trajectory count={logical_trajectory_count}, "
             f"group_size={group_size}"
         )
@@ -1048,6 +1077,15 @@ def _require_non_negative_int_if_present(cfg: DictConfig, key: str) -> None:
     int_value = int(value)
     if float(value) != float(int_value) or int_value < 0:
         raise ValueError(f"{key} must be a non-negative integer, got {value!r}")
+
+
+def _require_positive_int_if_present(cfg: DictConfig, key: str) -> None:
+    value = OmegaConf.select(cfg, key, default=None)
+    if value is None:
+        return
+    int_value = int(value)
+    if float(value) != float(int_value) or int_value <= 0:
+        raise ValueError(f"{key} must be a positive integer, got {value!r}")
 
 
 def _normalize_backends(value: Any) -> list[str]:
