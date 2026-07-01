@@ -177,6 +177,8 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
         ("sync_every", "_sync_every"),
         ("learner_update_step", "_learner_update_step"),
         ("rollout_epoch", "_rollout_epoch"),
+        ("real_rollout_epoch", "_real_rollout_epoch"),
+        ("wm_rollout_epoch", "_wm_rollout_epoch"),
         ("max_steps_per_rollout_epoch", "_max_steps_per_rollout_epoch"),
         ("wm_rollout_multiplier", "_wm_rollout_multiplier"),
         ("num_action_chunks", "_num_action_chunks"),
@@ -260,6 +262,8 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.learner.train_cfg.mode == "wm_classifier_only"
     assert cfg.algorithm.group_size == 8
     assert cfg.algorithm.rollout_epoch == 16
+    assert cfg.manual_cotrain.real_rollout_epoch == 4
+    assert cfg.manual_cotrain.wm_rollout_epoch == 16
     assert cfg.manual_cotrain.wm_rollout_multiplier == 4
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28

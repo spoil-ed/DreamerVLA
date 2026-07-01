@@ -567,6 +567,8 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
     _require_positive_if_present(cfg, "manual_cotrain.sync_every")
     _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.real_rollout_epoch")
+    _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
@@ -620,16 +622,33 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
         return
 
     ngpu = int(OmegaConf.select(cfg, "manual_cotrain.ngpu", default=1))
-    env_workers = ngpu if ngpu > 0 else 1
+    real_workers = 1
+    wm_workers = max(0, ngpu - 1)
     envs_per_worker = int(envs_per_worker_raw)
     rollout_epoch = int(
         OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1)
+    )
+    real_rollout_epoch = int(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.real_rollout_epoch",
+            default=rollout_epoch,
+        )
+    )
+    wm_rollout_epoch = int(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.wm_rollout_epoch",
+            default=rollout_epoch,
+        )
     )
     group_size = int(group_size_raw)
     if group_size <= 0:
         raise ValueError("actor.train_cfg.algorithm_cfg.group_size must be positive")
 
-    logical_trajectory_count = env_workers * envs_per_worker * rollout_epoch
+    logical_trajectory_count = envs_per_worker * (
+        real_workers * real_rollout_epoch + wm_workers * wm_rollout_epoch
+    )
     if logical_trajectory_count % group_size != 0:
         raise ValueError(
             "manual cotrain logical trajectory count must be divisible by "
@@ -637,6 +656,8 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             f"manual_cotrain.ngpu={ngpu}, "
             f"manual_cotrain.envs_per_worker={envs_per_worker}, "
             f"manual_cotrain.rollout_epoch={rollout_epoch}, "
+            f"manual_cotrain.real_rollout_epoch={real_rollout_epoch}, "
+            f"manual_cotrain.wm_rollout_epoch={wm_rollout_epoch}, "
             f"logical trajectory count={logical_trajectory_count}, "
             f"group_size={group_size}"
         )

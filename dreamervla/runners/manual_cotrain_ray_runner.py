@@ -141,7 +141,7 @@ class ManualCotrainRayRunner(BaseRunner):
             RealEnvWorker,
             self._real_env_cfg(),
             self._envs_per_worker(),
-            self._rollout_epoch(),
+            self._real_rollout_epoch(),
             self._max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
             task_id=self._task_id(),
@@ -163,7 +163,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 WMEnvWorker,
                 self._cfg_dict("env.wm.cfg"),
                 self._envs_per_worker(),
-                self._rollout_epoch(),
+                self._wm_rollout_epoch(),
                 self._wm_max_steps_per_rollout_epoch(),
                 self._num_action_chunks(),
                 task_id=self._task_id(),
@@ -401,6 +401,18 @@ class ManualCotrainRayRunner(BaseRunner):
     def _rollout_epoch(self) -> int:
         return self._positive_manual_int("rollout_epoch", default=1)
 
+    def _real_rollout_epoch(self) -> int:
+        return self._positive_manual_int(
+            "real_rollout_epoch",
+            default=self._rollout_epoch(),
+        )
+
+    def _wm_rollout_epoch(self) -> int:
+        return self._positive_manual_int(
+            "wm_rollout_epoch",
+            default=self._rollout_epoch(),
+        )
+
     def _max_steps_per_rollout_epoch(self) -> int:
         return self._positive_manual_int("max_steps_per_rollout_epoch", default=1)
 
@@ -584,8 +596,10 @@ class ManualCotrainRayRunner(BaseRunner):
         wm_workers = _worker_count(groups.get("WMEnvGroup"))
         return int(
             self._envs_per_worker()
-            * self._rollout_epoch()
-            * (real_workers + wm_workers)
+            * (
+                real_workers * self._real_rollout_epoch()
+                + wm_workers * self._wm_rollout_epoch()
+            )
         )
 
     def _render_backend(self) -> str:

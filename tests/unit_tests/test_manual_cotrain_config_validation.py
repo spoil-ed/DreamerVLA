@@ -98,6 +98,15 @@ def test_manual_cotrain_rejects_non_positive_wm_rollout_multiplier() -> None:
         validate_cfg(cfg)
 
 
+@pytest.mark.parametrize("field", ("real_rollout_epoch", "wm_rollout_epoch"))
+def test_manual_cotrain_rejects_non_positive_split_rollout_epochs(
+    field: str,
+) -> None:
+    cfg = _cfg(**{field: 0})
+    with pytest.raises(ValueError, match=f"manual_cotrain.{field}"):
+        validate_cfg(cfg)
+
+
 def test_manual_cotrain_rejects_bad_actor_fsdp_strategy() -> None:
     cfg = _cfg()
     cfg.actor.train_cfg.fsdp.strategy = "bad"
@@ -117,6 +126,23 @@ def test_manual_cotrain_geometry_counts_rollout_epoch_for_multigpu_profile() -> 
     cfg = _cfg(ngpu=6, envs_per_worker=2, rollout_epoch=16)
     cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
 
+    validate_cfg(cfg)
+
+
+def test_manual_cotrain_geometry_counts_split_real_and_wm_rollout_epochs() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        rollout_epoch=16,
+        real_rollout_epoch=1,
+        wm_rollout_epoch=16,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    with pytest.raises(ValueError, match="real_rollout_epoch=1"):
+        validate_cfg(cfg)
+
+    cfg.manual_cotrain.real_rollout_epoch = 4
     validate_cfg(cfg)
 
 
