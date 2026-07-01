@@ -604,6 +604,7 @@ class ManualCotrainRayRunner(BaseRunner):
         cfg = self._cfg_dict("env.real.cfg")
         cfg.setdefault("render_backend", self._render_backend())
         cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
+        cfg.setdefault("spawn_env_slots", False)
         return cfg
 
     def _cfg_dict(self, path: str, fallback: str | None = None) -> dict[str, Any]:

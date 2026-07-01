@@ -303,9 +303,41 @@ def test_real_env_worker_attaches_rollout_sidecars_to_no_embedding_env_records()
         worker.close()
 
 
-def test_real_env_worker_uses_spawned_slots_for_egl_backend(monkeypatch) -> None:
+def test_real_env_worker_respects_explicit_spawn_slots_false_for_egl_backend(monkeypatch) -> None:
     cfg = dict(_counter_env_cfg())
     cfg["render_backend"] = "egl"
+    cfg["spawn_env_slots"] = False
+    worker = RealEnvWorker(
+        env_cfg=cfg,
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    build_calls: list[dict[str, Any]] = []
+    original_build_env_from_cfg = trajectory_env_worker._build_env_from_cfg
+
+    def build_inproc(cfg_arg: dict[str, Any]) -> Any:
+        build_calls.append(dict(cfg_arg))
+        return original_build_env_from_cfg(cfg_arg)
+
+    monkeypatch.setattr(trajectory_env_worker, "_build_env_from_cfg", build_inproc)
+
+    try:
+        worker.init()
+
+        assert len(build_calls) == 2
+        assert worker._spawned_env is False
+        assert len(worker.envs) == 2
+    finally:
+        worker.close()
+
+
+def test_real_env_worker_uses_spawned_slots_when_explicitly_enabled_for_egl_backend(monkeypatch) -> None:
+    cfg = dict(_counter_env_cfg())
+    cfg["render_backend"] = "egl"
+    cfg["spawn_env_slots"] = True
     worker = RealEnvWorker(
         env_cfg=cfg,
         num_slots=2,
@@ -317,7 +349,7 @@ def test_real_env_worker_uses_spawned_slots_for_egl_backend(monkeypatch) -> None
     calls: list[int] = []
 
     def fail_inproc_build(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("EGL real env slots must not be built in the Ray actor")
+        raise AssertionError("explicitly spawned EGL real env slots must not be built in the Ray actor")
 
     def fake_init_spawn_slot(slot_id: int, *, task_id: int | None = None, start_episode_id: int = 0) -> None:
         del task_id

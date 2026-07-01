@@ -46,6 +46,20 @@ def _plain_dict(value: Any) -> dict[str, Any]:
     raise TypeError(f"expected mapping config, got {type(value).__name__}")
 
 
+def _config_bool(value: Any, *, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean, got {value!r}")
+
+
 def _state_dict_nbytes(state_dict: Mapping[str, Any]) -> int:
     total = 0
     for value in state_dict.values():
@@ -1593,6 +1607,8 @@ class BaseTrajectoryEnvWorker(Worker):
     def _should_spawn_env_slots(self) -> bool:
         if self.role != "real_env":
             return False
+        if "spawn_env_slots" in self.env_cfg:
+            return _config_bool(self.env_cfg.get("spawn_env_slots"), name="env_cfg.spawn_env_slots")
         if self.env_cfg.get("egl_device_pool"):
             return True
         return str(self.env_cfg.get("render_backend", "")).strip().lower() == "egl"
