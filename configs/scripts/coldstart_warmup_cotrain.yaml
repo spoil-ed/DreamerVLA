@@ -42,6 +42,10 @@ collect_num_tasks: 10
 common_overrides: []
 collect_overrides: []
 cotrain_overrides: []
+eval:
+  enabled: false
+  interval_global_steps: 10
+  debug_interval_global_steps: 1
 
 # Direct launcher controls. Leave values null to use the selected profile.
 # These are translated to the downstream Hydra keys listed in control_overrides.

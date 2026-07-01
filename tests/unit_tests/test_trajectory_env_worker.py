@@ -437,6 +437,7 @@ def test_apply_rollout_result_stops_chunk_at_episode_boundary() -> None:
         assert shard.rewards[0, 0].tolist() == [1.0, 0.0]
         assert shard.dones[0, 0].tolist() == [True, True]
         assert worker._last_apply_completed_episodes == 1
+        assert worker._last_apply_successful_episodes == 1
         assert worker._last_apply_physical_steps == 1
         assert len(replay.episodes) == 1
         assert len(replay.episodes[0]) == 1

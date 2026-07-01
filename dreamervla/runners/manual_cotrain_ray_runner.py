@@ -49,6 +49,8 @@ class ManualCotrainRayRunner(BaseRunner):
         config = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
         super().__init__(config)
         self.history: dict[str, float | int] | None = None
+        self._real_rollout_episodes = 0
+        self._real_rollout_successes = 0
 
     def setup(self) -> None:
         super().setup()
@@ -374,6 +376,7 @@ class ManualCotrainRayRunner(BaseRunner):
         metrics = {
             "global_step": float(global_step),
             **env_metrics,
+            **self._real_env_success_rate_metrics(env_metrics, global_step=global_step),
             **rollout_metrics,
             **actor_recv_metrics,
             **replay_metrics,
@@ -389,6 +392,85 @@ class ManualCotrainRayRunner(BaseRunner):
             time.perf_counter() - checkpoint_start
         )
         return metrics
+
+    def _real_env_success_rate_metrics(
+        self,
+        env_metrics: dict[str, float],
+        *,
+        global_step: int,
+    ) -> dict[str, float]:
+        """Return real-LIBERO episode success metrics for the current actor."""
+
+        step_episodes = int(
+            max(0.0, float(env_metrics.get("env/real_env/episodes_completed", 0.0)))
+        )
+        step_successes = int(
+            max(0.0, float(env_metrics.get("env/real_env/episodes_successful", 0.0)))
+        )
+        if step_successes > step_episodes:
+            step_successes = step_episodes
+        self._real_rollout_episodes += int(step_episodes)
+        self._real_rollout_successes += int(step_successes)
+
+        valid = float(self._real_rollout_episodes > 0)
+        step_valid = float(step_episodes > 0)
+        success_rate = (
+            float(self._real_rollout_successes) / float(self._real_rollout_episodes)
+            if self._real_rollout_episodes > 0
+            else 0.0
+        )
+        step_success_rate = (
+            float(step_successes) / float(step_episodes)
+            if step_episodes > 0
+            else 0.0
+        )
+        metrics = {
+            "rollout/episodes": float(self._real_rollout_episodes),
+            "rollout/successes": float(self._real_rollout_successes),
+            "rollout/success_rate": float(success_rate),
+            "rollout/success_rate_valid": float(valid),
+            "rollout/step_episodes": float(step_episodes),
+            "rollout/step_successes": float(step_successes),
+            "rollout/step_success_rate": float(step_success_rate),
+            "rollout/step_success_rate_valid": float(step_valid),
+        }
+        interval = self._eval_interval_global_steps()
+        if interval > 0 and int(global_step) % int(interval) == 0:
+            metrics.update(
+                {
+                    "eval/episodes": float(self._real_rollout_episodes),
+                    "eval/successes": float(self._real_rollout_successes),
+                    "eval/success_rate": float(success_rate),
+                    "eval/success_rate_valid": float(valid),
+                    "eval/step_episodes": float(step_episodes),
+                    "eval/step_successes": float(step_successes),
+                    "eval/step_success_rate": float(step_success_rate),
+                    "eval/step_success_rate_valid": float(step_valid),
+                }
+            )
+        return metrics
+
+    def _eval_interval_global_steps(self) -> int:
+        debug_enabled = bool(OmegaConf.select(self.cfg, "training.debug", default=False))
+        if debug_enabled:
+            debug_interval = OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.debug_eval_interval_global_steps",
+                default=None,
+            )
+            if debug_interval is not None:
+                return _nonnegative_int(
+                    debug_interval,
+                    "manual_cotrain.debug_eval_interval_global_steps",
+                )
+        return _nonnegative_int(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.eval_interval_global_steps",
+                default=0,
+            ),
+            "manual_cotrain.eval_interval_global_steps",
+        )
 
     def _ngpu(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.ngpu", default=1))
@@ -796,6 +878,7 @@ class ManualCotrainRayRunner(BaseRunner):
         torch.save(
             {
                 "global_step": int(global_step),
+                "cfg": _plain(self.cfg),
                 "metrics": dict(metrics),
                 "state_dicts": state_dicts,
                 "replay": replay_state,
@@ -1196,6 +1279,13 @@ def _load_runner_state_dicts(
             f"{path} missing state_dicts for requested component(s): {missing}"
         )
     return {name: state_dicts[name] for name in names}
+
+
+def _nonnegative_int(value: Any, field: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError(f"{field} must be non-negative, got {parsed}")
+    return parsed
 
 
 def _load_component_state_dict(ckpt_path: str, component: str) -> dict[str, Any]:

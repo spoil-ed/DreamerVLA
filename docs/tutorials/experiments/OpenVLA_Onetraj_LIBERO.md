@@ -62,6 +62,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
   task=goal ngpu=6 profile=multi_gpu \
   cotrain_engine=async render_backend=egl \
+  eval.enabled=true \
   > logs/cotrain_ray_async_egl.log 2>&1
 ```
 
@@ -98,6 +99,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   task=goal ngpu=6 profile=multi_gpu \
   cotrain_engine=async cotrain_phase=online \
   run_root="${RUN_ROOT}" render_backend=egl \
+  eval.enabled=true \
   manual_cotrain.envs_per_worker=2 \
   manual_cotrain.global_steps=25 \
   > logs/cotrain_ray_async_online_from_warmup.log 2>&1
@@ -118,16 +120,23 @@ python -m dreamervla.train \
   init.warmup_ckpt_path="${RUN_ROOT}/cotrain/ckpt/ray_async_init.ckpt" \
   training.out_dir="${RUN_ROOT}/cotrain" \
   manual_cotrain.ngpu=6 +cluster.num_gpus=6 \
+  ++manual_cotrain.eval_interval_global_steps=10 \
+  ++manual_cotrain.debug_eval_interval_global_steps=1 \
   > logs/cotrain_manual_async_from_warmup.log 2>&1
 ```
 
 - `init.warmup_ckpt_path`：LearnerWorker 载入 world_model + classifier；OFT policy 由
   `task.openvla_oft.ckpt_path` 自动加载。
-- RL 超参（`group_size=8` / `rollout_epoch=16` / `max_steps_per_rollout_epoch=256` /
-  `env.train.total_num_envs=64` / `global_steps=1000` / gamma / gae_lambda / clip 等）已
-  写进配置默认，命令行无需重复；要短跑临时加 `manual_cotrain.global_steps=<N>`。
+- RL 超参（`group_size=8` / `rollout_epoch=16` / `max_steps_per_rollout_epoch=512` /
+  `wm_rollout_target_trajectories=1024` / `real_rollout_epoch=4` / `global_steps=1000` /
+  gamma / gae_lambda / clip 等）已写进配置默认，命令行无需重复；要短跑临时加
+  `manual_cotrain.global_steps=<N>`。
 - `manual_cotrain.ngpu=N`（0–6）= 本机 GPU 数：GPU0=real_env，GPU1..N-1=wm_env，配 N 个
   rollout worker。默认 osmesa，要 EGL 加 `render_backend=egl`。
+- actor SR 来自 manual cotrain 训练内部的 RealEnv episode 统计：`rollout/success_rate`
+  每个 global step 都会记录；coldstart launcher 加 `eval.enabled=true` 后，正式训练每
+  10 个 global step 额外记录一次 `eval/success_rate`，debug 训练每 1 个 global step 记录一次。
+  这里不启动旧的 `eval_libero_vla` Dreamer/RynnVLA 子进程。
 - `DVLA_COTRAIN_HANDSHAKE_TRACE=1` 打印 env/rollout 握手与 `[build_groups]` 各 worker init
   边界，用于定位卡点。
 
@@ -256,11 +265,18 @@ nvidia-smi
 Replay 写入：replay_buffer/transitions 持续增长
 Rollout 推理：rollout/generated 非零
 Actor 更新：actor/ppo_updates = 1，actor/policy_grad_norm 非零
+Actor SR：rollout/success_rate_valid = 1，rollout/success_rate 有数值
+Eval SR：开启 eval.enabled=true 时，eval/success_rate 按间隔出现
 Learner 更新：wm/loss 和 wm/grad_norm 非零
 WMEnv 推理：env/wm_env/batch_size_avg 稳定接近 8
 同步推进：policy / rollout / wm / classifier version 持续增长
 Checkpoint：checkpoints/manual_cotrain_step_<N>/manual_cotrain.ckpt 写出
 ```
+
+注意：`actor/return_mean` 主要受 WM imagined reward/return 影响，不等价于真实 LIBERO
+成功率。判断 actor 是否真的完成任务，优先看 RealEnv 统计出来的 `rollout/success_rate`
+和按间隔镜像出来的 `eval/success_rate`。刚启动时如果还没有真实 episode 完成，
+`rollout/success_rate_valid` 会是 0，这是“没有分母”，不是失败。
 
 如果需要看曲线：
 

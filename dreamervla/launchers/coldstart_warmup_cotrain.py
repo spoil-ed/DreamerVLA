@@ -69,6 +69,8 @@ class PipelinePlan:
     warmup_wm_ckpt: Path | None = None
     warmup_cls_ckpt: Path | None = None
     ray_init_ckpt: Path | None = None
+    eval_enabled: bool = False
+    eval_interval_global_steps: int = 0
 
 
 def _normalize_mode(mode: str) -> PipelineMode:
@@ -610,6 +612,16 @@ def build_pipeline_plan(
         "cotrain_out": str(cotrain_out),
         "render_backend": selected_render_backend,
     }
+    eval_cfg = dict(cfg.get("eval") or {})
+    eval_enabled = bool(eval_cfg.get("enabled", False))
+    eval_interval_global_steps = _eval_interval_global_steps(
+        eval_cfg,
+        debug=debug_enabled,
+    )
+    eval_manual_overrides = _manual_cotrain_eval_overrides(
+        eval_cfg,
+        enabled=eval_enabled,
+    )
     mode_cfg = _select_mapping(dict(cfg["modes"]), selected_mode, label="mode")
     profile_cfg = _select_mapping(dict(cfg["profiles"]), selected_profile, label="profile")
     collect_profile_cfg = _select_mapping(
@@ -817,11 +829,12 @@ def build_pipeline_plan(
             f"init.warmup_ckpt_path={ray_init_ckpt}",
             *ray_online_overrides,
             *manual_cotrain_overrides,
+            *eval_manual_overrides,
             *common_overrides,
             *cotrain_overrides,
         ]
         if debug_enabled:
-            cotrain_online_cmd.append("training.debug=true")
+            cotrain_online_cmd.append("++training.debug=true")
 
     return PipelinePlan(
         mode=selected_mode,
@@ -840,6 +853,8 @@ def build_pipeline_plan(
         warmup_wm_ckpt=warmup_wm_ckpt,
         warmup_cls_ckpt=warmup_cls_ckpt,
         ray_init_ckpt=ray_init_ckpt,
+        eval_enabled=eval_enabled,
+        eval_interval_global_steps=eval_interval_global_steps,
     )
 
 
@@ -959,6 +974,54 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, Sequence):
         return [str(item) for item in value]
     return [str(value)]
+
+
+def _eval_interval_global_steps(
+    eval_cfg: Mapping[str, Any],
+    *,
+    debug: bool,
+) -> int:
+    key = "debug_interval_global_steps" if debug else "interval_global_steps"
+    value = eval_cfg.get(key, eval_cfg.get("interval_global_steps", 0))
+    interval = int(value or 0)
+    if interval < 0:
+        raise ValueError(f"eval.{key} must be non-negative, got {interval}")
+    return interval
+
+
+def _manual_cotrain_eval_overrides(
+    eval_cfg: Mapping[str, Any],
+    *,
+    enabled: bool,
+) -> list[str]:
+    if not enabled:
+        return []
+    interval = int(eval_cfg.get("interval_global_steps", 0))
+    debug_interval = int(
+        eval_cfg.get("debug_interval_global_steps", interval)
+    )
+    if interval < 0:
+        raise ValueError(f"eval.interval_global_steps must be non-negative, got {interval}")
+    if debug_interval < 0:
+        raise ValueError(
+            "eval.debug_interval_global_steps must be non-negative, "
+            f"got {debug_interval}"
+        )
+    return [
+        f"++manual_cotrain.eval_interval_global_steps={interval}",
+        f"++manual_cotrain.debug_eval_interval_global_steps={debug_interval}",
+    ]
+
+
+def run_async_online_with_in_run_eval_metrics(plan: PipelinePlan) -> None:
+    """Run async online cotrain.
+
+    OpenVLA-OFT one-trajectory cotrain reports actor SR from RealEnv rollout
+    metrics inside the training loop.  Do not launch the legacy
+    ``eval_libero_vla`` Dreamer subprocess from this tutorial path.
+    """
+
+    subprocess.run(plan.cotrain_online_cmd, check=True)
 
 
 def _consolidate_warmup_state_dicts(wm_path: Path, cls_path: Path, out_path: Path) -> None:
@@ -1105,6 +1168,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if plan.cotrain_phase != "all" or plan.cotrain_engine == "async":
         print(f"cotrain_warmup: {shlex.join(plan.cotrain_warmup_cmd)}")
         print(f"cotrain_online: {shlex.join(plan.cotrain_online_cmd)}")
+    if plan.eval_enabled:
+        print(f"eval_interval_global_steps: {plan.eval_interval_global_steps}")
+        print("eval_source: real_env rollout success metrics")
     if bool(cfg.get("dry_run", False)):
         return 0
 
@@ -1166,7 +1232,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plan.warmup_cls_ckpt,
                 plan.ray_init_ckpt,
             )
-        subprocess.run(plan.cotrain_online_cmd, check=True)
+        if plan.cotrain_engine == "async":
+            run_async_online_with_in_run_eval_metrics(plan)
+        else:
+            subprocess.run(plan.cotrain_online_cmd, check=True)
     elif plan.cotrain_engine == "async":
         print("PHASE 2a/3: offline warmup (sync, writes warmup ckpts)", flush=True)
         subprocess.run(plan.cotrain_warmup_cmd, check=True)
@@ -1175,7 +1244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan.warmup_wm_ckpt, plan.warmup_cls_ckpt, plan.ray_init_ckpt
         )
         print("PHASE 2c/3: async online cotrain (ray overlap)", flush=True)
-        subprocess.run(plan.cotrain_online_cmd, check=True)
+        run_async_online_with_in_run_eval_metrics(plan)
     else:
         print("PHASE 2/2 START: offline-warmup online cotrain", flush=True)
         subprocess.run(plan.cotrain_cmd, check=True)

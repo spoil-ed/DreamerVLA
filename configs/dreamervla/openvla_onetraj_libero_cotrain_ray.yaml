@@ -14,6 +14,7 @@ manual_cotrain:
   ngpu: 1
   global_steps: 1000  # cotrain epochs
   learner_update_step: 1
+  checkpoint_every: 0
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false

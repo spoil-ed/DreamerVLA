@@ -281,6 +281,68 @@ def test_sum_metric_lists_derives_batch_size_distribution_metrics() -> None:
     assert metrics["env/wm_env/batch_size_max"] == 8.0
 
 
+def test_manual_runner_reports_real_env_success_rate_metrics() -> None:
+    runner = runners.ManualCotrainRayRunner(_cfg())
+    metrics = runner._real_env_success_rate_metrics(
+        {
+            "env/real_env/episodes_completed": 3.0,
+            "env/real_env/episodes_successful": 2.0,
+        },
+        global_step=1,
+    )
+
+    assert metrics["rollout/episodes"] == 3.0
+    assert metrics["rollout/successes"] == 2.0
+    assert metrics["rollout/success_rate"] == pytest.approx(2.0 / 3.0)
+    assert metrics["rollout/success_rate_valid"] == 1.0
+    assert "eval/success_rate" not in metrics
+
+
+def test_manual_runner_emits_eval_success_rate_on_configured_interval() -> None:
+    cfg = _cfg()
+    cfg.manual_cotrain.eval_interval_global_steps = 10
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    early = runner._real_env_success_rate_metrics(
+        {
+            "env/real_env/episodes_completed": 1.0,
+            "env/real_env/episodes_successful": 1.0,
+        },
+        global_step=1,
+    )
+    interval = runner._real_env_success_rate_metrics(
+        {
+            "env/real_env/episodes_completed": 1.0,
+            "env/real_env/episodes_successful": 0.0,
+        },
+        global_step=10,
+    )
+
+    assert "eval/success_rate" not in early
+    assert interval["eval/success_rate"] == pytest.approx(0.5)
+    assert interval["eval/episodes"] == 2.0
+    assert interval["eval/success_rate_valid"] == 1.0
+
+
+def test_manual_runner_uses_debug_eval_interval_when_training_debug() -> None:
+    cfg = _cfg()
+    cfg.training.debug = True
+    cfg.manual_cotrain.eval_interval_global_steps = 10
+    cfg.manual_cotrain.debug_eval_interval_global_steps = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    metrics = runner._real_env_success_rate_metrics(
+        {
+            "env/real_env/episodes_completed": 1.0,
+            "env/real_env/episodes_successful": 0.0,
+        },
+        global_step=1,
+    )
+
+    assert metrics["eval/success_rate"] == 0.0
+    assert metrics["eval/success_rate_valid"] == 1.0
+
+
 def _compose_train_config(*overrides: str):
     from pathlib import Path
 
@@ -851,6 +913,8 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
     )
     assert actor.state_dict_calls == [None]
     assert payload["global_step"] == 1
+    assert payload["cfg"]["_target_"] == "dreamervla.runners.ManualCotrainRayRunner"
+    assert payload["cfg"]["manual_cotrain"]["checkpoint_every"] == 1
     assert sorted(payload["state_dicts"]) == ["classifier", "policy", "world_model"]
     assert manifest["schema_version"] == 1
     assert manifest["global_step"] == 1

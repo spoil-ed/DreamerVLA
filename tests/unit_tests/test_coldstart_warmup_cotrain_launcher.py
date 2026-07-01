@@ -41,15 +41,17 @@ def _assert_items_in_command(items: list[str], command: list[str]) -> None:
 
 
 def _override_int(overrides: list[str], key: str) -> int:
-    prefix = f"{key}="
-    matches = [item for item in overrides if item.startswith(prefix)]
+    matches = [item for item in overrides if _override_key(item) == key and "=" in item]
     assert len(matches) == 1
     return int(matches[0].split("=", 1)[1])
 
 
 def _override_values(overrides: list[str], key: str) -> list[str]:
-    prefix = f"{key}="
-    return [item.split("=", 1)[1] for item in overrides if item.startswith(prefix)]
+    return [
+        item.split("=", 1)[1]
+        for item in overrides
+        if _override_key(item) == key and "=" in item
+    ]
 
 
 def _override_key(override: str) -> str:
@@ -1398,6 +1400,24 @@ def test_async_ray_egl_respects_explicit_online_worker_topology(tmp_path) -> Non
     assert plan.cotrain_online_cmd.count("cluster.component_placement.actor=5") == 1
 
 
+def test_async_online_debug_override_is_struct_safe(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        debug=True,
+    )
+
+    assert "++training.debug=true" in plan.cotrain_online_cmd
+    assert "training.debug=true" not in plan.cotrain_online_cmd
+
+
 def test_sync_cotrain_phase_warmup_only_has_no_online_steps(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
@@ -1517,6 +1537,52 @@ def test_async_cotrain_online_command_uses_valid_ray_hydra_keys(tmp_path) -> Non
 
     assert cfg_obj.init.warmup_ckpt_path == str(plan.ray_init_ckpt)
     assert cfg_obj.learner.init_ckpt.path == str(plan.ray_init_ckpt)
+
+
+def test_async_eval_uses_in_run_real_env_success_metrics(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["eval"]["enabled"] = True
+    plan = mod.build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=2,
+        debug=True,
+        launcher_cfg=cfg,
+        cotrain_overrides=["manual_cotrain.global_steps=3"],
+    )
+    assert _override_values(
+        plan.cotrain_online_cmd,
+        "manual_cotrain.eval_interval_global_steps",
+    ) == ["10"]
+    assert _override_values(
+        plan.cotrain_online_cmd,
+        "manual_cotrain.debug_eval_interval_global_steps",
+    ) == ["1"]
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def run(self, cmd, check):
+            assert check is True
+            cmd = list(cmd)
+            self.calls.append(cmd)
+
+    rec = _Recorder()
+    monkeypatch.setattr(mod, "subprocess", rec)
+
+    mod.run_async_online_with_in_run_eval_metrics(plan)
+
+    assert rec.calls == [plan.cotrain_online_cmd]
+    assert all("experiment=eval_libero_vla" not in call for call in rec.calls)
 
 
 def test_sync_cotrain_engine_has_no_async_subcommands(tmp_path) -> None:

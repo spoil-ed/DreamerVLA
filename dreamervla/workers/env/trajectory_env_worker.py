@@ -361,6 +361,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self.global_step = 0
         self._pending_component_states: dict[str, tuple[dict[str, Any], int]] = {}
         self._last_apply_completed_episodes = 0
+        self._last_apply_successful_episodes = 0
         self._last_apply_physical_steps = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
@@ -459,12 +460,13 @@ class BaseTrajectoryEnvWorker(Worker):
         rewards = np.zeros((self.num_action_chunks,), dtype=np.float32)
         dones = np.zeros((self.num_action_chunks,), dtype=np.bool_)
         completed = 0
+        successful = 0
         physical_steps = 0
         env_crashes = 0
         env_respawns = 0
         transition_sidecars = _transition_sidecars_from_rollout(result)
         for index, action in enumerate(actions_np):
-            _, reward, done, _ = self._step_slot(
+            _, reward, done, info = self._step_slot(
                 slot_id,
                 action,
                 transition_sidecars=transition_sidecars,
@@ -476,11 +478,13 @@ class BaseTrajectoryEnvWorker(Worker):
             env_respawns += int(self._last_apply_env_respawns)
             if done:
                 completed = 1
+                successful = int(bool(info.get("success", False)))
                 if index + 1 < self.num_action_chunks:
                     dones[index + 1 :] = True
                 break
 
         self._last_apply_completed_episodes = int(completed)
+        self._last_apply_successful_episodes = int(successful)
         self._last_apply_physical_steps = int(physical_steps)
         self._last_apply_env_crashes = int(env_crashes)
         self._last_apply_env_respawns = int(env_respawns)
@@ -634,6 +638,9 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/episodes_completed"] += float(
                         self._last_apply_completed_episodes
                     )
+                    metrics["env/episodes_successful"] += float(
+                        self._last_apply_successful_episodes
+                    )
                     metrics["env/env_crashes"] += float(
                         self._last_apply_env_crashes
                     )
@@ -718,6 +725,7 @@ class BaseTrajectoryEnvWorker(Worker):
             "env/trajectory_chunks": 0.0,
             "env/trajectory_shards": 0.0,
             "env/episodes_completed": 0.0,
+            "env/episodes_successful": 0.0,
             "env/episodes_flushed": 0.0,
             "env/env_crashes": 0.0,
             "env/env_respawns": 0.0,
@@ -886,6 +894,9 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/episodes_completed"] += float(
                         shard_metrics["completed_episodes"]
                     )
+                    metrics["env/episodes_successful"] += float(
+                        shard_metrics["successful_episodes"]
+                    )
                 next_messages: list[ObservationMsg] = []
                 for shard, _shard_metrics in applied:
                     slot_id = int(shard.slot_id)
@@ -985,6 +996,7 @@ class BaseTrajectoryEnvWorker(Worker):
                     "rewards": np.zeros((self.num_action_chunks,), dtype=np.float32),
                     "dones": np.zeros((self.num_action_chunks,), dtype=np.bool_),
                     "completed": 0,
+                    "successful": 0,
                     "physical_steps": 0,
                     "active": True,
                     "sidecars": _transition_sidecars_from_rollout(result),
@@ -1029,6 +1041,7 @@ class BaseTrajectoryEnvWorker(Worker):
                     np.asarray(env_actions[batch_index], dtype=np.float32).reshape(-1),
                 )
                 done = bool(terminated or truncated)
+                success = bool(info.get("success", False))
                 transition_obs = dict(obs)
                 transition_obs.update(self._model_version_sidecars())
                 transition_obs.update(dict(item["sidecars"]))
@@ -1048,6 +1061,7 @@ class BaseTrajectoryEnvWorker(Worker):
                 item["physical_steps"] = int(item["physical_steps"]) + 1
                 if done:
                     item["completed"] = 1
+                    item["successful"] = int(success)
                     if action_index + 1 < self.num_action_chunks:
                         item["dones"][action_index + 1 :] = True
                     self._push_replay_episode(self._episodes_by_slot[slot_id])
@@ -1074,6 +1088,7 @@ class BaseTrajectoryEnvWorker(Worker):
                     {
                         "physical_steps": float(item["physical_steps"]),
                         "completed_episodes": float(item["completed"]),
+                        "successful_episodes": float(item["successful"]),
                     },
                 )
             )
