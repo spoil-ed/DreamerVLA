@@ -134,10 +134,6 @@ match the WM checkpoint being loaded.
 `B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_per_start`
 is the online-cotrain memory dial — see EXPLAINED.md.
 
-Manual Ray cotrain rollout budget terms such as `chunk_step`,
-`real_rollout_epoch`, `wm_rollout_epoch`, and `wm_rollout_multiplier` are defined in
-[`manual_cotrain_rollout_budget.md`](manual_cotrain_rollout_budget.md).
-
 ## `optim.*` — optimizers (per module)
 
 | Key | Default | Meaning |
