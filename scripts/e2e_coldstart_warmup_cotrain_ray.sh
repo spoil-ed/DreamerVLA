@@ -27,4 +27,5 @@ fi
 # Multi-GPU DDP cotrain stability (harmless for single-GPU); override by exporting it.
 export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"
 
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray "$@"
+python -m dreamervla.launchers.coldstart_warmup_cotrain \
+  mode=ray profile=multi_gpu ngpu=6 cotrain_engine=async "$@"

@@ -875,6 +875,9 @@ def test_e2e_shell_scripts_select_expected_modes() -> None:
     assert "--mode" not in noray_text
     assert "mode=ray" in ray_text
     assert "mode=noray" in noray_text
+    assert "profile=multi_gpu" in ray_text
+    assert "ngpu=6" in ray_text
+    assert "cotrain_engine=async" in ray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in ray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in noray_text
     assert 'conda activate "${CONDA_ENV_NAME}"' in ray_text
