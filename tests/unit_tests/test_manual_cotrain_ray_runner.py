@@ -488,7 +488,11 @@ def test_manual_runner_rejects_legacy_real_env_spawn_slots_config() -> None:
 def test_manual_cotrain_tiny_wm_env_num_envs_tracks_envs_per_worker_and_disables_loggers() -> None:
     cfg = _compose_train_config("experiment=manual_cotrain_ray_tiny")
 
-    assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.envs_per_worker
+    assert cfg.manual_cotrain.real_rollout_epoch == cfg.manual_cotrain.rollout_epoch
+    assert cfg.manual_cotrain.wm_rollout_epoch == cfg.manual_cotrain.rollout_epoch
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories is None
+    assert cfg.manual_cotrain.wm_envs_per_worker == cfg.manual_cotrain.envs_per_worker
+    assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.wm_envs_per_worker
     assert list(cfg.runner.logger.logger_backends) == []
 
 

@@ -23,10 +23,14 @@ manual_cotrain:
   requires_bootstrap_value: false
   wm_env_write_replay: false
   rollout_epoch: 1
+  real_rollout_epoch: ${manual_cotrain.rollout_epoch}
+  wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
+  wm_rollout_target_trajectories: null
   max_steps_per_rollout_epoch: 2
   wm_rollout_multiplier: 1
   num_action_chunks: 2
   envs_per_worker: 2
+  wm_envs_per_worker: ${manual_cotrain.envs_per_worker}
   task_id: 0
 
 algorithm:
@@ -133,7 +137,7 @@ env:
         action_dim: 3
         success_threshold: 0.5
         max_episode_steps: 2
-        num_envs: ${manual_cotrain.envs_per_worker}
+        num_envs: ${manual_cotrain.wm_envs_per_worker}
         device: cpu
 
 replay:
