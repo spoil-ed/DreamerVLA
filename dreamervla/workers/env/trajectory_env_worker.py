@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -365,11 +367,39 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_physical_steps = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
+        self._progress_path: Path | None = None
+        self._progress_min_interval_s = 5.0
+        self._progress_last_write_t: float | None = None
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible progress metadata for observations and replay."""
 
         self.global_step = int(global_step)
+
+    def configure_progress(
+        self,
+        progress_dir: str | os.PathLike[str] | None,
+        min_interval_s: float = 5.0,
+    ) -> dict[str, float]:
+        """Configure runner-visible manual-cotrain env progress reporting."""
+
+        if progress_dir in (None, ""):
+            self._progress_path = None
+            self._progress_last_write_t = None
+            return {"env/progress_configured": 0.0}
+        path = Path(progress_dir).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        self._progress_path = path / f"{self.role}_{self._rank_key()}.json"
+        self._progress_min_interval_s = max(0.0, float(min_interval_s))
+        self._progress_last_write_t = None
+        self._write_interact_progress(
+            done=0,
+            total=self._interact_progress_total(),
+            active=False,
+            finished=False,
+            force=True,
+        )
+        return {"env/progress_configured": 1.0}
 
     def configure_rollout_epoch(self, rollout_epoch: int) -> dict[str, float]:
         """Update this worker's per-slot trajectory count for the next interaction."""
@@ -567,6 +597,14 @@ class BaseTrajectoryEnvWorker(Worker):
         actor_channel = Channel.connect(actor_channel_name)
         metrics = self._new_interact_metrics()
         interact_start = time.perf_counter()
+        progress_total = self._interact_progress_total()
+        self._write_interact_progress(
+            done=0,
+            total=progress_total,
+            active=True,
+            finished=False,
+            force=True,
+        )
         if self._can_batch_wm_slots():
             out = self._interact_batched_wm_slots(
                 env_channel,
@@ -578,6 +616,13 @@ class BaseTrajectoryEnvWorker(Worker):
                 time.perf_counter() - interact_start
             )
             out[f"env/{self.role}/interact_loop_s"] = out["env/interact_loop_s"]
+            self._write_interact_progress(
+                done=int(out.get("env/chunk_steps", 0.0)),
+                total=progress_total,
+                active=False,
+                finished=True,
+                force=True,
+            )
             return out
 
         pending_actor_puts: list[Any] = []
@@ -647,6 +692,12 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/env_respawns"] += float(
                         self._last_apply_env_respawns
                     )
+                    self._write_interact_progress(
+                        done=int(metrics["env/chunk_steps"]),
+                        total=progress_total,
+                        active=True,
+                        finished=False,
+                    )
                     if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
                         put_s, emitted = self._flush_buffered_actor_shard(
                             slot_id,
@@ -714,6 +765,13 @@ class BaseTrajectoryEnvWorker(Worker):
         _hs_trace(
             f"[env rank={int(self.rank)} role={self.role}] interact done "
             f"chunk_steps={int(metrics['env/chunk_steps'])}"
+        )
+        self._write_interact_progress(
+            done=int(metrics["env/chunk_steps"]),
+            total=progress_total,
+            active=False,
+            finished=True,
+            force=True,
         )
         return self._finalize_interact_metrics(metrics)
 
@@ -834,6 +892,7 @@ class BaseTrajectoryEnvWorker(Worker):
         metrics: dict[str, float],
     ) -> dict[str, float]:
         pending_actor_puts: list[Any] = []
+        progress_total = self._interact_progress_total()
         for _ in range(self.rollout_epoch):
             self._reset_actor_shard_buffers()
             _hs_trace(
@@ -896,6 +955,12 @@ class BaseTrajectoryEnvWorker(Worker):
                     )
                     metrics["env/episodes_successful"] += float(
                         shard_metrics["successful_episodes"]
+                    )
+                    self._write_interact_progress(
+                        done=int(metrics["env/chunk_steps"]),
+                        total=progress_total,
+                        active=True,
+                        finished=False,
                     )
                 next_messages: list[ObservationMsg] = []
                 for shard, _shard_metrics in applied:
@@ -1255,6 +1320,47 @@ class BaseTrajectoryEnvWorker(Worker):
                 f"({self.max_steps_per_rollout_epoch} % {self.num_action_chunks})"
             )
         return self.max_steps_per_rollout_epoch // self.num_action_chunks
+
+    def _interact_progress_total(self) -> int:
+        return int(self.rollout_epoch) * int(self.num_slots) * int(
+            self._chunk_steps_per_rollout_epoch()
+        )
+
+    def _write_interact_progress(
+        self,
+        *,
+        done: int,
+        total: int,
+        active: bool,
+        finished: bool,
+        force: bool = False,
+    ) -> None:
+        path = self._progress_path
+        if path is None:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and self._progress_last_write_t is not None
+            and (now - self._progress_last_write_t) < self._progress_min_interval_s
+        ):
+            return
+        payload = {
+            "role": str(self.role),
+            "rank": int(self.rank),
+            "env_rank": int(self._rank_key()),
+            "global_step": int(self.global_step),
+            "done": max(0, int(done)),
+            "total": max(0, int(total)),
+            "active": bool(active),
+            "finished": bool(finished),
+            "time": float(time.time()),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        os.replace(tmp_path, path)
+        self._progress_last_write_t = now
 
     def _env_action_from_policy_action(self, action: Any) -> np.ndarray:
         action_arr = np.asarray(action, dtype=np.float32).reshape(-1)

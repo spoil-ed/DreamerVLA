@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from typing import Any
@@ -666,6 +667,49 @@ def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
         assert metrics["env/chunk_steps"] == 2.0
         assert metrics["env/trajectory_shards"] == 1.0
         assert metrics["env/final_bootstrap_requests"] == 0.0
+    finally:
+        worker.close()
+
+
+def test_interact_writes_manual_cotrain_progress_file(monkeypatch, tmp_path) -> None:
+    worker = RealEnvWorker(
+        env_cfg=_long_horizon_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=4,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    worker.set_global_step(3)
+    worker.configure_progress(str(tmp_path), min_interval_s=0.0)
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        worker.interact("env", "rollout", "actor")
+
+        payload = json.loads((tmp_path / "real_env_0.json").read_text(encoding="utf-8"))
+        assert payload["role"] == "real_env"
+        assert payload["rank"] == 0
+        assert payload["env_rank"] == 0
+        assert payload["global_step"] == 3
+        assert payload["done"] == 2
+        assert payload["total"] == 2
+        assert payload["active"] is False
+        assert payload["finished"] is True
     finally:
         worker.close()
 

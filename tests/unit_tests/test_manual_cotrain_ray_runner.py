@@ -9,6 +9,8 @@ from omegaconf import OmegaConf
 import dreamervla.runners as runners
 import dreamervla.runners.manual_cotrain_ray_runner as manual_runner
 from dreamervla.runners.manual_cotrain_ray_runner import (
+    _ManualCotrainEnvProgressMonitor,
+    _read_manual_cotrain_progress_snapshot,
     _split_actor_shard_counts,
     _sum_metric_lists,
     _wait_env_metrics_with_rollout_guard,
@@ -619,10 +621,17 @@ class _FakeEnvGroup:
         self.classifier_states: list[dict] = []
         self.component_state_versions: list[int] = []
         self.component_state_keys: list[list[str]] = []
+        self.progress_configs: list[tuple[str | None, float]] = []
 
     def set_global_step(self, global_step: int):
         self.global_steps.append(int(global_step))
         return _Ready([None])
+
+    def configure_progress(self, progress_dir: str | None, min_interval_s: float = 5.0):
+        self.progress_configs.append(
+            (None if progress_dir is None else str(progress_dir), float(min_interval_s))
+        )
+        return _Ready([{"env/progress_configured": 1.0}])
 
     def interact(self, env_channel_name: str, rollout_channel_name: str, actor_channel_name: str):
         del env_channel_name, rollout_channel_name, actor_channel_name
@@ -764,6 +773,89 @@ def test_wait_env_metrics_timeout_points_to_handshake_trace() -> None:
         )
 
 
+def test_manual_cotrain_progress_snapshot_sums_worker_files(tmp_path) -> None:
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    (progress_dir / "real_env_0.json").write_text(
+        json.dumps(
+            {
+                "role": "real_env",
+                "rank": 0,
+                "env_rank": 0,
+                "global_step": 4,
+                "done": 1,
+                "total": 2,
+                "finished": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (progress_dir / "wm_env_1.json").write_text(
+        json.dumps(
+            {
+                "role": "wm_env",
+                "rank": 0,
+                "env_rank": 1,
+                "global_step": 4,
+                "done": 3,
+                "total": 5,
+                "finished": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = _read_manual_cotrain_progress_snapshot(progress_dir)
+
+    assert snapshot.done == 4
+    assert snapshot.total == 7
+    assert snapshot.status is not None
+    assert "global_step=4" in snapshot.status
+    assert "real_env#0=1/2" in snapshot.status
+    assert "wm_env#1=3/5" in snapshot.status
+    assert "finished=1/2" in snapshot.status
+
+
+def test_wait_env_metrics_timeout_includes_manual_progress(tmp_path) -> None:
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    (progress_dir / "wm_env_1.json").write_text(
+        json.dumps(
+            {
+                "role": "wm_env",
+                "rank": 0,
+                "env_rank": 1,
+                "global_step": 2,
+                "done": 3,
+                "total": 8,
+                "finished": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[int, int, str, str | None, str | None]] = []
+    monitor = _ManualCotrainEnvProgressMonitor(
+        progress_dir,
+        lambda current, total, desc, **kwargs: calls.append(
+            (current, total, desc, kwargs.get("unit"), kwargs.get("status"))
+        ),
+    )
+
+    with pytest.raises(TimeoutError, match="wm_env#1=3/8"):
+        _wait_env_metrics_with_rollout_guard(
+            [_NeverReady()],
+            _RunningRollout(),
+            timeout_s=0.001,
+            poll_s=0.0,
+            progress=monitor,
+        )
+
+    assert calls
+    assert calls[-1][:4] == (3, 8, "manual-cotrain-env", "chunk")
+    assert calls[-1][4] is not None
+    assert "global_step=2" in calls[-1][4]
+
+
 def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> None:
     traces: list[str] = []
     monkeypatch.setattr(manual_runner, "_hs_trace", traces.append)
@@ -801,6 +893,12 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert rollout.pulled == [("policy", None)]
     assert rollout.generate_call == ("env", "rollout", 1)
     assert events.index("actor_recv_start") < events.index("env_wait")
+    assert groups["RealEnvGroup"].progress_configs
+    assert wm_env.progress_configs
+    assert groups["RealEnvGroup"].progress_configs[0][0] == wm_env.progress_configs[0][0]
+    assert groups["RealEnvGroup"].progress_configs[0][0].endswith(
+        "manual_cotrain_progress/global_step_00000001"
+    )
     assert [key for key, _ in groups["env_channel"].puts] == ["0", "1"]
     assert all(isinstance(value, StopMsg) for _, value in groups["env_channel"].puts)
     assert "[global_step=1] EnvGroup.interact start" in traces

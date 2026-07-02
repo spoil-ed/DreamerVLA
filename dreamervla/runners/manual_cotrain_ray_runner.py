@@ -11,6 +11,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,36 @@ class ManualCotrainRayRunner(BaseRunner):
             "learner_to_wm_env_sync",
             "checkpoint_and_metrics",
         ]
+
+    def _manual_cotrain_progress_dir(self, global_step: int) -> Path:
+        return (
+            self.get_diagnostics_dir()
+            / "manual_cotrain_progress"
+            / f"global_step_{int(global_step):08d}"
+        )
+
+    def _prepare_manual_cotrain_progress_dir(self, global_step: int) -> Path:
+        progress_dir = self._prepare_manual_cotrain_progress_dir(global_step)
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        for file in progress_dir.glob("*.json"):
+            try:
+                file.unlink()
+            except FileNotFoundError:
+                pass
+        return progress_dir
+
+    def _configure_env_progress(
+        self,
+        group: Any | None,
+        progress_dir: Path,
+    ) -> None:
+        if group is None:
+            return
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        interval = float(
+            OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
+        )
+        group.configure_progress(str(progress_dir), min_interval_s=interval).wait()
 
     def _build_groups(self, cluster: Cluster) -> dict[str, Any]:
         plan = self._placement_plan()
@@ -269,6 +300,15 @@ class ManualCotrainRayRunner(BaseRunner):
         real_env.set_global_step(global_step).wait()
         if wm_env is not None:
             wm_env.set_global_step(global_step).wait()
+        progress_dir = self._manual_cotrain_progress_dir(global_step)
+        self._configure_env_progress(real_env, progress_dir)
+        self._configure_env_progress(wm_env, progress_dir)
+        progress_monitor = _ManualCotrainEnvProgressMonitor(
+            progress_dir,
+            self.console_progress,
+            desc=f"manual-cotrain-env/{int(global_step):08d}",
+        )
+        progress_monitor.report(force=True)
         stage_start = mark_stage("set_global_step", stage_start)
         if global_step % self._sync_every() == 0:
             actor_sync = actor.sync_model_to_rollout("policy", global_step).wait()
@@ -300,7 +340,9 @@ class ManualCotrainRayRunner(BaseRunner):
             env_results,
             rollout_result,
             timeout_s=self._env_rollout_timeout_s(),
+            progress=progress_monitor,
         )
+        progress_monitor.report(force=True)
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact done")
         stage_start = mark_stage("env_interact_and_rollout_generate", stage_start)
         for rollout_rank, _ in enumerate(groups["RolloutGroup"].workers):
@@ -1085,17 +1127,115 @@ def _chunk_steps(max_steps_per_rollout_epoch: int, num_action_chunks: int) -> in
     return max_steps // chunks
 
 
+@dataclass(frozen=True)
+class _ManualCotrainProgressSnapshot:
+    done: int
+    total: int
+    status: str | None
+    worker_count: int
+    finished_count: int
+
+
+class _ManualCotrainEnvProgressMonitor:
+    def __init__(
+        self,
+        progress_dir: str | Path,
+        console_progress: Any,
+        *,
+        desc: str = "manual-cotrain-env",
+    ) -> None:
+        self.progress_dir = Path(progress_dir)
+        self._console_progress = console_progress
+        self._desc = str(desc)
+
+    def report(self, *, force: bool = False) -> _ManualCotrainProgressSnapshot:
+        del force
+        snapshot = _read_manual_cotrain_progress_snapshot(self.progress_dir)
+        if snapshot.total > 0:
+            self._console_progress(
+                snapshot.done,
+                snapshot.total,
+                self._desc,
+                unit="chunk",
+                status=snapshot.status,
+            )
+        return snapshot
+
+
+def _read_manual_cotrain_progress_snapshot(
+    progress_dir: str | Path,
+) -> _ManualCotrainProgressSnapshot:
+    path = Path(progress_dir)
+    records: list[dict[str, Any]] = []
+    if path.is_dir():
+        for file in sorted(path.glob("*.json")):
+            try:
+                payload = json.loads(file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                records.append(payload)
+    if not records:
+        return _ManualCotrainProgressSnapshot(
+            done=0,
+            total=0,
+            status=None,
+            worker_count=0,
+            finished_count=0,
+        )
+
+    def sort_key(record: dict[str, Any]) -> tuple[int, int, str]:
+        role = str(record.get("role", ""))
+        role_order = 0 if role == "real_env" else 1
+        return (role_order, int(record.get("env_rank", record.get("rank", 0))), role)
+
+    records.sort(key=sort_key)
+    done = 0
+    total = 0
+    finished = 0
+    global_steps: set[int] = set()
+    parts: list[str] = []
+    for record in records:
+        item_done = max(0, int(record.get("done", 0) or 0))
+        item_total = max(0, int(record.get("total", 0) or 0))
+        done += min(item_done, item_total) if item_total > 0 else item_done
+        total += item_total
+        finished += int(bool(record.get("finished", False)))
+        if "global_step" in record:
+            global_steps.add(int(record.get("global_step", 0) or 0))
+        role = str(record.get("role", "env"))
+        env_rank = int(record.get("env_rank", record.get("rank", 0)) or 0)
+        parts.append(f"{role}#{env_rank}={item_done}/{item_total}")
+    prefix: list[str] = []
+    if len(global_steps) == 1:
+        prefix.append(f"global_step={next(iter(global_steps))}")
+    elif global_steps:
+        prefix.append(f"global_steps={min(global_steps)}-{max(global_steps)}")
+    prefix.append(f"finished={finished}/{len(records)}")
+    status = " ".join([*prefix, *parts])
+    return _ManualCotrainProgressSnapshot(
+        done=done,
+        total=total,
+        status=status,
+        worker_count=len(records),
+        finished_count=finished,
+    )
+
+
 def _wait_env_metrics_with_rollout_guard(
     env_results: list[Any],
     rollout_result: Any,
     *,
     timeout_s: float,
     poll_s: float = 1.0,
+    progress: _ManualCotrainEnvProgressMonitor | None = None,
 ) -> dict[str, float]:
     """Wait for EnvGroup while surfacing RolloutGroup failures immediately."""
 
     start = time.monotonic()
     while not all(result.done() for result in env_results):
+        if progress is not None:
+            progress.report()
         ready = rollout_result.ready()
         if ready:
             values = rollout_result.wait_refs(ready)
@@ -1104,12 +1244,19 @@ def _wait_env_metrics_with_rollout_guard(
                 f"ready_result={values!r}"
             )
         if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
+            snapshot = progress.report(force=True) if progress is not None else None
+            progress_suffix = (
+                f" Current manual cotrain progress: {snapshot.status}."
+                if snapshot is not None and snapshot.status
+                else ""
+            )
             raise TimeoutError(
                 "EnvGroup.interact did not finish before "
                 f"manual_cotrain.env_rollout_timeout_s={float(timeout_s):.1f}s; "
                 "RolloutGroup.generate is still running or waiting for StopMsg. "
                 "Set DVLA_COTRAIN_HANDSHAKE_TRACE=1 before launching to log "
                 "EnvGroup/RolloutGroup action handshakes."
+                f"{progress_suffix}"
             )
         time.sleep(max(0.0, float(poll_s)))
     return _sum_metric_lists([result.wait() for result in env_results])
