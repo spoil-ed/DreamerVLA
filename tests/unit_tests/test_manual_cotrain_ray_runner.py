@@ -202,6 +202,14 @@ def test_runner_uses_independent_wm_env_slots_when_configured() -> None:
     assert runner._wm_rollout_epochs_by_worker(3) == [43, 43, 42]
 
 
+def test_runner_rollout_slots_cover_largest_env_batch() -> None:
+    cfg = _cfg(ngpu=4, wm_envs_per_worker=8)
+    cfg.manual_cotrain.envs_per_worker = 2
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    assert runner._rollout_num_slots() == 8
+
+
 def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
     cfg = _cfg(ngpu=4, wm_rollout_target_trajectories=1024)
     cfg.manual_cotrain.envs_per_worker = 2

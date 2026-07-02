@@ -328,7 +328,7 @@ class ManualCotrainRayRunner(BaseRunner):
         rollout_result = rollout.generate(
             env_channel_name,
             rollout_channel_name,
-            self._envs_per_worker(),
+            self._rollout_num_slots(),
         )
         actor_recv_started = self._start_actor_trajectory_receivers(
             groups,
@@ -602,6 +602,9 @@ class ManualCotrainRayRunner(BaseRunner):
             "wm_envs_per_worker",
             default=self._envs_per_worker(),
         )
+
+    def _rollout_num_slots(self) -> int:
+        return max(self._envs_per_worker(), self._wm_envs_per_worker())
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
