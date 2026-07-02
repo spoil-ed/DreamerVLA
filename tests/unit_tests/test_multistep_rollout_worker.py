@@ -16,12 +16,15 @@ from dreamervla.workers.cotrain.messages import (
     RolloutResultBatchMsg,
     RolloutResultMsg,
     StopMsg,
+    rollout_result_batch_to_messages,
 )
 from dreamervla.workers.inference.oft_rollout import _select_image_keys_for_policy
+import dreamervla.workers.rollout.multistep_rollout_worker as rollout_worker
 from dreamervla.workers.rollout.multistep_rollout_worker import (
     MultiStepRolloutWorker,
     _obs_embedding_from_obs,
     _to_cpu_tensor,
+    _to_device_float_tensor,
 )
 
 
@@ -107,6 +110,69 @@ def test_generate_once_accepts_obs_embedding_and_returns_forward_inputs() -> Non
     assert out.versions["global_step"] == 0
 
 
+def test_to_device_float_tensor_avoids_unconditional_numpy_copy(monkeypatch) -> None:
+    array = np.ones((2, 4), dtype=np.float32)
+
+    monkeypatch.setattr(
+        rollout_worker.np,
+        "array",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("numpy observation conversion should avoid np.array copy")
+        ),
+    )
+
+    tensor = _to_device_float_tensor(array, torch.device("cpu"))
+
+    assert tensor.shape == (2, 4)
+    assert tensor.dtype == torch.float32
+
+
+def test_to_device_float_tensor_copies_readonly_numpy_without_warning() -> None:
+    array = np.ones((2, 4), dtype=np.float32)
+    array.setflags(write=False)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tensor = _to_device_float_tensor(array, torch.device("cpu"))
+
+    assert tensor.shape == (2, 4)
+    assert tensor.dtype == torch.float32
+    assert not caught
+
+
+def test_to_device_float_tensor_preserves_existing_tensor_dtype() -> None:
+    tensor = torch.ones((2, 4), dtype=torch.bfloat16)
+
+    out = _to_device_float_tensor(tensor, torch.device("cpu"))
+
+    assert out.shape == (2, 4)
+    assert out.dtype == torch.bfloat16
+
+
+def test_generate_batch_batches_direct_hidden_conversion(monkeypatch) -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+    observations = [_obs(slot_id=0), _obs(slot_id=1)]
+
+    monkeypatch.setattr(
+        rollout_worker,
+        "_to_device_float_tensor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("batched rollout hidden conversion should not be per-row")
+        ),
+    )
+
+    results = worker.generate_batch(observations)
+
+    assert [result.slot_id for result in results] == [0, 1]
+    assert all(result.forward_inputs["hidden"].shape == (1, 4) for result in results)
+
+
 def test_generate_once_propagates_component_versions_from_env_message() -> None:
     worker = MultiStepRolloutWorker(
         policy_cfg=_policy_cfg(),
@@ -162,6 +228,63 @@ def test_generate_batch_uses_one_policy_forward_for_multiple_observations() -> N
     assert all(result.actions.shape == (2, 3) for result in results)
     assert all(result.forward_inputs["hidden"].shape == (1, 4) for result in results)
     assert all(result.forward_inputs["action"].shape == (1, 2, 3) for result in results)
+
+
+def test_generate_batch_uses_batched_obs_hidden_payload() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+    observations = [
+        ObservationMsg(
+            env_rank=0,
+            slot_id=0,
+            task_id=0,
+            episode_id=10,
+            step=2,
+            obs={"task_description": "task 0"},
+            versions={"policy": 0},
+        ),
+        ObservationMsg(
+            env_rank=0,
+            slot_id=1,
+            task_id=0,
+            episode_id=11,
+            step=3,
+            obs={"task_description": "task 0"},
+            versions={"policy": 0},
+        ),
+    ]
+
+    results = worker.generate_batch(
+        observations,
+        batched_obs={
+            "latent": np.stack(
+                [
+                    np.ones(4, dtype=np.float32),
+                    np.full(4, 2.0, dtype=np.float32),
+                ],
+                axis=0,
+            ),
+            "lang_emb": np.stack(
+                [
+                    np.full(2, 3.0, dtype=np.float32),
+                    np.full(2, 4.0, dtype=np.float32),
+                ],
+                axis=0,
+            ),
+        },
+    )
+
+    assert [result.slot_id for result in results] == [0, 1]
+    assert [result.step for result in results] == [2, 3]
+    assert results[0].forward_inputs["hidden"].tolist() == [[1.0, 1.0, 1.0, 1.0]]
+    assert results[1].forward_inputs["hidden"].tolist() == [[2.0, 2.0, 2.0, 2.0]]
+    assert results[0].forward_inputs["lang_emb"].tolist() == [3.0, 3.0]
+    assert results[1].forward_inputs["lang_emb"].tolist() == [4.0, 4.0]
 
 
 def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> None:
@@ -350,7 +473,8 @@ def test_generate_reads_rank_keyed_observation_batches_when_num_slots_is_set(mon
         assert output_channel.qsize(key="0") == 1
         batch = output_channel.get(key="0")
         assert isinstance(batch, RolloutResultBatchMsg)
-        first, second = batch.results
+        assert batch.results == []
+        first, second = rollout_result_batch_to_messages(batch)
         assert first.step == 0
         assert second.step == 10
         assert any(
@@ -367,13 +491,145 @@ def test_generate_reads_rank_keyed_observation_batches_when_num_slots_is_set(mon
         cluster.shutdown()
 
 
+def test_generate_reads_rank_keyed_batch_hidden_payload() -> None:
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-batched-hidden-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-batched-hidden-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        output_channel = Channel.create(output_name)
+        input_channel.put(
+            ObservationBatchMsg(
+                env_rank=0,
+                observations=[
+                    ObservationMsg(
+                        env_rank=0,
+                        slot_id=0,
+                        task_id=0,
+                        episode_id=10,
+                        step=2,
+                        obs={"task_description": "task 0"},
+                        versions={"policy": 0},
+                    ),
+                    ObservationMsg(
+                        env_rank=0,
+                        slot_id=1,
+                        task_id=0,
+                        episode_id=11,
+                        step=3,
+                        obs={"task_description": "task 0"},
+                        versions={"policy": 0},
+                    ),
+                ],
+                batched_obs={
+                    "latent": np.stack(
+                        [
+                            np.ones(4, dtype=np.float32),
+                            np.full(4, 2.0, dtype=np.float32),
+                        ],
+                        axis=0,
+                    ),
+                    "lang_emb": np.stack(
+                        [
+                            np.full(2, 3.0, dtype=np.float32),
+                            np.full(2, 4.0, dtype=np.float32),
+                        ],
+                        axis=0,
+                    ),
+                },
+            ),
+            key="0",
+        )
+        input_channel.put(StopMsg(reason="unit-test"), key="0")
+
+        worker = MultiStepRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        stats = worker.generate(input_name, output_name, num_slots=2)
+
+        assert stats["rollout/generated"] == 2.0
+        batch = output_channel.get(key="0")
+        assert isinstance(batch, RolloutResultBatchMsg)
+        assert batch.results == []
+        assert batch.slot_ids == [0, 1]
+        assert batch.task_ids == [0, 0]
+        assert batch.episode_ids == [10, 11]
+        assert batch.steps == [2, 3]
+        assert torch.as_tensor(batch.actions).shape == (2, 2, 3)
+        assert torch.as_tensor(batch.prev_logprobs).shape == (2, 1)
+        assert batch.prev_values is None
+        assert torch.as_tensor(batch.forward_inputs["hidden"]).tolist() == [
+            [1.0, 1.0, 1.0, 1.0],
+            [2.0, 2.0, 2.0, 2.0],
+        ]
+        assert torch.as_tensor(batch.forward_inputs["lang_emb"]).tolist() == [
+            [3.0, 3.0],
+            [4.0, 4.0],
+        ]
+        assert torch.as_tensor(batch.forward_inputs["action"]).shape == (2, 2, 3)
+        assert torch.as_tensor(batch.versions["policy"]).tolist() == [0, 0]
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_rank_keyed_batch_sends_direct_batched_payload(monkeypatch) -> None:
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-direct-batch-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-direct-batch-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        output_channel = Channel.create(output_name)
+        input_channel.put(
+            ObservationBatchMsg(
+                env_rank=0,
+                observations=[_obs(step=0, slot_id=0), _obs(step=1, slot_id=1)],
+            ),
+            key="0",
+        )
+        input_channel.put(StopMsg(reason="unit-test"), key="0")
+
+        def fail_pack(*_args, **_kwargs):
+            raise AssertionError("rank-key rollout should produce a batched payload directly")
+
+        monkeypatch.setattr(rollout_worker, "pack_rollout_result_batch", fail_pack)
+        worker = MultiStepRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        worker.generate(input_name, output_name, num_slots=2)
+
+        batch = output_channel.get(key="0")
+        assert isinstance(batch, RolloutResultBatchMsg)
+        assert batch.results == []
+        assert batch.slot_ids == [0, 1]
+        assert torch.as_tensor(batch.actions).shape == (2, 2, 3)
+    finally:
+        cluster.shutdown()
+
+
 def test_generate_wraps_rank_slot_failures_with_channel_key() -> None:
     class FailingRolloutWorker(MultiStepRolloutWorker):
-        def generate_batch(
+        def generate_result_batch(
             self,
             obs_msgs: list[ObservationMsg],
-        ) -> list[RolloutResultMsg]:
+            *,
+            batched_obs: dict[str, object] | None = None,
+        ) -> RolloutResultBatchMsg:
             del obs_msgs
+            del batched_obs
             raise ValueError("encoder failed")
 
     if ray.is_initialized():
@@ -394,7 +650,10 @@ def test_generate_wraps_rank_slot_failures_with_channel_key() -> None:
         )
         worker.init()
 
-        with pytest.raises(RuntimeError, match=r"rank=0.*keys=0:0.*encoder failed"):
+        with pytest.raises(
+            RuntimeError,
+            match=r"generate_result_batch failed rank=0.*keys=0:0.*encoder failed",
+        ):
             worker.generate(input_name, output_name, num_slots=1)
     finally:
         cluster.shutdown()

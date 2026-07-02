@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dreamervla.runners.oft_collect_common import process_action
+from dreamervla.runners.oft_collect_common import process_action, process_action_batch
 
 
 @pytest.mark.parametrize(
@@ -53,3 +53,25 @@ def test_output_gripper_is_binary() -> None:
     for g in np.linspace(0.0, 1.0, 21):
         out = process_action([0, 0, 0, 0, 0, 0, float(g)])
         assert float(out[-1]) in (-1.0, 0.0, 1.0)
+
+
+def test_batch_postprocess_matches_per_action_and_does_not_mutate_input() -> None:
+    raw = np.array(
+        [
+            [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.25], [1, 2, 3, 4, 5, 6, 0.75]],
+            [[-1, -2, -3, -4, -5, -6, 0.5], [0, 0, 0, 0, 0, 0, 0.49]],
+        ],
+        dtype=np.float32,
+    )
+    raw_copy = raw.copy()
+
+    out = process_action_batch(raw)
+
+    expected = np.stack(
+        [process_action(action) for action in raw.reshape(-1, raw.shape[-1])],
+        axis=0,
+    ).reshape(raw.shape)
+    assert out.shape == raw.shape
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(out, expected)
+    np.testing.assert_array_equal(raw, raw_copy)

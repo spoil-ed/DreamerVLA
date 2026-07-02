@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import torch
 
 import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
 from dreamervla.workers.cotrain.messages import (
@@ -546,6 +547,106 @@ def test_wm_env_worker_requires_component_state_loaders() -> None:
         worker.close()
 
 
+def test_observation_batch_msg_moves_hidden_to_batched_payload() -> None:
+    worker = WMEnvWorker(
+        env_cfg=_no_sidecar_env_cfg(),
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    messages = [
+        ObservationMsg(
+            env_rank=0,
+            slot_id=0,
+            task_id=0,
+            episode_id=10,
+            step=0,
+            obs={
+                "obs_embedding": np.ones(4, dtype=np.float32),
+                "lang_emb": np.full(2, 3.0, dtype=np.float32),
+                "task_description": "task 0",
+            },
+            versions={"policy": 0},
+        ),
+        ObservationMsg(
+            env_rank=0,
+            slot_id=1,
+            task_id=0,
+            episode_id=11,
+            step=0,
+            obs={
+                "obs_embedding": np.full(4, 2.0, dtype=np.float32),
+                "lang_emb": np.full(2, 4.0, dtype=np.float32),
+                "task_description": "task 0",
+            },
+            versions={"policy": 0},
+        ),
+    ]
+
+    batch = worker._observation_batch_msg(messages)
+
+    assert batch.batched_obs is not None
+    assert batch.batched_obs["obs_embedding"].shape == (2, 4)
+    assert batch.batched_obs["obs_embedding"].tolist() == [
+        [1.0, 1.0, 1.0, 1.0],
+        [2.0, 2.0, 2.0, 2.0],
+    ]
+    assert batch.batched_obs["lang_emb"].shape == (2, 2)
+    assert batch.batched_obs["lang_emb"].tolist() == [
+        [3.0, 3.0],
+        [4.0, 4.0],
+    ]
+    assert all("obs_embedding" not in msg.obs for msg in batch.observations)
+    assert all("lang_emb" not in msg.obs for msg in batch.observations)
+    assert batch.observations[0].obs["task_description"] == "task 0"
+
+
+def test_observation_batch_msg_preserves_bfloat16_tensor_payload() -> None:
+    worker = WMEnvWorker(
+        env_cfg=_no_sidecar_env_cfg(),
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    messages = [
+        ObservationMsg(
+            env_rank=0,
+            slot_id=0,
+            task_id=0,
+            episode_id=10,
+            step=0,
+            obs={
+                "obs_embedding": torch.ones(4, dtype=torch.bfloat16),
+                "task_description": "task 0",
+            },
+            versions={"policy": 0},
+        ),
+        ObservationMsg(
+            env_rank=0,
+            slot_id=1,
+            task_id=0,
+            episode_id=11,
+            step=0,
+            obs={
+                "obs_embedding": torch.full((4,), 2.0, dtype=torch.bfloat16),
+                "task_description": "task 0",
+            },
+            versions={"policy": 0},
+        ),
+    ]
+
+    batch = worker._observation_batch_msg(messages)
+
+    assert batch.batched_obs is not None
+    assert isinstance(batch.batched_obs["obs_embedding"], torch.Tensor)
+    assert batch.batched_obs["obs_embedding"].dtype == torch.bfloat16
+    assert batch.batched_obs["obs_embedding"].shape == (2, 4)
+
+
 def test_interact_routes_observations_rollout_results_and_trajectory(
     monkeypatch,
 ) -> None:
@@ -572,7 +673,6 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         "connect",
         staticmethod(lambda name: channels[str(name)]),
     )
-
     try:
         worker.init()
         metrics = worker.interact("env", "rollout", "actor")
@@ -653,7 +753,6 @@ def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
         "connect",
         staticmethod(lambda name: channels[str(name)]),
     )
-
     try:
         worker.init()
         metrics = worker.interact("env", "rollout", "actor")
@@ -738,13 +837,54 @@ def test_wm_env_worker_does_not_write_imagined_rollouts_to_replay_by_default(
         "connect",
         staticmethod(lambda name: channels[str(name)]),
     )
-
     try:
         worker.init()
         metrics = worker.interact("env", "rollout", "actor")
 
         assert metrics["env/episodes_completed"] == 1.0
         assert len(replay.episodes) == 0
+        assert len(channels["actor"].puts) == 1
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_skips_transition_building_without_episode_sinks(
+    monkeypatch,
+) -> None:
+    worker = WMEnvWorker(
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([_rollout_batch(_rollout_result())]),
+        "actor": _MemoryChannel(),
+    }
+
+    def fail_transition(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("WMEnvWorker should not build unused imagined episodes")
+
+    monkeypatch.setattr(
+        trajectory_env_worker.BaseTrajectoryEnvWorker,
+        "_make_transition",
+        staticmethod(fail_transition),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        metrics = worker.interact("env", "rollout", "actor")
+
+        assert metrics["env/episodes_completed"] == 1.0
         assert len(channels["actor"].puts) == 1
     finally:
         worker.close()
@@ -893,9 +1033,290 @@ def test_wm_env_worker_batches_slots_with_step_batch(monkeypatch) -> None:
         assert metrics["env/wm_env/actor_put_s"] >= 0.0
         assert metrics["env/wm_env/actor_put_flush_s"] >= 0.0
         assert metrics["env/wm_env/interact_loop_s"] >= 0.0
-        assert len(channels["actor"].puts) == 2
-        assert len(channels["actor"].put_no_wait_calls) == 2
-        assert all(isinstance(item, TrajectoryShard) for _key, item in channels["actor"].puts)
+        assert len(channels["actor"].puts) == 1
+        assert len(channels["actor"].put_no_wait_calls) == 1
+        _key, shard = channels["actor"].puts[0]
+        assert isinstance(shard, TrajectoryShard)
+        assert shard.actions.shape == (1, 2, 2, 3)
+        assert shard.rewards.shape == (1, 2, 2)
+        assert shard.loss_mask is not None
+        assert shard.loss_mask.shape == (1, 2)
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> None:
+    class _ChunkBatchWMEnv:
+        num_envs = 2
+
+        def __init__(self) -> None:
+            self.step_i = [0, 0]
+            self.chunk_calls: list[tuple[list[int], tuple[int, ...]]] = []
+
+        def reset_slot(self, slot_id: int, *, task_id: int = 0, episode_id: int = 0):
+            self.step_i[int(slot_id)] = 0
+            return self._obs(int(slot_id), task_id, episode_id, is_first=True), {}
+
+        def step_slot(self, slot_id: int, action):
+            raise AssertionError("WMEnvWorker should use chunk_step_batch")
+
+        def step_batch(self, actions, env_ids=None):
+            raise AssertionError("WMEnvWorker should use chunk_step_batch")
+
+        def chunk_step_batch(self, actions, env_ids=None):
+            slots = [int(v) for v in env_ids]
+            action_arr = np.asarray(actions, dtype=np.float32)
+            self.chunk_calls.append((slots, tuple(action_arr.shape)))
+            rewards = np.zeros((len(slots), action_arr.shape[1]), dtype=np.float32)
+            terminations = np.zeros_like(rewards, dtype=np.bool_)
+            truncations = np.zeros_like(rewards, dtype=np.bool_)
+            observations = []
+            infos = []
+            for batch_index, slot_id in enumerate(slots):
+                self.step_i[slot_id] += int(action_arr.shape[1])
+                observations.append(
+                    self._obs(
+                        slot_id,
+                        task_id=0,
+                        episode_id=slot_id,
+                        is_first=False,
+                    )
+                )
+                infos.append({"wm_action": action_arr[batch_index, -1]})
+            return observations, rewards, terminations, truncations, infos
+
+        def get_metrics(self, *, reset: bool = False):
+            del reset
+            return {
+                "model_forwards": len(self.chunk_calls),
+                "wm_forward_calls": len(self.chunk_calls),
+            }
+
+        def _obs(self, slot_id: int, task_id: int, episode_id: int, *, is_first: bool):
+            value = self.step_i[slot_id]
+            return {
+                "image": np.zeros((1, 1, 3), dtype=np.uint8),
+                "state": np.full((2,), value, dtype=np.float32),
+                "obs_embedding": np.full((4,), value, dtype=np.float32),
+                "task_id": int(task_id),
+                "episode_id": int(episode_id),
+                "step": int(value),
+                "task_description": f"task {task_id}",
+                "is_first": bool(is_first),
+            }
+
+    env = _ChunkBatchWMEnv()
+    monkeypatch.setattr(
+        trajectory_env_worker,
+        "_build_env_from_cfg",
+        lambda _cfg: env,
+    )
+    worker = WMEnvWorker(
+        env_cfg={"target": "unused"},
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=4,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(
+                    _rollout_result_for_slot(0),
+                    _rollout_result_for_slot(1),
+                ),
+                _rollout_batch(
+                    _rollout_result_for_slot(0),
+                    _rollout_result_for_slot(1),
+                ),
+            ]
+        ),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.BaseTrajectoryEnvWorker,
+        "_build_trajectory_shard",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("chunk_step_batch results should materialize at flush")
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.BaseTrajectoryEnvWorker,
+        "_build_trajectory_shard_from_chunks",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("worker slot chunks should materialize as one batch")
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.BaseTrajectoryEnvWorker,
+        "_env_action_from_policy_action",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no-op action postprocess should pass chunks directly")
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.np,
+        "flatnonzero",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("WoVR-style final-column chunks should not scan per slot")
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.np,
+        "stack",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("worker chunk materialization should preallocate arrays")
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.torch,
+        "stack",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("worker chunk materialization should stack through numpy")
+        ),
+    )
+
+    try:
+        worker.init()
+        metrics = worker.interact("env", "rollout", "actor")
+
+        assert env.chunk_calls == [([0, 1], (2, 2, 3)), ([0, 1], (2, 2, 3))]
+        assert metrics["env/wm_env/model_forwards"] == 2.0
+        assert len(channels["actor"].puts) == 1
+        _key, shard = channels["actor"].puts[0]
+        assert isinstance(shard, TrajectoryShard)
+        assert shard.actions.shape == (2, 2, 2, 3)
+        assert shard.rewards.shape == (2, 2, 2)
+        assert shard.loss_mask is not None
+        assert shard.loss_mask.shape == (2, 2)
+        assert shard.forward_inputs["action"].data_ptr() == shard.actions.data_ptr()
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_batches_openvla_oft_action_postprocess(monkeypatch) -> None:
+    class _ChunkBatchWMEnv:
+        num_envs = 2
+
+        def __init__(self) -> None:
+            self.chunk_actions: list[np.ndarray] = []
+
+        def reset_slot(self, slot_id: int, *, task_id: int = 0, episode_id: int = 0):
+            return self._obs(int(slot_id), task_id, episode_id), {}
+
+        def step_slot(self, slot_id: int, action):
+            raise AssertionError("WMEnvWorker should use chunk_step_batch")
+
+        def step_batch(self, actions, env_ids=None):
+            raise AssertionError("WMEnvWorker should use chunk_step_batch")
+
+        def chunk_step_batch(self, actions, env_ids=None):
+            del env_ids
+            action_arr = np.asarray(actions, dtype=np.float32)
+            self.chunk_actions.append(action_arr.copy())
+            batch_size, chunk_len, _action_dim = action_arr.shape
+            rewards = np.zeros((batch_size, chunk_len), dtype=np.float32)
+            dones = np.zeros((batch_size, chunk_len), dtype=np.bool_)
+            observations = [self._obs(slot_id, 0, slot_id) for slot_id in range(batch_size)]
+            infos = [{"wm_action": action_arr[index, -1]} for index in range(batch_size)]
+            return observations, rewards, dones, dones.copy(), infos
+
+        def get_metrics(self, *, reset: bool = False):
+            del reset
+            return {"model_forwards": len(self.chunk_actions)}
+
+        def _obs(self, slot_id: int, task_id: int, episode_id: int):
+            return {
+                "image": np.zeros((1, 1, 3), dtype=np.uint8),
+                "state": np.zeros((2,), dtype=np.float32),
+                "obs_embedding": np.full((4,), float(slot_id), dtype=np.float32),
+                "task_id": int(task_id),
+                "episode_id": int(episode_id),
+                "step": 0,
+                "task_description": f"task {task_id}",
+            }
+
+    def result_for_slot(slot_id: int, grippers: tuple[float, float]) -> RolloutResultMsg:
+        actions = np.zeros((2, 7), dtype=np.float32)
+        actions[:, :6] = float(slot_id) + 0.1
+        actions[:, -1] = np.asarray(grippers, dtype=np.float32)
+        return RolloutResultMsg(
+            env_rank=0,
+            slot_id=int(slot_id),
+            task_id=0,
+            episode_id=int(slot_id),
+            step=0,
+            actions=actions,
+            prev_logprobs=np.array([0.0], dtype=np.float32),
+            prev_values=None,
+            forward_inputs={
+                "hidden": np.full((1, 4), float(slot_id), dtype=np.float32),
+                "action": actions.reshape(1, 2, 7),
+            },
+            versions={"policy": 1},
+        )
+
+    env = _ChunkBatchWMEnv()
+    monkeypatch.setattr(
+        trajectory_env_worker,
+        "_build_env_from_cfg",
+        lambda _cfg: env,
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker.BaseTrajectoryEnvWorker,
+        "_env_action_from_policy_action",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("openvla_oft chunks should use vectorized postprocess")
+        ),
+    )
+    worker = WMEnvWorker(
+        env_cfg={"target": "unused", "action_postprocess": "openvla_oft"},
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=4,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(
+                    result_for_slot(0, (0.25, 0.75)),
+                    result_for_slot(1, (0.49, 0.51)),
+                ),
+                _rollout_batch(
+                    result_for_slot(0, (0.25, 0.75)),
+                    result_for_slot(1, (0.49, 0.51)),
+                ),
+            ]
+        ),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        worker.interact("env", "rollout", "actor")
+
+        assert len(env.chunk_actions) == 2
+        np.testing.assert_allclose(env.chunk_actions[0][0, :, -1], [1.0, -1.0])
+        np.testing.assert_allclose(env.chunk_actions[0][1, :, -1], [1.0, -1.0])
+        np.testing.assert_allclose(env.chunk_actions[0][0, :, :6], 0.1)
+        np.testing.assert_allclose(env.chunk_actions[0][1, :, :6], 1.1)
     finally:
         worker.close()
 

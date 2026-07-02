@@ -2,3 +2,9 @@
 defaults:
   - override /dreamervla: openvla_onetraj_libero_cotrain_ray
   - _self_
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline
+    wandb_proxy: null

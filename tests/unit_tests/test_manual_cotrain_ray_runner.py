@@ -230,7 +230,7 @@ def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
         }
     )
 
-    assert expected == 1032
+    assert expected == 520
 
 
 def test_runner_uses_wm_rollout_epoch_fallback_without_target() -> None:
@@ -252,6 +252,7 @@ def test_runner_uses_wm_rollout_epoch_fallback_without_target() -> None:
         ("real_rollout_epoch", "_real_rollout_epoch"),
         ("wm_rollout_epoch", "_wm_rollout_epoch"),
         ("wm_rollout_target_trajectories", "_wm_rollout_target_trajectories"),
+        ("wm_rollout_lease_epochs", "_wm_rollout_lease_epochs"),
         ("max_steps_per_rollout_epoch", "_max_steps_per_rollout_epoch"),
         ("wm_rollout_multiplier", "_wm_rollout_multiplier"),
         ("num_action_chunks", "_num_action_chunks"),
@@ -400,8 +401,15 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.manual_cotrain.real_rollout_epoch == 4
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
     assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
+    assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
     assert cfg.manual_cotrain.wm_rollout_multiplier == 1
+    assert list(cfg.runner.logger.logger_backends) == ["tensorboard", "wandb"]
+    assert cfg.runner.logger.wandb_mode == "offline"
+    assert cfg.runner.logger.wandb_proxy is None
+    assert cfg.ray_components.world_model.kwargs.attn_impl == "sdpa"
+    assert cfg.env.wm.cfg.kwargs.inference_dtype == "bf16"
+    assert cfg.env.wm.cfg.kwargs.observation_format == "tensor"
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28
 
@@ -491,6 +499,7 @@ def test_manual_cotrain_tiny_wm_env_num_envs_tracks_envs_per_worker_and_disables
     assert cfg.manual_cotrain.real_rollout_epoch == cfg.manual_cotrain.rollout_epoch
     assert cfg.manual_cotrain.wm_rollout_epoch == cfg.manual_cotrain.rollout_epoch
     assert cfg.manual_cotrain.wm_rollout_target_trajectories is None
+    assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.wm_envs_per_worker == cfg.manual_cotrain.envs_per_worker
     assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.wm_envs_per_worker
     assert list(cfg.runner.logger.logger_backends) == []
@@ -664,7 +673,12 @@ class _FakeEnvGroup:
         )
         return _Ready([{"env/progress_configured": 1.0}])
 
-    def interact(self, env_channel_name: str, rollout_channel_name: str, actor_channel_name: str):
+    def interact(
+        self,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        actor_channel_name: str,
+    ):
         del env_channel_name, rollout_channel_name, actor_channel_name
         if self.events is not None:
             self.events.append("env_interact_start")
@@ -784,6 +798,83 @@ class _RunningRollout:
         return []
 
 
+class _DelayedReady:
+    def __init__(self, value, *, done_after_polls: int = 0):
+        self.value = value
+        self.done_after_polls = int(done_after_polls)
+        self.polls = 0
+        self.waited = False
+
+    def done(self):
+        self.polls += 1
+        return self.polls > self.done_after_polls
+
+    def wait(self):
+        self.waited = True
+        return self.value
+
+
+class _DynamicFakeWMEnvGroup:
+    def __init__(self, *, worker_count: int, slow_rank: int = 1) -> None:
+        self.workers = [object() for _ in range(worker_count)]
+        self.selected: tuple[int, ...] | None = None
+        self.configure_calls: list[tuple[int, int]] = []
+        self.interact_calls: list[int] = []
+        self.slow_rank = int(slow_rank)
+
+    def execute_on(self, *ranks: int):
+        self.selected = tuple(int(rank) for rank in ranks)
+        return self
+
+    def configure_rollout_epoch(self, rollout_epoch: int):
+        if self.selected is None or len(self.selected) != 1:
+            raise AssertionError("configure_rollout_epoch must target one rank")
+        self.configure_calls.append((int(self.selected[0]), int(rollout_epoch)))
+        return _Ready([{"env/rollout_epoch": float(rollout_epoch)}])
+
+    def interact(
+        self,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        actor_channel_name: str,
+    ):
+        del env_channel_name, rollout_channel_name, actor_channel_name
+        if self.selected is None or len(self.selected) != 1:
+            raise AssertionError("interact must target one rank")
+        rank = int(self.selected[0])
+        self.interact_calls.append(rank)
+        self.selected = None
+        return _DelayedReady(
+            {"env/trajectory_shards": 2.0, "env/steps": 4.0},
+            done_after_polls=6 if rank == self.slow_rank else 0,
+        )
+
+
+def test_dynamic_wm_leases_let_fast_worker_consume_more_imagine_budget() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=2, wm_rollout_target_trajectories=12)
+    cfg.manual_cotrain.wm_rollout_lease_epochs = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+    wm_env = _DynamicFakeWMEnvGroup(worker_count=2, slow_rank=1)
+
+    metrics = runner._wait_env_metrics_with_dynamic_wm_leases(
+        real_env_results=[_Ready({"env/trajectory_shards": 1.0, "env/steps": 2.0})],
+        wm_env=wm_env,
+        rollout_result=_RunningRollout(),
+        env_channel_name="env",
+        rollout_channel_name="rollout",
+        actor_channel_name="actor",
+        timeout_s=10.0,
+        poll_s=0.0,
+        progress=None,
+    )
+
+    assert len(wm_env.interact_calls) == 6
+    assert wm_env.interact_calls.count(0) > wm_env.interact_calls.count(1)
+    assert all(epoch == 1 for _rank, epoch in wm_env.configure_calls)
+    assert metrics["env/trajectory_shards"] == 13.0
+    assert metrics["env/steps"] == 26.0
+
+
 def test_wait_env_metrics_surfaces_rollout_failure_before_env_wait() -> None:
     with pytest.raises(RuntimeError, match="rank0 failed key=0:0"):
         _wait_env_metrics_with_rollout_guard(
@@ -885,6 +976,22 @@ def test_wait_env_metrics_timeout_includes_manual_progress(tmp_path) -> None:
     assert calls[-1][:4] == (3, 8, "manual-cotrain-env", "chunk")
     assert calls[-1][4] is not None
     assert "global_step=2" in calls[-1][4]
+
+
+def test_prepare_manual_cotrain_progress_dir_clears_stale_json(tmp_path) -> None:
+    runner = runners.ManualCotrainRayRunner(_cfg(out_dir=str(tmp_path / "run")))
+    progress_dir = runner._manual_cotrain_progress_dir(global_step=3)
+    progress_dir.mkdir(parents=True)
+    stale = progress_dir / "real_env_0.json"
+    stale.write_text("{}", encoding="utf-8")
+    keep = progress_dir / "notes.txt"
+    keep.write_text("keep", encoding="utf-8")
+
+    prepared = runner._prepare_manual_cotrain_progress_dir(global_step=3)
+
+    assert prepared == progress_dir
+    assert not stale.exists()
+    assert keep.read_text(encoding="utf-8") == "keep"
 
 
 def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> None:

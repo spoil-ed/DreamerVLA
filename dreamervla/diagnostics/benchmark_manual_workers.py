@@ -28,7 +28,13 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.train import PROJECT_ROOT
-from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg
+import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
+from dreamervla.workers.cotrain.messages import (
+    ObservationMsg,
+    RolloutResultBatchMsg,
+    RolloutResultMsg,
+    rollout_result_batch_to_messages,
+)
 from dreamervla.workers.env.trajectory_env_worker import WMEnvWorker
 from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRolloutWorker
 
@@ -194,6 +200,48 @@ class SyntheticBatchWMEnv:
         obs, rewards, terms, truncs, infos = self.step_batch([action], env_ids=[int(slot_id)])
         return obs[0], rewards[0], terms[0], truncs[0], infos[0]
 
+    def chunk_step_batch(
+        self,
+        actions: Any,
+        env_ids: list[int] | tuple[int, ...] | None = None,
+    ) -> tuple[list[dict[str, Any]], np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+        slots = [int(v) for v in (range(self.num_envs) if env_ids is None else env_ids)]
+        action_arr = np.asarray(actions, dtype=np.float32).reshape(
+            len(slots),
+            -1,
+            self.action_dim,
+        )
+        chunk_len = int(action_arr.shape[1])
+        self.batch_calls.append((slots, tuple(int(v) for v in action_arr.shape)))
+        start = time.perf_counter()
+        if self._work_tensor is not None:
+            work = self._work_tensor
+            _ = work @ work.T
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+        self.forward_time_s += time.perf_counter() - start
+
+        rewards = np.zeros((len(slots), chunk_len), dtype=np.float32)
+        terminations = np.zeros((len(slots), chunk_len), dtype=np.bool_)
+        truncations = np.zeros((len(slots), chunk_len), dtype=np.bool_)
+        obs, infos = [], []
+        offsets = np.arange(1, chunk_len + 1, dtype=np.int64)
+        for index, slot in enumerate(slots):
+            start_step = int(self.steps[slot])
+            elapsed = start_step + offsets
+            done_steps = elapsed >= self.horizon
+            rewards[index] = done_steps.astype(np.float32)
+            terminations[index] = done_steps
+            self.steps[slot] = int(start_step + chunk_len)
+            obs.append(self._obs(slot, is_first=False))
+            infos.append(
+                {
+                    "success": bool(done_steps.any()),
+                    "wm_action": action_arr[index, -1].reshape(-1)[: self.action_dim],
+                }
+            )
+        return obs, rewards, terminations, truncations, infos
+
     def make_transition(
         self,
         obs: dict[str, Any],
@@ -311,6 +359,33 @@ class GpuSampler:
             self._stop.wait(self.interval_s)
 
 
+class _ReadyPut:
+    def wait(self) -> None:
+        return None
+
+
+class _MemoryChannel:
+    def __init__(self, initial: list[Any] | None = None) -> None:
+        self.queue = list(initial or [])
+        self.puts: list[tuple[str, Any]] = []
+        self.put_no_wait_calls: list[tuple[str, Any]] = []
+        self.gets: list[str] = []
+
+    def put(self, item: Any, *, key: str = "default") -> None:
+        self.puts.append((str(key), item))
+
+    def put_no_wait(self, item: Any, *, key: str = "default") -> _ReadyPut:
+        self.put_no_wait_calls.append((str(key), item))
+        self.put(item, key=key)
+        return _ReadyPut()
+
+    def get(self, *, key: str = "default") -> Any:
+        self.gets.append(str(key))
+        if not self.queue:
+            raise RuntimeError(f"channel {key!r} is empty")
+        return self.queue.pop(0)
+
+
 def run_wm_env_direct_benchmark(
     *,
     env_cfg: Mapping[str, Any],
@@ -381,6 +456,91 @@ def run_wm_env_direct_benchmark(
             **sampler.summary(),
         }
     finally:
+        worker.close()
+    _write_json_if_requested(metrics, output_json)
+    return metrics
+
+
+def run_wm_env_interact_benchmark(
+    *,
+    env_cfg: Mapping[str, Any],
+    num_slots: int,
+    chunk_steps: int,
+    action_dim: int,
+    chunk_size: int,
+    latent_dim: int,
+    lang_dim: int = 0,
+    proprio_dim: int = 0,
+    output_json: str | Path | None = None,
+    gpu_sample_interval_s: float = 0.5,
+) -> dict[str, Any]:
+    """Run WMEnvWorker.interact with in-memory channels and synthetic rollout batches."""
+
+    rank = 0
+    rollout_batches = []
+    for step in range(int(chunk_steps)):
+        rollout_batches.append(
+            RolloutResultBatchMsg(
+                env_rank=rank,
+                results=[
+                    build_rollout_result(
+                        build_synthetic_observation(
+                            env_rank=rank,
+                            slot_id=slot_id,
+                            step=step,
+                            latent_dim=int(latent_dim),
+                            lang_dim=int(lang_dim),
+                            proprio_dim=int(proprio_dim),
+                        ),
+                        action_dim=int(action_dim),
+                        chunk_size=int(chunk_size),
+                    )
+                    for slot_id in range(int(num_slots))
+                ],
+            )
+        )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel(rollout_batches),
+        "actor": _MemoryChannel(),
+    }
+    worker = WMEnvWorker(
+        env_cfg=dict(env_cfg),
+        num_slots=int(num_slots),
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=int(chunk_steps) * int(chunk_size),
+        num_action_chunks=int(chunk_size),
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    start = time.perf_counter()
+    worker.init()
+    init_s = time.perf_counter() - start
+    original_connect = trajectory_env_worker.Channel.connect
+    try:
+        trajectory_env_worker.Channel.connect = staticmethod(
+            lambda name: channels[str(name)]
+        )
+        with GpuSampler(interval_s=gpu_sample_interval_s) as sampler:
+            loop_start = time.perf_counter()
+            interact_metrics = worker.interact("env", "rollout", "actor")
+            loop_s = time.perf_counter() - loop_start
+        metrics: dict[str, Any] = {
+            "worker/component": "wm-env-interact",
+            "worker/env_class": type(worker.envs[0]).__name__ if worker.envs else "",
+            "worker/init_s": float(init_s),
+            "worker/loop_s": float(loop_s),
+            "worker/chunk_steps": int(chunk_steps),
+            "worker/slot_count": int(num_slots),
+            "worker/action_chunk_size": int(chunk_size),
+            "worker/action_dim": int(action_dim),
+            "worker/trajectory_shards": int(len(channels["actor"].puts)),
+            "worker/chunk_steps_per_s": float(int(chunk_steps) / max(loop_s, 1e-9)),
+            **interact_metrics,
+            **sampler.summary(),
+        }
+    finally:
+        trajectory_env_worker.Channel.connect = original_connect
         worker.close()
     _write_json_if_requested(metrics, output_json)
     return metrics
@@ -488,13 +648,15 @@ def run_pair_direct_benchmark(
             rollout_s = 0.0
             wm_s = 0.0
             for _step in range(int(chunk_steps)):
-                step_results = []
-                for obs in obs_msgs:
-                    t0 = time.perf_counter()
-                    result = rollout.generate_once(obs)
-                    rollout_s += time.perf_counter() - t0
-                    step_results.append(result)
-                    generated += 1
+                obs_batch = wm_env._observation_batch_msg(obs_msgs)
+                t0 = time.perf_counter()
+                step_result_batch = rollout.generate_result_batch(
+                    obs_batch.observations,
+                    batched_obs=obs_batch.batched_obs,
+                )
+                rollout_s += time.perf_counter() - t0
+                generated += len(step_result_batch.slot_ids or step_result_batch.results)
+                step_results = rollout_result_batch_to_messages(step_result_batch)
                 t0 = time.perf_counter()
                 shards.extend(wm_env._apply_wm_rollout_results_batch(step_results))
                 wm_s += time.perf_counter() - t0
@@ -555,6 +717,19 @@ def main(argv: list[str] | None = None) -> None:
             output_json=args.output_json,
             gpu_sample_interval_s=args.gpu_sample_interval_s,
         )
+    elif args.component == "wm-env-interact":
+        metrics = run_wm_env_interact_benchmark(
+            env_cfg=_env_cfg(args, cfg, dims),
+            num_slots=args.num_slots,
+            chunk_steps=args.chunk_steps,
+            action_dim=dims["action_dim"],
+            chunk_size=dims["chunk_size"],
+            latent_dim=dims["latent_dim"],
+            lang_dim=dims["lang_dim"],
+            proprio_dim=dims["proprio_dim"],
+            output_json=args.output_json,
+            gpu_sample_interval_s=args.gpu_sample_interval_s,
+        )
     elif args.component == "rollout":
         policy_cfg, train_cfg, encoder_cfg = _rollout_cfg(args, cfg, dims)
         metrics = run_rollout_direct_benchmark(
@@ -588,7 +763,11 @@ def main(argv: list[str] | None = None) -> None:
 
 def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--component", choices=("wm-env", "rollout", "pair", "all"), required=True)
+    parser.add_argument(
+        "--component",
+        choices=("wm-env", "wm-env-interact", "rollout", "pair", "all"),
+        required=True,
+    )
     parser.add_argument("--profile", choices=("tiny", "config"), default="tiny")
     parser.add_argument("--num-slots", type=int, default=8)
     parser.add_argument("--chunk-steps", type=int, default=32)

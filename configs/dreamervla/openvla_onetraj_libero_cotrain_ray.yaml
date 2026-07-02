@@ -22,6 +22,7 @@ manual_cotrain:
   real_rollout_epoch: 4
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
   wm_rollout_target_trajectories: 1024
+  wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
@@ -152,6 +153,8 @@ env:
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
         num_envs: ${manual_cotrain.wm_envs_per_worker}
         device: cuda
+        inference_dtype: bf16
+        observation_format: tensor
 
 replay:
   cfg:

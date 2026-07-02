@@ -573,6 +573,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
         cfg,
         "manual_cotrain.wm_rollout_target_trajectories",
     )
+    _require_positive_int_if_present(cfg, "manual_cotrain.wm_rollout_lease_epochs")
     _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")

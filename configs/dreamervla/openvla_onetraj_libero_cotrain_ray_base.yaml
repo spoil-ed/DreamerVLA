@@ -73,6 +73,7 @@ ray_components:
       depth: 6
       heads: 16
       dim_head: 128
+      attn_impl: sdpa
       mlp_dim: 2048
       dropout: 0.1
       num_pred: 1

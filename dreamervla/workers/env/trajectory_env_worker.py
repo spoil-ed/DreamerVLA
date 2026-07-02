@@ -7,6 +7,7 @@ import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,15 @@ from dreamervla.workers.cotrain.messages import (
     RolloutResultBatchMsg,
     RolloutResultMsg,
     TrajectoryShard,
+    _pad_step_batch,
     _shard_loss_mask,
     as_tensor,
+    rollout_result_batch_to_messages,
 )
 
 _ACTOR_PUT_FLUSH_EVERY = 64
+_DIRECT_HIDDEN_OBS_KEYS = ("obs_embedding", "hidden", "latent")
+_BATCHED_OBS_SIDECAR_KEYS = ("lang_emb",)
 
 
 def _plain_dict(value: Any) -> dict[str, Any]:
@@ -100,6 +105,77 @@ def _as_action_chunk(value: Any, *, action_dim: int | None = None) -> np.ndarray
     return np.asarray(actions, dtype=np.float32)
 
 
+def _batch_action_chunks(action_chunks: list[np.ndarray]) -> np.ndarray:
+    if not action_chunks:
+        raise ValueError("cannot batch an empty action chunk list")
+    first = np.asarray(action_chunks[0], dtype=np.float32)
+    batch = np.empty((len(action_chunks), *first.shape), dtype=np.float32)
+    batch[0] = first
+    for index, action_chunk in enumerate(action_chunks[1:], start=1):
+        chunk = np.asarray(action_chunk, dtype=np.float32)
+        if tuple(int(v) for v in chunk.shape) != tuple(int(v) for v in first.shape):
+            raise ValueError("rollout action chunks must share shape for batching")
+        batch[index] = chunk
+    return batch
+
+
+def _batched_hidden_payload_from_messages(
+    messages: list[ObservationMsg],
+) -> tuple[dict[str, Any] | None, list[ObservationMsg]]:
+    if not messages:
+        return None, []
+    for key in _DIRECT_HIDDEN_OBS_KEYS:
+        if not all(key in message.obs for message in messages):
+            continue
+        values = [message.obs[key] for message in messages]
+        batched_value = _batch_same_shape_obs_values(values)
+        if batched_value is None:
+            continue
+        batched_obs = {key: batched_value}
+        stripped_keys = {key}
+        for sidecar_key in _BATCHED_OBS_SIDECAR_KEYS:
+            if not all(sidecar_key in message.obs for message in messages):
+                continue
+            sidecar_values = [message.obs[sidecar_key] for message in messages]
+            sidecar_batch = _batch_same_shape_obs_values(sidecar_values)
+            if sidecar_batch is None:
+                continue
+            batched_obs[sidecar_key] = sidecar_batch
+            stripped_keys.add(sidecar_key)
+        stripped = []
+        for message in messages:
+            obs = dict(message.obs)
+            for stripped_key in stripped_keys:
+                obs.pop(stripped_key, None)
+            stripped.append(replace(message, obs=obs))
+        return batched_obs, stripped
+    return None, list(messages)
+
+
+def _batch_same_shape_obs_values(values: list[Any]) -> Any | None:
+    shapes = []
+    for value in values:
+        if isinstance(value, torch.Tensor):
+            shapes.append(tuple(int(dim) for dim in value.shape))
+        else:
+            shapes.append(tuple(int(dim) for dim in np.asarray(_as_numpy(value)).shape))
+    if len(set(shapes)) != 1:
+        return None
+    shape = shapes[0]
+    if all(isinstance(value, torch.Tensor) for value in values):
+        return torch.cat(
+            [value.detach().cpu().reshape(1, *shape) for value in values],
+            dim=0,
+        )
+    return np.concatenate(
+        [
+            np.asarray(_as_numpy(value), dtype=np.float32).reshape(1, *shape)
+            for value in values
+        ],
+        axis=0,
+    )
+
+
 def _one_chunk_batch(
     value: Any,
     *,
@@ -113,6 +189,70 @@ def _one_chunk_batch(
     if int(tensor.shape[0]) == 1:
         return tensor.reshape(1, 1, *tensor.shape[1:]).detach().cpu()
     return tensor.reshape(1, 1, *tensor.shape).detach().cpu()
+
+
+def _numpy_dtype_for_torch_dtype(dtype: torch.dtype | None) -> np.dtype | None:
+    if dtype is None:
+        return None
+    if dtype == torch.float32:
+        return np.dtype(np.float32)
+    if dtype == torch.float64:
+        return np.dtype(np.float64)
+    if dtype == torch.float16:
+        return np.dtype(np.float16)
+    if dtype == torch.long:
+        return np.dtype(np.int64)
+    if dtype == torch.int32:
+        return np.dtype(np.int32)
+    if dtype == torch.bool:
+        return np.dtype(np.bool_)
+    return None
+
+
+def _chunk_value_array(
+    value: Any,
+    *,
+    dtype: torch.dtype | None = None,
+) -> np.ndarray:
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach()
+        if dtype is not None and dtype != torch.bfloat16:
+            tensor = tensor.to(dtype=dtype)
+        if tensor.dtype == torch.bfloat16:
+            tensor = tensor.to(dtype=torch.float32)
+        array = tensor.cpu().numpy()
+    else:
+        array = np.asarray(value)
+    np_dtype = _numpy_dtype_for_torch_dtype(dtype)
+    if np_dtype is not None:
+        array = array.astype(np_dtype, copy=False)
+    if array.ndim > 0 and int(array.shape[0]) == 1:
+        array = np.squeeze(array, axis=0)
+    return np.asarray(array)
+
+
+def _cpu_tensor(value: Any, *, dtype: torch.dtype | None = None) -> torch.Tensor:
+    tensor = value.detach() if isinstance(value, torch.Tensor) else as_tensor(value)
+    if dtype is not None:
+        tensor = tensor.to(dtype=dtype)
+    return tensor.cpu()
+
+
+def _loss_mask_from_dones(dones: torch.Tensor) -> torch.Tensor:
+    steps = int(dones.shape[0])
+    batch_size = int(dones.shape[1])
+    if steps <= 0:
+        return torch.zeros((0, batch_size), dtype=torch.float32)
+    if dones.ndim > 2:
+        done_by_step = dones.reshape(steps, batch_size, -1).any(dim=2)
+    else:
+        done_by_step = dones.reshape(steps, batch_size)
+    mask = torch.zeros((steps, batch_size), dtype=torch.float32)
+    alive = torch.ones((batch_size,), dtype=torch.bool)
+    for step in range(steps):
+        mask[step] = alive.to(dtype=torch.float32)
+        alive = alive & ~done_by_step[step]
+    return mask
 
 
 def _concat_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryShard:
@@ -189,6 +329,170 @@ def _concat_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryShard:
             for key in sorted(version_keys)
         },
         loss_mask=torch.cat(loss_masks, dim=0),
+    )
+
+
+def _concat_uniform_slot_shards(shards: list[TrajectoryShard]) -> TrajectoryShard:
+    if not shards:
+        raise ValueError("cannot concatenate an empty trajectory shard buffer")
+    if len(shards) == 1:
+        return shards[0]
+    first = shards[0]
+    forward_keys = set(first.forward_inputs)
+    version_keys = set(first.versions)
+    has_prev_values = first.prev_values is not None
+    if any(
+        int(shard.env_rank) != int(first.env_rank)
+        or int(shard.slot_id) != int(first.slot_id)
+        or int(shard.task_id) != int(first.task_id)
+        or set(shard.forward_inputs) != forward_keys
+        or set(shard.versions) != version_keys
+        or (shard.prev_values is not None) != has_prev_values
+        or shard.loss_mask is not None
+        for shard in shards
+    ):
+        return _concat_trajectory_shards(shards)
+
+    actions = torch.cat([_cpu_tensor(shard.actions) for shard in shards], dim=0)
+    rewards = torch.cat(
+        [_cpu_tensor(shard.rewards, dtype=torch.float32) for shard in shards],
+        dim=0,
+    )
+    dones = torch.cat(
+        [_cpu_tensor(shard.dones, dtype=torch.bool) for shard in shards],
+        dim=0,
+    )
+    prev_logprobs = torch.cat(
+        [_cpu_tensor(shard.prev_logprobs, dtype=torch.float32) for shard in shards],
+        dim=0,
+    )
+    prev_values = None
+    if has_prev_values:
+        prev_values = torch.cat(
+            [
+                _cpu_tensor(shard.prev_values, dtype=torch.float32)
+                for shard in shards
+                if shard.prev_values is not None
+            ],
+            dim=0,
+        )
+    return TrajectoryShard(
+        env_rank=int(first.env_rank),
+        slot_id=int(first.slot_id),
+        task_id=int(first.task_id),
+        episode_ids=list(first.episode_ids),
+        actions=actions,
+        rewards=rewards,
+        dones=dones,
+        prev_logprobs=prev_logprobs,
+        prev_values=prev_values,
+        forward_inputs={
+            key: torch.cat(
+                [_cpu_tensor(shard.forward_inputs[key]) for shard in shards],
+                dim=0,
+            )
+            for key in sorted(forward_keys)
+        },
+        versions={
+            key: torch.cat(
+                [_cpu_tensor(shard.versions[key], dtype=torch.long) for shard in shards],
+                dim=0,
+            )
+            for key in sorted(version_keys)
+        },
+        loss_mask=_loss_mask_from_dones(dones),
+    )
+
+
+def _concat_worker_slot_shards(shards: list[TrajectoryShard]) -> TrajectoryShard:
+    if not shards:
+        raise ValueError("cannot concatenate an empty trajectory shard buffer")
+    if len(shards) == 1:
+        return shards[0]
+    first = shards[0]
+    forward_keys = set(first.forward_inputs)
+    version_keys = set(first.versions)
+    has_prev_values = first.prev_values is not None
+    for shard in shards:
+        if int(shard.env_rank) != int(first.env_rank):
+            raise ValueError("worker trajectory shards must share env_rank")
+        if int(shard.task_id) != int(first.task_id):
+            raise ValueError("worker trajectory shards must share task_id")
+        if set(shard.forward_inputs) != forward_keys:
+            raise ValueError("worker trajectory shards must share forward_input keys")
+        if set(shard.versions) != version_keys:
+            raise ValueError("worker trajectory shards must share version keys")
+        if (shard.prev_values is not None) != has_prev_values:
+            raise ValueError("worker trajectory shards must consistently include values")
+
+    steps_by_shard = [int(as_tensor(shard.actions).shape[0]) for shard in shards]
+    batch_sizes = [int(as_tensor(shard.actions).shape[1]) for shard in shards]
+    max_steps = max(steps_by_shard)
+    prev_values = None
+    if has_prev_values:
+        prev_values = torch.cat(
+            [
+                _pad_step_batch(shard.prev_values, max_steps).float()
+                for shard in shards
+                if shard.prev_values is not None
+            ],
+            dim=1,
+        )
+    return TrajectoryShard(
+        env_rank=int(first.env_rank),
+        slot_id=int(first.slot_id),
+        task_id=int(first.task_id),
+        episode_ids=[int(ep) for shard in shards for ep in shard.episode_ids],
+        actions=torch.cat(
+            [_pad_step_batch(shard.actions, max_steps) for shard in shards],
+            dim=1,
+        ),
+        rewards=torch.cat(
+            [_pad_step_batch(shard.rewards, max_steps).float() for shard in shards],
+            dim=1,
+        ),
+        dones=torch.cat(
+            [
+                _pad_step_batch(shard.dones, max_steps, pad_value=True).bool()
+                for shard in shards
+            ],
+            dim=1,
+        ),
+        prev_logprobs=torch.cat(
+            [
+                _pad_step_batch(shard.prev_logprobs, max_steps).float()
+                for shard in shards
+            ],
+            dim=1,
+        ),
+        prev_values=prev_values,
+        forward_inputs={
+            key: torch.cat(
+                [
+                    _pad_step_batch(shard.forward_inputs[key], max_steps)
+                    for shard in shards
+                ],
+                dim=1,
+            )
+            for key in sorted(forward_keys)
+        },
+        versions={
+            key: torch.cat(
+                [
+                    _pad_step_batch(shard.versions[key], max_steps).long()
+                    for shard in shards
+                ],
+                dim=1,
+            )
+            for key in sorted(version_keys)
+        },
+        loss_mask=torch.cat(
+            [
+                _shard_loss_mask(shard, max_steps, batch_size)
+                for shard, batch_size in zip(shards, batch_sizes, strict=True)
+            ],
+            dim=1,
+        ),
     )
 
 
@@ -299,6 +603,18 @@ def _make_env_transition(
     }, obs)
 
 
+@dataclass(frozen=True)
+class _TrajectoryChunk:
+    """Internal raw trajectory chunk buffered before actor-channel emission."""
+
+    result: RolloutResultMsg
+    slot_id: int
+    actions_np: np.ndarray
+    rewards: np.ndarray
+    dones: np.ndarray
+    action_dim: int
+
+
 class BaseTrajectoryEnvWorker(Worker):
     """EnvWorker that turns action chunks into step-major trajectory shards."""
 
@@ -352,7 +668,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._episodes_by_slot: list[list[dict[str, Any]]] = [
             [] for _ in range(self.num_slots)
         ]
-        self._actor_shards_by_slot: list[list[TrajectoryShard]] = [
+        self._actor_shards_by_slot: list[list[TrajectoryShard | _TrajectoryChunk]] = [
             [] for _ in range(self.num_slots)
         ]
         self._episode_ids_by_slot: list[int] = [0 for _ in range(self.num_slots)]
@@ -535,12 +851,15 @@ class BaseTrajectoryEnvWorker(Worker):
         dones: np.ndarray,
         action_dim: int,
     ) -> TrajectoryShard:
-        action_pad = np.zeros(
-            (self.num_action_chunks, action_dim),
-            dtype=np.float32,
-        )
         chunk_len = int(actions_np.shape[0])
-        action_pad[:chunk_len] = actions_np
+        if chunk_len == int(self.num_action_chunks):
+            action_pad = np.asarray(actions_np, dtype=np.float32)
+        else:
+            action_pad = np.zeros(
+                (self.num_action_chunks, action_dim),
+                dtype=np.float32,
+            )
+            action_pad[:chunk_len] = actions_np
         action_tensor = torch.as_tensor(action_pad, dtype=torch.float32).view(
             1,
             1,
@@ -582,6 +901,236 @@ class BaseTrajectoryEnvWorker(Worker):
                 str(key): _one_chunk_batch(value, dtype=torch.long)
                 for key, value in dict(result.versions).items()
             },
+        )
+
+    def _build_trajectory_shard_from_chunks(
+        self,
+        chunks: list[_TrajectoryChunk],
+    ) -> TrajectoryShard:
+        if not chunks:
+            raise ValueError("cannot build a trajectory shard from no chunks")
+        first = chunks[0]
+        result = first.result
+        action_dim = int(first.action_dim)
+        action_blocks: list[np.ndarray] = []
+        reward_blocks: list[np.ndarray] = []
+        done_blocks: list[np.ndarray] = []
+        prev_logprobs: list[torch.Tensor] = []
+        prev_values: list[torch.Tensor] = []
+        has_prev_values = result.prev_values is not None
+        forward_keys = set(result.forward_inputs)
+        version_keys = set(result.versions)
+        for chunk in chunks:
+            if (
+                int(chunk.result.env_rank) != int(result.env_rank)
+                or int(chunk.slot_id) != int(first.slot_id)
+                or int(chunk.result.task_id) != int(result.task_id)
+                or int(chunk.action_dim) != action_dim
+                or set(chunk.result.forward_inputs) != forward_keys
+                or set(chunk.result.versions) != version_keys
+                or (chunk.result.prev_values is not None) != has_prev_values
+            ):
+                fallback = [
+                    self._build_trajectory_shard(
+                        chunk.result,
+                        actions_np=chunk.actions_np,
+                        rewards=chunk.rewards,
+                        dones=chunk.dones,
+                        action_dim=int(chunk.action_dim),
+                    )
+                    for chunk in chunks
+                ]
+                return _concat_uniform_slot_shards(fallback)
+            chunk_len = int(chunk.actions_np.shape[0])
+            if chunk_len == int(self.num_action_chunks):
+                action_pad = np.asarray(chunk.actions_np, dtype=np.float32)
+            else:
+                action_pad = np.zeros(
+                    (self.num_action_chunks, action_dim),
+                    dtype=np.float32,
+                )
+                action_pad[:chunk_len] = chunk.actions_np
+            action_blocks.append(action_pad)
+            reward_blocks.append(np.asarray(chunk.rewards, dtype=np.float32))
+            done_blocks.append(np.asarray(chunk.dones, dtype=np.bool_))
+            prev_logprobs.append(
+                _one_chunk_batch(chunk.result.prev_logprobs, dtype=torch.float32)
+            )
+            if has_prev_values and chunk.result.prev_values is not None:
+                prev_values.append(
+                    _one_chunk_batch(chunk.result.prev_values, dtype=torch.float32)
+                )
+
+        actions = torch.as_tensor(
+            np.stack(action_blocks, axis=0),
+            dtype=torch.float32,
+        ).view(len(chunks), 1, self.num_action_chunks, action_dim)
+        rewards = torch.as_tensor(
+            np.stack(reward_blocks, axis=0),
+            dtype=torch.float32,
+        ).view(len(chunks), 1, self.num_action_chunks)
+        dones = torch.as_tensor(
+            np.stack(done_blocks, axis=0),
+            dtype=torch.bool,
+        ).view(len(chunks), 1, self.num_action_chunks)
+        return TrajectoryShard(
+            env_rank=int(result.env_rank),
+            slot_id=int(first.slot_id),
+            task_id=int(result.task_id),
+            episode_ids=[int(result.episode_id)],
+            actions=actions,
+            rewards=rewards,
+            dones=dones,
+            prev_logprobs=torch.cat(prev_logprobs, dim=0),
+            prev_values=torch.cat(prev_values, dim=0) if has_prev_values else None,
+            forward_inputs={
+                str(key): torch.cat(
+                    [_one_chunk_batch(chunk.result.forward_inputs[key]) for chunk in chunks],
+                    dim=0,
+                )
+                for key in sorted(forward_keys)
+            },
+            versions={
+                str(key): torch.cat(
+                    [
+                        _one_chunk_batch(
+                            chunk.result.versions[key],
+                            dtype=torch.long,
+                        )
+                        for chunk in chunks
+                    ],
+                    dim=0,
+                )
+                for key in sorted(version_keys)
+            },
+            loss_mask=_loss_mask_from_dones(dones),
+        )
+
+    def _build_worker_trajectory_shard_from_slot_chunks(
+        self,
+        slot_chunks: list[list[_TrajectoryChunk]],
+    ) -> TrajectoryShard:
+        if not slot_chunks:
+            raise ValueError("cannot build a worker trajectory shard from no slots")
+        first_chunks = slot_chunks[0]
+        if not first_chunks:
+            raise ValueError("cannot build a worker trajectory shard from empty chunks")
+        chunk_count = len(first_chunks)
+        first = first_chunks[0]
+        result = first.result
+        action_dim = int(first.action_dim)
+        has_prev_values = result.prev_values is not None
+        forward_keys = set(result.forward_inputs)
+        version_keys = set(result.versions)
+        for chunks in slot_chunks:
+            if len(chunks) != chunk_count:
+                raise ValueError("worker slot chunk buffers must have matching lengths")
+            for chunk in chunks:
+                if (
+                    int(chunk.result.env_rank) != int(result.env_rank)
+                    or int(chunk.result.task_id) != int(result.task_id)
+                    or int(chunk.action_dim) != action_dim
+                    or set(chunk.result.forward_inputs) != forward_keys
+                    or set(chunk.result.versions) != version_keys
+                    or (chunk.result.prev_values is not None) != has_prev_values
+                ):
+                    raise ValueError("worker slot chunk buffers are not batch-compatible")
+
+        batch_size = len(slot_chunks)
+        actions_np = np.empty(
+            (chunk_count, batch_size, self.num_action_chunks, action_dim),
+            dtype=np.float32,
+        )
+        rewards_np = np.empty(
+            (chunk_count, batch_size, self.num_action_chunks),
+            dtype=np.float32,
+        )
+        dones_np = np.empty(
+            (chunk_count, batch_size, self.num_action_chunks),
+            dtype=np.bool_,
+        )
+        for step in range(chunk_count):
+            for slot_index, chunks in enumerate(slot_chunks):
+                chunk = chunks[step]
+                chunk_len = int(chunk.actions_np.shape[0])
+                if chunk_len == int(self.num_action_chunks):
+                    actions_np[step, slot_index] = np.asarray(
+                        chunk.actions_np,
+                        dtype=np.float32,
+                    )
+                else:
+                    actions_np[step, slot_index].fill(0.0)
+                    actions_np[step, slot_index, :chunk_len] = chunk.actions_np
+                rewards_np[step, slot_index] = np.asarray(
+                    chunk.rewards,
+                    dtype=np.float32,
+                )
+                dones_np[step, slot_index] = np.asarray(chunk.dones, dtype=np.bool_)
+
+        actions = torch.as_tensor(actions_np, dtype=torch.float32)
+        rewards = torch.as_tensor(rewards_np, dtype=torch.float32)
+        dones = torch.as_tensor(dones_np, dtype=torch.bool)
+
+        def stack_result_value(
+            getter: Any,
+            *,
+            dtype: torch.dtype | None = None,
+        ) -> torch.Tensor:
+            values = [
+                _chunk_value_array(getter(chunks[step].result), dtype=dtype)
+                for step in range(chunk_count)
+                for chunks in slot_chunks
+            ]
+            value_shape = values[0].shape
+            if value_shape:
+                stacked = np.concatenate(
+                    [value.reshape(1, *value_shape) for value in values],
+                    axis=0,
+                )
+            else:
+                stacked = np.asarray(values)
+            tensor = torch.as_tensor(
+                stacked.reshape(chunk_count, batch_size, *value_shape)
+            )
+            return tensor.to(dtype=dtype) if dtype is not None else tensor
+
+        prev_values = None
+        if has_prev_values:
+            prev_values = stack_result_value(
+                lambda result: result.prev_values,
+                dtype=torch.float32,
+            )
+        return TrajectoryShard(
+            env_rank=int(result.env_rank),
+            slot_id=int(first.slot_id),
+            task_id=int(result.task_id),
+            episode_ids=[int(chunks[0].result.episode_id) for chunks in slot_chunks],
+            actions=actions,
+            rewards=rewards,
+            dones=dones,
+            prev_logprobs=stack_result_value(
+                lambda result: result.prev_logprobs,
+                dtype=torch.float32,
+            ),
+            prev_values=prev_values,
+            forward_inputs={
+                str(key): (
+                    actions
+                    if str(key) == "action"
+                    else stack_result_value(
+                        lambda result, key=key: result.forward_inputs[key]
+                    )
+                )
+                for key in sorted(forward_keys)
+            },
+            versions={
+                str(key): stack_result_value(
+                    lambda result, key=key: result.versions[key],
+                    dtype=torch.long,
+                )
+                for key in sorted(version_keys)
+            },
+            loss_mask=_loss_mask_from_dones(dones),
         )
 
     def interact(
@@ -843,10 +1392,33 @@ class BaseTrajectoryEnvWorker(Worker):
     def _reset_actor_shard_buffers(self) -> None:
         self._actor_shards_by_slot = [[] for _ in range(self.num_slots)]
 
-    def _buffer_actor_shard(self, shard: TrajectoryShard) -> None:
+    def _buffer_actor_shard(self, shard: TrajectoryShard | _TrajectoryChunk) -> None:
         slot_id = int(shard.slot_id)
         self._validate_slot(slot_id)
         self._actor_shards_by_slot[slot_id].append(shard)
+
+    def _materialize_buffered_actor_shard(
+        self,
+        slot_id: int,
+    ) -> TrajectoryShard | None:
+        self._validate_slot(slot_id)
+        shards = self._actor_shards_by_slot[slot_id]
+        if not shards:
+            return None
+        if all(isinstance(shard, _TrajectoryChunk) for shard in shards):
+            shard = self._build_trajectory_shard_from_chunks(
+                [shard for shard in shards if isinstance(shard, _TrajectoryChunk)]
+            )
+        else:
+            materialized: list[TrajectoryShard] = []
+            for item in shards:
+                if isinstance(item, TrajectoryShard):
+                    materialized.append(item)
+                else:
+                    materialized.append(self._build_trajectory_shard_from_chunks([item]))
+            shard = _concat_uniform_slot_shards(materialized)
+        self._actor_shards_by_slot[slot_id] = []
+        return shard
 
     def _flush_buffered_actor_shard(
         self,
@@ -854,12 +1426,52 @@ class BaseTrajectoryEnvWorker(Worker):
         actor_channel: Channel,
         pending: list[Any],
     ) -> tuple[float, int]:
-        self._validate_slot(slot_id)
-        shards = self._actor_shards_by_slot[slot_id]
-        if not shards:
+        shard = self._materialize_buffered_actor_shard(slot_id)
+        if shard is None:
             return 0.0, 0
-        shard = _concat_trajectory_shards(shards)
-        self._actor_shards_by_slot[slot_id] = []
+        put_s = self._queue_actor_shard(actor_channel, shard, pending)
+        return put_s, 1
+
+    def _flush_buffered_actor_slot_batch(
+        self,
+        slot_ids: list[int],
+        actor_channel: Channel,
+        pending: list[Any],
+    ) -> tuple[float, int]:
+        chunk_buffers: list[list[_TrajectoryChunk]] = []
+        chunk_slot_ids: list[int] = []
+        can_direct_materialize = True
+        for slot_id in slot_ids:
+            self._validate_slot(int(slot_id))
+            shards = self._actor_shards_by_slot[int(slot_id)]
+            if not shards:
+                continue
+            if not all(isinstance(shard, _TrajectoryChunk) for shard in shards):
+                can_direct_materialize = False
+                break
+            chunk_buffers.append(
+                [shard for shard in shards if isinstance(shard, _TrajectoryChunk)]
+            )
+            chunk_slot_ids.append(int(slot_id))
+        if can_direct_materialize and chunk_buffers:
+            try:
+                shard = self._build_worker_trajectory_shard_from_slot_chunks(chunk_buffers)
+            except ValueError:
+                pass
+            else:
+                for slot_id in chunk_slot_ids:
+                    self._actor_shards_by_slot[slot_id] = []
+                put_s = self._queue_actor_shard(actor_channel, shard, pending)
+                return put_s, 1
+
+        materialized: list[TrajectoryShard] = []
+        for slot_id in slot_ids:
+            shard = self._materialize_buffered_actor_shard(int(slot_id))
+            if shard is not None:
+                materialized.append(shard)
+        if not materialized:
+            return 0.0, 0
+        shard = _concat_worker_slot_shards(materialized)
         put_s = self._queue_actor_shard(actor_channel, shard, pending)
         return put_s, 1
 
@@ -965,18 +1577,6 @@ class BaseTrajectoryEnvWorker(Worker):
                 next_messages: list[ObservationMsg] = []
                 for shard, _shard_metrics in applied:
                     slot_id = int(shard.slot_id)
-                    if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
-                        put_s, emitted = self._flush_buffered_actor_shard(
-                            slot_id,
-                            actor_channel,
-                            pending_actor_puts,
-                        )
-                        metrics["env/actor_put_s"] += put_s
-                        metrics["env/trajectory_shards"] += float(emitted)
-                        if len(pending_actor_puts) >= _ACTOR_PUT_FLUSH_EVERY:
-                            metrics["env/actor_put_flush_s"] += self._flush_actor_puts(
-                                pending_actor_puts
-                            )
                     if chunk_steps_by_slot[slot_id] < target_chunk_steps:
                         obs = self._obs_by_slot[slot_id]
                         if obs is None:
@@ -984,16 +1584,20 @@ class BaseTrajectoryEnvWorker(Worker):
                         next_messages.append(self._observation_msg(slot_id, obs))
                 if next_messages:
                     self._put_observation_batch(env_channel, next_messages, metrics)
+            put_s, emitted = self._flush_buffered_actor_slot_batch(
+                list(range(self.num_slots)),
+                actor_channel,
+                pending_actor_puts,
+            )
+            metrics["env/actor_put_s"] += put_s
+            metrics["env/trajectory_shards"] += float(emitted)
+            if len(pending_actor_puts) >= _ACTOR_PUT_FLUSH_EVERY:
+                metrics["env/actor_put_flush_s"] += self._flush_actor_puts(
+                    pending_actor_puts
+                )
             final_bootstrap_messages: list[ObservationMsg] = []
             final_bootstrap_slot_ids: list[int] = []
             for slot_id in range(self.num_slots):
-                put_s, emitted = self._flush_buffered_actor_shard(
-                    slot_id,
-                    actor_channel,
-                    pending_actor_puts,
-                )
-                metrics["env/actor_put_s"] += put_s
-                metrics["env/trajectory_shards"] += float(emitted)
                 obs = self._obs_by_slot[slot_id]
                 if obs is None:
                     continue
@@ -1033,12 +1637,13 @@ class BaseTrajectoryEnvWorker(Worker):
     def _apply_wm_rollout_results_batch(
         self,
         results: list[RolloutResultMsg],
-    ) -> list[tuple[TrajectoryShard, dict[str, float]]]:
+    ) -> list[tuple[TrajectoryShard | _TrajectoryChunk, dict[str, float]]]:
         if not results:
             return []
         env = self._env_for_slot(int(results[0].slot_id))
         parsed: list[dict[str, Any]] = []
         action_dim: int | None = None
+        collect_transitions = self._collect_episode_transitions()
         for result in results:
             slot_id = int(result.slot_id)
             self._validate_slot(slot_id)
@@ -1064,11 +1669,25 @@ class BaseTrajectoryEnvWorker(Worker):
                     "successful": 0,
                     "physical_steps": 0,
                     "active": True,
-                    "sidecars": _transition_sidecars_from_rollout(result),
+                    "sidecars": (
+                        _transition_sidecars_from_rollout(result)
+                        if collect_transitions
+                        else {}
+                    ),
                 }
             )
         if action_dim is None:
             raise ValueError("cannot batch empty WM rollout results")
+        if (
+            not collect_transitions
+            and callable(getattr(env, "chunk_step_batch", None))
+            and all(int(item["chunk_len"]) == self.num_action_chunks for item in parsed)
+        ):
+            return self._apply_wm_rollout_results_chunk_batch(
+                env,
+                parsed,
+                action_dim=int(action_dim),
+            )
 
         for action_index in range(self.num_action_chunks):
             active = [
@@ -1107,20 +1726,21 @@ class BaseTrajectoryEnvWorker(Worker):
                 )
                 done = bool(terminated or truncated)
                 success = bool(info.get("success", False))
-                transition_obs = dict(obs)
-                transition_obs.update(self._model_version_sidecars())
-                transition_obs.update(dict(item["sidecars"]))
-                transition = self._make_transition(
-                    env,
-                    transition_obs,
-                    next_obs,
-                    policy_actions[batch_index],
-                    reward,
-                    terminated,
-                    truncated,
-                    info,
-                )
-                self._episodes_by_slot[slot_id].append(transition)
+                if collect_transitions:
+                    transition_obs = dict(obs)
+                    transition_obs.update(self._model_version_sidecars())
+                    transition_obs.update(dict(item["sidecars"]))
+                    transition = self._make_transition(
+                        env,
+                        transition_obs,
+                        next_obs,
+                        policy_actions[batch_index],
+                        reward,
+                        terminated,
+                        truncated,
+                        info,
+                    )
+                    self._episodes_by_slot[slot_id].append(transition)
                 item["rewards"][action_index] = reward
                 item["dones"][action_index] = done
                 item["physical_steps"] = int(item["physical_steps"]) + 1
@@ -1129,8 +1749,9 @@ class BaseTrajectoryEnvWorker(Worker):
                     item["successful"] = int(success)
                     if action_index + 1 < self.num_action_chunks:
                         item["dones"][action_index + 1 :] = True
-                    self._push_replay_episode(self._episodes_by_slot[slot_id])
-                    self._push_episode(self.dump, self._episodes_by_slot[slot_id])
+                    if collect_transitions:
+                        self._push_replay_episode(self._episodes_by_slot[slot_id])
+                        self._push_episode(self.dump, self._episodes_by_slot[slot_id])
                     self._episodes_by_slot[slot_id] = []
                     self._episode_ids_by_slot[slot_id] += 1
                     self._reset_slot(slot_id)
@@ -1138,10 +1759,11 @@ class BaseTrajectoryEnvWorker(Worker):
                 else:
                     self._obs_by_slot[slot_id] = next_obs
 
-        shards: list[tuple[TrajectoryShard, dict[str, float]]] = []
+        shards: list[tuple[TrajectoryShard | _TrajectoryChunk, dict[str, float]]] = []
         for item in parsed:
-            shard = self._build_trajectory_shard(
-                item["result"],
+            shard = _TrajectoryChunk(
+                result=item["result"],
+                slot_id=int(item["slot_id"]),
                 actions_np=item["actions_np"],
                 rewards=item["rewards"],
                 dones=item["dones"],
@@ -1154,6 +1776,115 @@ class BaseTrajectoryEnvWorker(Worker):
                         "physical_steps": float(item["physical_steps"]),
                         "completed_episodes": float(item["completed"]),
                         "successful_episodes": float(item["successful"]),
+                    },
+                )
+            )
+        return shards
+
+    def _apply_wm_rollout_results_chunk_batch(
+        self,
+        env: Any,
+        parsed: list[dict[str, Any]],
+        *,
+        action_dim: int,
+    ) -> list[tuple[TrajectoryShard | _TrajectoryChunk, dict[str, float]]]:
+        slots = [int(item["slot_id"]) for item in parsed]
+        policy_action_chunks = [
+            np.asarray(item["actions_np"], dtype=np.float32) for item in parsed
+        ]
+        if self.action_postprocess in {"", "none", "false"}:
+            env_actions = _batch_action_chunks(policy_action_chunks)
+        elif self.action_postprocess in {"openvla_oft", "oft"}:
+            from dreamervla.runners.oft_collect_common import process_action_batch
+
+            env_actions = process_action_batch(_batch_action_chunks(policy_action_chunks))
+        else:
+            first_chunk = policy_action_chunks[0]
+            env_actions = np.empty(
+                (len(policy_action_chunks), *first_chunk.shape),
+                dtype=np.float32,
+            )
+            for chunk_index, action_chunk in enumerate(policy_action_chunks):
+                if tuple(int(v) for v in action_chunk.shape) != tuple(
+                    int(v) for v in first_chunk.shape
+                ):
+                    raise ValueError(
+                        "rollout action chunks must share shape for batching"
+                    )
+                for action_index, action in enumerate(action_chunk):
+                    env_actions[chunk_index, action_index] = (
+                        self._env_action_from_policy_action(action)
+                    )
+        step_out = env.chunk_step_batch(env_actions, env_ids=slots)
+        if len(step_out) != 5:
+            raise ValueError(
+                "env.chunk_step_batch(actions, env_ids=...) must return 5 values"
+            )
+        next_obs_list, rewards, terminations, truncations, infos = step_out
+        rewards_arr = np.asarray(rewards, dtype=np.float32).reshape(
+            len(parsed),
+            self.num_action_chunks,
+        )
+        terminations_arr = np.asarray(terminations, dtype=np.bool_).reshape(
+            len(parsed),
+            self.num_action_chunks,
+        )
+        truncations_arr = np.asarray(truncations, dtype=np.bool_).reshape(
+            len(parsed),
+            self.num_action_chunks,
+        )
+        done_arr = np.logical_or(terminations_arr, truncations_arr)
+        has_nonfinal_done = (
+            bool(done_arr[:, :-1].any()) if int(self.num_action_chunks) > 1 else False
+        )
+        shards: list[tuple[TrajectoryShard | _TrajectoryChunk, dict[str, float]]] = []
+        for batch_index, item in enumerate(parsed):
+            slot_id = int(item["slot_id"])
+            next_obs = dict(next_obs_list[batch_index])
+            info = dict(infos[batch_index] or {})
+            done_values = done_arr[batch_index]
+            item["rewards"][:] = rewards_arr[batch_index]
+            item["dones"][:] = done_values
+            if has_nonfinal_done:
+                done_indices = np.flatnonzero(done_values)
+                physical_steps = (
+                    int(done_indices[0]) + 1
+                    if len(done_indices) > 0
+                    else int(self.num_action_chunks)
+                )
+                if len(done_indices) > 0:
+                    item["dones"][int(done_indices[0]) :] = True
+                completed = bool(len(done_indices) > 0)
+                successful = bool(info.get("success", False)) or bool(
+                    terminations_arr[batch_index].any()
+                )
+            else:
+                physical_steps = int(self.num_action_chunks)
+                completed = bool(done_values[-1])
+                successful = bool(info.get("success", False)) or bool(
+                    terminations_arr[batch_index, -1]
+                )
+            if completed:
+                self._episodes_by_slot[slot_id] = []
+                self._episode_ids_by_slot[slot_id] += 1
+                self._reset_slot(slot_id)
+            else:
+                self._obs_by_slot[slot_id] = next_obs
+            shard = _TrajectoryChunk(
+                result=item["result"],
+                slot_id=slot_id,
+                actions_np=item["actions_np"],
+                rewards=item["rewards"],
+                dones=item["dones"],
+                action_dim=int(action_dim),
+            )
+            shards.append(
+                (
+                    shard,
+                    {
+                        "physical_steps": float(physical_steps),
+                        "completed_episodes": float(completed),
+                        "successful_episodes": float(successful),
                     },
                 )
             )
@@ -1280,24 +2011,27 @@ class BaseTrajectoryEnvWorker(Worker):
         info = dict(info or {})
         info.setdefault("wm_action", np.asarray(env_action, dtype=np.float32).reshape(-1))
         done = bool(terminated or truncated)
-        transition_obs = dict(obs)
-        transition_obs.update(self._model_version_sidecars())
-        if transition_sidecars:
-            transition_obs.update(transition_sidecars)
-        transition = self._make_transition(
-            env,
-            transition_obs,
-            next_obs,
-            policy_action,
-            float(reward),
-            bool(terminated),
-            bool(truncated),
-            info,
-        )
-        self._episodes_by_slot[slot_id].append(transition)
+        collect_transitions = self._collect_episode_transitions()
+        if collect_transitions:
+            transition_obs = dict(obs)
+            transition_obs.update(self._model_version_sidecars())
+            if transition_sidecars:
+                transition_obs.update(transition_sidecars)
+            transition = self._make_transition(
+                env,
+                transition_obs,
+                next_obs,
+                policy_action,
+                float(reward),
+                bool(terminated),
+                bool(truncated),
+                info,
+            )
+            self._episodes_by_slot[slot_id].append(transition)
         if done:
-            self._push_replay_episode(self._episodes_by_slot[slot_id])
-            self._push_episode(self.dump, self._episodes_by_slot[slot_id])
+            if collect_transitions:
+                self._push_replay_episode(self._episodes_by_slot[slot_id])
+                self._push_episode(self.dump, self._episodes_by_slot[slot_id])
             self._episodes_by_slot[slot_id] = []
             self._episode_ids_by_slot[slot_id] += 1
             next_obs = self._reset_slot(slot_id)
@@ -1395,6 +2129,15 @@ class BaseTrajectoryEnvWorker(Worker):
         self._episodes_by_slot[slot_id] = []
         self._episode_ids_by_slot[slot_id] += 1
         return 1
+
+    def _collect_episode_transitions(self) -> bool:
+        if self.dump is not None:
+            return True
+        if self.replay is None:
+            return False
+        if self.role == "wm_env" and not self.replay_write_enabled:
+            return False
+        return True
 
     def _bootstrap_wm_initial_latents_from_replay(self) -> None:
         if self.role != "wm_env" or self.replay is None:
@@ -1559,7 +2302,12 @@ class BaseTrajectoryEnvWorker(Worker):
             if slot_id in slots_seen:
                 raise ValueError(f"duplicate observation for slot_id {slot_id}")
             slots_seen.add(slot_id)
-        return ObservationBatchMsg(env_rank=env_rank, observations=list(messages))
+        batched_obs, batch_messages = _batched_hidden_payload_from_messages(messages)
+        return ObservationBatchMsg(
+            env_rank=env_rank,
+            observations=batch_messages,
+            batched_obs=batched_obs,
+        )
 
     def _put_observation_batch(
         self,
@@ -1622,7 +2370,7 @@ class BaseTrajectoryEnvWorker(Worker):
             )
 
         by_slot: dict[int, RolloutResultMsg] = {}
-        for result in msg.results:
+        for result in rollout_result_batch_to_messages(msg):
             if not isinstance(result, RolloutResultMsg):
                 raise TypeError(
                     "rollout result batches must contain RolloutResultMsg items, "

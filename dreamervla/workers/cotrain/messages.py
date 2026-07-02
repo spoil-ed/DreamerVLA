@@ -30,6 +30,7 @@ class ObservationBatchMsg:
 
     env_rank: int
     observations: list[ObservationMsg]
+    batched_obs: dict[str, Any] | None = None
 
     @property
     def key(self) -> str:
@@ -62,6 +63,15 @@ class RolloutResultBatchMsg:
 
     env_rank: int
     results: list[RolloutResultMsg]
+    slot_ids: list[int] | None = None
+    task_ids: list[int] | None = None
+    episode_ids: list[int] | None = None
+    steps: list[int] | None = None
+    actions: Any | None = None
+    prev_logprobs: Any | None = None
+    prev_values: Any | None = None
+    forward_inputs: dict[str, Any] | None = None
+    versions: dict[str, Any] | None = None
 
     @property
     def key(self) -> str:
@@ -119,6 +129,170 @@ def as_tensor(value: Any, *, dtype: torch.dtype | None = None) -> torch.Tensor:
     else:
         tensor = torch.as_tensor(value)
     return tensor.to(dtype=dtype) if dtype is not None else tensor
+
+
+def pack_rollout_result_batch(
+    *,
+    env_rank: int,
+    results: list[RolloutResultMsg],
+) -> RolloutResultBatchMsg:
+    """Pack per-slot rollout results into WoVR-style batch tensors."""
+
+    if not results:
+        return RolloutResultBatchMsg(env_rank=int(env_rank), results=[])
+    expected_rank = int(env_rank)
+    forward_keys = set(results[0].forward_inputs)
+    version_keys = set(results[0].versions)
+    has_prev_values = results[0].prev_values is not None
+    for result in results:
+        if int(result.env_rank) != expected_rank:
+            raise ValueError(
+                "rollout result env_rank mismatch: "
+                f"got {int(result.env_rank)}, expected {expected_rank}"
+            )
+        if set(result.forward_inputs) != forward_keys:
+            raise ValueError("rollout results must share forward_input keys")
+        if set(result.versions) != version_keys:
+            raise ValueError("rollout results must share version keys")
+        if (result.prev_values is not None) != has_prev_values:
+            raise ValueError("rollout results must consistently include prev_values")
+
+    return RolloutResultBatchMsg(
+        env_rank=expected_rank,
+        results=[],
+        slot_ids=[int(result.slot_id) for result in results],
+        task_ids=[int(result.task_id) for result in results],
+        episode_ids=[int(result.episode_id) for result in results],
+        steps=[int(result.step) for result in results],
+        actions=_batch_result_values([result.actions for result in results]),
+        prev_logprobs=_batch_result_values(
+            [result.prev_logprobs for result in results],
+        ),
+        prev_values=(
+            _batch_result_values(
+                [
+                    result.prev_values
+                    for result in results
+                    if result.prev_values is not None
+                ],
+            )
+            if has_prev_values
+            else None
+        ),
+        forward_inputs={
+            key: _batch_forward_input_values(
+                [result.forward_inputs[key] for result in results],
+            )
+            for key in sorted(forward_keys)
+        },
+        versions={
+            key: torch.as_tensor(
+                [int(result.versions[key]) for result in results],
+                dtype=torch.long,
+            )
+            for key in sorted(version_keys)
+        },
+    )
+
+
+def rollout_result_batch_to_messages(
+    msg: RolloutResultBatchMsg,
+) -> list[RolloutResultMsg]:
+    """Return per-slot rollout results from either legacy or batched payloads."""
+
+    if msg.results:
+        return list(msg.results)
+    if msg.slot_ids is None:
+        return []
+    slot_ids = [int(value) for value in msg.slot_ids]
+    batch_size = len(slot_ids)
+    task_ids = _required_id_list(msg.task_ids, "task_ids", batch_size)
+    episode_ids = _required_id_list(msg.episode_ids, "episode_ids", batch_size)
+    steps = _required_id_list(msg.steps, "steps", batch_size)
+    if msg.actions is None or msg.prev_logprobs is None:
+        raise ValueError("batched rollout result must include actions and prev_logprobs")
+    actions = as_tensor(msg.actions).detach().cpu()
+    prev_logprobs = as_tensor(msg.prev_logprobs).detach().cpu()
+    prev_values = (
+        None if msg.prev_values is None else as_tensor(msg.prev_values).detach().cpu()
+    )
+    if int(actions.shape[0]) != batch_size:
+        raise ValueError("batched rollout actions batch size mismatch")
+    if int(prev_logprobs.shape[0]) != batch_size:
+        raise ValueError("batched rollout prev_logprobs batch size mismatch")
+    if prev_values is not None and int(prev_values.shape[0]) != batch_size:
+        raise ValueError("batched rollout prev_values batch size mismatch")
+    forward_inputs = dict(msg.forward_inputs or {})
+    versions = dict(msg.versions or {})
+    for key, value in forward_inputs.items():
+        if int(as_tensor(value).shape[0]) != batch_size:
+            raise ValueError(f"batched rollout forward_inputs[{key!r}] size mismatch")
+    for key, value in versions.items():
+        if int(as_tensor(value).shape[0]) != batch_size:
+            raise ValueError(f"batched rollout versions[{key!r}] size mismatch")
+
+    return [
+        RolloutResultMsg(
+            env_rank=int(msg.env_rank),
+            slot_id=slot_ids[index],
+            task_id=task_ids[index],
+            episode_id=episode_ids[index],
+            step=steps[index],
+            actions=actions[index],
+            prev_logprobs=prev_logprobs[index],
+            prev_values=None if prev_values is None else prev_values[index],
+            forward_inputs={
+                key: _unpack_forward_input_row(key, as_tensor(value)[index])
+                for key, value in forward_inputs.items()
+            },
+            versions={
+                key: int(as_tensor(value)[index].detach().cpu().reshape(-1)[0].item())
+                for key, value in versions.items()
+            },
+        )
+        for index in range(batch_size)
+    ]
+
+
+def _required_id_list(
+    values: list[int] | None,
+    name: str,
+    batch_size: int,
+) -> list[int]:
+    if values is None:
+        raise ValueError(f"batched rollout result must include {name}")
+    out = [int(value) for value in values]
+    if len(out) != int(batch_size):
+        raise ValueError(f"batched rollout result {name} batch size mismatch")
+    return out
+
+
+def _batch_result_values(values: list[Any]) -> torch.Tensor:
+    tensors = [as_tensor(value).detach().cpu() for value in values]
+    shape = tuple(tensors[0].shape)
+    if any(tuple(tensor.shape) != shape for tensor in tensors):
+        raise ValueError("rollout result tensors must share shape for batching")
+    return torch.cat([tensor.reshape(1, *shape) for tensor in tensors], dim=0)
+
+
+def _batch_forward_input_values(values: list[Any]) -> torch.Tensor:
+    rows = []
+    for value in values:
+        tensor = as_tensor(value).detach().cpu()
+        if tensor.ndim > 0 and int(tensor.shape[0]) == 1:
+            tensor = tensor[0]
+        rows.append(tensor)
+    shape = tuple(rows[0].shape)
+    if any(tuple(row.shape) != shape for row in rows):
+        raise ValueError("rollout forward_inputs must share shape for batching")
+    return torch.cat([row.reshape(1, *shape) for row in rows], dim=0)
+
+
+def _unpack_forward_input_row(key: str, row: torch.Tensor) -> torch.Tensor:
+    row = row.detach().cpu()
+    if str(key) == "lang_emb":
+        return row
+    return row.reshape(1, *tuple(row.shape))
 
 
 def _cat_step_batch(values: list[Any]) -> torch.Tensor:

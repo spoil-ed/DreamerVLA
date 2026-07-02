@@ -99,6 +99,15 @@ def test_manual_cotrain_rejects_non_positive_wm_rollout_multiplier() -> None:
 
 
 @pytest.mark.parametrize("value", (0, -1, 1.5))
+def test_manual_cotrain_rejects_bad_wm_rollout_lease_epochs(
+    value: float,
+) -> None:
+    cfg = _cfg(wm_rollout_lease_epochs=value)
+    with pytest.raises(ValueError, match="manual_cotrain.wm_rollout_lease_epochs"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize("value", (0, -1, 1.5))
 def test_manual_cotrain_rejects_bad_wm_rollout_target_trajectories(
     value: float,
 ) -> None:

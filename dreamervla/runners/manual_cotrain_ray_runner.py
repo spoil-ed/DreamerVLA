@@ -126,7 +126,7 @@ class ManualCotrainRayRunner(BaseRunner):
         )
 
     def _prepare_manual_cotrain_progress_dir(self, global_step: int) -> Path:
-        progress_dir = self._prepare_manual_cotrain_progress_dir(global_step)
+        progress_dir = self._manual_cotrain_progress_dir(global_step)
         progress_dir.mkdir(parents=True, exist_ok=True)
         for file in progress_dir.glob("*.json"):
             try:
@@ -321,9 +321,22 @@ class ManualCotrainRayRunner(BaseRunner):
         stage_start = mark_stage("actor_to_rollout_sync", stage_start)
 
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact start")
-        env_results = [real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)]
-        if wm_env is not None:
-            env_results.append(wm_env.interact(env_channel_name, rollout_channel_name, actor_channel_name))
+        real_env_results = [
+            real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)
+        ]
+        env_results = list(real_env_results)
+        dynamic_wm_leases = (
+            wm_env is not None
+            and self._wm_rollout_target_trajectories() is not None
+        )
+        if wm_env is not None and not dynamic_wm_leases:
+            env_results.append(
+                wm_env.interact(
+                    env_channel_name,
+                    rollout_channel_name,
+                    actor_channel_name,
+                )
+            )
         _hs_trace(f"[global_step={global_step}] RolloutGroup.generate start")
         rollout_result = rollout.generate(
             env_channel_name,
@@ -336,12 +349,24 @@ class ManualCotrainRayRunner(BaseRunner):
             actor_channel_name=actor_channel_name,
         )
 
-        env_metrics = _wait_env_metrics_with_rollout_guard(
-            env_results,
-            rollout_result,
-            timeout_s=self._env_rollout_timeout_s(),
-            progress=progress_monitor,
-        )
+        if wm_env is not None and dynamic_wm_leases:
+            env_metrics = self._wait_env_metrics_with_dynamic_wm_leases(
+                real_env_results=real_env_results,
+                wm_env=wm_env,
+                rollout_result=rollout_result,
+                env_channel_name=env_channel_name,
+                rollout_channel_name=rollout_channel_name,
+                actor_channel_name=actor_channel_name,
+                timeout_s=self._env_rollout_timeout_s(),
+                progress=progress_monitor,
+            )
+        else:
+            env_metrics = _wait_env_metrics_with_rollout_guard(
+                env_results,
+                rollout_result,
+                timeout_s=self._env_rollout_timeout_s(),
+                progress=progress_monitor,
+            )
         progress_monitor.report(force=True)
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact done")
         stage_start = mark_stage("env_interact_and_rollout_generate", stage_start)
@@ -541,6 +566,9 @@ class ManualCotrainRayRunner(BaseRunner):
             default=self._rollout_epoch(),
         )
 
+    def _wm_rollout_lease_epochs(self) -> int:
+        return self._positive_manual_int("wm_rollout_lease_epochs", default=1)
+
     def _wm_rollout_target_trajectories(self) -> int | None:
         value = OmegaConf.select(
             self.cfg,
@@ -669,6 +697,108 @@ class ManualCotrainRayRunner(BaseRunner):
             ),
         )
 
+    def _wait_env_metrics_with_dynamic_wm_leases(
+        self,
+        *,
+        real_env_results: list[Any],
+        wm_env: Any,
+        rollout_result: Any,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        actor_channel_name: str,
+        timeout_s: float,
+        poll_s: float = 1.0,
+        progress: _ManualCotrainEnvProgressMonitor | None = None,
+    ) -> dict[str, float]:
+        """Run WM imagine as a global lease pool while real env rollout proceeds."""
+
+        wm_workers = _worker_count(wm_env)
+        total_wm_epochs = sum(self._wm_rollout_epochs_by_worker(wm_workers))
+        lease_epochs = self._wm_rollout_lease_epochs()
+        remaining_wm_epochs = int(total_wm_epochs)
+        active_wm: dict[int, Any] = {}
+        pending_real = list(real_env_results)
+        completed_metrics: list[Any] = []
+        start = time.monotonic()
+
+        def check_rollout_failure() -> None:
+            ready = rollout_result.ready()
+            if ready:
+                values = rollout_result.wait_refs(ready)
+                raise RuntimeError(
+                    "RolloutGroup.generate completed before EnvGroup.interact; "
+                    f"ready_result={values!r}"
+                )
+
+        def start_wm_lease(rank: int) -> None:
+            nonlocal remaining_wm_epochs
+            if remaining_wm_epochs <= 0:
+                return
+            lease = min(int(lease_epochs), int(remaining_wm_epochs))
+            _hs_trace(
+                f"[wm env rank={int(rank)}] start dynamic imagine lease "
+                f"rollout_epoch={int(lease)} remaining_before={int(remaining_wm_epochs)}"
+            )
+            wm_env.execute_on(int(rank)).configure_rollout_epoch(int(lease)).wait()
+            active_wm[int(rank)] = wm_env.execute_on(int(rank)).interact(
+                env_channel_name,
+                rollout_channel_name,
+                actor_channel_name,
+            )
+            remaining_wm_epochs -= int(lease)
+
+        for rank in range(min(int(wm_workers), int(remaining_wm_epochs))):
+            start_wm_lease(rank)
+
+        while pending_real or active_wm:
+            if progress is not None:
+                progress.report()
+            check_rollout_failure()
+
+            next_pending_real: list[Any] = []
+            for result in pending_real:
+                if result.done():
+                    completed_metrics.append(result.wait())
+                else:
+                    next_pending_real.append(result)
+            pending_real = next_pending_real
+
+            completed_wm_ranks: list[int] = []
+            for rank, result in list(active_wm.items()):
+                if not result.done():
+                    continue
+                completed_metrics.append(result.wait())
+                completed_wm_ranks.append(int(rank))
+            for rank in completed_wm_ranks:
+                active_wm.pop(int(rank), None)
+            for rank in completed_wm_ranks:
+                start_wm_lease(int(rank))
+
+            if not pending_real and not active_wm:
+                break
+            if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
+                snapshot = progress.report(force=True) if progress is not None else None
+                progress_suffix = (
+                    f" Current manual cotrain progress: {snapshot.status}."
+                    if snapshot is not None and snapshot.status
+                    else ""
+                )
+                active_ranks = ",".join(str(rank) for rank in sorted(active_wm)) or "none"
+                raise TimeoutError(
+                    "EnvGroup.interact did not finish before "
+                    f"manual_cotrain.env_rollout_timeout_s={float(timeout_s):.1f}s; "
+                    "dynamic WM imagine leases are still running or "
+                    "RolloutGroup.generate is waiting for StopMsg. "
+                    f"active_wm_ranks={active_ranks}, "
+                    f"remaining_wm_rollout_epochs={int(remaining_wm_epochs)}. "
+                    "Set DVLA_COTRAIN_HANDSHAKE_TRACE=1 before launching to log "
+                    "EnvGroup/RolloutGroup action handshakes."
+                    f"{progress_suffix}"
+                )
+            time.sleep(max(0.0, float(poll_s)))
+
+        return _sum_metric_lists(completed_metrics)
+
     def _receive_actor_trajectories(
         self,
         groups: dict[str, Any],
@@ -773,9 +903,7 @@ class ManualCotrainRayRunner(BaseRunner):
         real_workers = _worker_count(groups.get("RealEnvGroup"))
         wm_workers = _worker_count(groups.get("WMEnvGroup"))
         real_shards = self._envs_per_worker() * real_workers * self._real_rollout_epoch()
-        wm_shards = self._wm_envs_per_worker() * sum(
-            self._wm_rollout_epochs_by_worker(wm_workers)
-        )
+        wm_shards = sum(self._wm_rollout_epochs_by_worker(wm_workers))
         return int(real_shards + wm_shards)
 
     def _render_backend(self) -> str:

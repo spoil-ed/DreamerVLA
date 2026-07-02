@@ -28,6 +28,16 @@ def process_action(action: Any) -> np.ndarray:
     return a
 
 
+def process_action_batch(actions: Any) -> np.ndarray:
+    """Vectorized OpenVLA-OFT LIBERO gripper post-process for action batches."""
+
+    a = np.asarray(actions, dtype=np.float32).copy()
+    if a.shape[-1] <= 0:
+        raise ValueError("actions must have a non-empty action dimension")
+    a[..., -1] = np.sign(2.0 * a[..., -1] - 1.0) * -1.0
+    return a
+
+
 def pop_open_loop_action(
     action_chunk: Any,
     action_queue: list,

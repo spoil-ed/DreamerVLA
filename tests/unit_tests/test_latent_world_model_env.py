@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import torch
 
+from dreamervla.envs.world_model import latent_world_model_env
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
 
 
@@ -14,6 +15,63 @@ class _TinyWM(torch.nn.Module):
 
 class _TinyClassifier(torch.nn.Module):
     def forward(self, latent):
+        return latent.sum(dim=-1, keepdim=True)
+
+
+class _ChunkWM(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[dict] = []
+
+    def forward(self, batch):
+        self.calls.append(dict(batch))
+        assert batch["mode"] == "predict_next_chunk"
+        latent = batch["latent"].reshape(batch["actions"].shape[0], -1)
+        increments = batch["actions"][..., : latent.shape[-1]].cumsum(dim=1)
+        hidden_seq = latent[:, None] + increments
+        return {
+            "hidden": hidden_seq[:, -1],
+            "hidden_seq": hidden_seq,
+        }
+
+
+class _AutocastAwareChunkWM(_ChunkWM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.autocast_enabled: list[bool] = []
+
+    def forward(self, batch):
+        self.autocast_enabled.append(torch.is_autocast_enabled("cpu"))
+        return super().forward(batch)
+
+
+class _AutocastAwareClassifier(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.autocast_enabled: list[bool] = []
+
+    def forward(self, latent):
+        self.autocast_enabled.append(torch.is_autocast_enabled("cpu"))
+        return latent.sum(dim=-1, keepdim=True)
+
+
+class _InferenceModeAwareChunkWM(_ChunkWM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inference_mode_enabled: list[bool] = []
+
+    def forward(self, batch):
+        self.inference_mode_enabled.append(torch.is_inference_mode_enabled())
+        return super().forward(batch)
+
+
+class _InferenceModeAwareClassifier(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inference_mode_enabled: list[bool] = []
+
+    def forward(self, latent):
+        self.inference_mode_enabled.append(torch.is_inference_mode_enabled())
         return latent.sum(dim=-1, keepdim=True)
 
 
@@ -135,6 +193,272 @@ def test_latent_world_model_env_batches_independent_slots() -> None:
     assert truncated1 is False
     assert info0["slot_id"] == 0
     assert info1["slot_id"] == 1
+
+
+def test_latent_world_model_env_chunk_step_batch_uses_one_wm_call() -> None:
+    wm = _ChunkWM()
+    env = LatentWorldModelEnv(
+        world_model=wm,
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=2,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+    env.reset_slot(1, task_id=1, episode_id=10)
+
+    observations, rewards, terminations, truncations, infos = env.chunk_step_batch(
+        np.array(
+            [
+                [[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]],
+                [[0.0, 1.0], [2.0, 0.0], [0.0, 3.0]],
+            ],
+            dtype=np.float32,
+        ),
+        env_ids=[0, 1],
+    )
+
+    assert len(wm.calls) == 1
+    assert wm.calls[0]["actions"].shape == (2, 3, 2)
+    assert np.asarray(rewards).shape == (2, 3)
+    assert observations[0]["step"] == 3
+    assert observations[1]["step"] == 3
+    assert observations[0]["latent"].tolist() == [4.0, 2.0]
+    assert observations[1]["latent"].tolist() == [2.0, 4.0]
+    assert np.asarray(terminations).shape == (2, 3)
+    assert np.asarray(truncations).shape == (2, 3)
+    assert infos[0]["slot_id"] == 0
+    assert infos[1]["slot_id"] == 1
+    assert env.get_metrics()["wm_forward_calls"] == 1.0
+
+
+def test_latent_world_model_env_chunk_step_batch_marks_done_only_on_final_step() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=0.5,
+        max_episode_steps=99,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    _observations, _rewards, terminations, truncations, infos = env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert terminations.tolist() == [[False, False, True]]
+    assert truncations.tolist() == [[False, False, False]]
+    assert infos[0]["success"] is True
+
+    timeout_env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=2,
+        num_envs=1,
+    )
+    timeout_env.reset_slot(0, task_id=0, episode_id=0)
+
+    _observations, _rewards, terminations, truncations, infos = (
+        timeout_env.chunk_step_batch(
+            np.array([[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]], dtype=np.float32),
+            env_ids=[0],
+        )
+    )
+
+    assert terminations.tolist() == [[False, False, False]]
+    assert truncations.tolist() == [[False, False, True]]
+    assert infos[0]["success"] is False
+
+
+def test_latent_world_model_env_chunk_step_batch_avoids_unconditional_action_copy(
+    monkeypatch,
+) -> None:
+    class _NoCopyArray(np.ndarray):
+        def copy(self, *_args, **_kwargs):  # type: ignore[override]
+            raise AssertionError("chunk actions should not be copied unconditionally")
+
+    original_asarray = np.asarray
+
+    def asarray_no_copy(value, *args, **kwargs):
+        arr = original_asarray(value, *args, **kwargs)
+        if arr.shape == (1, 3, 2):
+            return arr.view(_NoCopyArray)
+        return arr
+
+    monkeypatch.setattr(latent_world_model_env.np, "asarray", asarray_no_copy)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=99,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    _observations, rewards, terminations, _truncations, _infos = env.chunk_step_batch(
+        original_asarray([[[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert rewards.shape == (1, 3)
+    assert terminations.tolist() == [[False, False, False]]
+
+
+def test_latent_world_model_env_chunk_step_batch_keeps_wm_action_on_cpu_boundary(
+    monkeypatch,
+) -> None:
+    original_cpu = torch.Tensor.cpu
+
+    def cpu_guard(tensor, *args, **kwargs):
+        if tuple(tensor.shape) == (2,):
+            raise AssertionError("wm_action should not be copied back from action_t")
+        return original_cpu(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "cpu", cpu_guard)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=99,
+        num_envs=1,
+        observation_format="tensor",
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    _observations, _rewards, _terminations, _truncations, infos = env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 1.0], [3.0, 4.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert np.asarray(infos[0]["wm_action"], dtype=np.float32).tolist() == [3.0, 4.0]
+
+
+def test_latent_world_model_env_chunk_step_batch_uses_configured_autocast() -> None:
+    wm = _AutocastAwareChunkWM()
+    env = LatentWorldModelEnv(
+        world_model=wm,
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=99,
+        num_envs=1,
+        inference_dtype="bf16",
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert wm.autocast_enabled == [True]
+
+
+def test_latent_world_model_env_chunk_step_batch_autocasts_classifier() -> None:
+    classifier = _AutocastAwareClassifier()
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=99,
+        num_envs=1,
+        inference_dtype="bf16",
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert classifier.autocast_enabled == [True]
+
+
+def test_latent_world_model_env_chunk_step_batch_uses_inference_mode() -> None:
+    wm = _InferenceModeAwareChunkWM()
+    classifier = _InferenceModeAwareClassifier()
+    env = LatentWorldModelEnv(
+        world_model=wm,
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        max_episode_steps=99,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert wm.inference_mode_enabled == [True]
+    assert classifier.inference_mode_enabled == [True]
+
+
+def test_latent_world_model_env_can_return_tensor_observation_snapshots() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        observation_format="tensor",
+    )
+
+    obs, _info = env.reset()
+
+    assert isinstance(obs["latent"], torch.Tensor)
+    obs["latent"][0] = 42.0
+
+    next_obs, _reward, _terminated, _truncated, _info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+
+    assert isinstance(next_obs["latent"], torch.Tensor)
+    assert next_obs["latent"].tolist() == [0.0, 0.0]
+
+
+def test_latent_world_model_env_tensor_observation_uses_inference_dtype() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        lang_dim=2,
+        initial_lang_emb=np.ones(2, dtype=np.float32),
+        success_threshold=99.0,
+        inference_dtype="bf16",
+        observation_format="tensor",
+    )
+
+    obs, _info = env.reset()
+
+    assert obs["latent"].dtype == torch.bfloat16
+    assert obs["lang_emb"].dtype == torch.bfloat16
+
+    observations, _rewards, _terminations, _truncations, _infos = env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert observations[0]["latent"].dtype == torch.bfloat16
+    assert observations[0]["lang_emb"].dtype == torch.bfloat16
 
 
 def test_latent_world_model_env_config_modules_make_replay_transition():

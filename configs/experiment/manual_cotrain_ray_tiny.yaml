@@ -26,6 +26,7 @@ manual_cotrain:
   real_rollout_epoch: ${manual_cotrain.rollout_epoch}
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
   wm_rollout_target_trajectories: null
+  wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 2
   wm_rollout_multiplier: 1
   num_action_chunks: 2
