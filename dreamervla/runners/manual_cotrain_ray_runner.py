@@ -197,7 +197,7 @@ class ManualCotrainRayRunner(BaseRunner):
             wm_env_group = WorkerGroup(
                 WMEnvWorker,
                 self._cfg_dict("env.wm.cfg"),
-                self._envs_per_worker(),
+                self._wm_envs_per_worker(),
                 initial_wm_rollout_epoch,
                 self._wm_max_steps_per_rollout_epoch(),
                 self._num_action_chunks(),
@@ -564,19 +564,19 @@ class ManualCotrainRayRunner(BaseRunner):
         target = self._wm_rollout_target_trajectories()
         if target is None:
             return [self._wm_rollout_epoch() for _ in range(workers)]
-        envs_per_worker = self._envs_per_worker()
-        if target % envs_per_worker != 0:
+        wm_envs_per_worker = self._wm_envs_per_worker()
+        if target % wm_envs_per_worker != 0:
             raise ValueError(
                 "manual_cotrain.wm_rollout_target_trajectories must be divisible by "
-                "manual_cotrain.envs_per_worker; "
-                f"got {target} and {envs_per_worker}"
+                "manual_cotrain.wm_envs_per_worker; "
+                f"got {target} and {wm_envs_per_worker}"
             )
-        total_worker_epochs = target // envs_per_worker
+        total_worker_epochs = target // wm_envs_per_worker
         if total_worker_epochs < workers:
             raise ValueError(
                 "manual_cotrain.wm_rollout_target_trajectories is too small to give "
                 "each WM worker at least one rollout_epoch; "
-                f"got target={target}, envs_per_worker={envs_per_worker}, "
+                f"got target={target}, wm_envs_per_worker={wm_envs_per_worker}, "
                 f"wm_workers={workers}"
             )
         base, extra = divmod(total_worker_epochs, workers)
@@ -596,6 +596,12 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _envs_per_worker(self) -> int:
         return self._positive_manual_int("envs_per_worker", default=1)
+
+    def _wm_envs_per_worker(self) -> int:
+        return self._positive_manual_int(
+            "wm_envs_per_worker",
+            default=self._envs_per_worker(),
+        )
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
@@ -764,7 +770,7 @@ class ManualCotrainRayRunner(BaseRunner):
         real_workers = _worker_count(groups.get("RealEnvGroup"))
         wm_workers = _worker_count(groups.get("WMEnvGroup"))
         real_shards = self._envs_per_worker() * real_workers * self._real_rollout_epoch()
-        wm_shards = self._envs_per_worker() * sum(
+        wm_shards = self._wm_envs_per_worker() * sum(
             self._wm_rollout_epochs_by_worker(wm_workers)
         )
         return int(real_shards + wm_shards)

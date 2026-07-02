@@ -577,6 +577,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
     _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
+    _require_positive_if_present(cfg, "manual_cotrain.wm_envs_per_worker")
     _validate_ray_single_node_placement(cfg)
 
     max_steps = OmegaConf.select(
@@ -629,6 +630,13 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     real_workers = 1
     wm_workers = max(0, ngpu - 1)
     envs_per_worker = int(envs_per_worker_raw)
+    wm_envs_per_worker = int(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.wm_envs_per_worker",
+            default=envs_per_worker,
+        )
+    )
     rollout_epoch = int(
         OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1)
     )
@@ -658,24 +666,24 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     real_trajectory_count = envs_per_worker * real_workers * real_rollout_epoch
     if wm_workers > 0 and wm_rollout_target is not None:
         wm_trajectory_count = int(wm_rollout_target)
-        if wm_trajectory_count % envs_per_worker != 0:
+        if wm_trajectory_count % wm_envs_per_worker != 0:
             raise ValueError(
                 "manual_cotrain.wm_rollout_target_trajectories must be divisible by "
-                "manual_cotrain.envs_per_worker: "
+                "manual_cotrain.wm_envs_per_worker: "
                 f"wm_rollout_target_trajectories={wm_trajectory_count}, "
-                f"envs_per_worker={envs_per_worker}"
+                f"wm_envs_per_worker={wm_envs_per_worker}"
             )
-        total_wm_worker_epochs = wm_trajectory_count // envs_per_worker
+        total_wm_worker_epochs = wm_trajectory_count // wm_envs_per_worker
         if total_wm_worker_epochs < wm_workers:
             raise ValueError(
                 "manual_cotrain.wm_rollout_target_trajectories is too small to give "
                 "each WM worker at least one rollout_epoch: "
                 f"wm_rollout_target_trajectories={wm_trajectory_count}, "
-                f"envs_per_worker={envs_per_worker}, "
+                f"wm_envs_per_worker={wm_envs_per_worker}, "
                 f"wm_workers={wm_workers}"
             )
     else:
-        wm_trajectory_count = envs_per_worker * wm_workers * wm_rollout_epoch
+        wm_trajectory_count = wm_envs_per_worker * wm_workers * wm_rollout_epoch
     logical_trajectory_count = real_trajectory_count + wm_trajectory_count
     if logical_trajectory_count % group_size != 0:
         raise ValueError(
@@ -683,6 +691,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             "actor.train_cfg.algorithm_cfg.group_size: "
             f"manual_cotrain.ngpu={ngpu}, "
             f"manual_cotrain.envs_per_worker={envs_per_worker}, "
+            f"manual_cotrain.wm_envs_per_worker={wm_envs_per_worker}, "
             f"manual_cotrain.rollout_epoch={rollout_epoch}, "
             f"manual_cotrain.real_rollout_epoch={real_rollout_epoch}, "
             f"manual_cotrain.wm_rollout_epoch={wm_rollout_epoch}, "

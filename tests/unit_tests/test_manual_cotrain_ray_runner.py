@@ -39,6 +39,7 @@ def _cfg(
     out_dir: str = "/tmp/dvla-manual-cotrain-test",
     checkpoint_every: int = 0,
     publish_learner_weights: bool = False,
+    wm_envs_per_worker: int | None = None,
     wm_rollout_multiplier: int | None = None,
     wm_rollout_target_trajectories: int | None = None,
 ):
@@ -56,6 +57,8 @@ def _cfg(
     }
     if wm_rollout_multiplier is not None:
         manual_cotrain["wm_rollout_multiplier"] = int(wm_rollout_multiplier)
+    if wm_envs_per_worker is not None:
+        manual_cotrain["wm_envs_per_worker"] = int(wm_envs_per_worker)
     if wm_rollout_target_trajectories is not None:
         manual_cotrain["wm_rollout_target_trajectories"] = int(
             wm_rollout_target_trajectories
@@ -182,6 +185,21 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
 
     assert runner._max_steps_per_rollout_epoch() == 2
     assert runner._wm_max_steps_per_rollout_epoch() == 8
+
+
+def test_runner_uses_independent_wm_env_slots_when_configured() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        wm_envs_per_worker=8,
+        wm_rollout_target_trajectories=1024,
+    )
+    cfg.manual_cotrain.envs_per_worker = 2
+    cfg.manual_cotrain.real_rollout_epoch = 4
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    assert runner._envs_per_worker() == 2
+    assert runner._wm_envs_per_worker() == 8
+    assert runner._wm_rollout_epochs_by_worker(3) == [43, 43, 42]
 
 
 def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
@@ -397,7 +415,8 @@ def test_manual_cotrain_oft_wm_env_num_envs_tracks_envs_per_worker() -> None:
         "task=openvla_onetraj_coldstart_libero",
     )
 
-    assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.envs_per_worker
+    assert cfg.manual_cotrain.wm_envs_per_worker == 8
+    assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.wm_envs_per_worker
     assert cfg.env.wm.cfg.kwargs.device == "cuda"
 
 

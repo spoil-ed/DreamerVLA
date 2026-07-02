@@ -223,7 +223,7 @@ profiles:
   # + WM co-residency OOMs.
   multi_gpu:
     online_rollout_envs_per_gpu: 2
-    ray_online_env_rollout_timeout_s: 2400
+    ray_online_env_rollout_timeout_s: 5400
     collect:
       ray:
         - collect.episode_horizon=300

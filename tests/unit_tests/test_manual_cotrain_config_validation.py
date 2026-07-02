@@ -172,6 +172,20 @@ def test_manual_cotrain_geometry_uses_wm_target_trajectories_when_present() -> N
     validate_cfg(cfg)
 
 
+def test_manual_cotrain_wm_target_uses_wm_envs_per_worker_when_present() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        wm_envs_per_worker=8,
+        real_rollout_epoch=4,
+        wm_rollout_target_trajectories=1026,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 2}
+
+    with pytest.raises(ValueError, match="manual_cotrain.wm_envs_per_worker"):
+        validate_cfg(cfg)
+
+
 def test_manual_cotrain_rejects_wm_target_not_divisible_by_envs_per_worker() -> None:
     cfg = _cfg(
         ngpu=4,

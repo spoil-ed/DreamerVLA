@@ -26,6 +26,7 @@ manual_cotrain:
   wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
   envs_per_worker: 8
+  wm_envs_per_worker: 8
   task_id: 0
 
 algorithm:
@@ -149,7 +150,7 @@ env:
         proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
         success_threshold: 0.5
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
-        num_envs: ${manual_cotrain.envs_per_worker}
+        num_envs: ${manual_cotrain.wm_envs_per_worker}
         device: cuda
 
 replay:
