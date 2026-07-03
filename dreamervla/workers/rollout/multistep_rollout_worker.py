@@ -149,10 +149,12 @@ class MultiStepRolloutWorker(Worker):
         log_prob_cpu = _to_cpu_tensor(log_prob).reshape(len(obs_msgs), -1)
         extra = extra if isinstance(extra, dict) else {}
 
-        forward_inputs: dict[str, Any] = {
-            "hidden": hidden_t.detach().cpu(),
-            "action": action_cpu,
-        }
+        forward_inputs: dict[str, Any] = {"action": action_cpu}
+        if batched_hidden is None:
+            # Encoder-derived hidden only exists here; obs-provided hidden is
+            # already held by the env worker, so echoing it back would just
+            # duplicate the largest tensor on the rollout->env channel.
+            forward_inputs["hidden"] = hidden_t.detach().cpu()
         lang_emb = _batched_forward_input(
             obs_msgs,
             batched_obs=batched_obs,

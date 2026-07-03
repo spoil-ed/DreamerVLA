@@ -136,7 +136,7 @@ def pack_rollout_result_batch(
     env_rank: int,
     results: list[RolloutResultMsg],
 ) -> RolloutResultBatchMsg:
-    """Pack per-slot rollout results into WoVR-style batch tensors."""
+    """Pack per-slot rollout results into rank-level batch tensors."""
 
     if not results:
         return RolloutResultBatchMsg(env_rank=int(env_rank), results=[])
@@ -295,8 +295,30 @@ def _unpack_forward_input_row(key: str, row: torch.Tensor) -> torch.Tensor:
     return row.reshape(1, *tuple(row.shape))
 
 
-def _cat_step_batch(values: list[Any]) -> torch.Tensor:
-    return torch.cat([as_tensor(value) for value in values], dim=1)
+def _cat_step_batch(
+    values: list[Any],
+    *,
+    name: str = "trajectory tensor",
+) -> torch.Tensor:
+    tensors = [as_tensor(value).detach().cpu() for value in values]
+    if not tensors:
+        raise ValueError(f"{name} requires at least one tensor")
+    max_ndim = max(int(tensor.ndim) for tensor in tensors)
+    normalized: list[torch.Tensor] = []
+    for tensor in tensors:
+        while tensor.ndim < max_ndim:
+            tensor = tensor.unsqueeze(-1)
+        normalized.append(tensor)
+
+    expected = tuple(normalized[0].shape[:1]) + tuple(normalized[0].shape[2:])
+    for tensor in normalized[1:]:
+        shape = tuple(tensor.shape[:1]) + tuple(tensor.shape[2:])
+        if shape != expected:
+            shapes = [tuple(int(dim) for dim in item.shape) for item in tensors]
+            raise ValueError(
+                f"{name} tensors must share non-batch dimensions; got {shapes}"
+            )
+    return torch.cat(normalized, dim=1)
 
 
 def _validate_step_batch_dim(
@@ -418,21 +440,26 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
                 _pad_step_batch(shard.prev_values, max_steps)
                 for shard in shards
                 if shard.prev_values is not None
-            ]
+            ],
+            name="prev_values",
         )
 
     return TrajectoryBatch(
         actions=_cat_step_batch(
-            [_pad_step_batch(shard.actions, max_steps) for shard in shards]
+            [_pad_step_batch(shard.actions, max_steps) for shard in shards],
+            name="actions",
         ),
         rewards=_cat_step_batch(
-            [_pad_step_batch(shard.rewards, max_steps) for shard in shards]
+            [_pad_step_batch(shard.rewards, max_steps) for shard in shards],
+            name="rewards",
         ).float(),
         dones=_cat_step_batch(
-            [_pad_step_batch(shard.dones, max_steps, pad_value=True) for shard in shards]
+            [_pad_step_batch(shard.dones, max_steps, pad_value=True) for shard in shards],
+            name="dones",
         ).bool(),
         prev_logprobs=_cat_step_batch(
-            [_pad_step_batch(shard.prev_logprobs, max_steps) for shard in shards]
+            [_pad_step_batch(shard.prev_logprobs, max_steps) for shard in shards],
+            name="prev_logprobs",
         ).float(),
         prev_values=prev_values,
         forward_inputs={
@@ -440,13 +467,15 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
                 [
                     _pad_step_batch(shard.forward_inputs[key], max_steps)
                     for shard in shards
-                ]
+                ],
+                name=f"forward_inputs[{key!r}]",
             )
             for key in sorted(forward_keys)
         },
         versions={
             key: _cat_step_batch(
-                [_pad_step_batch(shard.versions[key], max_steps) for shard in shards]
+                [_pad_step_batch(shard.versions[key], max_steps) for shard in shards],
+                name=f"versions[{key!r}]",
             )
             for key in sorted(version_keys)
         },
@@ -454,7 +483,8 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
             [
                 _shard_loss_mask(shard, max_steps, batch_size)
                 for shard, batch_size in zip(shards, batch_sizes, strict=True)
-            ]
+            ],
+            name="loss_mask",
         ),
         task_ids=torch.tensor(
             [

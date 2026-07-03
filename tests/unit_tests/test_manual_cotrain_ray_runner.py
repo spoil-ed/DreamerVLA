@@ -10,6 +10,7 @@ import dreamervla.runners as runners
 import dreamervla.runners.manual_cotrain_ray_runner as manual_runner
 from dreamervla.runners.manual_cotrain_ray_runner import (
     _ManualCotrainEnvProgressMonitor,
+    _ManualCotrainProgressSnapshot,
     _read_manual_cotrain_progress_snapshot,
     _split_actor_shard_counts,
     _sum_metric_lists,
@@ -398,12 +399,14 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.learner.train_cfg.mode == "wm_classifier_only"
     assert cfg.algorithm.group_size == 8
     assert cfg.algorithm.rollout_epoch == 16
-    assert cfg.manual_cotrain.real_rollout_epoch == 4
+    assert cfg.manual_cotrain.real_rollout_epoch == 1
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
     assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
     assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
     assert cfg.manual_cotrain.wm_rollout_multiplier == 1
+    assert cfg.manual_cotrain.eval_interval_global_steps == 1
+    assert cfg.manual_cotrain.debug_eval_interval_global_steps == 1
     assert list(cfg.runner.logger.logger_backends) == ["tensorboard", "wandb"]
     assert cfg.runner.logger.wandb_mode == "offline"
     assert cfg.runner.logger.wandb_proxy is None
@@ -425,15 +428,29 @@ def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
     assert cfg.rollout.encoder_cfg.kwargs.policy_cfg.num_images_in_input == 1
 
 
-def test_manual_cotrain_oft_wm_env_num_envs_tracks_envs_per_worker() -> None:
+def test_manual_cotrain_oft_wm_env_num_envs_tracks_wm_envs_per_worker() -> None:
     cfg = _compose_train_config(
         "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
 
-    assert cfg.manual_cotrain.wm_envs_per_worker == 8
+    assert cfg.manual_cotrain.wm_envs_per_worker == 16
     assert cfg.env.wm.cfg.kwargs.num_envs == cfg.manual_cotrain.wm_envs_per_worker
     assert cfg.env.wm.cfg.kwargs.device == "cuda"
+
+
+def test_manual_cotrain_real_rollout_budget_is_one_epoch() -> None:
+    cfg = _compose_train_config(
+        "experiment=openvla_onetraj_libero_cotrain_ray",
+        "task=openvla_onetraj_coldstart_libero",
+    )
+
+    assert cfg.manual_cotrain.real_rollout_epoch == 1
+    total = (
+        cfg.manual_cotrain.envs_per_worker * cfg.manual_cotrain.real_rollout_epoch
+        + cfg.manual_cotrain.wm_rollout_target_trajectories
+    )
+    assert total % cfg.algorithm.group_size == 0
 
 
 def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess() -> None:
@@ -814,6 +831,31 @@ class _DelayedReady:
         return self.value
 
 
+class _RecordingCentralProgress:
+    def __init__(self) -> None:
+        self.snapshots: list[_ManualCotrainProgressSnapshot] = []
+
+    def records(self):
+        return []
+
+    def report_snapshot(self, snapshot, *, force: bool = False):
+        del force
+        self.snapshots.append(snapshot)
+        return snapshot
+
+    def report(self, *, force: bool = False):
+        del force
+        snapshot = _ManualCotrainProgressSnapshot(
+            done=0,
+            total=0,
+            status=None,
+            worker_count=0,
+            finished_count=0,
+        )
+        self.snapshots.append(snapshot)
+        return snapshot
+
+
 class _DynamicFakeWMEnvGroup:
     def __init__(self, *, worker_count: int, slow_rank: int = 1) -> None:
         self.workers = [object() for _ in range(worker_count)]
@@ -873,6 +915,37 @@ def test_dynamic_wm_leases_let_fast_worker_consume_more_imagine_budget() -> None
     assert all(epoch == 1 for _rank, epoch in wm_env.configure_calls)
     assert metrics["env/trajectory_shards"] == 13.0
     assert metrics["env/steps"] == 26.0
+
+
+def test_dynamic_wm_progress_is_reported_from_central_pool() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=2, wm_rollout_target_trajectories=12)
+    cfg.manual_cotrain.wm_rollout_lease_epochs = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+    wm_env = _DynamicFakeWMEnvGroup(worker_count=2, slow_rank=1)
+    progress = _RecordingCentralProgress()
+
+    runner._wait_env_metrics_with_dynamic_wm_leases(
+        real_env_results=[_Ready({"env/trajectory_shards": 1.0, "env/steps": 2.0})],
+        wm_env=wm_env,
+        rollout_result=_RunningRollout(),
+        env_channel_name="env",
+        rollout_channel_name="rollout",
+        actor_channel_name="actor",
+        timeout_s=10.0,
+        poll_s=0.0,
+        progress=progress,  # type: ignore[arg-type]
+    )
+
+    reported = [snapshot for snapshot in progress.snapshots if snapshot.total > 0]
+    assert reported
+    dones = [snapshot.done for snapshot in reported]
+    assert dones == sorted(dones)
+    assert reported[-1].done == reported[-1].total
+    assert any(snapshot.status and "wm_pool=" in snapshot.status for snapshot in reported)
+    assert all(
+        snapshot.status is None or "wm_env#1=" not in snapshot.status
+        for snapshot in reported
+    )
 
 
 def test_wait_env_metrics_surfaces_rollout_failure_before_env_wait() -> None:

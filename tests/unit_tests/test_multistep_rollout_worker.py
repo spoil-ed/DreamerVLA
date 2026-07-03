@@ -281,8 +281,9 @@ def test_generate_batch_uses_batched_obs_hidden_payload() -> None:
 
     assert [result.slot_id for result in results] == [0, 1]
     assert [result.step for result in results] == [2, 3]
-    assert results[0].forward_inputs["hidden"].tolist() == [[1.0, 1.0, 1.0, 1.0]]
-    assert results[1].forward_inputs["hidden"].tolist() == [[2.0, 2.0, 2.0, 2.0]]
+    # The env already owns the hidden it sent in batched_obs; echoing it back
+    # would only duplicate the largest tensor on the rollout->env channel.
+    assert all("hidden" not in result.forward_inputs for result in results)
     assert results[0].forward_inputs["lang_emb"].tolist() == [3.0, 3.0]
     assert results[1].forward_inputs["lang_emb"].tolist() == [4.0, 4.0]
 
@@ -565,10 +566,9 @@ def test_generate_reads_rank_keyed_batch_hidden_payload() -> None:
         assert torch.as_tensor(batch.actions).shape == (2, 2, 3)
         assert torch.as_tensor(batch.prev_logprobs).shape == (2, 1)
         assert batch.prev_values is None
-        assert torch.as_tensor(batch.forward_inputs["hidden"]).tolist() == [
-            [1.0, 1.0, 1.0, 1.0],
-            [2.0, 2.0, 2.0, 2.0],
-        ]
+        # Obs-provided hidden is not echoed back; the env worker re-attaches
+        # its own copy when building trajectory shards.
+        assert "hidden" not in batch.forward_inputs
         assert torch.as_tensor(batch.forward_inputs["lang_emb"]).tolist() == [
             [3.0, 3.0],
             [4.0, 4.0],

@@ -164,11 +164,21 @@ def test_real_env_worker_buffers_rollout_result_into_trajectory() -> None:
         assert isinstance(obs, ObservationMsg)
         assert obs.obs["step"] == 0
 
-        shard = worker.apply_rollout_result(_rollout_result())
+        result = _rollout_result()
+        result = replace(
+            result,
+            forward_inputs={
+                **result.forward_inputs,
+                "lang_emb": np.full((2,), 3.0, dtype=np.float32),
+            },
+        )
+        shard = worker.apply_rollout_result(result)
 
         assert isinstance(shard, TrajectoryShard)
         assert shard.actions.shape == (1, 1, 2, 3)
         assert shard.forward_inputs["hidden"].shape == (1, 1, 4)
+        assert shard.forward_inputs["lang_emb"].shape == (1, 1, 2)
+        assert shard.forward_inputs["lang_emb"][0, 0].tolist() == [3.0, 3.0]
         assert shard.forward_inputs["action"].shape == (1, 1, 2, 3)
         assert shard.versions["policy"].shape == (1, 1)
         assert shard.prev_logprobs.shape == (1, 1)
@@ -1368,5 +1378,87 @@ def test_interact_flushes_partial_episode_at_rollout_epoch_boundary(
         assert float(last_step["discount"]) == 1.0
         assert worker._episode_ids_by_slot[0] == 1
         assert worker._episodes_by_slot[0] == []
+    finally:
+        worker.close()
+
+
+def test_get_rollout_result_batch_injects_hidden_from_slot_obs() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="wm_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+    try:
+        worker.init()
+        worker.bootstrap_obs()
+        batch = RolloutResultBatchMsg(
+            env_rank=0,
+            results=[],
+            slot_ids=[0],
+            task_ids=[0],
+            episode_ids=[0],
+            steps=[0],
+            actions=torch.zeros(1, 2, 3),
+            prev_logprobs=torch.zeros(1, 1),
+            prev_values=None,
+            forward_inputs={"action": torch.zeros(1, 2, 3)},
+            versions={"policy": torch.ones(1, dtype=torch.long)},
+        )
+        channel = _MemoryChannel([batch])
+        metrics = worker._new_interact_metrics()
+
+        results = worker._get_rollout_result_batch(channel, [0], metrics)
+
+        hidden = torch.as_tensor(results[0].forward_inputs["hidden"])
+        expected = torch.as_tensor(
+            np.asarray(worker._obs_by_slot[0]["obs_embedding"], dtype=np.float32)
+        ).reshape(1, -1)
+        assert hidden.shape == expected.shape
+        assert torch.allclose(hidden, expected)
+    finally:
+        worker.close()
+
+
+def test_get_rollout_result_batch_injects_bf16_tensor_hidden() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="wm_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+    try:
+        worker.init()
+        worker.bootstrap_obs()
+        worker._obs_by_slot[0]["obs_embedding"] = torch.full(
+            (4,), 2.0, dtype=torch.bfloat16
+        )
+        batch = RolloutResultBatchMsg(
+            env_rank=0,
+            results=[],
+            slot_ids=[0],
+            task_ids=[0],
+            episode_ids=[0],
+            steps=[0],
+            actions=torch.zeros(1, 2, 3),
+            prev_logprobs=torch.zeros(1, 1),
+            prev_values=None,
+            forward_inputs={"action": torch.zeros(1, 2, 3)},
+            versions={"policy": torch.ones(1, dtype=torch.long)},
+        )
+        channel = _MemoryChannel([batch])
+        metrics = worker._new_interact_metrics()
+
+        results = worker._get_rollout_result_batch(channel, [0], metrics)
+
+        hidden = torch.as_tensor(results[0].forward_inputs["hidden"])
+        assert hidden.dtype == torch.float32
+        assert hidden.tolist() == [[2.0, 2.0, 2.0, 2.0]]
     finally:
         worker.close()

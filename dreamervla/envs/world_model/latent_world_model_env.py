@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import time
 from collections.abc import Sequence
 from contextlib import nullcontext
@@ -11,6 +12,8 @@ from typing import Any
 import numpy as np
 import torch
 from torch import nn
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _float32_contiguous_array(value: Any) -> np.ndarray:
@@ -132,6 +135,7 @@ class LatentWorldModelEnv:
         self._batch_size_sum = 0
         self._batch_size_min: int | None = None
         self._batch_size_max = 0
+        self._chunk_fallback_warned = False
         self.world_model.to(self.device).eval()
         if self.classifier is not None:
             self.classifier.to(self.device).eval()
@@ -405,7 +409,7 @@ class LatentWorldModelEnv:
     ]:
         """Advance a batch of slots by one policy action chunk.
 
-        This is the WoVR-style world-model env boundary: one call accepts
+        This is the chunk-batched world-model env boundary: one call accepts
         ``[B, K, A]`` actions and performs one chunk world-model forward.
         """
 
@@ -587,6 +591,12 @@ class LatentWorldModelEnv:
     ]:
         """Preserve behavior for world models without chunk prediction support."""
 
+        if not self._chunk_fallback_warned:
+            self._chunk_fallback_warned = True
+            _LOGGER.warning(
+                "world model lacks chunk mode (predict_next_chunk); "
+                "chunk_step_batch is falling back to per-step step_batch"
+            )
         batch_size = len(slots)
         actions_np = np.asarray(actions_np, dtype=np.float32).reshape(
             batch_size,

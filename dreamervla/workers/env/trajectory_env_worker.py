@@ -191,6 +191,17 @@ def _one_chunk_batch(
     return tensor.reshape(1, 1, *tensor.shape).detach().cpu()
 
 
+def _one_forward_input_chunk_batch(value: Any) -> torch.Tensor:
+    tensor = as_tensor(value)
+    if tensor.ndim == 0:
+        return tensor.reshape(1, 1, 1).detach().cpu()
+    if tensor.ndim == 1:
+        return tensor.reshape(1, 1, *tuple(tensor.shape)).detach().cpu()
+    if int(tensor.shape[0]) == 1:
+        return tensor.reshape(1, 1, *tuple(tensor.shape[1:])).detach().cpu()
+    return tensor.reshape(1, 1, *tuple(tensor.shape)).detach().cpu()
+
+
 def _numpy_dtype_for_torch_dtype(dtype: torch.dtype | None) -> np.dtype | None:
     if dtype is None:
         return None
@@ -894,7 +905,7 @@ class BaseTrajectoryEnvWorker(Worker):
             ),
             prev_values=prev_values,
             forward_inputs={
-                str(key): _one_chunk_batch(value)
+                str(key): _one_forward_input_chunk_batch(value)
                 for key, value in dict(result.forward_inputs).items()
             },
             versions={
@@ -985,7 +996,12 @@ class BaseTrajectoryEnvWorker(Worker):
             prev_values=torch.cat(prev_values, dim=0) if has_prev_values else None,
             forward_inputs={
                 str(key): torch.cat(
-                    [_one_chunk_batch(chunk.result.forward_inputs[key]) for chunk in chunks],
+                    [
+                        _one_forward_input_chunk_batch(
+                            chunk.result.forward_inputs[key]
+                        )
+                        for chunk in chunks
+                    ],
                     dim=0,
                 )
                 for key in sorted(forward_keys)
@@ -2395,6 +2411,21 @@ class BaseTrajectoryEnvWorker(Worker):
             )
 
         results = [by_slot[slot_id] for slot_id in expected_slots]
+        for result in results:
+            if "hidden" in result.forward_inputs:
+                continue
+            obs = self._obs_by_slot[int(result.slot_id)]
+            if obs is None:
+                continue
+            for obs_key in _DIRECT_HIDDEN_OBS_KEYS:
+                if obs_key in obs:
+                    value = obs[obs_key]
+                    if isinstance(value, torch.Tensor):
+                        hidden = value.detach().to(dtype=torch.float32, device="cpu")
+                    else:
+                        hidden = torch.as_tensor(np.asarray(value, dtype=np.float32))
+                    result.forward_inputs["hidden"] = hidden.reshape(1, -1)
+                    break
         keys_csv = ",".join(result.key for result in results)
         _hs_trace(
             f"[env rank={int(self.rank)} role={self.role}] "

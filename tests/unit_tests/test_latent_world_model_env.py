@@ -487,3 +487,34 @@ def test_latent_world_model_env_config_modules_make_replay_transition():
     assert transition["image"].shape == (4, 4, 3)
     assert transition["task_id"] == 3
     assert transition["episode_id"] == 4
+
+
+class _NoChunkWM(torch.nn.Module):
+    def forward(self, batch):
+        if batch.get("mode") == "predict_next_chunk":
+            raise NotImplementedError("predict_next_chunk not supported")
+        latent = batch["latent"]
+        action = batch["action"]
+        return latent + action[..., : latent.shape[-1]]
+
+
+def test_chunk_step_batch_fallback_warns_once(caplog) -> None:
+    env = LatentWorldModelEnv(
+        world_model=_NoChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+    actions = np.zeros((1, 2, 2), dtype=np.float32)
+
+    with caplog.at_level("WARNING"):
+        env.chunk_step_batch(actions, env_ids=[0])
+        env.chunk_step_batch(actions, env_ids=[0])
+
+    fallback_warnings = [
+        record for record in caplog.records if "chunk mode" in record.getMessage()
+    ]
+    assert len(fallback_warnings) == 1

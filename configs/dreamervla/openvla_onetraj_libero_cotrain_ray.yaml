@@ -19,7 +19,7 @@ manual_cotrain:
   requires_bootstrap_value: false
   wm_env_write_replay: false
   rollout_epoch: ${algorithm.rollout_epoch}
-  real_rollout_epoch: 4
+  real_rollout_epoch: 1
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
   wm_rollout_target_trajectories: 1024
   wm_rollout_lease_epochs: 1
@@ -27,7 +27,9 @@ manual_cotrain:
   wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
   envs_per_worker: 8
-  wm_envs_per_worker: 8
+  wm_envs_per_worker: 16
+  eval_interval_global_steps: 1
+  debug_eval_interval_global_steps: 1
   task_id: 0
 
 algorithm:

@@ -716,10 +716,25 @@ class ManualCotrainRayRunner(BaseRunner):
         total_wm_epochs = sum(self._wm_rollout_epochs_by_worker(wm_workers))
         lease_epochs = self._wm_rollout_lease_epochs()
         remaining_wm_epochs = int(total_wm_epochs)
-        active_wm: dict[int, Any] = {}
+        active_wm: dict[int, tuple[Any, int]] = {}
+        completed_wm_epochs = 0
         pending_real = list(real_env_results)
         completed_metrics: list[Any] = []
         start = time.monotonic()
+        real_total_chunks = (
+            self._real_rollout_epoch()
+            * self._envs_per_worker()
+            * _chunk_steps(
+                self._max_steps_per_rollout_epoch(),
+                self._num_action_chunks(),
+            )
+        )
+        wm_chunks_per_epoch = self._wm_envs_per_worker() * _chunk_steps(
+            self._wm_max_steps_per_rollout_epoch(),
+            self._num_action_chunks(),
+        )
+        wm_total_chunks = int(total_wm_epochs) * int(wm_chunks_per_epoch)
+        real_completed = False
 
         def check_rollout_failure() -> None:
             ready = rollout_result.ready()
@@ -740,36 +755,127 @@ class ManualCotrainRayRunner(BaseRunner):
                 f"rollout_epoch={int(lease)} remaining_before={int(remaining_wm_epochs)}"
             )
             wm_env.execute_on(int(rank)).configure_rollout_epoch(int(lease)).wait()
-            active_wm[int(rank)] = wm_env.execute_on(int(rank)).interact(
-                env_channel_name,
-                rollout_channel_name,
-                actor_channel_name,
+            active_wm[int(rank)] = (
+                wm_env.execute_on(int(rank)).interact(
+                    env_channel_name,
+                    rollout_channel_name,
+                    actor_channel_name,
+                ),
+                int(lease),
             )
             remaining_wm_epochs -= int(lease)
+
+        def progress_records() -> list[dict[str, Any]]:
+            if progress is None:
+                return []
+            records = getattr(progress, "records", None)
+            if callable(records):
+                return list(records())
+            return []
+
+        def central_progress_snapshot() -> _ManualCotrainProgressSnapshot:
+            records = progress_records()
+            global_steps = {
+                int(record.get("global_step", 0) or 0)
+                for record in records
+                if "global_step" in record
+            }
+            real_done = int(real_total_chunks if real_completed else 0)
+            for record in records:
+                if str(record.get("role", "")) != "real_env":
+                    continue
+                item_total = max(0, int(record.get("total", 0) or 0))
+                item_done = max(0, int(record.get("done", 0) or 0))
+                if item_total > 0:
+                    real_done = max(real_done, min(item_done, item_total))
+                else:
+                    real_done = max(real_done, item_done)
+
+            active_wm_chunks = 0
+            for record in records:
+                if str(record.get("role", "")) != "wm_env":
+                    continue
+                rank = int(record.get("rank", record.get("env_rank", -1)) or -1)
+                if rank not in active_wm:
+                    continue
+                item_total = max(0, int(record.get("total", 0) or 0))
+                item_done = max(0, int(record.get("done", 0) or 0))
+                active_wm_chunks += min(item_done, item_total) if item_total > 0 else item_done
+
+            wm_done = min(
+                int(wm_total_chunks),
+                int(completed_wm_epochs) * int(wm_chunks_per_epoch) + int(active_wm_chunks),
+            )
+            done = min(
+                int(real_total_chunks) + int(wm_total_chunks),
+                int(real_done) + int(wm_done),
+            )
+            total = int(real_total_chunks) + int(wm_total_chunks)
+            parts: list[str] = []
+            if len(global_steps) == 1:
+                parts.append(f"global_step={next(iter(global_steps))}")
+            elif global_steps:
+                parts.append(f"global_steps={min(global_steps)}-{max(global_steps)}")
+            parts.extend(
+                [
+                    f"real_env={int(real_done)}/{int(real_total_chunks)}",
+                    f"wm_pool={int(wm_done)}/{int(wm_total_chunks)}",
+                    f"wm_epochs={int(completed_wm_epochs)}/{int(total_wm_epochs)}",
+                    "active_wm="
+                    + (
+                        ",".join(str(rank + 1) for rank in sorted(active_wm))
+                        if active_wm
+                        else "none"
+                    ),
+                    f"remaining_wm_epochs={int(remaining_wm_epochs)}",
+                ]
+            )
+            finished = int(real_done >= real_total_chunks) + int(wm_done >= wm_total_chunks)
+            return _ManualCotrainProgressSnapshot(
+                done=done,
+                total=total,
+                status=" ".join(parts),
+                worker_count=2,
+                finished_count=finished,
+            )
+
+        def report_central_progress(*, force: bool = False) -> _ManualCotrainProgressSnapshot | None:
+            if progress is None:
+                return None
+            snapshot = central_progress_snapshot()
+            report_snapshot = getattr(progress, "report_snapshot", None)
+            if callable(report_snapshot):
+                report_snapshot(snapshot, force=force)
+            else:
+                progress.report(force=force)
+            return snapshot
 
         for rank in range(min(int(wm_workers), int(remaining_wm_epochs))):
             start_wm_lease(rank)
 
+        report_central_progress(force=True)
         while pending_real or active_wm:
-            if progress is not None:
-                progress.report()
+            report_central_progress()
             check_rollout_failure()
 
             next_pending_real: list[Any] = []
             for result in pending_real:
                 if result.done():
+                    real_completed = True
                     completed_metrics.append(result.wait())
                 else:
                     next_pending_real.append(result)
             pending_real = next_pending_real
 
             completed_wm_ranks: list[int] = []
-            for rank, result in list(active_wm.items()):
+            for rank, (result, _lease) in list(active_wm.items()):
                 if not result.done():
                     continue
                 completed_metrics.append(result.wait())
                 completed_wm_ranks.append(int(rank))
             for rank in completed_wm_ranks:
+                _result, lease = active_wm[int(rank)]
+                completed_wm_epochs += int(lease)
                 active_wm.pop(int(rank), None)
             for rank in completed_wm_ranks:
                 start_wm_lease(int(rank))
@@ -777,7 +883,7 @@ class ManualCotrainRayRunner(BaseRunner):
             if not pending_real and not active_wm:
                 break
             if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
-                snapshot = progress.report(force=True) if progress is not None else None
+                snapshot = report_central_progress(force=True)
                 progress_suffix = (
                     f" Current manual cotrain progress: {snapshot.status}."
                     if snapshot is not None and snapshot.status
@@ -797,6 +903,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 )
             time.sleep(max(0.0, float(poll_s)))
 
+        report_central_progress(force=True)
         return _sum_metric_lists(completed_metrics)
 
     def _receive_actor_trajectories(
@@ -1298,10 +1405,30 @@ class _ManualCotrainEnvProgressMonitor:
             )
         return snapshot
 
+    def records(self) -> list[dict[str, Any]]:
+        return _read_manual_cotrain_progress_records(self.progress_dir)
 
-def _read_manual_cotrain_progress_snapshot(
+    def report_snapshot(
+        self,
+        snapshot: _ManualCotrainProgressSnapshot,
+        *,
+        force: bool = False,
+    ) -> _ManualCotrainProgressSnapshot:
+        del force
+        if snapshot.total > 0:
+            self._console_progress(
+                snapshot.done,
+                snapshot.total,
+                self._desc,
+                unit="chunk",
+                status=snapshot.status,
+            )
+        return snapshot
+
+
+def _read_manual_cotrain_progress_records(
     progress_dir: str | Path,
-) -> _ManualCotrainProgressSnapshot:
+) -> list[dict[str, Any]]:
     path = Path(progress_dir)
     records: list[dict[str, Any]] = []
     if path.is_dir():
@@ -1312,6 +1439,13 @@ def _read_manual_cotrain_progress_snapshot(
                 continue
             if isinstance(payload, dict):
                 records.append(payload)
+    return records
+
+
+def _read_manual_cotrain_progress_snapshot(
+    progress_dir: str | Path,
+) -> _ManualCotrainProgressSnapshot:
+    records = _read_manual_cotrain_progress_records(progress_dir)
     if not records:
         return _ManualCotrainProgressSnapshot(
             done=0,

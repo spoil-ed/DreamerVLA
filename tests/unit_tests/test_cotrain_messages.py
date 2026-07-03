@@ -139,6 +139,51 @@ def test_collate_chunk_level_trajectory_shards_keeps_chunk_axis() -> None:
     assert batch.versions["policy"].tolist() == [[1, 2]]
 
 
+def test_collate_trajectory_shards_normalizes_trailing_singleton_rank() -> None:
+    shards = [
+        TrajectoryShard(
+            env_rank=0,
+            slot_id=0,
+            task_id=0,
+            episode_ids=[10],
+            actions=torch.ones(2, 1, 3),
+            rewards=torch.zeros(2, 1),
+            dones=torch.zeros(2, 1, dtype=torch.bool),
+            prev_logprobs=torch.zeros(2, 1),
+            prev_values=None,
+            forward_inputs={
+                "hidden": torch.ones(2, 1, 4),
+                "scalar_score": torch.tensor([[0.1], [0.2]]),
+            },
+            versions={"policy": torch.ones(2, 1, dtype=torch.long)},
+        ),
+        TrajectoryShard(
+            env_rank=1,
+            slot_id=0,
+            task_id=0,
+            episode_ids=[20],
+            actions=torch.full((2, 1, 3), 2.0),
+            rewards=torch.zeros(2, 1),
+            dones=torch.zeros(2, 1, dtype=torch.bool),
+            prev_logprobs=torch.zeros(2, 1),
+            prev_values=None,
+            forward_inputs={
+                "hidden": torch.full((2, 1, 4), 2.0),
+                "scalar_score": torch.tensor([[[0.3]], [[0.4]]]),
+            },
+            versions={"policy": torch.full((2, 1), 2, dtype=torch.long)},
+        ),
+    ]
+
+    batch = collate_trajectory_shards(shards)
+
+    assert batch.forward_inputs["scalar_score"].shape == (2, 2, 1)
+    assert torch.allclose(
+        batch.forward_inputs["scalar_score"].squeeze(-1),
+        torch.tensor([[0.1, 0.3], [0.2, 0.4]]),
+    )
+
+
 def test_collate_trajectory_shards_repeats_task_ids_by_batch_size() -> None:
     shards = [
         _trajectory_shard(batch_size=2, task_id=0, episode_start=10),
