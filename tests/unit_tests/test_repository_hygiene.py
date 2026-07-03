@@ -49,8 +49,14 @@ def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
     ]
     skip_paths = {
         project_root / "spec" / "99_manual_notes.md",
+        # Background prompt context that documents the external reference
+        # implementation it was derived from.
+        project_root / "spec" / "98_prompt.md",
+        # User-requested cross-project alignment analysis; the report must name
+        # the external scheme it analyzes.
+        project_root / "docs" / "rlinf_wovr_inference_optimizations.md",
     }
-    skip_parts = {"archive", "__pycache__"}
+    skip_parts = {"archive", "__pycache__", "superpowers"}
     checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
 
     offenders: list[str] = []
@@ -217,8 +223,8 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
         / "OpenVLA_Onetraj_LIBERO.md"
     ).read_text(encoding="utf-8")
 
-    assert "experiment=oft_discrete_token_world_model_chunk" in tutorial
-    assert "experiment=dreamervla_oft_discrete_token_wm_lumos" in tutorial
+    assert "e2e_coldstart_warmup_cotrain_ray.sh" in tutorial
+    assert "experiment=collect_rollouts_ray" in tutorial
     _assert_no_removed_wm_wording(tutorial)
 
 
