@@ -19,6 +19,17 @@
 
 ---
 
+## Execution Status (2026-07-03, branch `feat/rlinf-alignment-full-pipeline`)
+
+- ✅ **A1** committed `01ba4f0` — `grpo.group_variance_mask` + activated-actor wiring; tests green.
+- ✅ **A2** committed `00d11f7` — per-rollout equal-weight loss normalization; tests green.
+- ✅ **A4** committed `c9ee022` — enabled A1+A2 knobs in the mainline cotrain config; compose test green.
+- ⏸ **A3** (group-aligned micro-batch) — DEFERRED. The activated `run_training` loops over *time steps* evaluating the full rollout batch per step (`embodied_fsdp_actor.py:231-315`); micro-batching the rollout dim requires slicing `_eval_inputs_for_step` output per group-aligned slice + an exact full-vs-micro equivalence test. Not landed to avoid a wrong numerics-changing edit under time pressure. Next task.
+- ⏳ **B1/B2** (threshold calibration + warmup val gate) — not started; anchors verified in plan.
+- ⏳ **C1/C2** (bootstrap overlap + eval enumeration) — not started; both need the `REQUIRED READ` first steps (env-worker `interact`, eval loop) that the extraction agents could not finish (session limit reset 1:50pm ET).
+
+Regression at checkpoint: `test_embodied_fsdp_actor + test_grpo_helpers + test_manual_cotrain_ray_runner + test_manual_cotrain_config_validation` = **109 passed**.
+
 ## File Structure
 
 | File | Responsibility | Sub-plan |
