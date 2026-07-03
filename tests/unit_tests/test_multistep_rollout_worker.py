@@ -8,6 +8,7 @@ import pytest
 import ray
 import torch
 
+import dreamervla.workers.rollout.multistep_rollout_worker as rollout_worker
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.workers.cotrain.messages import (
@@ -19,7 +20,6 @@ from dreamervla.workers.cotrain.messages import (
     rollout_result_batch_to_messages,
 )
 from dreamervla.workers.inference.oft_rollout import _select_image_keys_for_policy
-import dreamervla.workers.rollout.multistep_rollout_worker as rollout_worker
 from dreamervla.workers.rollout.multistep_rollout_worker import (
     MultiStepRolloutWorker,
     _obs_embedding_from_obs,
@@ -61,6 +61,22 @@ def _obs(
 
 def _obs_batch(*observations: ObservationMsg, env_rank: int = 0) -> ObservationBatchMsg:
     return ObservationBatchMsg(env_rank=int(env_rank), observations=list(observations))
+
+
+class _InspectLogprobTypePolicy(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_logprob_types: list[object] = []
+
+    def forward(self, batch):  # type: ignore[override]
+        logprob_type = batch.get("logprob_type")
+        self.seen_logprob_types.append(logprob_type)
+        if logprob_type != "token_level":
+            raise AssertionError(f"expected token_level logprob_type, got {logprob_type!r}")
+        bsz = int(batch["hidden"].shape[0])
+        action = torch.zeros(bsz, 2, 3)
+        log_prob = torch.zeros(bsz, 2, 3)
+        return action, log_prob, {"action_chunk": action}
 
 
 def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> ObservationMsg:
@@ -108,6 +124,23 @@ def test_generate_once_accepts_obs_embedding_and_returns_forward_inputs() -> Non
     assert out.versions["actor_policy_version"] == 0
     assert out.versions["rollout_policy_version"] == 0
     assert out.versions["global_step"] == 0
+
+
+def test_generate_once_forwards_token_level_logprob_type() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu", "logprob_type": "token_level"},
+    )
+    worker.init()
+    policy = _InspectLogprobTypePolicy()
+    worker.policy = policy
+
+    out = worker.generate_once(_obs())
+
+    assert policy.seen_logprob_types == ["token_level"]
+    assert out.prev_logprobs.shape == (2, 3)
 
 
 def test_to_device_float_tensor_avoids_unconditional_numpy_copy(monkeypatch) -> None:

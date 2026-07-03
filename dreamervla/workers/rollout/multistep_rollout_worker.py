@@ -21,7 +21,6 @@ from dreamervla.workers.cotrain.messages import (
     RolloutResultBatchMsg,
     RolloutResultMsg,
     StopMsg,
-    pack_rollout_result_batch,
     rollout_result_batch_to_messages,
 )
 
@@ -137,16 +136,20 @@ class MultiStepRolloutWorker(Worker):
             hidden_t = _to_device_float_batch(hidden_values, self.torch_device)
 
         policy = self._policy()
-        action, log_prob, extra = policy(
-            {
-                "mode": "sample",
-                "hidden": hidden_t,
-                "return_chunk": True,
-                "deterministic": bool(self.train_cfg.get("deterministic", False)),
-            }
-        )
+        logprob_type = self.train_cfg.get("logprob_type", None)
+        sample_batch = {
+            "mode": "sample",
+            "hidden": hidden_t,
+            "return_chunk": True,
+            "deterministic": bool(self.train_cfg.get("deterministic", False)),
+        }
+        if logprob_type is not None:
+            sample_batch["logprob_type"] = str(logprob_type)
+        action, log_prob, extra = policy(sample_batch)
         action_cpu = _to_cpu_tensor(action)
-        log_prob_cpu = _to_cpu_tensor(log_prob).reshape(len(obs_msgs), -1)
+        log_prob_cpu = _to_cpu_tensor(log_prob)
+        if str(logprob_type).lower() != "token_level":
+            log_prob_cpu = log_prob_cpu.reshape(len(obs_msgs), -1)
         extra = extra if isinstance(extra, dict) else {}
 
         forward_inputs: dict[str, Any] = {"action": action_cpu}

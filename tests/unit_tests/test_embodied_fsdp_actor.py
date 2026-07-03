@@ -175,6 +175,23 @@ class _GraphProbePolicy(nn.Module):
         return logprob, entropy, None
 
 
+class _TokenLevelPolicy(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.offset = nn.Parameter(torch.tensor(0.0))
+        self.seen_logprob_types: list[object] = []
+
+    def forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        logprob_type = batch.get("logprob_type")
+        self.seen_logprob_types.append(logprob_type)
+        if logprob_type != "token_level":
+            raise AssertionError(f"expected token_level logprob_type, got {logprob_type!r}")
+        action = batch["action"].float()
+        logprob = torch.zeros_like(action) + self.offset
+        entropy = torch.ones_like(logprob) * 0.5
+        return logprob, entropy, {}
+
+
 def test_actor_group_computes_group_advantages_from_trajectory_rewards() -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
     actor.init()
@@ -495,3 +512,45 @@ def test_actor_default_normalization_flag_off() -> None:
     train_metrics = actor.run_training()
 
     assert train_metrics["actor/loss_normalization_per_rollout"] == 0.0
+
+
+def test_actor_token_level_logprobs_are_not_collapsed_to_chunk_scalars() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"].update(
+        {
+            "logprob_type": "token_level",
+            "loss_agg_func": "token-mean",
+            "loss_normalization": "global_valid_count",
+            "clip_log_ratio": None,
+        }
+    )
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    policy = _TokenLevelPolicy()
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=0.0)
+    actions = torch.zeros(1, 2, 2, 3)
+    shard = TrajectoryShard(
+        env_rank=0,
+        slot_id=0,
+        task_id=0,
+        episode_ids=[0, 1],
+        actions=actions,
+        rewards=torch.tensor([[0.0, 1.0]], dtype=torch.float32),
+        dones=torch.zeros(1, 2, dtype=torch.bool),
+        prev_logprobs=torch.zeros(1, 2, 2, 3),
+        prev_values=None,
+        forward_inputs={
+            "hidden": torch.ones(1, 2, 4),
+            "action": actions.clone(),
+        },
+        versions={"policy": torch.zeros(1, 2, dtype=torch.long)},
+    )
+
+    actor.load_trajectory_shards([shard])
+    actor.compute_advantages_and_returns()
+    train_metrics = actor.run_training()
+
+    assert policy.seen_logprob_types == ["token_level"]
+    assert train_metrics["actor/logprob_type_token_level"] == 1.0
+    assert train_metrics["actor/global_logprob_token_count"] == 12.0

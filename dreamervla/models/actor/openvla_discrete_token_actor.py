@@ -258,6 +258,7 @@ class OpenVLADiscreteTokenActor(BaseActor):
             token_ids = self._classes_to_token_ids(classes)
             action_chunk = self._chunk_from_classes(classes)
             token_log_prob = dist.log_prob(classes)
+            token_level = _is_token_level_logprob(batch)
             extra = {
                 "action_chunk": greedy_chunk,
                 "action_token_ids": token_ids.reshape(
@@ -272,12 +273,19 @@ class OpenVLADiscreteTokenActor(BaseActor):
                 "std_chunk": torch.zeros_like(greedy_chunk),
             }
             if bool(batch.get("return_chunk", False)):
-                log_prob = token_log_prob.sum(dim=-1)
+                log_prob = (
+                    self._reshape_action_tokens(token_log_prob)
+                    if token_level
+                    else token_log_prob.sum(dim=-1)
+                )
                 return action_chunk, log_prob, extra
             first_action = action_chunk[:, 0, :]
-            first_log_prob = token_log_prob.reshape(
-                logits.shape[0], self.time_horizon, self.action_dim
-            )[:, 0].sum(dim=-1)
+            first_token_log_prob = self._reshape_action_tokens(token_log_prob)[:, 0]
+            first_log_prob = (
+                first_token_log_prob
+                if token_level
+                else first_token_log_prob.sum(dim=-1)
+            )
             return first_action, first_log_prob, extra
 
         if mode == "evaluate":
@@ -304,12 +312,29 @@ class OpenVLADiscreteTokenActor(BaseActor):
 
             token_log_prob = dist.log_prob(classes)
             token_entropy = dist.entropy()
+            token_level = _is_token_level_logprob(batch)
             if action.ndim == 3:
-                log_prob = token_log_prob.sum(dim=-1)
-                entropy = token_entropy.sum(dim=-1)
+                log_prob = (
+                    self._reshape_action_tokens(token_log_prob)
+                    if token_level
+                    else token_log_prob.sum(dim=-1)
+                )
+                entropy = (
+                    self._reshape_action_tokens(token_entropy)
+                    if token_level
+                    else token_entropy.sum(dim=-1)
+                )
             elif action.ndim == 2:
-                log_prob = token_log_prob[:, : self.action_dim].sum(dim=-1)
-                entropy = token_entropy[:, : self.action_dim].sum(dim=-1)
+                log_prob = (
+                    token_log_prob
+                    if token_level
+                    else token_log_prob[:, : self.action_dim].sum(dim=-1)
+                )
+                entropy = (
+                    token_entropy
+                    if token_level
+                    else token_entropy[:, : self.action_dim].sum(dim=-1)
+                )
             else:
                 raise ValueError(f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}")
             return (
@@ -327,6 +352,13 @@ class OpenVLADiscreteTokenActor(BaseActor):
                 },
             )
         raise ValueError(f"Unknown OpenVLADiscreteTokenActor forward mode: {mode!r}")
+
+    def _reshape_action_tokens(self, value: torch.Tensor) -> torch.Tensor:
+        return value.reshape(value.shape[0], self.time_horizon, self.action_dim)
+
+
+def _is_token_level_logprob(batch: dict[str, Any]) -> bool:
+    return str(batch.get("logprob_type", "")).lower() == "token_level"
 
 
 __all__ = ["OpenVLADiscreteTokenActor"]

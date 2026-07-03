@@ -211,9 +211,14 @@ class EmbodiedFSDPActor(Worker):
         clip_ratio_c = (
             None if clip_ratio_c_value is None else float(clip_ratio_c_value)
         )
-        clip_log_ratio = float(algorithm_cfg.get("clip_log_ratio", 20.0))
+        clip_log_ratio_value = algorithm_cfg.get("clip_log_ratio", 20.0)
+        clip_log_ratio = (
+            None if clip_log_ratio_value is None else float(clip_log_ratio_value)
+        )
         entropy_coef = _entropy_coef(algorithm_cfg)
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
+        logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
+        token_level_logprob = logprob_type == "token_level"
 
         policy.train()
         losses: list[float] = []
@@ -227,6 +232,21 @@ class EmbodiedFSDPActor(Worker):
         valid_count = _distributed_sum_int(local_valid_count, self.torch_device)
         if valid_count <= 0:
             raise ValueError("trajectory loss_mask has no valid training steps")
+        logprob_tokens_per_step = (
+            _trailing_numel(batch.prev_logprobs.shape[2:])
+            if token_level_logprob
+            else 1
+        )
+        local_logprob_token_count = int(local_valid_count * logprob_tokens_per_step)
+        logprob_token_count = _distributed_sum_int(
+            local_logprob_token_count,
+            self.torch_device,
+        )
+        loss_reduction_count = (
+            logprob_token_count if token_level_logprob else valid_count
+        )
+        if loss_reduction_count <= 0:
+            raise ValueError("trajectory logprob token count is empty")
         # RLinf masked_mean_ratio: weight every rollout equally regardless of its
         # valid-step count, instead of the global-valid-count sum (which
         # over-weights long/failed rollouts). Default preserves current behavior.
@@ -261,21 +281,37 @@ class EmbodiedFSDPActor(Worker):
                         dtype=torch.bool,
                     )
                     eval_batch = self._eval_inputs_for_step(batch, 0)
+                if logprob_type:
+                    eval_batch["logprob_type"] = logprob_type
 
                 new_logprob, entropy, _ = policy(eval_batch)
-                new_logprob = _as_vector(new_logprob)
-                entropy = _as_vector(entropy)
+                if token_level_logprob:
+                    new_logprob = _as_tensor(new_logprob).to(
+                        self.torch_device,
+                        dtype=torch.float32,
+                    )
+                    entropy = _match_logprob_shape(
+                        _as_tensor(entropy).to(self.torch_device, dtype=torch.float32),
+                        new_logprob,
+                        name="entropy",
+                    )
+                else:
+                    new_logprob = _as_vector(new_logprob)
+                    entropy = _as_vector(entropy)
                 if not has_local_step:
                     loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
                     loss.backward()
                     zero_loss_steps += 1
                     continue
 
-                old_logprob = _as_vector(
-                    batch.prev_logprobs[step].to(
-                        self.torch_device,
-                        dtype=torch.float32,
-                    )
+                old_logprob_raw = batch.prev_logprobs[step].to(
+                    self.torch_device,
+                    dtype=torch.float32,
+                )
+                old_logprob = (
+                    old_logprob_raw
+                    if token_level_logprob
+                    else _as_vector(old_logprob_raw)
                 )
                 advantage = _as_vector(advantages).to(self.torch_device)
                 if new_logprob.shape != old_logprob.shape:
@@ -283,7 +319,13 @@ class EmbodiedFSDPActor(Worker):
                         "policy evaluate log_prob shape must match prev_logprobs; "
                         f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
                     )
-                if advantage.shape != old_logprob.shape:
+                if token_level_logprob:
+                    if advantage.shape[:1] != old_logprob.shape[:1]:
+                        raise ValueError(
+                            "advantage batch size must match prev_logprobs; "
+                            f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                        )
+                elif advantage.shape != old_logprob.shape:
                     raise ValueError(
                         "advantage shape must match prev_logprobs; "
                         f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
@@ -297,6 +339,8 @@ class EmbodiedFSDPActor(Worker):
                 advantage = advantage[step_mask]
                 new_logprob = new_logprob[step_mask]
                 entropy = entropy[step_mask]
+                if token_level_logprob:
+                    advantage = _expand_batch_vector_as(advantage, new_logprob)
 
                 ratio = _ppo_ratio(
                     new_logprob,
@@ -310,7 +354,7 @@ class EmbodiedFSDPActor(Worker):
                     clip_high,
                     clip_ratio_c=clip_ratio_c,
                 )
-                if loss_norm == "per_rollout":
+                if loss_norm == "per_rollout" and not token_level_logprob:
                     step_weight = (
                         1.0 / per_rollout_count.to(self.torch_device)
                     )[step_mask]
@@ -321,7 +365,7 @@ class EmbodiedFSDPActor(Worker):
                 else:
                     loss = (
                         ppo_clip.sum() - float(entropy_coef) * entropy.sum()
-                    ) / float(valid_count)
+                    ) / float(loss_reduction_count)
                 loss.backward()
 
                 epoch_loss += float(loss.detach().cpu().item())
@@ -332,8 +376,8 @@ class EmbodiedFSDPActor(Worker):
 
             ppo_updates += 1
             losses.append(epoch_loss)
-            ratio_means.append(ratio_sum / float(valid_count))
-            entropy_means.append(entropy_sum / float(valid_count))
+            ratio_means.append(ratio_sum / float(loss_reduction_count))
+            entropy_means.append(entropy_sum / float(loss_reduction_count))
             grad_norms.append(float(grad_norm))
 
         policy.train(False)
@@ -347,10 +391,13 @@ class EmbodiedFSDPActor(Worker):
             "actor/global_time_steps": float(global_time_steps),
             "actor/local_loss_mask_sum": float(local_valid_count),
             "actor/global_loss_mask_sum": float(valid_count),
+            "actor/local_logprob_token_count": float(local_logprob_token_count),
+            "actor/global_logprob_token_count": float(logprob_token_count),
             "actor/zero_loss_steps": float(zero_loss_steps),
             "actor/loss_normalization_per_rollout": (
                 1.0 if loss_norm == "per_rollout" else 0.0
             ),
+            "actor/logprob_type_token_level": 1.0 if token_level_logprob else 0.0,
         }
 
     def sync_model_to_rollout(
@@ -526,6 +573,44 @@ def _as_vector(value: Any) -> torch.Tensor:
     if tensor.ndim == 1:
         return tensor
     return tensor.reshape(int(tensor.shape[0]), -1).sum(dim=1)
+
+
+def _trailing_numel(shape: torch.Size | tuple[int, ...]) -> int:
+    total = 1
+    for dim in shape:
+        total *= int(dim)
+    return int(total)
+
+
+def _match_logprob_shape(
+    value: torch.Tensor,
+    logprob: torch.Tensor,
+    *,
+    name: str,
+) -> torch.Tensor:
+    if value.shape == logprob.shape:
+        return value
+    if (
+        value.ndim == 1
+        and logprob.ndim > 1
+        and int(value.shape[0]) == int(logprob.shape[0])
+    ):
+        return _expand_batch_vector_as(value, logprob)
+    raise ValueError(
+        f"{name} shape must match log_prob shape; got "
+        f"{tuple(value.shape)} and {tuple(logprob.shape)}"
+    )
+
+
+def _expand_batch_vector_as(value: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    if value.ndim != 1:
+        raise ValueError(f"expected a [batch] tensor, got {tuple(value.shape)}")
+    if int(value.shape[0]) != int(target.shape[0]):
+        raise ValueError(
+            "batch vector size must match target batch size; "
+            f"got {tuple(value.shape)} and {tuple(target.shape)}"
+        )
+    return value.reshape((int(value.shape[0]),) + (1,) * (target.ndim - 1))
 
 
 def _trajectory_returns_from_rewards(

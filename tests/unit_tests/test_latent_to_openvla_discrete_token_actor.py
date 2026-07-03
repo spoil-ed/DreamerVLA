@@ -101,6 +101,36 @@ def test_actor_decodes_backbone_latent_to_action_chunk() -> None:
     assert extra["action_token_ids"].shape == (2, 3, 2)
 
 
+def test_actor_returns_token_level_logprobs_when_requested() -> None:
+    torch.manual_seed(0)
+    actor = _tiny_actor()
+    actor.eval()
+    hidden = torch.randn(2, 5, 4)
+
+    action_chunk, log_prob, extra = actor(
+        {
+            "mode": "sample",
+            "hidden": hidden,
+            "return_chunk": True,
+            "logprob_type": "token_level",
+        }
+    )
+    eval_log_prob, entropy, _ = actor(
+        {
+            "mode": "evaluate",
+            "hidden": hidden,
+            "action": action_chunk,
+            "action_token_ids": extra["action_token_ids"],
+            "logprob_type": "token_level",
+        }
+    )
+
+    assert log_prob.shape == (2, 3, 2)
+    assert eval_log_prob.shape == (2, 3, 2)
+    assert entropy.shape == (2, 3, 2)
+    assert torch.allclose(eval_log_prob, log_prob)
+
+
 def test_actor_accepts_flat_and_tokenized_latent() -> None:
     torch.manual_seed(0)
     actor = _tiny_actor()
@@ -119,5 +149,4 @@ def test_actor_is_discrete_with_no_l1_head() -> None:
     # No L1 action head is constructed on this route.
     assert not hasattr(actor, "action_head")
     assert not hasattr(actor, "output_projection")
-
 

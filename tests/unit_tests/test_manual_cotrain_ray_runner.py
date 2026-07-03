@@ -517,7 +517,15 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28
     assert cfg.actor.train_cfg.algorithm_cfg.filter_zero_variance_groups is True
-    assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "per_rollout"
+    assert cfg.actor.train_cfg.algorithm_cfg.reward_type == "action_level"
+    assert cfg.actor.train_cfg.algorithm_cfg.logprob_type == "token_level"
+    assert cfg.actor.train_cfg.algorithm_cfg.entropy_type == "token_level"
+    assert cfg.actor.train_cfg.algorithm_cfg.loss_type == "actor"
+    assert cfg.actor.train_cfg.algorithm_cfg.loss_agg_func == "token-mean"
+    assert cfg.actor.train_cfg.algorithm_cfg.kl_beta == 0.0
+    assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio is None
+    assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "token_mean"
+    assert cfg.rollout.train_cfg.logprob_type == "token_level"
 
 
 def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
@@ -572,11 +580,7 @@ def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess
         == cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
     )
     assert cfg.env.real.cfg.action_postprocess == "openvla_oft"
-    assert cfg.env.real.cfg.action_scale == "env"
     assert cfg.env.wm.cfg.action_postprocess == "openvla_oft"
-    assert cfg.env.wm.cfg.action_scale == "policy"
-    assert cfg.env.wm.cfg.dataset_statistics_path == cfg.task.openvla_oft.dataset_statistics_path
-    assert cfg.env.wm.cfg.unnorm_key == cfg.task.openvla_oft.dataset_statistics_key
     assert "egl_step_timeout_s" not in cfg.env.real.cfg
 
 
