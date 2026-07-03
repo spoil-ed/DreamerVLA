@@ -121,7 +121,12 @@ def _variable_length_shard(
 class _MemoryActorChannel:
     def __init__(self, items: list[object]) -> None:
         self.items = list(items)
+        self.get_calls: list[str] = []
         self.get_batch_calls: list[tuple[int, str]] = []
+
+    def get(self, *, key: str = "default") -> object:
+        self.get_calls.append(str(key))
+        return self.items.pop(0)
 
     def get_batch(self, n: int, *, key: str = "default") -> list[object]:
         self.get_batch_calls.append((int(n), str(key)))
@@ -181,7 +186,7 @@ def test_actor_group_computes_group_advantages_from_trajectory_rewards() -> None
     assert metrics["actor/advantage_std"] > 0.0
 
 
-def test_actor_recv_rollout_trajectories_batches_channel_and_reports_timings(
+def test_actor_recv_rollout_trajectories_gets_shards_incrementally_and_reports_timings(
     monkeypatch,
 ) -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
@@ -195,10 +200,34 @@ def test_actor_recv_rollout_trajectories_batches_channel_and_reports_timings(
 
     metrics = actor.recv_rollout_trajectories("actor", expected_shards=1)
 
-    assert channel.get_batch_calls == [(1, "default")]
+    assert channel.get_calls == ["default"]
+    assert channel.get_batch_calls == []
     assert metrics["actor/received_shards"] == 1.0
     assert metrics["actor/channel_get_batch_s"] >= 0.0
     assert metrics["actor/load_trajectory_shards_s"] >= 0.0
+    assert actor.batch is not None
+
+
+def test_actor_recv_rollout_trajectories_gets_keyed_shards_incrementally(
+    monkeypatch,
+) -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    channel = _MemoryActorChannel([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+    monkeypatch.setattr(
+        embodied_fsdp_actor.Channel,
+        "connect",
+        staticmethod(lambda name: channel),
+    )
+
+    metrics = actor.recv_rollout_trajectories(
+        "actor",
+        keyed_counts=[("wm_env", 2)],
+    )
+
+    assert channel.get_calls == ["wm_env", "wm_env"]
+    assert channel.get_batch_calls == []
+    assert metrics["actor/received_shards"] == 2.0
     assert actor.batch is not None
 
 
@@ -290,6 +319,43 @@ def test_actor_run_training_backprops_each_step_before_next_forward() -> None:
     assert probe.active == 0
 
 
+def test_actor_run_training_backprops_zero_loss_for_global_padded_steps(
+    monkeypatch,
+) -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    probe = _OutstandingGraphProbe()
+    policy = _GraphProbePolicy(probe)
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=1e-3)
+
+    actor.load_trajectory_shards(
+        [
+            _variable_length_shard(steps=1, slot_id=0, reward=0.0),
+            _variable_length_shard(steps=1, slot_id=1, reward=1.0),
+        ]
+    )
+    actor.compute_advantages_and_returns()
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_max_int",
+        lambda value, device: 3,
+    )
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_sum_int",
+        lambda value, device: int(value),
+    )
+
+    metrics = actor.run_training()
+
+    assert metrics["actor/ppo_updates"] == 1.0
+    assert metrics["actor/global_time_steps"] == 3.0
+    assert metrics["actor/zero_loss_steps"] == 2.0
+    assert probe.backward_calls == 3
+    assert probe.active == 0
+
+
 def test_actor_run_training_updates_policy_parameters() -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
     actor.init()
@@ -372,3 +438,31 @@ def test_sync_model_to_rollout_nonzero_rank_participates_without_pushing_patch()
     assert metrics["sync/policy_export_s"] >= 0.0
     assert metrics["sync/policy_push_s"] == 0.0
     assert metrics["sync/policy_tensors"] > 0.0
+
+
+def test_actor_masks_zero_variance_groups_when_enabled() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["filter_zero_variance_groups"] = True
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+
+    # group_size=2: both rollouts fail -> zero within-group variance -> masked.
+    actor.load_trajectory_shards([_shard(0.0, 0.0)])
+    metrics = actor.compute_advantages_and_returns()
+
+    assert metrics["actor/zero_variance_masked_rollouts"] == 2.0
+    assert actor.advantages is not None
+    assert float(actor.advantages.abs().sum().item()) == 0.0
+
+
+def test_actor_keeps_variant_groups_when_filter_enabled() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["filter_zero_variance_groups"] = True
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    metrics = actor.compute_advantages_and_returns()
+
+    assert metrics["actor/zero_variance_masked_rollouts"] == 0.0
+    assert metrics["actor/advantage_std"] > 0.0

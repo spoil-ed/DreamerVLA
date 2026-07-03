@@ -138,10 +138,36 @@ def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.
     return ((groups - mean) / std).reshape_as(score)
 
 
+def group_variance_mask(
+    score: torch.Tensor, group_size: int, eps: float
+) -> torch.Tensor:
+    """Return a ``[N]`` float mask zeroing rollouts whose GRPO group has no
+    return variance (all-success or all-fail). Their group-relative advantage is
+    0 anyway, so masking them out of the loss is a pure compute/stability win.
+
+    Mirrors the keep/skip decision in ``outcome.py::_adaptive_group_advantage_and_mask``
+    for the fixed-width (non-adaptive) actor batch; ``group_size <= 1`` keeps
+    everything.
+    """
+    g = int(group_size)
+    n = int(score.numel())
+    if g <= 1:
+        return torch.ones_like(score)
+    if n < g or n % g != 0:
+        raise ValueError(
+            f"group_variance_mask: numel={n} is not a positive multiple of "
+            f"group_size={g}."
+        )
+    groups = score.reshape(-1, g)
+    has_var = groups.std(dim=1, unbiased=False) > float(eps)  # [n_groups]
+    return has_var.to(score.dtype).repeat_interleave(g).reshape_as(score)
+
+
 __all__ = [
     "_entropy_coef",
     "_group_advantage",
     "_ppo_clip_term",
     "_ppo_ratio",
     "_repeat_latent",
+    "group_variance_mask",
 ]

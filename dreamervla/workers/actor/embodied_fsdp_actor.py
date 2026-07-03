@@ -60,6 +60,7 @@ class EmbodiedFSDPActor(Worker):
         self.batch: TrajectoryBatch | None = None
         self.returns: torch.Tensor | None = None
         self.advantages: torch.Tensor | None = None
+        self.group_variance_mask: torch.Tensor | None = None
         self._advantage_metrics: dict[str, float] = {}
 
     def init(self) -> None:
@@ -101,19 +102,22 @@ class EmbodiedFSDPActor(Worker):
         self,
         actor_channel_name: str,
         expected_shards: int | None = None,
+        keyed_counts: list[tuple[str, int]] | None = None,
     ) -> dict[str, float]:
         """Receive trajectory shards from a named ActorGroup channel."""
 
         channel = Channel.connect(actor_channel_name)
-        count = 1 if expected_shards is None else max(0, int(expected_shards))
         get_start = time.perf_counter()
-        if count <= 0:
-            messages: list[Any] = []
+        messages: list[Any] = []
+        if keyed_counts is not None:
+            for key, key_count in keyed_counts:
+                key_count = max(0, int(key_count))
+                if key_count <= 0:
+                    continue
+                messages.extend(channel.get(key=str(key)) for _ in range(key_count))
         else:
-            get_batch = getattr(channel, "get_batch", None)
-            if callable(get_batch):
-                messages = list(get_batch(count))
-            else:
+            count = 1 if expected_shards is None else max(0, int(expected_shards))
+            if count > 0:
                 messages = [channel.get() for _ in range(count)]
         channel_get_s = float(time.perf_counter() - get_start)
         shards: list[TrajectoryShard] = []
@@ -159,14 +163,22 @@ class EmbodiedFSDPActor(Worker):
             )
 
         advantages = _group_advantage(returns, group_size, eps=1e-6)
+        if bool(algorithm_cfg.get("filter_zero_variance_groups", False)):
+            var_mask = _group_variance_mask(returns, group_size, eps=1e-6)
+        else:
+            var_mask = torch.ones_like(returns)
+        self.group_variance_mask = var_mask.detach()
         self.returns = returns.detach()
-        self.advantages = advantages.detach()
+        self.advantages = (advantages * var_mask).detach()
         self._advantage_metrics = {
             "actor/trajectory_count": float(trajectory_count),
             "actor/loss_mask_sum": float(loss_mask.detach().sum().cpu().item()),
             "actor/return_mean": float(returns.detach().mean().cpu().item()),
             "actor/advantage_std": float(
                 advantages.detach().std(unbiased=False).cpu().item()
+            ),
+            "actor/zero_variance_masked_rollouts": float(
+                (var_mask <= 0.0).sum().cpu().item()
             ),
         }
         return dict(self._advantage_metrics)
@@ -182,6 +194,9 @@ class EmbodiedFSDPActor(Worker):
             )
         advantages = self._advantages()
         loss_mask = batch.loss_mask.to(self.torch_device, dtype=torch.bool)
+        if self.group_variance_mask is not None:
+            keep = self.group_variance_mask.to(loss_mask.device) > 0.0
+            loss_mask = loss_mask & keep.reshape((1, -1) + (1,) * (loss_mask.ndim - 2))
         policy = self._policy()
         optimizer = self._optimizer()
         algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
@@ -206,22 +221,43 @@ class EmbodiedFSDPActor(Worker):
         entropy_means: list[float] = []
         grad_norms: list[float] = []
         ppo_updates = 0
+        local_time_steps = int(batch.rewards.shape[0])
+        global_time_steps = _distributed_max_int(local_time_steps, self.torch_device)
+        local_valid_count = int(loss_mask.sum().detach().cpu().item())
+        valid_count = _distributed_sum_int(local_valid_count, self.torch_device)
+        if valid_count <= 0:
+            raise ValueError("trajectory loss_mask has no valid training steps")
+        zero_loss_steps = 0
         for _ in range(update_epochs):
             optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
-            valid_count = int(loss_mask.sum().detach().cpu().item())
-            if valid_count <= 0:
-                raise ValueError("trajectory loss_mask has no valid training steps")
             epoch_loss = 0.0
             ratio_sum = 0.0
             entropy_sum = 0.0
-            for step in range(int(batch.rewards.shape[0])):
-                step_mask = _as_vector(loss_mask[step]).to(
-                    self.torch_device,
-                    dtype=torch.bool,
-                )
-                if not bool(step_mask.any().item()):
+            for step in range(global_time_steps):
+                has_local_step = step < local_time_steps
+                if has_local_step:
+                    step_mask = _as_vector(loss_mask[step]).to(
+                        self.torch_device,
+                        dtype=torch.bool,
+                    )
+                    eval_batch = self._eval_inputs_for_step(batch, step)
+                else:
+                    step_mask = torch.zeros(
+                        int(batch.rewards.shape[1]),
+                        device=self.torch_device,
+                        dtype=torch.bool,
+                    )
+                    eval_batch = self._eval_inputs_for_step(batch, 0)
+
+                new_logprob, entropy, _ = policy(eval_batch)
+                new_logprob = _as_vector(new_logprob)
+                entropy = _as_vector(entropy)
+                if not has_local_step:
+                    loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                    loss.backward()
+                    zero_loss_steps += 1
                     continue
-                eval_batch = self._eval_inputs_for_step(batch, step)
+
                 old_logprob = _as_vector(
                     batch.prev_logprobs[step].to(
                         self.torch_device,
@@ -229,10 +265,6 @@ class EmbodiedFSDPActor(Worker):
                     )
                 )
                 advantage = _as_vector(advantages).to(self.torch_device)
-
-                new_logprob, entropy, _ = policy(eval_batch)
-                new_logprob = _as_vector(new_logprob)
-                entropy = _as_vector(entropy)
                 if new_logprob.shape != old_logprob.shape:
                     raise ValueError(
                         "policy evaluate log_prob shape must match prev_logprobs; "
@@ -243,6 +275,11 @@ class EmbodiedFSDPActor(Worker):
                         "advantage shape must match prev_logprobs; "
                         f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
                     )
+                if not bool(step_mask.any().item()):
+                    loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                    loss.backward()
+                    zero_loss_steps += 1
+                    continue
                 old_logprob = old_logprob[step_mask]
                 advantage = advantage[step_mask]
                 new_logprob = new_logprob[step_mask]
@@ -284,6 +321,11 @@ class EmbodiedFSDPActor(Worker):
             "actor/ratio_mean": _mean(ratio_means),
             "actor/entropy_mean": _mean(entropy_means),
             "actor/policy_grad_norm": _mean(grad_norms),
+            "actor/local_time_steps": float(local_time_steps),
+            "actor/global_time_steps": float(global_time_steps),
+            "actor/local_loss_mask_sum": float(local_valid_count),
+            "actor/global_loss_mask_sum": float(valid_count),
+            "actor/zero_loss_steps": float(zero_loss_steps),
         }
 
     def sync_model_to_rollout(
@@ -508,6 +550,38 @@ def _to_float(value: Any) -> float:
     return float(value)
 
 
+def _distributed_max_int(value: int, device: torch.device) -> int:
+    return _distributed_reduce_int(value, device, torch.distributed.ReduceOp.MAX)
+
+
+def _distributed_sum_int(value: int, device: torch.device) -> int:
+    return _distributed_reduce_int(value, device, torch.distributed.ReduceOp.SUM)
+
+
+def _distributed_reduce_int(
+    value: int,
+    device: torch.device,
+    op: Any,
+) -> int:
+    if not (
+        torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+    ):
+        return int(value)
+    backend = str(torch.distributed.get_backend()).lower()
+    tensor_device = device if backend == "nccl" else torch.device("cpu")
+    tensor = torch.tensor([int(value)], dtype=torch.long, device=tensor_device)
+    torch.distributed.all_reduce(tensor, op=op)
+    return int(tensor.detach().cpu().item())
+
+
+def _zero_loss_from_policy_outputs(
+    new_logprob: torch.Tensor,
+    entropy: torch.Tensor,
+) -> torch.Tensor:
+    return new_logprob.sum() * 0.0 + entropy.sum() * 0.0
+
+
 def _export_policy_state_dict(policy: nn.Module) -> dict[str, torch.Tensor]:
     if _is_fsdp_module(policy):
         from torch.distributed.fsdp import (
@@ -548,6 +622,7 @@ def _mean(values: list[float]) -> float:
 _GRPO_HELPERS = _load_grpo_helpers()
 _entropy_coef = _GRPO_HELPERS._entropy_coef
 _group_advantage = _GRPO_HELPERS._group_advantage
+_group_variance_mask = _GRPO_HELPERS.group_variance_mask
 _ppo_clip_term = _GRPO_HELPERS._ppo_clip_term
 _ppo_ratio = _GRPO_HELPERS._ppo_ratio
 
