@@ -227,6 +227,19 @@ class EmbodiedFSDPActor(Worker):
         valid_count = _distributed_sum_int(local_valid_count, self.torch_device)
         if valid_count <= 0:
             raise ValueError("trajectory loss_mask has no valid training steps")
+        # RLinf masked_mean_ratio: weight every rollout equally regardless of its
+        # valid-step count, instead of the global-valid-count sum (which
+        # over-weights long/failed rollouts). Default preserves current behavior.
+        loss_norm = str(algorithm_cfg.get("loss_normalization", "global_valid_count"))
+        per_rollout_count = (
+            loss_mask.to(torch.float32)
+            .reshape(int(loss_mask.shape[0]), int(loss_mask.shape[1]), -1)
+            .sum(dim=(0, 2))
+            .clamp(min=1.0)
+        )
+        num_rollouts = _distributed_sum_int(
+            int(loss_mask.shape[1]), self.torch_device
+        )
         zero_loss_steps = 0
         for _ in range(update_epochs):
             optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
@@ -297,9 +310,18 @@ class EmbodiedFSDPActor(Worker):
                     clip_high,
                     clip_ratio_c=clip_ratio_c,
                 )
-                loss = (
-                    ppo_clip.sum() - float(entropy_coef) * entropy.sum()
-                ) / float(valid_count)
+                if loss_norm == "per_rollout":
+                    step_weight = (
+                        1.0 / per_rollout_count.to(self.torch_device)
+                    )[step_mask]
+                    loss = (
+                        (ppo_clip * step_weight).sum()
+                        - float(entropy_coef) * (entropy * step_weight).sum()
+                    ) / float(num_rollouts)
+                else:
+                    loss = (
+                        ppo_clip.sum() - float(entropy_coef) * entropy.sum()
+                    ) / float(valid_count)
                 loss.backward()
 
                 epoch_loss += float(loss.detach().cpu().item())
@@ -326,6 +348,9 @@ class EmbodiedFSDPActor(Worker):
             "actor/local_loss_mask_sum": float(local_valid_count),
             "actor/global_loss_mask_sum": float(valid_count),
             "actor/zero_loss_steps": float(zero_loss_steps),
+            "actor/loss_normalization_per_rollout": (
+                1.0 if loss_norm == "per_rollout" else 0.0
+            ),
         }
 
     def sync_model_to_rollout(

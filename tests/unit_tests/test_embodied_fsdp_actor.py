@@ -466,3 +466,32 @@ def test_actor_keeps_variant_groups_when_filter_enabled() -> None:
 
     assert metrics["actor/zero_variance_masked_rollouts"] == 0.0
     assert metrics["actor/advantage_std"] > 0.0
+
+
+def test_actor_per_rollout_normalization_flag_reported() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["loss_normalization"] = "per_rollout"
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+
+    actor.load_trajectory_shards(
+        [
+            _variable_length_shard(steps=1, slot_id=0, reward=0.0),
+            _variable_length_shard(steps=3, slot_id=1, reward=1.0),
+        ]
+    )
+    actor.compute_advantages_and_returns()
+    train_metrics = actor.run_training()
+
+    assert train_metrics["actor/loss_normalization_per_rollout"] == 1.0
+    assert train_metrics["actor/ppo_updates"] == 1.0
+
+
+def test_actor_default_normalization_flag_off() -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    actor.compute_advantages_and_returns()
+    train_metrics = actor.run_training()
+
+    assert train_metrics["actor/loss_normalization_per_rollout"] == 0.0
