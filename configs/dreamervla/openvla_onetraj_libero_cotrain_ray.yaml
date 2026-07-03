@@ -21,15 +21,15 @@ manual_cotrain:
   rollout_epoch: ${algorithm.rollout_epoch}
   real_rollout_epoch: 1
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
-  wm_rollout_target_trajectories: 1024
+  wm_rollout_target_trajectories: 128
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
   envs_per_worker: 8
   wm_envs_per_worker: 16
-  eval_interval_global_steps: 1
-  debug_eval_interval_global_steps: 1
+  eval_interval_global_steps: 0
+  debug_eval_interval_global_steps: 0
   task_id: 0
 
 algorithm:
@@ -74,6 +74,8 @@ actor:
       gae_lambda: ${algorithm.gae_lambda}
       entropy_coef: 0.0
       clip_log_ratio: 20.0
+      filter_zero_variance_groups: true
+      loss_normalization: per_rollout
 
 rollout:
   policy_cfg: ${ray_components.policy}
@@ -139,11 +141,18 @@ env:
   # Keep inherited legacy env.* keys so existing launcher overrides compose.
   cfg:
     action_postprocess: openvla_oft
+    action_scale: env
+    dataset_statistics_path: ${task.openvla_oft.dataset_statistics_path}
+    unnorm_key: ${task.openvla_oft.dataset_statistics_key}
   real:
     cfg: ${env.cfg}
   wm:
     cfg:
       target: dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv
+      action_postprocess: openvla_oft
+      action_scale: policy
+      dataset_statistics_path: ${task.openvla_oft.dataset_statistics_path}
+      unnorm_key: ${task.openvla_oft.dataset_statistics_key}
       kwargs:
         world_model: ${ray_components.world_model}
         classifier: ${ray_components.classifier}

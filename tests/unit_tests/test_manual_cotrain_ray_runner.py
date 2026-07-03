@@ -12,6 +12,7 @@ from dreamervla.runners.manual_cotrain_ray_runner import (
     _ManualCotrainEnvProgressMonitor,
     _ManualCotrainProgressSnapshot,
     _read_manual_cotrain_progress_snapshot,
+    _split_actor_keyed_shard_counts,
     _split_actor_shard_counts,
     _sum_metric_lists,
     _wait_env_metrics_with_rollout_guard,
@@ -214,7 +215,6 @@ def test_runner_rollout_slots_cover_largest_env_batch() -> None:
 def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
     cfg = _cfg(ngpu=4, wm_rollout_target_trajectories=1024)
     cfg.manual_cotrain.envs_per_worker = 2
-    cfg.manual_cotrain.real_rollout_epoch = 4
     cfg.manual_cotrain.wm_rollout_epoch = 999
     runner = runners.ManualCotrainRayRunner(cfg)
 
@@ -231,7 +231,7 @@ def test_runner_distributes_wm_target_trajectories_across_wm_workers() -> None:
         }
     )
 
-    assert expected == 520
+    assert expected == 512
 
 
 def test_runner_uses_wm_rollout_epoch_fallback_without_target() -> None:
@@ -282,6 +282,98 @@ def test_split_actor_shard_counts_preserves_group_size_groups() -> None:
     ]
 
 
+def test_split_actor_keyed_shard_counts_uses_only_wm_trajectories() -> None:
+    counts = _split_actor_keyed_shard_counts(
+        real_shards=0,
+        wm_shards=64,
+        wm_shard_batch_size=16,
+        actor_ranks=3,
+        group_size=8,
+    )
+
+    assert counts == [
+        [("wm_env", 22)],
+        [("wm_env", 21)],
+        [("wm_env", 21)],
+    ]
+    trajectory_counts = [
+        sum(
+            count if key == "real_env" else count * 16
+            for key, count in rank_counts
+        )
+        for rank_counts in counts
+    ]
+    assert trajectory_counts == [352, 336, 336]
+    assert sum(trajectory_counts) == 1024
+    assert all(count % 8 == 0 for count in trajectory_counts)
+
+
+def test_split_actor_keyed_shard_counts_groups_small_wm_batches() -> None:
+    counts = _split_actor_keyed_shard_counts(
+        real_shards=0,
+        wm_shards=48,
+        wm_shard_batch_size=2,
+        actor_ranks=3,
+        group_size=8,
+    )
+
+    assert counts == [
+        [("wm_env", 16)],
+        [("wm_env", 16)],
+        [("wm_env", 16)],
+    ]
+    trajectory_counts = [
+        sum(count * 2 for key, count in rank_counts if key == "wm_env")
+        for rank_counts in counts
+    ]
+    assert trajectory_counts == [32, 32, 32]
+    assert all(count % 8 == 0 for count in trajectory_counts)
+
+
+def test_split_actor_keyed_shard_counts_rejects_real_actor_shards() -> None:
+    with pytest.raises(ValueError, match="real_env.*must not enter ActorGroup"):
+        _split_actor_keyed_shard_counts(
+            real_shards=8,
+            wm_shards=64,
+            wm_shard_batch_size=16,
+            actor_ranks=3,
+            group_size=8,
+        )
+
+
+def test_runner_starts_multigpu_actor_receivers_with_keyed_trajectory_counts() -> None:
+    cfg = _cfg(ngpu=4, wm_envs_per_worker=16, wm_rollout_target_trajectories=1024)
+    cfg.manual_cotrain.envs_per_worker = 2
+    cfg.manual_cotrain.real_rollout_epoch = 1
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 8
+    runner = runners.ManualCotrainRayRunner(cfg)
+    actor = _FakeActorGroup()
+    actor.workers = ["actor0", "actor1", "actor2"]
+
+    class _Group:
+        def __init__(self, count: int) -> None:
+            self.workers = [object() for _ in range(count)]
+
+    groups = {
+        "ActorGroup": actor,
+        "RealEnvGroup": _Group(1),
+        "WMEnvGroup": _Group(3),
+    }
+
+    started = runner._start_actor_trajectory_receivers(
+        groups,
+        expected_shards=64,
+        actor_channel_name="actor",
+    )
+
+    assert started is not None
+    assert actor.recv_calls == [
+        ((0,), "actor", 22, [("wm_env", 22)]),
+        ((1,), "actor", 21, [("wm_env", 21)]),
+        ((2,), "actor", 21, [("wm_env", 21)]),
+    ]
+
+
 def test_sum_metric_lists_derives_batch_size_distribution_metrics() -> None:
     metrics = _sum_metric_lists(
         [
@@ -328,33 +420,42 @@ def test_manual_runner_reports_real_env_success_rate_metrics() -> None:
     assert "eval/success_rate" not in metrics
 
 
-def test_manual_runner_emits_eval_success_rate_on_configured_interval() -> None:
+def test_manual_runner_keeps_online_real_env_metrics_out_of_eval_namespace() -> None:
+    cfg = _cfg()
+    cfg.manual_cotrain.eval_interval_global_steps = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    metrics = runner._real_env_success_rate_metrics(
+        {
+            "env/real_env/episodes_completed": 3.0,
+            "env/real_env/episodes_successful": 2.0,
+        },
+        global_step=1,
+    )
+
+    assert metrics["rollout/success_rate"] == pytest.approx(2.0 / 3.0)
+    assert "eval/success_rate" not in metrics
+    assert "eval/episodes" not in metrics
+
+
+def test_manual_runner_does_not_mirror_real_rollout_to_eval_on_interval() -> None:
     cfg = _cfg()
     cfg.manual_cotrain.eval_interval_global_steps = 10
     runner = runners.ManualCotrainRayRunner(cfg)
 
-    early = runner._real_env_success_rate_metrics(
+    metrics = runner._real_env_success_rate_metrics(
         {
             "env/real_env/episodes_completed": 1.0,
             "env/real_env/episodes_successful": 1.0,
         },
-        global_step=1,
-    )
-    interval = runner._real_env_success_rate_metrics(
-        {
-            "env/real_env/episodes_completed": 1.0,
-            "env/real_env/episodes_successful": 0.0,
-        },
         global_step=10,
     )
 
-    assert "eval/success_rate" not in early
-    assert interval["eval/success_rate"] == pytest.approx(0.5)
-    assert interval["eval/episodes"] == 2.0
-    assert interval["eval/success_rate_valid"] == 1.0
+    assert metrics["rollout/success_rate"] == 1.0
+    assert not any(key.startswith("eval/") for key in metrics)
 
 
-def test_manual_runner_uses_debug_eval_interval_when_training_debug() -> None:
+def test_manual_runner_does_not_mirror_real_rollout_to_eval_in_debug() -> None:
     cfg = _cfg()
     cfg.training.debug = True
     cfg.manual_cotrain.eval_interval_global_steps = 10
@@ -369,8 +470,8 @@ def test_manual_runner_uses_debug_eval_interval_when_training_debug() -> None:
         global_step=1,
     )
 
-    assert metrics["eval/success_rate"] == 0.0
-    assert metrics["eval/success_rate_valid"] == 1.0
+    assert metrics["rollout/success_rate"] == 0.0
+    assert not any(key.startswith("eval/") for key in metrics)
 
 
 def _compose_train_config(*overrides: str):
@@ -401,12 +502,12 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.algorithm.rollout_epoch == 16
     assert cfg.manual_cotrain.real_rollout_epoch == 1
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
-    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 128
     assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
     assert cfg.manual_cotrain.wm_rollout_multiplier == 1
-    assert cfg.manual_cotrain.eval_interval_global_steps == 1
-    assert cfg.manual_cotrain.debug_eval_interval_global_steps == 1
+    assert cfg.manual_cotrain.eval_interval_global_steps == 0
+    assert cfg.manual_cotrain.debug_eval_interval_global_steps == 0
     assert list(cfg.runner.logger.logger_backends) == ["tensorboard", "wandb"]
     assert cfg.runner.logger.wandb_mode == "offline"
     assert cfg.runner.logger.wandb_proxy is None
@@ -415,6 +516,8 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.env.wm.cfg.kwargs.observation_format == "tensor"
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28
+    assert cfg.actor.train_cfg.algorithm_cfg.filter_zero_variance_groups is True
+    assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "per_rollout"
 
 
 def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
@@ -439,18 +542,19 @@ def test_manual_cotrain_oft_wm_env_num_envs_tracks_wm_envs_per_worker() -> None:
     assert cfg.env.wm.cfg.kwargs.device == "cuda"
 
 
-def test_manual_cotrain_real_rollout_budget_is_one_epoch() -> None:
+def test_manual_cotrain_actor_rollout_budget_uses_wm_only() -> None:
     cfg = _compose_train_config(
         "experiment=openvla_onetraj_libero_cotrain_ray",
         "task=openvla_onetraj_coldstart_libero",
     )
 
     assert cfg.manual_cotrain.real_rollout_epoch == 1
-    total = (
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 128
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories % cfg.algorithm.group_size == 0
+    real_trajectories = (
         cfg.manual_cotrain.envs_per_worker * cfg.manual_cotrain.real_rollout_epoch
-        + cfg.manual_cotrain.wm_rollout_target_trajectories
     )
-    assert total % cfg.algorithm.group_size == 0
+    assert real_trajectories == 8
 
 
 def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess() -> None:
@@ -468,6 +572,11 @@ def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess
         == cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
     )
     assert cfg.env.real.cfg.action_postprocess == "openvla_oft"
+    assert cfg.env.real.cfg.action_scale == "env"
+    assert cfg.env.wm.cfg.action_postprocess == "openvla_oft"
+    assert cfg.env.wm.cfg.action_scale == "policy"
+    assert cfg.env.wm.cfg.dataset_statistics_path == cfg.task.openvla_oft.dataset_statistics_path
+    assert cfg.env.wm.cfg.unnorm_key == cfg.task.openvla_oft.dataset_statistics_key
     assert "egl_step_timeout_s" not in cfg.env.real.cfg
 
 
@@ -560,8 +669,11 @@ class _FakeActorGroup:
         self.selected: tuple[int, ...] | None = None
         self.sync_calls: list[tuple[tuple[int, ...] | None, str, int]] = []
         self.state_dict_calls: list[tuple[int, ...] | None] = []
-        self.recv_calls: list[tuple[tuple[int, ...] | None, str, int]] = []
+        self.recv_calls: list[
+            tuple[tuple[int, ...] | None, str, int, list[tuple[str, int]] | None]
+        ] = []
         self.loaded_shards: list[object] = []
+        self.loaded_by_rank: list[tuple[tuple[int, ...] | None, list[object]]] = []
         self.load_calls = 0
 
     def execute_on(self, *ranks: int):
@@ -586,19 +698,36 @@ class _FakeActorGroup:
         )
 
     def load_trajectory_shards(self, shards: list[object]):
+        if self.events is not None:
+            self.events.append("actor_load")
         self.load_calls += 1
-        self.loaded_shards = list(shards)
+        loaded = list(shards)
+        self.loaded_by_rank.append((self.selected, loaded))
+        self.loaded_shards.extend(loaded)
+        self.selected = None
         return _Ready([None for _ in self.workers])
 
     def recv_rollout_trajectories(
         self,
         actor_channel_name: str,
         expected_shards: int | None = None,
+        keyed_counts: list[tuple[str, int]] | None = None,
     ):
         if self.events is not None:
             self.events.append("actor_recv_start")
-        count = 1 if expected_shards is None else int(expected_shards)
-        self.recv_calls.append((self.selected, str(actor_channel_name), count))
+        count = (
+            sum(int(value) for _key, value in keyed_counts)
+            if keyed_counts is not None
+            else 1 if expected_shards is None else int(expected_shards)
+        )
+        self.recv_calls.append(
+            (
+                self.selected,
+                str(actor_channel_name),
+                count,
+                list(keyed_counts) if keyed_counts is not None else None,
+            )
+        )
         rank = -1 if not self.selected else int(self.selected[0])
         self.loaded_shards.extend([f"rank{rank}-shard{i}" for i in range(count)])
         self.selected = None
@@ -750,11 +879,18 @@ class _FakeLearnerGroup:
 
 
 class _FakeChannel:
-    def __init__(self, items: list[object] | None = None) -> None:
+    def __init__(
+        self,
+        items: list[object] | None = None,
+        *,
+        qsize_sequence: list[int] | None = None,
+    ) -> None:
         self.items = list(items or [])
+        self.qsize_sequence = list(qsize_sequence or [])
         self.puts: list[tuple[str, object]] = []
         self.gets: list[str] = []
         self.get_batch_calls: list[tuple[int, str]] = []
+        self.qsize_calls: list[str | None] = []
 
     def get(self, *, key: str = "default"):
         self.gets.append(str(key))
@@ -768,6 +904,12 @@ class _FakeChannel:
 
     def put(self, value, *, key: str = "default"):
         self.puts.append((str(key), value))
+
+    def qsize(self, *, key: str | None = None):
+        self.qsize_calls.append(None if key is None else str(key))
+        if self.qsize_sequence:
+            return int(self.qsize_sequence.pop(0))
+        return len(self.items)
 
 
 class _FakeReplayGroup:
@@ -1072,13 +1214,20 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     monkeypatch.setattr(manual_runner, "_hs_trace", traces.append)
     cfg = _cfg(ngpu=2)
     cfg.actor.train_cfg.algorithm_cfg.group_size = 1
+    cfg.manual_cotrain.wm_rollout_epoch = 2
     runner = runners.ManualCotrainRayRunner(cfg)
     events: list[str] = []
     actor = _FakeActorGroup(events)
     rollout = _FakeRolloutGroup(events)
     learner = _FakeLearnerGroup()
     wm_env = _FakeEnvGroup(
-        [{"env/trajectory_shards": 1.0, "env/steps": 4.0}],
+        [
+            {
+                "env/trajectory_shards": 2.0,
+                "env/wm_env/trajectory_shards": 2.0,
+                "env/steps": 4.0,
+            }
+        ],
         events,
     )
     groups = {
@@ -1092,7 +1241,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
         "WMEnvGroup": wm_env,
         "ReplayGroup": _FakeReplayGroup(),
         "env_channel": _FakeChannel(),
-        "actor_channel": _FakeChannel(),
+        "actor_channel": _FakeChannel(["wm0", "wm1"]),
         "env_channel_name": "env",
         "rollout_channel_name": "rollout",
         "actor_channel_name": "actor",
@@ -1103,7 +1252,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert actor.sync_calls == [(None, "policy", 1)]
     assert rollout.pulled == [("policy", None)]
     assert rollout.generate_call == ("env", "rollout", 1)
-    assert events.index("actor_recv_start") < events.index("env_wait")
+    assert events.index("env_wait") < events.index("actor_recv_wait")
     assert groups["RealEnvGroup"].progress_configs
     assert wm_env.progress_configs
     assert groups["RealEnvGroup"].progress_configs[0][0] == wm_env.progress_configs[0][0]
@@ -1117,9 +1266,14 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert "[global_step=1] EnvGroup.interact done" in traces
     assert "[env rank=0] send StopMsg key=0" in traces
     assert "[env rank=1] send StopMsg key=1" in traces
-    assert actor.recv_calls == [((0,), "actor", 1), ((1,), "actor", 1)]
+    assert actor.recv_calls == [
+        ((0,), "actor", 1, [("wm_env", 1)]),
+        ((1,), "actor", 1, [("wm_env", 1)]),
+    ]
     assert actor.load_calls == 0
+    assert actor.loaded_by_rank == []
     assert len(actor.loaded_shards) == 2
+    assert groups["actor_channel"].qsize_calls == ["wm_env"]
     assert groups["actor_channel"].get_batch_calls == []
     assert groups["actor_channel"].gets == []
     assert learner.synced == []
@@ -1129,7 +1283,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert wm_env.classifier_versions == [1]
     assert wm_env.world_model_states == [{"wm": 1}]
     assert wm_env.classifier_states == [{"cls": 2}]
-    assert metrics["env/trajectory_shards"] == 2.0
+    assert metrics["env/trajectory_shards"] == 3.0
     assert metrics["env/steps"] == 6.0
     assert metrics["actor/received_shards"] == 2.0
     assert metrics["rollout/generated"] == 5.0
@@ -1153,6 +1307,196 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert "time/manual_cotrain/learner_to_wm_env_sync_s" in metrics
 
 
+def test_run_global_step_dynamic_wm_progress_uses_central_snapshots(monkeypatch) -> None:
+    cfg = _cfg(ngpu=2, wm_envs_per_worker=1, wm_rollout_target_trajectories=4)
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+    progress_calls: list[tuple[str, int | bool, str | None]] = []
+
+    class _RecordingProgressMonitor:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def records(self):
+            return []
+
+        def report(self, *, force: bool = False):
+            progress_calls.append(("file", bool(force), None))
+            return _ManualCotrainProgressSnapshot(
+                done=0,
+                total=4,
+                status="file-progress",
+                worker_count=1,
+                finished_count=0,
+            )
+
+        def report_snapshot(self, snapshot, *, force: bool = False):
+            del force
+            progress_calls.append(("central", int(snapshot.total), snapshot.status))
+            return snapshot
+
+    monkeypatch.setattr(
+        manual_runner,
+        "_ManualCotrainEnvProgressMonitor",
+        _RecordingProgressMonitor,
+    )
+
+    def fake_dynamic_wait(self, **kwargs):
+        del self
+        progress = kwargs["progress"]
+        progress.report_snapshot(
+            _ManualCotrainProgressSnapshot(
+                done=0,
+                total=5,
+                status="real_env=0/1 wm_pool=0/4",
+                worker_count=2,
+                finished_count=0,
+            ),
+            force=True,
+        )
+        progress.report_snapshot(
+            _ManualCotrainProgressSnapshot(
+                done=5,
+                total=5,
+                status="real_env=1/1 wm_pool=4/4",
+                worker_count=2,
+                finished_count=2,
+            ),
+            force=True,
+        )
+        return {
+            "env/trajectory_shards": 4.0,
+            "env/wm_env/trajectory_shards": 4.0,
+            "env/steps": 8.0,
+        }
+
+    monkeypatch.setattr(
+        runner._runner.__class__,
+        "_wait_env_metrics_with_dynamic_wm_leases",
+        fake_dynamic_wait,
+    )
+
+    groups = {
+        "ActorGroup": _FakeActorGroup(),
+        "RolloutGroup": _FakeRolloutGroup(),
+        "LearnerGroup": _FakeLearnerGroup(),
+        "RealEnvGroup": _FakeEnvGroup({"env/trajectory_shards": 1.0}),
+        "WMEnvGroup": _FakeEnvGroup({"env/wm_env/trajectory_shards": 4.0}),
+        "ReplayGroup": _FakeReplayGroup(),
+        "env_channel": _FakeChannel(),
+        "actor_channel": _FakeChannel(["wm0", "wm1", "wm2", "wm3"]),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+    }
+
+    metrics = runner._run_global_step(groups, global_step=1)
+
+    assert metrics["actor/received_shards"] == 4.0
+    assert [call[0] for call in progress_calls] == ["central", "central"]
+    assert all(call[1] == 5 for call in progress_calls)
+
+
+def test_receive_actor_trajectories_loads_actual_wm_shards_by_actor_rank() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=1)
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 2
+    runner = runners.ManualCotrainRayRunner(cfg)
+    actor = _FakeActorGroup()
+    actor.workers = ["actor0", "actor1"]
+    stage_times: dict[str, float] = {}
+    groups = {
+        "ActorGroup": actor,
+        "WMEnvGroup": _FakeEnvGroup({}),
+        "actor_channel": _FakeChannel(["wm0", "wm1", "wm2", "wm3"]),
+    }
+
+    metrics = runner._receive_actor_trajectories(
+        groups,
+        expected_shards=4,
+        env_metrics={"env/wm_env/trajectory_shards": 4.0},
+        actor_channel_name="actor",
+        stage_times=stage_times,
+        started_receivers=None,
+    )
+
+    assert actor.recv_calls == [
+        ((0,), "actor", 2, [("wm_env", 2)]),
+        ((1,), "actor", 2, [("wm_env", 2)]),
+    ]
+    assert groups["actor_channel"].qsize_calls == ["wm_env"]
+    assert groups["actor_channel"].get_batch_calls == []
+    assert actor.loaded_by_rank == []
+    assert metrics["actor/received_shards"] == 4.0
+    assert "time/manual_cotrain/actor_channel_get_batch_s" in stage_times
+    assert "time/manual_cotrain/actor_load_trajectory_shards_s" in stage_times
+
+
+def test_receive_actor_trajectories_dispatches_receive_to_actor_ranks() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=1)
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 2
+    runner = runners.ManualCotrainRayRunner(cfg)
+    actor = _FakeActorGroup()
+    actor.workers = ["actor0", "actor1"]
+    actor_channel = _FakeChannel(["wm0", "wm1", "wm2", "wm3"])
+    stage_times: dict[str, float] = {}
+
+    metrics = runner._receive_actor_trajectories(
+        {
+            "ActorGroup": actor,
+            "WMEnvGroup": _FakeEnvGroup({}),
+            "actor_channel": actor_channel,
+        },
+        expected_shards=4,
+        env_metrics={"env/wm_env/trajectory_shards": 4.0},
+        actor_channel_name="actor",
+        stage_times=stage_times,
+        started_receivers=None,
+    )
+
+    assert actor.recv_calls == [
+        ((0,), "actor", 2, [("wm_env", 2)]),
+        ((1,), "actor", 2, [("wm_env", 2)]),
+    ]
+    assert actor_channel.qsize_calls == ["wm_env"]
+    assert actor_channel.get_batch_calls == []
+    assert metrics["actor/received_shards"] == 4.0
+
+
+def test_receive_actor_trajectories_waits_for_actor_channel_ready() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=1)
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 2
+    runner = runners.ManualCotrainRayRunner(cfg)
+    actor = _FakeActorGroup()
+    actor.workers = ["actor0", "actor1"]
+    actor_channel = _FakeChannel(
+        ["wm0", "wm1", "wm2", "wm3"],
+        qsize_sequence=[3, 4],
+    )
+    stage_times: dict[str, float] = {}
+
+    metrics = runner._receive_actor_trajectories(
+        {
+            "ActorGroup": actor,
+            "WMEnvGroup": _FakeEnvGroup({}),
+            "actor_channel": actor_channel,
+        },
+        expected_shards=4,
+        env_metrics={"env/wm_env/trajectory_shards": 4.0},
+        actor_channel_name="actor",
+        stage_times=stage_times,
+        started_receivers=None,
+    )
+
+    assert metrics["actor/received_shards"] == 4.0
+    assert actor_channel.qsize_calls == ["wm_env", "wm_env"]
+    assert actor_channel.get_batch_calls == []
+    assert actor.recv_calls == [
+        ((0,), "actor", 2, [("wm_env", 2)]),
+        ((1,), "actor", 2, [("wm_env", 2)]),
+    ]
+    assert "time/manual_cotrain/actor_channel_wait_ready_s" in stage_times
+
+
 def test_run_global_step_can_publish_learner_weights_when_configured() -> None:
     runner = runners.ManualCotrainRayRunner(
         _cfg(ngpu=2, publish_learner_weights=True)
@@ -1166,11 +1510,15 @@ def test_run_global_step_can_publish_learner_weights_when_configured() -> None:
             {"env/trajectory_shards": 1.0, "env/steps": 2.0}
         ),
         "WMEnvGroup": _FakeEnvGroup(
-            {"env/trajectory_shards": 1.0, "env/steps": 2.0}
+            {
+                "env/trajectory_shards": 1.0,
+                "env/wm_env/trajectory_shards": 1.0,
+                "env/steps": 2.0,
+            }
         ),
         "ReplayGroup": None,
         "env_channel": _FakeChannel(),
-        "actor_channel": _FakeChannel(["real-shard", "wm-shard"]),
+        "actor_channel": _FakeChannel(["wm-shard"]),
         "env_channel_name": "env",
         "rollout_channel_name": "rollout",
         "actor_channel_name": "actor",
@@ -1191,10 +1539,16 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
         "RolloutGroup": _FakeRolloutGroup(),
         "LearnerGroup": _FakeLearnerGroup(),
         "RealEnvGroup": _FakeEnvGroup({"env/trajectory_shards": 1.0, "env/steps": 2.0}),
-        "WMEnvGroup": None,
+        "WMEnvGroup": _FakeEnvGroup(
+            {
+                "env/trajectory_shards": 1.0,
+                "env/wm_env/trajectory_shards": 1.0,
+                "env/steps": 2.0,
+            }
+        ),
         "ReplayGroup": None,
         "env_channel": _FakeChannel(),
-        "actor_channel": _FakeChannel(["real-shard"]),
+        "actor_channel": _FakeChannel(["wm-shard"]),
         "env_channel_name": "env",
         "rollout_channel_name": "rollout",
         "actor_channel_name": "actor",
