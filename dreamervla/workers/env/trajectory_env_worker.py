@@ -16,6 +16,7 @@ import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.egl_device import apply_libero_render_regime
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
     ObservationBatchMsg,
@@ -49,6 +50,16 @@ def _plain_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     raise TypeError(f"expected mapping config, got {type(value).__name__}")
+
+
+def _libero_render_gpu_pool(env_cfg: Mapping[str, Any]) -> list[int]:
+    from dreamervla.runners.render_device_config import parse_device_ids
+
+    for key in ("gpu_pool", "render_devices", "egl_device_pool"):
+        devices = parse_device_ids(_plain_dict(env_cfg).get(key))
+        if devices:
+            return devices
+    return []
 
 
 def _state_dict_nbytes(state_dict: Mapping[str, Any]) -> int:
@@ -775,11 +786,12 @@ class BaseTrajectoryEnvWorker(Worker):
     def _pin_inproc_render_backend(self) -> None:
         if self.role != "real_env":
             return
-        render_backend = str(self.env_cfg.get("render_backend", "")).strip().lower()
-        if render_backend == "egl":
-            return
-        os.environ.setdefault("MUJOCO_GL", "osmesa")
-        os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+        render_backend = str(self.env_cfg.get("render_backend", "osmesa")).strip().lower()
+        apply_libero_render_regime(
+            render_backend,
+            int(self.local_rank),
+            _libero_render_gpu_pool(self.env_cfg),
+        )
 
     def _reject_legacy_spawn_config(self) -> None:
         raw = self.env_cfg.get("spawn_env_slots", False)

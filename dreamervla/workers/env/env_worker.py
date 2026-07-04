@@ -17,7 +17,6 @@ from __future__ import annotations
 import importlib
 import inspect
 import multiprocessing as mp
-import os
 import time
 from typing import Any
 
@@ -26,9 +25,26 @@ import ray
 
 from dreamervla.scheduler.worker import Worker
 from dreamervla.utils.egl_device import (
-    apply_egl_device_regime,
+    apply_libero_render_regime,
     log_egl_device_diagnostics_from_env,
 )
+
+
+def _libero_render_backend(env_cfg: dict[str, Any], default: str = "osmesa") -> str:
+    backend = str(env_cfg.get("render_backend", default)).strip().lower()
+    if backend not in {"egl", "osmesa"}:
+        raise ValueError(f"render_backend must be 'egl' or 'osmesa', got {backend!r}")
+    return backend
+
+
+def _libero_render_gpu_pool(env_cfg: dict[str, Any]) -> list[int]:
+    from dreamervla.runners.render_device_config import parse_device_ids
+
+    for key in ("gpu_pool", "render_devices", "egl_device_pool"):
+        devices = parse_device_ids(env_cfg.get(key))
+        if devices:
+            return devices
+    return []
 
 
 def _build_env_from_cfg(env_cfg: dict[str, Any]) -> Any:
@@ -111,8 +127,15 @@ def _env_subprocess_main(  # noqa: ANN001
     set_task / current_obs / step / close over the pipe. Transitions are built HERE (they need
     the env object); the parent EnvWorker accumulates them and pushes to the Ray replay.
     """
-    if egl_device_id is not None:
-        apply_egl_device_regime(egl_device_id, logger_name=__name__)
+    render_backend = _libero_render_backend(env_cfg)
+    render_pool = _libero_render_gpu_pool(env_cfg)
+    if not render_pool and egl_device_id is not None:
+        render_pool = [int(egl_device_id)]
+    apply_libero_render_regime(
+        render_backend,
+        int(env_cfg.get("_render_shard_id", 0)),
+        render_pool,
+    )
     try:
         env = _build_env_from_cfg(env_cfg)
         cur_task = int(task_id)
@@ -297,11 +320,11 @@ class EnvWorker(Worker):
         self._egl_diagnostics_logged = True
 
     def _init_inproc(self) -> None:
-        # The in-process (non-egl) path renders with CPU osmesa. Pin it before _build_env
-        # imports robosuite, so a Ray actor that did not inherit MUJOCO_GL does not fall
-        # back to egl with an empty CUDA_VISIBLE_DEVICES (robosuite egl_context int('')).
-        os.environ.setdefault("MUJOCO_GL", "osmesa")
-        os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+        apply_libero_render_regime(
+            _libero_render_backend(self.env_cfg),
+            int(self.local_rank),
+            _libero_render_gpu_pool(self.env_cfg),
+        )
         self.env = self._build_env(self.env_cfg)
         if hasattr(self.env, "set_task"):
             self.env.set_task(self.task_id)
@@ -321,6 +344,11 @@ class EnvWorker(Worker):
         # spawn their child simultaneously. Each child cold-starts a fresh interpreter and builds
         # LIBERO/robosuite/EGL; stagger startup to reduce CPU/disk thundering herd during init.
         self._egl_device_id = None if egl_device_id is None else int(egl_device_id)
+        child_env_cfg = dict(self.env_cfg)
+        child_env_cfg.setdefault("render_backend", "egl")
+        child_env_cfg["_render_shard_id"] = int(self.local_rank)
+        if egl_device_id is not None and not _libero_render_gpu_pool(child_env_cfg):
+            child_env_cfg["render_devices"] = [int(egl_device_id)]
         stagger_s = float(self.env_cfg.get("egl_spawn_stagger_s", 3.0)) * int(self.local_rank)
         if stagger_s > 0:
             time.sleep(stagger_s)
@@ -331,7 +359,7 @@ class EnvWorker(Worker):
             target=_env_subprocess_main,
             args=(
                 child_conn,
-                self.env_cfg,
+                child_env_cfg,
                 self.task_id if task_id is None else int(task_id),
                 self._record_builder,
                 egl_device_id,

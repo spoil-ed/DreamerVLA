@@ -53,9 +53,18 @@ def apply_libero_render_regime(backend: str, shard_id: int, gpu_pool: list[int])
 
     devices = parse_device_ids(gpu_pool)
     if not devices:
+        devices = parse_device_ids(os.environ.get("MUJOCO_EGL_DEVICE_ID", ""))
+    if not devices:
+        devices = parse_device_ids(os.environ.get("CUDA_VISIBLE_DEVICES", ""))
+    if not devices:
         raise ValueError(_ZERO_GPU_EGL_ERROR)
     egl_device_id = devices[int(shard_id) % len(devices)]
-    apply_egl_device_regime(egl_device_id, logger_name=__name__)
+    device = str(int(egl_device_id))
+    os.environ["MUJOCO_GL"] = "egl"
+    os.environ["PYOPENGL_PLATFORM"] = "egl"
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = device
+    os.environ["CUDA_VISIBLE_DEVICES"] = device
+    os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def log_egl_device_diagnostics_from_env(*, logger_name: str) -> None:
