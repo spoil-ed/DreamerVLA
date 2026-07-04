@@ -12,10 +12,9 @@ python: python
 # fan-out via collect.num_workers). Under DDP, dataloader.batch_size is PER-GPU — tune
 # it with warmup.batch_size. Default 1 (single process); set ngpu=<N> for any N.
 ngpu: 1
-# One-knob render backend for the cotrain online rollout: egl (GPU offscreen, default)
-# or osmesa (CPU software, stable fallback if egl misbehaves). Threads into the cotrain
-# command as online_rollout.render_backend. Collection always renders osmesa.
-render_backend: osmesa
+# One-knob render backend for LIBERO collection, cotrain-real rollout, and eval:
+# egl (GPU offscreen, default) or osmesa (CPU software, explicit fallback).
+render_backend: egl
 # Cotrain engine: sync (DDP pipeline, default) or async (RLinf-style ray overlap —
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
@@ -46,6 +45,7 @@ eval:
   enabled: false
   interval_global_steps: 10
   debug_interval_global_steps: 1
+  render_backend: egl
 
 # Direct launcher controls. Leave values null to use the selected profile.
 # These are translated to the downstream Hydra keys listed in control_overrides.
@@ -128,6 +128,7 @@ modes:
       - experiment=collect_rollouts_ray
       - task={hydra_task}
       - logger=tensorboard
+      - env.cfg.render_backend={render_backend}
       - collect.task_ids=all
       - collect.episodes_per_task=50
       - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.input_tokens.expected_action_head_type}}

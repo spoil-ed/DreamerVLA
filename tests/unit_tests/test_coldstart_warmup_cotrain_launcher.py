@@ -1042,7 +1042,8 @@ def test_async_cotrain_online_command_targets_manual_cotrain_runner(tmp_path) ->
     assert "manual_cotrain.ngpu=2" in plan.cotrain_online_cmd
     assert "+cluster.num_gpus=2" in plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=8" in plan.cotrain_online_cmd
-    assert "cluster.component_placement=null" in plan.cotrain_online_cmd
+    assert "cluster.component_placement=null" not in plan.cotrain_online_cmd
+    assert "cluster.component_placement.env=0-1" in plan.cotrain_online_cmd
 
 
 @pytest.mark.parametrize("ngpu", [0, 1, 2, 3, 4, 5])
@@ -1054,6 +1055,8 @@ def test_async_manual_cotrain_online_command_supports_zero_to_five_gpus(
 
     cfg = _launcher_cfg()
     cfg["cotrain_engine"] = "async"
+    if ngpu == 0:
+        cfg["render_backend"] = "osmesa"
     plan = build_pipeline_plan(
         mode="ray",
         run_root=tmp_path,
@@ -1319,6 +1322,7 @@ def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
 
     cfg = _launcher_cfg()
     cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
     plan = build_pipeline_plan(
         mode="ray",
         run_root=tmp_path,

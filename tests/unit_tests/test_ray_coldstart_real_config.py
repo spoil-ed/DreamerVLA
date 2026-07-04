@@ -170,6 +170,37 @@ def test_collect_rollouts_ray_experiment_composes() -> None:
     assert cfg.collect.num_images_in_input == 1
 
 
+def test_collect_egl_render_pool_defaults_to_cluster_gpus() -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import (
+        _ensure_collect_render_device_pool,
+    )
+
+    class _Cluster:
+        num_gpus = 3
+
+    env_cfg = {"render_backend": "egl"}
+
+    resolved = _ensure_collect_render_device_pool(env_cfg, _Cluster())
+
+    assert resolved["render_devices"] == [0, 1, 2]
+    assert "render_devices" not in env_cfg
+
+
+def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
+    from dreamervla.runners.cold_start_ray_collect_runner import (
+        _ensure_collect_render_device_pool,
+    )
+
+    class _Cluster:
+        num_gpus = 3
+
+    env_cfg = {"render_backend": "egl", "render_devices": [7]}
+
+    resolved = _ensure_collect_render_device_pool(env_cfg, _Cluster())
+
+    assert resolved["render_devices"] == [7]
+
+
 def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
     from dreamervla.runners.cold_start_ray_collect_runner import (
         _next_ray_task_id,

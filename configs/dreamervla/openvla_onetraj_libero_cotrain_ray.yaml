@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 _target_: dreamervla.runners.ManualCotrainRayRunner
-render_backend: osmesa
+render_backend: egl
 
 manual_cotrain:
   ngpu: 1

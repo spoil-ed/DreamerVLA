@@ -16,6 +16,7 @@ from dreamervla.runners.collect_parallel_rollouts import _build_resume_work_list
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
+from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
 from dreamervla.utils.paths import data_path
 from dreamervla.utils.resource_metrics import collect_resource_metrics
 from dreamervla.workers.env.env_worker import EnvWorker
@@ -37,6 +38,28 @@ def _shard_env_ids_by_worker(env_ids: list[int], num_workers: int) -> dict[int, 
     for env_id in env_ids:
         groups.setdefault(int(env_id) % num_workers, []).append(int(env_id))
     return groups
+
+
+def _ensure_collect_render_device_pool(
+    env_cfg: dict[str, Any],
+    cluster: Cluster,
+) -> dict[str, Any]:
+    """Return collect env cfg with an EGL render pool when the user did not set one."""
+    resolved = dict(env_cfg)
+    if str(resolved.get("render_backend", "osmesa")).strip().lower() != "egl":
+        return resolved
+
+    from dreamervla.runners.render_device_config import parse_device_ids
+
+    for key in ("gpu_pool", "render_devices", "egl_device_pool"):
+        if parse_device_ids(resolved.get(key)):
+            return resolved
+
+    num_gpus = int(getattr(cluster, "num_gpus", 0))
+    if num_gpus <= 0:
+        raise ValueError(_ZERO_GPU_EGL_ERROR)
+    resolved["render_devices"] = list(range(num_gpus))
+    return resolved
 
 
 class ColdStartRayCollectRunner(BaseRunner):
@@ -244,7 +267,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 
-        env_cfg = plan["env"]
+        env_cfg = _ensure_collect_render_device_pool(plan["env"], cluster)
         env_kwargs = dict(env_cfg.get("kwargs", {}))
         initial_task = task_ids[0] if task_ids else int(env_kwargs["task_id"])
         env_group = WorkerGroup(

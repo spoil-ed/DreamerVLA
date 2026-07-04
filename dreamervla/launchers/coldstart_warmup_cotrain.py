@@ -471,6 +471,8 @@ def _manual_cotrain_online_overrides(
             f"+cluster.num_gpus={_requested_gpu_count(ngpu)}",
         ]
     )
+    if not _has_override(explicit_overrides, "env.cfg.render_backend"):
+        defaults.append(f"env.cfg.render_backend={render_backend}")
     envs_per_worker = _profile_per_gpu_count(
         profile_cfg,
         "online_rollout_envs_per_gpu",
