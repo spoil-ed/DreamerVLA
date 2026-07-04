@@ -43,6 +43,8 @@ def _shard_env_ids_by_worker(env_ids: list[int], num_workers: int) -> dict[int, 
 def _ensure_collect_render_device_pool(
     env_cfg: dict[str, Any],
     cluster: Cluster,
+    *,
+    collect_cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return collect env cfg with an EGL render pool when the user did not set one."""
     resolved = dict(env_cfg)
@@ -58,7 +60,22 @@ def _ensure_collect_render_device_pool(
     num_gpus = int(getattr(cluster, "num_gpus", 0))
     if num_gpus <= 0:
         raise ValueError(_ZERO_GPU_EGL_ERROR)
-    resolved["render_devices"] = list(range(num_gpus))
+    collect_cfg = dict(collect_cfg or {})
+    first_infer_gpu = int(collect_cfg.get("gpu_id", 0))
+    num_infer = max(1, int(collect_cfg.get("num_inference_workers", 1)))
+    inference_gpus = {
+        gpu
+        for gpu in range(first_infer_gpu, first_infer_gpu + num_infer)
+        if 0 <= gpu < num_gpus
+    }
+    render_devices = [gpu for gpu in range(num_gpus) if gpu not in inference_gpus]
+    if not render_devices:
+        raise ValueError(
+            "collect render_backend=egl needs a render GPU disjoint from inference "
+            f"GPU(s) {sorted(inference_gpus)}; expose another GPU and set "
+            "+env.cfg.render_devices, or use render_backend=osmesa."
+        )
+    resolved["render_devices"] = render_devices
     return resolved
 
 
@@ -267,7 +284,11 @@ class ColdStartRayCollectRunner(BaseRunner):
         ).launch(cluster, NodePlacementStrategy(1))
         dump = dump_group.workers[0]
 
-        env_cfg = _ensure_collect_render_device_pool(plan["env"], cluster)
+        env_cfg = _ensure_collect_render_device_pool(
+            plan["env"],
+            cluster,
+            collect_cfg=collect_cfg,
+        )
         env_kwargs = dict(env_cfg.get("kwargs", {}))
         initial_task = task_ids[0] if task_ids else int(env_kwargs["task_id"])
         env_group = WorkerGroup(

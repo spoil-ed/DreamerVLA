@@ -170,20 +170,42 @@ def test_collect_rollouts_ray_experiment_composes() -> None:
     assert cfg.collect.num_images_in_input == 1
 
 
-def test_collect_egl_render_pool_defaults_to_cluster_gpus() -> None:
+def test_collect_egl_render_pool_defaults_to_non_inference_gpus() -> None:
     from dreamervla.runners.cold_start_ray_collect_runner import (
         _ensure_collect_render_device_pool,
     )
 
     class _Cluster:
-        num_gpus = 3
+        num_gpus = 4
 
     env_cfg = {"render_backend": "egl"}
 
-    resolved = _ensure_collect_render_device_pool(env_cfg, _Cluster())
+    resolved = _ensure_collect_render_device_pool(
+        env_cfg,
+        _Cluster(),
+        collect_cfg={"gpu_id": 0, "num_inference_workers": 2},
+    )
 
-    assert resolved["render_devices"] == [0, 1, 2]
+    assert resolved["render_devices"] == [2, 3]
     assert "render_devices" not in env_cfg
+
+
+def test_collect_egl_render_pool_rejects_inference_overlap_without_spare_gpu() -> None:
+    import pytest
+
+    from dreamervla.runners.cold_start_ray_collect_runner import (
+        _ensure_collect_render_device_pool,
+    )
+
+    class _Cluster:
+        num_gpus = 1
+
+    with pytest.raises(ValueError, match="render_backend=osmesa"):
+        _ensure_collect_render_device_pool(
+            {"render_backend": "egl"},
+            _Cluster(),
+            collect_cfg={"gpu_id": 0, "num_inference_workers": 1},
+        )
 
 
 def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
@@ -196,7 +218,11 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
 
     env_cfg = {"render_backend": "egl", "render_devices": [7]}
 
-    resolved = _ensure_collect_render_device_pool(env_cfg, _Cluster())
+    resolved = _ensure_collect_render_device_pool(
+        env_cfg,
+        _Cluster(),
+        collect_cfg={"gpu_id": 0, "num_inference_workers": 1},
+    )
 
     assert resolved["render_devices"] == [7]
 

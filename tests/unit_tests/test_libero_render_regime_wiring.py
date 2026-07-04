@@ -129,6 +129,36 @@ def test_manual_real_env_applies_libero_helper_before_env_build(monkeypatch) -> 
     assert events[:2] == [("helper", "egl", 3, [6, 8]), ("build", "egl")]
 
 
+def test_manual_real_env_uses_worker_visible_gpu_when_cfg_pool_absent(monkeypatch) -> None:
+    for key in (
+        "MUJOCO_GL",
+        "PYOPENGL_PLATFORM",
+        "MUJOCO_EGL_DEVICE_ID",
+        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    worker = RealEnvWorker(
+        env_cfg={"target": "unused", "render_backend": "egl"},
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+
+    monkeypatch.setattr(trajectory_env_worker, "_build_env_from_cfg", lambda cfg: _Env())
+
+    try:
+        worker.init()
+    finally:
+        worker.close()
+
+    assert os.environ["MUJOCO_GL"] == "egl"
+    assert os.environ["PYOPENGL_PLATFORM"] == "egl"
+    assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "5"
+
+
 def test_post_step_eval_env_uses_libero_helper(monkeypatch, tmp_path) -> None:
     if not hasattr(coldstart, "_post_step_eval_env"):
         pytest.skip("post-step eval env helper is not present in this checkout")
