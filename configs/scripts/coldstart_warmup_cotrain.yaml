@@ -45,7 +45,18 @@ eval:
   enabled: false
   interval_global_steps: 10
   debug_interval_global_steps: 1
+  # For EGL full eval, use "model_gpu,render_gpu" to keep robosuite EGL render
+  # off the model CUDA device. MUJOCO_EGL_DEVICE_ID defaults to the last entry.
+  gpus: 0
   render_backend: egl
+  egl_device_id: null
+  num_episodes_per_task: null
+  task_ids: null
+  max_tasks: null
+  max_steps: null
+  action_postprocess: openvla_oft
+  seed: null
+  significant_drop_threshold: 0.10
 
 # Direct launcher controls. Leave values null to use the selected profile.
 # These are translated to the downstream Hydra keys listed in control_overrides.
@@ -146,6 +157,7 @@ modes:
       - experiment=collect_rollouts_onetraj
       - task={hydra_task}
       - logger=tensorboard
+      - collect.render_backend={render_backend}
       - collect.task_ids=all
       - collect.episodes_per_task=50
       - collect.gpu_id=0
@@ -224,6 +236,13 @@ profiles:
   # + WM co-residency OOMs.
   multi_gpu:
     online_rollout_envs_per_gpu: 2
+    ray_online_real_env_workers: 4
+    ray_online_real_render_backend: null
+    ray_online_real_envs_per_worker: 1
+    ray_online_wm_envs_per_worker: 16
+    ray_online_real_rollout_target_trajectories: 32
+    ray_online_wm_rollout_target_trajectories: 256
+    ray_online_max_steps_per_rollout_epoch: 512
     ray_online_env_rollout_timeout_s: 5400
     collect:
       ray:

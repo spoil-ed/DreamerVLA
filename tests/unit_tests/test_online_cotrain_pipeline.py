@@ -1581,3 +1581,152 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     assert calls == ["build", "online"]
     # threshold restored from the cls warmup ckpt
     assert runner.classifier_threshold == 0.42
+
+
+# ---------------------------------------------------------------------------
+# B1/B2: warmup threshold calibration + held-out validation gate
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_metrics_is_exported_and_picks_separating_threshold():
+    # B1 Step 1: the sweep must live in the shared classifier_metrics module
+    # (so the cotrain pipeline does not depend on the classifier runner) and
+    # select a threshold that perfectly separates a linearly-separable set.
+    from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
+    from dreamervla.runners.latent_classifier_runner import _sweep_metrics
+
+    assert _sweep_metrics is sweep_threshold_metrics
+
+    probs = np.array([0.1, 0.2, 0.8, 0.9])
+    ys = np.array([0, 0, 1, 1])
+    out = sweep_threshold_metrics(probs, ys, np.linspace(0.1, 0.9, 9), "val")
+    assert out["best_f1"] == 1.0
+    assert 0.2 < out["best_thresh"] <= 0.8
+
+
+class _FakeSeparableReplay:
+    """Returns a fixed classifier-window batch encoding its own labels."""
+
+    def __init__(self, labels):
+        self._labels = torch.tensor(labels, dtype=torch.int64)
+
+    def sample_classifier_windows(self, batch_size, **kwargs):
+        ys = self._labels
+        windows = (ys.float() * 2.0 - 1.0).unsqueeze(1)  # -1 / +1
+        return {"windows": windows, "labels": ys}
+
+
+class _FakeSeparableClassifier(torch.nn.Module):
+    """logits = [-x, x] so softmax[:,1] is high for +1 windows, low for -1."""
+
+    cfg = SimpleNamespace(window=4, chunk_size=1, chunk_pool="last")
+
+    def forward(self, windows, **kwargs):
+        x = windows[:, 0]
+        return torch.stack([-x, x], dim=1)
+
+
+class _FakeConstantClassifier(torch.nn.Module):
+    """Always emits the same low P(success) regardless of input (bad model)."""
+
+    cfg = SimpleNamespace(window=4, chunk_size=1, chunk_pool="last")
+
+    def forward(self, windows, **kwargs):
+        n = windows.shape[0]
+        # logits [+1, -1] -> P(success)=softmax[:,1] ~= 0.12 for every sample
+        return torch.stack(
+            [torch.ones(n), -torch.ones(n)], dim=1
+        )
+
+
+def _make_warmup_runner(monkeypatch, classifier):
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    def fake_cls_step(**kw):
+        return {"loss": 0.2, "acc": 0.5, "f1": 0.0, "pos_frac": 0.5}
+
+    monkeypatch.setattr(mod, "online_classifier_update_step", fake_cls_step)
+
+    logged = []
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.device = torch.device("cpu")
+    runner.classifier = classifier
+    runner.classifier_optimizer = object()
+    runner.classifier_threshold = 0.5
+    runner.log_metrics = lambda metrics, step: logged.append((dict(metrics), int(step)))
+    runner.console_progress = lambda *a, **k: None
+    runner._maybe_warmup_checkpoint = lambda **kw: None
+    return runner, logged
+
+
+def test_offline_warmup_calibration_default_off_preserves_threshold(monkeypatch):
+    runner, logged = _make_warmup_runner(monkeypatch, _FakeSeparableClassifier())
+    replay = _FakeSeparableReplay([0, 0, 1, 1])
+
+    runner._offline_warmup_classifier(
+        replay, steps=1, batch_size=2, early_neg_stride=8, grad_clip=1.0
+    )
+
+    # default path: threshold untouched, no eval/* calibration metrics emitted.
+    assert runner.classifier_threshold == 0.5
+    keys = {k for metrics, _ in logged for k in metrics}
+    assert not any(k.startswith("eval/classifier_warmup") for k in keys)
+
+
+def test_offline_warmup_calibrates_threshold_when_enabled(monkeypatch):
+    runner, logged = _make_warmup_runner(monkeypatch, _FakeSeparableClassifier())
+    replay = _FakeSeparableReplay([0, 0, 1, 1])
+
+    runner._offline_warmup_classifier(
+        replay,
+        steps=1,
+        batch_size=2,
+        early_neg_stride=8,
+        grad_clip=1.0,
+        calibrate=True,
+        val_num_batches=2,
+    )
+
+    # threshold moved off the 0.5 default into the separating band.
+    assert runner.classifier_threshold != 0.5
+    probs_low, probs_high = 0.11, 0.89  # softmax([-(-1),-1]) etc.
+    assert probs_low < runner.classifier_threshold < probs_high
+    metric_map = {k: v for metrics, _ in logged for k, v in metrics.items()}
+    assert metric_map["eval/classifier_warmup_best_f1"] == 1.0
+    assert metric_map["eval/classifier_warmup_best_thresh"] == runner.classifier_threshold
+
+
+def test_offline_warmup_val_gate_raises_below_min_f1(monkeypatch):
+    runner, _ = _make_warmup_runner(monkeypatch, _FakeConstantClassifier())
+    replay = _FakeSeparableReplay([0, 0, 1, 1])
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="val F1"):
+        runner._offline_warmup_classifier(
+            replay,
+            steps=1,
+            batch_size=2,
+            early_neg_stride=8,
+            grad_clip=1.0,
+            min_val_f1=0.9,
+        )
+
+
+def test_offline_warmup_val_gate_passes_and_logs(monkeypatch):
+    runner, logged = _make_warmup_runner(monkeypatch, _FakeSeparableClassifier())
+    replay = _FakeSeparableReplay([0, 0, 1, 1])
+
+    runner._offline_warmup_classifier(
+        replay,
+        steps=1,
+        batch_size=2,
+        early_neg_stride=8,
+        grad_clip=1.0,
+        min_val_f1=0.5,
+    )
+
+    metric_map = {k: v for metrics, _ in logged for k, v in metrics.items()}
+    assert metric_map["eval/classifier_warmup_val_f1"] == 1.0
+    # gate-only run does not calibrate: threshold stays at the 0.5 default.
+    assert runner.classifier_threshold == 0.5

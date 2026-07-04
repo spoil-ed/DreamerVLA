@@ -246,3 +246,87 @@ def test_vectorized_path_threads_obs_hidden_source_to_decoder(monkeypatch, tmp_p
 
     assert captured["obs_hidden_source"] == "input_token_embedding"
     assert captured["image_keys"] == ["agentview_rgb"]
+
+
+def test_vectorized_path_threads_libero_render_regime_to_children(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    class FakeDecoder:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def predict_batch(self, preps):
+            return []
+
+    class FakeVecEnv:
+        def __init__(self, *, num_envs, cfg_kwargs, env_vars):
+            captured["cfg_kwargs"] = dict(cfg_kwargs)
+            captured["env_vars"] = dict(env_vars)
+
+        def set_task(self, task_ids, env_ids=None):
+            return ["fake task"]
+
+        def close(self):
+            return None
+
+    class FakeWriter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setenv("MUJOCO_GL", "osmesa")
+    monkeypatch.setenv("PYOPENGL_PLATFORM", "osmesa")
+    monkeypatch.setattr(
+        "dreamervla.runners.rollout_hidden_extractor.OFTBatchedDecoder",
+        FakeDecoder,
+    )
+    monkeypatch.setattr(
+        "dreamervla.runners.vec_rollout_env.VecRolloutEnv",
+        FakeVecEnv,
+    )
+    monkeypatch.setattr(
+        "dreamervla.runners.vectorized_collect.collect_vectorized",
+        lambda *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "dreamervla.runners.collect_parallel_rollouts._make_dump_writer",
+        lambda *args, **kwargs: FakeWriter(),
+    )
+
+    _collect_vectorized_path(
+        policy=object(),
+        extractor=object(),
+        unnorm_key="libero_goal_no_noops",
+        env_cfg_kwargs={},
+        num_envs=2,
+        my_work=[(0, 0)],
+        episode_horizon=4,
+        reward_dir=tmp_path / "reward",
+        hidden_dir=tmp_path / "hidden",
+        shard_name="shard_000.hdf5",
+        shard_prefix="shard",
+        shard_idx=0,
+        demos_per_shard=0,
+        preprocess_config={"chunk_size": 8},
+        task_suite_name="libero_goal",
+        rank=3,
+        world_size=4,
+        progress_dir=None,
+        history=1,
+        rotate_images_180=True,
+        image_keys=["agentview_rgb"],
+        obs_hidden_source="input_token_embedding",
+        render_backend="egl",
+        render_gpu_pool=[1, 5],
+        render_shard_id=6,
+    )
+
+    assert captured["cfg_kwargs"] == {
+        "_libero_render_backend": "egl",
+        "_libero_render_gpu_pool": [1, 5],
+        "_libero_render_shard_id": 6,
+    }
+    assert "MUJOCO_GL" not in captured["env_vars"]
+    assert "PYOPENGL_PLATFORM" not in captured["env_vars"]

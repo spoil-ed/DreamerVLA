@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import multiprocessing as mp
 import os
 import time
 from collections.abc import Mapping
@@ -16,7 +17,9 @@ import torch
 
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
-from dreamervla.utils.egl_device import apply_libero_render_regime
+from dreamervla.utils.egl_device import (
+    apply_libero_render_regime,
+)
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
     ObservationBatchMsg,
@@ -88,6 +91,180 @@ def _build_env_from_cfg(env_cfg: Mapping[str, Any]) -> Any:
     if hasattr(env_cls, "from_config") and bool(cfg.get("use_from_config", False)):
         return env_cls.from_config(kwargs)
     return env_cls(**kwargs)
+
+
+def _trajectory_env_subprocess_main(  # noqa: ANN001
+    conn,
+    env_cfg: Mapping[str, Any],
+    shard_id: int,
+) -> None:
+    """Build and step one real LIBERO env in a fresh spawned process."""
+
+    cfg = _plain_dict(env_cfg)
+    render_backend = str(cfg.get("render_backend", "osmesa")).strip().lower()
+    apply_libero_render_regime(render_backend, int(shard_id), _libero_render_gpu_pool(cfg))
+    env: Any | None = None
+    try:
+        env = _build_env_from_cfg(cfg)
+        conn.send(("ready", None))
+    except Exception as exc:  # noqa: BLE001 - surface child init failures
+        conn.send(("error", repr(exc)))
+        conn.close()
+        return
+
+    try:
+        while True:
+            cmd, payload = conn.recv()
+            if cmd == "close":
+                break
+            if cmd == "reset":
+                task_id, episode_id = payload
+                if hasattr(env, "set_task"):
+                    env.set_task(int(task_id))
+                conn.send(("ok", env.reset(task_id=int(task_id), episode_id=int(episode_id))))
+            elif cmd == "step":
+                conn.send(("ok", env.step(payload)))
+            else:
+                conn.send(("error", f"unknown cmd {cmd!r}"))
+    except EOFError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        try:
+            conn.send(("error", repr(exc)))
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        if env is not None:
+            close = getattr(env, "close", None)
+            if close is not None:
+                close()
+        conn.close()
+
+
+class _SpawnedTrajectoryEnvSlot:
+    """Small reset/step proxy for one spawned real-env slot."""
+
+    def __init__(
+        self,
+        env_cfg: Mapping[str, Any],
+        *,
+        shard_id: int,
+        start_timeout_s: float,
+    ) -> None:
+        self.env_cfg = _plain_dict(env_cfg)
+        self.task_id = int(self.env_cfg.get("kwargs", {}).get("task_id", 0))
+        ctx = mp.get_context("spawn")
+        parent_conn, child_conn = ctx.Pipe()
+        self._conn = parent_conn
+        self._proc = ctx.Process(
+            target=_trajectory_env_subprocess_main,
+            args=(child_conn, self.env_cfg, int(shard_id)),
+            daemon=True,
+        )
+        self._proc.start()
+        child_conn.close()
+        if not parent_conn.poll(float(start_timeout_s)):
+            self.close()
+            raise RuntimeError(
+                "spawned trajectory env timed out during init "
+                f"(shard_id={int(shard_id)}, timeout={float(start_timeout_s):.0f}s)"
+            )
+        status, payload = parent_conn.recv()
+        if status != "ready":
+            self.close()
+            raise RuntimeError(f"spawned trajectory env init failed: {payload}")
+
+    def set_task(self, task_id: int) -> None:
+        self.task_id = int(task_id)
+
+    def reset(
+        self,
+        *,
+        task_id: int | None = None,
+        episode_id: int | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        selected_task_id = self.task_id if task_id is None else int(task_id)
+        self.task_id = int(selected_task_id)
+        return self._rpc("reset", (int(selected_task_id), int(episode_id or 0)))
+
+    def step(self, action: Any) -> tuple[Any, ...]:
+        return self._rpc("step", action)
+
+    def make_transition(
+        self,
+        obs: dict[str, Any],
+        action: np.ndarray,
+        reward: float,
+        terminated: bool,
+        truncated: bool,
+        info: dict[str, Any],
+    ) -> dict[str, Any]:
+        done = bool(terminated or truncated)
+        if "wm_action" in info:
+            wm_action = np.asarray(info["wm_action"], dtype=np.float32).reshape(-1)[:7]
+        else:
+            wm_action = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
+        policy_action = np.asarray(action, dtype=np.float32).reshape(-1)[:7]
+        if {"image", "state", "task_id", "step", "task_description"}.issubset(obs):
+            return {
+                "image": np.asarray(obs["image"], dtype=np.uint8),
+                "state": np.asarray(obs["state"], dtype=np.float32),
+                "action": wm_action.astype(np.float32, copy=False),
+                "wm_action": wm_action.astype(np.float32, copy=False),
+                "policy_action": policy_action.astype(np.float32, copy=False),
+                "reward": np.float32(reward),
+                "done": np.float32(done),
+                "discount": np.float32(0.0 if terminated else 1.0),
+                "is_first": bool(obs.get("is_first", False)),
+                "is_terminal": bool(terminated),
+                "is_last": bool(done),
+                "task_id": int(obs["task_id"]),
+                "step": int(obs["step"]),
+                "task_description": str(obs["task_description"]),
+            }
+        return {
+            "obs": dict(obs),
+            "action": np.asarray(action, dtype=np.float32),
+            "reward": float(reward),
+            "done": bool(done),
+            "is_terminal": bool(terminated),
+            "is_last": bool(done),
+            "info": dict(info or {}),
+        }
+
+    def close(self) -> None:
+        conn = getattr(self, "_conn", None)
+        proc = getattr(self, "_proc", None)
+        if conn is not None:
+            try:
+                if proc is not None and proc.is_alive():
+                    conn.send(("close", None))
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+            self._conn = None
+        if proc is not None:
+            proc.join(timeout=2.0)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=2.0)
+            self._proc = None
+
+    def _rpc(self, cmd: str, payload: Any) -> Any:
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("spawned trajectory env is closed")
+        try:
+            conn.send((cmd, payload))
+            status, value = conn.recv()
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError("spawned trajectory env exited unexpectedly") from exc
+        if status == "error":
+            raise RuntimeError(f"spawned trajectory env error: {value}")
+        return value
 
 
 def _as_numpy(value: Any) -> np.ndarray:
@@ -625,6 +802,53 @@ def _make_env_transition(
     }, obs)
 
 
+def _wm_classifier_step_success(
+    env: Any,
+    *,
+    reward: float,
+    info: dict[str, Any] | None = None,
+    terminated: bool | None = None,
+) -> bool:
+    info = dict(info or {})
+    if "success" in info:
+        return bool(info["success"])
+    threshold = getattr(env, "success_threshold", None)
+    if threshold is not None:
+        score = float(info.get("success_score", reward))
+        return bool(score >= float(threshold))
+    return bool(terminated) if terminated is not None else False
+
+
+def _wm_classifier_success_mask(
+    env: Any,
+    rewards: np.ndarray,
+    terminations: np.ndarray,
+) -> np.ndarray:
+    rewards_arr = np.asarray(rewards, dtype=np.float32)
+    terminations_arr = np.asarray(terminations, dtype=np.bool_)
+    threshold = getattr(env, "success_threshold", None)
+    if threshold is None:
+        return terminations_arr.astype(np.bool_, copy=False)
+    return np.logical_or(rewards_arr >= float(threshold), terminations_arr)
+
+
+def _derive_wm_classifier_success_rates(
+    metrics: dict[str, float],
+    prefix: str,
+) -> None:
+    chunk_total = float(metrics.get(f"{prefix}classifier_total_chunks", 0.0))
+    if chunk_total > 0.0:
+        metrics[f"{prefix}classifier_success_rate"] = float(
+            metrics.get(f"{prefix}classifier_success_chunks", 0.0) / chunk_total
+        )
+    traj_total = float(metrics.get(f"{prefix}classifier_total_trajectories", 0.0))
+    if traj_total > 0.0:
+        metrics[f"{prefix}classifier_trajectory_success_rate"] = float(
+            metrics.get(f"{prefix}classifier_success_trajectories", 0.0)
+            / traj_total
+        )
+
+
 @dataclass(frozen=True)
 class _TrajectoryChunk:
     """Internal raw trajectory chunk buffered before actor-channel emission."""
@@ -703,11 +927,19 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_completed_episodes = 0
         self._last_apply_successful_episodes = 0
         self._last_apply_physical_steps = 0
+        self._last_apply_classifier_success_chunks = 0
+        self._last_apply_classifier_total_chunks = 0
+        self._last_apply_classifier_success_trajectories = 0
+        self._last_apply_classifier_total_trajectories = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
         self._progress_path: Path | None = None
         self._progress_min_interval_s = 5.0
         self._progress_last_write_t: float | None = None
+        self._progress_last_done = 0
+        self._progress_last_total = 0
+        self._last_action_diagnostics: dict[str, float | int | str] | None = None
+        self._prefetched_bootstrap: list[ObservationMsg] | None = None
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible progress metadata for observations and replay."""
@@ -756,6 +988,11 @@ class BaseTrajectoryEnvWorker(Worker):
 
         if self.envs:
             return
+        if self._use_spawn_env_slots():
+            self._init_spawned_env_slots()
+            self._bootstrap_wm_initial_latents_from_replay()
+            self._apply_pending_component_states()
+            return
         self._reject_legacy_spawn_config()
         self._pin_inproc_render_backend()
         first_env = _build_env_from_cfg(self.env_cfg)
@@ -793,6 +1030,37 @@ class BaseTrajectoryEnvWorker(Worker):
             _libero_render_gpu_pool(self.env_cfg),
         )
 
+    def _use_spawn_env_slots(self) -> bool:
+        if self.role != "real_env":
+            return False
+        raw = self.env_cfg.get("spawn_env_slots", False)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _init_spawned_env_slots(self) -> None:
+        render_backend = str(self.env_cfg.get("render_backend", "osmesa")).strip().lower()
+        if render_backend not in {"egl", "osmesa"}:
+            raise ValueError(f"render_backend must be 'egl' or 'osmesa', got {render_backend!r}")
+        start_timeout_s = float(self.env_cfg.get("spawn_env_init_timeout_s", 900.0))
+        slots: list[Any] = []
+        base_shard_id = int(self.local_rank) * max(1, int(self.num_slots))
+        try:
+            for slot_id in range(self.num_slots):
+                slots.append(
+                    _SpawnedTrajectoryEnvSlot(
+                        self.env_cfg,
+                        shard_id=base_shard_id + int(slot_id),
+                        start_timeout_s=start_timeout_s,
+                    )
+                )
+            self.envs = slots
+            self._batched_env = False
+        except Exception:
+            for env in slots:
+                close = getattr(env, "close", None)
+                if close is not None:
+                    close()
+            raise
+
     def _reject_legacy_spawn_config(self) -> None:
         raw = self.env_cfg.get("spawn_env_slots", False)
         enabled = str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -811,6 +1079,30 @@ class BaseTrajectoryEnvWorker(Worker):
             obs = self._reset_slot(slot_id)
             messages.append(self._observation_msg(slot_id, obs))
         return messages
+
+    def prefetch_bootstrap(self) -> dict[str, float]:
+        """Reset all slots and cache the first observation batch (idempotent).
+
+        Lets the runner overlap the next interaction's env reset with actor
+        training; ``interact`` then consumes the cache instead of resetting
+        inline.
+        """
+
+        self._ensure_initialized()
+        if self._prefetched_bootstrap is None:
+            self._prefetched_bootstrap = self.bootstrap_obs()
+        return {
+            f"env/{self.role}/prefetched_bootstrap_slots": float(self.num_slots)
+        }
+
+    def _consume_bootstrap_obs(self) -> list[ObservationMsg]:
+        """Return the prefetched bootstrap batch if present, else reset now."""
+
+        if self._prefetched_bootstrap is not None:
+            messages = self._prefetched_bootstrap
+            self._prefetched_bootstrap = None
+            return messages
+        return self.bootstrap_obs()
 
     def apply_rollout_result(self, result: RolloutResultMsg) -> TrajectoryShard:
         """Step one slot through a rollout action chunk and return a shard."""
@@ -831,6 +1123,8 @@ class BaseTrajectoryEnvWorker(Worker):
         completed = 0
         successful = 0
         physical_steps = 0
+        classifier_success_chunks = 0
+        classifier_total_chunks = 0
         env_crashes = 0
         env_respawns = 0
         transition_sidecars = _transition_sidecars_from_rollout(result)
@@ -843,6 +1137,15 @@ class BaseTrajectoryEnvWorker(Worker):
             rewards[index] = float(reward)
             dones[index] = bool(done)
             physical_steps += 1
+            if self.role == "wm_env":
+                classifier_total_chunks += 1
+                classifier_success_chunks += int(
+                    _wm_classifier_step_success(
+                        self._env_for_slot(slot_id),
+                        reward=reward,
+                        info=info,
+                    )
+                )
             env_crashes += int(self._last_apply_env_crashes)
             env_respawns += int(self._last_apply_env_respawns)
             if done:
@@ -855,6 +1158,14 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_completed_episodes = int(completed)
         self._last_apply_successful_episodes = int(successful)
         self._last_apply_physical_steps = int(physical_steps)
+        self._last_apply_classifier_success_chunks = int(classifier_success_chunks)
+        self._last_apply_classifier_total_chunks = int(classifier_total_chunks)
+        self._last_apply_classifier_success_trajectories = int(
+            classifier_success_chunks > 0
+        )
+        self._last_apply_classifier_total_trajectories = int(
+            self.role == "wm_env" and classifier_total_chunks > 0
+        )
         self._last_apply_env_crashes = int(env_crashes)
         self._last_apply_env_respawns = int(env_respawns)
         return self._build_trajectory_shard(
@@ -1180,6 +1491,7 @@ class BaseTrajectoryEnvWorker(Worker):
             total=progress_total,
             active=True,
             finished=False,
+            metrics=metrics,
             force=True,
         )
         if self._can_batch_wm_slots():
@@ -1198,6 +1510,7 @@ class BaseTrajectoryEnvWorker(Worker):
                 total=progress_total,
                 active=False,
                 finished=True,
+                metrics=out,
                 force=True,
             )
             return out
@@ -1211,7 +1524,7 @@ class BaseTrajectoryEnvWorker(Worker):
             )
             self._put_observation_batch(
                 env_channel,
-                self.bootstrap_obs(),
+                self._consume_bootstrap_obs(),
                 metrics,
                 phase="bootstrap",
             )
@@ -1263,6 +1576,17 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/episodes_successful"] += float(
                         self._last_apply_successful_episodes
                     )
+                    self._add_wm_classifier_metrics(
+                        metrics,
+                        success_chunks=self._last_apply_classifier_success_chunks,
+                        total_chunks=self._last_apply_classifier_total_chunks,
+                        success_trajectories=(
+                            self._last_apply_classifier_success_trajectories
+                        ),
+                        total_trajectories=(
+                            self._last_apply_classifier_total_trajectories
+                        ),
+                    )
                     metrics["env/env_crashes"] += float(
                         self._last_apply_env_crashes
                     )
@@ -1274,6 +1598,7 @@ class BaseTrajectoryEnvWorker(Worker):
                         total=progress_total,
                         active=True,
                         finished=False,
+                        metrics=metrics,
                     )
                     if chunk_steps_by_slot[slot_id] >= target_chunk_steps:
                         put_s, emitted = self._flush_buffered_actor_shard(
@@ -1348,6 +1673,7 @@ class BaseTrajectoryEnvWorker(Worker):
             total=progress_total,
             active=False,
             finished=True,
+            metrics=metrics,
             force=True,
         )
         return self._finalize_interact_metrics(metrics)
@@ -1374,6 +1700,7 @@ class BaseTrajectoryEnvWorker(Worker):
         }
 
     def _finalize_interact_metrics(self, metrics: dict[str, float]) -> dict[str, float]:
+        _derive_wm_classifier_success_rates(metrics, "env/")
         prefix = f"env/{self.role}/"
         for key, value in list(metrics.items()):
             if not key.startswith("env/"):
@@ -1403,6 +1730,25 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics[str(key)] = metrics.get(str(key), 0.0) + float(value)
         return metrics
 
+    def _add_wm_classifier_metrics(
+        self,
+        metrics: dict[str, float],
+        *,
+        success_chunks: float,
+        total_chunks: float,
+        success_trajectories: float,
+        total_trajectories: float,
+    ) -> None:
+        if self.role != "wm_env":
+            return
+        for key, value in {
+            "env/classifier_success_chunks": success_chunks,
+            "env/classifier_total_chunks": total_chunks,
+            "env/classifier_success_trajectories": success_trajectories,
+            "env/classifier_total_trajectories": total_trajectories,
+        }.items():
+            metrics[key] = float(metrics.get(key, 0.0) + float(value))
+
     def _queue_actor_shard(
         self,
         actor_channel: Channel,
@@ -1412,15 +1758,17 @@ class BaseTrajectoryEnvWorker(Worker):
         put_start = time.perf_counter()
         put_no_wait = getattr(actor_channel, "put_no_wait", None)
         if callable(put_no_wait):
-            pending.append(put_no_wait(shard))
+            pending.append(put_no_wait(shard, key=str(self.role)))
         else:
-            actor_channel.put(shard)
+            actor_channel.put(shard, key=str(self.role))
         return float(time.perf_counter() - put_start)
 
     def _reset_actor_shard_buffers(self) -> None:
         self._actor_shards_by_slot = [[] for _ in range(self.num_slots)]
 
     def _buffer_actor_shard(self, shard: TrajectoryShard | _TrajectoryChunk) -> None:
+        if not self._emit_actor_trajectories():
+            return
         slot_id = int(shard.slot_id)
         self._validate_slot(slot_id)
         self._actor_shards_by_slot[slot_id].append(shard)
@@ -1541,7 +1889,7 @@ class BaseTrajectoryEnvWorker(Worker):
             )
             self._put_observation_batch(
                 env_channel,
-                self.bootstrap_obs(),
+                self._consume_bootstrap_obs(),
                 metrics,
                 phase="bootstrap",
             )
@@ -1596,11 +1944,31 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/episodes_successful"] += float(
                         shard_metrics["successful_episodes"]
                     )
+                    self._add_wm_classifier_metrics(
+                        metrics,
+                        success_chunks=shard_metrics.get(
+                            "classifier_success_chunks",
+                            0.0,
+                        ),
+                        total_chunks=shard_metrics.get(
+                            "classifier_total_chunks",
+                            0.0,
+                        ),
+                        success_trajectories=shard_metrics.get(
+                            "classifier_success_trajectories",
+                            0.0,
+                        ),
+                        total_trajectories=shard_metrics.get(
+                            "classifier_total_trajectories",
+                            0.0,
+                        ),
+                    )
                     self._write_interact_progress(
                         done=int(metrics["env/chunk_steps"]),
                         total=progress_total,
                         active=True,
                         finished=False,
+                        metrics=metrics,
                     )
                 next_messages: list[ObservationMsg] = []
                 for shard, _shard_metrics in applied:
@@ -1695,6 +2063,8 @@ class BaseTrajectoryEnvWorker(Worker):
                     "dones": np.zeros((self.num_action_chunks,), dtype=np.bool_),
                     "completed": 0,
                     "successful": 0,
+                    "classifier_success_chunks": 0,
+                    "classifier_total_chunks": 0,
                     "physical_steps": 0,
                     "active": True,
                     "sidecars": (
@@ -1772,6 +2142,19 @@ class BaseTrajectoryEnvWorker(Worker):
                 item["rewards"][action_index] = reward
                 item["dones"][action_index] = done
                 item["physical_steps"] = int(item["physical_steps"]) + 1
+                item["classifier_total_chunks"] = (
+                    int(item["classifier_total_chunks"]) + 1
+                )
+                item["classifier_success_chunks"] = int(
+                    item["classifier_success_chunks"]
+                ) + int(
+                    _wm_classifier_step_success(
+                        env,
+                        reward=reward,
+                        info=info,
+                        terminated=terminated,
+                    )
+                )
                 if done:
                     item["completed"] = 1
                     item["successful"] = int(success)
@@ -1804,6 +2187,18 @@ class BaseTrajectoryEnvWorker(Worker):
                         "physical_steps": float(item["physical_steps"]),
                         "completed_episodes": float(item["completed"]),
                         "successful_episodes": float(item["successful"]),
+                        "classifier_success_chunks": float(
+                            item["classifier_success_chunks"]
+                        ),
+                        "classifier_total_chunks": float(
+                            item["classifier_total_chunks"]
+                        ),
+                        "classifier_success_trajectories": float(
+                            int(item["classifier_success_chunks"]) > 0
+                        ),
+                        "classifier_total_trajectories": float(
+                            int(item["classifier_total_chunks"]) > 0
+                        ),
                     },
                 )
             )
@@ -1873,6 +2268,11 @@ class BaseTrajectoryEnvWorker(Worker):
             done_values = done_arr[batch_index]
             item["rewards"][:] = rewards_arr[batch_index]
             item["dones"][:] = done_values
+            classifier_success_mask = _wm_classifier_success_mask(
+                env,
+                rewards_arr[batch_index],
+                terminations_arr[batch_index],
+            )
             if has_nonfinal_done:
                 done_indices = np.flatnonzero(done_values)
                 physical_steps = (
@@ -1892,6 +2292,10 @@ class BaseTrajectoryEnvWorker(Worker):
                 successful = bool(info.get("success", False)) or bool(
                     terminations_arr[batch_index, -1]
                 )
+            classifier_total_chunks = int(physical_steps)
+            classifier_success_chunks = int(
+                classifier_success_mask[:classifier_total_chunks].sum()
+            )
             if completed:
                 self._episodes_by_slot[slot_id] = []
                 self._episode_ids_by_slot[slot_id] += 1
@@ -1913,6 +2317,12 @@ class BaseTrajectoryEnvWorker(Worker):
                         "physical_steps": float(physical_steps),
                         "completed_episodes": float(completed),
                         "successful_episodes": float(successful),
+                        "classifier_success_chunks": float(classifier_success_chunks),
+                        "classifier_total_chunks": float(classifier_total_chunks),
+                        "classifier_success_trajectories": float(
+                            classifier_success_chunks > 0
+                        ),
+                        "classifier_total_trajectories": 1.0,
                     },
                 )
             )
@@ -2025,6 +2435,7 @@ class BaseTrajectoryEnvWorker(Worker):
             raise RuntimeError("bootstrap_obs() must be called before stepping")
         policy_action = np.asarray(action, dtype=np.float32).reshape(-1)
         env_action = self._env_action_from_policy_action(policy_action)
+        self._record_action_diagnostics(slot_id, policy_action, env_action)
         if self._batched_env:
             step_out = env.step_slot(slot_id, env_action)
         else:
@@ -2095,11 +2506,14 @@ class BaseTrajectoryEnvWorker(Worker):
         total: int,
         active: bool,
         finished: bool,
+        metrics: Mapping[str, float] | None = None,
         force: bool = False,
     ) -> None:
         path = self._progress_path
         if path is None:
             return
+        self._progress_last_done = max(0, int(done))
+        self._progress_last_total = max(0, int(total))
         now = time.monotonic()
         if (
             not force
@@ -2118,20 +2532,83 @@ class BaseTrajectoryEnvWorker(Worker):
             "finished": bool(finished),
             "time": float(time.time()),
         }
+        if self._last_action_diagnostics is not None:
+            payload["last_action"] = dict(self._last_action_diagnostics)
+        if self.role == "wm_env":
+            metric_values = metrics or {}
+            for key in (
+                "classifier_success_chunks",
+                "classifier_total_chunks",
+                "classifier_success_trajectories",
+                "classifier_total_trajectories",
+            ):
+                payload[key] = max(
+                    0,
+                    int(float(metric_values.get(f"env/{key}", 0.0))),
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
         tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
         os.replace(tmp_path, path)
         self._progress_last_write_t = now
 
+    def _record_action_diagnostics(
+        self,
+        slot_id: int,
+        policy_action: np.ndarray,
+        env_action: np.ndarray,
+    ) -> None:
+        """Persist the last real-env action range before native rendering code."""
+
+        if self.role != "real_env":
+            return
+        policy = np.asarray(policy_action, dtype=np.float32).reshape(-1)
+        env = np.asarray(env_action, dtype=np.float32).reshape(-1)
+        self._last_action_diagnostics = {
+            "slot_id": int(slot_id),
+            "policy_min": float(np.min(policy)),
+            "policy_max": float(np.max(policy)),
+            "policy_absmax": float(np.max(np.abs(policy))),
+            "policy_dim": int(policy.size),
+            "env_min": float(np.min(env)),
+            "env_max": float(np.max(env)),
+            "env_absmax": float(np.max(np.abs(env))),
+            "env_dim": int(env.size),
+            "action_postprocess": str(self.action_postprocess),
+            "time": float(time.time()),
+        }
+        if self._progress_path is not None and self._debug_action_diagnostics():
+            self._write_interact_progress(
+                done=self._progress_last_done,
+                total=self._progress_last_total,
+                active=True,
+                finished=False,
+                force=True,
+            )
+
+    def _debug_action_diagnostics(self) -> bool:
+        raw = self.env_cfg.get("debug_action_diagnostics", False)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
     def _env_action_from_policy_action(self, action: Any) -> np.ndarray:
         action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if not np.isfinite(action_arr).all():
+            raise ValueError(
+                "non-finite policy action received by "
+                f"{self.role} rank={int(self.local_rank)}"
+            )
         if self.action_postprocess in {"", "none", "false"}:
             return action_arr
         if self.action_postprocess in {"openvla_oft", "oft"}:
             from dreamervla.runners.oft_collect_common import process_action
 
-            return process_action(action_arr)
+            env_action = process_action(action_arr)
+            if not np.isfinite(env_action).all():
+                raise ValueError(
+                    "non-finite env action after postprocess for "
+                    f"{self.role} rank={int(self.local_rank)}"
+                )
+            return env_action
         raise ValueError(f"unknown env action_postprocess: {self.action_postprocess!r}")
 
     def _model_version_sidecars(self) -> dict[str, int]:
@@ -2166,6 +2643,12 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.role == "wm_env" and not self.replay_write_enabled:
             return False
         return True
+
+    def _emit_actor_trajectories(self) -> bool:
+        override = self.env_cfg.get("emit_actor_trajectories")
+        if override is not None:
+            return bool(override)
+        return self.role == "wm_env"
 
     def _bootstrap_wm_initial_latents_from_replay(self) -> None:
         if self.role != "wm_env" or self.replay is None:

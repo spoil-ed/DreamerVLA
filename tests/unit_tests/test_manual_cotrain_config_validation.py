@@ -160,11 +160,11 @@ def test_manual_cotrain_rejects_bad_actor_fsdp_strategy() -> None:
         validate_cfg(cfg)
 
 
-def test_manual_cotrain_rejects_env_slots_not_divisible_by_actor_group_size() -> None:
+def test_manual_cotrain_rejects_actor_wm_slots_not_divisible_by_group_size() -> None:
     cfg = _cfg(ngpu=6, envs_per_worker=1)
     cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
 
-    with pytest.raises(ValueError, match="logical trajectory count"):
+    with pytest.raises(ValueError, match="actor WM trajectory count"):
         validate_cfg(cfg)
 
 
@@ -185,10 +185,6 @@ def test_manual_cotrain_geometry_counts_split_real_and_wm_rollout_epochs() -> No
     )
     cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
 
-    with pytest.raises(ValueError, match="real_rollout_epoch=1"):
-        validate_cfg(cfg)
-
-    cfg.manual_cotrain.real_rollout_epoch = 4
     validate_cfg(cfg)
 
 
@@ -246,7 +242,7 @@ def test_manual_cotrain_rejects_wm_target_too_small_for_worker_count() -> None:
         validate_cfg(cfg)
 
 
-def test_manual_cotrain_geometry_rejects_bad_target_plus_real_total() -> None:
+def test_manual_cotrain_geometry_rejects_bad_actor_wm_target_total() -> None:
     cfg = _cfg(
         ngpu=4,
         envs_per_worker=2,
@@ -255,8 +251,21 @@ def test_manual_cotrain_geometry_rejects_bad_target_plus_real_total() -> None:
     )
     cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
 
-    with pytest.raises(ValueError, match="logical trajectory count"):
+    with pytest.raises(ValueError, match="actor WM trajectory count"):
         validate_cfg(cfg)
+
+
+def test_manual_cotrain_geometry_allows_small_real_budget_with_wm_actor_target() -> None:
+    cfg = _cfg(
+        ngpu=4,
+        envs_per_worker=2,
+        wm_envs_per_worker=16,
+        real_rollout_epoch=1,
+        wm_rollout_target_trajectories=128,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+
+    validate_cfg(cfg)
 
 
 def test_manual_cotrain_accepts_env_slots_divisible_by_actor_group_size() -> None:

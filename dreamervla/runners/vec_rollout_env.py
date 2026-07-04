@@ -33,6 +33,18 @@ import os
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
+from dreamervla.utils.egl_device import apply_libero_render_regime
+
+_LIBERO_RENDER_KEYS = (
+    "_libero_render_backend",
+    "_libero_render_gpu_pool",
+    "_libero_render_shard_id",
+)
+
+
+def _strip_libero_render_cfg(cfg_kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in dict(cfg_kwargs).items() if key not in _LIBERO_RENDER_KEYS}
+
 
 def _enter_if_supported(env: Any) -> Any:
     enter = getattr(env, "__enter__", None)
@@ -41,7 +53,14 @@ def _enter_if_supported(env: Any) -> Any:
 
 def default_env_factory(cfg_kwargs: dict[str, Any]) -> Any:
     """Build and enter the online rollout env from Hydra-aware config kwargs."""
-    cfg = dict(cfg_kwargs)
+    render_backend = cfg_kwargs.get("_libero_render_backend")
+    if render_backend is not None:
+        apply_libero_render_regime(
+            str(render_backend),
+            int(cfg_kwargs.get("_libero_render_shard_id", 0)),
+            list(cfg_kwargs.get("_libero_render_gpu_pool", [])),
+        )
+    cfg = _strip_libero_render_cfg(cfg_kwargs)
     target = cfg.pop("_target_", None)
     if target:
         import hydra
@@ -64,13 +83,20 @@ def _worker(
     factory: Callable[[dict[str, Any]], Any],
     cfg_kwargs: dict[str, Any],
     env_vars: dict[str, str],
+    worker_index: int = 0,
 ) -> None:
     """Child-process loop: build the env, then serve parent commands over the pipe."""
     for k, v in env_vars.items():
         os.environ[k] = v
 
+    render_backend = cfg_kwargs.get("_libero_render_backend")
+    if render_backend is not None:
+        render_shard_id = int(cfg_kwargs.get("_libero_render_shard_id", 0)) + int(worker_index)
+        render_gpu_pool = list(cfg_kwargs.get("_libero_render_gpu_pool", []))
+        apply_libero_render_regime(str(render_backend), render_shard_id, render_gpu_pool)
+
     try:
-        env = factory(cfg_kwargs)
+        env = factory(_strip_libero_render_cfg(cfg_kwargs))
         conn.send(("ready", None))
     except Exception as exc:  # noqa: BLE001 — surface init failure to the parent
         conn.send(("error", repr(exc)))
@@ -145,11 +171,11 @@ class VecRolloutEnv:
         env_vars = env_vars or {}
 
         # send-all: start every child
-        for _ in range(num_envs):
+        for worker_index in range(num_envs):
             parent_conn, child_conn = ctx.Pipe()
             proc = ctx.Process(
                 target=_worker,
-                args=(child_conn, factory, cfg_kwargs, env_vars),
+                args=(child_conn, factory, cfg_kwargs, env_vars, worker_index),
                 daemon=True,
             )
             proc.start()

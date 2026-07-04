@@ -17,6 +17,71 @@ def _assert_no_removed_wm_wording(text: str) -> None:
     assert _REMOVED_DASHED_WM_LABEL not in text
 
 
+def _tracked_source_paths(
+    project_root: Path,
+    active_roots: list[Path],
+    *,
+    skip_paths: set[Path],
+    skip_parts: set[str],
+    checked_suffixes: set[str],
+) -> list[Path]:
+    rel_roots = [str(root.relative_to(project_root)) for root in active_roots]
+    result = subprocess.run(
+        ["git", "-C", str(project_root), "ls-files", "--", *rel_roots],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paths: list[Path] = []
+    for rel_path in result.stdout.splitlines():
+        path = project_root / rel_path
+        if not path.is_file() or path in skip_paths:
+            continue
+        relative_parts = path.relative_to(project_root).parts
+        if any(part in skip_parts for part in relative_parts):
+            continue
+        if path.suffix not in checked_suffixes:
+            continue
+        paths.append(path)
+    return paths
+
+
+def test_hygiene_source_scan_ignores_untracked_files(tmp_path) -> None:
+    project_root = tmp_path / "repo"
+    docs_dir = project_root / "docs"
+    docs_dir.mkdir(parents=True)
+    tracked = docs_dir / "tracked.md"
+    untracked = docs_dir / "feishu.md"
+    tracked.write_text("active source\n", encoding="utf-8")
+    untracked.write_text("local note mentioning wovr\n", encoding="utf-8")
+
+    subprocess.run(
+        ["git", "-C", str(project_root), "init"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(project_root), "add", "docs/tracked.md"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    paths = list(
+        _tracked_source_paths(
+            project_root,
+            [docs_dir],
+            skip_paths=set(),
+            skip_parts=set(),
+            checked_suffixes={".md"},
+        )
+    )
+
+    assert tracked in paths
+    assert untracked not in paths
+
+
 def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
@@ -60,19 +125,16 @@ def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
     checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
 
     offenders: list[str] = []
-    for root in active_roots:
-        paths = [root] if root.is_file() else root.rglob("*")
-        for path in paths:
-            if not path.is_file() or path in skip_paths:
-                continue
-            relative_parts = path.relative_to(project_root).parts
-            if any(part in skip_parts for part in relative_parts):
-                continue
-            if path.suffix not in checked_suffixes:
-                continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            if removed_word in text.lower() or removed_word in path.name.lower():
-                offenders.append(str(path.relative_to(project_root)))
+    for path in _tracked_source_paths(
+        project_root,
+        active_roots,
+        skip_paths=skip_paths,
+        skip_parts=skip_parts,
+        checked_suffixes=checked_suffixes,
+    ):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if removed_word in text.lower() or removed_word in path.name.lower():
+            offenders.append(str(path.relative_to(project_root)))
 
     assert offenders == []
 
@@ -106,23 +168,17 @@ def test_active_sources_do_not_use_removed_world_model_naming() -> None:
     checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
 
     offenders: list[str] = []
-    for root in active_roots:
-        paths = [root] if root.is_file() else root.rglob("*")
-        for path in paths:
-            if not path.is_file() or path in skip_paths:
-                continue
-            relative_parts = path.relative_to(project_root).parts
-            if any(part in skip_parts for part in relative_parts):
-                continue
-            if path.suffix not in checked_suffixes:
-                continue
-            text = path.read_text(encoding="utf-8", errors="ignore").lower()
-            path_name = path.name.lower()
-            if any(
-                fragment in text or fragment in path_name
-                for fragment in removed_fragments
-            ):
-                offenders.append(str(path.relative_to(project_root)))
+    for path in _tracked_source_paths(
+        project_root,
+        active_roots,
+        skip_paths=skip_paths,
+        skip_parts=skip_parts,
+        checked_suffixes=checked_suffixes,
+    ):
+        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        path_name = path.name.lower()
+        if any(fragment in text or fragment in path_name for fragment in removed_fragments):
+            offenders.append(str(path.relative_to(project_root)))
 
     assert offenders == []
 

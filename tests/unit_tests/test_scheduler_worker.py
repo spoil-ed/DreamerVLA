@@ -109,6 +109,32 @@ def test_worker_group_env_vars_include_single_node_rendezvous() -> None:
     assert env["MASTER_PORT"] == "29519"
 
 
+def test_worker_group_env_vars_suppress_noisy_library_startup_logs() -> None:
+    from dreamervla.scheduler.placement import Placement
+    from dreamervla.scheduler.worker_group import WorkerGroup
+
+    env = WorkerGroup._env_vars(
+        Placement(
+            rank=0,
+            local_rank=0,
+            local_world_size=1,
+            visible_accelerators=["0"],
+            device="cuda:0",
+        )
+    )
+
+    assert env["TF_CPP_MIN_LOG_LEVEL"] == "3"
+    assert env["ABSL_MIN_LOG_LEVEL"] == "3"
+    assert env["GLOG_minloglevel"] == "2"
+    assert env["GYM_DISABLE_WARNINGS"] == "1"
+    assert env["USE_TF"] == "0"
+    assert env["TF_ENABLE_ONEDNN_OPTS"] == "0"
+    assert env["TOKENIZERS_PARALLELISM"] == "false"
+    assert env["TRANSFORMERS_VERBOSITY"] == "error"
+    assert "ignore::FutureWarning:libero.libero.benchmark" in env["PYTHONWARNINGS"]
+    assert "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer" in env["PYTHONWARNINGS"]
+
+
 def test_worker_group_launch_assigns_shared_single_node_rendezvous(monkeypatch) -> None:
     import dreamervla.scheduler.worker_group as worker_group_module
     from dreamervla.scheduler.placement import Placement

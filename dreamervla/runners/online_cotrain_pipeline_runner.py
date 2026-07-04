@@ -18,11 +18,13 @@ from inspect import signature
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.runners.base_runner import _atomic_torch_save
+from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
@@ -181,6 +183,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         checkpoint_every: int = 0,
         checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
         start_step: int = 0,
+        calibrate: bool = False,
+        min_val_f1: float = 0.0,
+        val_num_batches: int = 4,
+        val_thresh_min: float = 0.05,
+        val_thresh_max: float = 0.95,
+        val_thresh_steps: int = 19,
     ) -> float:
         last_acc = 0.0
         for i in range(int(start_step), int(steps)):
@@ -226,7 +234,134 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 label="classifier-warmup",
             )
             self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
+        # B1/B2: optional held-out threshold calibration + warmup val gate.
+        # Both are OFF by default (calibrate=False, min_val_f1=0.0), so the
+        # default warmup path is numerically unchanged — no extra replay draws,
+        # no threshold mutation.
+        if calibrate or float(min_val_f1) > 0.0:
+            probs, ys = self._collect_classifier_val_probs(
+                replay,
+                batch_size=batch_size,
+                early_neg_stride=early_neg_stride,
+                num_batches=val_num_batches,
+            )
+            val_step = int(log_step_offset) + int(steps)
+            if calibrate:
+                grid = np.linspace(
+                    float(val_thresh_min), float(val_thresh_max), int(val_thresh_steps)
+                )
+                swept = sweep_threshold_metrics(probs, ys, grid, "warmup_val")
+                self.classifier_threshold = float(swept["best_thresh"])
+                self._log_replay_warmup_metrics(
+                    {
+                        "eval/classifier_warmup_best_f1": float(swept["best_f1"]),
+                        "eval/classifier_warmup_best_thresh": float(swept["best_thresh"]),
+                    },
+                    step=val_step,
+                )
+            if float(min_val_f1) > 0.0:
+                # Val F1 at the ACTIVE threshold (the freshly calibrated best if
+                # calibrate ran, else the config default). Reuse sweep_threshold_metrics
+                # with a single-point grid to avoid re-deriving f1_score here.
+                gate = sweep_threshold_metrics(
+                    probs,
+                    ys,
+                    np.asarray([float(self.classifier_threshold)]),
+                    "warmup_val_gate",
+                )
+                val_f1 = float(gate["best_f1"])
+                self._log_replay_warmup_metrics(
+                    {"eval/classifier_warmup_val_f1": val_f1}, step=val_step
+                )
+                if val_f1 < float(min_val_f1):
+                    raise RuntimeError(
+                        f"warmup classifier held-out val F1 {val_f1:.3f} < "
+                        f"warmup_min_val_f1 {float(min_val_f1):.3f} "
+                        f"(threshold={float(self.classifier_threshold):.3f}); "
+                        "raise data/steps or lower the gate."
+                    )
         return last_acc
+
+    def _collect_classifier_val_probs(
+        self,
+        replay,
+        *,
+        batch_size: int,
+        early_neg_stride: int,
+        num_batches: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Forward-only held-out pass mirroring ``online_classifier_update_step``.
+
+        Samples classifier windows from ``replay`` with the same window/chunk/
+        conditioning contract used during training, runs the frozen classifier in
+        eval mode, and returns ``(P(success), labels)`` as numpy arrays.
+
+        NOTE: ``replay.sample_classifier_windows`` draws random windows, so this
+        is a *sampled* evaluation set, not a disjoint train/val split. A strict
+        held-out partition would need replay-side index partitioning (TODO: add a
+        `held_out=True` sampling mode on OnlineReplay so calibration never sees
+        windows the warmup trained on).
+        """
+        module = _unwrap(self.classifier)
+        cfg = module.cfg
+        self.classifier.eval()
+        module.eval()
+        probs_all: list[np.ndarray] = []
+        ys_all: list[np.ndarray] = []
+        for _ in range(max(1, int(num_batches))):
+            cls_batch = replay.sample_classifier_windows(
+                int(batch_size),
+                window=int(cfg.window),
+                chunk_size=int(getattr(cfg, "chunk_size", 1)),
+                chunk_pool=str(getattr(cfg, "chunk_pool", "last")),
+                early_neg_stride=int(early_neg_stride),
+            )
+            windows = cls_batch["windows"].to(self.device, non_blocking=True)
+            labels = cls_batch["labels"].to(self.device, non_blocking=True)
+            task_ids = cls_batch.get("task_ids")
+            forward_kwargs: dict[str, Any] = {}
+            if bool(getattr(module, "supports_proprio_conditioning", False)):
+                forward_kwargs["proprio"] = cls_batch["proprio"].to(
+                    self.device, non_blocking=True
+                )
+            if bool(getattr(module, "supports_language_conditioning", False)):
+                forward_kwargs["lang_emb"] = cls_batch["lang_emb"].to(
+                    self.device, non_blocking=True
+                )
+            with torch.no_grad():
+                if bool(
+                    getattr(module, "supports_task_conditioning", False)
+                ) and isinstance(task_ids, torch.Tensor):
+                    logits = self.classifier(
+                        windows,
+                        task_ids=task_ids.to(self.device, non_blocking=True),
+                        **forward_kwargs,
+                    )
+                else:
+                    logits = self.classifier(windows, **forward_kwargs)
+                probs = torch.softmax(logits, dim=-1)[:, 1]
+            probs_all.append(probs.detach().cpu().numpy())
+            ys_all.append(labels.detach().cpu().numpy())
+        return np.concatenate(probs_all), np.concatenate(ys_all)
+
+    def _warmup_calibration_kwargs(self) -> dict[str, Any]:
+        """Read the (default-off) B1/B2 calibration + gate knobs from config."""
+        cfg = getattr(self, "cfg", None)
+
+        def sel(key: str, default):
+            if cfg is None:
+                return default
+            value = OmegaConf.select(cfg, key, default=default)
+            return default if value is None else value
+
+        return {
+            "calibrate": bool(sel("algorithm.lumos.calibrate_threshold", False)),
+            "min_val_f1": float(sel("algorithm.lumos.warmup_min_val_f1", 0.0)),
+            "val_num_batches": int(sel("algorithm.lumos.calibrate_val_batches", 4)),
+            "val_thresh_min": float(sel("algorithm.lumos.calibrate_thresh_min", 0.05)),
+            "val_thresh_max": float(sel("algorithm.lumos.calibrate_thresh_max", 0.95)),
+            "val_thresh_steps": int(sel("algorithm.lumos.calibrate_thresh_steps", 19)),
+        }
 
     @staticmethod
     def _steps_for_replay_epochs(replay, *, replay_epochs: int, batch_size: int) -> int:
@@ -856,6 +991,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     else None
                 ),
                 start_step=cls_start_step,
+                **self._warmup_calibration_kwargs(),
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
@@ -920,6 +1056,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     else None
                 ),
                 start_step=cls_start_step,
+                **self._warmup_calibration_kwargs(),
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()

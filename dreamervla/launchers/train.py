@@ -201,8 +201,6 @@ def _build_env(cfg: Mapping[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
     env["DVLA_ROOT"] = str(PROJECT_ROOT)
     env["DVLA_DATA_ROOT"] = str(cfg["data_root"])
-    env.setdefault("MUJOCO_GL", "egl")
-    env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     env.setdefault("PYTHONFAULTHANDLER", "1")

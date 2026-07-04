@@ -114,6 +114,18 @@ class WorkerGroup:
             "LOCAL_RANK": str(placement.local_rank),
             "WORLD_SIZE": str(placement.local_world_size),
             "CUDA_VISIBLE_DEVICES": visible,
+            "TF_CPP_MIN_LOG_LEVEL": "3",
+            "ABSL_MIN_LOG_LEVEL": "3",
+            "GLOG_minloglevel": "2",
+            "GYM_DISABLE_WARNINGS": "1",
+            "USE_TF": "0",
+            "TF_ENABLE_ONEDNN_OPTS": "0",
+            "TOKENIZERS_PARALLELISM": "false",
+            "TRANSFORMERS_VERBOSITY": "error",
+            "PYTHONWARNINGS": (
+                "ignore::FutureWarning:libero.libero.benchmark,"
+                "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"
+            ),
         }
         visible_devices = [part.strip() for part in visible.split(",") if part.strip()]
         if visible_devices:

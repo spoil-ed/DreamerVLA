@@ -26,8 +26,24 @@
 
 ## Current Atomic Step
 
-- Step: `R3-followup — EGL eval sustain judgment (current code)`
-- Status: `DONE (judgment) / crash root identified`
+- Step: `R3/R1 — eval EGL fix, RLinf review DONE, impl BLOCKED on in-flight`
+- Status: `BLOCKED (needs in-flight eval diff committed first)`
+- Decisions (user 2026-07-04): eval fix = align to RLinf (NOT osmesa); R4 = aggressive
+  (repoint train.yaml default + rewrite route tests). Acceptance add-on: eval must be
+  ISOMORPHIC to collect/cotrain (same subprocess class + same `apply_libero_render_regime`),
+  and a max_steps=300 eval must SUSTAIN.
+- RLinf review (done, `/mnt/data/spoil/workspace/RLinf`): LIBERO renders in SUBPROCESS
+  (`envs/libero/venv.py` SubprocVectorEnv) isolated from torch; EGL device via
+  `scheduler/hardware/accelerators/nvidia_gpu.py:114`; `reconfigure` closes+recreates env
+  between episodes. Fix = route eval LIBERO env through DreamerVLA's existing
+  VecRolloutEnv/env_worker subprocess (same helper) instead of in-process `get_libero_env`.
+- BLOCKER: the 3 eval files (`embodied_eval_runner.py` +468, `_embodied_eval_latent_mixin.py`
+  +93, `pretokenize_vla_runner.py` +76 = 515 in-flight uncommitted lines) are being actively
+  refactored (orthogonal base-VLA adapter work, no subprocess isolation). Implementing the fix
+  now = 515-line conflict. Need the in-flight eval diff committed (or explicit go-ahead to build
+  on it) before implementing. See egl-eval-fix-rlinf-subprocess-plan memory.
+- Empirical crash judgment (current code, prior step): collect/cotrain SUSTAIN (subprocess);
+  eval max_steps=50 OK, 300 CRASH 2/2 (in-process mjr_readPixels abort, empty_cache ruled out).
 - Reason: Fresh current-code empirical test (single GPU pinned, render_backend=egl, dreamer
   ckpt manual_cotrain_step_5, libero_goal task 0, 1 episode). Result table:
   max_steps=50 → SUSTAIN (rc=0, eval_libero_metrics.json written, 0 aborts);

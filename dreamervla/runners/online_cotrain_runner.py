@@ -31,14 +31,6 @@ import torch
 import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 
-# Force CPU software rendering for robosuite offscreen cameras BEFORE any import
-# below pulls in robosuite (which otherwise defaults MUJOCO_GL=egl). The GPU/EGL
-# backend's ``read_pixels`` aborts (SIGABRT) intermittently mid-rollout; osmesa is
-# stable. This MUST precede the ``train_env`` import and matches the collector
-# (collect_parallel_rollouts). setdefault so an explicit MUJOCO_GL still wins.
-os.environ.setdefault("MUJOCO_GL", "osmesa")
-os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
-
 from dreamervla.algorithms.dreamervla import (
     namespaced_world_model_metrics,
     world_model_pretrain_step,
@@ -250,6 +242,29 @@ def build_rollout_progress_metrics(
     }
 
 
+def _cfg_select(container: Any, key: str, default: Any = None) -> Any:
+    if OmegaConf.is_config(container):
+        return OmegaConf.select(container, key, default=default)
+    if isinstance(container, dict):
+        return container.get(key, default)
+    return default
+
+
+def _cotrain_render_gpu_pool(rollout_cfg: Any, backend: str) -> list[int]:
+    if str(backend).strip().lower() != "egl":
+        return []
+    for key in ("render_gpu_pool", "gpu_pool", "render_devices", "egl_device_pool"):
+        devices = parse_device_ids(_cfg_select(rollout_cfg, key))
+        if devices:
+            return devices
+    devices = cuda_visible_devices_from_env()
+    if devices:
+        return devices
+    if torch.cuda.is_available():
+        return list(range(torch.cuda.device_count()))
+    return []
+
+
 def build_rollout_vec_env(
     *,
     render_backend: str,
@@ -282,12 +297,17 @@ def build_rollout_vec_env(
         from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
 
         egl_device_pool = parse_device_ids(render_devices)
+        adapter_cfg_kwargs = {
+            key: value
+            for key, value in cfg_kwargs.items()
+            if not str(key).startswith("_libero_render_")
+        }
         adapter_env_vars = {
             k: v for k, v in env_vars.items() if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
         }
         return OnlineEglVecEnv(
             num_envs=num_envs,
-            cfg_kwargs=cfg_kwargs,
+            cfg_kwargs=adapter_cfg_kwargs,
             egl_device_pool=egl_device_pool,
             env_vars=adapter_env_vars,
         )
@@ -410,9 +430,15 @@ class OnlineCotrainRunner(DreamerVLARunner):
         the vectorized VecRolloutEnv children — one source of truth so both render
         the same observations (action_input='normalized', same history/rotate/etc.)."""
         env_cfg = OmegaConf.select(cfg, "env", default={}) or {}
+        rollout_cfg = OmegaConf.select(cfg, "online_rollout", default=None) or {}
         task_ids = OmegaConf.select(env_cfg, "task_ids", default=None)
         task_ids = tuple(int(x) for x in task_ids) if task_ids is not None else None
         seed = int(OmegaConf.select(cfg, "seed", default=7)) + self._rank * 1000
+        render_backend = str(
+            _cfg_select(rollout_cfg, "render_backend")
+            or OmegaConf.select(cfg, "render_backend", default="egl")
+        ).strip().lower()
+        render_shard_id = int(_cfg_select(rollout_cfg, "render_shard_id", self._rank))
         return {
             "_target_": str(
                 OmegaConf.select(
@@ -435,14 +461,19 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "obs_hidden_source": str(
                 OmegaConf.select(env_cfg, "obs_hidden_source", default="action_query")
             ),
+            "_libero_render_backend": render_backend,
+            "_libero_render_gpu_pool": _cotrain_render_gpu_pool(
+                rollout_cfg, render_backend
+            ),
+            "_libero_render_shard_id": render_shard_id,
             "action_head_type": str(
                 OmegaConf.select(env_cfg, "action_head_type", default="legacy")
             ),
         }
 
     def _build_env(self, cfg: DictConfig) -> Any:
-        # MUJOCO_GL=osmesa is forced at module import (before robosuite loads); see
-        # the top of this file. Setting it here would be too late (egl already locked).
+        # default_env_factory applies the LIBERO render regime before importing the
+        # underlying robosuite/MuJoCo env.
         return default_env_factory(self._env_cfg_kwargs(cfg))
 
     @torch.no_grad()
@@ -1249,20 +1280,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
             self._build_oft_action_hidden_extractor(cfg) for _ in range(num_envs - 1)
         ]
 
-        # Children render with `render_backend` (egl isolated per child -> no robosuite
-        # read_pixels SIGABRT); spawn does not inherit runtime env edits, so pass them.
         env_vars = {
             k: os.environ[k]
-            for k in ("MUJOCO_GL", "PYOPENGL_PLATFORM", "DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
+            for k in ("DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
             if k in os.environ
         }
-        env_vars["MUJOCO_GL"] = render_backend
-        # PyOpenGL's platform must match mujoco's GL backend. The parent forces
-        # PYOPENGL_PLATFORM=osmesa at module import; a spawned egl child would inherit
-        # that osmesa and mujoco's egl init raises "Cannot use EGL rendering platform"
-        # (PYOPENGL_PLATFORM must be unset or 'egl'). Pair them — RLinf exports
-        # MUJOCO_GL=egl + PYOPENGL_PLATFORM=egl together.
-        env_vars["PYOPENGL_PLATFORM"] = render_backend
 
         image_size = int(OmegaConf.select(cfg, "env.image_size", default=64))
         cfg_kwargs = {

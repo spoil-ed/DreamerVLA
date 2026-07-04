@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dreamervla.runners import vec_rollout_env as vec_mod
 from dreamervla.runners.vec_rollout_env import VecRolloutEnv, default_env_factory
 
 # ── module-level fakes (must be importable for spawn pickling) ────────────────
@@ -66,6 +67,21 @@ def _raising_factory(cfg_kwargs: dict):
     raise ValueError("boom-during-init")
 
 
+class _Pipe:
+    def __init__(self) -> None:
+        self.sent = []
+        self.closed = False
+
+    def send(self, value):
+        self.sent.append(value)
+
+    def recv(self):
+        return ("close", None)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 
@@ -73,6 +89,60 @@ def test_default_env_factory_instantiates_hydra_target():
     env = default_env_factory({"_target_": "types.SimpleNamespace", "marker": 3})
 
     assert env.marker == 3
+
+
+def test_default_env_factory_applies_libero_render_helper_before_inproc_build(monkeypatch):
+    events = []
+
+    def fake_apply(backend: str, shard_id: int, gpu_pool: list[int]) -> None:
+        events.append(("helper", backend, int(shard_id), list(gpu_pool)))
+
+    monkeypatch.setattr(vec_mod, "apply_libero_render_regime", fake_apply)
+
+    env = default_env_factory(
+        {
+            "_target_": "types.SimpleNamespace",
+            "_libero_render_backend": "osmesa",
+            "_libero_render_gpu_pool": [1],
+            "_libero_render_shard_id": 4,
+            "marker": 3,
+        }
+    )
+
+    assert events == [("helper", "osmesa", 4, [1])]
+    assert env.marker == 3
+
+
+def test_worker_applies_libero_render_helper_before_factory(monkeypatch):
+    events = []
+
+    def fake_apply(backend: str, shard_id: int, gpu_pool: list[int]) -> None:
+        events.append(("helper", backend, int(shard_id), list(gpu_pool)))
+
+    def factory(cfg_kwargs: dict):
+        events.append(("factory", dict(cfg_kwargs)))
+        return _fake_env_factory({})
+
+    monkeypatch.setattr(vec_mod, "apply_libero_render_regime", fake_apply)
+    conn = _Pipe()
+
+    vec_mod._worker(
+        conn,
+        factory,
+        {
+            "_libero_render_backend": "egl",
+            "_libero_render_gpu_pool": [4, 6],
+            "_libero_render_shard_id": 10,
+        },
+        {},
+        worker_index=2,
+    )
+
+    assert events[:2] == [
+        ("helper", "egl", 12, [4, 6]),
+        ("factory", {}),
+    ]
+    assert conn.sent[0][0] == "ready"
 
 
 def test_parallel_step_scatters_actions_and_gathers_records():

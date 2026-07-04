@@ -72,6 +72,21 @@ def test_coldstart_ray_mainline_keeps_explicit_osmesa_fallback(tmp_path) -> None
     )
 
 
+def test_coldstart_noray_collect_receives_render_backend(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    plan = build_pipeline_plan(
+        mode="noray",
+        profile="smoke",
+        ngpu=1,
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=_script_cfg(),
+    )
+
+    assert "collect.render_backend=egl" in plan.collect_cmd
+
+
 def test_default_egl_rejects_zero_gpu_without_osmesa_override(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
@@ -104,13 +119,23 @@ def test_zero_gpu_accepts_explicit_osmesa_fallback(tmp_path) -> None:
 
 def test_collect_and_manual_cotrain_configs_default_to_egl() -> None:
     with initialize_config_dir(config_dir=_config_dir(), version_base=None):
+        noray_collect_cfg = compose(
+            config_name="train",
+            overrides=["experiment=collect_rollouts_onetraj"],
+        )
         collect_cfg = compose(config_name="train", overrides=["experiment=collect_rollouts_ray"])
+        sync_cfg = compose(
+            config_name="train",
+            overrides=["experiment=openvla_onetraj_libero_cotrain_noray"],
+        )
         ray_cfg = compose(
             config_name="train",
             overrides=["experiment=openvla_onetraj_libero_cotrain_ray"],
         )
 
+    assert noray_collect_cfg.collect.render_backend == "egl"
     assert collect_cfg.env.cfg.render_backend == "egl"
+    assert sync_cfg.online_rollout.render_backend == "egl"
     assert ray_cfg.render_backend == "egl"
     assert ray_cfg.env.cfg.render_backend == "egl"
     assert OmegaConf.select(ray_cfg, "manual_cotrain.real_render_backend") is None
@@ -122,3 +147,11 @@ def test_ray_base_config_default_documents_egl() -> None:
     )
 
     assert cfg.render_backend == "egl"
+
+
+def test_standalone_eval_config_defaults_to_egl() -> None:
+    with initialize_config_dir(config_dir=_config_dir(), version_base=None):
+        cfg = compose(config_name="train", overrides=["experiment=eval_libero_vla"])
+
+    assert cfg.eval.render_backend == "egl"
+    assert cfg.eval.render_gpu_pool is None

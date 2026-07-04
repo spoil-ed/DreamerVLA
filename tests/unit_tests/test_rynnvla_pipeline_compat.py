@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 
 import h5py
 import numpy as np
@@ -265,6 +266,277 @@ def test_dreamer_eval_accepts_plain_dict_checkpoint_cfg() -> None:
 
     assert OmegaConf.select(cfg, "training.out_dir") == "/tmp/eval"
     assert OmegaConf.select(cfg, "eval.task_suite_name") == "libero_goal"
+
+
+def test_dreamer_eval_adds_missing_trainer_node_for_manual_checkpoint(
+    tmp_path,
+) -> None:
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    workspace.distributed = types.SimpleNamespace(is_main_process=False)
+    workspace._output_dir = str(tmp_path)
+    workspace.device = torch.device("cpu")
+    workspace.console_banner = lambda *args, **kwargs: None
+    workspace.console_metrics = lambda *args, **kwargs: None
+    workspace._init_policy_trace = lambda _cfg: None
+    workspace._init_real_relabel_export = lambda _cfg: None
+    workspace._build_dreamer_modules = lambda _cfg, _payload: None
+    workspace.evaluate_libero = lambda epoch: {
+        "eval_success_rate": 0.0,
+        "eval_total_episodes": 0.0,
+        "eval_total_successes": 0.0,
+        "eval_tasks": 0.0,
+        "eval_episodes_per_task": 3.0,
+    }
+
+    eval_cfg = OmegaConf.create(
+        {
+            "eval": {
+                "task_suite_name": "libero_goal",
+                "num_episodes_per_task": 3,
+            },
+            "init": {
+                "vla_ckpt_path": "/tmp/openvla",
+                "encoder_state_ckpt": None,
+            },
+            "encoder": {"time_horizon": 5},
+            "trainer": {"device": "cpu"},
+            "training": {"device": "cpu"},
+        }
+    )
+    payload = {
+        "cfg": {
+            "training": {"out_dir": "/tmp/manual"},
+            "init": {},
+            "encoder": {},
+            "eval": {"task_suite_name": "libero_goal"},
+        },
+        "state_dicts": {"world_model": {}, "policy": {}},
+    }
+
+    workspace._run_dreamer_eval(eval_cfg, "/tmp/manual_cotrain.ckpt", payload)
+
+    assert OmegaConf.select(workspace.cfg, "trainer.device") == "cpu"
+
+
+def test_dreamer_eval_normalizes_manual_ray_checkpoint_components(
+    tmp_path,
+) -> None:
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    workspace.distributed = types.SimpleNamespace(is_main_process=False)
+    workspace._output_dir = str(tmp_path)
+    workspace.device = torch.device("cpu")
+    workspace.console_banner = lambda *args, **kwargs: None
+    workspace.console_metrics = lambda *args, **kwargs: None
+    workspace._init_policy_trace = lambda _cfg: None
+    workspace._init_real_relabel_export = lambda _cfg: None
+    captured: dict[str, object] = {}
+    workspace._build_dreamer_modules = lambda cfg, _payload: captured.setdefault(
+        "cfg", cfg
+    )
+    workspace.evaluate_libero = lambda epoch: {
+        "eval_success_rate": 0.0,
+        "eval_total_episodes": 0.0,
+        "eval_total_successes": 0.0,
+        "eval_tasks": 0.0,
+        "eval_episodes_per_task": 3.0,
+    }
+
+    eval_cfg = OmegaConf.create(
+        {
+            "eval": {"task_suite_name": "libero_goal", "num_episodes_per_task": 3},
+            "init": {"vla_ckpt_path": "/tmp/openvla", "encoder_state_ckpt": None},
+            "encoder": {"_target_": "default.RynnVLAEncoder", "time_horizon": 5},
+            "trainer": {"device": "cpu"},
+            "training": {"device": "cpu"},
+        }
+    )
+    payload = {
+        "cfg": {
+            "training": {"out_dir": "/tmp/manual"},
+            "init": {},
+            "eval": {},
+            "task": {
+                "openvla_oft": {
+                    "input_tokens": {
+                        "expected_obs_hidden_source": "input_token_embedding"
+                    }
+                }
+            },
+            "rollout": {
+                "encoder_cfg": {
+                    "target": "dreamervla.workers.inference.oft_rollout:OFTRolloutBundle",
+                    "kwargs": {"history": 1},
+                }
+            },
+            "actor": {
+                "policy_cfg": {
+                    "target": "pkg.Policy",
+                    "kwargs": {"alpha": 1},
+                }
+            },
+            "learner": {
+                "model_cfg": {
+                    "world_model": {
+                        "target": "pkg.WorldModel",
+                        "kwargs": {"beta": 2},
+                    },
+                    "classifier": {
+                        "target": "pkg.Classifier",
+                        "kwargs": {"gamma": 3},
+                    },
+                }
+            },
+        },
+        "state_dicts": {"world_model": {}, "policy": {}},
+    }
+
+    workspace._run_dreamer_eval(eval_cfg, "/tmp/manual_cotrain.ckpt", payload)
+
+    cfg = captured["cfg"]
+    assert OmegaConf.select(cfg, "encoder", default=None) is None
+    assert OmegaConf.select(cfg, "policy._target_") == "pkg.Policy"
+    assert OmegaConf.select(cfg, "policy.alpha") == 1
+    assert OmegaConf.select(cfg, "world_model._target_") == "pkg.WorldModel"
+    assert OmegaConf.select(cfg, "world_model.beta") == 2
+    assert OmegaConf.select(cfg, "classifier._target_") == "pkg.Classifier"
+    assert OmegaConf.select(cfg, "classifier.gamma") == 3
+    assert OmegaConf.select(cfg, "eval.obs_hidden_source") == "input_token_embedding"
+
+
+def test_dreamer_oft_eval_builds_processor_adapter(monkeypatch) -> None:
+    import dreamervla.runners.embodied_eval_runner as eval_runner_mod
+
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    workspace.device = torch.device("cpu")
+    workspace.distributed = types.SimpleNamespace(is_main_process=False)
+    workspace._dreamer_policy_source = "ckpt"
+    workspace._tdmpc_mpc_enabled = False
+    workspace._attach_image_token_mapping = lambda: None
+    workspace._load_module_state = lambda _module, _state, _name: None
+
+    def build_oft_extractor(_cfg) -> None:
+        workspace._dreamer_oft_extractor = object()
+
+    workspace._build_oft_eval_extractor = build_oft_extractor
+
+    class FakeModule(nn.Module):
+        pass
+
+    monkeypatch.setattr(
+        eval_runner_mod.hydra.utils,
+        "instantiate",
+        lambda *_args, **_kwargs: FakeModule(),
+    )
+
+    cfg = OmegaConf.create(
+        {
+            "rollout": {
+                "encoder_cfg": {
+                    "target": "dreamervla.workers.inference.oft_rollout:OFTRolloutBundle"
+                }
+            },
+            "world_model": {"_target_": "fake.WorldModel"},
+            "policy": {"_target_": "fake.Policy"},
+            "training": {"fsdp_mixed_precision": "fp32"},
+            "eval": {},
+        }
+    )
+
+    workspace._build_dreamer_modules(
+        cfg, {"state_dicts": {"world_model": {}, "policy": {}}}
+    )
+
+    assert workspace.encoder is not None
+    assert workspace.encoder._build_processor(torch.device("cpu")) is None
+    assert workspace.encoder.eval() is workspace.encoder
+
+
+def test_dreamer_eval_oft_bridge_maps_libero_obs_and_sidecars() -> None:
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    workspace.device = torch.device("cpu")
+    workspace.cfg = OmegaConf.create({"eval": {}})
+
+    class FakeOFTOutput:
+        hidden_state = torch.arange(6, dtype=torch.float16).reshape(2, 3)
+        lang_emb = torch.arange(4, dtype=torch.float16)
+
+        def __getitem__(self, index: int):
+            return [None, self.hidden_state][index]
+
+    class FakeExtractor:
+        def __init__(self) -> None:
+            self.last_obs = None
+            self.last_task = None
+
+        def step(self, obs, task_description):
+            self.last_obs = obs
+            self.last_task = task_description
+            return FakeOFTOutput()
+
+    extractor = FakeExtractor()
+    workspace._dreamer_oft_extractor = extractor
+    third = np.arange(12, dtype=np.uint8).reshape(2, 2, 3)
+    wrist = np.arange(12, 24, dtype=np.uint8).reshape(2, 2, 3)
+    state = np.arange(8, dtype=np.float32)
+    workspace._libero_current_raw_obs = {
+        "agentview_image": third,
+        "robot0_eye_in_hand_image": wrist,
+    }
+
+    obs_embedding, input_ids = workspace._dreamer_obs_embedding_from_eval_inputs(
+        None,
+        [],
+        state,
+        "Pick the block",
+    )
+
+    assert input_ids is None
+    assert torch.equal(obs_embedding["obs_embedding"], FakeOFTOutput.hidden_state[None].float())
+    assert torch.equal(obs_embedding["lang_emb"], FakeOFTOutput.lang_emb[None].float())
+    assert torch.equal(obs_embedding["proprio"], torch.from_numpy(state)[None])
+    assert np.array_equal(extractor.last_obs["agentview_rgb"], third)
+    assert np.array_equal(extractor.last_obs["eye_in_hand_rgb"], wrist)
+    assert np.array_equal(extractor.last_obs["state"], state)
+    assert extractor.last_task == "Pick the block"
+
+
+def test_dreamer_online_update_latent_preserves_eval_sidecars() -> None:
+    workspace = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+
+    class DummyWorldModel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def __call__(self, batch):
+            self.calls.append(batch)
+            return {
+                "hidden": batch["hidden"],
+                "history": batch["hidden"][:, None],
+                "actions": torch.zeros(batch["hidden"].shape[0], 1, 7),
+            }
+
+    wm = DummyWorldModel()
+    workspace.world_model = wm
+    obs = {
+        "obs_embedding": torch.ones(1, 2, 3),
+        "lang_emb": torch.ones(1, 4),
+        "proprio": torch.ones(1, 8),
+    }
+
+    latent = workspace._dreamer_online_update_latent(obs)
+
+    assert wm.calls[0]["mode"] == "encode_latent"
+    assert wm.calls[0]["hidden"] is obs["obs_embedding"]
+    assert latent["lang"] is obs["lang_emb"]
+    assert latent["proprio"] is obs["proprio"]
+
+    workspace._dreamer_online_prev_action = torch.zeros(1, 7)
+    latent = workspace._dreamer_online_update_latent(obs)
+
+    assert wm.calls[1]["mode"] == "observe_next"
+    assert wm.calls[1]["hidden"] is obs["obs_embedding"]
+    assert latent["lang"] is obs["lang_emb"]
+    assert latent["proprio"] is obs["proprio"]
 
 
 def test_rynnvla_action_hidden_actor_decodes_flattened_action_hidden() -> None:

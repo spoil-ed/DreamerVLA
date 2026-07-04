@@ -64,6 +64,10 @@ class OnlineReplay:
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
         self._pending_latest_online_episode_ids: set[int] = set()
+        self._classifier_pending_windows: deque[
+            tuple[Mapping[str, Any], int, int, bool]
+        ] = deque()
+        self._classifier_pending_key: tuple[int, int, str, int] | None = None
 
     def state_dict(self) -> dict[str, Any]:
         """Return mutable replay contents and cursors for checkpoint resume."""
@@ -165,7 +169,11 @@ class OnlineReplay:
                     self._next_task_episode_index[int(task_id)] = int(next_idx)
 
         pending = state.get("pending_latest_online_episode_ids", ())
-        self._pending_latest_online_episode_ids = {int(episode_id) for episode_id in pending}
+        self._pending_latest_online_episode_ids = {
+            int(episode_id) for episode_id in pending
+        }
+        self._classifier_pending_windows.clear()
+        self._classifier_pending_key = None
 
     def _next_record_id(self, key: str) -> int:
         next_id = 0
@@ -562,7 +570,9 @@ class OnlineReplay:
             episode_lengths.append(int(record["length"]))
             sample_limits.append(int(limit))
             source_ranks.append(int(record["rank"]))
-            replay_source_ids.append(int(record.get("source_id", self._source_id("online"))))
+            replay_source_ids.append(
+                int(record.get("source_id", self._source_id("online")))
+            )
 
         obs_embedding = np.stack(
             [[step["obs_embedding"] for step in window] for window in windows], axis=0
@@ -689,24 +699,20 @@ class OnlineReplay:
         is_end_window: list[bool] = []
         proprio_windows: list[np.ndarray] = []
         lang_embs: list[np.ndarray] = []
+        pending_key = (window_env, chunk_size, str(chunk_pool), stride)
+        if self._classifier_pending_key != pending_key:
+            self._classifier_pending_windows.clear()
+            self._classifier_pending_key = pending_key
 
-        for _ in range(int(batch_size)):
-            record = random.choice(candidates)
+        def _append_window(
+            record: Mapping[str, Any],
+            *,
+            end: int,
+            label: int,
+            end_window: bool,
+        ) -> None:
             episode = record["episode"]
             finish_step = int(record.get("finish_step", len(episode)))
-            use_end = random.random() < 0.5
-            if use_end:
-                end = finish_step
-                label = int(bool(record["success"]))
-            else:
-                valid_ends = list(range(finish_step - stride, window_env - 1, -stride))
-                if valid_ends:
-                    end = int(random.choice(valid_ends))
-                    label = 0
-                else:
-                    end = finish_step
-                    label = int(bool(record["success"]))
-                    use_end = True
 
             env_window = np.stack(
                 [step["obs_embedding"] for step in episode[end - window_env : end]],
@@ -772,7 +778,40 @@ class OnlineReplay:
             episode_lengths.append(int(record["length"]))
             finish_steps.append(int(finish_step))
             window_end_indices.append(int(end))
-            is_end_window.append(bool(use_end))
+            is_end_window.append(bool(end_window))
+
+        target_batch = int(batch_size)
+        while len(windows) < target_batch:
+            if self._classifier_pending_windows:
+                pending_record, end, label, end_window = (
+                    self._classifier_pending_windows.popleft()
+                )
+                _append_window(
+                    pending_record,
+                    end=end,
+                    label=label,
+                    end_window=end_window,
+                )
+                continue
+
+            record = random.choice(candidates)
+            episode = record["episode"]
+            finish_step = int(record.get("finish_step", len(episode)))
+            sample_specs = [(finish_step, int(bool(record["success"])), True)]
+            if finish_step - stride >= window_env:
+                valid_ends = list(range(finish_step - stride, window_env - 1, -stride))
+                valid_ends = valid_ends or list(
+                    range(finish_step - 1, window_env - 1, -1)
+                )
+                if valid_ends:
+                    sample_specs.append((int(random.choice(valid_ends)), 0, False))
+            for end, label, end_window in sample_specs:
+                if len(windows) >= target_batch:
+                    self._classifier_pending_windows.append(
+                        (record, int(end), int(label), bool(end_window))
+                    )
+                    continue
+                _append_window(record, end=end, label=label, end_window=end_window)
 
         batch = {
             "windows": torch.from_numpy(np.stack(windows, axis=0)).to(torch.float32),

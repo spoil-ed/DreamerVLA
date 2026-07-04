@@ -178,7 +178,7 @@ residual_mlp`, `adapter_hidden_dim 1024`, `initial_log_std -3.0`, `min/max_log_s
 | `eval.num_episodes_per_task` | `50` | rollouts per task |
 | `eval.num_steps_wait` | `10` | settle steps before first action |
 | `eval.dreamer_policy_source` | `ckpt` | `ckpt` / `env` |
-| `eval.dreamer_actor_input_source` | `rssm` | actor input (`rssm` / `encoder`) |
+| `eval.dreamer_actor_input_source` | `latent` | actor input (`latent` / `encoder`; legacy `rssm` aliases to `latent`) |
 | `eval.target_token_id` | `10004` (= `DEFAULT_ACTION_TOKEN_ID`) | action-token id; see [`dreamervla/constants.py`](../dreamervla/constants.py) |
 | `eval.save_video` | `false` | dump rollout videos |
 | `eval.tdmpc_mpc.enabled` | `false` | optional TDMPC planner |

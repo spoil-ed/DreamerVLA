@@ -200,6 +200,79 @@ def test_online_replay_classifier_windows_include_wm_proprio_language() -> None:
     assert torch.allclose(batch["lang_emb"][0], torch.arange(6, dtype=torch.float32) + 0.25)
 
 
+def test_online_replay_classifier_windows_follow_wmpo_episode_protocol(monkeypatch) -> None:
+    random.seed(3)
+    monkeypatch.setattr(random, "random", lambda: 0.99)
+    monkeypatch.setattr(random, "choice", lambda seq: list(seq)[0])
+
+    def sample_one(success: bool) -> dict[str, torch.Tensor]:
+        replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
+        episode = _episode(task_id=2, length=12, success=success)
+        for idx, step in enumerate(episode):
+            step["obs_embedding"] = np.full((1,), float(idx), dtype=np.float32)
+        replay.add_episode(episode)
+        return replay.sample_classifier_windows(
+            2,
+            window=2,
+            chunk_size=2,
+            chunk_pool="last",
+            early_neg_stride=4,
+        )
+
+    batch = sample_one(success=True)
+    assert batch["labels"].tolist() == [1, 0]
+    assert batch["is_end_window"].tolist() == [True, False]
+    assert batch["episode_ids"].tolist() == [0, 0]
+    assert batch["finish_steps"].tolist() == [12, 12]
+    assert batch["window_end_indices"].tolist() == [12, 8]
+    assert batch["source_success"].tolist() == [True, True]
+    assert torch.allclose(
+        batch["windows"].squeeze(-1),
+        torch.tensor(
+            [
+                [9.0, 11.0],
+                [5.0, 7.0],
+            ]
+        ),
+    )
+
+    batch = sample_one(success=False)
+    assert batch["labels"].tolist() == [0, 0]
+    assert batch["is_end_window"].tolist() == [True, False]
+    assert batch["episode_ids"].tolist() == [0, 0]
+    assert batch["finish_steps"].tolist() == [12, 12]
+    assert batch["window_end_indices"].tolist() == [12, 8]
+    assert batch["source_success"].tolist() == [False, False]
+
+    replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
+    episode = _episode(task_id=2, length=12, success=True)
+    for idx, step in enumerate(episode):
+        step["obs_embedding"] = np.full((1,), float(idx), dtype=np.float32)
+    replay.add_episode(episode)
+
+    first = replay.sample_classifier_windows(
+        1,
+        window=2,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=4,
+    )
+    second = replay.sample_classifier_windows(
+        1,
+        window=2,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=4,
+    )
+
+    assert first["labels"].tolist() == [1]
+    assert first["is_end_window"].tolist() == [True]
+    assert first["window_end_indices"].tolist() == [12]
+    assert second["labels"].tolist() == [0]
+    assert second["is_end_window"].tolist() == [False]
+    assert second["window_end_indices"].tolist() == [8]
+
+
 def test_online_replay_training_readiness_requires_each_task() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=3)
 

@@ -8,11 +8,8 @@ from typing import Any
 _EXPORTS = {
     "ACTION_HIGH": "dreamervla.envs.train_env",
     "ACTION_LOW": "dreamervla.envs.train_env",
-    "DreamerVLAOnlineEvalEnv": "dreamervla.envs.eval_env",
-    "DreamerVLAOnlineEvalEnvConfig": "dreamervla.envs.eval_env",
     "DreamerVLAOnlineTrainEnv": "dreamervla.envs.train_env",
     "DreamerVLAOnlineTrainEnvConfig": "dreamervla.envs.train_env",
-    "EvalEnv": "dreamervla.envs.eval_env",
     "LIBERODreamerEnv": "dreamervla.envs.libero_env",
     "LIBEROOnlineEnv": "dreamervla.envs.libero_online_env",
     "LIBEROOnlineEnvConfig": "dreamervla.envs.libero_online_env",

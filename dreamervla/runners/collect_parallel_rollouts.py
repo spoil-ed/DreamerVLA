@@ -57,6 +57,11 @@ from dreamervla.runners.oft_collect_common import (
     sidecar_to_numpy,
     vla_latent_spec,
 )
+from dreamervla.runners.render_device_config import (
+    cuda_visible_devices_from_env,
+    parse_device_ids,
+)
+from dreamervla.utils.egl_device import apply_libero_render_regime
 from dreamervla.utils.paths import data_path, data_root
 from dreamervla.utils.progress import AggregateProgress
 
@@ -156,6 +161,24 @@ def _require_keys(cfg: dict[str, Any]) -> None:
     missing = [k for k in _REQUIRED_COLLECT_KEYS if k not in cfg]
     if missing:
         raise KeyError(f"collect_rollouts cfg missing required keys: {missing}")
+
+
+def _collect_render_backend(cfg: dict[str, Any]) -> str:
+    backend = str(cfg.get("render_backend", "egl")).strip().lower()
+    if backend not in {"egl", "osmesa"}:
+        raise ValueError(f"collect.render_backend must be 'egl' or 'osmesa', got {backend!r}")
+    return backend
+
+
+def _collect_render_gpu_pool(cfg: dict[str, Any], *, gpu_id: int) -> list[int]:
+    for key in ("gpu_pool", "render_devices", "egl_device_pool"):
+        devices = parse_device_ids(cfg.get(key))
+        if devices:
+            return devices
+    visible_devices = cuda_visible_devices_from_env()
+    if visible_devices:
+        return visible_devices
+    return [int(gpu_id)]
 
 
 def _assert_gpu_free_memory(gpu_id: int, min_free_gb: float, *, rank: int) -> None:
@@ -364,6 +387,9 @@ def _collect_vectorized_path(
     rotate_images_180: bool,
     image_keys: list[str],
     obs_hidden_source: str,
+    render_backend: str = "osmesa",
+    render_gpu_pool: list[int] | None = None,
+    render_shard_id: int = 0,
     on_episode: Callable[[int, int, int, bool], None] | None = None,
 ) -> int:
     """Drive K env subprocesses with batched VLA inference; returns demos written.
@@ -379,19 +405,30 @@ def _collect_vectorized_path(
     from dreamervla.runners.vec_rollout_env import VecRolloutEnv
     from dreamervla.runners.vectorized_collect import collect_vectorized
 
-    # Children inherit the LIBERO/mujoco env vars (spawn does not carry runtime edits).
     env_vars = {
         k: os.environ[k]
-        for k in ("MUJOCO_GL", "PYOPENGL_PLATFORM", "DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
+        for k in ("DVLA_DATA_ROOT", "LIBERO_CONFIG_PATH")
         if k in os.environ
     }
+    child_env_cfg_kwargs = dict(env_cfg_kwargs)
+    child_env_cfg_kwargs.update(
+        {
+            "_libero_render_backend": str(render_backend).strip().lower(),
+            "_libero_render_gpu_pool": list(render_gpu_pool or []),
+            "_libero_render_shard_id": int(render_shard_id),
+        }
+    )
 
     if rank == 0:
         print(
             f"[collector rank={rank}] Layer-2: spawning {num_envs} env subprocesses ...",
             flush=True,
         )
-    vec_env = VecRolloutEnv(num_envs=num_envs, cfg_kwargs=env_cfg_kwargs, env_vars=env_vars)
+    vec_env = VecRolloutEnv(
+        num_envs=num_envs,
+        cfg_kwargs=child_env_cfg_kwargs,
+        env_vars=env_vars,
+    )
     try:
         # One extractor per slot (isolated history); reuse the main one for slot 0.
         extractors = [extractor] + [
@@ -494,10 +531,11 @@ def collect_rollouts(
         print("[collector] config:", cfg, flush=True)
     print(f"[collector] rank={rank}/{world_size} local_rank={local_rank} gpu_id={gpu_id}", flush=True)
 
-    os.environ.setdefault("MUJOCO_GL", "osmesa")
-    os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
     data_root()
     os.environ.setdefault("LIBERO_CONFIG_PATH", str(data_path(".libero")))
+    render_backend = _collect_render_backend(cfg)
+    render_gpu_pool = _collect_render_gpu_pool(cfg, gpu_id=gpu_id)
+    apply_libero_render_regime(render_backend, int(local_rank), render_gpu_pool)
 
     memory_fraction = float(cfg["memory_fraction"])
     if not 0.0 < memory_fraction <= 1.0:
@@ -631,6 +669,9 @@ def collect_rollouts(
             rotate_images_180=rotate_images_180,
             image_keys=image_keys,
             obs_hidden_source=str(cfg["expected_obs_hidden_source"]),
+            render_backend=render_backend,
+            render_gpu_pool=render_gpu_pool,
+            render_shard_id=int(local_rank) * envs_per_gpu,
             on_episode=on_episode,
         )
     else:

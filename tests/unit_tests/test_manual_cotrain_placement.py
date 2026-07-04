@@ -41,6 +41,58 @@ def test_one_gpu_placement_keeps_actor_spec_on_gpu_zero() -> None:
     assert [spec.gpu_ids for spec in plan.actor_specs] == [[0]]
 
 
+def test_manual_cotrain_placement_honors_component_gpu_groups() -> None:
+    plan = build_manual_cotrain_placement(
+        7,
+        real_env_workers=4,
+        component_gpu_groups={
+            "env": [[0], [1], [2], [3], [4]],
+            "rollout": [[5], [5], [5], [5], [5]],
+            "actor": [[6]],
+            "learner": [[6]],
+        },
+    )
+
+    assert [spec.role for spec in plan.env_specs] == [
+        "real_env",
+        "real_env",
+        "real_env",
+        "real_env",
+        "wm_env",
+    ]
+    assert [spec.gpu_ids for spec in plan.env_specs] == [[0], [1], [2], [3], [4]]
+    assert [spec.gpu_ids for spec in plan.rollout_specs] == [[5]] * 5
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [[6]]
+    assert plan.learner_spec.gpu_ids == [6]
+
+
+def test_manual_cotrain_placement_defaults_learner_to_actor_component() -> None:
+    plan = build_manual_cotrain_placement(
+        7,
+        real_env_workers=4,
+        component_gpu_groups={
+            "env": [[0], [1], [2], [3], [4]],
+            "rollout": [[5], [5], [5], [5], [5]],
+            "actor": [[6]],
+        },
+    )
+
+    assert plan.learner_spec.gpu_ids == [6]
+
+
+def test_manual_cotrain_placement_rejects_rollout_component_that_misses_env_ranks() -> None:
+    with pytest.raises(ValueError, match="rollout.*cover.*env"):
+        build_manual_cotrain_placement(
+            7,
+            real_env_workers=4,
+            component_gpu_groups={
+                "env": [[0], [1], [2], [3], [4]],
+                "rollout": [[5]],
+                "actor": [[6]],
+            },
+        )
+
+
 def test_zero_gpu_placement_is_cpu_target_topology() -> None:
     plan = build_manual_cotrain_placement(0)
 

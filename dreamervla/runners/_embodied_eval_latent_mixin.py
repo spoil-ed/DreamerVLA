@@ -246,9 +246,39 @@ class EmbodiedEvalLatentMixin:
         frame_history: list[tuple[Image.Image, Image.Image]],
         state: np.ndarray,
         task_description: str,
-    ) -> tuple[torch.Tensor, list[int] | None]:
+    ) -> tuple[Any, list[int] | None]:
         if self._wm_expects_pixel_images():
             return self._pixel_obs_for_wm(frame_history), None
+
+        oft_extractor = getattr(self, "_dreamer_oft_extractor", None)
+        if oft_extractor is not None:
+            raw_obs = getattr(self, "_libero_current_raw_obs", None)
+            if not isinstance(raw_obs, dict):
+                raise RuntimeError("OFT Dreamer eval requires current LIBERO raw obs")
+            obs = self._dreamer_oft_obs_from_libero_raw(raw_obs, state)
+            result = oft_extractor.step(obs, task_description)
+            hidden = getattr(result, "hidden_state", None)
+            if hidden is None:
+                hidden = result[1]
+            obs_tensor = torch.as_tensor(hidden, device=self.device).float()
+            if obs_tensor.ndim in {1, 2}:
+                obs_tensor = obs_tensor.unsqueeze(0)
+            if obs_tensor.ndim < 2:
+                raise ValueError(
+                    f"OFT obs_embedding must have at least 1 dim, got {tuple(obs_tensor.shape)}"
+                )
+            out: dict[str, torch.Tensor] = {"obs_embedding": obs_tensor}
+            lang_emb = getattr(result, "lang_emb", None)
+            if lang_emb is not None:
+                lang = torch.as_tensor(lang_emb, device=self.device).float()
+                if lang.ndim == 1:
+                    lang = lang.unsqueeze(0)
+                out["lang_emb"] = lang
+            proprio = torch.as_tensor(state, device=self.device).float()
+            if proprio.ndim == 1:
+                proprio = proprio.unsqueeze(0)
+            out["proprio"] = proprio
+            return out, None
 
         wm_frame_history = self._dreamer_wm_frame_history(frame_history)
         input_ids = self._dreamer_wm_observation_input_ids(
@@ -258,6 +288,27 @@ class EmbodiedEvalLatentMixin:
             task_description=task_description,
         )
         return self._obs_embedding_for_wm([input_ids]), input_ids
+
+    @staticmethod
+    def _dreamer_oft_obs_from_libero_raw(
+        raw_obs: dict[str, Any],
+        state: np.ndarray,
+    ) -> dict[str, Any]:
+        if "agentview_rgb" in raw_obs:
+            third = raw_obs["agentview_rgb"]
+        else:
+            third = raw_obs["agentview_image"]
+        if "eye_in_hand_rgb" in raw_obs:
+            wrist = raw_obs["eye_in_hand_rgb"]
+        else:
+            wrist = raw_obs["robot0_eye_in_hand_image"]
+        state_arr = np.asarray(state, dtype=np.float32).reshape(-1)
+        return {
+            "agentview_rgb": np.ascontiguousarray(np.asarray(third, dtype=np.uint8)),
+            "eye_in_hand_rgb": np.ascontiguousarray(np.asarray(wrist, dtype=np.uint8)),
+            "state": state_arr,
+            "proprio": state_arr,
+        }
 
     def _dreamer_dummy_sequence_inputs(
         self, hidden_states: torch.Tensor
@@ -277,9 +328,9 @@ class EmbodiedEvalLatentMixin:
         latent: Any,
         input_ids: list[int] | None = None,
         action_steps: int = 1,
-        live_hidden: torch.Tensor | None = None,
+        live_hidden: Any | None = None,
     ) -> np.ndarray:
-        env_actions, _rssm_actions = self._dreamer_action_chunk_from_latent(
+        env_actions, _latent_actions = self._dreamer_action_chunk_from_latent(
             latent=latent,
             input_ids=input_ids,
             action_steps=action_steps,
@@ -294,7 +345,7 @@ class EmbodiedEvalLatentMixin:
         latent: Any,
         input_ids: list[int] | None = None,
         action_steps: int = 1,
-        live_hidden: torch.Tensor | None = None,
+        live_hidden: Any | None = None,
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         if bool(getattr(self, "_real_relabel_enabled", False)):
             self._last_real_relabel_actor_step = None
@@ -363,8 +414,8 @@ class EmbodiedEvalLatentMixin:
             self._dreamer_policy_raw_to_env_action(row).astype(np.float32, copy=False)
             for row in raw_actions
         ]
-        rssm_actions = [
-            self._dreamer_rssm_action_from_raw_env(raw, env).astype(
+        latent_actions = [
+            self._dreamer_latent_action_from_raw_env(raw, env).astype(
                 np.float32, copy=False
             )
             for raw, env in zip(raw_actions, env_actions, strict=True)
@@ -403,15 +454,20 @@ class EmbodiedEvalLatentMixin:
                 .tolist(),
                 "old_log_prob": old_log_prob,
             }
+        live_hidden_tensor = (
+            self._hidden_tensor_from_eval_obs(live_hidden)
+            if live_hidden is not None
+            else None
+        )
         self._record_hidden_action_compare(
-            live_hidden=live_hidden,
+            live_hidden=live_hidden_tensor,
             recon_hidden=feat if "feat" in locals() else None,
             recon_action_raw=raw_action_np,
             executed_action=action_np,
             context=getattr(self, "_libero_current_eval_context", None),
-            source="online_rssm",
+            source="online_latent",
         )
-        live_trace_hidden = self._action_hidden_tokens_for_trace(live_hidden)
+        live_trace_hidden = self._action_hidden_tokens_for_trace(live_hidden_tensor)
         recon_trace_hidden = self._action_hidden_tokens_for_trace(
             feat if "feat" in locals() else None
         )
@@ -427,7 +483,7 @@ class EmbodiedEvalLatentMixin:
             recon_action_hidden=recon_trace_hidden,
             obs_embedding=live_hidden,
             actor_input=feat if "feat" in locals() else None,
-            rssm_latent=latent,
+            latent=latent,
             input_ids=np.asarray(input_ids, dtype=np.float32)
             if input_ids is not None
             else None,
@@ -442,41 +498,46 @@ class EmbodiedEvalLatentMixin:
                     "  [Eval][online-action] "
                     f"raw={np.array2string(raw_action_np, precision=4, suppress_small=False)} "
                     f"env={np.array2string(action_np, precision=4, suppress_small=False)} "
-                    f"rssm={np.array2string(rssm_actions[0], precision=4, suppress_small=False)} "
+                    f"latent={np.array2string(latent_actions[0], precision=4, suppress_small=False)} "
                     f"abs_mean={float(np.mean(np.abs(action_np))):.5f} "
                     f"max_abs={float(np.max(np.abs(action_np))):.5f} "
                     f"chunk={len(env_actions)} action_steps={int(action_steps)}",
                     flush=True,
                 )
             self._dreamer_eval_action_log_count = count + 1
-        return env_actions, rssm_actions
+        return env_actions, latent_actions
 
     def _dreamer_online_reset(self) -> None:
         self._dreamer_online_latent = None
         self._dreamer_online_prev_action = None
+        oft_extractor = getattr(self, "_dreamer_oft_extractor", None)
+        if oft_extractor is not None and hasattr(oft_extractor, "reset"):
+            oft_extractor.reset()
         planner = getattr(self, "_tdmpc_mpc_planner", None)
         if planner is not None:
             planner.reset()
 
-    def _dreamer_online_update_latent(self, obs_embedding: torch.Tensor) -> Any:
+    def _dreamer_online_update_latent(self, obs_embedding: Any) -> Any:
+        hidden = self._hidden_tensor_from_eval_obs(obs_embedding)
         if getattr(self, "_dreamer_online_latent", None) is None:
             latent = self.world_model(
-                {"mode": "encode_latent", "hidden": obs_embedding}
+                {"mode": "encode_latent", "hidden": hidden}
             )
         else:
             prev_action = getattr(self, "_dreamer_online_prev_action", None)
             if not isinstance(prev_action, torch.Tensor):
                 raise RuntimeError(
-                    "online_rssm latent update missing previous executed action"
+                    "online_latent update missing previous executed action"
                 )
             latent = self.world_model(
                 {
                     "mode": "observe_next",
                     "latent": self._dreamer_online_latent,
-                    "hidden": obs_embedding,
+                    "hidden": hidden,
                     "actions": prev_action,
                     "is_first": False,
                 }
             )
+        latent = self._latent_with_eval_sidecars(latent, obs_embedding)
         self._dreamer_online_latent = latent
         return latent

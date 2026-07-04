@@ -117,6 +117,17 @@ class EmbodiedEvalActionMixin:
         if bool(getattr(self, "_dreamer_clip_actions", True)):
             min_values, max_values = self._action_clip_bounds()
             action = np.clip(action, min_values, max_values)
+        action_postprocess = str(
+            OmegaConf.select(self.cfg, "eval.action_postprocess", default="none")
+        ).strip().lower()
+        if action_postprocess in {"openvla_oft", "oft"}:
+            from dreamervla.runners.oft_collect_common import process_action
+
+            action = process_action(action)
+        elif action_postprocess not in {"", "none", "false"}:
+            raise ValueError(
+                f"unknown eval.action_postprocess: {action_postprocess!r}"
+            )
         return action.astype(np.float32, copy=False)
 
     def _dreamer_should_unnorm_actions(self) -> bool:
@@ -146,27 +157,32 @@ class EmbodiedEvalActionMixin:
                 return False
         return bool(setting)
 
-    def _dreamer_rssm_action_from_raw_env(
+    def _dreamer_latent_action_source(self) -> str:
+        source = OmegaConf.select(
+            self.cfg, "eval.dreamer_latent_action_source", default=None
+        )
+        if source is None:
+            source = OmegaConf.select(
+                self.cfg, "eval.dreamer_rssm_action_source", default="env"
+            )
+        source = str(source).strip().lower()
+        if source not in {"env", "raw"}:
+            raise ValueError(
+                "eval.dreamer_latent_action_source must be one of: env, raw"
+            )
+        return source
+
+    def _dreamer_latent_action_from_raw_env(
         self, raw_action: np.ndarray, env_action: np.ndarray
     ) -> np.ndarray:
-        source = str(
-            OmegaConf.select(self.cfg, "eval.dreamer_rssm_action_source", default="env")
-        ).lower()
-        if source not in {"env", "raw"}:
-            raise ValueError("eval.dreamer_rssm_action_source must be one of: env, raw")
-        if source == "raw":
+        if self._dreamer_latent_action_source() == "raw":
             return np.asarray(raw_action[:7], dtype=np.float32)
         # WM training uses HDF5 LIBERO actions, i.e. the executed/env scale.
         return np.asarray(env_action[:7], dtype=np.float32)
 
-    def _tdmpc_mpc_raw_to_rssm_tensor(self, raw_action: torch.Tensor) -> torch.Tensor:
+    def _tdmpc_mpc_raw_to_latent_tensor(self, raw_action: torch.Tensor) -> torch.Tensor:
         raw_action = raw_action[..., :7].float()
-        source = str(
-            OmegaConf.select(self.cfg, "eval.dreamer_rssm_action_source", default="env")
-        ).lower()
-        if source not in {"env", "raw"}:
-            raise ValueError("eval.dreamer_rssm_action_source must be one of: env, raw")
-        if source == "raw":
+        if self._dreamer_latent_action_source() == "raw":
             return raw_action
         if self._dreamer_should_unnorm_actions():
             low_np, high_np = self._action_clip_bounds()
@@ -204,7 +220,7 @@ class EmbodiedEvalActionMixin:
             latent=latent,
             device=self.device,
             target_critic=getattr(self, "target_critic", None),
-            action_transform=self._tdmpc_mpc_raw_to_rssm_tensor,
+            action_transform=self._tdmpc_mpc_raw_to_latent_tensor,
         )
         raw_chunk_np = result.raw_actions.detach().cpu().float().numpy()
         if raw_chunk_np.ndim == 1:
@@ -217,8 +233,8 @@ class EmbodiedEvalActionMixin:
             self._dreamer_policy_raw_to_env_action(row).astype(np.float32, copy=False)
             for row in raw_actions
         ]
-        rssm_actions = [
-            self._dreamer_rssm_action_from_raw_env(raw, env).astype(
+        latent_actions = [
+            self._dreamer_latent_action_from_raw_env(raw, env).astype(
                 np.float32, copy=False
             )
             for raw, env in zip(raw_actions, env_actions, strict=True)
@@ -239,7 +255,7 @@ class EmbodiedEvalActionMixin:
                     flush=True,
                 )
             self._dreamer_eval_action_log_count = count + 1
-        return env_actions, rssm_actions
+        return env_actions, latent_actions
 
     def _record_hidden_action_compare(
         self,

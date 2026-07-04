@@ -21,7 +21,13 @@ from transformers import GenerationConfig
 from dreamervla.dataset import BaseDataset
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.runners.eval_metrics import summarize_libero_task_success
+from dreamervla.runners.render_device_config import (
+    cuda_visible_devices_from_env,
+    parse_device_ids,
+)
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
+from dreamervla.utils.egl_device import apply_libero_render_regime
 from dreamervla.utils.ema import EMAHelper
 from dreamervla.utils.hf_checkpoint import resolve_hf_checkpoint_dir
 from dreamervla.utils.optim import build_optimizer
@@ -29,6 +35,48 @@ from dreamervla.utils.paths import checkpoints_path, data_path
 from dreamervla.utils.seed import set_seed
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _select_eval_render_backend(root_cfg: DictConfig, eval_cfg: Any) -> str:
+    backend = str(
+        OmegaConf.select(
+            eval_cfg,
+            "render_backend",
+            default=OmegaConf.select(root_cfg, "render_backend", default="egl"),
+        )
+    ).strip().lower()
+    if backend not in {"egl", "osmesa"}:
+        raise ValueError(f"eval.render_backend must be 'egl' or 'osmesa', got {backend!r}")
+    return backend
+
+
+def _eval_render_gpu_pool(root_cfg: DictConfig, eval_cfg: Any, backend: str) -> list[int]:
+    if str(backend).strip().lower() != "egl":
+        return []
+    for key in ("render_gpu_pool", "gpu_pool", "render_devices", "egl_device_pool"):
+        devices = parse_device_ids(OmegaConf.select(eval_cfg, key, default=None))
+        if devices:
+            return devices
+    devices = cuda_visible_devices_from_env()
+    if devices:
+        return devices
+    devices = parse_device_ids(OmegaConf.select(root_cfg, "eval.gpus", default=None))
+    if devices:
+        return devices
+    if torch.cuda.is_available():
+        return list(range(torch.cuda.device_count()))
+    return []
+
+
+def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> None:
+    """Apply the LIBERO render backend before eval imports robosuite/LIBERO envs."""
+    backend = _select_eval_render_backend(root_cfg, eval_cfg)
+    shard_id = int(OmegaConf.select(eval_cfg, "render_shard_id", default=0))
+    apply_libero_render_regime(
+        backend,
+        shard_id,
+        _eval_render_gpu_pool(root_cfg, eval_cfg, backend),
+    )
 
 
 class PretokenizeVLARunner(BaseRunner):
@@ -318,6 +366,8 @@ class PretokenizeVLARunner(BaseRunner):
                 )
             return {}
 
+        _apply_libero_eval_render_regime(self.cfg, eval_cfg)
+
         from libero.libero import benchmark as libero_benchmark
 
         from dreamervla.envs import (
@@ -339,7 +389,7 @@ class PretokenizeVLARunner(BaseRunner):
             OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
         )
         num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=50)
+            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3)
         )
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=10))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
@@ -395,6 +445,7 @@ class PretokenizeVLARunner(BaseRunner):
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         total_episodes, total_successes = 0, 0
+        task_records: list[dict[str, int]] = []
         run_t0 = time.time()
 
         for task_index, task_id in enumerate(task_ids):
@@ -544,6 +595,13 @@ class PretokenizeVLARunner(BaseRunner):
             env.close()
 
             rate = task_successes / max(n_eps, 1)
+            task_records.append(
+                {
+                    "task_id": int(task_id),
+                    "episodes": int(n_eps),
+                    "successes": int(task_successes),
+                }
+            )
             task_dt = time.time() - task_t0
             print(
                 f'  [Eval] <<< Task {task_id} ({task_index + 1}/{len(task_ids)}) done: "{task_description}" '
@@ -553,18 +611,14 @@ class PretokenizeVLARunner(BaseRunner):
                 flush=True,
             )
 
-        avg_success = total_successes / max(total_episodes, 1)
+        metrics = summarize_libero_task_success(
+            task_records,
+            episodes_per_task=num_episodes,
+        )
+        avg_success = float(metrics["eval_success_rate"])
         run_dt = time.time() - run_t0
-        metrics = {
-            "eval_success_rate": avg_success,
-            "eval_total_episodes": float(total_episodes),
-            "eval_total_successes": float(total_successes),
-            "results/total_success_rate": avg_success,
-            "results/total_episodes": float(total_episodes),
-            "results/total_successes": float(total_successes),
-        }
         print(
-            f"  [Eval] Epoch {epoch} overall success rate: {avg_success:.1%} "
+            f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
             f"({total_successes}/{total_episodes}) total_time={run_dt:.1f}s",
             flush=True,
         )

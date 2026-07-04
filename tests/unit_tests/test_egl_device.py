@@ -29,14 +29,14 @@ def _skip_egl_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_libero_egl_regime_selects_render_device_by_shard(monkeypatch: pytest.MonkeyPatch) -> None:
     _skip_egl_diagnostics(monkeypatch)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,3,4,5,6")
 
     egl_device.apply_libero_render_regime("egl", shard_id=5, gpu_pool=[2, 4, 7])
 
     assert os.environ["MUJOCO_GL"] == "egl"
     assert os.environ["PYOPENGL_PLATFORM"] == "egl"
     assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "7"
-    assert os.environ["CUDA_VISIBLE_DEVICES"] == "7"
-    assert os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0,1,3,4,5,6"
 
 
 def test_libero_osmesa_regime_sets_backend_and_clears_egl_device() -> None:
@@ -52,6 +52,8 @@ def test_libero_osmesa_regime_sets_backend_and_clears_egl_device() -> None:
 
 
 def test_libero_egl_regime_rejects_empty_gpu_pool() -> None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+
     with pytest.raises(
         ValueError,
         match="render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0",

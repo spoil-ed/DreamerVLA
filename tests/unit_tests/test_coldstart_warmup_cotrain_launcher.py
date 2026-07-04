@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,6 +27,7 @@ def _plan_context(plan, cfg: dict) -> dict:
         "hidden_dir": str(plan.hidden_dir),
         "collect_out": str(plan.run_root / "collect"),
         "cotrain_out": str(plan.run_root / "cotrain"),
+        "render_backend": cfg["render_backend"],
     }
 
 
@@ -66,6 +68,40 @@ def _assert_no_duplicate_override_keys(overrides: list[str]) -> None:
     ]
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
     assert duplicates == []
+
+
+def _expected_ray_online_rollout_placement(ngpu: int, real_env_workers: int = 4) -> str:
+    if ngpu <= 1:
+        return "0"
+    compute_gpus = list(range(min(real_env_workers, ngpu - 1), ngpu))
+    if not compute_gpus:
+        compute_gpus = [ngpu - 1]
+    if len(compute_gpus) >= 3 and ngpu > 1:
+        actor_gpu = compute_gpus[-1]
+        worker_count = max(0, ngpu - 1)
+        non_actor_gpus = compute_gpus[:-1]
+    else:
+        actor_gpu = None
+        worker_count = ngpu
+        non_actor_gpus = compute_gpus
+    segments: list[str] = []
+    next_rank = 0
+    base, extra = divmod(worker_count, len(non_actor_gpus))
+    for idx, gpu in enumerate(non_actor_gpus):
+        count = base + (1 if idx < extra else 0)
+        if count <= 0:
+            continue
+        end = next_rank + count - 1
+        processes = str(next_rank) if next_rank == end else f"{next_rank}-{end}"
+        segments.append(f"{gpu}:{processes}")
+        next_rank = end + 1
+    if actor_gpu is not None:
+        segments.append(f"{actor_gpu}:{next_rank}")
+    return ",".join(segments)
+
+
+def _hydra_string_value(value: str) -> str:
+    return f"'{value}'" if "," in value else value
 
 
 def _write_complete_collected_pair(reward, hidden, shard_name: str, task_ids: list[int]) -> None:
@@ -1090,7 +1126,7 @@ def test_async_manual_cotrain_envs_per_worker_uses_profile_and_explicit_override
         ngpu=2,
         launcher_cfg=cfg,
     )
-    assert "manual_cotrain.envs_per_worker=2" in profile_plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=1" in profile_plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=8" not in profile_plan.cotrain_online_cmd
 
     override_plan = build_pipeline_plan(
@@ -1111,6 +1147,7 @@ def test_async_manual_cotrain_maps_online_budget_to_global_steps(tmp_path) -> No
 
     cfg = _launcher_cfg()
     cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
     plan = build_pipeline_plan(
         mode="ray",
         run_root=tmp_path / "budget",
@@ -1120,8 +1157,8 @@ def test_async_manual_cotrain_maps_online_budget_to_global_steps(tmp_path) -> No
         launcher_cfg=cfg,
     )
 
-    # release profile: ceil(200000 / (envs_per_worker=8 * rollout_epoch=16 * 256)).
-    assert "manual_cotrain.global_steps=7" in plan.cotrain_online_cmd
+    # release profile: ceil(200000 / (wm_target=128 * rollout_horizon=512)).
+    assert "manual_cotrain.global_steps=4" in plan.cotrain_online_cmd
 
     override_plan = build_pipeline_plan(
         mode="ray",
@@ -1133,7 +1170,7 @@ def test_async_manual_cotrain_maps_online_budget_to_global_steps(tmp_path) -> No
         cotrain_overrides=["manual_cotrain.global_steps=3"],
     )
     assert "manual_cotrain.global_steps=3" in override_plan.cotrain_online_cmd
-    assert "manual_cotrain.global_steps=7" not in override_plan.cotrain_online_cmd
+    assert "manual_cotrain.global_steps=4" not in override_plan.cotrain_online_cmd
 
 
 def test_ngpu_zero_does_not_emit_torchrun_or_gpu_ray_placement(tmp_path) -> None:
@@ -1340,7 +1377,7 @@ def test_multi_gpu_profile_scales_async_ray_online_envs_with_ngpu(
     assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
 
 
-@pytest.mark.parametrize("ngpu", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("ngpu", [1, 2, 3, 4, 5, 6, 7])
 def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     tmp_path,
     ngpu: int,
@@ -1361,15 +1398,55 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
 
     expected_env_slots = "0" if ngpu == 1 else f"0-{ngpu - 1}"
     expected_actor_slot = str(ngpu - 1)
+    expected_rollout_slots = _hydra_string_value(
+        _expected_ray_online_rollout_placement(ngpu)
+    )
 
     assert f"env.num_workers={ngpu}" in plan.cotrain_online_cmd
-    assert "env.envs_per_worker=2" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=1" in plan.cotrain_online_cmd
     assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
     assert f"cluster.component_placement.env={expected_env_slots}" in plan.cotrain_online_cmd
-    assert "cluster.component_placement.rollout=0" in plan.cotrain_online_cmd
+    assert f"cluster.component_placement.rollout={expected_rollout_slots}" in plan.cotrain_online_cmd
     assert f"cluster.component_placement.actor={expected_actor_slot}" in plan.cotrain_online_cmd
     assert "cluster.component_placement=null" not in plan.cotrain_online_cmd
     assert "render_backend=egl" in plan.cotrain_online_cmd
+    assert "env.cfg.render_backend=egl" in plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=1" in plan.cotrain_online_cmd
+    assert "manual_cotrain.real_env_workers=4" in plan.cotrain_online_cmd
+    assert not any(
+        item.startswith("manual_cotrain.real_render_backend=")
+        for item in plan.cotrain_online_cmd
+    )
+    assert "manual_cotrain.wm_envs_per_worker=16" in plan.cotrain_online_cmd
+
+
+def test_multi_gpu_profile_limits_rollout_pressure_on_actor_gpu(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "egl"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        profile="multi_gpu",
+        ngpu=7,
+    )
+
+    assert "cluster.component_placement.rollout='4:0-2,5:3-5,6:6'" in (
+        plan.cotrain_online_cmd
+    )
+    assert (
+        "manual_cotrain.real_rollout_target_trajectories=32"
+        in plan.cotrain_online_cmd
+    )
+    assert (
+        "manual_cotrain.wm_rollout_target_trajectories=256"
+        in plan.cotrain_online_cmd
+    )
+    assert "manual_cotrain.max_steps_per_rollout_epoch=512" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" not in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" not in plan.cotrain_online_cmd
     assert "+manual_cotrain.env_rollout_timeout_s=5400" in plan.cotrain_online_cmd
@@ -1544,9 +1621,11 @@ def test_async_cotrain_online_command_uses_valid_ray_hydra_keys(tmp_path) -> Non
 
     assert cfg_obj.init.warmup_ckpt_path == str(plan.ray_init_ckpt)
     assert cfg_obj.learner.init_ckpt.path == str(plan.ray_init_ckpt)
+    assert cfg_obj.env.real.cfg.target == cfg_obj.env.cfg.target
+    assert cfg_obj.env.real.cfg.render_backend == "egl"
 
 
-def test_async_eval_uses_in_run_real_env_success_metrics(
+def test_async_eval_runs_segmented_post_step_libero_eval_and_writes_trend_summary(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1555,41 +1634,112 @@ def test_async_eval_uses_in_run_real_env_success_metrics(
     cfg = _launcher_cfg()
     cfg["cotrain_engine"] = "async"
     cfg["eval"]["enabled"] = True
+    cfg["eval"]["interval_global_steps"] = 1
     plan = mod.build_pipeline_plan(
         mode="ray",
         run_root=tmp_path,
         python="python",
         profile="multi_gpu",
         ngpu=2,
-        debug=True,
         launcher_cfg=cfg,
-        cotrain_overrides=["manual_cotrain.global_steps=3"],
+        cotrain_overrides=["manual_cotrain.global_steps=2"],
     )
-    assert _override_values(
-        plan.cotrain_online_cmd,
-        "manual_cotrain.eval_interval_global_steps",
-    ) == ["10"]
-    assert _override_values(
-        plan.cotrain_online_cmd,
-        "manual_cotrain.debug_eval_interval_global_steps",
-    ) == ["1"]
 
     class _Recorder:
         def __init__(self) -> None:
             self.calls: list[list[str]] = []
+            self.envs: list[dict[str, str] | None] = []
+            self.eval_rates = [0.25, 0.35]
 
-        def run(self, cmd, check):
+        def run(self, cmd, check, **kwargs):
             assert check is True
             cmd = list(cmd)
             self.calls.append(cmd)
+            self.envs.append(kwargs.get("env"))
+            if "dreamervla.train" in cmd:
+                target = _override_int(cmd, "manual_cotrain.global_steps")
+                ckpt_dir = (
+                    tmp_path
+                    / "cotrain"
+                    / "checkpoints"
+                    / f"manual_cotrain_step_{target}"
+                )
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                (ckpt_dir / "manual_cotrain.ckpt").touch()
+                return
+            out_dir = next(
+                item.split("=", 1)[1] for item in cmd if item.startswith("out_dir=")
+            )
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            rate = self.eval_rates.pop(0)
+            (Path(out_dir) / "eval_libero_metrics.json").write_text(
+                json.dumps({"eval_success_rate": rate}),
+                encoding="utf-8",
+            )
 
     rec = _Recorder()
     monkeypatch.setattr(mod, "subprocess", rec)
 
     mod.run_async_online_with_in_run_eval_metrics(plan)
 
-    assert rec.calls == [plan.cotrain_online_cmd]
-    assert all("experiment=eval_libero_vla" not in call for call in rec.calls)
+    train_calls = [call for call in rec.calls if "dreamervla.train" in call]
+    eval_calls = [call for call in rec.calls if "dreamervla.launchers.train" in call]
+    eval_envs = [
+        env
+        for call, env in zip(rec.calls, rec.envs, strict=True)
+        if "dreamervla.launchers.train" in call
+    ]
+    assert [rec.calls.index(call) for call in train_calls] == [0, 2]
+    assert [rec.calls.index(call) for call in eval_calls] == [1, 3]
+    assert [_override_int(call, "manual_cotrain.global_steps") for call in train_calls] == [1, 2]
+    assert all(_override_int(call, "manual_cotrain.checkpoint_every") == 1 for call in train_calls)
+    assert len(eval_calls) == 2
+    assert all(env is not None for env in eval_envs)
+    assert all(env["MUJOCO_GL"] == "egl" for env in eval_envs if env is not None)
+    assert all(
+        env["PYOPENGL_PLATFORM"] == "egl"
+        for env in eval_envs
+        if env is not None
+    )
+    assert all(
+        env["MUJOCO_EGL_DEVICE_ID"] == "0"
+        for env in eval_envs
+        if env is not None
+    )
+    assert all("experiment=eval_libero_vla" in call for call in eval_calls)
+    assert all("eval.ckpt_kind=dreamer" in call for call in eval_calls)
+    assert all("eval.action_postprocess=openvla_oft" in call for call in eval_calls)
+    assert any(
+        item.endswith("manual_cotrain_step_1/manual_cotrain.ckpt")
+        for item in eval_calls[0]
+    )
+    assert "+manual_cotrain.resume_ckpt" not in " ".join(train_calls[0])
+    assert any(
+        item.startswith("+manual_cotrain.resume_ckpt=")
+        and item.endswith("manual_cotrain_step_1/manual_cotrain.ckpt")
+        for item in train_calls[1]
+    )
+    summary = json.loads(
+        (tmp_path / "cotrain" / "eval" / "eval_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [record["global_step"] for record in summary["records"]] == [1, 2]
+    assert [record["eval_success_rate"] for record in summary["records"]] == [0.25, 0.35]
+    assert [record["eval_success_rate_trend"] for record in summary["records"]] == [0.25, 0.35]
+    assert [record["eval_success_rate_delta"] for record in summary["records"]] == [0.0, 0.10]
+    assert summary["records"][-1]["eval_best_success_rate"] == 0.35
+    assert summary["records"][-1]["eval_success_rate_drop"] == 0.0
+    assert summary["records"][-1]["eval_significant_drop"] == 0.0
+
+
+def test_post_step_eval_egl_device_defaults_to_last_eval_gpu_for_split_render() -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import (
+        _post_step_eval_egl_device_id,
+    )
+
+    assert _post_step_eval_egl_device_id({"gpus": "7,0"}) == "0"
+    assert _post_step_eval_egl_device_id({"gpus": "7,0", "egl_device_id": 3}) == "3"
 
 
 def test_sync_cotrain_engine_has_no_async_subcommands(tmp_path) -> None:
@@ -1619,3 +1769,75 @@ def test_consolidate_warmup_state_dicts_merges_components(tmp_path) -> None:
     assert set(payload["state_dicts"]) == {"world_model", "classifier"}
     assert set(payload["state_dicts"]["world_model"]) == {"w"}
     assert payload["classifier_threshold"] == 0.5
+
+
+def test_multi_gpu_profile_does_not_force_async_real_rollout_actor_alignment(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+
+    profile_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "profile",
+        python="python",
+        profile="multi_gpu",
+        ngpu=6,
+        launcher_cfg=cfg,
+    )
+    # RealEnv trajectories feed replay/learner, not ActorGroup, so actor group_size
+    # alignment must be enforced only on WMEnv trajectories.
+    assert "manual_cotrain.envs_per_worker=1" in profile_plan.cotrain_online_cmd
+    assert "manual_cotrain.real_env_workers=4" in profile_plan.cotrain_online_cmd
+    assert not any(
+        item.startswith("manual_cotrain.real_render_backend=")
+        for item in profile_plan.cotrain_online_cmd
+    )
+    assert (
+        "manual_cotrain.real_rollout_target_trajectories=32"
+        in profile_plan.cotrain_online_cmd
+    )
+    assert (
+        "manual_cotrain.wm_rollout_target_trajectories=256"
+        in profile_plan.cotrain_online_cmd
+    )
+    assert not any(
+        item.startswith("manual_cotrain.real_rollout_epoch=")
+        for item in profile_plan.cotrain_online_cmd
+    )
+
+    override_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "override",
+        python="python",
+        profile="multi_gpu",
+        ngpu=6,
+        launcher_cfg=cfg,
+        cotrain_overrides=[
+            "manual_cotrain.envs_per_worker=8",
+            "manual_cotrain.real_rollout_epoch=1",
+            "manual_cotrain.wm_rollout_target_trajectories=512",
+        ],
+    )
+    assert "manual_cotrain.real_rollout_epoch=1" in override_plan.cotrain_online_cmd
+    assert (
+        "manual_cotrain.wm_rollout_target_trajectories=512"
+        in override_plan.cotrain_online_cmd
+    )
+    assert (
+        "manual_cotrain.wm_rollout_target_trajectories=256"
+        not in override_plan.cotrain_online_cmd
+    )
+
+    release_plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path / "release",
+        python="python",
+        profile="release",
+        ngpu=6,
+        launcher_cfg=cfg,
+    )
+    assert not any(
+        item.startswith("manual_cotrain.real_rollout_epoch=")
+        for item in release_plan.cotrain_online_cmd
+    )

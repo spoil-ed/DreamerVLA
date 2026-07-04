@@ -322,9 +322,15 @@ def test_real_env_worker_attaches_rollout_sidecars_to_no_embedding_env_records()
         worker.close()
 
 
-def test_real_env_worker_builds_egl_slots_in_process(monkeypatch) -> None:
+def test_real_env_worker_pins_egl_for_inproc_slots(monkeypatch) -> None:
     cfg = dict(_counter_env_cfg())
     cfg["render_backend"] = "egl"
+    cfg["render_devices"] = [0, 1]
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.delenv("MUJOCO_GL", raising=False)
+    monkeypatch.delenv("PYOPENGL_PLATFORM", raising=False)
+    monkeypatch.delenv("MUJOCO_EGL_DEVICE_ID", raising=False)
     worker = RealEnvWorker(
         env_cfg=cfg,
         num_slots=2,
@@ -336,27 +342,31 @@ def test_real_env_worker_builds_egl_slots_in_process(monkeypatch) -> None:
     build_calls: list[dict[str, Any]] = []
     original_build_env_from_cfg = trajectory_env_worker._build_env_from_cfg
 
-    def build_inproc(cfg_arg: dict[str, Any]) -> Any:
-        build_calls.append(dict(cfg_arg))
-        return original_build_env_from_cfg(cfg_arg)
-
-    monkeypatch.setattr(trajectory_env_worker, "_build_env_from_cfg", build_inproc)
+    monkeypatch.setattr(
+        trajectory_env_worker,
+        "_build_env_from_cfg",
+        lambda cfg_arg: build_calls.append(dict(cfg_arg)) or original_build_env_from_cfg(cfg_arg),
+    )
 
     try:
         worker.init()
 
         assert len(build_calls) == 2
-        assert not hasattr(worker, "_spawned_env")
-        assert not hasattr(worker, "_init_spawn_slots")
+        assert os.environ["MUJOCO_GL"] == "egl"
+        assert os.environ["PYOPENGL_PLATFORM"] == "egl"
+        assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "1"
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "0,1"
         assert len(worker.envs) == 2
+        assert not hasattr(worker, "_spawned_env")
     finally:
         worker.close()
 
 
-def test_real_env_worker_rejects_legacy_spawn_slots_config() -> None:
+def test_real_env_worker_spawn_env_slots_uses_child_process() -> None:
     cfg = dict(_counter_env_cfg())
-    cfg["render_backend"] = "egl"
+    cfg["render_backend"] = "osmesa"
     cfg["spawn_env_slots"] = True
+    replay = _MemoryReplay()
     worker = RealEnvWorker(
         env_cfg=cfg,
         num_slots=1,
@@ -364,10 +374,22 @@ def test_real_env_worker_rejects_legacy_spawn_slots_config() -> None:
         max_steps_per_rollout_epoch=1,
         num_action_chunks=1,
         task_id=0,
+        replay=replay,
     )
 
-    with pytest.raises(ValueError, match="spawn_env_slots"):
+    try:
         worker.init()
+        messages = worker.bootstrap_obs()
+        assert len(messages) == 1
+        assert type(worker.envs[0]).__name__ == "_SpawnedTrajectoryEnvSlot"
+
+        worker.apply_rollout_result(
+            replace(_rollout_result(), actions=np.zeros((1, 3), dtype=np.float32))
+        )
+
+        assert len(replay.episodes) == 0
+    finally:
+        worker.close()
 
 
 def test_real_env_worker_pins_osmesa_for_inproc_non_egl_backend(monkeypatch) -> None:
@@ -423,6 +445,34 @@ def test_real_env_worker_postprocesses_openvla_oft_env_action_without_overwritin
         step = replay.episodes[0][0]
         np.testing.assert_allclose(step["policy_action"], policy_action.reshape(-1))
         np.testing.assert_allclose(step["wm_action"], env.received_actions[0])
+    finally:
+        worker.close()
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf")])
+def test_real_env_worker_rejects_nonfinite_policy_actions_before_env_step(
+    bad_value: float,
+) -> None:
+    worker = RealEnvWorker(
+        env_cfg=_no_sidecar_oft_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    policy_action = np.array(
+        [[0.1, 0.2, 0.3, bad_value, 0.5, 0.6, 0.25]],
+        dtype=np.float32,
+    )
+    try:
+        worker.init()
+        worker.bootstrap_obs()
+
+        with pytest.raises(ValueError, match="non-finite policy action"):
+            worker.apply_rollout_result(_sidecar_rollout_result(policy_action))
+
+        assert worker.envs[0].received_actions == []
     finally:
         worker.close()
 
@@ -657,11 +707,12 @@ def test_observation_batch_msg_preserves_bfloat16_tensor_payload() -> None:
     assert batch.batched_obs["obs_embedding"].shape == (2, 4)
 
 
-def test_interact_routes_observations_rollout_results_and_trajectory(
+def test_real_env_interact_routes_observations_and_replay_without_actor_trajectory(
     monkeypatch,
 ) -> None:
     traces: list[str] = []
     monkeypatch.setattr(trajectory_env_worker, "_hs_trace", traces.append)
+    replay = _MemoryReplay()
     worker = RealEnvWorker(
         env_cfg=_counter_env_cfg(),
         num_slots=1,
@@ -669,6 +720,7 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         max_steps_per_rollout_epoch=2,
         num_action_chunks=2,
         task_id=0,
+        replay=replay,
     )
     channels = {
         "env": _MemoryChannel(),
@@ -693,15 +745,15 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         assert channels["env"].puts[-1][1].observations[0].obs["_final_bootstrap"] is True
         assert channels["env"].puts[-1][0] == "0"
         assert channels["rollout"].gets == ["0", "0"]
-        assert channels["actor"].puts[0][0] == "default"
-        assert channels["actor"].put_no_wait_calls[0][0] == "default"
-        assert isinstance(channels["actor"].puts[0][1], TrajectoryShard)
+        assert channels["actor"].puts == []
+        assert channels["actor"].put_no_wait_calls == []
+        assert len(replay.episodes) == 1
         assert metrics["env/chunk_steps"] == 1.0
         assert metrics["env/physical_steps"] == 2.0
         assert metrics["env/steps"] == 2.0
         assert metrics["env/real_env/chunk_steps"] == 1.0
         assert metrics["env/real_env/steps"] == 2.0
-        assert metrics["env/trajectory_shards"] == 1.0
+        assert metrics["env/trajectory_shards"] == 0.0
         assert metrics["env/episodes_completed"] == 1.0
         assert metrics["env/final_bootstrap_requests"] == 1.0
         assert metrics["env/channel_put_obs_s"] >= 0.0
@@ -740,8 +792,95 @@ def test_interact_routes_observations_rollout_results_and_trajectory(
         worker.close()
 
 
-def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
+def test_real_env_interact_can_emit_actor_trajectory_when_configured(
+    monkeypatch,
+) -> None:
+    env_cfg = _counter_env_cfg()
+    env_cfg["emit_actor_trajectories"] = True
     worker = RealEnvWorker(
+        env_cfg=env_cfg,
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+    try:
+        worker.init()
+        metrics = worker.interact("env", "rollout", "actor")
+
+        assert len(channels["actor"].puts) == 1
+        assert channels["actor"].puts[0][0] == "real_env"
+        assert isinstance(channels["actor"].puts[0][1], TrajectoryShard)
+        assert metrics["env/trajectory_shards"] == 1.0
+        assert metrics["env/real_env/trajectory_shards"] == 1.0
+    finally:
+        worker.close()
+
+
+def test_prefetch_bootstrap_lets_interact_skip_inline_reset(monkeypatch) -> None:
+    worker = RealEnvWorker(
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+        replay=_MemoryReplay(),
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+    try:
+        worker.init()
+        original_bootstrap = worker.bootstrap_obs
+        calls = {"n": 0}
+
+        def counting_bootstrap():
+            calls["n"] += 1
+            return original_bootstrap()
+
+        monkeypatch.setattr(worker, "bootstrap_obs", counting_bootstrap)
+
+        worker.prefetch_bootstrap()
+        assert calls["n"] == 1  # prefetch performed the slot reset
+        worker.prefetch_bootstrap()
+        assert calls["n"] == 1  # idempotent: cache already populated
+
+        calls["n"] = 0
+        metrics = worker.interact("env", "rollout", "actor")
+        assert calls["n"] == 0  # interact consumed the prefetched batch
+        assert metrics["env/chunk_steps"] == 1.0
+    finally:
+        worker.close()
+
+
+def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
+    worker = WMEnvWorker(
         env_cfg=_long_horizon_counter_env_cfg(),
         num_slots=1,
         rollout_epoch=1,
@@ -819,6 +958,97 @@ def test_interact_writes_manual_cotrain_progress_file(monkeypatch, tmp_path) -> 
         assert payload["total"] == 2
         assert payload["active"] is False
         assert payload["finished"] is True
+    finally:
+        worker.close()
+
+
+def test_real_env_action_diagnostics_do_not_force_progress_by_default(tmp_path) -> None:
+    worker = RealEnvWorker(
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    worker.set_global_step(3)
+    worker.configure_progress(str(tmp_path), min_interval_s=999.0)
+
+    worker._record_action_diagnostics(  # noqa: SLF001 - verifies progress throttling
+        0,
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        np.array([0.4, 0.5, 0.6], dtype=np.float32),
+    )
+
+    payload = json.loads((tmp_path / "real_env_0.json").read_text(encoding="utf-8"))
+    assert "last_action" not in payload
+
+
+def test_real_env_action_diagnostics_can_force_progress_when_debug_enabled(
+    tmp_path,
+) -> None:
+    cfg = _counter_env_cfg()
+    cfg["debug_action_diagnostics"] = True
+    worker = RealEnvWorker(
+        env_cfg=cfg,
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    worker.set_global_step(3)
+    worker.configure_progress(str(tmp_path), min_interval_s=999.0)
+
+    worker._record_action_diagnostics(  # noqa: SLF001 - verifies debug diagnostics
+        0,
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        np.array([0.4, 0.5, 0.6], dtype=np.float32),
+    )
+
+    payload = json.loads((tmp_path / "real_env_0.json").read_text(encoding="utf-8"))
+    assert payload["last_action"]["policy_absmax"] == pytest.approx(0.3)
+    assert payload["last_action"]["env_absmax"] == pytest.approx(0.6)
+
+
+def test_wm_interact_progress_file_includes_classifier_success_counters(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    worker = WMEnvWorker(
+        env_cfg=_short_horizon_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=4,
+        num_action_chunks=2,
+        task_id=0,
+        request_final_bootstrap=False,
+    )
+    worker.set_global_step(3)
+    worker.configure_progress(str(tmp_path), min_interval_s=0.0)
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([
+            _rollout_batch(_rollout_result()),
+            _rollout_batch(_rollout_result()),
+        ]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        worker.interact("env", "rollout", "actor")
+
+        payload = json.loads((tmp_path / "wm_env_0.json").read_text(encoding="utf-8"))
+        assert payload["classifier_total_chunks"] > 0
+        assert payload["classifier_success_chunks"] > 0
+        assert payload["classifier_total_trajectories"] > 0
+        assert payload["classifier_success_trajectories"] > 0
     finally:
         worker.close()
 
@@ -1043,9 +1273,16 @@ def test_wm_env_worker_batches_slots_with_step_batch(monkeypatch) -> None:
         assert metrics["env/wm_env/actor_put_s"] >= 0.0
         assert metrics["env/wm_env/actor_put_flush_s"] >= 0.0
         assert metrics["env/wm_env/interact_loop_s"] >= 0.0
+        assert metrics["env/wm_env/classifier_success_chunks"] == 2.0
+        assert metrics["env/wm_env/classifier_total_chunks"] == 4.0
+        assert metrics["env/wm_env/classifier_success_rate"] == 0.5
+        assert metrics["env/wm_env/classifier_success_trajectories"] == 2.0
+        assert metrics["env/wm_env/classifier_total_trajectories"] == 2.0
+        assert metrics["env/wm_env/classifier_trajectory_success_rate"] == 1.0
         assert len(channels["actor"].puts) == 1
         assert len(channels["actor"].put_no_wait_calls) == 1
-        _key, shard = channels["actor"].puts[0]
+        key, shard = channels["actor"].puts[0]
+        assert key == "wm_env"
         assert isinstance(shard, TrajectoryShard)
         assert shard.actions.shape == (1, 2, 2, 3)
         assert shard.rewards.shape == (1, 2, 2)
@@ -1058,6 +1295,7 @@ def test_wm_env_worker_batches_slots_with_step_batch(monkeypatch) -> None:
 def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> None:
     class _ChunkBatchWMEnv:
         num_envs = 2
+        success_threshold = 0.5
 
         def __init__(self) -> None:
             self.step_i = [0, 0]
@@ -1084,6 +1322,9 @@ def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> N
             infos = []
             for batch_index, slot_id in enumerate(slots):
                 self.step_i[slot_id] += int(action_arr.shape[1])
+                if batch_index == 0:
+                    rewards[batch_index, -1] = 0.75
+                    terminations[batch_index, -1] = True
                 observations.append(
                     self._obs(
                         slot_id,
@@ -1092,7 +1333,12 @@ def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> N
                         is_first=False,
                     )
                 )
-                infos.append({"wm_action": action_arr[batch_index, -1]})
+                infos.append(
+                    {
+                        "success": bool(rewards[batch_index].max() >= self.success_threshold),
+                        "wm_action": action_arr[batch_index, -1],
+                    }
+                )
             return observations, rewards, terminations, truncations, infos
 
         def get_metrics(self, *, reset: bool = False):
@@ -1200,6 +1446,12 @@ def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> N
 
         assert env.chunk_calls == [([0, 1], (2, 2, 3)), ([0, 1], (2, 2, 3))]
         assert metrics["env/wm_env/model_forwards"] == 2.0
+        assert metrics["env/wm_env/classifier_success_chunks"] == 2.0
+        assert metrics["env/wm_env/classifier_total_chunks"] == 8.0
+        assert metrics["env/wm_env/classifier_success_rate"] == 0.25
+        assert metrics["env/wm_env/classifier_success_trajectories"] == 2.0
+        assert metrics["env/wm_env/classifier_total_trajectories"] == 4.0
+        assert metrics["env/wm_env/classifier_trajectory_success_rate"] == 0.5
         assert len(channels["actor"].puts) == 1
         _key, shard = channels["actor"].puts[0]
         assert isinstance(shard, TrajectoryShard)

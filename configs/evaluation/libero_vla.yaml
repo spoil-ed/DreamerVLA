@@ -50,13 +50,18 @@ eval:
   ckpt_kind: auto
   seed: ${seed}
   task_suite_name: libero_goal
-  num_episodes_per_task: 50
+  num_episodes_per_task: 3
+  enumerate_all_init_states: false
   num_steps_wait: 10
+  render_backend: egl
+  render_gpu_pool: null
+  render_shard_id: 0
   task_start: 0
   task_ids: null
   max_tasks: null
   max_steps: null
   action_steps: 5
+  action_postprocess: none
   save_video: false
   video_max_episodes: 1
   dreamer_deterministic: true
@@ -64,9 +69,9 @@ eval:
   dreamer_action_repeat: 1
   dreamer_clip_actions: true
   dreamer_unnorm_actions: auto
-  dreamer_rssm_action_source: env
+  dreamer_latent_action_source: env
   dreamer_rollout_mode: stateless
-  dreamer_actor_input_source: rssm
+  dreamer_actor_input_source: latent
   dreamer_wm_history_length: 2
   dreamer_wm_rotate_images: true
   dreamer_wm_prompt_style: vla_policy

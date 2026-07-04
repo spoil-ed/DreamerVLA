@@ -42,7 +42,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
@@ -51,6 +50,7 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
 )
 from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -655,38 +655,6 @@ class LatentClassifierRunner(BaseRunner):
     exclude_keys = ("train_ds", "val_ds", "train_loader", "val_loader")
 
 
-# ---------------------------------------------------------------------------
-# Threshold sweep
-# ---------------------------------------------------------------------------
-
-
-def _sweep_metrics(
-    probs: np.ndarray, ys: np.ndarray, thresholds: np.ndarray, tag: str
-) -> dict[str, Any]:
-    best_f1 = -1.0
-    best_thresh = float(thresholds[0])
-    rows: dict[str, dict[str, float]] = {}
-    for th in thresholds:
-        preds = (probs >= th).astype(np.int64)
-        f1 = float(f1_score(ys, preds, zero_division=0))
-        rows[f"th_{th:.2f}"] = {
-            "f1": f1,
-            "acc": float(accuracy_score(ys, preds)),
-            "prec": float(precision_score(ys, preds, zero_division=0)),
-            "rec": float(recall_score(ys, preds, zero_division=0)),
-        }
-        if f1 > best_f1:
-            best_f1, best_thresh = f1, float(th)
-    return {
-        "best_f1": best_f1,
-        "best_thresh": best_thresh,
-        "n": int(len(ys)),
-        "n_pos": int((ys == 1).sum()),
-        "n_neg": int((ys == 0).sum()),
-        "tag": tag,
-        # full sweep retained for offline analysis; small dict, ok to log
-        "per_thresh": rows,
-    }
-
-
-__all__ = ["LatentClassifierRunner"]
+# Threshold sweep lives in dreamervla.runners.classifier_metrics; `_sweep_metrics`
+# is re-exported above for existing importers.
+__all__ = ["LatentClassifierRunner", "_sweep_metrics"]

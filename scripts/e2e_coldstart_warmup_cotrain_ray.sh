@@ -26,6 +26,16 @@ fi
 
 # Multi-GPU DDP cotrain stability (harmless for single-GPU); override by exporting it.
 export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"
+export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-3}"
+export ABSL_MIN_LOG_LEVEL="${ABSL_MIN_LOG_LEVEL:-3}"
+export GLOG_minloglevel="${GLOG_minloglevel:-2}"
+export GYM_DISABLE_WARNINGS="${GYM_DISABLE_WARNINGS:-1}"
+export USE_TF="${USE_TF:-0}"
+export TF_ENABLE_ONEDNN_OPTS="${TF_ENABLE_ONEDNN_OPTS:-0}"
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
+_DVLA_PYTHONWARNINGS="ignore::FutureWarning:libero.libero.benchmark,ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"
+export PYTHONWARNINGS="${_DVLA_PYTHONWARNINGS}${PYTHONWARNINGS:+,${PYTHONWARNINGS}}"
 
 python -m dreamervla.launchers.coldstart_warmup_cotrain \
   mode=ray profile=multi_gpu ngpu=6 cotrain_engine=async "$@"

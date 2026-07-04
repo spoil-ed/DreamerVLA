@@ -12,20 +12,28 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
+from math import gcd
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runners.render_device_config import (
+    cuda_visible_devices_from_env,
+    parse_device_ids,
+)
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
+    ComponentPlacement,
     NodePlacementStrategy,
     ResourceMapPlacementStrategy,
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
+from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
@@ -52,6 +60,7 @@ class ManualCotrainRayRunner(BaseRunner):
         self.history: dict[str, float | int] | None = None
         self._real_rollout_episodes = 0
         self._real_rollout_successes = 0
+        self._overlap_bootstrap_offload_warned = False
 
     def setup(self) -> None:
         super().setup()
@@ -100,7 +109,32 @@ class ManualCotrainRayRunner(BaseRunner):
             cluster.shutdown()
 
     def _placement_plan(self) -> ManualCotrainPlacementPlan:
-        return build_manual_cotrain_placement(self._ngpu())
+        return build_manual_cotrain_placement(
+            self._ngpu(),
+            real_env_workers=self._real_env_workers(),
+            component_gpu_groups=self._component_gpu_groups(),
+        )
+
+    def _component_gpu_groups(self) -> dict[str, list[list[int]]] | None:
+        component_cfg = OmegaConf.select(
+            self.cfg,
+            "cluster.component_placement",
+            default=None,
+        )
+        if component_cfg is None:
+            return None
+        placement = ComponentPlacement(self.cfg)
+        cluster = SimpleNamespace(num_gpus=self._ngpu())
+        groups: dict[str, list[list[int]]] = {}
+        for component in ("env", "real_env", "wm_env", "rollout", "actor", "learner"):
+            if not placement.has_component(component):
+                continue
+            resolved = placement.get_strategy(component).get_placement(cluster)
+            groups[component] = [
+                [int(gpu) for gpu in item.visible_accelerators]
+                for item in resolved
+            ]
+        return groups or None
 
     def _target_group_names(self) -> list[str]:
         return ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
@@ -169,12 +203,17 @@ class ManualCotrainRayRunner(BaseRunner):
             replay = replay_group.workers[0]
             _hs_trace("[build_groups] launch ReplayWorker done")
 
+        real_specs = [spec for spec in plan.env_specs if spec.role == "real_env"]
+        if not real_specs:
+            raise ValueError("manual cotrain placement must include a real_env worker")
+        real_rollout_epochs = self._real_rollout_epochs_by_worker(len(real_specs))
+        initial_real_rollout_epoch = real_rollout_epochs[0]
         _hs_trace("[build_groups] launch RealEnvWorker start")
         real_env_group = WorkerGroup(
             RealEnvWorker,
             self._real_env_cfg(),
             self._envs_per_worker(),
-            self._real_rollout_epoch(),
+            initial_real_rollout_epoch,
             self._max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
             task_id=self._task_id(),
@@ -184,16 +223,18 @@ class ManualCotrainRayRunner(BaseRunner):
             request_final_bootstrap=self._requires_bootstrap_value(),
         ).launch(
             cluster,
-            self._placement_for(plan.env_specs[0].gpu_ids),
+            self._resource_map_for_specs(real_specs),
             name="RealEnvWorker",
         )
+        for rank, rollout_epoch in enumerate(real_rollout_epochs):
+            real_env_group.execute_on(rank).configure_rollout_epoch(rollout_epoch).wait()
         _hs_trace("[build_groups] launch RealEnvWorker done")
-        wm_gpus = [spec.gpu_ids[0] for spec in plan.env_specs if spec.role == "wm_env"]
+        wm_specs = [spec for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
-        if wm_gpus:
-            wm_rollout_epochs = self._wm_rollout_epochs_by_worker(len(wm_gpus))
+        if wm_specs:
+            wm_rollout_epochs = self._wm_rollout_epochs_by_worker(len(wm_specs))
             initial_wm_rollout_epoch = wm_rollout_epochs[0]
-            _hs_trace(f"[build_groups] launch WMEnvWorker start gpus={wm_gpus}")
+            _hs_trace("[build_groups] launch WMEnvWorker start")
             wm_env_group = WorkerGroup(
                 WMEnvWorker,
                 self._cfg_dict("env.wm.cfg"),
@@ -204,12 +245,12 @@ class ManualCotrainRayRunner(BaseRunner):
                 task_id=self._task_id(),
                 replay=replay,
                 dump=None,
-                rank_offset=1,
+                rank_offset=len(real_specs),
                 request_final_bootstrap=self._requires_bootstrap_value(),
                 replay_write_enabled=self._wm_env_write_replay(),
             ).launch(
                 cluster,
-                ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in wm_gpus)),
+                self._resource_map_for_specs(wm_specs),
                 name="WMEnvWorker",
             )
             for rank, rollout_epoch in enumerate(wm_rollout_epochs):
@@ -308,7 +349,12 @@ class ManualCotrainRayRunner(BaseRunner):
             self.console_progress,
             desc=f"manual-cotrain-env/{int(global_step):08d}",
         )
-        progress_monitor.report(force=True)
+        dynamic_wm_leases = (
+            wm_env is not None
+            and self._wm_rollout_target_trajectories() is not None
+        )
+        if not dynamic_wm_leases:
+            progress_monitor.report(force=True)
         stage_start = mark_stage("set_global_step", stage_start)
         if global_step % self._sync_every() == 0:
             actor_sync = actor.sync_model_to_rollout("policy", global_step).wait()
@@ -325,10 +371,6 @@ class ManualCotrainRayRunner(BaseRunner):
             real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)
         ]
         env_results = list(real_env_results)
-        dynamic_wm_leases = (
-            wm_env is not None
-            and self._wm_rollout_target_trajectories() is not None
-        )
         if wm_env is not None and not dynamic_wm_leases:
             env_results.append(
                 wm_env.interact(
@@ -343,11 +385,13 @@ class ManualCotrainRayRunner(BaseRunner):
             rollout_channel_name,
             self._rollout_num_slots(),
         )
-        actor_recv_started = self._start_actor_trajectory_receivers(
-            groups,
-            expected_shards=self._configured_expected_trajectory_shards(groups),
-            actor_channel_name=actor_channel_name,
-        )
+        actor_recv_started = None
+        if self._actor_receive_overlap_enabled():
+            actor_recv_started = self._start_actor_trajectory_receivers(
+                groups,
+                expected_shards=self._configured_expected_trajectory_shards(groups),
+                actor_channel_name=actor_channel_name,
+            )
 
         if wm_env is not None and dynamic_wm_leases:
             env_metrics = self._wait_env_metrics_with_dynamic_wm_leases(
@@ -367,7 +411,8 @@ class ManualCotrainRayRunner(BaseRunner):
                 timeout_s=self._env_rollout_timeout_s(),
                 progress=progress_monitor,
             )
-        progress_monitor.report(force=True)
+        if not dynamic_wm_leases:
+            progress_monitor.report(force=True)
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact done")
         stage_start = mark_stage("env_interact_and_rollout_generate", stage_start)
         for rollout_rank, _ in enumerate(groups["RolloutGroup"].workers):
@@ -383,6 +428,7 @@ class ManualCotrainRayRunner(BaseRunner):
         actor_recv_metrics = self._receive_actor_trajectories(
             groups,
             expected_shards=expected_shards,
+            env_metrics=env_metrics,
             actor_channel_name=actor_channel_name,
             stage_times=stage_times,
             started_receivers=actor_recv_started,
@@ -392,7 +438,11 @@ class ManualCotrainRayRunner(BaseRunner):
             [actor.compute_advantages_and_returns().wait()]
         )
         stage_start = mark_stage("actor_compute_advantages_and_returns", stage_start)
-        train_metrics = _aggregate_actor_metric_lists([actor.run_training().wait()])
+        train_handle = actor.run_training()
+        prefetch_handle = self._maybe_prefetch_env_bootstrap(real_env)
+        train_metrics = _aggregate_actor_metric_lists([train_handle.wait()])
+        if prefetch_handle is not None:
+            prefetch_handle.wait()
         stage_start = mark_stage("actor_run_training", stage_start)
 
         learner_metrics: dict[str, float] = {}
@@ -400,8 +450,19 @@ class ManualCotrainRayRunner(BaseRunner):
             learner_metrics = _with_train_learner_aliases(
                 _merge_metric_lists([learner.update("cotrain", 1).wait()])
             )
+            sync_world_model_to_env = self._should_sync_world_model_after_learner_update(
+                learner_metrics
+            )
             if self._publish_learner_weights():
-                learner.sync_weights("world_model", global_step).wait()
+                if sync_world_model_to_env:
+                    learner.sync_weights("world_model", global_step).wait()
+                    sync_metrics[
+                        "sync/world_model_publish_skipped_classifier_not_updated"
+                    ] = 0.0
+                else:
+                    sync_metrics[
+                        "sync/world_model_publish_skipped_classifier_not_updated"
+                    ] = 1.0
                 learner.sync_weights("classifier", global_step).wait()
             stage_start = mark_stage("learner_update_wm_classifier", stage_start)
             if wm_env is not None:
@@ -413,12 +474,23 @@ class ManualCotrainRayRunner(BaseRunner):
                 state_dicts = _first_result(state_dict_results)
                 if not isinstance(state_dicts, dict):
                     raise TypeError("LearnerGroup.state_dicts() must return a mapping")
+                component_states = {
+                    "classifier": dict(state_dicts.get("classifier", {})),
+                }
+                if sync_world_model_to_env:
+                    component_states["world_model"] = dict(
+                        state_dicts.get("world_model", {})
+                    )
+                    sync_metrics[
+                        "sync/wm_env_world_model_skipped_classifier_not_updated"
+                    ] = 0.0
+                else:
+                    sync_metrics[
+                        "sync/wm_env_world_model_skipped_classifier_not_updated"
+                    ] = 1.0
                 load_start = time.perf_counter()
                 load_metrics = wm_env.load_component_states(
-                    {
-                        "world_model": dict(state_dicts.get("world_model", {})),
-                        "classifier": dict(state_dicts.get("classifier", {})),
-                    },
+                    component_states,
                     global_step,
                 ).wait()
                 sync_metrics["sync/wm_env_load_component_states_s"] = float(
@@ -459,6 +531,14 @@ class ManualCotrainRayRunner(BaseRunner):
             time.perf_counter() - checkpoint_start
         )
         return metrics
+
+    @staticmethod
+    def _should_sync_world_model_after_learner_update(
+        learner_metrics: dict[str, float],
+    ) -> bool:
+        if "cls/updated" not in learner_metrics:
+            return True
+        return float(learner_metrics.get("cls/updated", 1.0)) > 0.5
 
     def _real_env_success_rate_metrics(
         self,
@@ -501,20 +581,6 @@ class ManualCotrainRayRunner(BaseRunner):
             "rollout/step_success_rate": float(step_success_rate),
             "rollout/step_success_rate_valid": float(step_valid),
         }
-        interval = self._eval_interval_global_steps()
-        if interval > 0 and int(global_step) % int(interval) == 0:
-            metrics.update(
-                {
-                    "eval/episodes": float(self._real_rollout_episodes),
-                    "eval/successes": float(self._real_rollout_successes),
-                    "eval/success_rate": float(success_rate),
-                    "eval/success_rate_valid": float(valid),
-                    "eval/step_episodes": float(step_episodes),
-                    "eval/step_successes": float(step_successes),
-                    "eval/step_success_rate": float(step_success_rate),
-                    "eval/step_success_rate_valid": float(step_valid),
-                }
-            )
         return metrics
 
     def _eval_interval_global_steps(self) -> int:
@@ -560,6 +626,36 @@ class ManualCotrainRayRunner(BaseRunner):
             default=self._rollout_epoch(),
         )
 
+    def _real_env_workers(self) -> int:
+        return self._positive_manual_int("real_env_workers", default=1)
+
+    def _real_rollout_target_trajectories(self) -> int | None:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.real_rollout_target_trajectories",
+            default=None,
+        )
+        if value is None:
+            return None
+        target = int(value)
+        if target <= 0:
+            raise ValueError(
+                "manual_cotrain.real_rollout_target_trajectories must be positive, "
+                f"got {target}"
+            )
+        return target
+
+    def _real_rollout_epochs_by_worker(self, worker_count: int) -> list[int]:
+        return self._rollout_epochs_by_worker(
+            worker_count,
+            target_trajectories=self._real_rollout_target_trajectories(),
+            envs_per_worker=self._envs_per_worker(),
+            fallback_epoch=self._real_rollout_epoch(),
+            target_name="manual_cotrain.real_rollout_target_trajectories",
+            envs_name="manual_cotrain.envs_per_worker",
+            role_name="real",
+        )
+
     def _wm_rollout_epoch(self) -> int:
         return self._positive_manual_int(
             "wm_rollout_epoch",
@@ -586,26 +682,45 @@ class ManualCotrainRayRunner(BaseRunner):
         return target
 
     def _wm_rollout_epochs_by_worker(self, worker_count: int) -> list[int]:
+        return self._rollout_epochs_by_worker(
+            worker_count,
+            target_trajectories=self._wm_rollout_target_trajectories(),
+            envs_per_worker=self._wm_envs_per_worker(),
+            fallback_epoch=self._wm_rollout_epoch(),
+            target_name="manual_cotrain.wm_rollout_target_trajectories",
+            envs_name="manual_cotrain.wm_envs_per_worker",
+            role_name="WM",
+        )
+
+    @staticmethod
+    def _rollout_epochs_by_worker(
+        worker_count: int,
+        *,
+        target_trajectories: int | None,
+        envs_per_worker: int,
+        fallback_epoch: int,
+        target_name: str,
+        envs_name: str,
+        role_name: str,
+    ) -> list[int]:
         workers = int(worker_count)
         if workers <= 0:
             return []
-        target = self._wm_rollout_target_trajectories()
-        if target is None:
-            return [self._wm_rollout_epoch() for _ in range(workers)]
-        wm_envs_per_worker = self._wm_envs_per_worker()
-        if target % wm_envs_per_worker != 0:
+        if target_trajectories is None:
+            return [int(fallback_epoch) for _ in range(workers)]
+        target = int(target_trajectories)
+        envs = int(envs_per_worker)
+        if target % envs != 0:
             raise ValueError(
-                "manual_cotrain.wm_rollout_target_trajectories must be divisible by "
-                "manual_cotrain.wm_envs_per_worker; "
-                f"got {target} and {wm_envs_per_worker}"
+                f"{target_name} must be divisible by {envs_name}; "
+                f"got {target} and {envs}"
             )
-        total_worker_epochs = target // wm_envs_per_worker
+        total_worker_epochs = target // envs
         if total_worker_epochs < workers:
             raise ValueError(
-                "manual_cotrain.wm_rollout_target_trajectories is too small to give "
-                "each WM worker at least one rollout_epoch; "
-                f"got target={target}, wm_envs_per_worker={wm_envs_per_worker}, "
-                f"wm_workers={workers}"
+                f"{target_name} is too small to give each {role_name} worker at "
+                "least one rollout_epoch; "
+                f"got target={target}, envs_per_worker={envs}, workers={workers}"
             )
         base, extra = divmod(total_worker_epochs, workers)
         return [base + (1 if rank < extra else 0) for rank in range(workers)]
@@ -663,6 +778,15 @@ class ManualCotrainRayRunner(BaseRunner):
             )
         )
 
+    def _actor_receive_overlap_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.actor_receive_overlap",
+                default=False,
+            )
+        )
+
     def _requires_bootstrap_value(self) -> bool:
         return bool(
             OmegaConf.select(
@@ -672,11 +796,58 @@ class ManualCotrainRayRunner(BaseRunner):
             )
         )
 
+    def _overlap_env_bootstrap_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.overlap_env_bootstrap",
+                default=False,
+            )
+        )
+
+    def _actor_cpu_offload_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "actor.train_cfg.fsdp.cpu_offload",
+                default=False,
+            )
+        )
+
+    def _maybe_prefetch_env_bootstrap(self, real_env: Any) -> Any | None:
+        """Dispatch the next round's env reset to overlap actor training.
+
+        Returns the pending group handle (not waited) when overlap is enabled
+        and actor CPU offload is off; otherwise ``None``. Mirrors RLinf's guard
+        that force-disables bootstrap overlap while the actor is offloaded.
+        """
+
+        if not self._overlap_env_bootstrap_enabled():
+            return None
+        if self._actor_cpu_offload_enabled():
+            if not self._overlap_bootstrap_offload_warned:
+                _hs_trace(
+                    "[manual-cotrain] overlap_env_bootstrap skipped while actor "
+                    "cpu_offload is enabled"
+                )
+                self._overlap_bootstrap_offload_warned = True
+            return None
+        return real_env.prefetch_bootstrap()
+
     def _wm_env_write_replay(self) -> bool:
         return bool(
             OmegaConf.select(
                 self.cfg,
                 "manual_cotrain.wm_env_write_replay",
+                default=False,
+            )
+        )
+
+    def _save_replay_state(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.save_replay_state",
                 default=False,
             )
         )
@@ -721,8 +892,14 @@ class ManualCotrainRayRunner(BaseRunner):
         pending_real = list(real_env_results)
         completed_metrics: list[Any] = []
         start = time.monotonic()
+        configured_real_workers = (
+            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
+        )
+        real_worker_epochs = self._real_rollout_epochs_by_worker(
+            max(1, int(configured_real_workers))
+        )
         real_total_chunks = (
-            self._real_rollout_epoch()
+            sum(real_worker_epochs)
             * self._envs_per_worker()
             * _chunk_steps(
                 self._max_steps_per_rollout_epoch(),
@@ -781,23 +958,28 @@ class ManualCotrainRayRunner(BaseRunner):
                 if "global_step" in record
             }
             real_done = int(real_total_chunks if real_completed else 0)
+            real_observed_done = 0
             for record in records:
                 if str(record.get("role", "")) != "real_env":
                     continue
                 item_total = max(0, int(record.get("total", 0) or 0))
                 item_done = max(0, int(record.get("done", 0) or 0))
                 if item_total > 0:
-                    real_done = max(real_done, min(item_done, item_total))
+                    real_observed_done += min(item_done, item_total)
                 else:
-                    real_done = max(real_done, item_done)
+                    real_observed_done += item_done
+            if not real_completed:
+                real_done = min(int(real_total_chunks), int(real_observed_done))
 
             active_wm_chunks = 0
+            active_wm_records: list[dict[str, Any]] = []
             for record in records:
                 if str(record.get("role", "")) != "wm_env":
                     continue
                 rank = int(record.get("rank", record.get("env_rank", -1)) or -1)
                 if rank not in active_wm:
                     continue
+                active_wm_records.append(record)
                 item_total = max(0, int(record.get("total", 0) or 0))
                 item_done = max(0, int(record.get("done", 0) or 0))
                 active_wm_chunks += min(item_done, item_total) if item_total > 0 else item_done
@@ -829,6 +1011,12 @@ class ManualCotrainRayRunner(BaseRunner):
                     ),
                     f"remaining_wm_epochs={int(remaining_wm_epochs)}",
                 ]
+            )
+            parts.extend(
+                _classifier_progress_status_parts(
+                    active_wm_records,
+                    metrics=_sum_metric_lists(completed_metrics),
+                )
             )
             finished = int(real_done >= real_total_chunks) + int(wm_done >= wm_total_chunks)
             return _ManualCotrainProgressSnapshot(
@@ -911,6 +1099,7 @@ class ManualCotrainRayRunner(BaseRunner):
         groups: dict[str, Any],
         *,
         expected_shards: int,
+        env_metrics: dict[str, float],
         actor_channel_name: str,
         stage_times: dict[str, float],
         started_receivers: dict[str, Any] | None = None,
@@ -931,24 +1120,58 @@ class ManualCotrainRayRunner(BaseRunner):
 
         actor = groups["ActorGroup"]
         expected = max(0, int(expected_shards))
-        counts = self._actor_direct_receive_counts(groups, expected)
+        role_counts = self._actor_shard_role_counts_from_metrics(
+            groups,
+            env_metrics,
+            expected_shards=expected,
+        )
+        counts = self._actor_direct_receive_keyed_counts(
+            groups,
+            role_counts=role_counts,
+        )
         if counts is not None:
-            recv_start = time.perf_counter()
+            recv_stage_start = time.perf_counter()
+            ready_start = time.perf_counter()
+            self._wait_actor_channel_role_counts(
+                groups["actor_channel"],
+                role_counts,
+                timeout_s=self._actor_channel_timeout_s(),
+            )
+            stage_times["time/manual_cotrain/actor_channel_wait_ready_s"] = float(
+                time.perf_counter() - ready_start
+            )
             recv_results = [
                 actor.execute_on(rank).recv_rollout_trajectories(
                     actor_channel_name,
-                    count,
+                    keyed_counts=count,
                 )
                 for rank, count in enumerate(counts)
             ]
             metrics = _sum_metric_lists([result.wait() for result in recv_results])
+            if "actor/channel_get_batch_s" in metrics:
+                stage_times["time/manual_cotrain/actor_channel_get_batch_s"] = float(
+                    metrics["actor/channel_get_batch_s"]
+                )
+            if "actor/load_trajectory_shards_s" in metrics:
+                stage_times[
+                    "time/manual_cotrain/actor_load_trajectory_shards_s"
+                ] = float(metrics["actor/load_trajectory_shards_s"])
             stage_times["time/manual_cotrain/actor_recv_rollout_trajectories_s"] = float(
-                time.perf_counter() - recv_start
+                time.perf_counter() - recv_stage_start
             )
             return metrics
 
+        ready_start = time.perf_counter()
+        self._wait_actor_channel_role_counts(
+            groups["actor_channel"],
+            role_counts,
+            timeout_s=self._actor_channel_timeout_s(),
+        )
+        stage_times["time/manual_cotrain/actor_channel_wait_ready_s"] = float(
+            time.perf_counter() - ready_start
+        )
         channel_get_start = time.perf_counter()
-        shards = groups["actor_channel"].get_batch(expected)
+        shards = self._get_actor_shards_by_role(groups["actor_channel"], role_counts)
         stage_times["time/manual_cotrain/actor_channel_get_batch_s"] = float(
             time.perf_counter() - channel_get_start
         )
@@ -959,6 +1182,16 @@ class ManualCotrainRayRunner(BaseRunner):
         )
         return {"actor/received_shards": float(len(shards))}
 
+    def _actor_channel_timeout_s(self) -> float:
+        return float(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.actor_channel_timeout_s",
+                default=self._env_rollout_timeout_s(),
+            )
+            or 0.0
+        )
+
     def _start_actor_trajectory_receivers(
         self,
         groups: dict[str, Any],
@@ -966,7 +1199,13 @@ class ManualCotrainRayRunner(BaseRunner):
         expected_shards: int,
         actor_channel_name: str,
     ) -> dict[str, Any] | None:
-        counts = self._actor_direct_receive_counts(groups, int(expected_shards))
+        role_counts = self._configured_actor_shard_role_counts(groups)
+        if sum(count for _key, count in role_counts) != max(0, int(expected_shards)):
+            return None
+        counts = self._actor_direct_receive_keyed_counts(
+            groups,
+            role_counts=role_counts,
+        )
         if counts is None:
             return None
         actor = groups["ActorGroup"]
@@ -974,7 +1213,7 @@ class ManualCotrainRayRunner(BaseRunner):
         recv_results = [
             actor.execute_on(rank).recv_rollout_trajectories(
                 actor_channel_name,
-                count,
+                keyed_counts=count,
             )
             for rank, count in enumerate(counts)
         ]
@@ -984,34 +1223,124 @@ class ManualCotrainRayRunner(BaseRunner):
             "results": recv_results,
         }
 
-    def _actor_direct_receive_counts(
+    def _actor_direct_receive_keyed_counts(
         self,
         groups: dict[str, Any],
-        expected_shards: int,
-    ) -> list[int] | None:
+        role_counts: list[tuple[str, int]],
+    ) -> list[list[tuple[str, int]]] | None:
         actor = groups["ActorGroup"]
-        expected = max(0, int(expected_shards))
         actor_ranks = len(getattr(actor, "workers", []) or [])
-        group_size = self._actor_group_size()
-        if (
-            expected <= 0
-            or actor_ranks <= 0
-            or expected % group_size != 0
-            or expected // group_size < actor_ranks
-        ):
+        if actor_ranks <= 0:
             return None
-        return _split_actor_shard_counts(
-            expected,
-            actor_ranks=actor_ranks,
-            group_size=group_size,
-        )
+        counts_by_key = {str(key): max(0, int(count)) for key, count in role_counts}
+        try:
+            counts = _split_actor_keyed_shard_counts(
+                real_shards=0,
+                wm_shards=counts_by_key.get("wm_env", 0),
+                wm_shard_batch_size=self._wm_envs_per_worker(),
+                actor_ranks=actor_ranks,
+                group_size=self._actor_group_size(),
+            )
+        except ValueError:
+            return None
+        if any(not rank_counts for rank_counts in counts):
+            return None
+        return counts
+
+    def _configured_actor_shard_role_counts(
+        self,
+        groups: dict[str, Any],
+    ) -> list[tuple[str, int]]:
+        wm_workers = _worker_count(groups.get("WMEnvGroup"))
+        wm_shards = sum(self._wm_rollout_epochs_by_worker(wm_workers))
+        return [
+            ("wm_env", int(wm_shards)),
+        ]
+
+    def _actor_shard_role_counts_from_metrics(
+        self,
+        groups: dict[str, Any],
+        env_metrics: dict[str, float],
+        *,
+        expected_shards: int,
+    ) -> list[tuple[str, int]]:
+        wm_shards = int(env_metrics.get("env/wm_env/trajectory_shards", 0.0))
+        if wm_shards:
+            return [("wm_env", max(0, wm_shards))]
+        real_shards = int(env_metrics.get("env/real_env/trajectory_shards", 0.0))
+        if real_shards:
+            return [("real_env", max(0, real_shards))]
+        configured = self._configured_actor_shard_role_counts(groups)
+        if sum(count for _key, count in configured) == max(0, int(expected_shards)):
+            return configured
+        return [("default", max(0, int(expected_shards)))]
+
+    @staticmethod
+    def _get_actor_shards_by_role(
+        actor_channel: Any,
+        role_counts: list[tuple[str, int]],
+    ) -> list[Any]:
+        shards: list[Any] = []
+        for key, count in role_counts:
+            count = max(0, int(count))
+            if count <= 0:
+                continue
+            get_batch = getattr(actor_channel, "get_batch", None)
+            if callable(get_batch):
+                shards.extend(get_batch(count, key=str(key)))
+            else:
+                shards.extend(actor_channel.get(key=str(key)) for _ in range(count))
+        return shards
+
+    @staticmethod
+    def _wait_actor_channel_role_counts(
+        actor_channel: Any,
+        role_counts: list[tuple[str, int]],
+        *,
+        timeout_s: float,
+        poll_s: float = 0.5,
+    ) -> dict[str, int]:
+        expected_by_key: dict[str, int] = {}
+        for key, count in role_counts:
+            expected_by_key[str(key)] = expected_by_key.get(str(key), 0) + max(
+                0,
+                int(count),
+            )
+        expected_by_key = {
+            key: count for key, count in expected_by_key.items() if count > 0
+        }
+        if not expected_by_key:
+            return {}
+        qsize = getattr(actor_channel, "qsize", None)
+        if not callable(qsize):
+            return {}
+
+        start = time.monotonic()
+        latest: dict[str, int] = {key: 0 for key in expected_by_key}
+        while True:
+            ready = True
+            for key, expected in expected_by_key.items():
+                latest[key] = int(qsize(key=str(key)))
+                if latest[key] < expected:
+                    ready = False
+            if ready:
+                return latest
+            if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
+                status = ", ".join(
+                    f"{key}:qsize={latest[key]}/expected={expected}"
+                    for key, expected in sorted(expected_by_key.items())
+                )
+                raise TimeoutError(
+                    "actor channel did not receive expected trajectory shards before "
+                    f"manual_cotrain.actor_channel_timeout_s={float(timeout_s):.1f}s; "
+                    f"{status}"
+                )
+            time.sleep(max(0.0, float(poll_s)))
 
     def _configured_expected_trajectory_shards(self, groups: dict[str, Any]) -> int:
-        real_workers = _worker_count(groups.get("RealEnvGroup"))
-        wm_workers = _worker_count(groups.get("WMEnvGroup"))
-        real_shards = self._envs_per_worker() * real_workers * self._real_rollout_epoch()
-        wm_shards = sum(self._wm_rollout_epochs_by_worker(wm_workers))
-        return int(real_shards + wm_shards)
+        return int(
+            sum(count for _key, count in self._configured_actor_shard_role_counts(groups))
+        )
 
     def _render_backend(self) -> str:
         return str(
@@ -1022,17 +1351,50 @@ class ManualCotrainRayRunner(BaseRunner):
             )
         ).strip().lower()
 
+    def _real_render_backend(self) -> str | None:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.real_render_backend",
+            default=None,
+        )
+        if value is None:
+            return None
+        return str(value).strip().lower()
+
     def _real_env_cfg(self) -> dict[str, Any]:
         cfg = self._cfg_dict("env.real.cfg")
-        raw_spawn_slots = cfg.pop("spawn_env_slots", False)
-        if str(raw_spawn_slots).strip().lower() in {"1", "true", "yes", "y", "on"}:
-            raise ValueError(
-                "env.real.cfg.spawn_env_slots has been removed from manual cotrain"
-            )
-        if "render_backend" not in cfg:
-            cfg["render_backend"] = "osmesa"
+        real_render_backend = self._real_render_backend()
+        if real_render_backend is not None:
+            cfg["render_backend"] = real_render_backend
+        elif "render_backend" not in cfg:
+            cfg["render_backend"] = self._render_backend()
         cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
+        if str(cfg.get("render_backend", "osmesa")).strip().lower() == "egl":
+            self._ensure_real_env_render_gpu_pool(cfg)
         return cfg
+
+    def _ensure_real_env_render_gpu_pool(self, cfg: dict[str, Any]) -> None:
+        for key in ("gpu_pool", "render_devices", "egl_device_pool"):
+            if parse_device_ids(cfg.get(key)):
+                return
+
+        real_specs = [
+            spec for spec in self._placement_plan().env_specs if spec.role == "real_env"
+        ]
+        devices = cuda_visible_devices_from_env()
+        if devices:
+            limit = max(1, len(real_specs))
+            cfg["gpu_pool"] = devices[:limit]
+            return
+
+        placement_devices = [
+            int(gpu)
+            for spec in real_specs
+            for gpu in spec.gpu_ids
+        ]
+        if not placement_devices:
+            raise ValueError(_ZERO_GPU_EGL_ERROR)
+        cfg["gpu_pool"] = placement_devices
 
     def _cfg_dict(self, path: str, fallback: str | None = None) -> dict[str, Any]:
         value = OmegaConf.select(self.cfg, path, default=None)
@@ -1117,15 +1479,29 @@ class ManualCotrainRayRunner(BaseRunner):
         groups: dict[str, Any],
         payload: dict[str, Any],
     ) -> None:
+        resume_step = int(payload.get("global_step", 0) or 0)
         replay_state = payload.get("replay")
-        if replay_state is None:
-            return
-        replay_group = groups.get("ReplayGroup")
-        if replay_group is None:
-            raise ValueError(
-                "manual checkpoint contains replay state but active config has no ReplayGroup"
-            )
-        replay_group.load_state_dict(dict(replay_state)).wait()
+        if replay_state is not None:
+            replay_group = groups.get("ReplayGroup")
+            if replay_group is None:
+                raise ValueError(
+                    "manual checkpoint contains replay state but active config has no ReplayGroup"
+                )
+            replay_group.load_state_dict(dict(replay_state)).wait()
+
+        wm_env = groups.get("WMEnvGroup")
+        state_dicts = payload.get("state_dicts", {})
+        if wm_env is not None and isinstance(state_dicts, dict):
+            component_states = {
+                name: dict(state_dicts.get(name, {}))
+                for name in ("world_model", "classifier")
+                if isinstance(state_dicts.get(name), dict)
+            }
+            if component_states:
+                wm_env.load_component_states(
+                    component_states,
+                    resume_step,
+                ).wait()
 
     def _maybe_save_manual_checkpoint(
         self,
@@ -1153,7 +1529,7 @@ class ManualCotrainRayRunner(BaseRunner):
             raise TypeError("LearnerGroup.state_dicts() must return a mapping")
         replay_group = groups.get("ReplayGroup")
         replay_state = None
-        if replay_group is not None:
+        if replay_group is not None and self._save_replay_state():
             replay_state = replay_group.state_dict().wait()[0]
         ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
         state_dicts = {
@@ -1215,13 +1591,55 @@ class ManualCotrainRayRunner(BaseRunner):
     def _placement_for(gpu_ids: list[int]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
         if not gpu_ids:
             return NodePlacementStrategy(1)
-        return ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in gpu_ids))
+        return ResourceMapPlacementStrategy(
+            f"{_format_resource_group(tuple(int(gpu) for gpu in gpu_ids))}:0"
+        )
+
+    @staticmethod
+    def _placement_for_gpus(gpu_ids: list[int]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
+        ids = [int(gpu) for gpu in gpu_ids]
+        if not ids:
+            return NodePlacementStrategy(1)
+        return ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in ids))
 
     @staticmethod
     def _resource_map_for_specs(specs: list[Any]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
         if not specs or not specs[0].gpu_ids:
             return NodePlacementStrategy(max(1, len(specs)))
-        return ResourceMapPlacementStrategy(",".join(str(spec.gpu_ids[0]) for spec in specs))
+        segments: list[str] = []
+        index = 0
+        while index < len(specs):
+            group = tuple(int(gpu) for gpu in specs[index].gpu_ids)
+            if not group:
+                return NodePlacementStrategy(max(1, len(specs)))
+            stop = index + 1
+            while stop < len(specs) and tuple(int(gpu) for gpu in specs[stop].gpu_ids) == group:
+                stop += 1
+            resource = _format_resource_group(group)
+            processes = _format_process_range(index, stop - 1)
+            segments.append(f"{resource}:{processes}")
+            index = stop
+        return ResourceMapPlacementStrategy(",".join(segments))
+
+
+def _format_resource_group(gpu_ids: tuple[int, ...]) -> str:
+    if not gpu_ids:
+        raise ValueError("resource group must not be empty")
+    if len(gpu_ids) == 1:
+        return str(gpu_ids[0])
+    if any(right != left + 1 for left, right in zip(gpu_ids, gpu_ids[1:], strict=False)):
+        raise ValueError(
+            f"manual cotrain resource groups must be contiguous, got {list(gpu_ids)}"
+        )
+    return f"{gpu_ids[0]}-{gpu_ids[-1]}"
+
+
+def _format_process_range(start: int, end: int) -> str:
+    if end < start:
+        raise ValueError(f"invalid process range {start}-{end}")
+    if start == end:
+        return str(start)
+    return f"{start}-{end}"
 
 
 def _merge_metric_lists(items: list[Any]) -> dict[str, float]:
@@ -1257,6 +1675,10 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
     for key, values in values_by_key.items():
         if key.endswith("/batch_size_avg"):
             continue
+        if key.endswith("/classifier_success_rate") or key.endswith(
+            "/classifier_trajectory_success_rate"
+        ):
+            continue
         if key.endswith("/batch_size_min"):
             summed[key] = float(min(values))
         elif key.endswith("/batch_size_max"):
@@ -1274,7 +1696,29 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
         )
         if denominator > 0:
             summed[f"{prefix}batch_size_avg"] = float(value / denominator)
+    _derive_classifier_rate_metrics(summed)
     return summed
+
+
+def _derive_classifier_rate_metrics(metrics: dict[str, float]) -> None:
+    for key, total_chunks in list(metrics.items()):
+        if not key.endswith("/classifier_total_chunks"):
+            continue
+        prefix = key[: -len("classifier_total_chunks")]
+        if total_chunks > 0.0:
+            metrics[f"{prefix}classifier_success_rate"] = float(
+                metrics.get(f"{prefix}classifier_success_chunks", 0.0)
+                / float(total_chunks)
+            )
+    for key, total_trajectories in list(metrics.items()):
+        if not key.endswith("/classifier_total_trajectories"):
+            continue
+        prefix = key[: -len("classifier_total_trajectories")]
+        if total_trajectories > 0.0:
+            metrics[f"{prefix}classifier_trajectory_success_rate"] = float(
+                metrics.get(f"{prefix}classifier_success_trajectories", 0.0)
+                / float(total_trajectories)
+            )
 
 
 def _aggregate_sync_metric_lists(items: list[Any]) -> dict[str, float]:
@@ -1347,6 +1791,81 @@ def _split_actor_shard_counts(
         int(group_size) * (base_groups + (1 if rank < extra_groups else 0))
         for rank in range(int(actor_ranks))
     ]
+
+
+def _split_actor_keyed_shard_counts(
+    *,
+    real_shards: int,
+    wm_shards: int,
+    wm_shard_batch_size: int,
+    actor_ranks: int,
+    group_size: int,
+) -> list[list[tuple[str, int]]]:
+    """Split actor-channel role-keyed shard counts by trajectory columns.
+
+    Real env shards carry one trajectory column. Batched WM shards carry
+    ``wm_shard_batch_size`` columns. GRPO grouping constrains the resulting
+    trajectory columns on each actor rank, not the raw actor-channel message count.
+    """
+
+    ranks = int(actor_ranks)
+    group = int(group_size)
+    wm_batch = int(wm_shard_batch_size)
+    real_total = max(0, int(real_shards))
+    wm_total = max(0, int(wm_shards))
+    if ranks <= 0:
+        raise ValueError("actor_ranks must be positive")
+    if group <= 0:
+        raise ValueError("group_size must be positive")
+    if wm_batch <= 0:
+        raise ValueError("wm_shard_batch_size must be positive")
+
+    if real_total:
+        raise ValueError(
+            "real_env trajectories must not enter ActorGroup; "
+            "write them to replay for learner WM/classifier updates instead"
+        )
+
+    total_trajectories = wm_total * wm_batch
+    if total_trajectories <= 0:
+        return [[] for _ in range(ranks)]
+    if total_trajectories % group != 0:
+        raise ValueError(
+            "actor trajectory count must be divisible by group_size; "
+            f"got {total_trajectories} and {group}"
+        )
+    shard_group = group // gcd(group, wm_batch)
+    if wm_total % shard_group != 0:
+        raise ValueError(
+            "wm_env actor shard count must form complete group_size blocks; "
+            f"got wm_shards={wm_total}, wm_shard_batch_size={wm_batch}, "
+            f"group_size={group}"
+        )
+
+    wm_counts = [0 for _ in range(ranks)]
+    trajectory_counts = [0 for _ in range(ranks)]
+
+    for _ in range(wm_total // shard_group):
+        rank = min(range(ranks), key=lambda item: (trajectory_counts[item], item))
+        wm_counts[rank] += shard_group
+        trajectory_counts[rank] += shard_group * wm_batch
+
+    out: list[list[tuple[str, int]]] = []
+    for wm_count, trajectory_count in zip(
+        wm_counts,
+        trajectory_counts,
+        strict=True,
+    ):
+        if trajectory_count % group != 0:
+            raise ValueError(
+                "actor keyed shard split produced a non-divisible trajectory count; "
+                f"got {trajectory_count} and {group}"
+            )
+        rank_counts: list[tuple[str, int]] = []
+        if wm_count:
+            rank_counts.append(("wm_env", int(wm_count)))
+        out.append(rank_counts)
+    return out
 
 
 def _worker_count(group: Any | None) -> int:
@@ -1477,6 +1996,7 @@ def _read_manual_cotrain_progress_snapshot(
         role = str(record.get("role", "env"))
         env_rank = int(record.get("env_rank", record.get("rank", 0)) or 0)
         parts.append(f"{role}#{env_rank}={item_done}/{item_total}")
+    parts.extend(_classifier_progress_status_parts(records))
     prefix: list[str] = []
     if len(global_steps) == 1:
         prefix.append(f"global_step={next(iter(global_steps))}")
@@ -1491,6 +2011,47 @@ def _read_manual_cotrain_progress_snapshot(
         worker_count=len(records),
         finished_count=finished,
     )
+
+
+def _classifier_progress_status_parts(
+    records: list[dict[str, Any]],
+    *,
+    metrics: dict[str, float] | None = None,
+) -> list[str]:
+    metric_values = metrics or {}
+
+    def metric_counter(name: str) -> int:
+        for prefix in ("env/wm_env/", "env/"):
+            key = f"{prefix}{name}"
+            if key in metric_values:
+                return max(0, int(float(metric_values.get(key, 0.0) or 0.0)))
+        return 0
+
+    success_chunks = sum(
+        max(0, int(record.get("classifier_success_chunks", 0) or 0))
+        for record in records
+    ) + metric_counter("classifier_success_chunks")
+    total_chunks = sum(
+        max(0, int(record.get("classifier_total_chunks", 0) or 0))
+        for record in records
+    ) + metric_counter("classifier_total_chunks")
+    success_trajectories = sum(
+        max(0, int(record.get("classifier_success_trajectories", 0) or 0))
+        for record in records
+    ) + metric_counter("classifier_success_trajectories")
+    total_trajectories = sum(
+        max(0, int(record.get("classifier_total_trajectories", 0) or 0))
+        for record in records
+    ) + metric_counter("classifier_total_trajectories")
+    parts: list[str] = []
+    if total_chunks > 0:
+        parts.append(f"cls_sr={float(success_chunks) / float(total_chunks):.3f}")
+    if total_trajectories > 0:
+        parts.append(
+            "cls_traj_sr="
+            f"{float(success_trajectories) / float(total_trajectories):.3f}"
+        )
+    return parts
 
 
 def _wait_env_metrics_with_rollout_guard(

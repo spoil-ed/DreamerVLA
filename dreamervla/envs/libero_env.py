@@ -12,9 +12,6 @@ from typing import Any
 
 import imageio
 import numpy as np
-from libero.libero import benchmark as libero_benchmark
-from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
 from omegaconf import OmegaConf
 from PIL import Image
 
@@ -27,6 +24,12 @@ TASK_MAX_STEPS: dict[str, int] = {
     "libero_10": 520,
     "libero_90": 400,
 }
+
+
+def _libero_benchmark_dict():
+    from libero.libero import benchmark as libero_benchmark
+
+    return libero_benchmark.get_benchmark_dict()
 
 
 def resolve_libero_eval_protocol(root_cfg: Any, eval_cfg: Any) -> dict[str, int]:
@@ -51,6 +54,9 @@ def select_libero_action_chunk(action_chunk: Any, action_steps: int) -> list[Any
 
 def get_libero_env(task, resolution: int = 256, seed: int = 0):
     """Create an off-screen LIBERO environment for *task*."""
+    from libero.libero import get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+
     task_description = task.language
     task_bddl_file = os.path.join(
         get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
@@ -143,7 +149,7 @@ class LIBERODreamerEnv:
         self.warmup_steps = max(int(warmup_steps), 0)
         self.seed = int(seed)
 
-        benchmark_dict = libero_benchmark.get_benchmark_dict()
+        benchmark_dict = _libero_benchmark_dict()
         self.task_suite = benchmark_dict[self.task_suite_name]()
         self.task = self.task_suite.get_task(self.task_id)
         self.initial_states = self.task_suite.get_task_init_states(self.task_id)

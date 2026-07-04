@@ -387,6 +387,32 @@ def test_actor_run_training_updates_policy_parameters() -> None:
     assert any(not torch.equal(before[key], after[key]) for key in before)
 
 
+def test_actor_microbatch_matches_full_batch_update() -> None:
+    # Two shards -> 4 rollouts, group_size=2 -> 2 GRPO groups. With
+    # update_micro_batch_starts=1 the rollout dim is split into two
+    # single-group slices; grads accumulate across slices into one
+    # optimizer.step, so the trained policy must match the full-batch run.
+    def _train(micro_batch_starts: int) -> dict:
+        cfg = _actor_cfg()
+        cfg["train_cfg"]["algorithm_cfg"][
+            "update_micro_batch_starts"
+        ] = micro_batch_starts
+        torch.manual_seed(1234)
+        actor = EmbodiedFSDPActor(**cfg)
+        actor.init()
+        actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+        actor.compute_advantages_and_returns()
+        actor.run_training()
+        return actor.state_dict()
+
+    full = _train(0)
+    micro = _train(1)
+
+    assert set(full) == set(micro)
+    for key in full:
+        assert torch.allclose(full[key], micro[key], atol=1e-5), key
+
+
 def test_actor_run_training_rejects_step_action_tensors_for_manual_cotrain() -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
     actor.init()
@@ -457,31 +483,52 @@ def test_sync_model_to_rollout_nonzero_rank_participates_without_pushing_patch()
     assert metrics["sync/policy_tensors"] > 0.0
 
 
-def test_actor_masks_zero_variance_groups_when_enabled() -> None:
+def _filter_rewards_cfg() -> dict:
     cfg = _actor_cfg()
-    cfg["train_cfg"]["algorithm_cfg"]["filter_zero_variance_groups"] = True
-    actor = EmbodiedFSDPActor(**cfg)
+    ac = cfg["train_cfg"]["algorithm_cfg"]
+    ac["filter_rewards"] = True
+    ac["reward_coef"] = 1.0
+    ac["rewards_lower_bound"] = 0.5
+    ac["rewards_upper_bound"] = 4.5
+    return cfg
+
+
+def test_actor_filters_out_of_bound_reward_groups_when_enabled() -> None:
+    actor = EmbodiedFSDPActor(**_filter_rewards_cfg())
     actor.init()
 
-    # group_size=2: both rollouts fail -> zero within-group variance -> masked.
+    # group_size=2: both rollouts fail -> group mean 0.0 < lower bound -> filtered.
     actor.load_trajectory_shards([_shard(0.0, 0.0)])
     metrics = actor.compute_advantages_and_returns()
 
-    assert metrics["actor/zero_variance_masked_rollouts"] == 2.0
+    assert metrics["actor/reward_filtered_rollouts"] == 2.0
     assert actor.advantages is not None
-    assert float(actor.advantages.abs().sum().item()) == 0.0
 
 
-def test_actor_keeps_variant_groups_when_filter_enabled() -> None:
-    cfg = _actor_cfg()
-    cfg["train_cfg"]["algorithm_cfg"]["filter_zero_variance_groups"] = True
-    actor = EmbodiedFSDPActor(**cfg)
+def test_actor_skips_training_when_reward_filter_removes_every_group() -> None:
+    actor = EmbodiedFSDPActor(**_filter_rewards_cfg())
     actor.init()
 
+    actor.load_trajectory_shards([_shard(0.0, 0.0)])
+    advantage_metrics = actor.compute_advantages_and_returns()
+    train_metrics = actor.run_training()
+
+    assert advantage_metrics["actor/loss_mask_sum"] == 4.0
+    assert advantage_metrics["actor/reward_filtered_rollouts"] == 2.0
+    assert train_metrics["actor/global_loss_mask_sum"] == 0.0
+    assert train_metrics["actor/ppo_updates"] == 0.0
+    assert train_metrics["actor/skipped_zero_valid_update"] == 1.0
+
+
+def test_actor_keeps_in_bound_reward_groups_when_filter_enabled() -> None:
+    actor = EmbodiedFSDPActor(**_filter_rewards_cfg())
+    actor.init()
+
+    # returns [0, 2] -> group mean 1.0 in [0.5, 4.5] -> kept.
     actor.load_trajectory_shards([_shard(0.0, 1.0)])
     metrics = actor.compute_advantages_and_returns()
 
-    assert metrics["actor/zero_variance_masked_rollouts"] == 0.0
+    assert metrics["actor/reward_filtered_rollouts"] == 0.0
     assert metrics["actor/advantage_std"] > 0.0
 
 

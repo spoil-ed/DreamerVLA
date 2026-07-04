@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import textwrap
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from omegaconf import OmegaConf
 
 from dreamervla.launchers import coldstart_warmup_cotrain as coldstart
 from dreamervla.workers.env import env_worker, trajectory_env_worker
@@ -129,7 +134,7 @@ def test_manual_real_env_applies_libero_helper_before_env_build(monkeypatch) -> 
     assert events[:2] == [("helper", "egl", 3, [6, 8]), ("build", "egl")]
 
 
-def test_manual_real_env_uses_worker_visible_gpu_when_cfg_pool_absent(monkeypatch) -> None:
+def test_manual_real_env_rejects_egl_when_cfg_pool_absent(monkeypatch) -> None:
     for key in (
         "MUJOCO_GL",
         "PYOPENGL_PLATFORM",
@@ -137,7 +142,6 @@ def test_manual_real_env_uses_worker_visible_gpu_when_cfg_pool_absent(monkeypatc
         "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
     ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
     worker = RealEnvWorker(
         env_cfg={"target": "unused", "render_backend": "egl"},
         num_slots=1,
@@ -149,14 +153,8 @@ def test_manual_real_env_uses_worker_visible_gpu_when_cfg_pool_absent(monkeypatc
 
     monkeypatch.setattr(trajectory_env_worker, "_build_env_from_cfg", lambda cfg: _Env())
 
-    try:
+    with pytest.raises(ValueError, match="render_backend=egl requires ngpu>=1"):
         worker.init()
-    finally:
-        worker.close()
-
-    assert os.environ["MUJOCO_GL"] == "egl"
-    assert os.environ["PYOPENGL_PLATFORM"] == "egl"
-    assert os.environ["MUJOCO_EGL_DEVICE_ID"] == "5"
 
 
 def test_post_step_eval_env_uses_libero_helper(monkeypatch, tmp_path) -> None:
@@ -204,3 +202,97 @@ def test_post_step_eval_env_uses_libero_helper(monkeypatch, tmp_path) -> None:
     assert env["PYOPENGL_PLATFORM"] == "egl"
     assert env["MUJOCO_EGL_DEVICE_ID"] == "0"
     assert env["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
+
+
+def test_eval_loop_applies_libero_helper_from_configured_pool(monkeypatch) -> None:
+    from dreamervla.runners import pretokenize_vla_runner
+
+    calls: list[tuple[str, int, list[int]]] = []
+
+    def fake_apply(backend: str, shard_id: int, gpu_pool: list[int]) -> None:
+        calls.append((backend, int(shard_id), list(gpu_pool)))
+
+    monkeypatch.setattr(
+        pretokenize_vla_runner,
+        "apply_libero_render_regime",
+        fake_apply,
+        raising=False,
+    )
+
+    cfg = OmegaConf.create(
+        {
+            "eval": {
+                "render_backend": "egl",
+                "render_gpu_pool": [4, 6],
+                "render_shard_id": 3,
+            }
+        }
+    )
+
+    pretokenize_vla_runner._apply_libero_eval_render_regime(cfg, cfg.eval)
+
+    assert calls == [("egl", 3, [4, 6])]
+
+
+def test_train_launcher_does_not_select_libero_render_backend(monkeypatch) -> None:
+    from dreamervla.launchers.train import _build_env
+
+    for key in ("MUJOCO_GL", "PYOPENGL_PLATFORM"):
+        monkeypatch.delenv(key, raising=False)
+
+    env = _build_env({"data_root": "/tmp/dvla-data", "env": {}})
+
+    assert "MUJOCO_GL" not in env
+    assert "PYOPENGL_PLATFORM" not in env
+
+
+def test_sync_cotrain_env_kwargs_carry_libero_render_regime() -> None:
+    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+
+    runner = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
+    runner.distributed = SimpleNamespace(rank=0)
+    cfg = OmegaConf.create(
+        {
+            "seed": 7,
+            "env": {"task_suite_name": "libero_goal", "episode_horizon": 20},
+            "online_rollout": {
+                "render_backend": "egl",
+                "render_devices": [2, 5],
+            },
+        }
+    )
+
+    kwargs = runner._env_cfg_kwargs(cfg)
+
+    assert kwargs["_libero_render_backend"] == "egl"
+    assert kwargs["_libero_render_gpu_pool"] == [2, 5]
+    assert kwargs["_libero_render_shard_id"] == 0
+
+
+def test_libero_eval_env_module_import_does_not_import_libero_backend() -> None:
+    code = textwrap.dedent(
+        """
+        import importlib.abc
+        import sys
+
+        class BlockLibero(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname.startswith("libero"):
+                    raise RuntimeError(f"unexpected LIBERO import: {fullname}")
+                return None
+
+        sys.meta_path.insert(0, BlockLibero())
+        import dreamervla.envs.libero_env as libero_env
+        assert libero_env.TASK_MAX_STEPS["libero_goal"] == 300
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=os.getcwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

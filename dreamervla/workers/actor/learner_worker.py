@@ -436,12 +436,17 @@ class LearnerWorker(Worker):
                 early_neg_stride=int(self.train_cfg.get("classifier_early_neg_stride", 8)),
                 grad_clip=float(self._optim_cfg().get("grad_clip_norm", 1.0)),
             )
-        self._cotrain_classifier_updates += 1
-        self._cotrain_last_classifier_f1 = float(raw.get("f1", 0.0))
+        if float(raw.get("updated", 1.0)) > 0.5:
+            self._cotrain_classifier_updates += 1
+            self._cotrain_last_classifier_f1 = float(raw.get("f1", 0.0))
         return {
             "cls/loss": float(raw.get("loss", 0.0)),
             "cls/acc": float(raw.get("acc", 0.0)),
             "cls/f1": float(raw.get("f1", 0.0)),
+            "cls/updated": float(raw.get("updated", 1.0)),
+            "cls/skipped_single_class_batch": float(
+                raw.get("skipped_single_class_batch", 0.0)
+            ),
         }
 
     def _dreamervla_rl_update_once(self) -> dict[str, float]:

@@ -10,18 +10,28 @@ defaults:
 _target_: dreamervla.runners.ManualCotrainRayRunner
 render_backend: egl
 
+cluster:
+  component_placement:
+    env: 0
+    rollout: 0
+    actor: 0
+
 manual_cotrain:
   ngpu: 1
   global_steps: 1000  # cotrain epochs
   learner_update_step: 1
   checkpoint_every: 0
+  save_replay_state: false
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false
   rollout_epoch: ${algorithm.rollout_epoch}
+  real_env_workers: 1
+  real_render_backend: null
   real_rollout_epoch: 1
+  real_rollout_target_trajectories: 32
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
-  wm_rollout_target_trajectories: 128
+  wm_rollout_target_trajectories: 256
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
@@ -43,6 +53,10 @@ algorithm:
   clip_ratio_low: 0.2
   clip_ratio_high: 0.28
   clip_ratio_c: 3.0
+  reward_coef: 5.0
+  filter_rewards: true
+  rewards_lower_bound: 0.5
+  rewards_upper_bound: 4.5
   gamma: 0.99
   gae_lambda: 0.95
   kl_beta: 0.0
@@ -85,7 +99,10 @@ actor:
       kl_beta: ${algorithm.kl_beta}
       entropy_coef: ${algorithm.entropy_bonus}
       clip_log_ratio: null
-      filter_zero_variance_groups: true
+      filter_rewards: ${algorithm.filter_rewards}
+      reward_coef: ${algorithm.reward_coef}
+      rewards_lower_bound: ${algorithm.rewards_lower_bound}
+      rewards_upper_bound: ${algorithm.rewards_upper_bound}
       loss_normalization: token_mean
 
 rollout:
@@ -153,6 +170,7 @@ env:
   # Keep inherited legacy env.* keys so existing launcher overrides compose.
   cfg:
     action_postprocess: openvla_oft
+    render_backend: ${render_backend}
   real:
     cfg: ${env.cfg}
   wm:

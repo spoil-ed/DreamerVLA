@@ -139,7 +139,7 @@ class EmbodiedEvalExportMixin:
         recon_action_hidden: Any | None = None,
         obs_embedding: Any | None = None,
         actor_input: Any | None = None,
-        rssm_latent: Any | None = None,
+        latent: Any | None = None,
         input_ids: Any | None = None,
     ) -> None:
         if not bool(getattr(self, "_policy_trace_enabled", False)):
@@ -162,11 +162,11 @@ class EmbodiedEvalExportMixin:
             "actor_input": self._to_numpy_array(actor_input),
             "input_ids": self._to_numpy_array(input_ids),
         }
-        if rssm_latent is not None:
+        if latent is not None:
             for attr in ("deter", "stoch", "logits", "mean", "std", "h"):
-                if hasattr(rssm_latent, attr):
-                    optional_arrays[f"rssm_{attr}"] = self._to_numpy_array(
-                        getattr(rssm_latent, attr)
+                if hasattr(latent, attr):
+                    optional_arrays[f"latent_{attr}"] = self._to_numpy_array(
+                        getattr(latent, attr)
                     )
         for key, value in optional_arrays.items():
             if value is not None:

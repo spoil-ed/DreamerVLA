@@ -345,6 +345,7 @@ def online_classifier_update_step(
     windows = cls_batch["windows"].to(device, non_blocking=True)
     labels = cls_batch["labels"].to(device, non_blocking=True)
     task_ids = cls_batch.get("task_ids")
+    pos_frac = labels.float().mean()
     forward_kwargs: dict[str, Any] = {}
     if bool(getattr(module, "supports_proprio_conditioning", False)):
         proprio = cls_batch.get("proprio")
@@ -403,13 +404,15 @@ def online_classifier_update_step(
         "tp": int(tp.detach().cpu().item()),
         "fp": int(fp.detach().cpu().item()),
         "fn": int(fn.detach().cpu().item()),
-        "pos_frac": float(labels.float().mean().detach().cpu().item()),
+        "pos_frac": float(pos_frac.detach().cpu().item()),
         "prob_mean": float(probs.float().mean().detach().cpu().item()),
         "grad_norm": float(
             grad_norm.detach().cpu().item()
             if isinstance(grad_norm, torch.Tensor)
             else grad_norm
         ),
+        "updated": 1.0,
+        "skipped_single_class_batch": 0.0,
         "batch": _json_safe(
             {key: value for key, value in cls_batch.items() if key != "windows"}
         ),

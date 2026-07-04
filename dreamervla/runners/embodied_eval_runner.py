@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import gc
+import importlib
 import json
 import os
 import pathlib
@@ -39,7 +40,11 @@ from dreamervla.runners._embodied_eval_action_mixin import EmbodiedEvalActionMix
 from dreamervla.runners._embodied_eval_export_mixin import EmbodiedEvalExportMixin
 from dreamervla.runners._embodied_eval_image_token_mixin import EmbodiedEvalImageTokenMixin
 from dreamervla.runners._embodied_eval_latent_mixin import EmbodiedEvalLatentMixin
-from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+from dreamervla.runners.eval_metrics import summarize_libero_task_success
+from dreamervla.runners.pretokenize_vla_runner import (
+    PretokenizeVLARunner,
+    _apply_libero_eval_render_regime,
+)
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
@@ -47,6 +52,31 @@ from dreamervla.utils.hf_checkpoint import (
 )
 from dreamervla.utils.paths import data_path
 from dreamervla.utils.torch_utils import freeze_module
+
+
+def normalize_dreamer_actor_input_source(source: Any) -> str:
+    """Normalize legacy eval actor-input names to the current latent path."""
+    value = "latent" if source is None else str(source).strip().lower()
+    if value == "rssm":
+        return "latent"
+    if value not in {"latent", "encoder", "encoder_sequence"}:
+        raise ValueError(
+            "eval.dreamer_actor_input_source must be one of: "
+            "latent, encoder, encoder_sequence"
+        )
+    return value
+
+
+def normalize_dreamer_rollout_mode(mode: Any) -> str:
+    """Normalize legacy Dreamer eval rollout names to current mode names."""
+    value = "stateless" if mode is None else str(mode).strip().lower()
+    if value == "online_rssm":
+        return "online_latent"
+    if value not in {"stateless", "online_latent"}:
+        raise ValueError(
+            "eval.dreamer_rollout_mode must be one of: stateless, online_latent"
+        )
+    return value
 
 
 class _OFTBaseEvalAdapter:
@@ -188,7 +218,6 @@ class EmbodiedEvalRunner(
         self._base_oft_extractor = extractor
         return _OFTBaseEvalAdapter(extractor)
 
-
     @property
     def _action_token_id(self) -> int:
         """Action-token id used for all token insertions (X-03; adjustable)."""
@@ -197,6 +226,23 @@ class EmbodiedEvalRunner(
                 self.cfg, "eval.target_token_id", default=DEFAULT_ACTION_TOKEN_ID
             )
         )
+
+    @staticmethod
+    def _eval_init_state_indices(
+        num_init_states: int,
+        num_episodes: int,
+        enumerate_all_init_states: bool,
+    ) -> list[int]:
+        """Ordered init-state indices for one task's eval episodes.
+
+        Default (``enumerate_all_init_states=False``) preserves the historical
+        behavior of running the first ``num_episodes`` init states. When
+        enabled, every init state is visited exactly once in ascending order
+        (RLinf-style deterministic enumeration, no RNG).
+        """
+        if enumerate_all_init_states:
+            return list(range(num_init_states))
+        return list(range(num_episodes))
 
     def run(self) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:
@@ -297,6 +343,10 @@ class EmbodiedEvalRunner(
                 "eval/success_rate": eval_rate,
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
+                "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
+                "eval/episodes_per_task": float(
+                    metrics.get("eval_episodes_per_task", 0.0)
+                ),
             },
             force=True,
         )
@@ -310,7 +360,7 @@ class EmbodiedEvalRunner(
                 "ckpt_path": ckpt_path,
                 "task_suite": task_suite_name,
                 "num_episodes_per_task": int(
-                    OmegaConf.select(cfg, "eval.num_episodes_per_task", default=50)
+                    OmegaConf.select(cfg, "eval.num_episodes_per_task", default=3)
                 ),
                 "seed": int(
                     OmegaConf.select(
@@ -366,7 +416,12 @@ class EmbodiedEvalRunner(
             ) from exc
         with open_dict(train_cfg):
             train_cfg.eval = copy.deepcopy(eval_cfg_root.eval)
-            if OmegaConf.select(train_cfg, "encoder", default=None) is None:
+            self._normalize_manual_ray_dreamer_eval_cfg(train_cfg)
+            uses_oft_rollout_encoder = self._uses_oft_rollout_encoder_cfg(train_cfg)
+            if (
+                not uses_oft_rollout_encoder
+                and OmegaConf.select(train_cfg, "encoder", default=None) is None
+            ):
                 train_cfg.encoder = copy.deepcopy(eval_cfg_root.encoder)
             # Dreamer checkpoints may carry a stale init/encoder path when the
             # training launch overrode it from the shell.  Let eval-time
@@ -378,6 +433,16 @@ class EmbodiedEvalRunner(
                 train_cfg.init.vla_ckpt_path = eval_vla_path
                 if OmegaConf.select(train_cfg, "encoder", default=None) is not None:
                     train_cfg.encoder.model_path = eval_vla_path
+                if uses_oft_rollout_encoder:
+                    policy_model_path = OmegaConf.select(
+                        train_cfg,
+                        "rollout.encoder_cfg.kwargs.policy_cfg.model_path",
+                        default=None,
+                    )
+                    if policy_model_path is not None:
+                        train_cfg.rollout.encoder_cfg.kwargs.policy_cfg.model_path = (
+                            eval_vla_path
+                        )
             eval_encoder_ckpt = OmegaConf.select(
                 eval_cfg_root, "init.encoder_state_ckpt", default=None
             )
@@ -394,7 +459,18 @@ class EmbodiedEvalRunner(
             train_cfg.training.out_dir = self.output_dir
             train_cfg.training.distributed_strategy = "ddp"
             train_cfg.training.enable_activation_checkpointing = False
-            train_cfg.trainer.device = str(eval_cfg_root.trainer.device)
+            if OmegaConf.select(train_cfg, "trainer", default=None) is None:
+                train_cfg.trainer = {}
+            eval_device = OmegaConf.select(
+                eval_cfg_root,
+                "trainer.device",
+                default=OmegaConf.select(
+                    eval_cfg_root,
+                    "training.device",
+                    default="cuda:0",
+                ),
+            )
+            train_cfg.trainer.device = str(eval_device)
         self.cfg = train_cfg
         self.config = train_cfg
 
@@ -408,28 +484,22 @@ class EmbodiedEvalRunner(
         self._dreamer_clip_actions = bool(
             OmegaConf.select(train_cfg, "eval.dreamer_clip_actions", default=True)
         )
-        self._dreamer_rollout_mode = str(
+        self._dreamer_rollout_mode = normalize_dreamer_rollout_mode(
             OmegaConf.select(
                 train_cfg, "eval.dreamer_rollout_mode", default="stateless"
             )
-        ).lower()
-        if self._dreamer_rollout_mode not in {"stateless", "online_rssm"}:
-            raise ValueError(
-                "eval.dreamer_rollout_mode must be one of: stateless, online_rssm"
-            )
-        self._dreamer_actor_input_source = str(
+        )
+        OmegaConf.update(
+            train_cfg,
+            "eval.dreamer_rollout_mode",
+            self._dreamer_rollout_mode,
+            force_add=True,
+        )
+        self._dreamer_actor_input_source = normalize_dreamer_actor_input_source(
             OmegaConf.select(
-                train_cfg, "eval.dreamer_actor_input_source", default="rssm"
+                train_cfg, "eval.dreamer_actor_input_source", default="latent"
             )
-        ).lower()
-        if self._dreamer_actor_input_source not in {
-            "rssm",
-            "encoder",
-            "encoder_sequence",
-        }:
-            raise ValueError(
-                "eval.dreamer_actor_input_source must be one of: rssm, encoder, encoder_sequence"
-            )
+        )
         self._dreamer_policy_source = str(
             OmegaConf.select(train_cfg, "eval.dreamer_policy_source", default="ckpt")
         ).lower()
@@ -504,6 +574,10 @@ class EmbodiedEvalRunner(
                 "eval/success_rate": dreamer_eval_rate,
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
+                "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
+                "eval/episodes_per_task": float(
+                    metrics.get("eval_episodes_per_task", 0.0)
+                ),
             },
             force=True,
         )
@@ -560,7 +634,7 @@ class EmbodiedEvalRunner(
                 ),
                 "num_episodes_per_task": int(
                     OmegaConf.select(
-                        train_cfg, "eval.num_episodes_per_task", default=50
+                        train_cfg, "eval.num_episodes_per_task", default=3
                     )
                 ),
                 "seed": int(
@@ -580,9 +654,15 @@ class EmbodiedEvalRunner(
                 "dreamer_deterministic": bool(self._dreamer_deterministic),
                 "dreamer_clip_actions": bool(self._dreamer_clip_actions),
                 "dreamer_unnorm_actions": bool(self._dreamer_should_unnorm_actions()),
-                "dreamer_rssm_action_source": str(
+                "dreamer_latent_action_source": str(
                     OmegaConf.select(
-                        train_cfg, "eval.dreamer_rssm_action_source", default="env"
+                        train_cfg,
+                        "eval.dreamer_latent_action_source",
+                        default=OmegaConf.select(
+                            train_cfg,
+                            "eval.dreamer_rssm_action_source",
+                            default="env",
+                        ),
                     )
                 ),
                 "dreamer_rollout_mode": str(self._dreamer_rollout_mode),
@@ -612,11 +692,175 @@ class EmbodiedEvalRunner(
     def evaluate_libero(self, epoch: int) -> dict[str, float]:
         if (
             getattr(self, "_dreamer_eval", False)
-            and getattr(self, "_dreamer_rollout_mode", "stateless") == "online_rssm"
+            and getattr(self, "_dreamer_rollout_mode", "stateless")
+            in {"stateless", "online_latent"}
         ):
-            return self._evaluate_libero_online_rssm(epoch)
+            return self._evaluate_libero_online_latent(epoch)
         return super().evaluate_libero(epoch)
 
+
+    @staticmethod
+    def _target_to_hydra_path(target: str) -> str:
+        return str(target).replace(":", ".")
+
+    @classmethod
+    def _target_kwargs_to_hydra_cfg(cls, component_cfg: Any) -> DictConfig | None:
+        if component_cfg is None:
+            return None
+        if OmegaConf.is_config(component_cfg):
+            raw = OmegaConf.to_container(component_cfg, resolve=True)
+        else:
+            raw = copy.deepcopy(component_cfg)
+        if not isinstance(raw, dict):
+            return None
+        if raw.get("_target_"):
+            return OmegaConf.create(raw)
+        target = raw.get("target") or raw.get("class_path")
+        if target is None:
+            return OmegaConf.create(raw)
+        hydra_cfg: dict[str, Any] = {
+            key: value
+            for key, value in raw.items()
+            if key not in {"target", "_target_", "class_path", "kwargs", "init_args"}
+        }
+        init_args = raw.get("init_args") or {}
+        kwargs = raw.get("kwargs") or {}
+        if isinstance(init_args, dict):
+            hydra_cfg.update(init_args)
+        if isinstance(kwargs, dict):
+            hydra_cfg.update(kwargs)
+        hydra_cfg["_target_"] = cls._target_to_hydra_path(str(target))
+        return OmegaConf.create(hydra_cfg)
+
+    @classmethod
+    def _normalize_manual_ray_dreamer_eval_cfg(cls, cfg: DictConfig) -> None:
+        """Adapt manual Ray checkpoint schema to EmbodiedEvalRunner's schema."""
+
+        def set_if_missing(dst_path: str, *src_paths: str) -> None:
+            existing = OmegaConf.select(cfg, f"{dst_path}._target_", default=None)
+            if existing is not None:
+                return
+            for src_path in src_paths:
+                src = OmegaConf.select(cfg, src_path, default=None)
+                converted = cls._target_kwargs_to_hydra_cfg(src)
+                if converted is not None and OmegaConf.select(
+                    converted, "_target_", default=None
+                ):
+                    OmegaConf.update(cfg, dst_path, converted, force_add=True)
+                    return
+
+        set_if_missing("policy", "actor.policy_cfg", "policy.cfg", "policy")
+        set_if_missing("world_model", "learner.model_cfg.world_model", "world_model")
+        set_if_missing("classifier", "learner.model_cfg.classifier", "classifier")
+
+        if cls._uses_oft_rollout_encoder_cfg(cfg):
+            OmegaConf.update(cfg, "encoder", None, force_add=True)
+            if OmegaConf.select(cfg, "eval.dreamer_rollout_mode", default=None) is None:
+                OmegaConf.update(
+                    cfg, "eval.dreamer_rollout_mode", "stateless", force_add=True
+                )
+            if (
+                OmegaConf.select(
+                    cfg, "eval.dreamer_actor_input_source", default=None
+                )
+                is None
+            ):
+                OmegaConf.update(
+                    cfg, "eval.dreamer_actor_input_source", "latent", force_add=True
+                )
+            source = OmegaConf.select(
+                cfg,
+                "task.openvla_oft.input_tokens.expected_obs_hidden_source",
+                default=None,
+            )
+            current = str(
+                OmegaConf.select(cfg, "eval.obs_hidden_source", default="auto")
+            ).lower()
+            if source is not None and current == "auto":
+                OmegaConf.update(
+                    cfg, "eval.obs_hidden_source", str(source), force_add=True
+                )
+
+    @staticmethod
+    def _uses_oft_rollout_encoder_cfg(cfg: DictConfig) -> bool:
+        target = str(
+            OmegaConf.select(cfg, "rollout.encoder_cfg.target", default="")
+            or OmegaConf.select(cfg, "rollout.encoder_cfg._target_", default="")
+        )
+        return target.endswith("oft_rollout:OFTRolloutBundle") or target.endswith(
+            "oft_rollout.OFTRolloutBundle"
+        )
+
+    @staticmethod
+    def _build_from_target_cfg(component_cfg: Any) -> Any:
+        if OmegaConf.is_config(component_cfg):
+            raw = OmegaConf.to_container(component_cfg, resolve=True)
+        else:
+            raw = copy.deepcopy(component_cfg)
+        if not isinstance(raw, dict):
+            raise TypeError(f"component config must be a mapping, got {type(raw).__name__}")
+        target = raw.get("target") or raw.get("_target_") or raw.get("class_path")
+        if not target:
+            raise ValueError("component config must include target/_target_/class_path")
+        kwargs = {
+            key: value
+            for key, value in raw.items()
+            if key not in {"target", "_target_", "class_path", "kwargs", "init_args"}
+        }
+        init_args = raw.get("init_args") or {}
+        nested_kwargs = raw.get("kwargs") or {}
+        if isinstance(init_args, dict):
+            kwargs.update(init_args)
+        if isinstance(nested_kwargs, dict):
+            kwargs.update(nested_kwargs)
+        if ":" in str(target):
+            module_name, class_name = str(target).split(":", 1)
+        else:
+            module_name, class_name = str(target).rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        return getattr(module, class_name)(**kwargs)
+
+    def _build_oft_eval_extractor(self, cfg: DictConfig) -> None:
+        encoder_cfg = copy.deepcopy(OmegaConf.select(cfg, "rollout.encoder_cfg"))
+        if encoder_cfg is None:
+            raise ValueError("OFT Dreamer eval requires rollout.encoder_cfg")
+        with open_dict(encoder_cfg):
+            if OmegaConf.select(encoder_cfg, "kwargs", default=None) is None:
+                encoder_cfg.kwargs = {}
+            encoder_cfg.kwargs.device = str(self.device)
+        bundle = self._build_from_target_cfg(encoder_cfg)
+        if hasattr(bundle, "to"):
+            bundle.to(str(self.device))
+        self._dreamer_oft_bundle = bundle
+        self._dreamer_oft_extractor = bundle.make_extractor()
+
+    @staticmethod
+    def _hidden_tensor_from_eval_obs(obs_embedding: Any) -> torch.Tensor:
+        if isinstance(obs_embedding, dict):
+            hidden = obs_embedding.get("obs_embedding", obs_embedding.get("hidden"))
+            if not isinstance(hidden, torch.Tensor):
+                raise KeyError("Dreamer eval obs dict requires tensor obs_embedding")
+            return hidden
+        if not isinstance(obs_embedding, torch.Tensor):
+            raise TypeError(
+                f"Dreamer eval obs must be a tensor or mapping, got {type(obs_embedding).__name__}"
+            )
+        return obs_embedding
+
+    @staticmethod
+    def _latent_with_eval_sidecars(
+        latent: Any,
+        obs_embedding: Any,
+    ) -> Any:
+        if not isinstance(obs_embedding, dict):
+            return latent
+        if not isinstance(latent, dict):
+            latent = {"hidden": latent}
+        if isinstance(obs_embedding.get("lang_emb"), torch.Tensor):
+            latent["lang"] = obs_embedding["lang_emb"]
+        if isinstance(obs_embedding.get("proprio"), torch.Tensor):
+            latent["proprio"] = obs_embedding["proprio"]
+        return latent
 
 
 
@@ -641,30 +885,35 @@ class EmbodiedEvalRunner(
     def _build_dreamer_modules(self, cfg: DictConfig, payload: dict[str, Any]) -> None:
         state_dicts = payload.get("state_dicts", {})
 
-        encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-        encoder_init_ckpt = OmegaConf.select(
-            cfg, "init.encoder_state_ckpt", default=None
-        )
-        if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
-            with open_dict(encoder_cfg):
-                encoder_cfg.model_path = str(
-                    resolve_hf_checkpoint_dir(encoder_init_ckpt)
-                )
-        self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        freeze_module(self.encoder)
-        if "encoder" in state_dicts:
-            self._load_module_state(self.encoder, state_dicts["encoder"], "encoder")
+        self._dreamer_oft_extractor = None
+        if self._uses_oft_rollout_encoder_cfg(cfg):
+            self._build_oft_eval_extractor(cfg)
+            self.encoder = _OFTBaseEvalAdapter(self._dreamer_oft_extractor)
         else:
-            if encoder_init_ckpt and not is_hf_checkpoint(encoder_init_ckpt):
-                encoder_payload = self._load_checkpoint_payload(str(encoder_init_ckpt))
-                encoder_sd = encoder_payload.get("state_dicts", {}).get("encoder")
-                if encoder_sd is None:
-                    raise RuntimeError(
-                        f"{encoder_init_ckpt} has no state_dicts.encoder"
+            encoder_cfg = self._build_frozen_encoder_cfg(cfg)
+            encoder_init_ckpt = OmegaConf.select(
+                cfg, "init.encoder_state_ckpt", default=None
+            )
+            if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
+                with open_dict(encoder_cfg):
+                    encoder_cfg.model_path = str(
+                        resolve_hf_checkpoint_dir(encoder_init_ckpt)
                     )
-                self._load_module_state(self.encoder, encoder_sd, "encoder")
-                del encoder_payload
-        self.encoder.eval()
+            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
+            freeze_module(self.encoder)
+            if "encoder" in state_dicts:
+                self._load_module_state(self.encoder, state_dicts["encoder"], "encoder")
+            else:
+                if encoder_init_ckpt and not is_hf_checkpoint(encoder_init_ckpt):
+                    encoder_payload = self._load_checkpoint_payload(str(encoder_init_ckpt))
+                    encoder_sd = encoder_payload.get("state_dicts", {}).get("encoder")
+                    if encoder_sd is None:
+                        raise RuntimeError(
+                            f"{encoder_init_ckpt} has no state_dicts.encoder"
+                        )
+                    self._load_module_state(self.encoder, encoder_sd, "encoder")
+                    del encoder_payload
+            self.encoder.eval()
 
         world_model_cfg = OmegaConf.select(cfg, "world_model")
         if world_model_cfg is None:
@@ -830,14 +1079,17 @@ class EmbodiedEvalRunner(
 
 
 
-    def _evaluate_libero_online_rssm(self, epoch: int) -> dict[str, float]:
+    def _evaluate_libero_online_latent(self, epoch: int) -> dict[str, float]:
         if not self.distributed.is_main_process:
             return {}
         if self.distributed.uses_fsdp:
             print(
-                "  [Eval] Skipping online_rssm eval under FSDP. Use scripts/eval_libero_vla.sh."
+                "  [Eval] Skipping online_latent eval under FSDP. Use scripts/eval_libero_vla.sh."
             )
             return {}
+
+        eval_cfg = OmegaConf.select(self.cfg, "eval", default=None)
+        _apply_libero_eval_render_regime(self.cfg, eval_cfg)
 
         from libero.libero import benchmark as libero_benchmark
 
@@ -851,7 +1103,6 @@ class EmbodiedEvalRunner(
             save_rollout_video,
         )
 
-        eval_cfg = OmegaConf.select(self.cfg, "eval", default=None)
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
         num_steps_wait = int(protocol["num_steps_wait"])
@@ -860,7 +1111,10 @@ class EmbodiedEvalRunner(
             OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
         )
         num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=50)
+            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3)
+        )
+        enumerate_all_init_states = bool(
+            OmegaConf.select(eval_cfg, "enumerate_all_init_states", default=False)
         )
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=5))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
@@ -871,7 +1125,11 @@ class EmbodiedEvalRunner(
         )
         video_dir = os.path.join(self.output_dir, "videos")
 
-        item_processor = self.encoder._build_processor(self.device)
+        item_processor = (
+            None
+            if getattr(self, "_dreamer_oft_extractor", None) is not None
+            else self.encoder._build_processor(self.device)
+        )
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         total_tasks = int(task_suite.n_tasks)
@@ -898,14 +1156,16 @@ class EmbodiedEvalRunner(
             else TASK_MAX_STEPS.get(task_suite_name, 300)
         )
         print(
-            f"  [Eval][online_rssm] suite='{task_suite_name}' tasks={task_ids} "
+            f"  [Eval][online_latent] suite='{task_suite_name}' tasks={task_ids} "
             f"episodes_per_task={num_episodes} max_steps={max_steps} history_length={history_length} "
             f"seed={seed} num_steps_wait={num_steps_wait}",
             flush=True,
         )
 
-        self.encoder.eval()
+        if self.encoder is not None:
+            self.encoder.eval()
         total_episodes, total_successes = 0, 0
+        task_records: list[dict[str, int]] = []
         run_t0 = time.time()
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
@@ -913,15 +1173,18 @@ class EmbodiedEvalRunner(
             env, task_description = get_libero_env(
                 task, resolution=resolution, seed=seed
             )
-            n_eps = num_episodes
+            episode_indices = self._eval_init_state_indices(
+                len(initial_states), num_episodes, enumerate_all_init_states
+            )
+            n_eps = len(episode_indices)
             print(
-                f"  [Eval][online_rssm] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}): "
+                f"  [Eval][online_latent] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}): "
                 f'"{task_description}" episodes={n_eps}',
                 flush=True,
             )
             task_successes = 0
             task_t0 = time.time()
-            for episode_idx in range(n_eps):
+            for episode_idx in episode_indices:
                 self._dreamer_online_reset()
                 env.reset()
                 obs = env.set_init_state(initial_states[episode_idx])
@@ -931,7 +1194,7 @@ class EmbodiedEvalRunner(
                 ep_t0 = time.time()
                 frame_history: list[tuple[Image.Image, Image.Image]] = []
                 env_actions_buffer: list[np.ndarray] = []
-                rssm_actions_buffer: list[np.ndarray] = []
+                latent_actions_buffer: list[np.ndarray] = []
                 should_record = save_video and total_episodes < video_max_episodes
                 rollout_images: list[np.ndarray] = []
                 steps_taken = 0
@@ -1002,14 +1265,14 @@ class EmbodiedEvalRunner(
                         self._libero_current_eval_context_state = state
                         if not env_actions_buffer:
                             if bool(getattr(self, "_tdmpc_mpc_enabled", False)):
-                                env_actions_buffer, rssm_actions_buffer = (
+                                env_actions_buffer, latent_actions_buffer = (
                                     self._tdmpc_mpc_action_chunk_from_latent(
                                         latent,
                                         action_steps=action_steps,
                                     )
                                 )
                             else:
-                                env_actions_buffer, rssm_actions_buffer = (
+                                env_actions_buffer, latent_actions_buffer = (
                                     self._dreamer_action_chunk_from_latent(
                                         latent,
                                         input_ids=input_ids,
@@ -1035,8 +1298,10 @@ class EmbodiedEvalRunner(
                     if not env_actions_buffer:
                         break
                     action = env_actions_buffer.pop(0)
-                    rssm_action = (
-                        rssm_actions_buffer.pop(0) if rssm_actions_buffer else action
+                    latent_action = (
+                        latent_actions_buffer.pop(0)
+                        if latent_actions_buffer
+                        else action
                     )
                     if bool(
                         OmegaConf.select(
@@ -1052,7 +1317,7 @@ class EmbodiedEvalRunner(
                             float(np.linalg.norm(np.asarray(action, dtype=np.float32)))
                         )
                     self._dreamer_online_prev_action = (
-                        torch.from_numpy(rssm_action).to(self.device).reshape(1, -1)
+                        torch.from_numpy(latent_action).to(self.device).reshape(1, -1)
                     )
                     steps_taken = step_idx + 1
                     if done:
@@ -1143,7 +1408,7 @@ class EmbodiedEvalRunner(
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 print(
-                    f"  [Eval][online_rssm]   ep {episode_idx + 1}/{n_eps} {tag} "
+                    f"  [Eval][online_latent]   ep {episode_idx + 1}/{n_eps} {tag} "
                     f"steps={steps_taken} time={ep_dt:5.1f}s "
                     f"task_succ={task_successes}/{episode_idx + 1} "
                     f"total_succ={total_successes}/{total_episodes}"
@@ -1152,27 +1417,31 @@ class EmbodiedEvalRunner(
                 )
             env.close()
             rate = task_successes / max(n_eps, 1)
+            task_records.append(
+                {
+                    "task_id": int(task_id),
+                    "episodes": int(n_eps),
+                    "successes": int(task_successes),
+                }
+            )
             print(
-                f"  [Eval][online_rssm] <<< Task {task_id} done: success={rate:.1%} "
+                f"  [Eval][online_latent] <<< Task {task_id} done: success={rate:.1%} "
                 f"({task_successes}/{n_eps}) time={time.time() - task_t0:.1f}s",
                 flush=True,
             )
 
-        avg_success = total_successes / max(total_episodes, 1)
+        metrics = summarize_libero_task_success(
+            task_records,
+            episodes_per_task=num_episodes,
+        )
+        avg_success = float(metrics["eval_success_rate"])
         print(
-            f"  [Eval][online_rssm] Epoch {epoch} overall success rate: {avg_success:.1%} "
+            f"  [Eval][online_latent] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
             f"({total_successes}/{total_episodes}) total_time={time.time() - run_t0:.1f}s",
             flush=True,
         )
-        return {
-            "eval_success_rate": avg_success,
-            "eval_total_episodes": float(total_episodes),
-            "eval_total_successes": float(total_successes),
-            "results/total_success_rate": avg_success,
-            "results/total_episodes": float(total_episodes),
-            "results/total_successes": float(total_successes),
-            "eval_dreamer_rollout_mode_online_rssm": 1.0,
-        }
+        metrics["eval_dreamer_rollout_mode_online_latent"] = 1.0
+        return metrics
 
     def _generate_vla_actions_with_trace(
         self,
@@ -1348,20 +1617,24 @@ class EmbodiedEvalRunner(
         with torch.no_grad():
             if self._wm_expects_pixel_images():
                 obs_embedding = self._pixel_obs_for_wm(frame_history)
+                input_ids = None
             else:
-                wm_frame_history = self._dreamer_wm_frame_history(frame_history)
-                input_ids = self._dreamer_wm_observation_input_ids(
-                    item_processor=item_processor,
-                    frame_history=wm_frame_history,
-                    state=state,
-                    task_description=task_description,
+                obs_embedding, input_ids = self._dreamer_obs_embedding_from_eval_inputs(
+                    item_processor,
+                    frame_history,
+                    state,
+                    task_description,
                 )
-                obs_embedding = self._obs_embedding_for_wm([input_ids])
-            actor_input_source = getattr(self, "_dreamer_actor_input_source", "rssm")
+            hidden_tensor = self._hidden_tensor_from_eval_obs(obs_embedding)
+            actor_input_source = getattr(self, "_dreamer_actor_input_source", "latent")
             if actor_input_source == "encoder_sequence":
                 if self._wm_expects_pixel_images():
                     raise RuntimeError(
                         "eval.dreamer_actor_input_source=encoder_sequence requires tokenized VLA inputs"
+                    )
+                if input_ids is None:
+                    raise RuntimeError(
+                        "eval.dreamer_actor_input_source=encoder_sequence is not supported for OFT eval"
                     )
                 hidden_states, seq_input_ids, seq_attention_mask = (
                     self._encode_hidden_sequence_from_tokenized([input_ids])
@@ -1403,7 +1676,7 @@ class EmbodiedEvalRunner(
                     raise RuntimeError(
                         "eval.dreamer_actor_input_source=encoder requires world_model.encoder"
                     )
-                feat = self.world_model.encoder(obs_embedding)
+                feat = self.world_model.encoder(hidden_tensor)
                 if feat.ndim == 3:
                     if feat.shape[1] != 1:
                         raise RuntimeError(
@@ -1415,10 +1688,11 @@ class EmbodiedEvalRunner(
                 feat = self._maybe_add_hidden_noise(feat)
             else:
                 latent = self.world_model(
-                    {"mode": "encode_latent", "hidden": obs_embedding}
+                    {"mode": "encode_latent", "hidden": hidden_tensor}
                 )
+                latent = self._latent_with_eval_sidecars(latent, obs_embedding)
                 if bool(getattr(self, "_tdmpc_mpc_enabled", False)):
-                    env_actions, _rssm_actions = (
+                    env_actions, _latent_actions = (
                         self._tdmpc_mpc_action_chunk_from_latent(
                             latent,
                             action_steps=action_steps,
@@ -1448,8 +1722,8 @@ class EmbodiedEvalRunner(
         raw_action_np = np.asarray(action_chunk_np[0, :7], dtype=np.float32).copy()
         action_np = self._dreamer_policy_raw_to_env_action(raw_action_np)
         self._record_hidden_action_compare(
-            live_hidden=obs_embedding if actor_input_source == "rssm" else None,
-            recon_hidden=feat if actor_input_source == "rssm" else None,
+            live_hidden=hidden_tensor if actor_input_source == "latent" else None,
+            recon_hidden=feat if actor_input_source == "latent" else None,
             recon_action_raw=raw_action_np,
             executed_action=action_np,
             context=getattr(self, "_libero_current_eval_context", None),
@@ -1480,8 +1754,8 @@ class EmbodiedEvalRunner(
             return []
         live_hidden = None
         recon_hidden = None
-        if actor_input_source == "rssm":
-            live_hidden = self._action_hidden_tokens_for_trace(obs_embedding)
+        if actor_input_source == "latent":
+            live_hidden = self._action_hidden_tokens_for_trace(hidden_tensor)
             recon_hidden = self._action_hidden_tokens_for_trace(feat)
         self._write_policy_trace(
             source="dreamer",
@@ -1492,7 +1766,7 @@ class EmbodiedEvalRunner(
             recon_action_hidden=recon_hidden,
             obs_embedding=obs_embedding,
             actor_input=feat,
-            rssm_latent=latent if "latent" in locals() else None,
+            latent=latent if "latent" in locals() else None,
             input_ids=np.asarray(input_ids, dtype=np.float32)
             if "input_ids" in locals() and input_ids is not None
             else None,
@@ -1500,4 +1774,8 @@ class EmbodiedEvalRunner(
         return env_actions
 
 
-__all__ = ["EmbodiedEvalRunner"]
+__all__ = [
+    "EmbodiedEvalRunner",
+    "normalize_dreamer_actor_input_source",
+    "normalize_dreamer_rollout_mode",
+]

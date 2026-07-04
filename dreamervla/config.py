@@ -711,10 +711,10 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             )
     else:
         wm_trajectory_count = wm_envs_per_worker * wm_workers * wm_rollout_epoch
-    logical_trajectory_count = real_trajectory_count + wm_trajectory_count
-    if logical_trajectory_count % group_size != 0:
+    actor_trajectory_count = wm_trajectory_count
+    if actor_trajectory_count % group_size != 0:
         raise ValueError(
-            "manual cotrain logical trajectory count must be divisible by "
+            "manual cotrain actor WM trajectory count must be divisible by "
             "actor.train_cfg.algorithm_cfg.group_size: "
             f"manual_cotrain.ngpu={ngpu}, "
             f"manual_cotrain.envs_per_worker={envs_per_worker}, "
@@ -723,7 +723,8 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             f"manual_cotrain.real_rollout_epoch={real_rollout_epoch}, "
             f"manual_cotrain.wm_rollout_epoch={wm_rollout_epoch}, "
             f"manual_cotrain.wm_rollout_target_trajectories={wm_rollout_target}, "
-            f"logical trajectory count={logical_trajectory_count}, "
+            f"real replay trajectory count={real_trajectory_count}, "
+            f"actor WM trajectory count={actor_trajectory_count}, "
             f"group_size={group_size}"
         )
 

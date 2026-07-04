@@ -60,7 +60,7 @@ class EmbodiedFSDPActor(Worker):
         self.batch: TrajectoryBatch | None = None
         self.returns: torch.Tensor | None = None
         self.advantages: torch.Tensor | None = None
-        self.group_variance_mask: torch.Tensor | None = None
+        self.rollout_filter_mask: torch.Tensor | None = None
         self._advantage_metrics: dict[str, float] = {}
 
     def init(self) -> None:
@@ -163,13 +163,12 @@ class EmbodiedFSDPActor(Worker):
             )
 
         advantages = _group_advantage(returns, group_size, eps=1e-6)
-        if bool(algorithm_cfg.get("filter_zero_variance_groups", False)):
-            var_mask = _group_variance_mask(returns, group_size, eps=1e-6)
-        else:
-            var_mask = torch.ones_like(returns)
-        self.group_variance_mask = var_mask.detach()
+        filter_mask, n_filtered = _rollout_filter_mask(returns, algorithm_cfg, group_size)
+        self.rollout_filter_mask = filter_mask.detach()
         self.returns = returns.detach()
-        self.advantages = (advantages * var_mask).detach()
+        # RLinf applies the reward filter to loss_mask (not the advantage); a
+        # filtered rollout's loss_mask is zeroed so its advantage never enters.
+        self.advantages = advantages.detach()
         self._advantage_metrics = {
             "actor/trajectory_count": float(trajectory_count),
             "actor/loss_mask_sum": float(loss_mask.detach().sum().cpu().item()),
@@ -177,9 +176,7 @@ class EmbodiedFSDPActor(Worker):
             "actor/advantage_std": float(
                 advantages.detach().std(unbiased=False).cpu().item()
             ),
-            "actor/zero_variance_masked_rollouts": float(
-                (var_mask <= 0.0).sum().cpu().item()
-            ),
+            "actor/reward_filtered_rollouts": float(n_filtered),
         }
         return dict(self._advantage_metrics)
 
@@ -194,8 +191,8 @@ class EmbodiedFSDPActor(Worker):
             )
         advantages = self._advantages()
         loss_mask = batch.loss_mask.to(self.torch_device, dtype=torch.bool)
-        if self.group_variance_mask is not None:
-            keep = self.group_variance_mask.to(loss_mask.device) > 0.0
+        if self.rollout_filter_mask is not None:
+            keep = self.rollout_filter_mask.to(loss_mask.device) > 0.0
             loss_mask = loss_mask & keep.reshape((1, -1) + (1,) * (loss_mask.ndim - 2))
         policy = self._policy()
         optimizer = self._optimizer()
@@ -219,6 +216,10 @@ class EmbodiedFSDPActor(Worker):
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
         logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
         token_level_logprob = logprob_type == "token_level"
+        # RLinf masked_mean_ratio: weight every rollout equally regardless of its
+        # valid-step count, instead of the global-valid-count sum (which
+        # over-weights long/failed rollouts). Default preserves current behavior.
+        loss_norm = str(algorithm_cfg.get("loss_normalization", "global_valid_count"))
 
         policy.train()
         losses: list[float] = []
@@ -230,8 +231,6 @@ class EmbodiedFSDPActor(Worker):
         global_time_steps = _distributed_max_int(local_time_steps, self.torch_device)
         local_valid_count = int(loss_mask.sum().detach().cpu().item())
         valid_count = _distributed_sum_int(local_valid_count, self.torch_device)
-        if valid_count <= 0:
-            raise ValueError("trajectory loss_mask has no valid training steps")
         logprob_tokens_per_step = (
             _trailing_numel(batch.prev_logprobs.shape[2:])
             if token_level_logprob
@@ -242,15 +241,32 @@ class EmbodiedFSDPActor(Worker):
             local_logprob_token_count,
             self.torch_device,
         )
+        if valid_count <= 0:
+            policy.train(False)
+            return {
+                "actor/ppo_updates": 0.0,
+                "actor/loss": 0.0,
+                "actor/ratio_mean": 0.0,
+                "actor/entropy_mean": 0.0,
+                "actor/policy_grad_norm": 0.0,
+                "actor/local_time_steps": float(local_time_steps),
+                "actor/global_time_steps": float(global_time_steps),
+                "actor/local_loss_mask_sum": float(local_valid_count),
+                "actor/global_loss_mask_sum": float(valid_count),
+                "actor/local_logprob_token_count": float(local_logprob_token_count),
+                "actor/global_logprob_token_count": float(logprob_token_count),
+                "actor/zero_loss_steps": 0.0,
+                "actor/skipped_zero_valid_update": 1.0,
+                "actor/loss_normalization_per_rollout": (
+                    1.0 if loss_norm == "per_rollout" else 0.0
+                ),
+                "actor/logprob_type_token_level": 1.0 if token_level_logprob else 0.0,
+            }
         loss_reduction_count = (
             logprob_token_count if token_level_logprob else valid_count
         )
         if loss_reduction_count <= 0:
             raise ValueError("trajectory logprob token count is empty")
-        # RLinf masked_mean_ratio: weight every rollout equally regardless of its
-        # valid-step count, instead of the global-valid-count sum (which
-        # over-weights long/failed rollouts). Default preserves current behavior.
-        loss_norm = str(algorithm_cfg.get("loss_normalization", "global_valid_count"))
         per_rollout_count = (
             loss_mask.to(torch.float32)
             .reshape(int(loss_mask.shape[0]), int(loss_mask.shape[1]), -1)
@@ -261,116 +277,152 @@ class EmbodiedFSDPActor(Worker):
             int(loss_mask.shape[1]), self.torch_device
         )
         zero_loss_steps = 0
+        # ─── group-aligned micro-batch slices (MEM-RL-01 / A3) ───────────────
+        # Bound the update's peak activation memory to ONE contiguous block of
+        # GRPO groups (``[b_lo:b_hi]`` on the rollout dim) instead of the full
+        # rollout batch, while each epoch still runs a single optimizer.step
+        # over grads ACCUMULATED across all slices. GRPO groups are contiguous
+        # blocks of ``group_size`` rollouts, so a slice MUST cover whole groups
+        # for its group-relative advantage to match the full-batch one. We slice
+        # in START units: each slice spans ``mb_starts`` groups = the block
+        # ``[lo*g : hi*g]``. The global loss denominators
+        # (``loss_reduction_count`` / ``num_rollouts``) stay UNCHANGED, so
+        # summing per-slice grads reproduces the full-batch update. A config of
+        # ``update_micro_batch_starts`` <= 0 ⇒ one full-batch slice ⇒ bit-for-bit
+        # the original behavior.
+        group_size = max(1, int(algorithm_cfg.get("group_size", 1)))
+        n_starts = max(1, int(loss_mask.shape[1]) // group_size)
+        mb_starts_cfg = int(algorithm_cfg.get("update_micro_batch_starts", 0))
+        mb_starts = (
+            n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
+        )
+        slice_bounds = [
+            (lo * group_size, min(lo + mb_starts, n_starts) * group_size)
+            for lo in range(0, n_starts, mb_starts)
+        ]
         for _ in range(update_epochs):
             optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
             epoch_loss = 0.0
             ratio_sum = 0.0
             entropy_sum = 0.0
-            for step in range(global_time_steps):
-                has_local_step = step < local_time_steps
-                if has_local_step:
-                    step_mask = _as_vector(loss_mask[step]).to(
-                        self.torch_device,
-                        dtype=torch.bool,
-                    )
-                    eval_batch = self._eval_inputs_for_step(batch, step)
-                else:
-                    step_mask = torch.zeros(
-                        int(batch.rewards.shape[1]),
-                        device=self.torch_device,
-                        dtype=torch.bool,
-                    )
-                    eval_batch = self._eval_inputs_for_step(batch, 0)
-                if logprob_type:
-                    eval_batch["logprob_type"] = logprob_type
+            for b_lo, b_hi in slice_bounds:
+                for step in range(global_time_steps):
+                    has_local_step = step < local_time_steps
+                    if has_local_step:
+                        step_mask = _as_vector(loss_mask[step])[b_lo:b_hi].to(
+                            self.torch_device,
+                            dtype=torch.bool,
+                        )
+                        eval_batch = self._eval_inputs_for_step(batch, step)
+                    else:
+                        step_mask = torch.zeros(
+                            b_hi - b_lo,
+                            device=self.torch_device,
+                            dtype=torch.bool,
+                        )
+                        eval_batch = self._eval_inputs_for_step(batch, 0)
+                    eval_batch = {
+                        key: (
+                            value[b_lo:b_hi]
+                            if isinstance(value, torch.Tensor)
+                            else value
+                        )
+                        for key, value in eval_batch.items()
+                    }
+                    if logprob_type:
+                        eval_batch["logprob_type"] = logprob_type
 
-                new_logprob, entropy, _ = policy(eval_batch)
-                if token_level_logprob:
-                    new_logprob = _as_tensor(new_logprob).to(
+                    new_logprob, entropy, _ = policy(eval_batch)
+                    if token_level_logprob:
+                        new_logprob = _as_tensor(new_logprob).to(
+                            self.torch_device,
+                            dtype=torch.float32,
+                        )
+                        entropy = _match_logprob_shape(
+                            _as_tensor(entropy).to(
+                                self.torch_device, dtype=torch.float32
+                            ),
+                            new_logprob,
+                            name="entropy",
+                        )
+                    else:
+                        new_logprob = _as_vector(new_logprob)
+                        entropy = _as_vector(entropy)
+                    if not has_local_step:
+                        loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                        loss.backward()
+                        zero_loss_steps += 1
+                        continue
+
+                    old_logprob_raw = batch.prev_logprobs[step][b_lo:b_hi].to(
                         self.torch_device,
                         dtype=torch.float32,
                     )
-                    entropy = _match_logprob_shape(
-                        _as_tensor(entropy).to(self.torch_device, dtype=torch.float32),
-                        new_logprob,
-                        name="entropy",
+                    old_logprob = (
+                        old_logprob_raw
+                        if token_level_logprob
+                        else _as_vector(old_logprob_raw)
                     )
-                else:
-                    new_logprob = _as_vector(new_logprob)
-                    entropy = _as_vector(entropy)
-                if not has_local_step:
-                    loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
-                    loss.backward()
-                    zero_loss_steps += 1
-                    continue
-
-                old_logprob_raw = batch.prev_logprobs[step].to(
-                    self.torch_device,
-                    dtype=torch.float32,
-                )
-                old_logprob = (
-                    old_logprob_raw
-                    if token_level_logprob
-                    else _as_vector(old_logprob_raw)
-                )
-                advantage = _as_vector(advantages).to(self.torch_device)
-                if new_logprob.shape != old_logprob.shape:
-                    raise ValueError(
-                        "policy evaluate log_prob shape must match prev_logprobs; "
-                        f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
-                    )
-                if token_level_logprob:
-                    if advantage.shape[:1] != old_logprob.shape[:1]:
+                    advantage = _as_vector(advantages).to(self.torch_device)[
+                        b_lo:b_hi
+                    ]
+                    if new_logprob.shape != old_logprob.shape:
                         raise ValueError(
-                            "advantage batch size must match prev_logprobs; "
+                            "policy evaluate log_prob shape must match prev_logprobs; "
+                            f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
+                        )
+                    if token_level_logprob:
+                        if advantage.shape[:1] != old_logprob.shape[:1]:
+                            raise ValueError(
+                                "advantage batch size must match prev_logprobs; "
+                                f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                            )
+                    elif advantage.shape != old_logprob.shape:
+                        raise ValueError(
+                            "advantage shape must match prev_logprobs; "
                             f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
                         )
-                elif advantage.shape != old_logprob.shape:
-                    raise ValueError(
-                        "advantage shape must match prev_logprobs; "
-                        f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                    if not bool(step_mask.any().item()):
+                        loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                        loss.backward()
+                        zero_loss_steps += 1
+                        continue
+                    old_logprob = old_logprob[step_mask]
+                    advantage = advantage[step_mask]
+                    new_logprob = new_logprob[step_mask]
+                    entropy = entropy[step_mask]
+                    if token_level_logprob:
+                        advantage = _expand_batch_vector_as(advantage, new_logprob)
+
+                    ratio = _ppo_ratio(
+                        new_logprob,
+                        old_logprob,
+                        clip_log_ratio=clip_log_ratio,
                     )
-                if not bool(step_mask.any().item()):
-                    loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                    ppo_clip = _ppo_clip_term(
+                        ratio,
+                        advantage,
+                        clip_low,
+                        clip_high,
+                        clip_ratio_c=clip_ratio_c,
+                    )
+                    if loss_norm == "per_rollout" and not token_level_logprob:
+                        step_weight = (
+                            1.0 / per_rollout_count.to(self.torch_device)
+                        )[b_lo:b_hi][step_mask]
+                        loss = (
+                            (ppo_clip * step_weight).sum()
+                            - float(entropy_coef) * (entropy * step_weight).sum()
+                        ) / float(num_rollouts)
+                    else:
+                        loss = (
+                            ppo_clip.sum() - float(entropy_coef) * entropy.sum()
+                        ) / float(loss_reduction_count)
                     loss.backward()
-                    zero_loss_steps += 1
-                    continue
-                old_logprob = old_logprob[step_mask]
-                advantage = advantage[step_mask]
-                new_logprob = new_logprob[step_mask]
-                entropy = entropy[step_mask]
-                if token_level_logprob:
-                    advantage = _expand_batch_vector_as(advantage, new_logprob)
 
-                ratio = _ppo_ratio(
-                    new_logprob,
-                    old_logprob,
-                    clip_log_ratio=clip_log_ratio,
-                )
-                ppo_clip = _ppo_clip_term(
-                    ratio,
-                    advantage,
-                    clip_low,
-                    clip_high,
-                    clip_ratio_c=clip_ratio_c,
-                )
-                if loss_norm == "per_rollout" and not token_level_logprob:
-                    step_weight = (
-                        1.0 / per_rollout_count.to(self.torch_device)
-                    )[step_mask]
-                    loss = (
-                        (ppo_clip * step_weight).sum()
-                        - float(entropy_coef) * (entropy * step_weight).sum()
-                    ) / float(num_rollouts)
-                else:
-                    loss = (
-                        ppo_clip.sum() - float(entropy_coef) * entropy.sum()
-                    ) / float(loss_reduction_count)
-                loss.backward()
-
-                epoch_loss += float(loss.detach().cpu().item())
-                ratio_sum += float(ratio.detach().sum().cpu().item())
-                entropy_sum += float(entropy.detach().sum().cpu().item())
+                    epoch_loss += float(loss.detach().cpu().item())
+                    ratio_sum += float(ratio.detach().sum().cpu().item())
+                    entropy_sum += float(entropy.detach().sum().cpu().item())
             grad_norm = self._clip_or_measure_grad_norm(optim_cfg)
             optimizer.step()
 
@@ -394,6 +446,7 @@ class EmbodiedFSDPActor(Worker):
             "actor/local_logprob_token_count": float(local_logprob_token_count),
             "actor/global_logprob_token_count": float(logprob_token_count),
             "actor/zero_loss_steps": float(zero_loss_steps),
+            "actor/skipped_zero_valid_update": 0.0,
             "actor/loss_normalization_per_rollout": (
                 1.0 if loss_norm == "per_rollout" else 0.0
             ),
@@ -733,6 +786,33 @@ _GRPO_HELPERS = _load_grpo_helpers()
 _entropy_coef = _GRPO_HELPERS._entropy_coef
 _group_advantage = _GRPO_HELPERS._group_advantage
 _group_variance_mask = _GRPO_HELPERS.group_variance_mask
+
+
+def _rollout_filter_mask(
+    returns: torch.Tensor,
+    algorithm_cfg: dict,
+    group_size: int,
+) -> tuple[torch.Tensor, int]:
+    """Per-rollout keep mask for the GRPO loss, matching RLinf's trunk.
+
+    ``filter_rewards`` (RLinf ``fsdp_actor_worker.filter_rewards``): drop whole
+    groups whose ``reward_coef``-scaled mean summed reward falls outside
+    ``[rewards_lower_bound, rewards_upper_bound]`` (all-fail / all-success
+    degenerate groups). Falls back to the legacy zero-variance filter, then to
+    keeping everything.
+    """
+    if bool(algorithm_cfg.get("filter_rewards", False)):
+        coef = float(algorithm_cfg.get("reward_coef", 1.0))
+        lower = float(algorithm_cfg.get("rewards_lower_bound", float("-inf")))
+        upper = float(algorithm_cfg.get("rewards_upper_bound", float("inf")))
+        group_mean = (returns * coef).reshape(-1, int(group_size)).mean(dim=1)
+        keep = (group_mean >= lower) & (group_mean <= upper)
+        mask = keep.to(returns.dtype).repeat_interleave(int(group_size))
+    elif bool(algorithm_cfg.get("filter_zero_variance_groups", False)):
+        mask = _group_variance_mask(returns, int(group_size), eps=1e-6)
+    else:
+        mask = torch.ones_like(returns)
+    return mask, int((mask <= 0.0).sum().item())
 _ppo_clip_term = _GRPO_HELPERS._ppo_clip_term
 _ppo_ratio = _GRPO_HELPERS._ppo_ratio
 

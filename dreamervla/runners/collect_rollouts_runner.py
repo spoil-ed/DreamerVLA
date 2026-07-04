@@ -61,6 +61,9 @@ class CollectRolloutsRunner(BaseRunner):
                 default=hidden_default,
             )
         hidden_dir = OmegaConf.select(cfg, "collect.hidden_dir", default=hidden_default)
+        render_devices = OmegaConf.select(cfg, "collect.render_devices", default=[])
+        if OmegaConf.is_config(render_devices):
+            render_devices = OmegaConf.to_container(render_devices, resolve=True)
         collect_cfg = {
             "model_path": str(oft.ckpt_path),
             "policy_mode": str(OmegaConf.select(cfg, "collect.policy_mode", default="auto")),
@@ -73,6 +76,14 @@ class CollectRolloutsRunner(BaseRunner):
             "envs_per_gpu": int(cfg.collect.envs_per_gpu),
             "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
             "memory_fraction": float(cfg.collect.memory_fraction),
+            "render_backend": str(
+                OmegaConf.select(
+                    cfg,
+                    "collect.render_backend",
+                    default=OmegaConf.select(cfg, "render_backend", default="egl"),
+                )
+            ),
+            "render_devices": list(render_devices or []),
             "reward_dir": str(reward_dir),
             "hidden_dir": str(hidden_dir),
             "image_keys": image_keys,

@@ -11,8 +11,23 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from omegaconf import OmegaConf
 
+from dreamervla.runners._embodied_eval_action_mixin import EmbodiedEvalActionMixin
 from dreamervla.runners.oft_collect_common import process_action, process_action_batch
+
+
+class _EvalActionHarness(EmbodiedEvalActionMixin):
+    def __init__(self, action_postprocess: str = "none") -> None:
+        self.cfg = OmegaConf.create(
+            {
+                "eval": {
+                    "dreamer_unnorm_actions": False,
+                    "action_postprocess": action_postprocess,
+                }
+            }
+        )
+        self._dreamer_clip_actions = True
 
 
 @pytest.mark.parametrize(
@@ -75,3 +90,22 @@ def test_batch_postprocess_matches_per_action_and_does_not_mutate_input() -> Non
     assert out.dtype == np.float32
     np.testing.assert_allclose(out, expected)
     np.testing.assert_array_equal(raw, raw_copy)
+
+
+def test_eval_action_postprocess_defaults_to_no_gripper_mapping() -> None:
+    harness = _EvalActionHarness()
+
+    out = harness._dreamer_policy_raw_to_env_action(
+        np.array([0.1, -0.2, 0.3, 0.0, 0.0, 0.0, 0.9], dtype=np.float32)
+    )
+
+    assert float(out[-1]) == pytest.approx(0.9)
+
+
+def test_eval_openvla_oft_action_postprocess_reuses_shared_gripper_mapping() -> None:
+    harness = _EvalActionHarness("openvla_oft")
+    raw = np.array([0.1, -0.2, 0.3, 0.0, 0.0, 0.0, 0.9], dtype=np.float32)
+
+    out = harness._dreamer_policy_raw_to_env_action(raw)
+
+    np.testing.assert_allclose(out, process_action(raw))
