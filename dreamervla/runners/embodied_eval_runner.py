@@ -43,7 +43,7 @@ from dreamervla.runners._embodied_eval_latent_mixin import EmbodiedEvalLatentMix
 from dreamervla.runners.eval_metrics import summarize_libero_task_success
 from dreamervla.runners.pretokenize_vla_runner import (
     PretokenizeVLARunner,
-    _apply_libero_eval_render_regime,
+    _eval_render_regime_params,
 )
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
@@ -1089,19 +1089,26 @@ class EmbodiedEvalRunner(
             return {}
 
         eval_cfg = OmegaConf.select(self.cfg, "eval", default=None)
-        _apply_libero_eval_render_regime(self.cfg, eval_cfg)
+        # EGL isolation: render in a spawned subprocess (isomorphic to
+        # collect/cotrain), NOT in this torch process. Setting an EGL context
+        # next to the torch CUDA context here makes mjr_readPixels abort after a
+        # few hundred steps. Pass the render regime to the child instead.
+        render_backend, render_shard_id, render_gpu_pool = _eval_render_regime_params(
+            self.cfg, eval_cfg
+        )
 
         from libero.libero import benchmark as libero_benchmark
+        from libero.libero import get_libero_path
 
         from dreamervla.envs import (
             TASK_MAX_STEPS,
             get_libero_dummy_action,
-            get_libero_env,
             get_libero_image,
             quat2axisangle,
             resolve_libero_eval_protocol,
             save_rollout_video,
         )
+        from dreamervla.runners.eval_subproc_env import EvalSubprocEnv, make_libero_env_fn
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
@@ -1170,9 +1177,21 @@ class EmbodiedEvalRunner(
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
-            env, task_description = get_libero_env(
-                task, resolution=resolution, seed=seed
+            task_bddl_file = os.path.join(
+                get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
             )
+            env = EvalSubprocEnv(
+                make_libero_env_fn(
+                    bddl_file_name=task_bddl_file,
+                    resolution=resolution,
+                    seed=seed,
+                    render_backend=render_backend,
+                    render_shard_id=render_shard_id,
+                    render_gpu_pool=render_gpu_pool,
+                ),
+                task_description=task.language,
+            )
+            task_description = env.task_description
             episode_indices = self._eval_init_state_indices(
                 len(initial_states), num_episodes, enumerate_all_init_states
             )

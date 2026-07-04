@@ -57,26 +57,45 @@ def _eval_render_gpu_pool(root_cfg: DictConfig, eval_cfg: Any, backend: str) -> 
         devices = parse_device_ids(OmegaConf.select(eval_cfg, key, default=None))
         if devices:
             return devices
-    devices = cuda_visible_devices_from_env()
-    if devices:
-        return devices
+    # Auto default: keep mujoco EGL render on a physical GPU DISJOINT from the
+    # torch compute device (cuda:0 = first visible). A heavy torch policy and
+    # mujoco EGL on ONE physical GPU abort mjr_readPixels after a few hundred
+    # renders; both GPUs stay in CUDA_VISIBLE_DEVICES so MUJOCO_EGL_DEVICE_ID
+    # remains a valid global EGL id (robosuite asserts it is visible). With a
+    # single visible GPU there is no disjoint choice; fall back to it (short
+    # evals hold, long ones need >=2 GPUs or render_backend=osmesa).
+    visible = cuda_visible_devices_from_env()
+    if len(visible) >= 2:
+        return visible[1:]
+    if visible:
+        return visible
     devices = parse_device_ids(OmegaConf.select(root_cfg, "eval.gpus", default=None))
     if devices:
-        return devices
+        return devices[1:] if len(devices) >= 2 else devices
     if torch.cuda.is_available():
-        return list(range(torch.cuda.device_count()))
+        count = torch.cuda.device_count()
+        return list(range(1, count)) if count >= 2 else list(range(count))
     return []
+
+
+def _eval_render_regime_params(
+    root_cfg: DictConfig, eval_cfg: Any
+) -> tuple[str, int, list[int]]:
+    """Resolve (backend, shard_id, gpu_pool) for the LIBERO render regime.
+
+    Used to hand the render regime to a subprocess env (EvalSubprocEnv) so the
+    child applies it via the same shared ``apply_libero_render_regime`` helper,
+    instead of setting an EGL context in the eval process next to torch.
+    """
+    backend = _select_eval_render_backend(root_cfg, eval_cfg)
+    shard_id = int(OmegaConf.select(eval_cfg, "render_shard_id", default=0))
+    return backend, shard_id, _eval_render_gpu_pool(root_cfg, eval_cfg, backend)
 
 
 def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> None:
     """Apply the LIBERO render backend before eval imports robosuite/LIBERO envs."""
-    backend = _select_eval_render_backend(root_cfg, eval_cfg)
-    shard_id = int(OmegaConf.select(eval_cfg, "render_shard_id", default=0))
-    apply_libero_render_regime(
-        backend,
-        shard_id,
-        _eval_render_gpu_pool(root_cfg, eval_cfg, backend),
-    )
+    backend, shard_id, gpu_pool = _eval_render_regime_params(root_cfg, eval_cfg)
+    apply_libero_render_regime(backend, shard_id, gpu_pool)
 
 
 class PretokenizeVLARunner(BaseRunner):
