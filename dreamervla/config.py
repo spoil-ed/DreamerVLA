@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -605,6 +606,31 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "learner.train_cfg.precision must be one of "
                 f"fp32, bf16, or fp16; got {precision!r}"
             )
+    _warn_manual_cotrain_baseline_overrides(cfg)
+
+
+def _warn_manual_cotrain_baseline_overrides(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("ManualCotrainRayRunner"):
+        return
+
+    baselines = {
+        "real_rollout_target_trajectories": 32,
+        "wm_rollout_target_trajectories": 256,
+        "max_steps_per_rollout_epoch": 512,
+    }
+    for field, baseline in baselines.items():
+        path = f"manual_cotrain.{field}"
+        value = OmegaConf.select(cfg, path, default=None)
+        if value is None or int(value) == baseline:
+            continue
+        warnings.warn(
+            f"{path} overrides the mainline baseline {baseline}; got {value!r}. "
+            "This is allowed for smoke/tiny runs but should not become the "
+            "OpenVLA one-trajectory cotrain default.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:

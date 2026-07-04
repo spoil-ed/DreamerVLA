@@ -13,7 +13,7 @@ def _cfg(**manual_overrides):
         "learner_update_step": 1,
         "sync_every": 1,
         "rollout_epoch": 1,
-        "max_steps_per_rollout_epoch": 4,
+        "max_steps_per_rollout_epoch": 512,
         "num_action_chunks": 2,
         "envs_per_worker": 1,
     }
@@ -37,6 +37,31 @@ def _cfg(**manual_overrides):
 
 def test_manual_cotrain_allows_zero_gpu() -> None:
     validate_cfg(_cfg(ngpu=0))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "baseline"),
+    (
+        ("real_rollout_target_trajectories", 8, 32),
+        ("wm_rollout_target_trajectories", 128, 256),
+        ("max_steps_per_rollout_epoch", 64, 512),
+    ),
+)
+def test_manual_cotrain_warns_when_baseline_rollout_budget_is_overridden(
+    field: str,
+    value: int,
+    baseline: int,
+) -> None:
+    cfg = _cfg(**{field: value})
+
+    with pytest.warns(
+        UserWarning,
+        match=(
+            f"manual_cotrain.{field} overrides the mainline baseline "
+            f"{baseline}"
+        ),
+    ):
+        validate_cfg(cfg)
 
 
 def test_manual_cotrain_rejects_negative_gpu_count() -> None:
