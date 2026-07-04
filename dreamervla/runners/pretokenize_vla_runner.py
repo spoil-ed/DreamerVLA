@@ -89,7 +89,26 @@ def _eval_render_regime_params(
     """
     backend = _select_eval_render_backend(root_cfg, eval_cfg)
     shard_id = int(OmegaConf.select(eval_cfg, "render_shard_id", default=0))
-    return backend, shard_id, _eval_render_gpu_pool(root_cfg, eval_cfg, backend)
+    gpu_pool = _eval_render_gpu_pool(root_cfg, eval_cfg, backend)
+    if backend == "egl":
+        compute = cuda_visible_devices_from_env()
+        # mujoco EGL and a heavy torch policy on the SAME physical GPU abort
+        # mjr_readPixels under load (NVIDIA EGL driver contention — NOT memory;
+        # verified with 63 GB free at crash). The render GPU must be disjoint
+        # from the torch compute GPU (cuda:0 == compute[0]). If it cannot be
+        # (single visible GPU, or an explicit pool overlapping compute[0]),
+        # fall back to osmesa — the only reliable same-GPU path.
+        if compute and gpu_pool and compute[0] in gpu_pool:
+            print(
+                "  [Eval] render_backend=egl but the render GPU overlaps the torch "
+                "compute GPU (cuda:0); mujoco EGL + a heavy policy on one physical GPU "
+                "abort mjr_readPixels. Falling back to render_backend=osmesa. Give >=2 "
+                "GPUs (CUDA_VISIBLE_DEVICES) or an explicit disjoint eval.render_gpu_pool "
+                "for real EGL eval.",
+                flush=True,
+            )
+            return "osmesa", shard_id, []
+    return backend, shard_id, gpu_pool
 
 
 def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> None:
