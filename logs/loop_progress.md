@@ -26,8 +26,23 @@
 
 ## Current Atomic Step
 
-- Step: `R3/R1 — clean base landed; NEXT = implement RLinf-aligned subprocess eval fix`
-- Status: `UNBLOCKED — in-flight state committed (2249054)`
+- Step: `R3/R1 — eval EGL crash SOLVED (root cause nailed, all GPU cases handled)`
+- Status: `DONE (eval EGL) — commits 5ac38e5, 5785a1c`
+- Root cause NAILED (A/B + instrumented, NOT the earlier guesses): mujoco EGL + a heavy torch
+  policy on the SAME PHYSICAL GPU → NVIDIA libnvidia-eglcore abort() inside mjr_readPixels after a
+  few hundred renders. Evidence: same-GPU crashes, disjoint (torch@0/EGL@7) sustains 300 steps;
+  NOT memory (63 GB FREE at crash); NOT GPU-numbering (mujoco/robosuite use global EGL id AND assert
+  it ∈ CUDA_VISIBLE_DEVICES, so ids agree); NOT fork/context (spawn, crashes after 100s of renders).
+- Fix (all cases): eval renders LIBERO in a spawn subprocess (EvalSubprocEnv, RLinf-ported) +
+  `_eval_render_gpu_pool` defaults render GPU DISJOINT from torch cuda:0 (`visible[1:]`); single-GPU
+  or overlapping-pool → auto osmesa downgrade + warning; mainline post-step eval already disjoint
+  (`_post_step_eval_egl_device_id` = last of eval.gpus). Verified: dreamer eval 2-GPU disjoint 300
+  steps 0 abort; single-GPU osmesa 300 steps 0 abort.
+- Remaining (separate issues, NOT EGL): (1) base-VLA eval (`ckpt_kind=vla`, in-process render) blocked
+  by RynnVLAEncoder default config bug (`'NoneType'.get`) = SPEC §4 encoder issue — gets osmesa
+  downgrade on 1 GPU but in-process disjoint EGL untested behind that bug; (2) eval SR=0.0 = policy
+  quality, not EGL. Both are the R1 base-SR track, separate from the EGL crash.
+- (history) clean base landed at 2249054; restore infra 4a done.
 - Done this step: user authorized committing the whole in-flight state. Committed `2249054`
   (61 files: in-flight EGL/eval/per-rank refactor + classifier_metrics decoupling + restore-script
   setup-scripts curation), 74 archive renames kept staged separate. Closed-loop: my restore-script
