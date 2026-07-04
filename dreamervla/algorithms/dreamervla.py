@@ -33,7 +33,8 @@ from omegaconf import DictConfig
 from torch import nn
 from torch.distributions import Normal
 
-from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker, soft_update
+from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.utils.polyak import soft_update
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 

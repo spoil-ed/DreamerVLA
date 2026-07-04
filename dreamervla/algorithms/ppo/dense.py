@@ -63,7 +63,7 @@ from dreamervla.algorithms.ppo.tdmpc_critic import (
     _tdmpc_critic_hidden,
     _tdmpc_value_mode,
 )
-from dreamervla.models.critic.twohot_critic import soft_update
+from dreamervla.utils.polyak import soft_update
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
