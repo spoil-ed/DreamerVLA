@@ -26,8 +26,24 @@
 
 ## Current Atomic Step
 
-- Step: `R3/R1 — eval EGL fix, RLinf review DONE, impl BLOCKED on in-flight`
-- Status: `BLOCKED (needs in-flight eval diff committed first)`
+- Step: `R3/R1 — clean base landed; NEXT = implement RLinf-aligned subprocess eval fix`
+- Status: `UNBLOCKED — in-flight state committed (2249054)`
+- Done this step: user authorized committing the whole in-flight state. Committed `2249054`
+  (61 files: in-flight EGL/eval/per-rank refactor + classifier_metrics decoupling + restore-script
+  setup-scripts curation), 74 archive renames kept staged separate. Closed-loop: my restore-script
+  (2baf4b7) had broken 2 test_setup_scripts assertions (uncurated/unregistered script); fixed by
+  adding it to the curated top-level set + allowed_unregistered (the release-docs word ban forbids
+  "archive" in scripts/README.md, so it is manifest-documented, not README-registered). Committed
+  tree composes 6/6. Known remaining failures (documented, NOT mine): test_env_full_record,
+  test_learner_worker_manual_precision, test_multistep_rollout_worker (in-flight WIP),
+  test_repository_hygiene (loop reports under logs/).
+- NEXT (eval fix): route the dreamer eval `_evaluate_libero_online_latent` LIBERO env through the
+  SAME subprocess mechanism collect/cotrain use (VecRolloutEnv / env_worker + apply_libero_render_regime)
+  instead of in-process get_libero_env, so mujoco EGL is isolated from the eval torch-CUDA context.
+  Acceptance: ISOMORPHIC to collect/cotrain (same class+helper) + max_steps=300 eval SUSTAINS
+  (no abort 134). GPU-gated verify.
+- Original blocker cleared: eval files were entangled with the in-flight refactor (515 lines); now
+  committed, so the fix can be implemented on a clean base without a merge conflict.
 - Decisions (user 2026-07-04): eval fix = align to RLinf (NOT osmesa); R4 = aggressive
   (repoint train.yaml default + rewrite route tests). Acceptance add-on: eval must be
   ISOMORPHIC to collect/cotrain (same subprocess class + same `apply_libero_render_regime`),
