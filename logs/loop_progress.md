@@ -4,20 +4,21 @@
 
 - Requested SPEC: `docs/superpowers/specs/2026-07-04-mainline-deprecation-egl-align-design.md`
 - Mainline tutorial: `docs/tutorials/experiments/OpenVLA_Onetraj_LIBERO.md`
-- Current status: SPEC is missing from the current worktree, git refs, and attachment search. This ledger is provisional and uses only the explicit R1-R4 acceptance criteria from the pasted objective until the SPEC is restored.
+- Current status: SPEC recovered from the ignored approved plan at `docs/superpowers/plans/2026-07-04-mainline-deprecation-egl-align.md` into the requested specs path.
 
 ## Ledger
 
 | ID | Step | Status | Notes |
 | --- | --- | --- | --- |
-| SPEC-0 | Locate and read the authoritative SPEC, then replace this provisional ledger with the SPEC step list. | BLOCKED | The named SPEC path does not exist; `git log --all`, `git rev-list --all --objects`, workspace search, and attachment search found no copy. |
-| R1 | Baseline VLA SR through `eval.ckpt_kind=vla`, then cotrain runs 5 `global_step` with improving SR for both `manual_cotrain_ray_tiny` and real `32real/256imagine/global_steps=5`. | TODO | Provisional item from pasted objective; exact SPEC substeps unknown. |
-| R2 | Lock `real=32`, `imagine=256`, `step=512` in Ray and launcher configs, with `dreamervla/config.py` early validation. | TODO | Provisional item from pasted objective; exact SPEC substeps unknown. |
-| R3 | Align default EGL for collect/cotrain-real/eval, per-worker EGL device assignment, OSMesa fallback, and zero-GPU EGL rejection. | TODO | Provisional item from pasted objective; exact SPEC substeps unknown. |
-| R4 | Move all non-mainline routes/files to `archive/` with manifest and restore script while keeping mainline six experiments composable and tests green. | TODO | Provisional item from pasted objective; exact SPEC substeps unknown. |
+| SPEC-0 | Locate and recover the authoritative SPEC at the requested path, then replace the provisional ledger with the SPEC step list. | DONE | Recovered to `docs/superpowers/specs/2026-07-04-mainline-deprecation-egl-align-design.md`. |
+| Step 1 | 冻结主线契约（R2）：锁定/sync `real=32`, `imagine=256`, `step=512` 双写点，并在 `dreamervla/config.py` 加基线告警校验。 | TODO | Verify: config validation branch, compose `openvla_onetraj_libero_cotrain_ray` prints 32/256/512, tiny override warning visible. |
+| Step 2 | EGL 三处对齐（R3）：实证 collect 渲染入口，默认 collect/cotrain-real/eval 为 `egl`，复用/扩展 per-worker device binding，保留 osmesa 回退和零 GPU 拒绝。 | TODO | Verify: defaults are `egl`; GPU smoke if available, otherwise static path + GPU-GATED. |
+| Step 3 | base-VLA 基线 eval + 5 步双档验收（R1）：base `eval.ckpt_kind=vla`，tiny 5 step，真实 32/256/512 5 step。 | TODO | Verify: base SR and cotrain SR under `eval/`, JSONL/TensorBoard persisted, trend reported. |
+| Step 4 | 激进废弃（R4）：grep 主线引用，`git mv` 非主线到 `archive/`，更新 manifest 和 restore script，清理悬空 import。 | TODO | Verify: six mainline experiments compose, tests green, `restore_from_archive.sh --dry-run` lists restore actions. |
+| Step 5 | 文档：更新 mainline tutorial，写清 R1/R2/R3 默认值、base-VLA 基线评测命令、EGL 默认、废弃与还原说明。 | TODO | Verify: doc commands and config keys cross-checked. |
 
 ## Current Atomic Step
 
 - Step: `SPEC-0`
-- Status: `BLOCKED`
-- Reason: The loop requires reading the authoritative SPEC before selecting and implementing a real TODO. That file is absent in the current local state.
+- Status: `DONE`
+- Reason: The approved SPEC candidate was recovered into the requested specs path, and this ledger now tracks the SPEC Step 1-5 sequence.
