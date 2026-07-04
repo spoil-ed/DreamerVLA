@@ -5,6 +5,10 @@ from __future__ import annotations
 import logging
 import os
 
+_ZERO_GPU_EGL_ERROR = (
+    "render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0"
+)
+
 
 def apply_egl_device_regime(
     egl_device_id: int | None,
@@ -31,6 +35,27 @@ def apply_egl_device_regime(
     os.environ["CUDA_VISIBLE_DEVICES"] = device
     os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
     _log_egl_devices(logger, int(egl_device_id))
+
+
+def apply_libero_render_regime(backend: str, shard_id: int, gpu_pool: list[int]) -> None:
+    """Apply LIBERO render env vars before robosuite/mujoco initialization."""
+    normalized = str(backend).strip().lower()
+    if normalized not in {"egl", "osmesa"}:
+        raise ValueError("backend must be one of: egl, osmesa")
+
+    if normalized == "osmesa":
+        os.environ["MUJOCO_GL"] = "osmesa"
+        os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+        os.environ.pop("MUJOCO_EGL_DEVICE_ID", None)
+        return
+
+    from dreamervla.runners.render_device_config import parse_device_ids
+
+    devices = parse_device_ids(gpu_pool)
+    if not devices:
+        raise ValueError(_ZERO_GPU_EGL_ERROR)
+    egl_device_id = devices[int(shard_id) % len(devices)]
+    apply_egl_device_regime(egl_device_id, logger_name=__name__)
 
 
 def log_egl_device_diagnostics_from_env(*, logger_name: str) -> None:
