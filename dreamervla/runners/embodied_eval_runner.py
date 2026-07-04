@@ -49,6 +49,20 @@ from dreamervla.utils.paths import data_path
 from dreamervla.utils.torch_utils import freeze_module
 
 
+class _OFTBaseEvalAdapter:
+    """Adapter that lets the existing LIBERO eval loop drive an OFT extractor."""
+
+    def __init__(self, extractor: Any) -> None:
+        self.extractor = extractor
+        self.backbone = self
+
+    def _build_processor(self, _device: torch.device) -> None:
+        return None
+
+    def eval(self) -> _OFTBaseEvalAdapter:
+        return self
+
+
 class EmbodiedEvalRunner(
     EmbodiedEvalExportMixin,
     EmbodiedEvalImageTokenMixin,
@@ -65,6 +79,115 @@ class EmbodiedEvalRunner(
     @property
     def default_output_dir(self) -> str:
         return str(data_path("outputs", "eval", "eval_libero_vla"))
+
+    @staticmethod
+    def _oft_base_policy_cfg(cfg: DictConfig, ckpt_path: str) -> dict[str, Any]:
+        return {
+            "model_path": str(ckpt_path),
+            "num_images_in_input": int(
+                OmegaConf.select(cfg, "task.openvla_oft.num_images_in_input", default=1)
+            ),
+            "policy_mode": "auto",
+            "unnorm_key": str(
+                OmegaConf.select(
+                    cfg,
+                    "task.openvla_oft.dataset_statistics_key",
+                    default="libero_goal_no_noops",
+                )
+            ),
+            "expected_action_head_type": OmegaConf.select(
+                cfg, "task.openvla_oft.expected_action_head_type", default=None
+            ),
+            "expected_include_state": OmegaConf.select(
+                cfg, "task.openvla_oft.expected_include_state", default=None
+            ),
+            "_rank": 0,
+        }
+
+    @staticmethod
+    def _use_oft_base_eval(
+        cfg: DictConfig,
+        *,
+        ckpt_kind: str,
+        ckpt_is_hf_vla: bool,
+    ) -> bool:
+        target = str(
+            OmegaConf.select(cfg, "task.openvla_oft.sft_policy_target", default="")
+        )
+        return (
+            str(ckpt_kind).lower() == "vla"
+            and bool(ckpt_is_hf_vla)
+            and target.endswith("OpenVLAOFTPolicy")
+        )
+
+    @staticmethod
+    def _oft_base_eval_obs_from_libero_raw(
+        raw_obs: dict[str, Any],
+        state: np.ndarray,
+    ) -> dict[str, Any]:
+        third = raw_obs.get("agentview_rgb", raw_obs.get("agentview_image"))
+        wrist = raw_obs.get(
+            "eye_in_hand_rgb", raw_obs.get("robot0_eye_in_hand_image")
+        )
+        if third is None or wrist is None:
+            raise KeyError("OFT base eval requires LIBERO agentview and wrist images")
+        state_arr = np.asarray(state, dtype=np.float32).reshape(-1)
+        return {
+            "agentview_rgb": np.ascontiguousarray(np.asarray(third, dtype=np.uint8)),
+            "eye_in_hand_rgb": np.ascontiguousarray(np.asarray(wrist, dtype=np.uint8)),
+            "state": state_arr,
+            "proprio": state_arr,
+        }
+
+    def _build_oft_base_eval_adapter(
+        self,
+        cfg: DictConfig,
+        ckpt_path: str,
+    ) -> _OFTBaseEvalAdapter:
+        from dreamervla.workers.inference.oft_rollout import OFTRolloutBundle
+
+        policy_cfg = self._oft_base_policy_cfg(cfg, ckpt_path)
+        image_keys = list(
+            OmegaConf.select(
+                cfg,
+                "task.image_keys",
+                default=["agentview_rgb", "eye_in_hand_rgb"],
+            )
+        )
+        bundle = OFTRolloutBundle(
+            policy_cfg=policy_cfg,
+            unnorm_key=str(policy_cfg["unnorm_key"]),
+            image_keys=image_keys,
+            history=int(
+                OmegaConf.select(
+                    cfg, "task.openvla_oft.input_tokens.expected_history", default=1
+                )
+            ),
+            rotate_images_180=bool(
+                OmegaConf.select(
+                    cfg,
+                    "task.openvla_oft.input_tokens.expected_rotate_images_180",
+                    default=True,
+                )
+            ),
+            center_crop=bool(
+                OmegaConf.select(cfg, "task.openvla_oft.center_crop", default=True)
+            ),
+            obs_hidden_source=str(
+                OmegaConf.select(
+                    cfg,
+                    "task.openvla_oft.input_tokens.expected_obs_hidden_source",
+                    default="action_query",
+                )
+            ),
+            expected_action_head_type=policy_cfg.get("expected_action_head_type"),
+            expected_include_state=policy_cfg.get("expected_include_state"),
+            device=str(self.device),
+        )
+        extractor = bundle.make_extractor()
+        self._base_oft_extractor = extractor
+        return _OFTBaseEvalAdapter(extractor)
+
 
     @property
     def _action_token_id(self) -> int:
@@ -117,15 +240,22 @@ class EmbodiedEvalRunner(
             if is_dreamer:
                 return self._run_dreamer_eval(cfg, ckpt_path, payload)
 
-        # ── encoder (inference only; no optimiser, no distributed wrapping) ──
-        encoder_cfg = self._build_trainable_encoder_cfg(cfg)
-        if ckpt_is_hf_vla:
+        # ── encoder/policy (inference only; no optimiser, no distributed wrapping) ──
+        if self._use_oft_base_eval(
+            cfg,
+            ckpt_kind=ckpt_kind,
+            ckpt_is_hf_vla=ckpt_is_hf_vla,
+        ):
+            self.encoder = self._build_oft_base_eval_adapter(cfg, str(ckpt_path))
+        else:
+            encoder_cfg = self._build_trainable_encoder_cfg(cfg)
+            if ckpt_is_hf_vla:
+                with open_dict(encoder_cfg):
+                    encoder_cfg.model_path = ckpt_path
             with open_dict(encoder_cfg):
-                encoder_cfg.model_path = ckpt_path
-        with open_dict(encoder_cfg):
-            encoder_cfg.freeze_backbone = True
-        self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        self.encoder.eval()
+                encoder_cfg.freeze_backbone = True
+            self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
+            self.encoder.eval()
 
         # ── optional: load VLA checkpoint (produced by PretokenizeVLARunner) ─
         if ckpt_path and not ckpt_is_hf_vla:
@@ -1174,6 +1304,28 @@ class EmbodiedEvalRunner(
         task_description: str,
         action_steps: int,
     ) -> list[np.ndarray]:
+        oft_extractor = getattr(self, "_base_oft_extractor", None)
+        if oft_extractor is not None:
+            raw_obs = getattr(self, "_libero_current_raw_obs", None)
+            if not isinstance(raw_obs, dict):
+                raise RuntimeError("OFT base eval requires current LIBERO raw obs")
+            context = getattr(self, "_libero_current_eval_context", {}) or {}
+            if int(context.get("env_step", 0)) == 0 and hasattr(
+                oft_extractor, "reset"
+            ):
+                oft_extractor.reset()
+            obs = self._oft_base_eval_obs_from_libero_raw(raw_obs, state)
+            decoded = oft_extractor.step(obs, task_description)
+            action_chunk = (
+                decoded.action_chunk if hasattr(decoded, "action_chunk") else decoded[0]
+            )
+            from dreamervla.runners.oft_collect_common import process_action
+
+            return [
+                process_action(action).astype(np.float32, copy=False)
+                for action in list(action_chunk)[: int(action_steps)]
+            ]
+
         if not getattr(self, "_dreamer_eval", False):
             if bool(getattr(self, "_policy_trace_enabled", False)):
                 return self._generate_vla_actions_with_trace(
