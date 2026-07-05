@@ -210,6 +210,8 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
         "cls/loss": 0.5,
         "cls/acc": 1.0,
         "cls/f1": 1.0,
+        "cls/skipped_single_class_batch": 0.0,
+        "cls/updated": 1.0,
     }
     rl_metrics = learner.update("rl", 1)
     assert rl_metrics["rl/actor_loss"] == 0.75

@@ -2,13 +2,15 @@
 
 ## 简介
 
-推荐入口是 Ray async + EGL。它会自动执行 collection、warmup，然后进入 manual async cotrain：
+推荐入口是 Ray async。它会自动执行 collection、warmup，然后进入 manual async cotrain。
+渲染默认走 osmesa 并行子进程；`ngpu` 由 `CUDA_VISIBLE_DEVICES` 的卡数自动推导（下例即 8 卡），
+显式追加 `ngpu=<N>` 仍可覆盖：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal render_backend=egl \
-  > logs/cotrain_ray_async_egl.log 2>&1
+  task=goal render_backend=osmesa \
+  > logs/cotrain_ray_async.log 2>&1
 ```
 
 运行前默认已经在仓库根目录，`logs/` 已创建，`DVLA_DATA_ROOT` 指向包含
@@ -32,10 +34,10 @@ export RUN_ROOT="${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<run>"
 warmup，以及 manual async cotrain。
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal render_backend=egl \
-  > logs/cotrain_ray_async_egl.log 2>&1
+  task=goal render_backend=osmesa \
+  > logs/cotrain_ray_async.log 2>&1
 ```
 
 主要产物：
@@ -51,7 +53,7 @@ ${DVLA_DATA_ROOT}/outputs/coldstart_warmup_cotrain/<run>/cotrain/
 只采集 cold-start rollout 数据，写入后续 warmup/cotrain 共同消费的统一目录。
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   python -m dreamervla.train \
   experiment=collect_rollouts_ray \
   task=openvla_onetraj_coldstart_libero \
@@ -67,11 +69,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 从已采集的 rollout 数据启动，只写 warmup checkpoint，不进入在线 cotrain。
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
   task=goal run_root="${RUN_ROOT}" \
-  skip_collect=true cotrain_phase=warmup render_backend=egl \
-  > logs/cotrain_warmup_egl.log 2>&1
+  skip_collect=true cotrain_phase=warmup render_backend=osmesa \
+  > logs/cotrain_warmup.log 2>&1
 ```
 
 主要产物：
@@ -86,19 +88,19 @@ ${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt
 从同一个 `RUN_ROOT` 下的 warmup checkpoint 继续，只运行 online manual async cotrain。
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
   task=goal run_root="${RUN_ROOT}" \
-  cotrain_phase=online render_backend=egl \
-  > logs/cotrain_ray_async_online_egl.log 2>&1
+  cotrain_phase=online render_backend=osmesa \
+  > logs/cotrain_ray_async_online.log 2>&1
 ```
 
 常用日志检查：
 
 ```bash
-tail -f logs/cotrain_ray_async_egl.log
-tail -f logs/cotrain_warmup_egl.log
-tail -f logs/cotrain_ray_async_online_egl.log
+tail -f logs/cotrain_ray_async.log
+tail -f logs/cotrain_warmup.log
+tail -f logs/cotrain_ray_async_online.log
 ```
 
 ## W&B

@@ -912,7 +912,11 @@ def test_e2e_shell_scripts_select_expected_modes() -> None:
     assert "mode=ray" in ray_text
     assert "mode=noray" in noray_text
     assert "profile=multi_gpu" in ray_text
-    assert "ngpu=6" in ray_text
+    # ngpu is derived from CUDA_VISIBLE_DEVICES (so 8-GPU runs without a manual
+    # override) with a 6-GPU fallback when the variable is unset.
+    assert 'ngpu="${_DVLA_NGPU}"' in ray_text
+    assert "CUDA_VISIBLE_DEVICES" in ray_text
+    assert "_DVLA_NGPU=6" in ray_text
     assert "cotrain_engine=async" in ray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in ray_text
     assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in noray_text

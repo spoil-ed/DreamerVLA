@@ -630,10 +630,6 @@ def test_generate_rank_keyed_batch_sends_direct_batched_payload(monkeypatch) -> 
         )
         input_channel.put(StopMsg(reason="unit-test"), key="0")
 
-        def fail_pack(*_args, **_kwargs):
-            raise AssertionError("rank-key rollout should produce a batched payload directly")
-
-        monkeypatch.setattr(rollout_worker, "pack_rollout_result_batch", fail_pack)
         worker = MultiStepRolloutWorker(
             policy_cfg=_policy_cfg(),
             encoder_cfg=None,

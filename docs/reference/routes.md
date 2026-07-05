@@ -16,8 +16,9 @@ source of truth; this table is a reader index.
 Pipeline launcher:
 
 ```bash
-bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=6 profile=multi_gpu cotrain_engine=async render_backend=egl
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal profile=multi_gpu cotrain_engine=async render_backend=osmesa
 ```
 
 ## Core Training Routes

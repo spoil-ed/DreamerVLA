@@ -37,5 +37,14 @@ export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
 _DVLA_PYTHONWARNINGS="ignore::FutureWarning:libero.libero.benchmark,ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"
 export PYTHONWARNINGS="${_DVLA_PYTHONWARNINGS}${PYTHONWARNINGS:+,${PYTHONWARNINGS}}"
 
+# Derive the GPU count from CUDA_VISIBLE_DEVICES so 8-GPU (or any N) runs without a
+# manual ngpu override; an explicit ngpu=<N> passed in "$@" still wins (later wins).
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  IFS=',' read -ra _DVLA_GPUS <<< "${CUDA_VISIBLE_DEVICES}"
+  _DVLA_NGPU="${#_DVLA_GPUS[@]}"
+else
+  _DVLA_NGPU=6
+fi
+
 python -m dreamervla.launchers.coldstart_warmup_cotrain \
-  mode=ray profile=multi_gpu ngpu=6 cotrain_engine=async "$@"
+  mode=ray profile=multi_gpu ngpu="${_DVLA_NGPU}" cotrain_engine=async "$@"

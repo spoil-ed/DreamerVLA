@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
   bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=6 profile=multi_gpu render_backend=egl
+  task=goal ngpu=6 profile=multi_gpu render_backend=osmesa
 ```
 
 Both scripts set `DVLA_ROOT`, default `DVLA_DATA_ROOT`, activate the `dreamervla`
