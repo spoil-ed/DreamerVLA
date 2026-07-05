@@ -20,10 +20,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 EXPERIMENT_MODULES = {
     "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
-    "world_model_chunk_input_tokens": (
-        "worldmodel",
-        "rynnvla_input_token_chunk",
-    ),
     "oft_world_model_chunk": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
@@ -211,7 +207,6 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
-        "world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
@@ -258,23 +253,6 @@ def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     assert get_class(role_based.world_model._target_) is get_class(
         legacy.world_model._target_
     )
-
-
-def test_role_based_wm_input_token_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_chunk_input_tokens")
-        legacy = _compose_experiment("world_model_chunk_input_tokens")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert (
-        role_based.dataset.expected_obs_hidden_source
-        == legacy.dataset.expected_obs_hidden_source
-    )
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.world_model.token_count == legacy.world_model.token_count
 
 
 def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None:
@@ -385,13 +363,7 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        rynn_wm = _compose_experiment("world_model_chunk_input_tokens")
         oft_wm = _compose_experiment("oft_world_model_chunk_input_tokens")
-
-    assert rynn_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
-    assert rynn_wm.world_model.token_count == 2048
-    assert rynn_wm.world_model.token_dim == 4096
-    assert "input_token" in rynn_wm.dataset.hidden_dir
 
     assert oft_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
     assert oft_wm.world_model.token_count == 512
