@@ -7,4 +7,4 @@ defaults:
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb
-  - experiment: world_model_chunk
+  - experiment: openvla_onetraj_libero_cotrain_ray

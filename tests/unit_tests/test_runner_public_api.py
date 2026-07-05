@@ -277,21 +277,13 @@ def test_train_config_resolves_public_default_experiment() -> None:
     train_wm_config = (config_dir / "scripts" / "train_wm.yaml").read_text(
         encoding="utf-8"
     )
-    assert "experiment: world_model_chunk" in train_config
+    assert "experiment: openvla_onetraj_libero_cotrain_ray" in train_config
     assert "experiment: world_model_chunk" in train_wm_config
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
-        assert cfg._target_ == "dreamervla.runners.LatentWMRunner"
-        assert (
-            cfg.dataset._target_
-            == "dreamervla.dataset.balanced_terminal_dataset.BalancedTerminalDataset"
-        )
-        assert (
-            cfg.world_model._target_
-            == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
-        )
-        assert "worldmodel/chunk" in cfg.training.out_dir
+        assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+        assert "ray_cotrain" in cfg.training.out_dir
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
