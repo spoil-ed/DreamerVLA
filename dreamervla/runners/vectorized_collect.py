@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from dreamervla.envs.image_utils import resize_hwc_uint8
-from dreamervla.runners.oft_collect_common import pop_open_loop_action, sidecar_to_numpy
+from dreamervla.runners.oft_collect_common import sidecar_to_numpy
 from dreamervla.utils.progress import AggregateProgress
 
 # Per-step proprio fed to the extractor: ee_pos(3) + ee_ori/axisangle(3) + gripper(2) = 8.
@@ -95,12 +95,6 @@ def build_step_record(
     return step
 
 
-def _decode_action_chunk(result: Any) -> Any:
-    if hasattr(result, "action_chunk"):
-        return result.action_chunk
-    return result[0]
-
-
 def _decode_hidden_state(result: Any) -> Any:
     if hasattr(result, "hidden_state"):
         return result.hidden_state
@@ -164,111 +158,72 @@ def collect_vectorized(
     Returns:
         Number of demos written.
     """
+    from dreamervla.runners.libero_rollout_runner import run_vectorized_rollout
+
     if len(extractors) != vec_env.num_envs:
         raise ValueError(
             f"need one extractor per env: {len(extractors)} extractors, {vec_env.num_envs} envs"
         )
 
-    num_envs = vec_env.num_envs
-    queue = list(work_list)
-    next_idx = 0
+    work_items = list(work_list)
     demo_index = start_demo_index
     pending_config = preprocess_config
     pending_attrs = data_attrs
-
-    slot_task = [-1] * num_envs  # current task id per slot (skip redundant set_task)
-    slot_desc = [""] * num_envs  # current task description per slot
-    slot_rec: list[Any] = [None] * num_envs
-    slot_steps: list[Any] = [None] * num_envs
-    slot_t = [0] * num_envs
-    slot_ep = [-1] * num_envs
-    active = [False] * num_envs
-    action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
-    action_steps = max(1, int(action_steps))
-
-    def _start_slot(k: int) -> None:
-        nonlocal next_idx
-        if next_idx >= len(queue):
-            active[k] = False
-            return
-        tid, ep = queue[next_idx]
-        next_idx += 1
-        if slot_task[k] != tid:  # reconfigure the env only when crossing a task boundary
-            slot_desc[k] = vec_env.set_task([tid], env_ids=[k])[0]
-            slot_task[k] = tid
-        rec = vec_env.reset([tid], [ep], env_ids=[k])[0]
-        extractors[k].reset()
-        slot_rec[k] = rec
-        slot_steps[k] = []
-        slot_t[k] = 0
-        slot_ep[k] = ep
-        action_queues[k] = []
-        active[k] = True
-
-    for k in range(num_envs):
-        _start_slot(k)
+    # task_description is constant across an episode; capture it per (task, episode)
+    # on each step so the demo-write sink can reproduce the old ``slot_desc[k]`` value
+    # (the core's ``on_episode`` does not carry the description).
+    desc_by_episode: dict[tuple[int, int], str] = {}
 
     pbar = AggregateProgress(
-        len(queue), "collect", rank=rank, world_size=world_size,
+        len(work_items), "collect", rank=rank, world_size=world_size,
         progress_dir=progress_dir, unit="ep",
     )
-    while any(active):
-        active_ids = [k for k in range(num_envs) if active[k]]
-        preps = [
-            extractors[k].prepare(extractor_obs_from_record(slot_rec[k]), slot_desc[k])
-            for k in active_ids
-        ]
-        outs = infer_fn(preps)  # aligned with active_ids
-        # OpenVLA-OFT eval executes a full action chunk open-loop before using
-        # a newly predicted chunk. We still run inference every tick so the
-        # sidecar stores the current observation's hidden state.
-        actions = []
-        for i, k in enumerate(active_ids):
-            # Same open-loop action core (refill chunk + process_action) as the
-            # single-env collector and the online cotrain rollout — one shared impl.
-            actions.append(
-                pop_open_loop_action(_decode_action_chunk(outs[i]), action_queues[k], action_steps)
-            )
-        step_results = vec_env.step(actions, env_ids=active_ids)
 
-        finished: list[int] = []
-        for i, k in enumerate(active_ids):
-            hidden_state = _decode_hidden_state(outs[i])
-            lang_emb = _decode_lang_emb(outs[i])
-            reward, terminated, truncated, info, rec_after = step_results[i]
-            wm_action = info.get("wm_action", info.get("env_action", actions[i]))
-            slot_steps[k].append(
-                build_step_record(slot_rec[k], hidden_state, wm_action, lang_emb=lang_emb)
-            )
-            slot_t[k] += 1
-            slot_rec[k] = rec_after
-            done = bool(terminated or truncated) or slot_t[k] >= episode_horizon
-            if done:
-                success = bool(info.get("success", terminated))
-                steps = slot_steps[k]
-                steps[-1]["dones"] = np.uint8(1)
-                steps[-1]["sparse_rewards"] = np.uint8(1 if success else 0)
-                writer.write_demo(
-                    index=demo_index,
-                    steps=steps,
-                    preprocess_config=pending_config,
-                    data_attrs=pending_attrs,
-                    task_id=slot_task[k],
-                    episode_id=slot_ep[k],
-                    task_description=slot_desc[k],
-                    episode_success=success,
-                    episode_horizon=episode_horizon,
-                )
-                pending_config = None
-                pending_attrs = None
-                if on_episode is not None:
-                    on_episode(slot_task[k], slot_ep[k], len(steps), success)
-                demo_index += 1
-                pbar.set(demo_index - start_demo_index)
-                finished.append(k)
+    def _on_step(ctx: Any) -> dict[str, Any]:
+        desc_by_episode[(ctx.task_id, ctx.episode_id)] = ctx.task_description
+        # OpenVLA-OFT eval executes a full action chunk open-loop; we still run
+        # inference every tick so the sidecar stores the current obs hidden state.
+        wm_action = ctx.info.get("wm_action", ctx.info.get("env_action", ctx.action))
+        return build_step_record(
+            ctx.record_before,
+            _decode_hidden_state(ctx.out),
+            wm_action,
+            lang_emb=_decode_lang_emb(ctx.out),
+        )
 
-        for k in finished:
-            _start_slot(k)
+    def _on_episode(task_id: int, episode_id: int, steps: list[Any], success: bool) -> None:
+        nonlocal demo_index, pending_config, pending_attrs
+        steps[-1]["dones"] = np.uint8(1)
+        steps[-1]["sparse_rewards"] = np.uint8(1 if success else 0)
+        writer.write_demo(
+            index=demo_index,
+            steps=steps,
+            preprocess_config=pending_config,
+            data_attrs=pending_attrs,
+            task_id=task_id,
+            episode_id=episode_id,
+            task_description=desc_by_episode.pop((task_id, episode_id), ""),
+            episode_success=success,
+            episode_horizon=episode_horizon,
+        )
+        pending_config = None
+        pending_attrs = None
+        if on_episode is not None:
+            on_episode(task_id, episode_id, len(steps), success)
+        demo_index += 1
+        pbar.set(demo_index - start_demo_index)
+
+    run_vectorized_rollout(
+        vec_env,
+        extractors,
+        infer_fn,
+        work_items,
+        episode_horizon,
+        obs_from_record=extractor_obs_from_record,
+        on_step=_on_step,
+        on_episode=_on_episode,
+        action_steps=action_steps,
+    )
 
     pbar.close()
     return demo_index - start_demo_index
