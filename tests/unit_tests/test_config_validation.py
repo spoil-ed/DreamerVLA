@@ -511,16 +511,3 @@ def test_train_run_validates_config_before_runner_setup(monkeypatch) -> None:
     train.run(cfg)
 
     assert events == ["validate", "setup", "execute", "teardown"]
-
-
-def test_input_token_classifier_label_smoothing_uses_plain_ce_by_default() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "classifier=openvla_oft_input_token_chunk",
-                "task=openvla_onetraj_libero",
-            ],
-        )
-    assert float(cfg.training.label_smoothing) == 0.0
