@@ -21,13 +21,21 @@
 | Step 3b | R1 子步：`manual_cotrain_ray_tiny` 跑满 `manual_cotrain.global_steps=5`，确认 tiny 端到端 cotrain 绿。 | DONE | CPU/Ray tiny path ran with `manual_cotrain.global_steps=5` and `manual_cotrain.learner_update_step=1`; run root contains resolved config, manifest, and finished progress JSON for global_step 1-5. |
 | Step 3c | R1 子步：真实 32/256/512 配置跑满 5 global_step，并与 base-VLA SR 做趋势对比。 | BLOCKED | `/tmp/dvla-step3c-real-eval-gate-v1/cotrain` completed 5 EGL global steps and wrote `manual_cotrain_step_5`; cotrain/Ray logs have no `read_pixels`/SIGABRT/OOM. In-run eval failed before SR: first on Dreamer+OFT eval adapter (`self.encoder is None`, fixed with a unit test), then on LIBERO task initialization with process abort 134, so cotrain SR/trend is still unavailable. |
 | Step 4a | R4 回退基础设施：manifest 驱动的 `restore_from_archive.sh` + 单测。 | DONE | commit `2baf4b7`. `restore_from_archive.sh` 以 `DEPRECATION-manifest.md` 为源，dry-run 列全 74 还原动作；3 单测绿。manifest 本身由并发会话 `30aab68` 先建(74 行中文版，等价），本轮误重写后已恢复原版。仅提交脚本+单测，74 staged rename 未卷入。 |
-| Step 4b | R4 逐批归档：`git mv` SPEC §3 尚在原位的 ~80 非主线文件(experiment/runners/algorithms/models/configs 组)，每批 grep 主线无引用 + 追加 manifest + compose。 | TODO | 串行执行，避免 manifest/index 冲突。algorithms/dreamervla.py 按函数拆(world_model_pretrain_step 主线保留)。 |
+| BASELINE-0 | Step 4b 前置闸：在 dreamervla env 建立权威「既有失败」基线(全 `tests/unit_tests` pass/fail 名单 + compose 主线 6 experiment),作为每个归档批次「不新增失败」的对照。 | DONE | 亲验(report 162950):compose **6/6 PASS**;套件 **1349 passed / 5 failed / 7 skipped (261s)**。基线 allowlist 5 失败:test_env_full_record::test_full_record_exposes_libero_schema_fields、test_learner_worker_manual_precision::test_dreamervla_cotrain_mode_routes_real_update_steps、test_multistep_rollout_worker::{test_generate_reads_channel_writes_results_and_stops,test_generate_rank_keyed_batch_sends_direct_batched_payload}、test_repository_hygiene::test_files_live_under_their_architecture_domains(含 Ray 启动 flaky 成分)。 |
+| Step 4b-1 | R4 小步分批·首批(§3.1 最轻耦合)：`git mv configs/experiment/collect_rollouts_ray_synthetic.yaml → archive/`，删 e2e `test_s6` 中唯一绑定它的 `test_ray_coldstart_synthetic_experiment_runs_through_train_entry`，追加 manifest 行。 | DONE | 亲验(report 025231):compose 6/6 绿;套件 4 failed/1350 passed，4 失败全 ⊆ allowlist、零新增(5→4 因 Ray flaky test_generate_reads_channel 翻绿);ruff 干净;test_s6 剩 3 用例可导入。提交见下方 commit。 |
+| Step 4b | R4 逐批归档：`git mv` SPEC §3 尚在原位的 ~80 非主线文件(experiment/runners/algorithms/models/configs 组)，每批 grep 主线无引用 + 追加 manifest + compose。 | TODO | 串行执行，避免 manifest/index 冲突。algorithms/dreamervla.py 按函数拆(world_model_pretrain_step 主线保留)。**§3.1 耦合级联已实证(报告见 grep)**：19 个 experiment YAML 交织 test_runner_public_api.py(整份路由注册表)+ test_config_validation/repository_hygiene/wm_proprio_language/openvla_traj1_libero_matrix/manual_resource_config_groups/setup_scripts + e2e s5/s6 + README/SETUP/configs_README/routes.md/repository_structure/tutorials。轻耦合子集(仅 e2e/少量单测):collect_rollouts_ray_synthetic、online_cotrain_ray_{synthetic,dreamervla_tiny}；重耦合簇(注册表+docs):WM/classifier/VLA-SFT 路由。批次粒度待用户定。 |
 | Step 5 | 文档：更新 mainline tutorial，写清 R1/R2/R3 默认值、base-VLA 基线评测命令、EGL 默认、废弃与还原说明。 | TODO | Verify: doc commands and config keys cross-checked. |
 
 ## Current Atomic Step
 
-- Step: `R3/R1 — eval EGL crash SOLVED (root cause nailed, all GPU cases handled)`
-- Status: `DONE (eval EGL) — commits 5ac38e5, 5785a1c`
+- Step: `R3/R1 — eval EGL: dreamer-eval path fixed in an ISOLATED smoke only (NOT fully solved)`
+- Status: `PARTIAL — commits 5ac38e5, 5785a1c fix only the dreamer post-step eval path and
+  were verified ONLY in a standalone dreamer-eval smoke (300 steps, 0 abort). NOT re-verified
+  inside the real 32/256/512 full cotrain run (Step 3c, which crashed abort 134 at 14:01 BEFORE
+  the 15:46 fix and was never re-run). base-VLA eval (ckpt_kind=vla, in-process render) still
+  blocked by the RynnVLAEncoder default-config bug (SPEC §4) — in-process disjoint EGL untested.
+  Do NOT claim "eval EGL fully solved" until the full-cotrain in-run eval is re-run and base-VLA
+  eval path is unblocked.`
 - Root cause NAILED (A/B + instrumented, NOT the earlier guesses): mujoco EGL + a heavy torch
   policy on the SAME PHYSICAL GPU → NVIDIA libnvidia-eglcore abort() inside mjr_readPixels after a
   few hundred renders. Evidence: same-GPU crashes, disjoint (torch@0/EGL@7) sustains 300 steps;

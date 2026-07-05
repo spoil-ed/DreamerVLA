@@ -87,37 +87,6 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
         assert hidden_f["data"]["demo_0"]["obs_embedding"].shape == (3, 4)
 
 
-def test_ray_coldstart_synthetic_experiment_runs_through_train_entry(tmp_path) -> None:
-    from pathlib import Path
-
-    from hydra import compose, initialize_config_dir
-
-    from dreamervla.train import run
-
-    if ray.is_initialized():
-        ray.shutdown()
-
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=collect_rollouts_ray_synthetic",
-                f"training.out_dir={tmp_path / 'run'}",
-                f"dump.reward_dir={tmp_path / 'reward'}",
-                f"dump.hidden_dir={tmp_path / 'hidden'}",
-            ],
-        )
-
-    run(cfg)
-
-    assert (tmp_path / "run" / "resolved_config.yaml").is_file()
-    assert (tmp_path / "run" / "run_manifest.json").is_file()
-    assert (tmp_path / "reward" / "ray_shard_000.hdf5").is_file()
-    assert (tmp_path / "hidden" / "ray_shard_000.hdf5").is_file()
-    assert not ray.is_initialized()
-
-
 def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
 

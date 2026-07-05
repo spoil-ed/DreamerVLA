@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | configs/VLA/rynnvla_full_finetune.yaml | archive/configs/VLA/rynnvla_full_finetune.yaml | RynnVLA 次级训练配方，不在当前 OpenVLA-OFT cotrain 主线路径 | (staged, 未提交) |
 | configs/experiment/vla_rynnvla_full_finetune.yaml | archive/configs/experiment/vla_rynnvla_full_finetune.yaml | RynnVLA 次级实验配方，不在当前 OpenVLA-OFT cotrain 主线路径 | (staged, 未提交) |
+| configs/experiment/collect_rollouts_ray_synthetic.yaml | archive/configs/experiment/collect_rollouts_ray_synthetic.yaml | synthetic 后端冒烟 experiment（SPEC §3.1），主线 collect 走 collect_rollouts_ray/onetraj；无 mainline 源引用 | 4b-1 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
