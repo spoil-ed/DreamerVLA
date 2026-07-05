@@ -1078,8 +1078,8 @@ def test_async_cotrain_online_command_targets_manual_cotrain_runner(tmp_path) ->
     assert "manual_cotrain.ngpu=2" in plan.cotrain_online_cmd
     assert "+cluster.num_gpus=2" in plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=8" in plan.cotrain_online_cmd
-    assert "cluster.component_placement=null" not in plan.cotrain_online_cmd
-    assert "cluster.component_placement.env=0-1" in plan.cotrain_online_cmd
+    assert "cluster.component_placement=null" in plan.cotrain_online_cmd
+    assert "cluster.component_placement.env=0-1" not in plan.cotrain_online_cmd
 
 
 @pytest.mark.parametrize("ngpu", [0, 1, 2, 3, 4, 5])
@@ -1695,14 +1695,14 @@ def test_async_eval_runs_segmented_post_step_libero_eval_and_writes_trend_summar
     assert all(_override_int(call, "manual_cotrain.checkpoint_every") == 1 for call in train_calls)
     assert len(eval_calls) == 2
     assert all(env is not None for env in eval_envs)
-    assert all(env["MUJOCO_GL"] == "egl" for env in eval_envs if env is not None)
+    assert all(env["MUJOCO_GL"] == "osmesa" for env in eval_envs if env is not None)
     assert all(
-        env["PYOPENGL_PLATFORM"] == "egl"
+        env["PYOPENGL_PLATFORM"] == "osmesa"
         for env in eval_envs
         if env is not None
     )
     assert all(
-        env["MUJOCO_EGL_DEVICE_ID"] == "0"
+        "MUJOCO_EGL_DEVICE_ID" not in env
         for env in eval_envs
         if env is not None
     )

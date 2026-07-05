@@ -25,7 +25,7 @@ env:
   cfg:
     target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
-    render_backend: egl
+    render_backend: osmesa
 
 rollout:
   target_episodes: 4

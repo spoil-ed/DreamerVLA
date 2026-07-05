@@ -13,8 +13,8 @@ python: python
 # it with warmup.batch_size. Default 1 (single process); set ngpu=<N> for any N.
 ngpu: 1
 # One-knob render backend for LIBERO collection, cotrain-real rollout, and eval:
-# egl (GPU offscreen, default) or osmesa (CPU software, explicit fallback).
-render_backend: egl
+# osmesa (CPU software, parallel subprocess, default) or egl (GPU offscreen, explicit opt-in).
+render_backend: osmesa
 # Cotrain engine: sync (DDP pipeline, default) or async (RLinf-style ray overlap —
 # sync warmup-only -> consolidate warmup ckpt -> ray _run_loop_overlap online loop).
 # cotrain_async_experiment selects the ray online experiment used when engine=async.
@@ -48,7 +48,7 @@ eval:
   # For EGL full eval, use "model_gpu,render_gpu" to keep robosuite EGL render
   # off the model CUDA device. MUJOCO_EGL_DEVICE_ID defaults to the last entry.
   gpus: 0
-  render_backend: egl
+  render_backend: osmesa
   egl_device_id: null
   num_episodes_per_task: null
   task_ids: null

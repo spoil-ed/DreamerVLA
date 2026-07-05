@@ -30,6 +30,6 @@ collect:
   envs_per_gpu: 1          # K within-rank envs; >1 enables batched vectorized path
   demos_per_shard: 0       # 0 = one shard per rank; >0 = slice demos into N-sized shards
   memory_fraction: 0.8     # PyTorch allocator cap for the collector process
-  render_backend: egl      # egl default, osmesa explicit fallback
+  render_backend: osmesa   # osmesa default (parallel subprocess); egl explicit opt-in
   render_devices: []       # empty -> use the collector-visible GPU pool
   min_free_gpu_gb: 18.0    # preflight: fail fast if a rank's GPU has less free (0 disables)

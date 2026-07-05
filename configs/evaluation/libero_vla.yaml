@@ -53,7 +53,7 @@ eval:
   num_episodes_per_task: 3
   enumerate_all_init_states: false
   num_steps_wait: 10
-  render_backend: egl
+  render_backend: osmesa
   render_gpu_pool: null
   render_shard_id: 0
   task_start: 0

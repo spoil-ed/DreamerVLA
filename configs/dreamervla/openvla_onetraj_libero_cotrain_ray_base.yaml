@@ -12,7 +12,7 @@ defaults:
 _target_: dreamervla.runners.OnlineCotrainRayRunner
 latent_type: backbone_latent
 seed: 7
-render_backend: egl
+render_backend: osmesa
 
 cluster:
   num_nodes: 1

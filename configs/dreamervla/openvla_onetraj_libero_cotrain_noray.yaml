@@ -105,7 +105,7 @@ online_rollout:
   warmup_seed_episodes_per_task: 3
   classifier_early_neg_stride: 8
   num_envs: 1
-  render_backend: egl
+  render_backend: osmesa
   render_devices: []
   debug_total_env_steps: 160
   debug_warmup_steps: 2

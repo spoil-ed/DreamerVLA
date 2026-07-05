@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 _target_: dreamervla.runners.ManualCotrainRayRunner
-render_backend: egl
+render_backend: osmesa
 
 cluster:
   component_placement:
