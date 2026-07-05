@@ -219,9 +219,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 - Target Ray async cotrain (`ManualCotrainRayRunner`) is the mainline, available through
   `experiment=openvla_onetraj_libero_cotrain_ray`.
 - Legacy Ray async cotrain (`OnlineCotrainRayRunner`) survives only as the shared base
-  config `dreamervla/openvla_onetraj_libero_cotrain_ray_base` and the Ray smoke fixtures
-  (`online_cotrain_ray_synthetic`, `online_cotrain_ray_dreamervla_tiny`); it has no
-  standalone mainline experiment.
+  config `dreamervla/openvla_onetraj_libero_cotrain_ray_base` and the Ray smoke fixture
+  (`online_cotrain_ray_synthetic`); it has no standalone mainline experiment.
 - RynnVLA (alternative VLA backbone) and the OpenVLA-OFT VLA/WM/classifier stage variants
   remain as secondary routes; the full mainline-vs-secondary list is in
   [spec/06_routes.md](spec/06_routes.md). Do not make them the default path.

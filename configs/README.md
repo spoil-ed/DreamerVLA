@@ -46,7 +46,7 @@ Example single-node multi-GPU Ray placement without FSDP:
 ```bash
 CUDA_VISIBLE_DEVICES=2,3 RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0 \
 python -m dreamervla.train \
-  experiment=online_cotrain_ray_dreamervla_tiny \
+  experiment=openvla_onetraj_libero_cotrain_ray \
   +inference.placement.strategy=packed \
   +inference.placement.gpu_id=0 \
   inference.cfg.device=auto \

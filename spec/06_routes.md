@@ -47,7 +47,7 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 
 仅供 Ray smoke / 单测使用，合成或极小，勿当真实方案：
 
-- `collect_rollouts_ray_synthetic`、`online_cotrain_ray_synthetic`、`online_cotrain_ray_dreamervla_tiny`
+- `online_cotrain_ray_synthetic`
 
 ## 维护约定
 
