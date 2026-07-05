@@ -190,41 +190,6 @@ def test_validate_cfg_can_require_existing_dataset_paths(tmp_path: Path) -> None
         validate_cfg(cfg)
 
 
-def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    route_names = [
-        "world_model_chunk",
-    ]
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfgs = [
-            compose(config_name="train", overrides=[f"experiment={name}"])
-            for name in route_names
-        ]
-
-    for cfg in cfgs:
-        validate_cfg(cfg, world_size=1)
-
-
-def test_query_before_world_model_routes_use_compact_transformer_budget() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    rynn = [
-        "experiment=world_model_chunk",
-        "task=libero_goal",
-        "worldmodel=rynnvla_input_token_chunk",
-    ]
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        rynn_cfg = compose(config_name="train", overrides=rynn)
-
-    # Rynn query-before stays on the compact budget.
-    validate_cfg(rynn_cfg, world_size=1)
-    assert rynn_cfg.world_model.latent_stage == "query_before"
-    assert rynn_cfg.world_model.depth == 4
-    assert rynn_cfg.world_model.heads == 8
-    assert rynn_cfg.world_model.dim_head == 32
-    assert rynn_cfg.world_model.mlp_dim == 1024
-
-
 @pytest.mark.parametrize(
     ("task_name", "suite_time_horizon", "legacy_chunk_size", "legacy_tokens", "legacy_obs_dim"),
     [

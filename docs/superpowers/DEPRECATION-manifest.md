@@ -36,6 +36,9 @@
 | configs/experiment/oft_world_model_chunk_input_tokens.yaml | archive/configs/experiment/oft_world_model_chunk_input_tokens.yaml | LatentWMRunner standalone OFT WM input-token 路由（SPEC §3.1），非主线；worldmodel/openvla_oft_input_token_chunk 待剩余 WM 批同归 | 4b-10 |
 | configs/experiment/oft_world_model_chunk.yaml | archive/configs/experiment/oft_world_model_chunk.yaml | LatentWMRunner standalone OFT WM 路由（SPEC §3.1），非主线；worldmodel/openvla_oft_input_token_chunk 待剩余 WM 批同归 | 4b-11 |
 | tests/unit_tests/test_wm_proprio_language.py | archive/tests/unit_tests/test_wm_proprio_language.py | 整文件依赖已归档 oft_world_model_chunk（QB 常量），随其归档；非主线 WM proprio/language 测试 | 4b-11 |
+| configs/experiment/world_model_chunk.yaml | archive/configs/experiment/world_model_chunk.yaml | LatentWMRunner standalone chunk WM 训练路由（SPEC §3.1），非主线；train.yaml 默认已改主线(4b-12a)。注意：chunk WM 本体 wm_chunk/ChunkAwareWorldModel 保留(SPEC §2.4)，此处只归 standalone 训练 experiment | 4b-12b |
+| scripts/train_wm.sh | archive/scripts/train_wm.sh | standalone WM/classifier 训练启动脚本（SPEC §3.5），其服务的 WM/classifier experiment 全已归；主线走 cotrain/collect/eval | 4b-12b |
+| configs/scripts/train_wm.yaml | archive/configs/scripts/train_wm.yaml | train_wm.sh 的 launcher config（默认 experiment=world_model_chunk 已归→孤儿）（SPEC §3.5） | 4b-12b |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |

@@ -15,7 +15,6 @@ def _project_root() -> Path:
 def test_release_shell_entrypoints_are_self_contained() -> None:
     root = _project_root()
     libero_entrypoints = (
-        "scripts/train_wm.sh",
         "scripts/train_dreamervla.sh",
         "scripts/eval_libero_vla.sh",
         "scripts/preprocess_libero.sh",
@@ -35,7 +34,6 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         assert "DVLA_DATA_ROOT" in text, relpath
 
     for relpath in (
-        "scripts/train_wm.sh",
         "scripts/train_dreamervla.sh",
         "scripts/eval_libero_vla.sh",
     ):
@@ -379,62 +377,6 @@ def test_preprocess_scripts_are_direct_copyable_commands() -> None:
         assert "normalize_list" not in text, script.name
         assert "${PROCESSED_DATA_ROOT:-" not in text, script.name
         assert re.search(r"\n\s*python -m ", text), script.name
-
-
-def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
-    root = _project_root()
-    log_path = tmp_path / "train_stub.log"
-    python_stub = tmp_path / "python_stub.sh"
-    python_stub.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "printf 'CUDA_VISIBLE_DEVICES=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\" >> \"${PYTHON_STUB_LOG}\"\n"
-        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n",
-        encoding="utf-8",
-    )
-    python_stub.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PYTHON_STUB_LOG": str(log_path),
-            "DVLA_DATA_ROOT": str(tmp_path / "data"),
-            "PATH": f"{Path(sys.executable).parent}:{env.get('PATH', '')}",
-        }
-    )
-    result = subprocess.run(
-        [
-            "bash",
-            "scripts/train_wm.sh",
-            "experiment=world_model_chunk",
-            "task=libero_goal",
-            "gpus=2,3",
-            "ngpu=2",
-            f"python={python_stub}",
-            "batch_size=7",
-            "num_workers=0",
-            "out_dir="
-            + str(tmp_path / "out"),
-            "num_epochs=1",
-        ],
-        cwd=root,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    log_text = log_path.read_text(encoding="utf-8")
-    assert "CUDA_VISIBLE_DEVICES=2,3" in log_text
-    assert "--nproc-per-node=2" in log_text
-    assert "--config-name train" in log_text
-    assert "experiment=world_model_chunk" in log_text
-    assert "task=libero_goal" in log_text
-    assert "dataloader.batch_size=7" in log_text
-    assert "dataloader.num_workers=0" in log_text
-    assert f"training.out_dir={tmp_path / 'out'}" in log_text
-    assert "training.num_epochs=1" in log_text
 
 
 def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
@@ -792,7 +734,6 @@ def test_release_scripts_tree_is_curated() -> None:
             "run_wandb_relay_sync.sh",
             "start_ray.sh",
             "train_dreamervla.sh",
-            "train_wm.sh",
     }
     assert top_level_dirs == {
         "download",
@@ -884,7 +825,6 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
 def test_training_launchers_do_not_nest_out_dir_default_expansion() -> None:
     root = _project_root()
     launchers = [
-        root / "scripts" / "train_wm.sh",
         root / "scripts" / "train_dreamervla.sh",
     ]
     offenders = [

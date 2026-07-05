@@ -19,7 +19,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 
 EXPERIMENT_MODULES = {
-    "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
 
@@ -194,7 +193,6 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
-        "world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
     }
 
@@ -216,28 +214,6 @@ def test_train_config_experiments_compose_through_stage_modules() -> None:
             module_cfg = compose(config_name=f"{group_name}/{module_name}")
             assert new_cfg._target_ == module_cfg._target_
             assert "workspace" not in new_cfg
-
-
-def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_chunk")
-        legacy = _compose_experiment("world_model_chunk")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert (
-        role_based.world_model._target_
-        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
-    )
-    assert (
-        legacy.world_model._target_
-        == "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel"
-    )
-    assert get_class(role_based.world_model._target_) is get_class(
-        legacy.world_model._target_
-    )
 
 
 def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
@@ -274,11 +250,7 @@ def test_train_config_resolves_public_default_experiment() -> None:
     assert not (config_dir / "archive").exists()
 
     train_config = (config_dir / "train.yaml").read_text(encoding="utf-8")
-    train_wm_config = (config_dir / "scripts" / "train_wm.yaml").read_text(
-        encoding="utf-8"
-    )
     assert "experiment: openvla_onetraj_libero_cotrain_ray" in train_config
-    assert "experiment: world_model_chunk" in train_wm_config
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
@@ -302,8 +274,8 @@ def test_train_help_uses_role_based_wm_examples(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "experiment=world_model_chunk" in help_text
     assert "experiment=openvla_onetraj_libero_cotrain_ray" in help_text
+    assert "experiment=collect_rollouts_ray" in help_text
     _assert_no_removed_wm_wording(help_text)
 
 

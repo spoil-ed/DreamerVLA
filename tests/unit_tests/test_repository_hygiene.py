@@ -377,7 +377,6 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         config_dir / "README.md",
         project_root / "scripts" / "README.md",
         project_root / "dreamervla" / "train.py",
-        project_root / "scripts" / "train_wm.sh",
         project_root / "scripts" / "train_dreamervla.sh",
         project_root / "dreamervla" / "runners" / "online_dreamervla.py",
         project_root / "dreamervla" / "runners" / "frozen_wm_actor_critic.py",
