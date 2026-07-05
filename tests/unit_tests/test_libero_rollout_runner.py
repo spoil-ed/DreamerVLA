@@ -1,4 +1,9 @@
-from dreamervla.runners.libero_rollout_runner import run_vectorized_rollout
+from dreamervla.runners.eval_metrics import summarize_libero_task_success
+from dreamervla.runners.libero_rollout_runner import (
+    SuccessTally,
+    build_grid_work_list,
+    run_vectorized_rollout,
+)
 
 
 class _FakeVecEnv:
@@ -57,3 +62,27 @@ def test_core_runs_every_work_item_once():
     assert {(t, e): ok for t, e, ok in seen} == {  # success = (t+e) even
         (t, e): (t + e) % 2 == 0 for t, e in work
     }
+
+
+def test_grid_matches_sequential_episode_order():
+    # sequential loop is: for task in task_ids: for episode_idx in range(n): (task, episode_idx)
+    assert build_grid_work_list([5, 2, 9], num_episodes_per_task=3) == [
+        (5, 0), (5, 1), (5, 2), (2, 0), (2, 1), (2, 2), (9, 0), (9, 1), (9, 2)
+    ]
+
+
+def test_success_tally_macro_average_matches_eval_metrics():
+    tally = SuccessTally()
+    # task 5: 2/3 ; task 2: 0/3
+    for ep, ok in enumerate([True, True, False]):
+        tally.on_episode(5, ep, [], ok)
+    for ep in range(3):
+        tally.on_episode(2, ep, [], False)
+    metrics = tally.summarize(episodes_per_task=3)
+    expected = summarize_libero_task_success(
+        [{"task_id": 5, "episodes": 3, "successes": 2},
+         {"task_id": 2, "episodes": 3, "successes": 0}],
+        episodes_per_task=3,
+    )
+    assert metrics["eval_success_rate"] == expected["eval_success_rate"]
+    assert metrics["eval_task_5_success_rate"] == expected["eval_task_5_success_rate"]
