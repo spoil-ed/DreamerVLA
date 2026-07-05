@@ -55,6 +55,7 @@
 | dreamervla/runners/latent_wm_runner.py | archive/dreamervla/runners/latent_wm_runner.py | 非主线 standalone latent WM 训练 runner（SPEC §3.2，LatentWMRunner）；主线 WM warmup 走 world_model_pretrain_step，不 import 它 | 4b-code-r1 |
 | dreamervla/runners/vla_sft_runner.py | archive/dreamervla/runners/vla_sft_runner.py | 非主线 standalone VLA SFT 训练 runner（SPEC §3.2，VLASFTRunner）；仅 __init__ 引用，主线不 import | 4b-code-r2 |
 | dreamervla/runners/openvla_oft_runner.py | archive/dreamervla/runners/openvla_oft_runner.py | 非主线 standalone OpenVLA-OFT SFT 训练 runner（SPEC §3.2，OpenVLAOFTTrainingRunner）；主线 eval 用 policy/encoder 非此训练 runner | 4b-code-r2 |
+| dreamervla/models/world_model/chameleon_latent_action.py | archive/dreamervla/models/world_model/chameleon_latent_action.py | 非主线 Chameleon latent-action 世界模型（SPEC §3.4）；纯死代码(仅 world_model/__init__ 导出、无使用)；非 chunk WM | 4b-code-m1 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |

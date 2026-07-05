@@ -1,9 +1,4 @@
 from .base_world_model import BaseWorldModel, DreamerV3LatentState, DreamerV3Loss
-from .chameleon_latent_action import (
-    ChameleonLaDiWMFlowWorldModel,
-    ChameleonLatentActionWorldModel,
-    ChameleonLatentFlowWorldModel,
-)
 from .dreamer_v3_pixel_backbone_world_model import (
     DreamerV3PixelBackboneWorldModel,
 )
@@ -30,7 +25,4 @@ __all__ = [
     "SymexpTwoHotHead",
     "TSSMBackboneWorldModel",
     "TSSMTokenBackboneWorldModel",
-    "ChameleonLatentActionWorldModel",
-    "ChameleonLatentFlowWorldModel",
-    "ChameleonLaDiWMFlowWorldModel",
 ]
