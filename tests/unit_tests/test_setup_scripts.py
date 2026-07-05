@@ -437,30 +437,6 @@ def test_training_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     assert "training.num_epochs=1" in log_text
 
 
-def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path: Path) -> None:
-    root = _project_root()
-    hidden_dir = tmp_path / "hidden"
-    result = subprocess.run(
-        [
-            "bash",
-            "scripts/train_wm.sh",
-            "experiment=oft_world_model_chunk_input_tokens",
-            "task=openvla_onetraj_libero",
-            f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
-            "dry_run=true",
-        ],
-        cwd=root,
-        env={**os.environ, "DVLA_DATA_ROOT": str(tmp_path / "data")},
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "task=openvla_onetraj_libero" in result.stdout
-    assert f"task.openvla_oft.input_token_hidden_dir={hidden_dir}" in result.stdout
-
-
 def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
     root = _project_root()
     text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")

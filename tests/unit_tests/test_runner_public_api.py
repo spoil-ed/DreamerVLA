@@ -24,10 +24,6 @@ EXPERIMENT_MODULES = {
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
-    "oft_world_model_chunk_input_tokens": (
-        "worldmodel",
-        "openvla_oft_input_token_chunk",
-    ),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
 
@@ -204,7 +200,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
-        "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
     }
 
@@ -262,23 +257,6 @@ def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None
     assert role_based.world_model._target_ == legacy.world_model._target_
 
 
-def test_role_based_oft_wm_input_token_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_world_model_chunk_input_tokens")
-        legacy = _compose_experiment("oft_world_model_chunk_input_tokens")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert (
-        role_based.dataset.expected_obs_hidden_source
-        == legacy.dataset.expected_obs_hidden_source
-    )
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.world_model.token_count == legacy.world_model.token_count
-
-
 def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     train_dreamervla_config = (
@@ -327,17 +305,6 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
         assert cfg.dataset.hidden_dir == expected
         assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
         assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
-
-
-def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        oft_wm = _compose_experiment("oft_world_model_chunk_input_tokens")
-
-    assert oft_wm.dataset.expected_obs_hidden_source == "input_token_embedding"
-    assert oft_wm.world_model.token_count == 512
-    assert oft_wm.world_model.token_dim == 4096
-    assert "input_token" in oft_wm.dataset.hidden_dir
 
 
 def test_train_config_resolves_public_default_experiment() -> None:
