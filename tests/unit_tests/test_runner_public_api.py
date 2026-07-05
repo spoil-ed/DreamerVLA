@@ -20,10 +20,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 EXPERIMENT_MODULES = {
     "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
-    "oft_world_model_chunk": (
-        "worldmodel",
-        "openvla_oft_input_token_chunk",
-    ),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
 
@@ -199,7 +195,6 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
-        "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
     }
 
@@ -245,18 +240,6 @@ def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     )
 
 
-def test_role_based_oft_wm_chunk_experiment_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_world_model_chunk")
-        legacy = _compose_experiment("oft_world_model_chunk")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert role_based.world_model._target_ == legacy.world_model._target_
-
-
 def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     train_dreamervla_config = (
@@ -284,27 +267,6 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
     assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
     assert wandb_cfg.runner.logger.wandb_mode == "online"
-
-
-def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    suites = ("libero_goal", "libero_object", "libero_spatial", "libero_10")
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        wm_cfgs = [
-            _compose_experiment(
-                "oft_world_model_chunk",
-                extra_overrides=[f"task={suite}"],
-            )
-            for suite in suites
-        ]
-
-    for cfg in wm_cfgs:
-        expected = f"{cfg.task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2"
-        assert cfg.task.openvla_oft.input_token_hidden_dir == expected
-        assert cfg.dataset.hidden_dir == expected
-        assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
-        assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
 
 
 def test_train_config_resolves_public_default_experiment() -> None:

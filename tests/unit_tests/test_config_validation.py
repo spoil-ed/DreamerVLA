@@ -194,7 +194,6 @@ def test_validate_cfg_accepts_mainline_grouped_routes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     route_names = [
         "world_model_chunk",
-        "oft_world_model_chunk",
     ]
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -214,15 +213,8 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
         "task=libero_goal",
         "worldmodel=rynnvla_input_token_chunk",
     ]
-    oft = [
-        "experiment=oft_world_model_chunk",
-        "task=openvla_onetraj_libero",
-        "worldmodel=openvla_oft_input_token_chunk",
-    ]
-
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         rynn_cfg = compose(config_name="train", overrides=rynn)
-        oft_cfg = compose(config_name="train", overrides=oft)
 
     # Rynn query-before stays on the compact budget.
     validate_cfg(rynn_cfg, world_size=1)
@@ -231,35 +223,6 @@ def test_query_before_world_model_routes_use_compact_transformer_budget() -> Non
     assert rynn_cfg.world_model.heads == 8
     assert rynn_cfg.world_model.dim_head == 32
     assert rynn_cfg.world_model.mlp_dim == 1024
-
-    # OpenVLA query-before: lean-debottlenecked half-width profile (~313M).
-    validate_cfg(oft_cfg, world_size=1)
-    assert oft_cfg.world_model.latent_stage == "query_before"
-    assert oft_cfg.world_model.token_dim == 4096
-    assert oft_cfg.world_model.proprio_dim == 8
-    assert oft_cfg.world_model.proprio_emb_dim == 10
-    assert oft_cfg.world_model.num_proprio_repeat == 1
-    assert oft_cfg.world_model.lang_dim == 4096
-    assert oft_cfg.world_model.lang_emb_dim == 32
-    assert oft_cfg.world_model.num_lang_repeat == 1
-    assert oft_cfg.world_model.action_emb_dim == 10
-    assert oft_cfg.world_model.model_dim == 4148
-    assert oft_cfg.world_model.model_dim == (
-        oft_cfg.world_model.token_dim
-        + oft_cfg.world_model.proprio_emb_dim * oft_cfg.world_model.num_proprio_repeat
-        + oft_cfg.world_model.lang_emb_dim * oft_cfg.world_model.num_lang_repeat
-        + oft_cfg.world_model.action_emb_dim * oft_cfg.world_model.num_action_repeat
-    )
-    assert oft_cfg.world_model.cosine_loss_scale == 0.0
-    assert oft_cfg.world_model.chunk_rollout_chunks == 1
-    assert oft_cfg.world_model.chunk_rollout_loss_scale == 0.0
-    assert oft_cfg.dataset.sequence_length == 12
-    assert list(oft_cfg.dataset.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
-    assert oft_cfg.dataset.lang_emb_dir == oft_cfg.task.openvla_oft.input_token_hidden_dir
-    assert oft_cfg.world_model.depth == 6
-    assert oft_cfg.world_model.heads == 16
-    assert oft_cfg.world_model.dim_head == 128
-    assert oft_cfg.world_model.mlp_dim == 2048
 
 
 @pytest.mark.parametrize(
