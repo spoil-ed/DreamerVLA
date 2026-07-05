@@ -42,7 +42,7 @@ def _select_eval_render_backend(root_cfg: DictConfig, eval_cfg: Any) -> str:
         OmegaConf.select(
             eval_cfg,
             "render_backend",
-            default=OmegaConf.select(root_cfg, "render_backend", default="egl"),
+            default=OmegaConf.select(root_cfg, "render_backend", default="osmesa"),
         )
     ).strip().lower()
     if backend not in {"egl", "osmesa"}:

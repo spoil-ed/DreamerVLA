@@ -80,7 +80,7 @@ class CollectRolloutsRunner(BaseRunner):
                 OmegaConf.select(
                     cfg,
                     "collect.render_backend",
-                    default=OmegaConf.select(cfg, "render_backend", default="egl"),
+                    default=OmegaConf.select(cfg, "render_backend", default="osmesa"),
                 )
             ),
             "render_devices": list(render_devices or []),

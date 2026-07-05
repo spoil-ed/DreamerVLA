@@ -164,7 +164,7 @@ def _require_keys(cfg: dict[str, Any]) -> None:
 
 
 def _collect_render_backend(cfg: dict[str, Any]) -> str:
-    backend = str(cfg.get("render_backend", "egl")).strip().lower()
+    backend = str(cfg.get("render_backend", "osmesa")).strip().lower()
     if backend not in {"egl", "osmesa"}:
         raise ValueError(f"collect.render_backend must be 'egl' or 'osmesa', got {backend!r}")
     return backend
