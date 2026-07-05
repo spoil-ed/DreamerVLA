@@ -20,7 +20,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 EXPERIMENT_MODULES = {
     "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
-    "world_model_step": ("worldmodel", "rynnvla_action_step"),
     "world_model_chunk_input_tokens": (
         "worldmodel",
         "rynnvla_input_token_chunk",
@@ -213,7 +212,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
-        "world_model_step": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
@@ -260,18 +258,6 @@ def test_role_based_wm_chunk_experiment_alias_matches_legacy_route() -> None:
     assert get_class(role_based.world_model._target_) is get_class(
         legacy.world_model._target_
     )
-
-
-def test_role_based_wm_step_experiment_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("world_model_step")
-        legacy = _compose_experiment("world_model_step")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert role_based.world_model._target_ == legacy.world_model._target_
 
 
 def test_role_based_wm_input_token_alias_matches_legacy_route() -> None:
