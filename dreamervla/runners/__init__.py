@@ -17,27 +17,6 @@ class _RunnerSpec:
 
 
 _RUNNER_SPECS: dict[str, _RunnerSpec] = {
-    "ActionHiddenWMRunner": _RunnerSpec(
-        "dreamervla.runners.backbone_dreamerv3_wm_runner",
-        "BackboneDreamerV3WMRunner",
-        runner_name="action_hidden_wm",
-        runner_status="current",
-        runner_family="world_model",
-    ),
-    "PixelWMRunner": _RunnerSpec(
-        "dreamervla.runners.dreamerv3_pixel_runner",
-        "DreamerV3PixelRunner",
-        runner_name="pixel_wm",
-        runner_status="secondary",
-        runner_family="world_model",
-    ),
-    "TokenWMRunner": _RunnerSpec(
-        "dreamervla.runners.dreamerv3_token_runner",
-        "DreamerV3TokenRunner",
-        runner_name="token_wm",
-        runner_status="secondary",
-        runner_family="world_model",
-    ),
     "VLASFTRunner": _RunnerSpec(
         "dreamervla.runners.vla_sft_runner",
         "VLASFTRunner",
@@ -65,20 +44,6 @@ _RUNNER_SPECS: dict[str, _RunnerSpec] = {
         runner_name="embodied_eval",
         runner_status="current",
         runner_family="eval",
-    ),
-    "ChameleonLatentWMRunner": _RunnerSpec(
-        "dreamervla.runners.chameleon_latent_action_wm_runner",
-        "ChameleonLatentActionWMRunner",
-        runner_name="chameleon_latent_wm",
-        runner_status="secondary",
-        runner_family="world_model",
-    ),
-    "LatentWMRunner": _RunnerSpec(
-        "dreamervla.runners.latent_wm_runner",
-        "LatentWMTrainingRunner",
-        runner_name="latent_wm",
-        runner_status="current",
-        runner_family="world_model",
     ),
     "LatentClassifierRunner": _RunnerSpec(
         "dreamervla.runners.latent_classifier_runner",

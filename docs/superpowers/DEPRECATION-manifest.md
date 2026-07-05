@@ -48,6 +48,11 @@
 | configs/classifier/openvla_oft_input_token_chunk.yaml | archive/configs/classifier/openvla_oft_input_token_chunk.yaml | classifier override 组配置（SPEC §3.6），仅服务已归分类器 experiment；主线不选该组 | 4b② |
 | configs/classifier/rynnvla_action_chunk.yaml | archive/configs/classifier/rynnvla_action_chunk.yaml | classifier override 组配置（SPEC §3.6），仅服务已归分类器 experiment；主线不选该组 | 4b② |
 | configs/classifier/rynnvla_input_token_chunk.yaml | archive/configs/classifier/rynnvla_input_token_chunk.yaml | classifier override 组配置（SPEC §3.6），仅服务已归分类器 experiment；主线不选该组 | 4b② |
+| dreamervla/runners/dreamerv3_pixel_runner.py | archive/dreamervla/runners/dreamerv3_pixel_runner.py | 非主线 DreamerV3 pixel WM 训练 runner（SPEC §3.2，PixelWMRunner）；非-chunk WM，主线不 import | 4b-code-r1 |
+| dreamervla/runners/dreamerv3_token_runner.py | archive/dreamervla/runners/dreamerv3_token_runner.py | 非主线 DreamerV3 token WM 训练 runner（SPEC §3.2，TokenWMRunner）；非-chunk WM，主线不 import | 4b-code-r1 |
+| dreamervla/runners/backbone_dreamerv3_wm_runner.py | archive/dreamervla/runners/backbone_dreamerv3_wm_runner.py | 非主线 backbone DreamerV3 WM runner（SPEC §3.2，ActionHiddenWMRunner）；非-chunk WM，主线不 import | 4b-code-r1 |
+| dreamervla/runners/chameleon_latent_action_wm_runner.py | archive/dreamervla/runners/chameleon_latent_action_wm_runner.py | 非主线 Chameleon latent-action WM runner（SPEC §3.2，ChameleonLatentWMRunner）；主线不 import | 4b-code-r1 |
+| dreamervla/runners/latent_wm_runner.py | archive/dreamervla/runners/latent_wm_runner.py | 非主线 standalone latent WM 训练 runner（SPEC §3.2，LatentWMRunner）；主线 WM warmup 走 world_model_pretrain_step，不 import 它 | 4b-code-r1 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |

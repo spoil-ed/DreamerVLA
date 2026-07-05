@@ -50,15 +50,10 @@ def test_runner_public_api_exports_route_specific_names() -> None:
     import dreamervla.runners as runners
 
     expected = {
-        "ActionHiddenWMRunner",
-        "PixelWMRunner",
-        "TokenWMRunner",
         "VLASFTRunner",
         "OpenVLAOFTRunner",
         "JointDreamerVLARunner",
         "EmbodiedEvalRunner",
-        "ChameleonLatentWMRunner",
-        "LatentWMRunner",
         "LatentClassifierRunner",
         "OnlineCotrainRunner",
         "CollectRolloutsRunner",
@@ -80,35 +75,17 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         assert callable(cls.teardown)
 
 
-def test_latent_wm_implementation_uses_role_based_wm_name() -> None:
-    from dreamervla.runners import latent_wm_runner
-
-    assert latent_wm_runner.LatentWMTrainingRunner.runner_name == "wm"
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "dreamervla"
-        / "runners"
-        / "latent_wm_runner.py"
-    ).read_text(encoding="utf-8")
-    _assert_no_removed_wm_wording(source)
-
-
 def test_runner_directory_contains_route_specific_runners() -> None:
     runner_dir = Path(__file__).resolve().parents[2] / "dreamervla" / "runners"
     top_level_python_files = {path.name for path in runner_dir.glob("*.py")}
     assert {
         "__init__.py",
         "base_runner.py",
-        "chameleon_latent_action_wm_runner.py",
         "dreamervla_runner.py",
-        "dreamerv3_pixel_runner.py",
-        "dreamerv3_token_runner.py",
         "embodied_eval_runner.py",
         "latent_classifier_runner.py",
         "openvla_oft_runner.py",
         "pretokenize_vla_runner.py",
-        "backbone_dreamerv3_wm_runner.py",
-        "latent_wm_runner.py",
         "vla_sft_runner.py",
     }.issubset(top_level_python_files)
     assert "pretokenize_sft_runner.py" not in top_level_python_files

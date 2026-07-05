@@ -250,9 +250,6 @@ def test_base_runner_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
 
 
 def test_vla_family_runners_inherit_shared_base_helpers() -> None:
-    from dreamervla.runners.chameleon_latent_action_wm_runner import (
-        ChameleonLatentActionWMRunner,
-    )
     from dreamervla.runners.dreamervla_runner import DreamerVLARunner
     from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
     from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
@@ -260,7 +257,6 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
     for cls in (
         PretokenizeVLARunner,
         DreamerVLARunner,
-        ChameleonLatentActionWMRunner,
         EmbodiedEvalRunner,
     ):
         assert "_resolve_vla_init_path" not in cls.__dict__
@@ -272,7 +268,6 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
     for cls in (
         PretokenizeVLARunner,
         DreamerVLARunner,
-        ChameleonLatentActionWMRunner,
         EmbodiedEvalRunner,
     ):
         assert cls.save_checkpoint is BaseRunner.save_checkpoint
