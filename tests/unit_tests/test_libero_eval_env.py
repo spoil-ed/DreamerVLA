@@ -79,11 +79,16 @@ def test_full_record_shapes_match_sequential_inputs():
 
     record = env.full_record()
 
-    assert set(record) == {"third_image", "wrist_image", "state"}
+    assert set(record) == {"third_image", "wrist_image", "state", "raw_obs"}
     assert record["third_image"].shape == (8, 8, 3)
     assert record["wrist_image"].shape == (8, 8, 3)
     # eef_pos(3) + axisangle(3) + gripper_qpos(2)
     assert record["state"].shape == (8,)
+    # raw_obs threads the current LIBERO obs dict so the parallel OFT base eval
+    # can reproduce the sequential path (which reads self._libero_current_raw_obs).
+    assert isinstance(record["raw_obs"], dict)
+    assert "agentview_image" in record["raw_obs"]
+    assert "robot0_eye_in_hand_image" in record["raw_obs"]
 
 
 def test_step_returns_five_tuple_with_success():

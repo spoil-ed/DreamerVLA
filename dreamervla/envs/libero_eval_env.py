@@ -131,7 +131,12 @@ class LiberoEvalEnv:
     def full_record(self) -> dict[str, np.ndarray]:
         if self._obs is None:
             raise RuntimeError("full_record called before reset")
-        return build_libero_eval_record(self._obs, self._resolution)
+        record = build_libero_eval_record(self._obs, self._resolution)
+        # Carry the raw LIBERO obs so the parallel path can reproduce the
+        # sequential OFT base eval, whose action generation reads the raw obs
+        # (agentview/wrist images + proprio) rather than the built PIL history.
+        record["raw_obs"] = self._obs
+        return record
 
     def close(self) -> None:
         env = getattr(self, "_env", None)

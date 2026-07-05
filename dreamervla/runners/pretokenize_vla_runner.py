@@ -157,6 +157,9 @@ class _EvalFrameHistoryExtractor:
             "padded": padded,
             "state": record["state"],
             "task_description": task_description,
+            # Raw LIBERO obs for the OFT base override's _generate_actions,
+            # which reads self._libero_current_raw_obs (ignored by RynnVLA).
+            "raw_obs": record.get("raw_obs"),
         }
 
 
@@ -796,6 +799,11 @@ class PretokenizeVLARunner(BaseRunner):
         def _infer_fn(preps: list[dict]) -> list[_EvalInferResult]:
             outs: list[_EvalInferResult] = []
             for prep in preps:
+                # Set the single per-step raw-obs attribute right before this
+                # slot's generate call. infer_fn processes slots one-at-a-time,
+                # so this is the current raw obs for the slot being generated.
+                # Required by the OFT base override; harmless for RynnVLA.
+                self._libero_current_raw_obs = prep.get("raw_obs")
                 predicted = self._generate_actions(
                     backbone,
                     item_processor,
