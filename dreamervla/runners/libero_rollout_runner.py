@@ -1,0 +1,132 @@
+"""Sink-agnostic vectorized LIBERO rollout core (shared by eval + collect).
+
+Drives K VecRolloutEnv slots through a finite (task_id, episode_id) work-list:
+gather K obs -> one batched infer_fn -> open-loop action per slot -> step all
+active slots in parallel -> per-step callback -> on a slot's done: on_episode +
+refill.  Mirrors RLinf's SubprocVectorEnv scatter/gather.  Ported from
+`vectorized_collect.collect_vectorized`, which now delegates here.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from dreamervla.runners.oft_collect_common import pop_open_loop_action
+
+
+def _decode_action_chunk(result: Any) -> Any:
+    if hasattr(result, "action_chunk"):
+        return result.action_chunk
+    return result[0]
+
+
+@dataclass
+class SlotStepContext:
+    """Everything a sink needs for one executed slot-step."""
+    slot: int
+    task_id: int
+    episode_id: int
+    task_description: str
+    record_before: Any
+    out: Any                # infer_fn output for this slot (has .action_chunk / .hidden_state)
+    action: Any
+    reward: float
+    terminated: bool
+    truncated: bool
+    info: dict
+    record_after: Any
+
+
+def run_vectorized_rollout(
+    vec_env: Any,
+    extractors: Sequence[Any],
+    infer_fn: Callable[[list[Any]], list[Any]],
+    work_list: Sequence[tuple[int, int]],
+    episode_horizon: int,
+    *,
+    obs_from_record: Callable[[Any], Any] = lambda r: r,
+    on_step: Callable[[SlotStepContext], Any | None] | None = None,
+    on_episode: Callable[[int, int, list[Any], bool], None] | None = None,
+    action_steps: int = 1,
+) -> int:
+    """Run the whole work_list across vec_env.num_envs slots. Returns episodes completed."""
+    if len(extractors) != vec_env.num_envs:
+        raise ValueError(
+            f"need one extractor per env: {len(extractors)} extractors, {vec_env.num_envs} envs"
+        )
+    num_envs = vec_env.num_envs
+    queue = list(work_list)
+    next_idx = 0
+    done_count = 0
+    action_steps = max(1, int(action_steps))
+
+    slot_task = [-1] * num_envs
+    slot_desc = [""] * num_envs
+    slot_rec: list[Any] = [None] * num_envs
+    slot_steps: list[list[Any]] = [[] for _ in range(num_envs)]
+    slot_t = [0] * num_envs
+    slot_ep = [-1] * num_envs
+    active = [False] * num_envs
+    action_queues: list[list[Any]] = [[] for _ in range(num_envs)]
+
+    def _start_slot(k: int) -> None:
+        nonlocal next_idx
+        if next_idx >= len(queue):
+            active[k] = False
+            return
+        tid, ep = queue[next_idx]
+        next_idx += 1
+        if slot_task[k] != tid:
+            slot_desc[k] = vec_env.set_task([tid], env_ids=[k])[0]
+            slot_task[k] = tid
+        slot_rec[k] = vec_env.reset([tid], [ep], env_ids=[k])[0]
+        extractors[k].reset()
+        slot_steps[k] = []
+        slot_t[k] = 0
+        slot_ep[k] = ep
+        action_queues[k] = []
+        active[k] = True
+
+    for k in range(num_envs):
+        _start_slot(k)
+
+    while any(active):
+        active_ids = [k for k in range(num_envs) if active[k]]
+        preps = [
+            extractors[k].prepare(obs_from_record(slot_rec[k]), slot_desc[k])
+            for k in active_ids
+        ]
+        outs = infer_fn(preps)
+        actions = [
+            pop_open_loop_action(_decode_action_chunk(outs[i]), action_queues[k], action_steps)
+            for i, k in enumerate(active_ids)
+        ]
+        step_results = vec_env.step(actions, env_ids=active_ids)
+
+        finished: list[int] = []
+        for i, k in enumerate(active_ids):
+            reward, terminated, truncated, info, rec_after = step_results[i]
+            if on_step is not None:
+                rec = on_step(SlotStepContext(
+                    slot=k, task_id=slot_task[k], episode_id=slot_ep[k],
+                    task_description=slot_desc[k], record_before=slot_rec[k],
+                    out=outs[i], action=actions[i], reward=reward,
+                    terminated=terminated, truncated=truncated, info=info,
+                    record_after=rec_after,
+                ))
+                if rec is not None:
+                    slot_steps[k].append(rec)
+            slot_t[k] += 1
+            slot_rec[k] = rec_after
+            if bool(terminated or truncated) or slot_t[k] >= episode_horizon:
+                success = bool(info.get("success", terminated))
+                if on_episode is not None:
+                    on_episode(slot_task[k], slot_ep[k], slot_steps[k], success)
+                done_count += 1
+                finished.append(k)
+
+        for k in finished:
+            _start_slot(k)
+
+    return done_count
