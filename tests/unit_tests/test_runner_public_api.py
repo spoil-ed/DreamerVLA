@@ -19,12 +19,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 
 EXPERIMENT_MODULES = {
-    "openvla_oft_hdf5": ("VLA", "openvla_oft"),
-    "openvla_oft_hdf5_one_trajectory": ("VLA", "openvla_oft_one_trajectory"),
-    "openvla_oft_hdf5_one_trajectory_l1": (
-        "VLA",
-        "openvla_oft_l1_one_trajectory",
-    ),
     "world_model_chunk": ("worldmodel", "rynnvla_action_chunk"),
     "world_model_step": ("worldmodel", "rynnvla_action_step"),
     "world_model_chunk_input_tokens": (
@@ -237,9 +231,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
-        "openvla_oft_hdf5": "dreamervla.runners.OpenVLAOFTRunner",
-        "openvla_oft_hdf5_one_trajectory": "dreamervla.runners.OpenVLAOFTRunner",
-        "openvla_oft_hdf5_one_trajectory_l1": "dreamervla.runners.OpenVLAOFTRunner",
         "latent_classifier_libero_goal_chunk": "dreamervla.runners.LatentClassifierRunner",
         "latent_classifier_libero_goal_chunk_input_tokens": "dreamervla.runners.LatentClassifierRunner",
         "oft_latent_classifier_chunk": "dreamervla.runners.LatentClassifierRunner",
@@ -390,22 +381,6 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
     assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
     assert wandb_cfg.runner.logger.wandb_mode == "online"
-
-
-def test_openvla_oft_one_trajectory_routes_distinguish_action_heads() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        lm_head = _compose_experiment("openvla_oft_hdf5_one_trajectory")
-        l1 = _compose_experiment("openvla_oft_hdf5_one_trajectory_l1")
-
-    assert lm_head.policy.use_l1_regression is False
-    assert l1.policy.use_l1_regression is True
-    for cfg in (lm_head, l1):
-        assert cfg.dataset.demos_per_task == 1
-        assert cfg.dataset.demo_selection_seed == cfg.seed
-        assert cfg.dataset.max_demos_per_file is None
-    assert "openvla_oft_l1_one_trajectory" in l1.training.out_dir
-    assert "openvla_oft_lm_head_one_trajectory" in lm_head.training.out_dir
 
 
 def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:

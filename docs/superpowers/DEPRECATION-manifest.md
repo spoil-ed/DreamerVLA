@@ -19,6 +19,12 @@
 | configs/VLA/rynnvla_one_trajectory.yaml | archive/configs/VLA/rynnvla_one_trajectory.yaml | 仅服务 vla_sft_one_trajectory experiment 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-4 |
 | configs/scripts/train_vla.yaml | archive/configs/scripts/train_vla.yaml | train_vla.sh 的 launcher config（默认 experiment=vla_rynnvla_action_head，已归档→孤儿）（SPEC §3.5） | 4b-4 |
 | scripts/train_vla.sh | archive/scripts/train_vla.sh | standalone VLA SFT 训练启动脚本（SPEC §3.5），主线走 cotrain/collect/eval；train_wm.sh 另用 --config-name train_wm 不受影响 | 4b-4 |
+| configs/experiment/openvla_oft_hdf5.yaml | archive/configs/experiment/openvla_oft_hdf5.yaml | OpenVLAOFTRunner standalone SFT 路由（SPEC §3.1），主线 VLA 用 OpenVLA-OFT ckpt 经 cotrain | 4b-5 |
+| configs/experiment/openvla_oft_hdf5_one_trajectory.yaml | archive/configs/experiment/openvla_oft_hdf5_one_trajectory.yaml | OpenVLAOFTRunner one-traj SFT 路由（SPEC §3.1），非主线 | 4b-5 |
+| configs/experiment/openvla_oft_hdf5_one_trajectory_l1.yaml | archive/configs/experiment/openvla_oft_hdf5_one_trajectory_l1.yaml | OpenVLAOFTRunner L1 one-traj SFT 路由（SPEC §3.1），非主线 | 4b-5 |
+| configs/VLA/openvla_oft.yaml | archive/configs/VLA/openvla_oft.yaml | 仅服务 openvla_oft_hdf5 experiment 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
+| configs/VLA/openvla_oft_one_trajectory.yaml | archive/configs/VLA/openvla_oft_one_trajectory.yaml | 仅服务 openvla_oft_hdf5_one_trajectory 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
+| configs/VLA/openvla_oft_l1_one_trajectory.yaml | archive/configs/VLA/openvla_oft_l1_one_trajectory.yaml | 仅服务 openvla_oft_hdf5_one_trajectory_l1 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |

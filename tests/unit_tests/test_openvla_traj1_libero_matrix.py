@@ -97,22 +97,17 @@ def test_openvla_traj1_input_token_dims_are_resolver_expressions(
     assert cfg.task.openvla_oft.input_tokens.wm_obs_dim == 256 * 4096
 
 
-@pytest.mark.parametrize("offline_task,coldstart_task,suite", MATRIX)
+@pytest.mark.parametrize("_offline_task,coldstart_task,suite", MATRIX)
 def test_openvla_traj1_libero_tasks_define_vla_dataset_contract(
-    offline_task,
+    _offline_task,
     coldstart_task,
     suite,
 ) -> None:
-    offline = _compose(["experiment=openvla_oft_hdf5_one_trajectory", f"task={offline_task}"])
     coldstart = _compose(["experiment=collect_rollouts_onetraj", f"task={coldstart_task}"])
 
-    assert offline.task.suite == suite
     assert coldstart.task.suite == suite
-    _assert_openvla_traj1_contract(offline)
     _assert_openvla_traj1_contract(coldstart)
-    assert "/processed_data/" in str(offline.task.openvla_oft.hdf5_reward_dir)
     assert "/collected_rollouts/" in str(coldstart.task.openvla_oft.hdf5_reward_dir)
-    assert offline.task.openvla_oft.action_hidden_dir.endswith("_h1")
     assert coldstart.task.openvla_oft.action_hidden_dir.endswith("_h1")
 
 
@@ -120,7 +115,6 @@ def test_openvla_traj1_libero_tasks_define_vla_dataset_contract(
 @pytest.mark.parametrize(
     "experiment",
     [
-        "openvla_oft_hdf5_one_trajectory",
         "oft_discrete_token_world_model_chunk",
         "oft_discrete_token_world_model_chunk",
     ],
