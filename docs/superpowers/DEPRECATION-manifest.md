@@ -25,6 +25,10 @@
 | configs/VLA/openvla_oft.yaml | archive/configs/VLA/openvla_oft.yaml | 仅服务 openvla_oft_hdf5 experiment 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
 | configs/VLA/openvla_oft_one_trajectory.yaml | archive/configs/VLA/openvla_oft_one_trajectory.yaml | 仅服务 openvla_oft_hdf5_one_trajectory 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
 | configs/VLA/openvla_oft_l1_one_trajectory.yaml | archive/configs/VLA/openvla_oft_l1_one_trajectory.yaml | 仅服务 openvla_oft_hdf5_one_trajectory_l1 的 VLA override 组（SPEC §3.6），主线不引用 | 4b-5 |
+| configs/experiment/latent_classifier_libero_goal_chunk.yaml | archive/configs/experiment/latent_classifier_libero_goal_chunk.yaml | LatentClassifierRunner standalone 分类器路由（SPEC §3.1）；runner 本身 §2.2 保留，仅归 experiment | 4b-6 |
+| configs/experiment/latent_classifier_libero_goal_chunk_input_tokens.yaml | archive/configs/experiment/latent_classifier_libero_goal_chunk_input_tokens.yaml | LatentClassifierRunner standalone 分类器 input-token 路由（SPEC §3.1），非主线 | 4b-6 |
+| configs/experiment/oft_latent_classifier_chunk.yaml | archive/configs/experiment/oft_latent_classifier_chunk.yaml | LatentClassifierRunner OFT 分类器路由（SPEC §3.1），非主线 | 4b-6 |
+| configs/experiment/oft_latent_classifier_chunk_input_tokens.yaml | archive/configs/experiment/oft_latent_classifier_chunk_input_tokens.yaml | LatentClassifierRunner OFT 分类器 input-token 路由（SPEC §3.1），非主线 | 4b-6 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |

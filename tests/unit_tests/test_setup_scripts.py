@@ -444,7 +444,7 @@ def test_training_launchers_pass_nested_task_overrides_to_train_config(tmp_path:
         [
             "bash",
             "scripts/train_wm.sh",
-            "experiment=oft_latent_classifier_chunk_input_tokens",
+            "experiment=oft_world_model_chunk_input_tokens",
             "task=openvla_onetraj_libero",
             f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
             "dry_run=true",

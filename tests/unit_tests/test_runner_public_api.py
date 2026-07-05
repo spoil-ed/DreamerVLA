@@ -37,19 +37,6 @@ EXPERIMENT_MODULES = {
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
-    "latent_classifier_libero_goal_chunk": ("classifier", "rynnvla_action_chunk"),
-    "latent_classifier_libero_goal_chunk_input_tokens": (
-        "classifier",
-        "rynnvla_input_token_chunk",
-    ),
-    "oft_latent_classifier_chunk": (
-        "classifier",
-        "openvla_oft_input_token_chunk",
-    ),
-    "oft_latent_classifier_chunk_input_tokens": (
-        "classifier",
-        "openvla_oft_input_token_chunk",
-    ),
     "eval_libero_vla": ("evaluation", "libero_vla"),
 }
 
@@ -231,10 +218,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
-        "latent_classifier_libero_goal_chunk": "dreamervla.runners.LatentClassifierRunner",
-        "latent_classifier_libero_goal_chunk_input_tokens": "dreamervla.runners.LatentClassifierRunner",
-        "oft_latent_classifier_chunk": "dreamervla.runners.LatentClassifierRunner",
-        "oft_latent_classifier_chunk_input_tokens": "dreamervla.runners.LatentClassifierRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -404,10 +387,6 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
             )
             for suite in suites
         ]
-        classifier = _compose_experiment(
-            "oft_latent_classifier_chunk",
-            extra_overrides=["task=libero_goal"],
-        )
 
     for cfg in wm_cfgs:
         expected = f"{cfg.task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2"
@@ -415,8 +394,6 @@ def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:
         assert cfg.dataset.hidden_dir == expected
         assert cfg.dataset.expected_obs_hidden_source == "input_token_embedding"
         assert cfg.world_model.obs_dim == cfg.task.openvla_oft.input_tokens.wm_obs_dim
-
-    assert classifier.data.success_dir_hidden == classifier.task.openvla_oft.input_token_hidden_dir
 
 
 def test_input_token_scheme_b_routes_use_token_sidecar_and_bridge_actor() -> None:
