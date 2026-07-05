@@ -88,6 +88,69 @@ def test_success_tally_macro_average_matches_eval_metrics():
     assert metrics["eval_task_5_success_rate"] == expected["eval_task_5_success_rate"]
 
 
+class _StubOFTExtractor:
+    """OFT-like extractor whose output depends only on its OWN call count.
+
+    Under a shared single extractor, interleaving K slots corrupts this count
+    (slot 0 sees 1,3,5…; slot 1 sees 2,4,6…). Per-slot isolation must give each
+    slot an independent 1,2,3… sequence.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+        self.calls = 0
+
+    def step(self, _obs, _desc):
+        self.calls += 1
+        return type("O", (), {"action_chunk": [float(self.calls)]})()
+
+
+def test_parallel_oft_slots_isolate_per_slot_call_count():
+    import numpy as np
+
+    from dreamervla.runners.pretokenize_vla_runner import _EvalFrameHistoryExtractor
+
+    def rec(v):
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+        return {
+            "third_image": img,
+            "wrist_image": img,
+            "state": np.zeros(8, dtype=np.float32),
+            "raw_obs": {"v": v},
+        }
+
+    slots = [_EvalFrameHistoryExtractor(2) for _ in range(2)]
+    stubs = [_StubOFTExtractor() for _ in range(2)]
+    for slot, stub in zip(slots, stubs, strict=True):
+        slot.attach_oft_extractor(stub)
+        slot.reset()
+
+    seen: dict[int, list[float]] = {0: [], 1: []}
+    env_steps: dict[int, list[int]] = {0: [], 1: []}
+    for step in range(3):
+        # run_vectorized_rollout builds all slot preps, THEN infers one slot at a
+        # time (the interleaving that used to corrupt one shared extractor).
+        preps = [slots[k].prepare(rec(step), "task") for k in range(2)]
+        for k, prep in enumerate(preps):
+            env_steps[k].append(prep["env_step"])
+            out = prep["oft_extractor"].step(prep["raw_obs"], prep["task_description"])
+            seen[k].append(out.action_chunk[0])
+
+    # Each slot's OFT extractor advances only on its own calls (not interleaved).
+    assert seen[0] == [1.0, 2.0, 3.0]
+    assert seen[1] == [1.0, 2.0, 3.0]
+    # env_step is per-slot and starts at 0 at episode start, then increments.
+    assert env_steps[0] == [0, 1, 2]
+    assert env_steps[1] == [0, 1, 2]
+    # reset() zeroed each slot's step counter in lockstep with a new episode.
+    slots[0].reset()
+    assert slots[0].prepare(rec(0), "task")["env_step"] == 0
+
+
 def test_parallel_sr_equals_sequential_sr():
     # Same work-list run through 1 slot (sequential) and 4 slots (parallel); the
     # _FakeVecEnv success depends only on (task, episode), not slot, so the

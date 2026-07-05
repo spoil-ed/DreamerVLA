@@ -216,7 +216,16 @@ class EmbodiedEvalRunner(
         )
         extractor = bundle.make_extractor()
         self._base_oft_extractor = extractor
+        # Keep the bundle so the parallel eval path can mint one OFT extractor per
+        # slot (each with its own frame deque) via _make_parallel_oft_slot_extractor.
+        self._oft_eval_bundle = bundle
         return _OFTBaseEvalAdapter(extractor)
+
+    def _make_parallel_oft_slot_extractor(self) -> Any:
+        bundle = getattr(self, "_oft_eval_bundle", None)
+        if bundle is None:
+            return None
+        return bundle.make_extractor()
 
     @property
     def _action_token_id(self) -> int:
