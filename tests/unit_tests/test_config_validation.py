@@ -505,7 +505,7 @@ def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=world_model_chunk",
+                "experiment=collect_rollouts_ray",
                 "logger=tensorboard_wandb",
             ],
         )

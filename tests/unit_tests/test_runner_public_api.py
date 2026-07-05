@@ -252,9 +252,9 @@ def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
 def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        default_cfg = _compose_experiment("world_model_chunk")
+        default_cfg = _compose_experiment("collect_rollouts_ray")
         wandb_cfg = _compose_experiment(
-            "world_model_chunk",
+            "collect_rollouts_ray",
             extra_overrides=["logger=wandb"],
         )
 
