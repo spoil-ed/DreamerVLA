@@ -96,6 +96,27 @@ def quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
+def build_libero_eval_record(obs, resolution: int) -> dict[str, np.ndarray]:
+    """Build the per-step eval inputs (third/wrist image + proprio state).
+
+    Mirrors the sequential LIBERO eval loop's per-step construction in
+    ``dreamervla/runners/pretokenize_vla_runner.py`` (``get_libero_image`` for
+    both camera views + the ``eef_pos/axisangle/gripper_qpos`` state concat) so a
+    parallel slot's observation record is byte-identical to the sequential path
+    for the same ``(task, init_state)``.
+    """
+    third = get_libero_image(obs, resolution)
+    wrist = get_libero_image(obs, resolution, "robot0_eye_in_hand_image")
+    state = np.concatenate(
+        (
+            obs["robot0_eef_pos"],
+            quat2axisangle(obs["robot0_eef_quat"]),
+            obs["robot0_gripper_qpos"],
+        )
+    )
+    return {"third_image": third, "wrist_image": wrist, "state": state}
+
+
 def save_rollout_video(
     rollout_dir: str,
     rollout_images: list,
