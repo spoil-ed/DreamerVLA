@@ -38,7 +38,6 @@ bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
 | `online_cotrain_ray_oft_backbone_latent` | `OnlineCotrainRayRunner` | optional legacy Ray route |
 | `online_cotrain_ray_oft_action_hidden` | `OnlineCotrainRayRunner` | optional legacy Ray route |
 | `online_cotrain_ray_world_model_env_tiny` | `OnlineCotrainRayRunner` | world-model-env smoke |
-| `online_cotrain_ray_synthetic` | `OnlineCotrainRayRunner` | synthetic backend smoke |
 
 Do not make legacy Ray routes the default path unless the active task explicitly asks for them.
 

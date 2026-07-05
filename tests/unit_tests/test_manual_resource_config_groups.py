@@ -12,7 +12,7 @@ def test_manual_precision_and_parallelism_groups_compose_for_ray_backend() -> No
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=online_cotrain_ray_synthetic",
+                "experiment=manual_cotrain_ray_tiny",
                 "+precision=bf16",
                 "+parallelism=fsdp",
             ],
@@ -35,7 +35,7 @@ def test_scheduler_group_and_ray_scripts_are_manual_ops_entrypoints() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=online_cotrain_ray_synthetic",
+                "experiment=manual_cotrain_ray_tiny",
                 "+scheduler=local",
             ],
         )

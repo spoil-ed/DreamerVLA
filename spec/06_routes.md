@@ -43,12 +43,6 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 - world model：`world_model_chunk`、`world_model_step`、`world_model_chunk_input_tokens`
 - classifier：`latent_classifier_libero_goal_chunk`、`latent_classifier_libero_goal_chunk_input_tokens`
 
-## 测试夹具（不是路由）
-
-仅供 Ray smoke / 单测使用，合成或极小，勿当真实方案：
-
-- `online_cotrain_ray_synthetic`
-
 ## 维护约定
 
 新增 `experiment=` 时，回到本表归类：要么进主线（同时更新 `04_complete_loop.md` 与

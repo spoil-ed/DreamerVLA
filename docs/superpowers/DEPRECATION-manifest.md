@@ -11,6 +11,8 @@
 | configs/experiment/vla_rynnvla_full_finetune.yaml | archive/configs/experiment/vla_rynnvla_full_finetune.yaml | RynnVLA 次级实验配方，不在当前 OpenVLA-OFT cotrain 主线路径 | (staged, 未提交) |
 | configs/experiment/collect_rollouts_ray_synthetic.yaml | archive/configs/experiment/collect_rollouts_ray_synthetic.yaml | synthetic 后端冒烟 experiment（SPEC §3.1），主线 collect 走 collect_rollouts_ray/onetraj；无 mainline 源引用 | 4b-1 |
 | configs/experiment/online_cotrain_ray_dreamervla_tiny.yaml | archive/configs/experiment/online_cotrain_ray_dreamervla_tiny.yaml | OnlineCotrainRayRunner 极小 Ray smoke fixture（SPEC §3.1，CounterEnv/_test_models 合成），主线 cotrain 走 openvla_onetraj_libero_cotrain_ray；无 mainline 源引用 | 4b-2 |
+| configs/experiment/online_cotrain_ray_synthetic.yaml | archive/configs/experiment/online_cotrain_ray_synthetic.yaml | OnlineCotrainRayRunner 合成 Ray smoke fixture（SPEC §3.1，_test_envs/_test_models），主线 cotrain 走 openvla_onetraj_libero_cotrain_ray；夹具重写到 manual_cotrain_ray_tiny 后无 mainline 源引用 | 4b-3 |
+| tests/e2e_tests/test_s5_ray_hydra_entry.py | archive/tests/e2e_tests/test_s5_ray_hydra_entry.py | 唯一绑定 online_cotrain_ray_synthetic 的 e2e 测试（单测文件），随其 config 同批归档以保还原配对 | 4b-3 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
