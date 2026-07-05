@@ -751,22 +751,6 @@ def test_package_modules_do_not_insert_project_root_into_sys_path() -> None:
     assert offenders == []
 
 
-def test_world_model_modules_do_not_keep_lazy_compat_reexports() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    for relpath in (
-        "dreamervla/models/world_model/dreamerv3_torch.py",
-        "dreamervla/models/world_model/tssm_torch.py",
-    ):
-        text = (project_root / relpath).read_text(encoding="utf-8")
-        assert "_WORLD_MODEL_EXPORTS" not in text, relpath
-        assert "def __getattr__" not in text, relpath
-
-    config_text = "\n".join(
-        path.read_text(encoding="utf-8") for path in (project_root / "configs").rglob("*.yaml")
-    )
-    assert "dreamervla.models.world_model.dreamerv3_torch.WorldModel" not in config_text
-
-
 def test_active_configs_do_not_describe_ignored_targets() -> None:
     project_root = Path(__file__).resolve().parents[2]
     offenders: dict[str, list[str]] = {}

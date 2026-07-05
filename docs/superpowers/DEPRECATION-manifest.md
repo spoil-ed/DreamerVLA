@@ -56,6 +56,17 @@
 | dreamervla/runners/vla_sft_runner.py | archive/dreamervla/runners/vla_sft_runner.py | 非主线 standalone VLA SFT 训练 runner（SPEC §3.2，VLASFTRunner）；仅 __init__ 引用，主线不 import | 4b-code-r2 |
 | dreamervla/runners/openvla_oft_runner.py | archive/dreamervla/runners/openvla_oft_runner.py | 非主线 standalone OpenVLA-OFT SFT 训练 runner（SPEC §3.2，OpenVLAOFTTrainingRunner）；主线 eval 用 policy/encoder 非此训练 runner | 4b-code-r2 |
 | dreamervla/models/world_model/chameleon_latent_action.py | archive/dreamervla/models/world_model/chameleon_latent_action.py | 非主线 Chameleon latent-action 世界模型（SPEC §3.4）；纯死代码(仅 world_model/__init__ 导出、无使用)；非 chunk WM | 4b-code-m1 |
+| dreamervla/models/world_model/dreamer_v3_pixel_world_model.py | archive/dreamervla/models/world_model/dreamer_v3_pixel_world_model.py | 非主线 DreamerV3 pixel WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/dreamer_v3_pixel_backbone_world_model.py | archive/dreamervla/models/world_model/dreamer_v3_pixel_backbone_world_model.py | 非主线 DreamerV3 pixel-backbone WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/dreamer_v3_token_world_model.py | archive/dreamervla/models/world_model/dreamer_v3_token_world_model.py | 非主线 DreamerV3 token WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/dreamer_v3_token_from_pixel_world_model.py | archive/dreamervla/models/world_model/dreamer_v3_token_from_pixel_world_model.py | 非主线 DreamerV3 token-from-pixel WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/_dreamer_v3_token_common.py | archive/dreamervla/models/world_model/_dreamer_v3_token_common.py | dreamer token WM 共用私有模块（SPEC §3.4）；仅被已归 token WM import | 4b-code-m2 |
+| dreamervla/models/world_model/tssm_backbone_world_model.py | archive/dreamervla/models/world_model/tssm_backbone_world_model.py | 非主线 TSSM backbone WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/tssm_token_backbone_world_model.py | archive/dreamervla/models/world_model/tssm_token_backbone_world_model.py | 非主线 TSSM token-backbone WM（SPEC §3.4，非 chunk）；主线不 import | 4b-code-m2 |
+| dreamervla/models/world_model/dreamerv3_torch.py | archive/dreamervla/models/world_model/dreamerv3_torch.py | dreamer/tssm WM 共享基元（SPEC §3.4）；仅被已归 WM + 死码 utils/latent + 测试 import，非主线 | 4b-code-m2 |
+| dreamervla/models/world_model/tssm_torch.py | archive/dreamervla/models/world_model/tssm_torch.py | tssm WM 共享基元（SPEC §3.4）；仅被已归 tssm WM + 测试 import，非主线 | 4b-code-m2 |
+| dreamervla/utils/latent.py | archive/dreamervla/utils/latent.py | 死码，仅 import dreamerv3_torch.DreamerV3LatentState，无任何 importer | 4b-code-m2 |
+| tests/unit_tests/test_world_model_file_split_imports.py | archive/tests/unit_tests/test_world_model_file_split_imports.py | 顶层 import 全是已归档 dreamer/tssm WM 拆分文件；base-abstract 测试拆到 test_model_base_abstract.py 保留 | 4b-code-m2 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
