@@ -24,10 +24,6 @@ EXPERIMENT_MODULES = {
         "worldmodel",
         "openvla_oft_input_token_chunk",
     ),
-    "oft_discrete_token_world_model_chunk": (
-        "worldmodel",
-        "openvla_oft_discrete_token_action_chunk",
-    ),
     "oft_world_model_chunk_input_tokens": (
         "worldmodel",
         "openvla_oft_input_token_chunk",
@@ -208,7 +204,6 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk": "dreamervla.runners.LatentWMRunner",
-        "oft_discrete_token_world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "oft_world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
     }
@@ -284,23 +279,6 @@ def test_role_based_oft_wm_input_token_alias_matches_legacy_route() -> None:
     assert role_based.world_model.token_count == legacy.world_model.token_count
 
 
-def test_role_based_oft_discrete_token_wm_alias_matches_legacy_route() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        role_based = _compose_experiment("oft_discrete_token_world_model_chunk")
-        legacy = _compose_experiment("oft_discrete_token_world_model_chunk")
-
-    assert role_based._target_ == "dreamervla.runners.LatentWMRunner"
-    assert role_based._target_ == legacy._target_
-    assert role_based.dataset._target_ == legacy.dataset._target_
-    assert (
-        role_based.dataset.expected_action_head_type
-        == legacy.dataset.expected_action_head_type
-    )
-    assert role_based.world_model._target_ == legacy.world_model._target_
-    assert role_based.world_model.obs_dim == legacy.world_model.obs_dim
-
-
 def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     train_dreamervla_config = (
@@ -328,15 +306,6 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
     assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
     assert wandb_cfg.runner.logger.wandb_mode == "online"
-
-
-def test_openvla_dreamervla_discrete_probability_route_is_explicit() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        discrete_wm = _compose_experiment("oft_discrete_token_world_model_chunk")
-
-    assert discrete_wm.dataset.expected_action_head_type == "oft_discrete_token"
-    assert discrete_wm.dataset.hidden_dir.endswith("_h1")
 
 
 def test_openvla_oft_default_routes_use_input_token_sidecar() -> None:

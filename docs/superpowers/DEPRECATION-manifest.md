@@ -32,6 +32,7 @@
 | configs/experiment/world_model_step.yaml | archive/configs/experiment/world_model_step.yaml | LatentWMRunner standalone WM step 路由（SPEC §3.1），非主线；主线 WM 走 cotrain 内 world_model_pretrain_step | 4b-7 |
 | configs/worldmodel/rynnvla_action_step.yaml | archive/configs/worldmodel/rynnvla_action_step.yaml | 仅服务 world_model_step 的 worldmodel override 组（SPEC §3.6），无其他引用 | 4b-7 |
 | configs/experiment/world_model_chunk_input_tokens.yaml | archive/configs/experiment/world_model_chunk_input_tokens.yaml | LatentWMRunner standalone WM input-token 路由（SPEC §3.1），非主线；worldmodel/rynnvla_input_token_chunk 待剩余 WM 批同归 | 4b-8 |
+| configs/experiment/oft_discrete_token_world_model_chunk.yaml | archive/configs/experiment/oft_discrete_token_world_model_chunk.yaml | LatentWMRunner standalone OFT 离散 token WM 路由（SPEC §3.1），非主线；worldmodel/openvla_oft_discrete_token_action_chunk 待剩余 WM 批同归 | 4b-9 |
 | configs/scripts/action_state_model_conv_generation.yaml | archive/configs/scripts/action_state_model_conv_generation.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/concat_record_libero.yaml | archive/configs/scripts/concat_record_libero.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
 | configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | archive/configs/scripts/regenerate_libero_dataset_save_img_action_state_wrist.yaml | 旧预处理脚本配置，不在当前 one-trajectory cotrain 主线路径 | (staged, 未提交) |
