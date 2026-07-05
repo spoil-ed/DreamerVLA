@@ -86,3 +86,25 @@ def test_success_tally_macro_average_matches_eval_metrics():
     )
     assert metrics["eval_success_rate"] == expected["eval_success_rate"]
     assert metrics["eval_task_5_success_rate"] == expected["eval_task_5_success_rate"]
+
+
+def test_parallel_sr_equals_sequential_sr():
+    # Same work-list run through 1 slot (sequential) and 4 slots (parallel); the
+    # _FakeVecEnv success depends only on (task, episode), not slot, so the
+    # macro-average SR must be exactly equal (parallel ≡ sequential invariant).
+    work = build_grid_work_list([0, 1, 2, 3, 4], num_episodes_per_task=3)
+
+    def run(k):
+        tally = SuccessTally()
+        run_vectorized_rollout(
+            _FakeVecEnv(k, ep_len=2),
+            [_StubExtractor() for _ in range(k)],
+            _stub_infer,
+            work,
+            episode_horizon=10,
+            on_episode=tally.on_episode,
+        )
+        return tally.summarize(episodes_per_task=3)
+
+    assert run(1)["eval_success_rate"] == run(4)["eval_success_rate"]
+    assert run(1) == run(4)

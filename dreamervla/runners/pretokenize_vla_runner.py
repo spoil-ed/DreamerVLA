@@ -117,6 +117,49 @@ def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> Non
     apply_libero_render_regime(backend, shard_id, gpu_pool)
 
 
+class _EvalInferResult:
+    """Minimal ``infer_fn`` output the rollout core decodes via ``.action_chunk``."""
+
+    __slots__ = ("action_chunk",)
+
+    def __init__(self, action_chunk: Any) -> None:
+        self.action_chunk = action_chunk
+
+
+class _EvalFrameHistoryExtractor:
+    """Per-slot frame-history preparer for the parallel LIBERO eval path.
+
+    Faithfully re-implements the sequential eval's ``frame_history``/``padded``
+    construction (``evaluate_libero``): append this slot's ``(third_pil,
+    wrist_pil)`` each step, truncate to ``history_length``, then pad with the
+    oldest available frame until history fills. Returns the exact inputs
+    ``_generate_actions`` consumes so a parallel slot is byte-identical to the
+    sequential path for the same ``(task, init_state)``.
+    """
+
+    def __init__(self, history_length: int) -> None:
+        self._history_length = max(1, int(history_length))
+        self._frame_history: list[tuple[Image.Image, Image.Image]] = []
+
+    def reset(self) -> None:
+        self._frame_history = []
+
+    def prepare(self, record: dict, task_description: str) -> dict:
+        third_pil = Image.fromarray(record["third_image"])
+        wrist_pil = Image.fromarray(record["wrist_image"])
+        self._frame_history.append((third_pil, wrist_pil))
+        if len(self._frame_history) > self._history_length:
+            self._frame_history = self._frame_history[-self._history_length :]
+        padded = [self._frame_history[0]] * (
+            self._history_length - len(self._frame_history)
+        ) + self._frame_history
+        return {
+            "padded": padded,
+            "state": record["state"],
+            "task_description": task_description,
+        }
+
+
 class PretokenizeVLARunner(BaseRunner):
     runner_name = "vla_sft"
     runner_status = "current"
@@ -412,12 +455,11 @@ class PretokenizeVLARunner(BaseRunner):
             TASK_MAX_STEPS,
             get_libero_dummy_action,
             get_libero_env,
-            get_libero_image,
-            quat2axisangle,
             resolve_libero_eval_protocol,
             save_rollout_video,
             select_libero_action_chunk,
         )
+        from dreamervla.envs.libero_env import build_libero_eval_record
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
@@ -482,6 +524,24 @@ class PretokenizeVLARunner(BaseRunner):
         self.encoder.eval()
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
+        num_envs = int(OmegaConf.select(eval_cfg, "num_envs", default=1))
+        if num_envs > 1:
+            return self._evaluate_libero_parallel(
+                epoch=epoch,
+                eval_cfg=eval_cfg,
+                backbone=backbone,
+                item_processor=item_processor,
+                task_ids=task_ids,
+                num_episodes=num_episodes,
+                max_steps=max_steps,
+                action_steps=action_steps,
+                history_length=history_length,
+                resolution=resolution,
+                seed=seed,
+                num_steps_wait=num_steps_wait,
+                num_envs=num_envs,
+            )
+
         total_episodes, total_successes = 0, 0
         task_records: list[dict[str, int]] = []
         run_t0 = time.time()
@@ -521,19 +581,17 @@ class PretokenizeVLARunner(BaseRunner):
                         obs, _, done, _ = env.step(get_libero_dummy_action())
                         continue
 
-                    img = get_libero_image(obs, resolution)
+                    # Shared per-step record builder (identical to the parallel
+                    # path) to prevent field-by-field drift: build_libero_eval_record
+                    # returns get_libero_image(third), get_libero_image(wrist) and the
+                    # eef_pos/axisangle/gripper_qpos state concat — byte-identical to
+                    # the old inline block.
+                    record = build_libero_eval_record(obs, resolution)
+                    img = record["third_image"]
                     if should_record:
                         rollout_images.append(img)
-                    wrist_img = get_libero_image(
-                        obs, resolution, "robot0_eye_in_hand_image"
-                    )
-                    state = np.concatenate(
-                        (
-                            obs["robot0_eef_pos"],
-                            quat2axisangle(obs["robot0_eef_quat"]),
-                            obs["robot0_gripper_qpos"],
-                        )
-                    )
+                    wrist_img = record["wrist_image"]
+                    state = record["state"]
 
                     third_pil = Image.fromarray(img)
                     wrist_pil = Image.fromarray(wrist_img)
@@ -658,6 +716,130 @@ class PretokenizeVLARunner(BaseRunner):
         print(
             f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
             f"({total_successes}/{total_episodes}) total_time={run_dt:.1f}s",
+            flush=True,
+        )
+        return metrics
+
+    def _evaluate_libero_parallel(
+        self,
+        *,
+        epoch: int,
+        eval_cfg: Any,
+        backbone: Any,
+        item_processor: Any,
+        task_ids: list[int],
+        num_episodes: int,
+        max_steps: int,
+        action_steps: int,
+        history_length: int,
+        resolution: int,
+        seed: int,
+        num_steps_wait: int,
+        num_envs: int,
+    ) -> dict[str, float]:
+        """Parallel osmesa LIBERO eval: K subprocess envs stepped in lockstep.
+
+        Per-episode success is identical to the sequential path: each slot
+        reproduces the same frame-history/padded construction, calls the same
+        ``_generate_actions``, and feeds ``env.step`` the same (non-gripper-
+        processed) ``action.tolist()`` for the same ``(task, init_state)``. Only
+        the render regime (K osmesa subprocesses vs one in-process env) differs.
+        """
+        from dreamervla.envs import select_libero_action_chunk
+        from dreamervla.envs.libero_eval_env import make_libero_eval_env
+        from dreamervla.runners.libero_rollout_runner import (
+            SuccessTally,
+            build_grid_work_list,
+            run_vectorized_rollout,
+        )
+        from dreamervla.runners.vec_rollout_env import VecRolloutEnv
+
+        render_backend, render_shard_id, render_gpu_pool = _eval_render_regime_params(
+            self.cfg, eval_cfg
+        )
+        task_suite_name = str(
+            OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
+        )
+        cfg_kwargs = {
+            "task_suite_name": task_suite_name,
+            "resolution": int(resolution),
+            "seed": int(seed),
+            "num_steps_wait": int(num_steps_wait),
+            "max_steps": int(max_steps),
+            "_libero_render_backend": str(render_backend).strip().lower(),
+            "_libero_render_gpu_pool": list(render_gpu_pool or []),
+            "_libero_render_shard_id": int(render_shard_id),
+        }
+        env_vars = {
+            key: os.environ[key]
+            for key in (
+                "DVLA_DATA_ROOT",
+                "LIBERO_CONFIG_PATH",
+                "MUJOCO_GL",
+                "PYOPENGL_PLATFORM",
+            )
+            if key in os.environ
+        }
+
+        work_list = build_grid_work_list(task_ids, num_episodes)
+        n_slots = min(int(num_envs), len(work_list))
+
+        def _pop_eval_action(action_chunk: Any, action_queue: list, steps: int) -> Any:
+            # Byte-identical to the sequential replan: select_libero_action_chunk
+            # slices/asserts the chunk, one action pops per step, and env.step gets
+            # action.tolist() with NO OFT gripper post-process (the sequential
+            # RynnVLA eval does not gripper-process its actions).
+            if not action_queue:
+                action_queue.extend(select_libero_action_chunk(action_chunk, steps))
+            return np.asarray(action_queue.pop(0)).tolist()
+
+        def _infer_fn(preps: list[dict]) -> list[_EvalInferResult]:
+            outs: list[_EvalInferResult] = []
+            for prep in preps:
+                predicted = self._generate_actions(
+                    backbone,
+                    item_processor,
+                    prep["padded"],
+                    prep["state"],
+                    prep["task_description"],
+                    action_steps,
+                )
+                outs.append(_EvalInferResult(predicted))
+            return outs
+
+        tally = SuccessTally()
+        run_t0 = time.time()
+        print(
+            f"  [Eval] parallel osmesa rollout: num_envs={n_slots} "
+            f"episodes={len(work_list)} render_backend={render_backend}",
+            flush=True,
+        )
+        with VecRolloutEnv(
+            num_envs=n_slots,
+            cfg_kwargs=cfg_kwargs,
+            env_vars=env_vars,
+            factory=make_libero_eval_env,
+        ) as vec_env:
+            extractors = [
+                _EvalFrameHistoryExtractor(history_length) for _ in range(n_slots)
+            ]
+            run_vectorized_rollout(
+                vec_env,
+                extractors,
+                _infer_fn,
+                work_list,
+                episode_horizon=max_steps,
+                on_episode=tally.on_episode,
+                action_steps=action_steps,
+                pop_action=_pop_eval_action,
+            )
+
+        metrics = tally.summarize(episodes_per_task=num_episodes)
+        avg_success = float(metrics["eval_success_rate"])
+        run_dt = time.time() - run_t0
+        print(
+            f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
+            f"(parallel num_envs={n_slots}) total_time={run_dt:.1f}s",
             flush=True,
         )
         return metrics

@@ -49,8 +49,17 @@ def run_vectorized_rollout(
     on_step: Callable[[SlotStepContext], Any | None] | None = None,
     on_episode: Callable[[int, int, list[Any], bool], None] | None = None,
     action_steps: int = 1,
+    pop_action: Callable[[Any, list, int], Any] = pop_open_loop_action,
 ) -> int:
-    """Run the whole work_list across vec_env.num_envs slots. Returns episodes completed."""
+    """Run the whole work_list across vec_env.num_envs slots. Returns episodes completed.
+
+    ``pop_action(chunk, queue, action_steps) -> action`` refills ``queue`` from the
+    decoded chunk and pops the next open-loop action. Defaults to
+    ``pop_open_loop_action`` (OFT collect: gripper-post-processed). The RynnVLA eval
+    path injects a variant WITHOUT that gripper transform so the action fed to
+    ``vec_env.step`` is byte-identical to the sequential eval (which does not
+    gripper-process).
+    """
     if len(extractors) != vec_env.num_envs:
         raise ValueError(
             f"need one extractor per env: {len(extractors)} extractors, {vec_env.num_envs} envs"
@@ -99,7 +108,7 @@ def run_vectorized_rollout(
         ]
         outs = infer_fn(preps)
         actions = [
-            pop_open_loop_action(_decode_action_chunk(outs[i]), action_queues[k], action_steps)
+            pop_action(_decode_action_chunk(outs[i]), action_queues[k], action_steps)
             for i, k in enumerate(active_ids)
         ]
         step_results = vec_env.step(actions, env_ids=active_ids)
