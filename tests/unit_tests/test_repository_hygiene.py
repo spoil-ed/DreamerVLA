@@ -4,7 +4,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 _REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
 _REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
 _REMOVED_DASHED_WM_LABEL = "DINO" + "-WM"
@@ -87,14 +86,11 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
 
     readme = (project_root / "README.md").read_text(encoding="utf-8")
     scripts_readme = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
-    train_script = (project_root / "scripts" / "train_vla.sh").read_text(encoding="utf-8")
     eval_script = (project_root / "scripts" / "eval_libero_vla.sh").read_text(encoding="utf-8")
 
     assert "eval_wm.sh" not in readme
     assert "pretokenize_sft_wm_vla_smoke" not in scripts_readme
     assert "prepare_latent_data.sh" not in scripts_readme
-    assert "dreamervla.launchers.train" in train_script
-    assert "dreamervla.launchers.train" in eval_script
     assert "dreamervla.launchers.train" in eval_script
 
 

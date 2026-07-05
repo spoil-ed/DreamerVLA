@@ -15,7 +15,6 @@ def _project_root() -> Path:
 def test_release_shell_entrypoints_are_self_contained() -> None:
     root = _project_root()
     libero_entrypoints = (
-        "scripts/train_vla.sh",
         "scripts/train_wm.sh",
         "scripts/train_dreamervla.sh",
         "scripts/eval_libero_vla.sh",
@@ -36,7 +35,6 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         assert "DVLA_DATA_ROOT" in text, relpath
 
     for relpath in (
-        "scripts/train_vla.sh",
         "scripts/train_wm.sh",
         "scripts/train_dreamervla.sh",
         "scripts/eval_libero_vla.sh",
@@ -818,7 +816,6 @@ def test_release_scripts_tree_is_curated() -> None:
             "run_wandb_relay_sync.sh",
             "start_ray.sh",
             "train_dreamervla.sh",
-            "train_vla.sh",
             "train_wm.sh",
     }
     assert top_level_dirs == {
@@ -911,7 +908,6 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
 def test_training_launchers_do_not_nest_out_dir_default_expansion() -> None:
     root = _project_root()
     launchers = [
-        root / "scripts" / "train_vla.sh",
         root / "scripts" / "train_wm.sh",
         root / "scripts" / "train_dreamervla.sh",
     ]

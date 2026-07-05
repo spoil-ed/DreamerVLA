@@ -19,8 +19,6 @@ def _assert_no_removed_wm_wording(text: str) -> None:
 
 
 EXPERIMENT_MODULES = {
-    "vla_rynnvla_action_head": ("VLA", "rynnvla_action_head"),
-    "vla_sft_one_trajectory": ("VLA", "rynnvla_one_trajectory"),
     "openvla_oft_hdf5": ("VLA", "openvla_oft"),
     "openvla_oft_hdf5_one_trajectory": ("VLA", "openvla_oft_one_trajectory"),
     "openvla_oft_hdf5_one_trajectory_l1": (
@@ -232,8 +230,6 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
-        "vla_rynnvla_action_head": "dreamervla.runners.VLASFTRunner",
-        "vla_sft_one_trajectory": "dreamervla.runners.VLASFTRunner",
         "world_model_chunk": "dreamervla.runners.LatentWMRunner",
         "world_model_chunk_input_tokens": "dreamervla.runners.LatentWMRunner",
         "world_model_step": "dreamervla.runners.LatentWMRunner",
