@@ -17,20 +17,6 @@ class _RunnerSpec:
 
 
 _RUNNER_SPECS: dict[str, _RunnerSpec] = {
-    "VLASFTRunner": _RunnerSpec(
-        "dreamervla.runners.vla_sft_runner",
-        "VLASFTRunner",
-        runner_name="vla_sft",
-        runner_status="current",
-        runner_family="vla",
-    ),
-    "OpenVLAOFTRunner": _RunnerSpec(
-        "dreamervla.runners.openvla_oft_runner",
-        "OpenVLAOFTTrainingRunner",
-        runner_name="openvla_oft",
-        runner_status="current",
-        runner_family="vla",
-    ),
     "JointDreamerVLARunner": _RunnerSpec(
         "dreamervla.runners.dreamervla_runner",
         "DreamerVLARunner",

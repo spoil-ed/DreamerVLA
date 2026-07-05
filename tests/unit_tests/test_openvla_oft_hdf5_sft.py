@@ -125,26 +125,6 @@ def test_vla_sft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -
     assert first.data_spec.demos_per_task == 1
 
 
-def test_openvla_oft_component_save_allows_lm_head_mode_without_action_head(tmp_path: Path) -> None:
-    from dreamervla.runners.openvla_oft_runner import OpenVLAOFTTrainingRunner
-
-    workspace = OpenVLAOFTTrainingRunner.__new__(OpenVLAOFTTrainingRunner)
-    workspace._output_dir = str(tmp_path)
-    workspace.distributed = _TinyDistributed()
-    workspace.policy = SimpleNamespace(
-        vla=_TinyVLA(),
-        processor=_TinyProcessor(),
-        action_head=None,
-        proprio_projector=None,
-    )
-
-    workspace._save_oft_components(step=3)
-
-    save_dir = tmp_path / "openvla_oft_components--3"
-    assert (save_dir / "lora_adapter").is_dir()
-    assert not (save_dir / "action_head--3_checkpoint.pt").exists()
-
-
 def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> None:
     from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
 

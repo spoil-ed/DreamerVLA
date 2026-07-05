@@ -50,8 +50,6 @@ def test_runner_public_api_exports_route_specific_names() -> None:
     import dreamervla.runners as runners
 
     expected = {
-        "VLASFTRunner",
-        "OpenVLAOFTRunner",
         "JointDreamerVLARunner",
         "EmbodiedEvalRunner",
         "LatentClassifierRunner",
@@ -84,9 +82,7 @@ def test_runner_directory_contains_route_specific_runners() -> None:
         "dreamervla_runner.py",
         "embodied_eval_runner.py",
         "latent_classifier_runner.py",
-        "openvla_oft_runner.py",
         "pretokenize_vla_runner.py",
-        "vla_sft_runner.py",
     }.issubset(top_level_python_files)
     assert "pretokenize_sft_runner.py" not in top_level_python_files
     assert "pretokenize_wm_runner.py" not in top_level_python_files
