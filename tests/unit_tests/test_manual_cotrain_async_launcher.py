@@ -64,7 +64,7 @@ def test_fresh_launch_runs_pipeline_with_internal_manual_overrides(tmp_path, mon
     assert "task=goal" in launch.command
     assert "ngpu=5" in launch.command
     assert "cotrain_engine=async" in launch.command
-    assert "render_backend=egl" in launch.command
+    assert "render_backend=osmesa" in launch.command
     assert "manual_cotrain.envs_per_worker=8" in launch.command
     assert "manual_cotrain.max_steps_per_rollout_epoch=64" in launch.command
 

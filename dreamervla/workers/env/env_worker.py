@@ -308,9 +308,13 @@ class EnvWorker(Worker):
             self._log_worker_egl_diagnostics()
             for slot_id in range(self.num_envs):
                 self._init_spawn(None, slot_id)
+        elif self.num_envs != 1:
+            # Parallel osmesa (RLinf-aligned): render each env in its own spawn subprocess.
+            # osmesa is CPU software rendering (no GPU/driver contention), so num_envs>1 scales
+            # via worker subprocesses instead of egl within-worker batching.
+            for slot_id in range(self.num_envs):
+                self._init_spawn(None, slot_id)
         else:
-            if self.num_envs != 1:
-                raise ValueError("num_envs_per_worker>1 is only supported for render_backend=egl")
             self._init_inproc()
 
     def _log_worker_egl_diagnostics(self) -> None:
@@ -345,7 +349,7 @@ class EnvWorker(Worker):
         # LIBERO/robosuite/EGL; stagger startup to reduce CPU/disk thundering herd during init.
         self._egl_device_id = None if egl_device_id is None else int(egl_device_id)
         child_env_cfg = dict(self.env_cfg)
-        child_env_cfg.setdefault("render_backend", "egl")
+        child_env_cfg.setdefault("render_backend", "osmesa")
         child_env_cfg["_render_shard_id"] = int(self.local_rank)
         if egl_device_id is not None and not _libero_render_gpu_pool(child_env_cfg):
             child_env_cfg["render_devices"] = [int(egl_device_id)]

@@ -141,3 +141,69 @@ def test_env_worker_egl_initializes_each_worker_slot(monkeypatch):
     worker.init()
 
     assert calls == [(None, 0), (None, 1), (None, 2)]
+
+
+def test_env_worker_osmesa_parallel_spawns_each_worker_slot(monkeypatch):
+    """osmesa + num_envs>1 renders each slot in its own spawn subprocess.
+
+    Parallel osmesa is CPU software rendering, so multiple slots scale via spawn
+    subprocesses (no egl/GPU device pool). Previously num_envs>1 was egl-only.
+    """
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    calls = []
+    worker = EnvWorker(
+        env_cfg={
+            "target": "unused",
+            "render_backend": "osmesa",
+            "num_envs_per_worker": 3,
+        },
+        task_id=0,
+        replay=None,
+    )
+
+    monkeypatch.setattr(
+        worker,
+        "_init_spawn",
+        lambda egl_device_id, slot_id=0: calls.append((egl_device_id, slot_id)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_init_inproc",
+        lambda: calls.append(("inproc", None)),
+    )
+
+    worker.init()
+
+    assert calls == [(None, 0), (None, 1), (None, 2)]
+
+
+def test_env_worker_osmesa_single_env_stays_in_process(monkeypatch):
+    """osmesa + num_envs==1 keeps the in-process render path (no spawn)."""
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    calls = []
+    worker = EnvWorker(
+        env_cfg={
+            "target": "unused",
+            "render_backend": "osmesa",
+            "num_envs_per_worker": 1,
+        },
+        task_id=0,
+        replay=None,
+    )
+
+    monkeypatch.setattr(
+        worker,
+        "_init_spawn",
+        lambda egl_device_id, slot_id=0: calls.append(("spawn", slot_id)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_init_inproc",
+        lambda: calls.append(("inproc", None)),
+    )
+
+    worker.init()
+
+    assert calls == [("inproc", None)]
