@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from dreamervla.dataset.collection_manifest import (
+    append_episode_index_record,
     read_online_rollout_manifest,
     record_online_rollout_episode,
 )
-from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+from dreamervla.dataset.rollout_dump_writer import (
+    RolloutDumpWriter,
+    per_trajectory_shard_name,
+)
 from dreamervla.scheduler.worker import Worker
 
 
@@ -104,6 +108,22 @@ class RolloutDumpWorker(Worker):
             self.writer = None
             self._shard_idx += 1
             self._shard_demos = 0
+        if (
+            self.demos_per_shard == 1
+            and self.keep_last_global_steps <= 0
+            and (Path(self.reward_dir) / completed_shard_name).exists()
+        ):
+            append_episode_index_record(
+                Path(self.reward_dir),
+                {
+                    "file": completed_shard_name,
+                    "task_id": _optional_int(first.get("task_id")),
+                    "episode_id": _optional_int(first.get("episode_id")),
+                    "init_state_index": _optional_int(first.get("init_state_index")),
+                    "success": bool(episode[-1].get("success", False)),
+                    "horizon": len(episode),
+                },
+            )
         manifest_entry = None
         if self.keep_last_global_steps > 0:
             manifest_entry = self._record_manifest_entry(episode, completed_shard_name)
@@ -137,6 +157,10 @@ class RolloutDumpWorker(Worker):
         target_name = self._completed_episode_shard_name(episode, shard_idx)
         if target_name == shard_name:
             return shard_name
+        # Identity-only names (coldstart, no global_step) may legitimately
+        # collide on re-collection: the fresh episode replaces the stale one.
+        metadata = dict(episode[-1].get("episode_metadata") or {})
+        allow_overwrite = _metadata_int(metadata, "global_step") is None
         pairs = [
             (Path(self.reward_dir) / shard_name, Path(self.reward_dir) / target_name),
             (Path(self.hidden_dir) / shard_name, Path(self.hidden_dir) / target_name),
@@ -145,7 +169,7 @@ class RolloutDumpWorker(Worker):
         if not existing:
             return shard_name
         for _src, dst in existing:
-            if dst.exists():
+            if dst.exists() and not allow_overwrite:
                 raise FileExistsError(f"rollout dump shard already exists: {dst}")
         for src, dst in existing:
             src.replace(dst)
@@ -167,6 +191,11 @@ class RolloutDumpWorker(Worker):
         episode_id = _optional_int(first.get("episode_id"))
         if task_id is None or episode_id is None:
             return f"{base}_{step_token}_{outcome}_{int(shard_idx):03d}.hdf5"
+        if global_step is None:
+            # Coldstart collect: identity-only naming, unified with the no-Ray
+            # collector (per_trajectory_shard_name) so numbering matches the
+            # globally-assigned work list.
+            return per_trajectory_shard_name("traj", task_id, episode_id)
         return (
             f"{base}_{step_token}_t{int(task_id):02d}_"
             f"ep{int(episode_id):06d}_{outcome}.hdf5"

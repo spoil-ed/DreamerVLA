@@ -206,3 +206,56 @@ def test_init_state_index_passes_to_writer_from_episode():
         w.init()
         w.add_episode(episode)
         assert _FakeWriter.instances[0].kwargs[0]["init_state_index"] == 17
+
+
+def test_coldstart_per_traj_identity_naming(tmp_path):
+    import json
+
+    episode = _episode()
+    episode[0]["task_id"] = 2
+    episode[0]["episode_id"] = 5
+    episode[-1]["success"] = True  # no episode_metadata -> no global_step (coldstart)
+
+    with mock.patch.object(dw, "RolloutDumpWriter", _FileWriter):
+        w = dw.RolloutDumpWorker(
+            str(tmp_path / "reward"),
+            str(tmp_path / "hidden"),
+            "ray_shard_000.hdf5",
+            demos_per_shard=1,
+        )
+        w.init()
+        result = w.add_episode(episode)
+        w.close()
+
+    assert result["shard_name"] == "traj_t02_ep000005.hdf5"
+    assert (tmp_path / "reward" / "traj_t02_ep000005.hdf5").is_file()
+    assert (tmp_path / "hidden" / "traj_t02_ep000005.hdf5").is_file()
+    assert not (tmp_path / "reward" / "ray_shard_000.hdf5").exists()
+    rec = json.loads(
+        (tmp_path / "reward" / "episode_index.jsonl").read_text().splitlines()[-1]
+    )
+    assert rec["file"] == "traj_t02_ep000005.hdf5"
+    assert rec["task_id"] == 2 and rec["episode_id"] == 5 and rec["success"] is True
+
+
+def test_coldstart_per_traj_recollect_overwrites(tmp_path):
+    with mock.patch.object(dw, "RolloutDumpWriter", _FileWriter):
+        w = dw.RolloutDumpWorker(
+            str(tmp_path / "reward"),
+            str(tmp_path / "hidden"),
+            "ray_shard_000.hdf5",
+            demos_per_shard=1,
+        )
+        w.init()
+        first = _episode()
+        first[-1]["success"] = False
+        w.add_episode(first)
+        second = _episode()
+        second[-1]["success"] = True
+        result = w.add_episode(second)
+        w.close()
+
+    assert result["shard_name"] == "traj_t00_ep000000.hdf5"
+    assert [p.name for p in (tmp_path / "reward").glob("*.hdf5")] == [
+        "traj_t00_ep000000.hdf5"
+    ]
