@@ -209,18 +209,24 @@ def _make_dump_writer(
     start_index: int,
     demos_per_shard: int,
 ) -> Any:
-    """Single growing shard, or a writer that slices demos into N-sized shards.
+    """Single growing shard, per-trajectory files, or N-sized rotating shards.
 
     ``demos_per_shard <= 0`` returns the plain ``RolloutDumpWriter`` (one shard per
-    rank, byte-identical to before); ``> 0`` returns a ``RotatingRolloutDumpWriter``
-    that rolls a new ``{prefix}_{NNN}.hdf5`` shard every ``demos_per_shard`` demos
-    so a long collect is sliced (and a crash only loses the last small shard).
+    rank, byte-identical to before); ``== 1`` returns a ``PerTrajectoryDumpWriter``
+    that lands one identity-named ``traj_t{TT}_ep{EEEEEE}.hdf5`` pair per finished
+    trajectory (numbering unified across ranks by the globally-built work list);
+    ``> 1`` returns a ``RotatingRolloutDumpWriter`` that rolls a new
+    ``{prefix}_{NNN}.hdf5`` shard every ``demos_per_shard`` demos so a long
+    collect is sliced (and a crash only loses the last small shard).
     """
     from dreamervla.dataset.rollout_dump_writer import (
+        PerTrajectoryDumpWriter,
         RolloutDumpWriter,
         RotatingRolloutDumpWriter,
     )
 
+    if demos_per_shard and int(demos_per_shard) == 1:
+        return PerTrajectoryDumpWriter(reward_dir, hidden_dir, file_prefix="traj")
     if demos_per_shard and int(demos_per_shard) > 0:
         return RotatingRolloutDumpWriter(
             reward_dir,
