@@ -989,13 +989,14 @@ def test_multi_gpu_profile_is_gpu_count_agnostic(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("ngpu", "expected"),
-    [(2, "2"), (4, "4"), (8, "4")],
+    ("ngpu", "expected_inference_workers", "expected_real_env_workers"),
+    [(2, "2", "1"), (4, "4", "3"), (8, "4", "4")],
 )
 def test_multi_gpu_profile_caps_env_worker_counts_at_ngpu(
     tmp_path,
     ngpu: int,
-    expected: str,
+    expected_inference_workers: str,
+    expected_real_env_workers: str,
 ) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
@@ -1011,12 +1012,60 @@ def test_multi_gpu_profile_caps_env_worker_counts_at_ngpu(
         launcher_cfg=cfg,
     )
 
-    # collect inference workers and online real-env workers both cap at min(4, ngpu):
-    # ngpu=2 -> 2, ngpu>=4 -> 4 (unchanged from the profile-declared 4).
+    # collect inference workers cap at min(4, ngpu): ngpu=2 -> 2, ngpu>=4 -> 4.
     assert _override_values(plan.collect_cmd, "collect.num_inference_workers") == [
-        expected
+        expected_inference_workers
     ]
-    assert f"manual_cotrain.real_env_workers={expected}" in plan.cotrain_online_cmd
+    # online real-env workers cap at min(4, ngpu-1) so a wm_env worker always keeps a
+    # GPU: ngpu=2 -> 1, ngpu=4 -> 3, ngpu>=5 -> 4 (unchanged from the profile 4).
+    assert (
+        f"manual_cotrain.real_env_workers={expected_real_env_workers}"
+        in plan.cotrain_online_cmd
+    )
+
+
+@pytest.mark.parametrize("ngpu", [2, 3, 4, 5, 6, 8])
+def test_multi_gpu_profile_reserves_a_wm_env_gpu(tmp_path, ngpu: int) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=ngpu,
+        launcher_cfg=cfg,
+    )
+
+    workers = _override_int(plan.cotrain_online_cmd, "manual_cotrain.real_env_workers")
+    # ngpu>=2 always leaves at least one GPU for a wm_env worker.
+    assert 1 <= workers <= ngpu - 1
+    # ngpu>=5 is unchanged from the profile-declared 4 (6/8-GPU mainline byte-identical).
+    if ngpu >= 5:
+        assert workers == 4
+
+
+def test_async_online_guard_rejects_real_env_workers_leaving_no_wm_gpu(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
+    with pytest.raises(ValueError, match="need ngpu > real_env_workers"):
+        build_pipeline_plan(
+            mode="ray",
+            run_root=tmp_path,
+            python="python",
+            profile="multi_gpu",
+            ngpu=4,
+            launcher_cfg=cfg,
+            cotrain_overrides=["manual_cotrain.real_env_workers=4"],
+        )
 
 
 @pytest.mark.parametrize("profile", ["release", "multi_gpu"])
@@ -1447,8 +1496,11 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "env.cfg.render_backend=egl" in plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=1" in plan.cotrain_online_cmd
-    # real-env workers cap at min(4, ngpu): one worker binds one GPU.
-    assert f"manual_cotrain.real_env_workers={min(4, ngpu)}" in plan.cotrain_online_cmd
+    # real-env workers cap at min(4, ngpu-1) so a wm_env worker always keeps a GPU.
+    assert (
+        f"manual_cotrain.real_env_workers={min(4, max(1, ngpu - 1))}"
+        in plan.cotrain_online_cmd
+    )
     assert not any(
         item.startswith("manual_cotrain.real_render_backend=")
         for item in plan.cotrain_online_cmd

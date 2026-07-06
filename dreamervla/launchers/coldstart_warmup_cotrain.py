@@ -559,6 +559,36 @@ def _manual_rollout_component_rank_map(
     return ",".join(segments)
 
 
+def _validate_online_wm_env_reservation(
+    profile_cfg: Mapping[str, Any],
+    *,
+    real_env_workers: int | None,
+    ngpu: int,
+) -> None:
+    """Fail fast when the WM-fed async actor would get zero wm_env workers.
+
+    GPU placement assigns ``gpu < real_env_workers`` to ``real_env`` and the rest to
+    ``wm_env``; the async actor is fed ONLY by wm_env rollout shards, so
+    ``real_env_workers >= ngpu`` leaves no wm_env worker and the actor starves ~60 min
+    into the run (``collate_trajectory_shards requires at least one shard``). Guard only
+    the multi-GPU case (ngpu>=2): a single GPU cannot host a separate wm_env worker.
+    """
+    if int(ngpu) < 2 or real_env_workers is None:
+        return
+    wm_rollout_target = _plain(profile_cfg).get(
+        "ray_online_wm_rollout_target_trajectories"
+    )
+    if wm_rollout_target is None or int(wm_rollout_target) <= 0:
+        return
+    if int(real_env_workers) < int(ngpu):
+        return
+    raise ValueError(
+        "async online cotrain feeds the actor from world-model (wm_env) rollouts, but "
+        f"real_env_workers ({int(real_env_workers)}) leaves no GPU for wm_env at ngpu "
+        f"({int(ngpu)}); need ngpu > real_env_workers"
+    )
+
+
 def _manual_cotrain_online_overrides(
     profile_cfg: Mapping[str, Any],
     *,
@@ -590,18 +620,33 @@ def _manual_cotrain_online_overrides(
         )
     default_envs_per_worker = envs_per_worker or 8
     defaults.append(f"manual_cotrain.envs_per_worker={default_envs_per_worker}")
+    requested_gpu = _requested_gpu_count(ngpu)
     real_env_workers = _plain(profile_cfg).get("ray_online_real_env_workers")
+    capped_real_env_workers: int | None = None
     if real_env_workers is not None:
-        # One real-env worker binds one GPU, so a profile count above the GPU count
-        # would place an env worker on a missing GPU; cap at the selected count.
+        # One real-env worker binds one GPU. The async actor is fed ONLY by
+        # world-model (wm_env) rollout shards, so reserve at least one GPU for a
+        # wm_env worker by capping at ngpu-1 (floor 1) rather than the raw GPU count:
+        # a profile count >= ngpu would otherwise leave zero wm_env workers and starve
+        # the actor. ngpu>=5 stays min(4, ngpu-1)=4, byte-identical to the profile 4.
         capped_real_env_workers = (
-            _cap_at_ngpu(int(real_env_workers), _requested_gpu_count(ngpu))
-            if _requested_gpu_count(ngpu) > 0
+            min(int(real_env_workers), max(1, requested_gpu - 1))
+            if requested_gpu > 0
             else int(real_env_workers)
         )
         defaults.append(
             f"manual_cotrain.real_env_workers={capped_real_env_workers}"
         )
+    effective_real_env_workers = _last_int_override(
+        explicit_overrides, "manual_cotrain.real_env_workers"
+    )
+    if effective_real_env_workers is None:
+        effective_real_env_workers = capped_real_env_workers
+    _validate_online_wm_env_reservation(
+        profile_cfg,
+        real_env_workers=effective_real_env_workers,
+        ngpu=requested_gpu,
+    )
     real_render_backend = _plain(profile_cfg).get("ray_online_real_render_backend")
     if real_render_backend is not None:
         defaults.append(
