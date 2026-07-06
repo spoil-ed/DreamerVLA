@@ -17,6 +17,7 @@ from dreamervla.workers.cotrain.messages import (
     RolloutResultMsg,
     TrajectoryShard,
 )
+from dreamervla.workers.env._test_envs import CounterEnv
 from dreamervla.workers.env.trajectory_env_worker import (
     BaseTrajectoryEnvWorker,
     RealEnvWorker,
@@ -1712,5 +1713,153 @@ def test_get_rollout_result_batch_injects_bf16_tensor_hidden() -> None:
         hidden = torch.as_tensor(results[0].forward_inputs["hidden"])
         assert hidden.dtype == torch.float32
         assert hidden.tolist() == [[2.0, 2.0, 2.0, 2.0]]
+    finally:
+        worker.close()
+
+
+class _SplitCounterSlot(CounterEnv):
+    """CounterEnv whose step is split into send/recv and logs its call order.
+
+    Stands in for a spawned real-env slot: ``send_step`` dispatches the step and
+    ``recv_step`` returns its result, so a driver can keep several slots' steps
+    in flight at once. The shared ``call_log`` records the order to prove the
+    stepping is lockstep (all sends before the matching recvs).
+    """
+
+    def __init__(
+        self,
+        *,
+        slot_id: int,
+        horizon: int,
+        call_log: list[tuple[str, int]],
+        embedding_dim: int = 4,
+    ) -> None:
+        super().__init__(horizon=horizon, embedding_dim=embedding_dim)
+        self._slot_id = int(slot_id)
+        self._call_log = call_log
+        self._pending: np.ndarray | None = None
+
+    def send_step(self, action: Any) -> None:
+        self._call_log.append(("send", self._slot_id))
+        self._pending = np.asarray(action, dtype=np.float32).copy()
+
+    def recv_step(self) -> tuple[Any, ...]:
+        self._call_log.append(("recv", self._slot_id))
+        action = self._pending
+        self._pending = None
+        return super().step(action)
+
+
+def _build_split_slot_worker(
+    horizons: list[int],
+    call_log: list[tuple[str, int]],
+) -> BaseTrajectoryEnvWorker:
+    worker = BaseTrajectoryEnvWorker(
+        role="real_env",
+        env_cfg=_long_horizon_counter_env_cfg(),
+        num_slots=len(horizons),
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+        replay=_MemoryReplay(),
+    )
+    worker.init()
+    for env in worker.envs:
+        env.close()
+    worker.envs = [
+        _SplitCounterSlot(slot_id=i, horizon=h, call_log=call_log)
+        for i, h in enumerate(horizons)
+    ]
+    worker._batched_env = False
+    worker.bootstrap_obs()
+    call_log.clear()
+    return worker
+
+
+def test_step_slots_parallel_is_lockstep_across_slots() -> None:
+    call_log: list[tuple[str, int]] = []
+    worker = _build_split_slot_worker([5, 5, 5, 5], call_log)
+    try:
+        results = [_rollout_result_for_slot(i) for i in range(4)]
+        worker._step_slots_parallel(results)
+        # Two physical steps; each scatters all four sends before gathering the
+        # four recvs, so no subprocess idles while another steps.
+        assert call_log == [
+            ("send", 0),
+            ("send", 1),
+            ("send", 2),
+            ("send", 3),
+            ("recv", 0),
+            ("recv", 1),
+            ("recv", 2),
+            ("recv", 3),
+            ("send", 0),
+            ("send", 1),
+            ("send", 2),
+            ("send", 3),
+            ("recv", 0),
+            ("recv", 1),
+            ("recv", 2),
+            ("recv", 3),
+        ]
+    finally:
+        worker.close()
+
+
+def test_step_slots_parallel_matches_serial_reference() -> None:
+    # Varied horizons so some slots terminate mid-chunk and some do not.
+    horizons = [5, 1, 3, 2]
+
+    par_log: list[tuple[str, int]] = []
+    parallel = _build_split_slot_worker(horizons, par_log)
+    ser_log: list[tuple[str, int]] = []
+    serial = _build_split_slot_worker(horizons, ser_log)
+    try:
+        accums = parallel._step_slots_parallel(
+            [_rollout_result_for_slot(i) for i in range(4)]
+        )
+        parallel_shards = {i: parallel._finalize_accum(accums[i]) for i in range(4)}
+        serial_shards = {
+            i: serial.apply_rollout_result(_rollout_result_for_slot(i))
+            for i in range(4)
+        }
+
+        for i in range(4):
+            par = parallel_shards[i]
+            ser = serial_shards[i]
+            assert np.array_equal(par.actions.numpy(), ser.actions.numpy())
+            assert np.array_equal(par.rewards.numpy(), ser.rewards.numpy())
+            assert np.array_equal(par.dones.numpy(), ser.dones.numpy())
+    finally:
+        parallel.close()
+        serial.close()
+
+
+def test_step_slots_parallel_drops_terminated_slots() -> None:
+    # Slot 0 terminates on the first physical step (horizon 1) and must drop out
+    # of the active set for the second step, matching serial early-stop.
+    call_log: list[tuple[str, int]] = []
+    worker = _build_split_slot_worker([1, 5, 5, 5], call_log)
+    try:
+        accums = worker._step_slots_parallel(
+            [_rollout_result_for_slot(i) for i in range(4)]
+        )
+
+        slot0_ops = [op for op in call_log if op[1] == 0]
+        assert slot0_ops == [("send", 0), ("recv", 0)]
+
+        sends = [op for op in call_log if op[0] == "send"]
+        assert sends == [
+            ("send", 0),
+            ("send", 1),
+            ("send", 2),
+            ("send", 3),
+            ("send", 1),
+            ("send", 2),
+            ("send", 3),
+        ]
+        assert accums[0].dones.tolist() == [True, True]
+        assert not accums[0].active
     finally:
         worker.close()

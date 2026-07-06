@@ -188,7 +188,39 @@ class _SpawnedTrajectoryEnvSlot:
         return self._rpc("reset", (int(selected_task_id), int(episode_id or 0)))
 
     def step(self, action: Any) -> tuple[Any, ...]:
-        return self._rpc("step", action)
+        self.send_step(action)
+        return self.recv_step()
+
+    def send_step(self, action: Any) -> None:
+        """Dispatch one step RPC without blocking on the result.
+
+        Splitting ``step`` into ``send_step``/``recv_step`` lets a caller keep
+        multiple slots' steps in flight at once (scatter the sends to every
+        subprocess, then gather the recvs) instead of blocking on each slot in
+        turn.
+        """
+
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("spawned trajectory env is closed")
+        try:
+            conn.send(("step", action))
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError("spawned trajectory env exited unexpectedly") from exc
+
+    def recv_step(self) -> tuple[Any, ...]:
+        """Block on the result of a prior ``send_step`` on this slot."""
+
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("spawned trajectory env is closed")
+        try:
+            status, value = conn.recv()
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError("spawned trajectory env exited unexpectedly") from exc
+        if status == "error":
+            raise RuntimeError(f"spawned trajectory env error: {value}")
+        return value
 
     def make_transition(
         self,
@@ -861,6 +893,32 @@ class _TrajectoryChunk:
     action_dim: int
 
 
+@dataclass
+class _SlotRollout:
+    """Mutable per-slot accumulator while stepping one rollout action chunk.
+
+    Holds everything ``apply_rollout_result`` records for a single slot so the
+    physical stepping can be driven either serially (one slot at a time) or in
+    lockstep across slots without changing what gets recorded.
+    """
+
+    result: RolloutResultMsg
+    actions: np.ndarray
+    action_dim: int
+    rewards: np.ndarray
+    dones: np.ndarray
+    transition_sidecars: dict[str, Any]
+    chunk_len: int
+    completed: int = 0
+    successful: int = 0
+    physical_steps: int = 0
+    classifier_success_chunks: int = 0
+    classifier_total_chunks: int = 0
+    env_crashes: int = 0
+    env_respawns: int = 0
+    active: bool = True
+
+
 class BaseTrajectoryEnvWorker(Worker):
     """EnvWorker that turns action chunks into step-major trajectory shards."""
 
@@ -933,6 +991,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_classifier_total_trajectories = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
+        self._pending_step: dict[int, tuple[Any, ...]] = {}
         self._progress_path: Path | None = None
         self._progress_min_interval_s = 5.0
         self._progress_last_write_t: float | None = None
@@ -1109,72 +1168,139 @@ class BaseTrajectoryEnvWorker(Worker):
 
         self._ensure_initialized()
         slot_id = int(result.slot_id)
-        self._validate_slot(slot_id)
+        accum = self._new_slot_accum(result)
+        for index, action in enumerate(accum.actions):
+            _, reward, done, info = self._step_slot(
+                slot_id,
+                action,
+                transition_sidecars=accum.transition_sidecars,
+            )
+            if self._accumulate_step(accum, index, reward, done, info, slot_id):
+                break
+        return self._finalize_accum(accum)
+
+    def _new_slot_accum(self, result: RolloutResultMsg) -> _SlotRollout:
+        """Validate one rollout result and build its per-slot accumulator."""
+
+        self._validate_slot(int(result.slot_id))
         actions_np = _as_action_chunk(result.actions)
         if int(actions_np.shape[0]) > self.num_action_chunks:
             raise ValueError(
                 "rollout action chunk length must be <= num_action_chunks "
                 f"({self.num_action_chunks})"
             )
+        return _SlotRollout(
+            result=result,
+            actions=actions_np,
+            action_dim=int(actions_np.shape[-1]),
+            rewards=np.zeros((self.num_action_chunks,), dtype=np.float32),
+            dones=np.zeros((self.num_action_chunks,), dtype=np.bool_),
+            transition_sidecars=_transition_sidecars_from_rollout(result),
+            chunk_len=int(actions_np.shape[0]),
+        )
 
-        action_dim = int(actions_np.shape[-1])
-        rewards = np.zeros((self.num_action_chunks,), dtype=np.float32)
-        dones = np.zeros((self.num_action_chunks,), dtype=np.bool_)
-        completed = 0
-        successful = 0
-        physical_steps = 0
-        classifier_success_chunks = 0
-        classifier_total_chunks = 0
-        env_crashes = 0
-        env_respawns = 0
-        transition_sidecars = _transition_sidecars_from_rollout(result)
-        for index, action in enumerate(actions_np):
-            _, reward, done, info = self._step_slot(
-                slot_id,
-                action,
-                transition_sidecars=transition_sidecars,
-            )
-            rewards[index] = float(reward)
-            dones[index] = bool(done)
-            physical_steps += 1
-            if self.role == "wm_env":
-                classifier_total_chunks += 1
-                classifier_success_chunks += int(
-                    _wm_classifier_step_success(
-                        self._env_for_slot(slot_id),
-                        reward=reward,
-                        info=info,
-                    )
+    def _accumulate_step(
+        self,
+        accum: _SlotRollout,
+        index: int,
+        reward: float,
+        done: bool,
+        info: dict[str, Any],
+        slot_id: int,
+    ) -> bool:
+        """Record one physical step into ``accum``; return True if it ended.
+
+        Terminating a slot fills the remaining chunk with ``done`` and marks the
+        accumulator inactive so lockstep stepping drops it from later steps -
+        the same early-stop semantics as the serial per-slot loop.
+        """
+
+        accum.rewards[index] = float(reward)
+        accum.dones[index] = bool(done)
+        accum.physical_steps += 1
+        if self.role == "wm_env":
+            accum.classifier_total_chunks += 1
+            accum.classifier_success_chunks += int(
+                _wm_classifier_step_success(
+                    self._env_for_slot(slot_id),
+                    reward=reward,
+                    info=info,
                 )
-            env_crashes += int(self._last_apply_env_crashes)
-            env_respawns += int(self._last_apply_env_respawns)
-            if done:
-                completed = 1
-                successful = int(bool(info.get("success", False)))
-                if index + 1 < self.num_action_chunks:
-                    dones[index + 1 :] = True
-                break
+            )
+        accum.env_crashes += int(self._last_apply_env_crashes)
+        accum.env_respawns += int(self._last_apply_env_respawns)
+        if done:
+            accum.completed = 1
+            accum.successful = int(bool(info.get("success", False)))
+            if index + 1 < self.num_action_chunks:
+                accum.dones[index + 1 :] = True
+            accum.active = False
+            return True
+        return False
 
-        self._last_apply_completed_episodes = int(completed)
-        self._last_apply_successful_episodes = int(successful)
-        self._last_apply_physical_steps = int(physical_steps)
-        self._last_apply_classifier_success_chunks = int(classifier_success_chunks)
-        self._last_apply_classifier_total_chunks = int(classifier_total_chunks)
+    def _finalize_accum(self, accum: _SlotRollout) -> TrajectoryShard:
+        """Publish the accumulated per-slot stats and build the shard."""
+
+        self._last_apply_completed_episodes = int(accum.completed)
+        self._last_apply_successful_episodes = int(accum.successful)
+        self._last_apply_physical_steps = int(accum.physical_steps)
+        self._last_apply_classifier_success_chunks = int(accum.classifier_success_chunks)
+        self._last_apply_classifier_total_chunks = int(accum.classifier_total_chunks)
         self._last_apply_classifier_success_trajectories = int(
-            classifier_success_chunks > 0
+            accum.classifier_success_chunks > 0
         )
         self._last_apply_classifier_total_trajectories = int(
-            self.role == "wm_env" and classifier_total_chunks > 0
+            self.role == "wm_env" and accum.classifier_total_chunks > 0
         )
-        self._last_apply_env_crashes = int(env_crashes)
-        self._last_apply_env_respawns = int(env_respawns)
+        self._last_apply_env_crashes = int(accum.env_crashes)
+        self._last_apply_env_respawns = int(accum.env_respawns)
         return self._build_trajectory_shard(
-            result,
-            actions_np=actions_np,
-            rewards=rewards,
-            dones=dones,
-            action_dim=action_dim,
+            accum.result,
+            actions_np=accum.actions,
+            rewards=accum.rewards,
+            dones=accum.dones,
+            action_dim=accum.action_dim,
         )
+
+    def _should_step_slots_parallel(self, results: list[RolloutResultMsg]) -> bool:
+        """Real spawned slots step in parallel; keep every other path serial."""
+
+        if self._batched_env or len(results) <= 1:
+            return False
+        first_env = self._env_for_slot(int(results[0].slot_id))
+        return hasattr(first_env, "send_step") and hasattr(first_env, "recv_step")
+
+    def _step_slots_parallel(
+        self,
+        results: list[RolloutResultMsg],
+    ) -> dict[int, _SlotRollout]:
+        """Step every slot's chunk in lockstep, one physical step at a time.
+
+        For each physical step index the sends to all still-active slots are
+        scattered first, then the recvs are gathered - so all subprocesses step
+        concurrently instead of one slot idling the rest (RLinf's
+        ``BaseVectorEnv.step`` scatter/gather). Per-slot recording is identical
+        to the serial path; only the order of the pipe RPCs changes.
+        """
+
+        accums = {int(r.slot_id): self._new_slot_accum(r) for r in results}
+        max_len = max(accum.chunk_len for accum in accums.values())
+        for index in range(max_len):
+            active = [
+                (slot_id, accum)
+                for slot_id, accum in accums.items()
+                if accum.active and index < accum.chunk_len
+            ]
+            for slot_id, accum in active:
+                self._send_step_slot(
+                    slot_id,
+                    accum.actions[index],
+                    transition_sidecars=accum.transition_sidecars,
+                )
+            for slot_id, accum in active:
+                _, reward, done, info = self._recv_step_slot(slot_id)
+                self._accumulate_step(accum, index, reward, done, info, slot_id)
+        return accums
 
     def _build_trajectory_shard(
         self,
@@ -1557,11 +1683,22 @@ class BaseTrajectoryEnvWorker(Worker):
                     f"step {first_step} start batch_size={len(results)} keys={keys_csv}"
                 )
                 next_messages: list[ObservationMsg] = []
+                parallel_accums: dict[int, _SlotRollout] | None = None
+                if self._should_step_slots_parallel(results):
+                    apply_start = time.perf_counter()
+                    self._ensure_initialized()
+                    parallel_accums = self._step_slots_parallel(results)
+                    metrics["env/apply_step_s"] += time.perf_counter() - apply_start
                 for result in results:
                     slot_id = int(result.slot_id)
-                    apply_start = time.perf_counter()
-                    shard = self.apply_rollout_result(result)
-                    metrics["env/apply_step_s"] += time.perf_counter() - apply_start
+                    if parallel_accums is not None:
+                        shard = self._finalize_accum(parallel_accums[slot_id])
+                    else:
+                        apply_start = time.perf_counter()
+                        shard = self.apply_rollout_result(result)
+                        metrics["env/apply_step_s"] += (
+                            time.perf_counter() - apply_start
+                        )
                     self._buffer_actor_shard(shard)
                     chunk_steps_by_slot[slot_id] += 1
                     metrics["env/chunk_steps"] += 1.0
@@ -2426,6 +2563,26 @@ class BaseTrajectoryEnvWorker(Worker):
         *,
         transition_sidecars: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
+        env, obs, policy_action, env_action = self._prepare_step(slot_id, action)
+        if self._batched_env:
+            step_out = env.step_slot(slot_id, env_action)
+        else:
+            step_out = env.step(env_action)
+        return self._finish_step(
+            slot_id,
+            env,
+            obs,
+            policy_action,
+            env_action,
+            step_out,
+            transition_sidecars,
+        )
+
+    def _prepare_step(
+        self,
+        slot_id: int,
+        action: Any,
+    ) -> tuple[Any, dict[str, Any], np.ndarray, np.ndarray]:
         self._validate_slot(slot_id)
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
@@ -2436,10 +2593,57 @@ class BaseTrajectoryEnvWorker(Worker):
         policy_action = np.asarray(action, dtype=np.float32).reshape(-1)
         env_action = self._env_action_from_policy_action(policy_action)
         self._record_action_diagnostics(slot_id, policy_action, env_action)
-        if self._batched_env:
-            step_out = env.step_slot(slot_id, env_action)
-        else:
-            step_out = env.step(env_action)
+        return env, obs, policy_action, env_action
+
+    def _send_step_slot(
+        self,
+        slot_id: int,
+        action: Any,
+        *,
+        transition_sidecars: dict[str, Any] | None = None,
+    ) -> None:
+        """Scatter half of a lockstep step: dispatch the RPC, defer the recv."""
+
+        env, obs, policy_action, env_action = self._prepare_step(slot_id, action)
+        env.send_step(env_action)
+        self._pending_step[slot_id] = (
+            env,
+            obs,
+            policy_action,
+            env_action,
+            transition_sidecars,
+        )
+
+    def _recv_step_slot(
+        self,
+        slot_id: int,
+    ) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
+        """Gather half of a lockstep step: block on the deferred RPC and record."""
+
+        env, obs, policy_action, env_action, transition_sidecars = (
+            self._pending_step.pop(slot_id)
+        )
+        step_out = env.recv_step()
+        return self._finish_step(
+            slot_id,
+            env,
+            obs,
+            policy_action,
+            env_action,
+            step_out,
+            transition_sidecars,
+        )
+
+    def _finish_step(
+        self,
+        slot_id: int,
+        env: Any,
+        obs: dict[str, Any],
+        policy_action: np.ndarray,
+        env_action: np.ndarray,
+        step_out: tuple[Any, ...],
+        transition_sidecars: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
         if len(step_out) == 5:
             next_obs, reward, terminated, truncated, info = step_out
         elif len(step_out) == 4:
