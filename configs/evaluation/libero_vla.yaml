@@ -52,7 +52,10 @@ eval:
   task_suite_name: libero_goal
   num_episodes_per_task: 3
   num_envs: 8
-  reconfigure_per_episode: false
+  # Rebuild the LIBERO env per episode (RLinf reconfigure semantics): makes the
+  # parallel SR K-invariant (num_envs 2==4) by removing cross-episode subprocess
+  # state leakage, and matches the ~0.55 OFT-traj1 baseline. Verified 2026-07-05.
+  reconfigure_per_episode: true
   enumerate_all_init_states: false
   num_steps_wait: 10
   render_backend: osmesa
