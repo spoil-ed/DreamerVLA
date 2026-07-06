@@ -162,6 +162,56 @@ def test_reset_applies_init_states_and_warmup():
     assert len(obs["task_descriptions"]) == 4
 
 
+def test_chunk_step_aggregates_termination_to_last_column():
+    env, vec = _make_env(num_envs=2, auto_reset=True, ignore_terminations=True)
+    env.reset()
+    vec.terminate_at[0] = vec._steps[0] + 2  # env 0 terminates on 2nd chunk substep
+    chunk = np.zeros((2, 3, 7))
+    obs_list, rewards, terms, truncs, infos_list = env.chunk_step(chunk)
+    assert len(obs_list) == 3 and len(infos_list) == 3
+    assert rewards.shape == (2, 3)
+    # with ignore_terminations, raw terminations are masked; the episode ends
+    # via truncation (max_episode_steps=6 = warmup 2 + 3 chunk steps + margin)
+    assert terms[:, :-1].sum() == 0
+    # success is latched in success_once for env 0
+    ep = infos_list[-1].get("final_info", infos_list[-1])["episode"]
+    assert bool(ep["success_once"][0]) is True
+    assert bool(ep["success_once"][1]) is False
+
+
+def test_chunk_step_truncation_triggers_auto_reset():
+    env, vec = _make_env(
+        num_envs=2, auto_reset=True, ignore_terminations=True, max_episode_steps=2
+    )
+    env.reset()
+    first_ids = env.reset_state_ids.copy()
+    vec.terminate_at[0] = vec._steps[0] + 1  # env 0 succeeds on 1st substep
+    _, _, terms, truncs, infos_list = env.chunk_step(np.zeros((2, 2, 7)))
+    # truncation reported on the last column only
+    assert truncs[:, :-1].sum() == 0
+    assert truncs[:, -1].all()
+    infos = infos_list[-1]
+    assert "final_info" in infos
+    final_ep = infos["final_info"]["episode"]
+    assert bool(final_ep["success_once"][0]) is True
+    assert bool(final_ep["success_once"][1]) is False
+    # the finished episodes are attributed to the ORIGINAL reset ids
+    assert final_ep["reset_state_id"].tolist() == first_ids.tolist()
+    # and the env has moved on to the next ordered block
+    assert env.reset_state_ids.tolist() != first_ids.tolist()
+
+
+def test_chunk_step_no_auto_reset_keeps_raw_columns():
+    env, vec = _make_env(num_envs=2, auto_reset=False, ignore_terminations=False)
+    env.reset()
+    vec.terminate_at[1] = vec._steps[1] + 1  # env 1 terminates on 1st substep
+    chunk = np.zeros((2, 2, 7))
+    _, _, terms, truncs, infos_list = env.chunk_step(chunk)
+    assert bool(terms[1, 0]) is True
+    assert "final_info" not in infos_list[-1]
+    assert bool(infos_list[-1]["episode"]["success_once"][1]) is True
+
+
 def test_eval_reconfigures_only_on_task_change():
     env, vec = _make_env(num_envs=4)
     env.reset()

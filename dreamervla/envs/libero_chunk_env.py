@@ -402,6 +402,68 @@ class LiberoChunkEnv:
             obs, infos = self._handle_auto_reset(dones, obs, infos)
         return obs, step_reward, terminations, truncations, infos
 
+    def chunk_step(self, chunk_actions):
+        # chunk_actions: [num_envs, chunk_steps, action_dim]
+        chunk_actions = np.asarray(chunk_actions)
+        chunk_size = chunk_actions.shape[1]
+        obs_list = []
+        infos_list = []
+        chunk_rewards = []
+        raw_chunk_terminations = []
+        raw_chunk_truncations = []
+        for i in range(chunk_size):
+            actions = chunk_actions[:, i]
+            extracted_obs, step_reward, terminations, truncations, infos = self.step(
+                actions, auto_reset=False
+            )
+            obs_list.append(extracted_obs)
+            infos_list.append(infos)
+            chunk_rewards.append(np.asarray(step_reward, dtype=np.float64))
+            raw_chunk_terminations.append(terminations)
+            raw_chunk_truncations.append(truncations)
+
+        chunk_rewards = np.stack(chunk_rewards, axis=1)
+        raw_chunk_terminations = np.stack(raw_chunk_terminations, axis=1)
+        raw_chunk_truncations = np.stack(raw_chunk_truncations, axis=1)
+
+        past_terminations = raw_chunk_terminations.any(axis=1)
+        past_truncations = raw_chunk_truncations.any(axis=1)
+        past_dones = np.logical_or(past_terminations, past_truncations)
+
+        if past_dones.any() and self.auto_reset:
+            obs_list[-1], infos_list[-1] = self._handle_auto_reset(
+                past_dones, obs_list[-1], infos_list[-1]
+            )
+
+        if self.auto_reset or self.ignore_terminations:
+            chunk_terminations = np.zeros_like(raw_chunk_terminations)
+            chunk_terminations[:, -1] = past_terminations
+            chunk_truncations = np.zeros_like(raw_chunk_truncations)
+            chunk_truncations[:, -1] = past_truncations
+        else:
+            chunk_terminations = raw_chunk_terminations.copy()
+            chunk_truncations = raw_chunk_truncations.copy()
+        return obs_list, chunk_rewards, chunk_terminations, chunk_truncations, infos_list
+
+    def _handle_auto_reset(self, dones, _final_obs, infos):
+        final_obs = copy.deepcopy(_final_obs)
+        env_idx = np.arange(0, self.num_envs)[dones]
+        final_info = copy.deepcopy(infos)
+        if bool(self.cfg.is_eval):
+            self.update_reset_state_ids()
+        obs, infos = self.reset(
+            env_idx=env_idx,
+            reset_state_ids=self.reset_state_ids[env_idx]
+            if self.use_fixed_reset_state_ids
+            else None,
+        )
+        infos["final_observation"] = final_obs
+        infos["final_info"] = final_info
+        infos["_final_info"] = dones
+        infos["_final_observation"] = dones
+        infos["_elapsed_steps"] = dones
+        return obs, infos
+
     def _calc_step_reward(self, terminations):
         step_penalty = -1 if self.use_step_penalty else 0
         reward = step_penalty + float(self.cfg.reward_coef) * terminations
