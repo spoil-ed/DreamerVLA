@@ -652,10 +652,7 @@ def _manual_cotrain_online_overrides(
     )
     if global_steps is not None:
         defaults.append(f"manual_cotrain.global_steps={global_steps}")
-    rollout_timeout_s = _manual_cotrain_env_rollout_timeout_s(
-        profile_cfg,
-        render_backend=render_backend,
-    )
+    rollout_timeout_s = _manual_cotrain_env_rollout_timeout_s(profile_cfg)
     if rollout_timeout_s is not None:
         defaults.append(f"+manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
     if _requested_gpu_count(ngpu) == 0:
@@ -675,11 +672,11 @@ def _manual_cotrain_online_overrides(
 
 def _manual_cotrain_env_rollout_timeout_s(
     profile_cfg: Mapping[str, Any],
-    *,
-    render_backend: str,
 ) -> int | None:
-    if str(render_backend).strip().lower() != "egl":
-        return None
+    # Applies to every render backend. osmesa (the mainline default) is CPU
+    # software rendering and SLOWER than egl, so it needs this long rollout
+    # timeout even more than egl did — the previous egl-only gate left osmesa on
+    # the short 600s default and timed out real-env rollouts on slow/few-GPU boxes.
     raw = _plain(profile_cfg).get("ray_online_env_rollout_timeout_s", 2400)
     if raw is None:
         return None
