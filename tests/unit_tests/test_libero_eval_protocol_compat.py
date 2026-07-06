@@ -95,6 +95,11 @@ def test_eval_libero_config_uses_rlinf_protocol_defaults() -> None:
     assert OmegaConf.select(cfg, "eval.seed") == 7
     assert OmegaConf.select(cfg, "eval.num_steps_wait") == 10
     assert OmegaConf.select(cfg, "eval.num_episodes_per_task") == 3
+    assert OmegaConf.select(cfg, "eval.scheme") == "rlinf_chunk"
+    assert OmegaConf.select(cfg, "eval.num_envs") == 64
+    assert OmegaConf.select(cfg, "eval.action_steps") == 8
+    assert OmegaConf.select(cfg, "eval.history_length") == 1
+    assert OmegaConf.select(cfg, "eval.render_backend") == "osmesa"
 
 
 def test_eval_libero_config_uses_latent_dreamer_defaults() -> None:

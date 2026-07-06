@@ -10,8 +10,9 @@ spawn context (mujoco/EGL safety, matching RLinf).
 from __future__ import annotations
 
 import multiprocessing
+from collections.abc import Callable
 from multiprocessing import connection
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import gym
 
@@ -30,13 +31,13 @@ def _reconfigure_worker(
     parent: connection.Connection,
     p: connection.Connection,
     env_fn_wrapper: CloudpickleWrapper,
-    obs_bufs: Optional[Union[dict, tuple, ShArray]] = None,
+    obs_bufs: dict | tuple | ShArray | None = None,
 ) -> None:
     def _encode_obs(obs, buffer) -> None:
         if isinstance(buffer, ShArray):
             buffer.save(obs)
         elif isinstance(obs, tuple) and isinstance(buffer, tuple):
-            for o, b in zip(obs, buffer):
+            for o, b in zip(obs, buffer, strict=False):
                 _encode_obs(o, b)
         elif isinstance(obs, dict) and isinstance(buffer, dict):
             for k in obs.keys():
@@ -115,7 +116,7 @@ class ReconfigureSubprocEnvWorker(SubprocEnvWorker):
         ctx = multiprocessing.get_context("spawn")
         self.parent_remote, self.child_remote = ctx.Pipe()
         self.share_memory = share_memory
-        self.buffer: Optional[Union[dict, tuple, ShArray]] = None
+        self.buffer: dict | tuple | ShArray | None = None
         if self.share_memory:
             dummy = env_fn()
             obs_space = dummy.observation_space

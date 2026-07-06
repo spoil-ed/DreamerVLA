@@ -117,6 +117,50 @@ def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> Non
     apply_libero_render_regime(backend, shard_id, gpu_pool)
 
 
+def build_chunk_env_cfg(
+    eval_cfg: Any,
+    *,
+    task_ids: list[int],
+    num_episodes: int,
+    max_steps: int,
+    seed: int,
+    resolution: int,
+) -> DictConfig:
+    """Assemble the LiberoChunkEnv DictConfig from the Hydra eval block."""
+    chunk_cfg = OmegaConf.select(eval_cfg, "chunk_env", default=None)
+    if chunk_cfg is None:
+        raise ValueError(
+            "eval.chunk_env config block is required for eval.scheme=rlinf_chunk"
+        )
+    return OmegaConf.create(
+        {
+            "task_suite_name": str(
+                OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
+            ),
+            "seed": int(seed),
+            "group_size": int(chunk_cfg.group_size),
+            "is_eval": True,
+            "use_fixed_reset_state_ids": True,
+            "use_ordered_reset_state_ids": True,
+            "auto_reset": bool(chunk_cfg.auto_reset),
+            "ignore_terminations": bool(chunk_cfg.ignore_terminations),
+            "max_episode_steps": int(max_steps),
+            "reset_wait_steps": int(chunk_cfg.reset_wait_steps),
+            "reset_gripper_open": bool(chunk_cfg.reset_gripper_open),
+            "use_rel_reward": False,
+            "use_step_penalty": False,
+            "reward_coef": 1.0,
+            "task_id_filter": [int(t) for t in task_ids],
+            "max_trials_per_task": int(num_episodes),
+            "specific_reset_id": None,
+            "init_params": {
+                "camera_heights": int(resolution),
+                "camera_widths": int(resolution),
+            },
+        }
+    )
+
+
 class _EvalInferResult:
     """Minimal ``infer_fn`` output the rollout core decodes via ``.action_chunk``."""
 
@@ -551,6 +595,26 @@ class PretokenizeVLARunner(BaseRunner):
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         num_envs = int(OmegaConf.select(eval_cfg, "num_envs", default=1))
+        scheme = str(OmegaConf.select(eval_cfg, "scheme", default="slots")).strip().lower()
+        if scheme not in ("slots", "rlinf_chunk"):
+            raise ValueError(
+                f"eval.scheme must be 'slots' or 'rlinf_chunk', got {scheme!r}"
+            )
+        if num_envs > 1 and scheme == "rlinf_chunk":
+            return self._evaluate_libero_rlinf_chunk(
+                epoch=epoch,
+                eval_cfg=eval_cfg,
+                backbone=backbone,
+                item_processor=item_processor,
+                task_ids=task_ids,
+                num_episodes=num_episodes,
+                max_steps=max_steps,
+                action_steps=action_steps,
+                history_length=history_length,
+                resolution=resolution,
+                seed=seed,
+                num_envs=num_envs,
+            )
         if num_envs > 1:
             return self._evaluate_libero_parallel(
                 epoch=epoch,
@@ -899,6 +963,176 @@ class PretokenizeVLARunner(BaseRunner):
         print(
             f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
             f"(parallel num_envs={n_slots}) total_time={run_dt:.1f}s",
+            flush=True,
+        )
+        return metrics
+
+    def _evaluate_libero_rlinf_chunk(
+        self,
+        *,
+        epoch: int,
+        eval_cfg: Any,
+        backbone: Any,
+        item_processor: Any,
+        task_ids: list[int],
+        num_episodes: int,
+        max_steps: int,
+        action_steps: int,
+        history_length: int,
+        resolution: int,
+        seed: int,
+        num_envs: int,
+    ) -> dict[str, float]:
+        """RLinf LiberoEnv-port eval: N lockstep subprocess envs, one policy
+        call per action chunk (the slots path calls ``_generate_actions`` every
+        env step and discards queued results), envs kept alive across episodes
+        of the same task (RLinf ``is_eval`` reconfigure-only-on-task-change).
+        """
+        import math
+
+        from dreamervla.envs import select_libero_action_chunk
+        from dreamervla.envs.libero_chunk_env import LiberoChunkEnv
+        from dreamervla.runners.libero_chunk_eval import run_rlinf_chunk_eval
+
+        # Render regime was already applied in-process by evaluate_libero
+        # (_apply_libero_eval_render_regime); spawn children inherit it.
+        render_backend, _shard_id, _gpu_pool = _eval_render_regime_params(
+            self.cfg, eval_cfg
+        )
+
+        total_episodes = len(task_ids) * int(num_episodes)
+        n_envs = max(1, int(num_envs))
+
+        extractors = [
+            _EvalFrameHistoryExtractor(history_length) for _ in range(n_envs)
+        ]
+        has_oft = False
+        for slot_extractor in extractors:
+            oft_slot = self._make_parallel_oft_slot_extractor()
+            if oft_slot is not None:
+                slot_extractor.attach_oft_extractor(oft_slot)
+                has_oft = True
+        if int(history_length) > 1 and not has_oft:
+            # Chunk-cadence prepare() sees one frame per chunk, not per step, so
+            # a real multi-frame history diverges from the sequential oracle.
+            # The OFT base path ignores frame_history (raw obs + own extractor).
+            print(
+                "  [Eval] eval.scheme=rlinf_chunk needs history_length==1 for "
+                "non-OFT policies; falling back to the slots scheme.",
+                flush=True,
+            )
+            return self._evaluate_libero_parallel(
+                epoch=epoch,
+                eval_cfg=eval_cfg,
+                backbone=backbone,
+                item_processor=item_processor,
+                task_ids=task_ids,
+                num_episodes=num_episodes,
+                max_steps=max_steps,
+                action_steps=action_steps,
+                history_length=history_length,
+                resolution=resolution,
+                seed=seed,
+                num_steps_wait=int(
+                    OmegaConf.select(eval_cfg, "num_steps_wait", default=10)
+                ),
+                num_envs=num_envs,
+            )
+
+        env_cfg = build_chunk_env_cfg(
+            eval_cfg,
+            task_ids=task_ids,
+            num_episodes=num_episodes,
+            max_steps=max_steps,
+            seed=seed,
+            resolution=resolution,
+        )
+        n_chunk_steps = math.ceil(int(max_steps) / int(action_steps))
+        num_epochs = math.ceil(total_episodes / n_envs)
+
+        chunk_env_ref: list[Any] = [None]
+
+        def _policy_fn(obs: dict) -> np.ndarray:
+            chunks = []
+            for i in range(n_envs):
+                prep = extractors[i].prepare(
+                    {
+                        "third_image": obs["main_images"][i],
+                        "wrist_image": obs["wrist_images"][i],
+                        "state": obs["states"][i],
+                        "raw_obs": (
+                            chunk_env_ref[0].current_raw_obs[i]
+                            if chunk_env_ref[0] is not None
+                            and chunk_env_ref[0].current_raw_obs is not None
+                            else None
+                        ),
+                    },
+                    obs["task_descriptions"][i],
+                )
+                self._libero_current_raw_obs = prep.get("raw_obs")
+                oft_extractor = prep.get("oft_extractor")
+                if oft_extractor is not None:
+                    self._base_oft_extractor = oft_extractor
+                    self._libero_current_eval_context = {
+                        "env_step": int(prep.get("env_step", 0))
+                    }
+                predicted = self._generate_actions(
+                    backbone,
+                    item_processor,
+                    prep["padded"],
+                    prep["state"],
+                    prep["task_description"],
+                    action_steps,
+                )
+                chunks.append(
+                    np.stack(
+                        [
+                            np.asarray(a, dtype=np.float64)
+                            for a in select_libero_action_chunk(
+                                predicted, action_steps
+                            )
+                        ]
+                    )
+                )
+            return np.stack(chunks)
+
+        def _on_epoch_start() -> None:
+            for slot_extractor in extractors:
+                slot_extractor.reset()
+
+        run_t0 = time.time()
+        print(
+            f"  [Eval] rlinf_chunk rollout: num_envs={n_envs} "
+            f"episodes={total_episodes} chunk_steps={n_chunk_steps} "
+            f"epochs={num_epochs} render_backend={render_backend}",
+            flush=True,
+        )
+        with LiberoChunkEnv(env_cfg, num_envs=n_envs) as chunk_env:
+            chunk_env_ref[0] = chunk_env
+            tally = run_rlinf_chunk_eval(
+                chunk_env,
+                _policy_fn,
+                n_chunk_steps=n_chunk_steps,
+                num_epochs=num_epochs,
+                total_episodes=total_episodes,
+                on_epoch_start=_on_epoch_start,
+            )
+        metrics = tally.summarize(episodes_per_task=num_episodes)
+        avg_success = float(metrics["eval_success_rate"])
+        run_dt = time.time() - run_t0
+        metrics["eval/env_chunk_steps"] = float(tally.env_chunk_steps)
+        metrics["eval/env_action_steps"] = float(tally.env_action_steps)
+        metrics["eval/elapsed_seconds"] = float(run_dt)
+        metrics["eval/env_chunk_per_s"] = (
+            float(tally.env_chunk_steps) / run_dt if run_dt > 0 else 0.0
+        )
+        metrics["eval/env_action_step_per_s"] = (
+            float(tally.env_action_steps) / run_dt if run_dt > 0 else 0.0
+        )
+        print(
+            f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
+            f"(rlinf_chunk num_envs={n_envs}) total_time={run_dt:.1f}s "
+            f"env_chunk_per_s={metrics['eval/env_chunk_per_s']:.2f}",
             flush=True,
         )
         return metrics

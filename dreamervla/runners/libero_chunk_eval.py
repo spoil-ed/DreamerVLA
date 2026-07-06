@@ -13,7 +13,8 @@ driver advances the ordered enumeration between non-auto-reset epochs via
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -23,6 +24,8 @@ class ChunkEvalTally:
 
     def __init__(self) -> None:
         self._by_reset_id: dict[int, tuple[int, bool]] = {}
+        self.env_chunk_steps = 0
+        self.env_action_steps = 0
 
     def add(self, episode_info: dict, newly_done: np.ndarray) -> None:
         for i in np.flatnonzero(np.asarray(newly_done)):
@@ -33,6 +36,16 @@ class ChunkEvalTally:
                 int(episode_info["task_id"][i]),
                 bool(episode_info["success_once"][i]),
             )
+
+    def record_chunk_step(self, chunk_actions: np.ndarray) -> None:
+        actions = np.asarray(chunk_actions)
+        if actions.ndim < 2:
+            raise ValueError(
+                "chunk eval policy_fn must return actions with shape "
+                "[num_envs, chunk_steps, ...]"
+            )
+        self.env_chunk_steps += int(actions.shape[0])
+        self.env_action_steps += int(actions.shape[0] * actions.shape[1])
 
     @property
     def num_episodes(self) -> int:
@@ -81,6 +94,7 @@ def run_rlinf_chunk_eval(
         obs, _infos = env.reset()
         for _chunk in range(int(n_chunk_steps)):
             chunk_actions = policy_fn(obs)
+            tally.record_chunk_step(chunk_actions)
             obs_list, _rewards, terms, truncs, infos_list = env.chunk_step(
                 chunk_actions
             )

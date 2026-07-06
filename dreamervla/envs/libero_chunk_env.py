@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import os
-from typing import Optional, Union
 
 import numpy as np
 
@@ -207,12 +206,19 @@ class LiberoChunkEnv:
     def _get_ordered_reset_state_ids(self, num_reset_states):
         if self.specific_reset_id is not None:
             return int(self.specific_reset_id) * np.ones((self.num_group,), dtype=int)
-        if self.start_idx + num_reset_states > len(self.reset_state_ids_all[0]):
+        pool = self.reset_state_ids_all[self.seed_offset]
+        if len(pool) == 0:
+            raise ValueError("LiberoChunkEnv has no reset states to enumerate")
+        if int(num_reset_states) > len(pool):
+            repeats = (int(num_reset_states) + len(pool) - 1) // len(pool)
+            reset_state_ids = np.tile(pool, repeats)[: int(num_reset_states)]
+            self.start_idx = int(num_reset_states) % len(pool)
+            return reset_state_ids
+        if self.start_idx + num_reset_states > len(pool):
             self.reset_state_ids_all = self.get_reset_state_ids_all()
             self.start_idx = 0
-        reset_state_ids = self.reset_state_ids_all[self.seed_offset][
-            self.start_idx : self.start_idx + num_reset_states
-        ]
+            pool = self.reset_state_ids_all[self.seed_offset]
+        reset_state_ids = pool[self.start_idx : self.start_idx + num_reset_states]
         self.start_idx = self.start_idx + num_reset_states
         return reset_state_ids
 
@@ -349,7 +355,7 @@ class LiberoChunkEnv:
 
     def reset(
         self,
-        env_idx: Optional[Union[int, list, np.ndarray]] = None,
+        env_idx: int | list | np.ndarray | None = None,
         reset_state_ids=None,
     ):
         if env_idx is None:

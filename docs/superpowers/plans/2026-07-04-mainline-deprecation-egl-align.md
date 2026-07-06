@@ -64,7 +64,13 @@
     以免阻断 smoke/tiny）。真正硬约束仍是既有的整除/chunk 一致性校验。
 - **验证判据**：读校验分支 + compose 主线 experiment 时打印三值确认；smoke/tiny 覆盖时告警可见。
 
-### R3 — collect / cotrain-real / eval 三处默认 EGL
+### R3 — collect / cotrain-real / eval 三处默认并行 osmesa（EGL 弃用）
+
+> **更正（2026-07-05，用户决策）**：EGL 无法解决(重型 torch 策略与 mujoco EGL 同物理 GPU →
+> libnvidia-eglcore abort，见 §7 风险 2 与 eval 崩溃报告)。改为 RLinf 对齐的**并行 osmesa**:
+> osmesa = CPU 软渲染、无 GPU 驱动争用,并行性由现有子进程向量化提供(与后端无关)。三处 config
+> 默认 `render_backend` 已由 egl 翻为 osmesa(loop `R3-REVISE`);`render_backend=egl` 保留为
+> **显式 opt-in**。下文原「默认 EGL + per-worker 设备绑定」内容降级为 egl 显式路径的实现参考。
 
 - **现状**（需在改动前逐一实证，见 §5 任务 2）：
   - collect：`dreamervla/runners/collect_parallel_rollouts.py:497-498`
@@ -76,7 +82,8 @@
   - eval：`coldstart_warmup_cotrain.py` `_post_step_eval_env()`（L1207-1219）默认 egl。
   - 所有 config 级 `render_backend` 默认值均为 osmesa（ray.yaml L11、ray_base.yaml L16、
     coldstart yaml L33）。EGL 目前是 opt-in（靠 `render_backend=egl` 覆盖）。
-- **目标**：三处默认 `render_backend=egl`。
+- **目标(已更正 2026-07-05)**：三处默认 `render_backend=osmesa`（并行子进程 osmesa）；
+  `render_backend=egl` 降为显式 opt-in。（原目标「三处默认 egl」已推翻。）
 - **RLinf 对齐（根治历史 robosuite `read_pixels` SIGABRT）**：移植 per-worker 设备绑定——
   每个 env worker 在其 `env_fn`/子进程内按 shard 设置
   `MUJOCO_EGL_DEVICE_ID`（LIBERO/MetaWorld 用法，RLinf

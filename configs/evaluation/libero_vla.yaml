@@ -51,12 +51,22 @@ eval:
   seed: ${seed}
   task_suite_name: libero_goal
   num_episodes_per_task: 3
-  num_envs: 8
+  num_envs: 64
   # Rebuild the LIBERO env per episode (RLinf reconfigure semantics): makes the
   # parallel SR K-invariant (num_envs 2==4) by removing cross-episode subprocess
   # state leakage, and matches the ~0.55 OFT-traj1 baseline. Verified 2026-07-05.
   reconfigure_per_episode: true
   enumerate_all_init_states: false
+  # Parallel eval scheme: rlinf_chunk is the default osmesa path aligned with the
+  # RLinf LiberoEnv chunk_step benchmark (64 envs x 8-action chunks). slots keeps
+  # the older VecRolloutEnv fallback.
+  scheme: rlinf_chunk
+  chunk_env:
+    reset_wait_steps: 10      # == sequential num_steps_wait oracle (RLinf uses 15)
+    reset_gripper_open: true
+    auto_reset: false
+    ignore_terminations: false
+    group_size: 1
   num_steps_wait: 10
   render_backend: osmesa
   render_gpu_pool: null
@@ -65,7 +75,8 @@ eval:
   task_ids: null
   max_tasks: null
   max_steps: null
-  action_steps: 5
+  action_steps: 8
+  history_length: 1
   action_postprocess: none
   save_video: false
   video_max_episodes: 1
