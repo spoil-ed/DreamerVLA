@@ -360,6 +360,35 @@ def _profile_per_gpu_count(profile_cfg: Mapping[str, Any], key: str) -> int | No
     return per_gpu
 
 
+def _cap_at_ngpu(value: int, ngpu: int) -> int:
+    """Cap a worker count at the selected GPU count with a floor of 1.
+
+    Profiles declare a worker count (e.g. 4) that assumes at least that many GPUs;
+    at a smaller GPU count Ray placement asks for a GPU index that does not exist.
+    Capping at min(value, ngpu) leaves ngpu>=value byte-identical while letting
+    ngpu<value run (ngpu=2 -> 2, ngpu>=4 -> 4).
+    """
+    return max(1, min(int(value), int(ngpu)))
+
+
+def _cap_override_at_ngpu(
+    overrides: Sequence[str],
+    key: str,
+    *,
+    ngpu: int,
+) -> list[str]:
+    """Rewrite an integer override's value in-place to min(value, ngpu) (floor 1)."""
+    capped: list[str] = []
+    for item in overrides:
+        raw = _override_value(item)
+        if _override_key(item) != key or raw is None:
+            capped.append(item)
+            continue
+        value = int(str(raw).strip().strip("'\""))
+        capped.append(f"{key}={_cap_at_ngpu(value, ngpu)}")
+    return capped
+
+
 def _sync_cotrain_scale_overrides(
     profile_cfg: Mapping[str, Any],
     *,
@@ -563,7 +592,16 @@ def _manual_cotrain_online_overrides(
     defaults.append(f"manual_cotrain.envs_per_worker={default_envs_per_worker}")
     real_env_workers = _plain(profile_cfg).get("ray_online_real_env_workers")
     if real_env_workers is not None:
-        defaults.append(f"manual_cotrain.real_env_workers={int(real_env_workers)}")
+        # One real-env worker binds one GPU, so a profile count above the GPU count
+        # would place an env worker on a missing GPU; cap at the selected count.
+        capped_real_env_workers = (
+            _cap_at_ngpu(int(real_env_workers), _requested_gpu_count(ngpu))
+            if _requested_gpu_count(ngpu) > 0
+            else int(real_env_workers)
+        )
+        defaults.append(
+            f"manual_cotrain.real_env_workers={capped_real_env_workers}"
+        )
     real_render_backend = _plain(profile_cfg).get("ray_online_real_render_backend")
     if real_render_backend is not None:
         defaults.append(
@@ -776,6 +814,14 @@ def build_pipeline_plan(
         collect_profile_items = _without_override_keys(
             collect_profile_items,
             {"collect.num_inference_workers", "env.num_workers"},
+        )
+    else:
+        # A profile's ray inference-worker count (e.g. 4) needs that many GPUs; cap it
+        # at the selected GPU count so ngpu<4 does not request a missing GPU index.
+        collect_profile_items = _cap_override_at_ngpu(
+            collect_profile_items,
+            "collect.num_inference_workers",
+            ngpu=selected_ngpu,
         )
     collect_control_items = _control_overrides(
         cfg.get("collect"),

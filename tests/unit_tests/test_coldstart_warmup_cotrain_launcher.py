@@ -988,6 +988,37 @@ def test_multi_gpu_profile_is_gpu_count_agnostic(tmp_path) -> None:
         assert "torch.distributed.run" not in plan.collect_cmd
 
 
+@pytest.mark.parametrize(
+    ("ngpu", "expected"),
+    [(2, "2"), (4, "4"), (8, "4")],
+)
+def test_multi_gpu_profile_caps_env_worker_counts_at_ngpu(
+    tmp_path,
+    ngpu: int,
+    expected: str,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=ngpu,
+        launcher_cfg=cfg,
+    )
+
+    # collect inference workers and online real-env workers both cap at min(4, ngpu):
+    # ngpu=2 -> 2, ngpu>=4 -> 4 (unchanged from the profile-declared 4).
+    assert _override_values(plan.collect_cmd, "collect.num_inference_workers") == [
+        expected
+    ]
+    assert f"manual_cotrain.real_env_workers={expected}" in plan.cotrain_online_cmd
+
+
 @pytest.mark.parametrize("profile", ["release", "multi_gpu"])
 def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
     cfg = _launcher_cfg()
@@ -1416,7 +1447,8 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "env.cfg.render_backend=egl" in plan.cotrain_online_cmd
     assert "manual_cotrain.envs_per_worker=1" in plan.cotrain_online_cmd
-    assert "manual_cotrain.real_env_workers=4" in plan.cotrain_online_cmd
+    # real-env workers cap at min(4, ngpu): one worker binds one GPU.
+    assert f"manual_cotrain.real_env_workers={min(4, ngpu)}" in plan.cotrain_online_cmd
     assert not any(
         item.startswith("manual_cotrain.real_render_backend=")
         for item in plan.cotrain_online_cmd
