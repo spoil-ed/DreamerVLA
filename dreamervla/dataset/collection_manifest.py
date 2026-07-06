@@ -693,10 +693,22 @@ def append_episode_index_record(reward_dir: str | Path, record: dict[str, Any]) 
     Audit log tying each per-trajectory shard file to its identity metadata
     (task_id, episode_id, success, ...). Append-only: a re-collected episode
     adds a new line; readers should treat the LAST line per ``file`` as current.
+
+    Parallel-safe: multiple collector ranks append to the SAME file, so each
+    append takes an exclusive ``flock`` and lands as a single write — plain
+    ``O_APPEND`` line atomicity is filesystem-dependent and not relied upon.
     """
+    import fcntl
+
     directory = Path(reward_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / EPISODE_INDEX_NAME
+    line = json.dumps(record, sort_keys=True) + "\n"
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, sort_keys=True) + "\n")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.write(line)
+            f.flush()
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return path

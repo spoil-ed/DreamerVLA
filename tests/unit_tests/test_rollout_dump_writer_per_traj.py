@@ -153,3 +153,35 @@ def test_make_dump_writer_routes_one_to_per_traj(tmp_path):
     )
     assert isinstance(single, RolloutDumpWriter)
     single.close()
+
+
+def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
+    from dreamervla.dataset import rollout_dump_writer as rdw
+
+    def _boom(self, *a, **kw):
+        raise RuntimeError("simulated crash mid-write")
+
+    monkeypatch.setattr(rdw.RolloutDumpWriter, "write_demo", _boom)
+    reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
+    writer = PerTrajectoryDumpWriter(reward_dir, hidden_dir)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        writer.write_demo(index=0, steps=_make_steps(2, False), task_id=0, episode_id=0)
+    # the canonical identity name is never occupied by a partial file
+    assert list(reward_dir.glob("*.hdf5")) == []
+    assert list(hidden_dir.glob("*.hdf5")) == []
+
+
+def test_no_tmp_files_left_after_successful_write(tmp_path):
+    reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
+    with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
+        writer.write_demo(
+            index=0,
+            steps=_make_steps(2, True),
+            task_id=0,
+            episode_id=0,
+            episode_success=True,
+            episode_horizon=2,
+        )
+    assert [p.name for p in reward_dir.glob("*.hdf5")] == ["traj_t00_ep000000.hdf5"]
+    assert list(reward_dir.glob("*.tmp")) == []
+    assert list(hidden_dir.glob("*.tmp")) == []

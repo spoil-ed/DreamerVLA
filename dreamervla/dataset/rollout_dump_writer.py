@@ -241,10 +241,14 @@ class RolloutDumpWriter:
                 self._hidden_data.attrs[attr_key] = attr_val
             self._data_attrs_written = True
 
-        # Write preprocess_config.json on first call (if provided)
+        # Write preprocess_config.json on first call (if provided). Atomic
+        # tmp+rename: per-trajectory collects rewrite this once per episode,
+        # so a reader must never observe a torn write.
         if preprocess_config is not None and not self._preprocess_config_written:
             config_path = self.hidden_dir / "preprocess_config.json"
-            config_path.write_text(json.dumps(preprocess_config, indent=2), encoding="utf-8")
+            tmp_path = config_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(preprocess_config, indent=2), encoding="utf-8")
+            tmp_path.replace(config_path)
             self._preprocess_config_written = True
 
     def close(self) -> None:
@@ -421,14 +425,29 @@ class PerTrajectoryDumpWriter:
         shard_name = per_trajectory_shard_name(
             self.file_prefix, int(task_id), int(episode_id)
         )
-        with RolloutDumpWriter(self.reward_dir, self.hidden_dir, shard_name) as writer:
-            writer.write_demo(
-                index=0,
-                steps=steps,
-                preprocess_config=self._saved_config,
-                data_attrs=self._saved_attrs,
-                **kwargs,
-            )
+        # Write under a .tmp name and atomically rename on success so a crash
+        # mid-write never leaves a partial file at the canonical identity name
+        # (readers/resume glob *.hdf5 and cannot see the .hdf5.tmp files).
+        tmp_name = shard_name + ".tmp"
+        try:
+            with RolloutDumpWriter(
+                self.reward_dir, self.hidden_dir, tmp_name
+            ) as writer:
+                writer.write_demo(
+                    index=0,
+                    steps=steps,
+                    preprocess_config=self._saved_config,
+                    data_attrs=self._saved_attrs,
+                    **kwargs,
+                )
+        except BaseException:
+            for directory in (self.reward_dir, self.hidden_dir):
+                tmp_path = Path(directory) / tmp_name
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            raise
+        for directory in (self.reward_dir, self.hidden_dir):
+            (Path(directory) / tmp_name).replace(Path(directory) / shard_name)
         from dreamervla.dataset.collection_manifest import append_episode_index_record
 
         record: dict[str, Any] = {

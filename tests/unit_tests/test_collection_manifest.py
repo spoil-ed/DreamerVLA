@@ -489,3 +489,37 @@ def test_append_episode_index_record(tmp_path):
     assert path == reward_dir / EPISODE_INDEX_NAME
     lines = path.read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in lines] == [rec1, rec2]
+
+
+def test_append_episode_index_record_is_safe_under_parallel_writers(tmp_path):
+    import multiprocessing
+
+    from dreamervla.dataset.collection_manifest import (
+        EPISODE_INDEX_NAME,
+        append_episode_index_record,
+    )
+
+    reward_dir = tmp_path / "reward"
+    n_procs, n_records = 4, 25
+
+    def _worker(rank):
+        for i in range(n_records):
+            append_episode_index_record(
+                reward_dir,
+                {"file": f"traj_t{rank:02d}_ep{i:06d}.hdf5", "task_id": rank, "episode_id": i},
+            )
+
+    ctx = multiprocessing.get_context("fork")
+    procs = [ctx.Process(target=_worker, args=(r,)) for r in range(n_procs)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+        assert p.exitcode == 0
+
+    lines = (reward_dir / EPISODE_INDEX_NAME).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == n_procs * n_records
+    parsed = [json.loads(line) for line in lines]  # every line is well-formed JSON
+    assert {(r["task_id"], r["episode_id"]) for r in parsed} == {
+        (r, i) for r in range(n_procs) for i in range(n_records)
+    }

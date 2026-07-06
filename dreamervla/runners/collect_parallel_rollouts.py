@@ -736,6 +736,7 @@ def collect_rollouts(
                         task_id=task_id,
                         episode_id=ep,
                         task_description=task_description,
+                        episode_success=ep_success,
                         episode_horizon=episode_horizon,
                     )
                     demo_index += 1
