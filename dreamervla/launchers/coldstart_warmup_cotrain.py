@@ -11,6 +11,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from math import gcd
 from pathlib import Path
 from typing import Any, Literal
 
@@ -48,6 +49,7 @@ _ZERO_GPU_COMPONENT_PLACEMENT_ERROR = (
     "cluster.component_placement.* overrides are not supported when ngpu=0; "
     "remove them or set ngpu>=1"
 )
+_DEBUG_ASYNC_ENVS_PER_WORKER = 4
 
 
 @dataclass(frozen=True)
@@ -173,25 +175,148 @@ def _debug_sync_cotrain_overrides() -> list[str]:
         "training.classifier_batch_size=1",
         "dataloader.batch_size=1",
         "online_rollout.buffer_size=1000",
+        "online_rollout.num_envs=1",
         "online_rollout.total_env_steps=0",
     ]
 
 
-def _debug_async_online_overrides() -> list[str]:
-    """Tiny manual-Ray online budget for launcher-level ``debug=true``."""
+def _ceil_to_multiple(value: int, multiple: int) -> int:
+    divisor = max(1, int(multiple))
+    return ((max(0, int(value)) + divisor - 1) // divisor) * divisor
+
+
+def _lcm_int(left: int, right: int) -> int:
+    lhs = max(1, abs(int(left)))
+    rhs = max(1, abs(int(right)))
+    return lhs * rhs // gcd(lhs, rhs)
+
+
+def _debug_async_online_overrides(
+    *,
+    ngpu: int | None,
+    explicit_overrides: Sequence[str] = (),
+    effective_overrides: Sequence[str] = (),
+) -> list[str]:
+    """Tiny manual-Ray online budget for launcher-level ``debug=true``.
+
+    Debug keeps multi-worker real-env concurrency but caps the per-worker env width
+    unless the caller explicitly sets it. This avoids serial smoke runs while keeping
+    the generated trajectory budget small.
+    """
+    effective_items = [*effective_overrides, *explicit_overrides]
+    real_env_workers = (
+        _last_int_override(effective_items, "manual_cotrain.real_env_workers") or 1
+    )
+    envs_per_worker = _debug_async_env_width(
+        key="manual_cotrain.envs_per_worker",
+        explicit_overrides=explicit_overrides,
+        effective_overrides=effective_items,
+        default=2,
+    )
+    wm_envs_per_worker = _debug_async_env_width(
+        key="manual_cotrain.wm_envs_per_worker",
+        explicit_overrides=explicit_overrides,
+        effective_overrides=effective_items,
+        default=envs_per_worker,
+    )
+    group_size = (
+        _last_int_override(
+            effective_items,
+            "actor.train_cfg.algorithm_cfg.group_size",
+        )
+        or _last_int_override(effective_items, "algorithm.group_size")
+        or 8
+    )
+    num_action_chunks = (
+        _last_int_override(effective_items, "manual_cotrain.num_action_chunks") or 8
+    )
+    replay_sequence_length = (
+        _last_int_override(effective_items, "replay.cfg.sequence_length") or 12
+    )
+    classifier_window = (
+        _last_int_override(
+            effective_items,
+            "learner.model_cfg.classifier.kwargs.window",
+        )
+        or _last_int_override(
+            effective_items,
+            "learner.model_cfg.classifier.window",
+        )
+        or 8
+    )
+    classifier_chunk_size = (
+        _last_int_override(
+            effective_items,
+            "learner.model_cfg.classifier.kwargs.chunk_size",
+        )
+        or _last_int_override(
+            effective_items,
+            "learner.model_cfg.classifier.chunk_size",
+        )
+        or int(num_action_chunks)
+    )
+    wm_workers = max(0, _requested_gpu_count(ngpu) - 1)
+    real_target = _ceil_to_multiple(
+        max(8, int(real_env_workers) * int(envs_per_worker)),
+        int(envs_per_worker),
+    )
+    wm_target = _ceil_to_multiple(
+        max(8, int(wm_workers) * int(wm_envs_per_worker)),
+        _lcm_int(int(wm_envs_per_worker), int(group_size)),
+    )
+    max_steps_per_rollout_epoch = _ceil_to_multiple(
+        max(
+            int(replay_sequence_length),
+            int(classifier_window) * int(classifier_chunk_size),
+        ),
+        int(num_action_chunks),
+    )
     return [
         "++training.debug=true",
-        "env.num_workers=1",
         "manual_cotrain.global_steps=1",
         "manual_cotrain.rollout_epoch=1",
         "manual_cotrain.real_rollout_epoch=1",
         "manual_cotrain.wm_rollout_epoch=1",
-        "manual_cotrain.real_rollout_target_trajectories=8",
-        "manual_cotrain.wm_rollout_target_trajectories=8",
-        "manual_cotrain.max_steps_per_rollout_epoch=2",
-        "manual_cotrain.envs_per_worker=2",
-        "manual_cotrain.wm_envs_per_worker=2",
+        f"manual_cotrain.real_rollout_target_trajectories={real_target}",
+        f"manual_cotrain.wm_rollout_target_trajectories={wm_target}",
+        f"manual_cotrain.max_steps_per_rollout_epoch={max_steps_per_rollout_epoch}",
+        *_debug_async_env_width_overrides(
+            explicit_overrides=explicit_overrides,
+            envs_per_worker=envs_per_worker,
+            wm_envs_per_worker=wm_envs_per_worker,
+        ),
     ]
+
+
+def _debug_async_env_width(
+    *,
+    key: str,
+    explicit_overrides: Sequence[str],
+    effective_overrides: Sequence[str],
+    default: int,
+) -> int:
+    explicit_value = _last_int_override(explicit_overrides, key)
+    if explicit_value is not None:
+        return int(explicit_value)
+    effective_value = _last_int_override(effective_overrides, key)
+    width = int(effective_value if effective_value is not None else default)
+    return max(1, min(width, _DEBUG_ASYNC_ENVS_PER_WORKER))
+
+
+def _debug_async_env_width_overrides(
+    *,
+    explicit_overrides: Sequence[str],
+    envs_per_worker: int,
+    wm_envs_per_worker: int,
+) -> list[str]:
+    overrides: list[str] = []
+    if not _has_override(explicit_overrides, "manual_cotrain.envs_per_worker"):
+        overrides.append(f"manual_cotrain.envs_per_worker={int(envs_per_worker)}")
+    if not _has_override(explicit_overrides, "manual_cotrain.wm_envs_per_worker"):
+        overrides.append(
+            f"manual_cotrain.wm_envs_per_worker={int(wm_envs_per_worker)}"
+        )
+    return overrides
 
 
 def _without_override_keys(overrides: Sequence[str], keys: set[str]) -> list[str]:
@@ -1144,7 +1269,17 @@ def build_pipeline_plan(
             else []
         )
         debug_online_items = (
-            _debug_async_online_overrides() if debug_enabled else []
+            _debug_async_online_overrides(
+                ngpu=selected_ngpu,
+                explicit_overrides=explicit_online_overrides,
+                effective_overrides=[
+                    *explicit_online_overrides,
+                    *ray_online_overrides,
+                    *manual_cotrain_overrides,
+                ],
+            )
+            if debug_enabled
+            else []
         )
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
         cotrain_online_cmd = [

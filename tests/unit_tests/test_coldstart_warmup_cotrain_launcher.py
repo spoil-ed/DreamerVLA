@@ -1158,7 +1158,7 @@ def test_launcher_debug_control_covers_collection_warmup_and_async_online(tmp_pa
         launcher_cfg=cfg,
         debug=True,
         profile="multi_gpu",
-        ngpu=2,
+        ngpu=6,
     )
     assert "training.debug=true" in plan_debug.cotrain_cmd
     assert _override_values(plan_debug.collect_cmd, "collect.episodes_per_task")[-1] == "1"
@@ -1166,10 +1166,43 @@ def test_launcher_debug_control_covers_collection_warmup_and_async_online(tmp_pa
     assert _override_values(plan_debug.collect_cmd, "env.num_workers")[-1] == "2"
     assert _override_values(plan_debug.cotrain_cmd, "training.wm_warmup_steps")[-1] == "1"
     assert _override_values(plan_debug.cotrain_cmd, "training.classifier_warmup_steps")[-1] == "1"
+    assert _override_values(plan_debug.cotrain_cmd, "online_rollout.num_envs")[-1] == "1"
     assert _override_values(plan_debug.cotrain_cmd, "online_rollout.total_env_steps")[-1] == "0"
+    assert _override_values(plan_debug.cotrain_online_cmd, "env.num_workers")[-1] == "12"
     assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.global_steps")[-1] == "1"
-    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.max_steps_per_rollout_epoch")[-1] == "2"
-    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.envs_per_worker")[-1] == "2"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.real_env_workers")[-1] == "4"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.max_steps_per_rollout_epoch")[-1] == "64"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.envs_per_worker")[-1] == "4"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.wm_envs_per_worker")[-1] == "4"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.real_rollout_target_trajectories")[-1] == "16"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.wm_rollout_target_trajectories")[-1] == "24"
+
+
+def test_launcher_debug_control_keeps_async_env_width_adjustable(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        debug=True,
+        profile="multi_gpu",
+        ngpu=6,
+        cotrain_overrides=[
+            "manual_cotrain.real_env_workers=3",
+            "manual_cotrain.envs_per_worker=6",
+            "manual_cotrain.wm_envs_per_worker=6",
+        ],
+    )
+
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.real_env_workers")[-1] == "3"
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.envs_per_worker")[-1] == "6"
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.wm_envs_per_worker")[-1] == "6"
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.real_rollout_target_trajectories")[-1] == "18"
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.wm_rollout_target_trajectories")[-1] == "48"
 
 
 def test_launcher_debug_control_preserves_explicit_overrides(tmp_path) -> None:
