@@ -1048,6 +1048,40 @@ def test_multi_gpu_profile_reserves_a_wm_env_gpu(tmp_path, ngpu: int) -> None:
         assert workers == 4
 
 
+@pytest.mark.parametrize(
+    ("ngpu", "expected_real_env_workers", "expected_envs_per_worker"),
+    [(2, 1, 16), (3, 2, 16), (4, 3, 8), (8, 4, 8)],
+)
+def test_multi_gpu_profile_caps_real_envs_per_worker_for_guard(
+    tmp_path,
+    ngpu: int,
+    expected_real_env_workers: int,
+    expected_envs_per_worker: int,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["render_backend"] = "osmesa"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=ngpu,
+        launcher_cfg=cfg,
+    )
+
+    target = 32  # ray_online_real_rollout_target_trajectories in the multi_gpu profile
+    workers = _override_int(plan.cotrain_online_cmd, "manual_cotrain.real_env_workers")
+    envs = _override_int(plan.cotrain_online_cmd, "manual_cotrain.envs_per_worker")
+    assert workers == expected_real_env_workers
+    assert envs == expected_envs_per_worker
+    # Both runner rollout-distribution guard invariants must hold at every GPU count.
+    assert target % envs == 0
+    assert target // envs >= workers
+
+
 def test_async_online_guard_rejects_real_env_workers_leaving_no_wm_gpu(
     tmp_path,
 ) -> None:
@@ -1210,8 +1244,9 @@ def test_async_manual_cotrain_envs_per_worker_uses_profile_and_explicit_override
         ngpu=2,
         launcher_cfg=cfg,
     )
-    assert "manual_cotrain.envs_per_worker=1" in profile_plan.cotrain_online_cmd
-    assert "manual_cotrain.envs_per_worker=8" not in profile_plan.cotrain_online_cmd
+    # ngpu=2 -> 1 real_env_worker, target=32, profile width=16 -> capped to 16.
+    assert "manual_cotrain.envs_per_worker=16" in profile_plan.cotrain_online_cmd
+    assert "manual_cotrain.envs_per_worker=1" not in profile_plan.cotrain_online_cmd
 
     override_plan = build_pipeline_plan(
         mode="ray",
@@ -1487,20 +1522,32 @@ def test_multi_gpu_profile_scales_async_ray_egl_slots_with_ngpu(
     )
 
     assert f"env.num_workers={ngpu}" in plan.cotrain_online_cmd
-    assert "env.envs_per_worker=1" in plan.cotrain_online_cmd
-    assert "env.envs_per_worker=12" not in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=16" in plan.cotrain_online_cmd
+    assert "env.envs_per_worker=1" not in plan.cotrain_online_cmd
     assert f"cluster.component_placement.env={expected_env_slots}" in plan.cotrain_online_cmd
     assert f"cluster.component_placement.rollout={expected_rollout_slots}" in plan.cotrain_online_cmd
     assert f"cluster.component_placement.actor={expected_actor_slot}" in plan.cotrain_online_cmd
     assert "cluster.component_placement=null" not in plan.cotrain_online_cmd
     assert "render_backend=egl" in plan.cotrain_online_cmd
     assert "env.cfg.render_backend=egl" in plan.cotrain_online_cmd
-    assert "manual_cotrain.envs_per_worker=1" in plan.cotrain_online_cmd
     # real-env workers cap at min(4, ngpu-1) so a wm_env worker always keeps a GPU.
+    expected_real_env_workers = min(4, max(1, ngpu - 1))
     assert (
-        f"manual_cotrain.real_env_workers={min(4, max(1, ngpu - 1))}"
+        f"manual_cotrain.real_env_workers={expected_real_env_workers}"
         in plan.cotrain_online_cmd
     )
+    # envs_per_worker: profile width 16, capped to the largest divisor of target=32
+    # that keeps target//envs >= real_env_workers.
+    expected_envs = max(
+        d
+        for d in (1, 2, 4, 8, 16, 32)
+        if d <= min(16, 32 // expected_real_env_workers)
+    )
+    assert (
+        f"manual_cotrain.envs_per_worker={expected_envs}" in plan.cotrain_online_cmd
+    )
+    assert 32 % expected_envs == 0
+    assert 32 // expected_envs >= expected_real_env_workers
     assert not any(
         item.startswith("manual_cotrain.real_render_backend=")
         for item in plan.cotrain_online_cmd
@@ -1875,7 +1922,8 @@ def test_multi_gpu_profile_does_not_force_async_real_rollout_actor_alignment(tmp
     )
     # RealEnv trajectories feed replay/learner, not ActorGroup, so actor group_size
     # alignment must be enforced only on WMEnv trajectories.
-    assert "manual_cotrain.envs_per_worker=1" in profile_plan.cotrain_online_cmd
+    # ngpu=6 -> 4 real_env_workers, target=32, profile width=16 -> capped to 8.
+    assert "manual_cotrain.envs_per_worker=8" in profile_plan.cotrain_online_cmd
     assert "manual_cotrain.real_env_workers=4" in profile_plan.cotrain_online_cmd
     assert not any(
         item.startswith("manual_cotrain.real_render_backend=")

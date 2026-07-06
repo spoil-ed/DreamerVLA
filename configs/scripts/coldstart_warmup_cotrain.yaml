@@ -238,7 +238,7 @@ profiles:
     online_rollout_envs_per_gpu: 2
     ray_online_real_env_workers: 4
     ray_online_real_render_backend: null
-    ray_online_real_envs_per_worker: 1
+    ray_online_real_envs_per_worker: 16
     ray_online_wm_envs_per_worker: 16
     ray_online_real_rollout_target_trajectories: 32
     ray_online_wm_rollout_target_trajectories: 256

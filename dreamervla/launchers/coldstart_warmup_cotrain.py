@@ -589,6 +589,38 @@ def _validate_online_wm_env_reservation(
     )
 
 
+def _largest_divisor_at_most(target: int, limit: int) -> int:
+    """Largest positive divisor of ``target`` that is <= ``limit`` (floor 1)."""
+    limit = min(int(limit), int(target))
+    for candidate in range(max(1, limit), 0, -1):
+        if int(target) % candidate == 0:
+            return candidate
+    return 1
+
+
+def _cap_real_envs_per_worker(
+    profile_width: int,
+    target_trajectories: int | None,
+    real_env_workers: int | None,
+) -> int:
+    """Cap the real rollout width so the runner rollout-distribution guard holds.
+
+    Returns ``min(profile_width, target // workers)`` clamped DOWN to the largest
+    divisor of ``target`` so both guard invariants hold at any GPU count:
+    ``target % envs == 0`` and ``target // envs >= workers``. When the profile omits a
+    real rollout target, no divisibility applies and the profile width passes through.
+    """
+    width = max(1, int(profile_width))
+    if target_trajectories is None:
+        return width
+    target = int(target_trajectories)
+    if target <= 0:
+        return width
+    workers = max(1, int(real_env_workers or 1))
+    limit = min(width, target // workers)
+    return _largest_divisor_at_most(target, max(1, limit))
+
+
 def _manual_cotrain_online_overrides(
     profile_cfg: Mapping[str, Any],
     *,
@@ -618,8 +650,7 @@ def _manual_cotrain_online_overrides(
             profile_cfg,
             "online_rollout_envs_per_gpu",
         )
-    default_envs_per_worker = envs_per_worker or 8
-    defaults.append(f"manual_cotrain.envs_per_worker={default_envs_per_worker}")
+    profile_real_envs_per_worker = envs_per_worker or 8
     requested_gpu = _requested_gpu_count(ngpu)
     real_env_workers = _plain(profile_cfg).get("ray_online_real_env_workers")
     capped_real_env_workers: int | None = None
@@ -642,6 +673,17 @@ def _manual_cotrain_online_overrides(
     )
     if effective_real_env_workers is None:
         effective_real_env_workers = capped_real_env_workers
+    # Cap the real rollout width so the runner rollout-distribution guard holds at ANY
+    # GPU count: `target % envs == 0` AND `target // envs >= real_env_workers`. The
+    # profile declares the RLinf rollout width (16); at low GPU counts we keep it, but
+    # when `target // workers` drops below it we clamp DOWN to the largest divisor of
+    # `target` that still gives every real-env worker at least one rollout_epoch.
+    default_envs_per_worker = _cap_real_envs_per_worker(
+        profile_real_envs_per_worker,
+        _plain(profile_cfg).get("ray_online_real_rollout_target_trajectories"),
+        effective_real_env_workers,
+    )
+    defaults.append(f"manual_cotrain.envs_per_worker={default_envs_per_worker}")
     _validate_online_wm_env_reservation(
         profile_cfg,
         real_env_workers=effective_real_env_workers,
