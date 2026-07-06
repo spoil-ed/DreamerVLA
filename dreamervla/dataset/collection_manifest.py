@@ -39,6 +39,7 @@ _OBS_DATASETS = (
 MANIFEST_NAME = "collection_manifest.json"
 ONLINE_ROLLOUT_MANIFEST_NAME = "manifest.jsonl"
 ONLINE_ROLLOUT_EPISODES_DIR = "episodes"
+EPISODE_INDEX_NAME = "episode_index.jsonl"
 
 
 def count_collected_episodes(
@@ -683,4 +684,19 @@ def write_manifest(root: str | Path, data: dict[str, Any]) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / MANIFEST_NAME
     path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def append_episode_index_record(reward_dir: str | Path, record: dict[str, Any]) -> Path:
+    """Append one per-episode JSON line to ``reward_dir/episode_index.jsonl``.
+
+    Audit log tying each per-trajectory shard file to its identity metadata
+    (task_id, episode_id, success, ...). Append-only: a re-collected episode
+    adds a new line; readers should treat the LAST line per ``file`` as current.
+    """
+    directory = Path(reward_dir).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / EPISODE_INDEX_NAME
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, sort_keys=True) + "\n")
     return path

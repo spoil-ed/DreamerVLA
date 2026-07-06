@@ -5,6 +5,8 @@ a manifest (metadata + config) and episode-level resume: a relaunch tops up to
 the target episode count by appending new shards instead of overwriting.
 """
 
+import json
+
 import h5py
 import numpy as np
 
@@ -471,3 +473,19 @@ def test_quarantine_incomplete_moves_reward_shard_when_hidden_sidecar_missing(tm
     assert quarantine_incomplete_shards(reward, hidden) == ["ray_shard_000.hdf5"]
     assert not (reward / "ray_shard_000.hdf5").exists()
     assert (reward / ".incomplete" / "ray_shard_000.hdf5").exists()
+
+
+def test_append_episode_index_record(tmp_path):
+    from dreamervla.dataset.collection_manifest import (
+        EPISODE_INDEX_NAME,
+        append_episode_index_record,
+    )
+
+    reward_dir = tmp_path / "reward"
+    rec1 = {"file": "traj_t00_ep000000.hdf5", "task_id": 0, "episode_id": 0, "success": True}
+    rec2 = {"file": "traj_t01_ep000003.hdf5", "task_id": 1, "episode_id": 3, "success": False}
+    path = append_episode_index_record(reward_dir, rec1)
+    append_episode_index_record(reward_dir, rec2)
+    assert path == reward_dir / EPISODE_INDEX_NAME
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == [rec1, rec2]
