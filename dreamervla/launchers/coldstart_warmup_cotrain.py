@@ -144,6 +144,56 @@ def _has_override_or_child(overrides: Sequence[str], key: str) -> bool:
     )
 
 
+def _debug_collect_overrides(mode: PipelineMode) -> list[str]:
+    """Tiny cold-start collection budget for launcher-level ``debug=true``."""
+    overrides = [
+        "collect.episodes_per_task=1",
+        "collect.episode_horizon=16",
+        "collect.memory_fraction=0.8",
+    ]
+    if mode == "ray":
+        overrides.extend(
+            [
+                "env.num_workers=2",
+                "collect.num_inference_workers=1",
+            ]
+        )
+    else:
+        overrides.append("collect.envs_per_gpu=1")
+    return overrides
+
+
+def _debug_sync_cotrain_overrides() -> list[str]:
+    """Tiny sync warmup / online budget for launcher-level ``debug=true``."""
+    return [
+        "training.debug=true",
+        "training.wm_warmup_steps=1",
+        "training.classifier_warmup_steps=1",
+        "training.warmup_replay_epochs=0",
+        "training.classifier_batch_size=1",
+        "dataloader.batch_size=1",
+        "online_rollout.buffer_size=1000",
+        "online_rollout.total_env_steps=0",
+    ]
+
+
+def _debug_async_online_overrides() -> list[str]:
+    """Tiny manual-Ray online budget for launcher-level ``debug=true``."""
+    return [
+        "++training.debug=true",
+        "env.num_workers=1",
+        "manual_cotrain.global_steps=1",
+        "manual_cotrain.rollout_epoch=1",
+        "manual_cotrain.real_rollout_epoch=1",
+        "manual_cotrain.wm_rollout_epoch=1",
+        "manual_cotrain.real_rollout_target_trajectories=8",
+        "manual_cotrain.wm_rollout_target_trajectories=8",
+        "manual_cotrain.max_steps_per_rollout_epoch=2",
+        "manual_cotrain.envs_per_worker=2",
+        "manual_cotrain.wm_envs_per_worker=2",
+    ]
+
+
 def _without_override_keys(overrides: Sequence[str], keys: set[str]) -> list[str]:
     return [item for item in overrides if _override_key(item) not in keys]
 
@@ -913,6 +963,10 @@ def build_pipeline_plan(
         label="collect",
     )
     cotrain_profile_items = _render_overrides(profile_cfg["cotrain"], context)
+    debug_collect_items = (
+        _debug_collect_overrides(selected_mode) if debug_enabled else []
+    )
+    debug_cotrain_items = _debug_sync_cotrain_overrides() if debug_enabled else []
     warmup_control_items = _control_overrides(
         cfg.get("warmup"),
         _warmup_control_mapping(cfg),
@@ -994,6 +1048,7 @@ def build_pipeline_plan(
     explicit_collect_overrides = [
         *collect_profile_items,
         *zero_gpu_collect_items,
+        *debug_collect_items,
         *collect_control_items,
         *common_overrides,
         *collect_overrides,
@@ -1012,6 +1067,7 @@ def build_pipeline_plan(
             f"training.out_dir={collect_out}",
             *ray_env_scale,
             *zero_gpu_collect_items,
+            *debug_collect_items,
             *collect_control_items,
             *common_overrides,
             *collect_overrides,
@@ -1039,14 +1095,11 @@ def build_pipeline_plan(
             explicit_overrides=[*common_overrides, *cotrain_overrides],
         ),
         *zero_gpu_cotrain_items,
+        *debug_cotrain_items,
         *warmup_control_items,
         *common_overrides,
         *cotrain_overrides,
     ]
-    # debug=true overrides the profile's full values so the runner's central swap
-    # takes over (small debug_* scale). Appended last so it wins in Hydra.
-    if debug_enabled:
-        cotrain_cmd.append("training.debug=true")
 
     cotrain_warmup_cmd: list[str] = []
     cotrain_online_cmd: list[str] = []
@@ -1090,6 +1143,9 @@ def build_pipeline_plan(
             if async_exp.startswith("openvla_onetraj_libero_cotrain_ray")
             else []
         )
+        debug_online_items = (
+            _debug_async_online_overrides() if debug_enabled else []
+        )
         cotrain_warmup_cmd = [*cotrain_cmd, "online_rollout.total_env_steps=0"]
         cotrain_online_cmd = [
             python_cmd,
@@ -1101,11 +1157,10 @@ def build_pipeline_plan(
             f"init.warmup_ckpt_path={ray_init_ckpt}",
             *ray_online_overrides,
             *manual_cotrain_overrides,
+            *debug_online_items,
             *common_overrides,
             *cotrain_overrides,
         ]
-        if debug_enabled:
-            cotrain_online_cmd.append("++training.debug=true")
 
     return PipelinePlan(
         mode=selected_mode,

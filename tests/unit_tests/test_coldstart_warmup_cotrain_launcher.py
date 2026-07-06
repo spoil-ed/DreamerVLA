@@ -1143,18 +1143,58 @@ def test_smoke_profile_replay_can_retain_one_episode_per_task() -> None:
     assert buffer_size >= task_count * horizon
 
 
-def test_launcher_debug_control_appends_training_debug_to_cotrain(tmp_path) -> None:
+def test_launcher_debug_control_covers_collection_warmup_and_async_online(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
 
-    plan_default = build_pipeline_plan(mode="noray", run_root=tmp_path, python="python")
+    plan_default = build_pipeline_plan(mode="ray", run_root=tmp_path, python="python")
     assert "training.debug=true" not in plan_default.cotrain_cmd
 
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
     plan_debug = build_pipeline_plan(
-        mode="noray", run_root=tmp_path, python="python", debug=True
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        debug=True,
+        profile="multi_gpu",
+        ngpu=2,
     )
     assert "training.debug=true" in plan_debug.cotrain_cmd
-    # debug only affects cotrain, never the collect command.
-    assert "training.debug=true" not in plan_debug.collect_cmd
+    assert _override_values(plan_debug.collect_cmd, "collect.episodes_per_task")[-1] == "1"
+    assert _override_values(plan_debug.collect_cmd, "collect.episode_horizon")[-1] == "16"
+    assert _override_values(plan_debug.collect_cmd, "env.num_workers")[-1] == "2"
+    assert _override_values(plan_debug.cotrain_cmd, "training.wm_warmup_steps")[-1] == "1"
+    assert _override_values(plan_debug.cotrain_cmd, "training.classifier_warmup_steps")[-1] == "1"
+    assert _override_values(plan_debug.cotrain_cmd, "online_rollout.total_env_steps")[-1] == "0"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.global_steps")[-1] == "1"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.max_steps_per_rollout_epoch")[-1] == "2"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.envs_per_worker")[-1] == "2"
+
+
+def test_launcher_debug_control_preserves_explicit_overrides(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        launcher_cfg=cfg,
+        debug=True,
+        profile="multi_gpu",
+        ngpu=2,
+        collect_overrides=["collect.episodes_per_task=3"],
+        cotrain_overrides=[
+            "online_rollout.total_env_steps=64",
+            "manual_cotrain.global_steps=4",
+        ],
+    )
+
+    assert _override_values(plan.collect_cmd, "collect.episodes_per_task")[-1] == "3"
+    assert _override_values(plan.cotrain_cmd, "online_rollout.total_env_steps")[-1] == "64"
+    assert _override_values(plan.cotrain_online_cmd, "manual_cotrain.global_steps")[-1] == "4"
 
 
 def test_async_cotrain_engine_splits_warmup_and_ray_online(tmp_path) -> None:

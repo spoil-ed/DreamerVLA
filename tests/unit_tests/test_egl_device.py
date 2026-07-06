@@ -18,9 +18,16 @@ _RENDER_ENV_KEYS = (
 
 
 @pytest.fixture(autouse=True)
-def clean_render_env(monkeypatch: pytest.MonkeyPatch):
+def clean_render_env():
+    original = {key: os.environ.get(key) for key in _RENDER_ENV_KEYS}
     for key in _RENDER_ENV_KEYS:
-        monkeypatch.delenv(key, raising=False)
+        os.environ.pop(key, None)
+    yield
+    for key, value in original.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 def _skip_egl_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
