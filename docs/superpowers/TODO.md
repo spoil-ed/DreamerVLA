@@ -42,7 +42,11 @@
 - **offline-warmup → online-cotrain real long-run** — pipeline + Ray-tiny both run; the real OFT/LIBERO
   convergence/metrics are unverified. Validate against the RLinf parallel-eval baseline (libero-goal
   traj1 ≈ 0.50 `success_once`); produce a reproducible command + run root + metrics summary. *(= the
-  same task as Ray-todo item 1.)*
+  same task as Ray-todo item 1.)* **Base-ckpt eval leg DONE 2026-07-06:** `eval.scheme=rlinf_chunk`
+  first real-model run scored `eval_success_rate=0.567` (17/30, num_envs=10, 539 s) on OFT-traj1 /
+  libero_goal — identical to the slots-parallel baseline (0.533-0.567) and above the RLinf official
+  34.4% (11/32 @512 steps); run root `data/outputs/eval/rlinf_chunk_verify`, log
+  `logs/eval_rlinf_chunk_verify.log`. The cotrain-ckpt convergence leg remains open.
 - **Perf benchmark** — no real throughput/memory benchmark yet; instrumentation landed, kernel on/off
   conclusions (FA2 / `torch.compile`; liger N/A on Chameleon) are gated on the long-run. "先量后调."
   *(= Ray-todo item 5.)*
