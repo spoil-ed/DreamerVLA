@@ -362,7 +362,110 @@ class RotatingRolloutDumpWriter:
             pass
 
 
-__all__ = ["RolloutDumpWriter", "RotatingRolloutDumpWriter"]
+def per_trajectory_shard_name(prefix: str, task_id: int, episode_id: int) -> str:
+    """Identity-based shard filename shared by all per-trajectory writers."""
+    return f"{prefix}_t{int(task_id):02d}_ep{int(episode_id):06d}.hdf5"
+
+
+class PerTrajectoryDumpWriter:
+    """Drop-in ``RolloutDumpWriter`` that lands one file pair per trajectory.
+
+    Same ``write_demo`` / ``close`` / context-manager surface as
+    ``RotatingRolloutDumpWriter``.  Each demo is written to its own
+    ``{file_prefix}_t{task:02d}_ep{episode:06d}.hdf5`` pair (reward + hidden)
+    and closed immediately, so every finished trajectory is durable on disk.
+    Identity comes from the globally-built work list (``task_id``/``episode_id``
+    are REQUIRED), which makes the numbering unified across ranks without any
+    cross-rank coordination; re-collecting an identity overwrites its files.
+    ``preprocess_config`` / ``data_attrs`` are captured from the first write
+    that provides them and re-emitted into every file so each file is
+    independently readable.  Every write appends a line to
+    ``reward_dir/episode_index.jsonl`` mapping the file to its metadata.
+    The caller's ``index`` argument is ignored (each file holds ``demo_0``).
+    """
+
+    def __init__(
+        self,
+        reward_dir: str | Path,
+        hidden_dir: str | Path,
+        *,
+        file_prefix: str = "traj",
+    ) -> None:
+        self.reward_dir = Path(reward_dir)
+        self.hidden_dir = Path(hidden_dir)
+        self.file_prefix = str(file_prefix)
+        self._saved_config: dict[str, Any] | None = None
+        self._saved_attrs: dict[str, Any] | None = None
+        self._closed = False
+
+    def write_demo(
+        self,
+        index: int,
+        steps: list[dict[str, Any]],
+        preprocess_config: dict[str, Any] | None = None,
+        data_attrs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not steps:
+            return
+        task_id = kwargs.get("task_id")
+        episode_id = kwargs.get("episode_id")
+        if task_id is None or episode_id is None:
+            raise ValueError(
+                "PerTrajectoryDumpWriter requires task_id and episode_id kwargs"
+            )
+        if preprocess_config is not None and self._saved_config is None:
+            self._saved_config = preprocess_config
+        if data_attrs is not None and self._saved_attrs is None:
+            self._saved_attrs = data_attrs
+        shard_name = per_trajectory_shard_name(
+            self.file_prefix, int(task_id), int(episode_id)
+        )
+        with RolloutDumpWriter(self.reward_dir, self.hidden_dir, shard_name) as writer:
+            writer.write_demo(
+                index=0,
+                steps=steps,
+                preprocess_config=self._saved_config,
+                data_attrs=self._saved_attrs,
+                **kwargs,
+            )
+        from dreamervla.dataset.collection_manifest import append_episode_index_record
+
+        record: dict[str, Any] = {
+            "file": shard_name,
+            "task_id": int(task_id),
+            "episode_id": int(episode_id),
+            "horizon": len(steps),
+        }
+        init_state_index = _resolve_init_state_index(
+            kwargs.get("init_state_index"), steps
+        )
+        if init_state_index is not None:
+            record["init_state_index"] = int(init_state_index)
+        episode_success = kwargs.get("episode_success")
+        if episode_success is not None:
+            record["success"] = bool(episode_success)
+        task_description = kwargs.get("task_description")
+        if task_description is not None:
+            record["task_description"] = str(task_description)
+        append_episode_index_record(self.reward_dir, record)
+
+    def close(self) -> None:
+        self._closed = True
+
+    def __enter__(self) -> PerTrajectoryDumpWriter:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+
+__all__ = [
+    "PerTrajectoryDumpWriter",
+    "RolloutDumpWriter",
+    "RotatingRolloutDumpWriter",
+    "per_trajectory_shard_name",
+]
 
 
 def _episode_attrs(
