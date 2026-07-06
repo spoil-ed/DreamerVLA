@@ -53,6 +53,11 @@ class LiberoEvalEnv:
             ``None`` the raw LIBERO env is built from the benchmark suite.
         init_states: test seam ``task_id -> list[init_state]``. When ``None`` the
             init states come from the benchmark suite.
+        reconfigure_per_episode: when True, every ``reset`` closes the current raw
+            env and rebuilds a byte-fresh one (via the same construction path
+            ``set_task`` uses) before applying ``set_init_state`` + the warmup, so
+            an episode's outcome cannot carry over from prior episodes in this
+            subprocess. When False (default), keep the reuse behavior.
     """
 
     def __init__(
@@ -65,6 +70,7 @@ class LiberoEvalEnv:
         *,
         make_env: Callable[[int], tuple[Any, str]] | None = None,
         init_states: Mapping[int, Sequence[Any]] | None = None,
+        reconfigure_per_episode: bool = False,
     ) -> None:
         self._task_suite_name = str(task_suite_name)
         self._resolution = int(resolution)
@@ -73,6 +79,7 @@ class LiberoEvalEnv:
         self._max_steps = int(max_steps)
         self._make_env = make_env
         self._init_states = init_states
+        self._reconfigure_per_episode = bool(reconfigure_per_episode)
 
         self._task_suite: Any = None
         self._env: Any = None
@@ -88,16 +95,21 @@ class LiberoEvalEnv:
             self._task_suite = _libero_benchmark_dict()[self._task_suite_name]()
         return self._task_suite
 
+    def _build_raw_env(self, task_id: int) -> tuple[Any, str]:
+        """Construct the raw LIBERO env + task text for ``task_id``.
+
+        The single construction path shared by ``set_task`` and the per-episode
+        reconfigure rebuild.
+        """
+        if self._make_env is not None:
+            return self._make_env(task_id)
+        task = self._get_task_suite().get_task(task_id)
+        return get_libero_env(task, resolution=self._resolution, seed=self._seed)
+
     def set_task(self, task_id: int) -> None:
         """Build the raw env for ``task_id`` and cache its init-states + text."""
         task_id = int(task_id)
-        if self._make_env is not None:
-            self._env, self._desc = self._make_env(task_id)
-        else:
-            task = self._get_task_suite().get_task(task_id)
-            self._env, self._desc = get_libero_env(
-                task, resolution=self._resolution, seed=self._seed
-            )
+        self._env, self._desc = self._build_raw_env(task_id)
         if self._init_states is not None:
             self._cur_init_states = self._init_states[task_id]
         else:
@@ -116,6 +128,12 @@ class LiberoEvalEnv:
             self.set_task(task_id)
         if self._env is None or self._cur_init_states is None:
             raise RuntimeError("reset called before set_task")
+        if self._reconfigure_per_episode:
+            # Full per-episode rebuild: close the current raw env and reconstruct
+            # a byte-fresh one (same path as set_task) so no mujoco/osmesa state
+            # carries over from previously-run episodes in this subprocess.
+            self.close()
+            self._env, self._desc = self._build_raw_env(int(self._task_id))
         self._env.reset()
         obs = self._env.set_init_state(self._cur_init_states[int(episode_id)])
         for _ in range(self._num_steps_wait):
@@ -181,5 +199,6 @@ def make_libero_eval_env(cfg_kwargs: dict[str, Any]) -> LiberoEvalEnv:
         seed=int(kwargs.get("seed", 0)),
         num_steps_wait=int(kwargs.get("num_steps_wait", 10)),
         max_steps=int(kwargs["max_steps"]),
+        reconfigure_per_episode=bool(kwargs.get("reconfigure_per_episode", False)),
     )
     return env.__enter__()

@@ -52,6 +52,7 @@ eval:
   task_suite_name: libero_goal
   num_episodes_per_task: 3
   num_envs: 8
+  reconfigure_per_episode: false
   enumerate_all_init_states: false
   num_steps_wait: 10
   render_backend: osmesa

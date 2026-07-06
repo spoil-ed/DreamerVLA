@@ -794,12 +794,16 @@ class PretokenizeVLARunner(BaseRunner):
         task_suite_name = str(
             OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
         )
+        reconfigure_per_episode = bool(
+            OmegaConf.select(eval_cfg, "reconfigure_per_episode", default=False)
+        )
         cfg_kwargs = {
             "task_suite_name": task_suite_name,
             "resolution": int(resolution),
             "seed": int(seed),
             "num_steps_wait": int(num_steps_wait),
             "max_steps": int(max_steps),
+            "reconfigure_per_episode": reconfigure_per_episode,
             "_libero_render_backend": str(render_backend).strip().lower(),
             "_libero_render_gpu_pool": list(render_gpu_pool or []),
             "_libero_render_shard_id": int(render_shard_id),

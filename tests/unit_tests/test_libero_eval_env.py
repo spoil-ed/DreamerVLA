@@ -112,3 +112,60 @@ def test_context_manager_closes_env():
         e.set_task(0)
         e.reset(episode_id=0)
     assert fake.closed is True
+
+
+class _CountingFactory:
+    """make_env seam that builds a fresh fake env per call and counts builds."""
+
+    def __init__(self) -> None:
+        self.built: list[_FakeLibero] = []
+
+    def __call__(self, task_id: int) -> tuple[_FakeLibero, str]:
+        fake = _FakeLibero()
+        self.built.append(fake)
+        return fake, "desc"
+
+
+def _make_env_counting(reconfigure: bool) -> tuple[LiberoEvalEnv, _CountingFactory]:
+    factory = _CountingFactory()
+    env = LiberoEvalEnv(
+        task_suite_name="libero_goal",
+        resolution=256,
+        seed=0,
+        num_steps_wait=1,
+        max_steps=2,
+        make_env=factory,
+        init_states={0: ["A", "B", "C"]},
+        reconfigure_per_episode=reconfigure,
+    )
+    return env, factory
+
+
+def test_reconfigure_per_episode_rebuilds_each_reset():
+    env, factory = _make_env_counting(reconfigure=True)
+    env.set_task(0)
+    assert len(factory.built) == 1  # set_task builds once
+
+    env.reset(episode_id=0)
+    assert len(factory.built) == 2  # reset rebuilds a fresh env
+    assert factory.built[0].closed is True  # old env closed before rebuild
+    assert factory.built[1].applied == "A"  # fresh env got the init state
+
+    env.reset(episode_id=1)
+    assert len(factory.built) == 3
+    assert factory.built[1].closed is True
+    assert factory.built[2].applied == "B"
+
+
+def test_no_reconfigure_reuses_single_env():
+    env, factory = _make_env_counting(reconfigure=False)
+    env.set_task(0)
+    assert len(factory.built) == 1
+
+    env.reset(episode_id=0)
+    env.reset(episode_id=1)
+    env.reset(episode_id=2)
+
+    assert len(factory.built) == 1  # built once, reused across resets
+    assert factory.built[0].closed is False
+    assert factory.built[0].applied == "C"  # last init state applied
