@@ -1,9 +1,9 @@
-"""LiberoChunkEnv (RLinf LiberoEnv port): enumeration, reset, chunk_step."""
+"""LiberoEnv (RLinf LiberoEnv port): enumeration, reset, chunk_step."""
 
 import numpy as np
 from omegaconf import OmegaConf
 
-from dreamervla.envs.libero_chunk_env import LiberoChunkEnv
+from dreamervla.envs.libero.libero_env import LiberoEnv
 
 
 class _FakeSuite:
@@ -108,7 +108,7 @@ def _make_env(num_envs=4, **overrides):
     )
     fake_vec = _FakeVecEnv(num_envs)
 
-    class _TestChunkEnv(LiberoChunkEnv):
+    class _TestChunkEnv(LiberoEnv):
         def _load_task_suite(self):
             return _FakeSuite()
 

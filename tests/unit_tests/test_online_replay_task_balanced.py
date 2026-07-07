@@ -273,6 +273,39 @@ def test_online_replay_classifier_windows_follow_wmpo_episode_protocol(monkeypat
     assert second["window_end_indices"].tolist() == [8]
 
 
+def test_online_replay_classifier_wmpo_balanced_batches_mix_success_and_failure() -> None:
+    random.seed(4)
+    replay = OnlineReplay(capacity=100, sequence_length=4, task_balanced=False)
+    for success, task_id in ((True, 2), (False, 9)):
+        episode = _episode(task_id=task_id, length=12, success=success)
+        for idx, step in enumerate(episode):
+            step["obs_embedding"] = np.full(
+                (1,), float(task_id * 100 + idx), dtype=np.float32
+            )
+        replay.add_episode(episode)
+
+    batch = replay.sample_classifier_windows(
+        4,
+        window=2,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=4,
+        sampling_protocol="wmpo",
+        balance_batches=True,
+    )
+
+    assert batch["labels"].tolist() == [1, 0, 1, 0]
+    assert batch["source_success"][0::2].tolist() == [True, True]
+    assert batch["is_end_window"][0::2].tolist() == [True, True]
+    assert batch["window_end_indices"][0::2].tolist() == [12, 12]
+    for idx in (1, 3):
+        if bool(batch["source_success"][idx].item()):
+            assert bool(batch["is_end_window"][idx].item()) is False
+            assert int(batch["window_end_indices"][idx].item()) <= (
+                int(batch["finish_steps"][idx].item()) - 4
+            )
+
+
 def test_online_replay_training_readiness_requires_each_task() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=3)
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
+from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
 
 def _tiny_chunk_wm(**overrides) -> ChunkAwareWorldModel:
@@ -83,6 +83,7 @@ def test_chunk_wm_source_uses_role_based_wm_wording() -> None:
         Path(__file__).resolve().parents[2]
         / "dreamervla"
         / "models"
+        / "embodiment"
         / "world_model"
         / "wm_chunk.py"
     ).read_text(encoding="utf-8")

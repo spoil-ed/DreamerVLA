@@ -48,7 +48,7 @@ def _assert_openvla_traj1_contract(cfg) -> None:
     assert oft.use_wrist_image is False
     assert oft.use_l1_regression is False
     assert oft.wm_obs_dim == oft.token_count * oft.token_dim
-    assert oft.actor_target == "dreamervla.models.actor.OpenVLADiscreteTokenActor"
+    assert oft.actor_target == "dreamervla.algorithms.actor.OpenVLADiscreteTokenActor"
     assert oft.actor_head_type == "oft_discrete_token"
 
     input_tokens = oft.input_tokens
@@ -95,6 +95,90 @@ def test_openvla_traj1_input_token_dims_are_resolver_expressions(
     assert cfg.task.openvla_oft.num_images_in_input == 1
     assert cfg.task.openvla_oft.input_tokens.token_count == 256
     assert cfg.task.openvla_oft.input_tokens.wm_obs_dim == 256 * 4096
+
+
+def test_standard_h1_classifier_experiment_composes() -> None:
+    cfg = _compose(["experiment=latent_classifier_openvla_onetraj_libero_goal_h1"])
+
+    assert cfg._target_ == "dreamervla.runners.LatentClassifierRunner"
+    assert cfg.task.hdf5_dir.endswith("data/processed_data/libero_goal_no_noops_t_256")
+    assert cfg.task.openvla_oft.input_token_hidden_dir.endswith(
+        "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cfg.task.pretokenize_config_path.endswith(
+        "data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml"
+    )
+    assert cfg.data.success_dir_raw.endswith(
+        "data/processed_data/libero_goal_no_noops_t_256"
+    )
+    assert cfg.data.success_dir_hidden.endswith(
+        "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cfg.data.failure_dir_raw.endswith(
+        "data/processed_data/libero_goal_no_noops_t_256_failures"
+    )
+    assert cfg.data.failure_dir_hidden.endswith(
+        "data/processed_data/libero_goal_no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cfg.data.lang_emb_dir == "__source_hidden__"
+    assert cfg.data.chunk_subsample == cfg.task.openvla_oft.input_tokens.chunk_size == 8
+    assert cfg.data.sampling_protocol == "wmpo"
+    assert cfg.data.balance_batches is True
+    assert cfg.training.loss_type == "bce"
+    assert cfg.training.batch_size == 4
+    assert cfg.training.episode_eval_enabled is True
+    assert cfg.classifier.head_type == "spatial_tf"
+    assert cfg.classifier.output_dim == 1
+    assert cfg.classifier.token_count == 256
+    assert cfg.classifier.latent_dim == 4138
+    assert cfg.classifier.proprio_dim == 8
+    assert cfg.classifier.lang_dim == 4096
+    assert list(cfg.runner.logger.logger_backends) == ["tensorboard"]
+
+
+def test_wmpo_token_h1_classifier_experiment_composes() -> None:
+    cfg = _compose(["experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1"])
+
+    assert cfg._target_ == "dreamervla.runners.LatentClassifierRunner"
+    assert cfg.training.episode_eval_enabled is True
+    assert cfg.training.lr == 3.0e-5
+    assert cfg.classifier.head_type == "spatial_tf"
+    assert cfg.classifier.granularity == "chunk"
+    assert cfg.classifier.output_dim == 1
+    assert cfg.training.loss_type == "bce"
+    assert cfg.data.sampling_protocol == "wmpo"
+    assert cfg.data.balance_batches is True
+    assert cfg.classifier.token_count == cfg.task.openvla_oft.input_tokens.token_count
+    assert cfg.data.success_dir_hidden.endswith(
+        "libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cfg.data.failure_dir_hidden.endswith(
+        "libero_goal_no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
+    )
+
+
+def test_openvla_onetraj_cotrain_noray_uses_wmpo_classifier_protocol() -> None:
+    cfg = _compose(["experiment=openvla_onetraj_libero_cotrain_noray"])
+
+    assert cfg._target_ == "dreamervla.runners.OnlineCotrainPipelineRunner"
+    assert cfg.classifier.output_dim == 1
+    assert cfg.online_rollout.classifier_loss_type == "bce"
+    assert cfg.online_rollout.classifier_sampling_protocol == "wmpo"
+    assert cfg.online_rollout.classifier_balance_batches is True
+    assert cfg.algorithm.lumos.calibrate_threshold is True
+    assert cfg.training.classifier_batch_size % 2 == 0
+
+
+def test_openvla_onetraj_cotrain_ray_uses_wmpo_classifier_protocol() -> None:
+    cfg = _compose(["experiment=openvla_onetraj_libero_cotrain_ray"])
+
+    assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+    assert cfg.ray_components.classifier.kwargs.output_dim == 1
+    assert cfg.learner.train_cfg.classifier_loss_type == "bce"
+    assert cfg.learner.train_cfg.classifier_sampling_protocol == "wmpo"
+    assert cfg.learner.train_cfg.classifier_balance_batches is True
+    assert cfg.learner.train_cfg.classifier_threshold is None
+    assert cfg.learner.train_cfg.classifier_batch_size % 2 == 0
 
 
 @pytest.mark.parametrize("_offline_task,coldstart_task,suite", MATRIX)

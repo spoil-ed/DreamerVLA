@@ -5,7 +5,7 @@ Launch path:
         → python -m dreamervla.train --config-name train experiment=latent_classifier_libero_goal_chunk
             → dreamervla.runners.LatentClassifierRunner.run()
                 → dreamervla.dataset.lumos_aligned_latent_dataset
-                → dreamervla.models.reward.LatentSuccessClassifier
+                → dreamervla.algorithms.critic.LatentSuccessClassifier
 
 Why a dedicated runner, not another standalone script:
   * The existing v3 / wm_replay classifier scripts are 500+ lines each and bypass
@@ -18,12 +18,12 @@ Why a dedicated runner, not another standalone script:
 The training loop is epoch-based:
   * Resampled train loader → ``cfg.training.num_epochs`` passes, default 20
   * Eval every ``cfg.training.eval_every`` steps; window F1 + (optional) episode F1
-  * Best ckpt saved by val window F1 (sigmoid + threshold sweep, LUMOS protocol)
+  * Best ckpt saved by val window F1 (softmax + threshold sweep, LUMOS protocol)
   * Final ckpt saved after the last epoch
 
-Window-level F1 uses sigmoid + threshold sweep to mirror LUMOS's
-``_evaluate_terminal_model`` (note: LUMOS sweep is [0.3, 1.0]; we expose the bounds
-via cfg). Episode-level F1 mirrors ``predict_success`` (stride-1 sliding window +
+Window-level F1 uses softmax + threshold sweep to mirror ``predict_success``
+(note: LUMOS sweep is [0.3, 1.0]; we expose the bounds via cfg).
+Episode-level F1 mirrors ``predict_success`` (stride-1 sliding window +
 ``any-positive`` aggregation).
 
 The runner owns resume, checkpointing, logging, and Hydra override behavior so
@@ -41,6 +41,7 @@ import hydra
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
@@ -48,7 +49,7 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
     LumosAlignedLatentValDataset,
 )
-from dreamervla.models.reward import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamervla.algorithms.critic import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
 
@@ -92,6 +93,60 @@ def _classifier_forward_kwargs(
     return kwargs
 
 
+def _success_probabilities_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    if logits.ndim != 2:
+        raise ValueError(f"classifier logits must be [B,C], got {tuple(logits.shape)}")
+    if int(logits.shape[-1]) == 1:
+        return torch.sigmoid(logits.squeeze(-1))
+    if int(logits.shape[-1]) == 2:
+        return torch.softmax(logits, dim=-1)[:, 1]
+    raise ValueError(f"classifier logits last dim must be 1 or 2, got {logits.shape[-1]}")
+
+
+def _classifier_loss_and_predictions(
+    logits: torch.Tensor,
+    ys: torch.Tensor,
+    *,
+    loss_type: str,
+    label_smoothing: float,
+    class_weight: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    loss_type = str(loss_type)
+    if loss_type == "bce":
+        if int(logits.shape[-1]) != 1:
+            raise ValueError("BCE classifier loss requires output_dim=1")
+        targets = ys.to(dtype=logits.dtype)
+        if label_smoothing:
+            eps = float(label_smoothing)
+            targets = targets * (1.0 - eps) + 0.5 * eps
+        pos_weight = None
+        if class_weight is not None:
+            if int(class_weight.numel()) == 2:
+                pos_weight = class_weight[1].reshape(())
+            elif int(class_weight.numel()) == 1:
+                pos_weight = class_weight.reshape(())
+            else:
+                raise ValueError("BCE class_weight must have one or two elements")
+        loss = F.binary_cross_entropy_with_logits(
+            logits.squeeze(-1),
+            targets,
+            pos_weight=pos_weight,
+        )
+        pred = (_success_probabilities_from_logits(logits) >= 0.5).long()
+        return loss, pred
+    if loss_type == "ce":
+        if int(logits.shape[-1]) != 2:
+            raise ValueError("CE classifier loss requires output_dim=2")
+        loss = F.cross_entropy(
+            logits,
+            ys.long(),
+            weight=class_weight,
+            label_smoothing=float(label_smoothing),
+        )
+        return loss, logits.argmax(dim=-1)
+    raise ValueError(f"unknown classifier loss_type {loss_type!r} (bce|ce)")
+
+
 class LatentClassifierRunner(BaseRunner):
     """Single-GPU epoch-based trainer for LatentSuccessClassifier.
 
@@ -116,6 +171,8 @@ class LatentClassifierRunner(BaseRunner):
         self.optim: torch.optim.Optimizer | None = None
         self.best_window_f1: float = -1.0
         self.best_episode_f1: float = -1.0
+        self.best_window_ckpt_path: str | None = None
+        self.best_episode_ckpt_path: str | None = None
         self._log_path: pathlib.Path | None = None
 
     # --------------------------- setup ---------------------------------
@@ -151,6 +208,8 @@ class LatentClassifierRunner(BaseRunner):
         # (action) granularity for backwards compatibility.
         chunk_subsample = int(OmegaConf.select(d, "chunk_subsample") or 1)
         chunk_pool = str(OmegaConf.select(d, "chunk_pool") or "last")
+        sampling_protocol = str(OmegaConf.select(d, "sampling_protocol") or "lumos")
+        balance_batches = bool(OmegaConf.select(d, "balance_batches") or False)
         self.train_ds = LumosAlignedLatentTrainDataset(
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
@@ -164,6 +223,8 @@ class LatentClassifierRunner(BaseRunner):
             proprio_keys=OmegaConf.select(d, "proprio_keys", default=None),
             lang_emb_dir=OmegaConf.select(d, "lang_emb_dir", default=None),
             lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
+            sampling_protocol=sampling_protocol,
+            balance_batches=balance_batches,
         )
         self.val_ds = LumosAlignedLatentValDataset(
             success_dir_raw=d.success_dir_raw,
@@ -177,10 +238,26 @@ class LatentClassifierRunner(BaseRunner):
             proprio_keys=OmegaConf.select(d, "proprio_keys", default=None),
             lang_emb_dir=OmegaConf.select(d, "lang_emb_dir", default=None),
             lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
+            sampling_protocol=sampling_protocol,
         )
+        self._log(self._dataset_summary_payload("train", self.train_ds))
+        self._log(self._dataset_summary_payload("val", self.val_ds))
 
         # ----- dataloaders -----------------------------------------------
         tr = self.cfg.training
+        if sampling_protocol == "wmpo" and balance_batches and int(tr.batch_size) % 2:
+            raise ValueError(
+                "WMPO batch-balanced sampling requires an even training.batch_size"
+            )
+        if (
+            sampling_protocol == "wmpo"
+            and balance_batches
+            and int(OmegaConf.select(tr, "num_workers") or 0) != 0
+        ):
+            raise ValueError(
+                "WMPO batch-balanced sampling requires training.num_workers=0 "
+                "so consecutive positive/negative samples form exact batches"
+            )
         self.train_loader = DataLoader(
             self.train_ds,
             batch_size=int(tr.batch_size),
@@ -205,6 +282,11 @@ class LatentClassifierRunner(BaseRunner):
         valid_keys = LatentSuccessClassifierConfig.__dataclass_fields__.keys()
         cfg_dict = {k: v for k, v in cfg_dict.items() if k in valid_keys}
         cls_cfg = LatentSuccessClassifierConfig(**cfg_dict)
+        loss_type_for_cfg = str(OmegaConf.select(self.cfg, "training.loss_type") or "ce")
+        if loss_type_for_cfg == "bce" and int(cls_cfg.output_dim) != 1:
+            raise ValueError("training.loss_type=bce requires classifier.output_dim=1")
+        if loss_type_for_cfg == "ce" and int(cls_cfg.output_dim) != 2:
+            raise ValueError("training.loss_type=ce requires classifier.output_dim=2")
         if int(cls_cfg.window) != int(d.window):
             raise ValueError(
                 f"classifier.window ({cls_cfg.window}) != data.window ({d.window})"
@@ -264,6 +346,12 @@ class LatentClassifierRunner(BaseRunner):
 
     # --------------------------- run -----------------------------------
 
+    @staticmethod
+    def _dataset_summary_payload(split: str, dataset: object) -> dict[str, object]:
+        summary_fn = getattr(dataset, "summary", None)
+        summary = summary_fn() if callable(summary_fn) else {}
+        return {"event": "dataset_summary", "split": str(split), **dict(summary)}
+
     def run(self) -> dict[str, float]:
         assert self.model is not None and self.optim is not None
         assert self.train_loader is not None and self.val_loader is not None
@@ -279,6 +367,7 @@ class LatentClassifierRunner(BaseRunner):
             steps_per_epoch_cfg if steps_per_epoch_cfg > 0 else max(1, len(self.train_loader))
         )
         label_smoothing = float(OmegaConf.select(tr, "label_smoothing") or 0.0)
+        loss_type = str(OmegaConf.select(tr, "loss_type") or "ce")
 
         # class-balanced CE (matches LUMOS `nn.CrossEntropyLoss()` *unweighted* by
         # default; user can flip via cfg.training.class_balanced)
@@ -297,8 +386,6 @@ class LatentClassifierRunner(BaseRunner):
             )
         else:
             cw = None
-        loss_fn = nn.CrossEntropyLoss(weight=cw, label_smoothing=label_smoothing)
-
         running_loss = 0.0
         running_correct = 0
         running_total = 0
@@ -318,7 +405,13 @@ class LatentClassifierRunner(BaseRunner):
 
                 self.model.train()
                 logits = self.model(xs, **forward_kwargs)
-                loss = loss_fn(logits, ys)
+                loss, pred = _classifier_loss_and_predictions(
+                    logits,
+                    ys,
+                    loss_type=loss_type,
+                    label_smoothing=label_smoothing,
+                    class_weight=cw,
+                )
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 grad_norm = float(
@@ -327,7 +420,6 @@ class LatentClassifierRunner(BaseRunner):
                 self.optim.step()
 
                 with torch.no_grad():
-                    pred = logits.argmax(dim=-1)
                     running_correct += int((pred == ys).sum().item())
                     running_total += int(ys.numel())
                 running_loss += float(loss.item())
@@ -398,6 +490,8 @@ class LatentClassifierRunner(BaseRunner):
         summary = {
             "best_window_f1": self.best_window_f1,
             "best_episode_f1": self.best_episode_f1,
+            "best_window_ckpt_path": self.best_window_ckpt_path,
+            "best_episode_ckpt_path": self.best_episode_ckpt_path,
             "total_steps": int(self.global_step),
             "total_epochs": int(self.epoch),
             "wall_s": time.time() - t0,
@@ -411,11 +505,10 @@ class LatentClassifierRunner(BaseRunner):
 
     @torch.no_grad()
     def _evaluate_window_level(self) -> dict[str, Any]:
-        """Sigmoid + threshold sweep over softmax(logits)[:, 1].
+        """Softmax + threshold sweep over the positive class.
 
-        Mirrors LUMOS's _evaluate_terminal_model: P(success) = sigmoid(logit_class_1).
-        (Equivalent decision boundary at high thresholds to softmax-based, but
-        we use sigmoid here for 1:1 parity with LUMOS's eval protocol.)
+        Keep this aligned with ``LatentSuccessClassifier.predict_success`` and
+        the two-class CE objective used during training.
         """
         assert self.model is not None and self.val_loader is not None
         self.model.eval()
@@ -438,8 +531,7 @@ class LatentClassifierRunner(BaseRunner):
                 self.model, extra, self.device
             )
             logits = self.model(xs, **forward_kwargs)
-            # LUMOS uses sigmoid(logits)[:, 1] — see LUMOS/verl/.../fsdp_workers.py:847
-            probs = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
+            probs = _success_probabilities_from_logits(logits).detach().cpu().numpy()
             probs_l.extend(probs.tolist())
             ys_l.extend(ys.tolist())
         probs = np.asarray(probs_l, dtype=np.float32)
@@ -473,7 +565,7 @@ class LatentClassifierRunner(BaseRunner):
         W = int(self.cfg.data.window)
         min_steps = int(OmegaConf.select(tr, "episode_eval_min_steps") or 0)
         stride = int(OmegaConf.select(tr, "episode_eval_stride") or 1)
-        ep_batch = int(OmegaConf.select(tr, "episode_eval_batch") or 256)
+        ep_batch = max(1, int(OmegaConf.select(tr, "episode_eval_batch") or 256))
 
         K = int(getattr(self.val_ds, "K", 1))
         chunk_pool = str(getattr(self.val_ds, "chunk_pool", "last"))
@@ -482,12 +574,43 @@ class LatentClassifierRunner(BaseRunner):
         ep_max_prob: list[float] = []
         ep_true: list[int] = []
 
-        # Collect all windows from all episodes into flat batches, tagged
-        # with episode idx; aggregate max per episode.
+        # Stream windows through the classifier in small batches. Token-grid
+        # episodes are large, so materializing every episode window before the
+        # first forward pass makes episode eval CPU-bound and memory-hungry.
         flat_xs: list[np.ndarray] = []
         flat_proprio: list[np.ndarray] = []
         flat_lang: list[np.ndarray] = []
         flat_ep: list[int] = []
+
+        def flush_windows() -> None:
+            if not flat_xs:
+                return
+            if flat_proprio and len(flat_proprio) != len(flat_xs):
+                raise ValueError("episode eval proprio windows are incomplete")
+            if flat_lang and len(flat_lang) != len(flat_xs):
+                raise ValueError("episode eval language windows are incomplete")
+            chunk = np.stack(flat_xs)
+            extra: dict[str, torch.Tensor] = {}
+            if flat_proprio:
+                extra["proprio"] = torch.from_numpy(np.stack(flat_proprio)).float()
+            if flat_lang:
+                extra["lang_emb"] = torch.from_numpy(np.stack(flat_lang)).float()
+            forward_kwargs = _classifier_forward_kwargs(
+                self.model, extra, self.device
+            )
+            logits = self.model(
+                torch.from_numpy(chunk).float().to(self.device),
+                **forward_kwargs,
+            )
+            p = _success_probabilities_from_logits(logits).detach().cpu().numpy()
+            for eid, pj in zip(flat_ep, p, strict=True):
+                if pj > ep_max_prob[eid]:
+                    ep_max_prob[eid] = float(pj)
+            flat_xs.clear()
+            flat_proprio.clear()
+            flat_lang.clear()
+            flat_ep.clear()
+
         for ep_idx, trajectory in enumerate(self.val_ds.trajectories()):
             if len(trajectory) == 5:
                 obs, complete, finish_step, _eid, extra = trajectory
@@ -544,38 +667,9 @@ class LatentClassifierRunner(BaseRunner):
                 if isinstance(lang_emb, np.ndarray):
                     flat_lang.append(lang_emb)
                 flat_ep.append(ep_idx)
-
-        if flat_xs:
-            if flat_proprio and len(flat_proprio) != len(flat_xs):
-                raise ValueError("episode eval proprio windows are incomplete")
-            if flat_lang and len(flat_lang) != len(flat_xs):
-                raise ValueError("episode eval language windows are incomplete")
-            i = 0
-            n = len(flat_xs)
-            while i < n:
-                chunk = np.stack(flat_xs[i : i + ep_batch])
-                extra: dict[str, torch.Tensor] = {}
-                if flat_proprio:
-                    extra["proprio"] = torch.from_numpy(
-                        np.stack(flat_proprio[i : i + ep_batch])
-                    ).float()
-                if flat_lang:
-                    extra["lang_emb"] = torch.from_numpy(
-                        np.stack(flat_lang[i : i + ep_batch])
-                    ).float()
-                forward_kwargs = _classifier_forward_kwargs(
-                    self.model, extra, self.device
-                )
-                logits = self.model(
-                    torch.from_numpy(chunk).float().to(self.device),
-                    **forward_kwargs,
-                )
-                p = torch.sigmoid(logits)[:, 1].detach().cpu().numpy()
-                for j, pj in enumerate(p):
-                    eid = flat_ep[i + j]
-                    if pj > ep_max_prob[eid]:
-                        ep_max_prob[eid] = float(pj)
-                i += ep_batch
+                if len(flat_xs) >= ep_batch:
+                    flush_windows()
+        flush_windows()
 
         # placeholder -1.0 → 0.0 (too-short episodes)
         ep_max_prob = [max(0.0, p) for p in ep_max_prob]
@@ -614,6 +708,10 @@ class LatentClassifierRunner(BaseRunner):
                 if isinstance(v, dict):
                     f1 = float(v.get("best_f1", f1))
                     threshold = float(v.get("best_thresh", threshold))
+                    if k == "val_episode":
+                        self.best_episode_ckpt_path = str(path)
+                    else:
+                        self.best_window_ckpt_path = str(path)
                     break
         torch.save(
             {

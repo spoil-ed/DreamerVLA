@@ -1,9 +1,9 @@
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256
 out_dir: null
-image_keys: [agentview_rgb, eye_in_hand_rgb]
+image_keys: [agentview_rgb]
 prompt_style: vla_policy
-history: 2
-include_state: true
+history: 1
+include_state: false
 rotate_images_180: true
 hidden_key: obs_embedding
 obs_hidden_source: action_query

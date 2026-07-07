@@ -336,6 +336,29 @@ def test_actor_run_training_backprops_each_step_before_next_forward() -> None:
     assert probe.active == 0
 
 
+def test_actor_run_training_applies_behavior_kl_anchor_when_advantages_are_zero() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["lr"] = 0.1
+    cfg["train_cfg"]["algorithm_cfg"]["kl_coef"] = 1.0
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    probe = _OutstandingGraphProbe()
+    policy = _GraphProbePolicy(probe)
+    with torch.no_grad():
+        policy.logprob.fill_(1.0)
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
+
+    actor.load_trajectory_shards([_shard(0.0, 0.0)])
+    actor.compute_advantages_and_returns()
+    before = float(policy.logprob.detach().cpu())
+    metrics = actor.run_training()
+
+    assert float(policy.logprob.detach().cpu()) < before
+    assert metrics["actor/behavior_kl_mean"] > 0.0
+    assert metrics["actor/kl_coef"] == 1.0
+
+
 def test_actor_run_training_backprops_zero_loss_for_global_padded_steps(
     monkeypatch,
 ) -> None:

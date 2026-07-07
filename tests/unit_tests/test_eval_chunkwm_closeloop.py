@@ -7,12 +7,12 @@ from dreamervla.diagnostics.eval_chunkwm_closeloop import (
     load_chunk_wm,
     truncate_demo_to_wm_context,
 )
-from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
+from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
 
 def _tiny_wm_cfg() -> dict:
     return {
-        "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
+        "_target_": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
         "chunk_size": 2,
         "obs_dim": 8,
         "action_dim": 2,

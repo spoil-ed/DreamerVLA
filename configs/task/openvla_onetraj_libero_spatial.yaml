@@ -14,8 +14,8 @@ pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/d
 
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
-rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h1
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h1
 
 openvla_oft:
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
@@ -52,16 +52,16 @@ openvla_oft:
   wm_sequence_length: 36
   latent_stage: query_after
   latent_source: OpenVLA-OFT discrete action-query hidden [56,4096]
-  sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
+  sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
-  wm_target: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
-  classifier_target: dreamervla.models.reward.LatentSuccessClassifier
-  actor_target: dreamervla.models.actor.OpenVLADiscreteTokenActor
+  wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
+  classifier_target: dreamervla.algorithms.critic.LatentSuccessClassifier
+  actor_target: dreamervla.algorithms.actor.OpenVLADiscreteTokenActor
   actor_head_type: oft_discrete_token
   actor_adapter_type: residual_mlp
   actor_adapter_hidden_dim: 1024
   actor_freeze_lm_head: true
-  critic_target: dreamervla.models.critic.twohot_critic.TwohotCritic
+  critic_target: dreamervla.algorithms.critic.twohot_critic.TwohotCritic
   vocab_size: 32000
   action_token_bins: 256
   min_action: -1.0

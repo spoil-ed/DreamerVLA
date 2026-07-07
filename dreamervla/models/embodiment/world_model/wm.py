@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dreamervla.models.world_model.base_world_model import BaseWorldModel
+from dreamervla.models.embodiment.world_model.base_world_model import BaseWorldModel
 
 
 class WorldModel(BaseWorldModel):

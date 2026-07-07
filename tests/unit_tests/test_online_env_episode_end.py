@@ -23,15 +23,14 @@ def test_episode_end_marks_max_steps_failure_as_timeout_not_terminal() -> None:
 
 def test_online_env_wrappers_use_shared_episode_end_logic() -> None:
     repo = Path(__file__).resolve().parents[2]
-    train_env = (repo / "dreamervla/envs/train_env.py").read_text(encoding="utf-8")
-    libero_online_env = (repo / "dreamervla/envs/libero_online_env.py").read_text(
+    libero_env = (repo / "dreamervla/envs/libero/libero_env.py").read_text(
         encoding="utf-8"
     )
 
-    assert "from dreamervla.utils.episode_end import resolve_episode_end" in train_env
-    assert "DreamerVLAOnlineTrainEnv" in libero_online_env
-    assert "episode_end = resolve_episode_end" in train_env
-    assert "episode_end = resolve_episode_end" not in libero_online_env
+    assert "from dreamervla.utils.episode_end import resolve_episode_end" in libero_env
+    assert "DreamerVLAOnlineTrainEnv" in libero_env
+    assert "LIBEROOnlineEnv" in libero_env
+    assert "episode_end = resolve_episode_end" in libero_env
 
 
 def test_online_training_script_separates_episode_horizon_from_training_budget() -> (

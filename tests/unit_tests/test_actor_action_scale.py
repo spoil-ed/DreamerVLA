@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import _actor_action_for_world_model
 from dreamervla.algorithms.ppo.outcome import dino_lumos_step
-from dreamervla.envs.train_env import unnormalize_libero_action
+from dreamervla.envs.libero.libero_env import unnormalize_libero_action
 
 
 def test_env_and_world_model_action_scale_mapping_match():

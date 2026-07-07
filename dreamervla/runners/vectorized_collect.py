@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from dreamervla.envs.image_utils import resize_hwc_uint8
+from dreamervla.envs.libero.utils import resize_hwc_uint8
 from dreamervla.runners.oft_collect_common import sidecar_to_numpy
 from dreamervla.utils.progress import AggregateProgress
 

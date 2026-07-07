@@ -8,11 +8,11 @@ skip_cd_sidecars: false
 oft_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal
 unnorm_key: libero_goal_no_noops
 policy_mode: auto
-image_keys: [agentview_rgb, eye_in_hand_rgb]
-num_images_in_input: null
-include_state: true
+image_keys: [agentview_rgb]
+num_images_in_input: 1
+include_state: false
 center_crop: true
-history: 2
+history: 1
 rotate_images_180: true
 resolution: 256
 prompt_style: vla_policy

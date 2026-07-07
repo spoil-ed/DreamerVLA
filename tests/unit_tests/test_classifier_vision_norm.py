@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from dreamervla.models.reward.latent_success_classifier import LatentSuccessClassifier
+from dreamervla.algorithms.critic.latent_success_classifier import LatentSuccessClassifier
 
 
 def _spatial(**kw):

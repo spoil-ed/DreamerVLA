@@ -15,7 +15,7 @@ class _TinyWM(torch.nn.Module):
 
 class _TinyClassifier(torch.nn.Module):
     def forward(self, latent):
-        return latent.sum(dim=-1, keepdim=True)
+        return {"score": latent.sum(dim=-1, keepdim=True)}
 
 
 class _ChunkWM(torch.nn.Module):
@@ -80,6 +80,11 @@ class _ZeroTwoClassClassifier(torch.nn.Module):
         return torch.zeros(latent.shape[0], 2, device=latent.device)
 
 
+class _ZeroOneLogitClassifier(torch.nn.Module):
+    def forward(self, latent):
+        return torch.zeros(latent.shape[0], 1, device=latent.device)
+
+
 class _MalformedDictClassifier(torch.nn.Module):
     def forward(self, latent):
         return {"unknown": torch.zeros(latent.shape[0], 1, device=latent.device)}
@@ -129,6 +134,26 @@ def test_latent_world_model_env_converts_two_class_logits_to_success_probability
     env = LatentWorldModelEnv(
         world_model=_TinyWM(),
         classifier=_ZeroTwoClassClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=0.5,
+    )
+
+    env.reset()
+    _next_obs, reward, terminated, truncated, info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+
+    assert reward == pytest.approx(0.5)
+    assert info["success_score"] == pytest.approx(0.5)
+    assert terminated is True
+    assert truncated is False
+
+
+def test_latent_world_model_env_converts_single_logit_to_success_probability():
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_ZeroOneLogitClassifier(),
         latent_dim=2,
         action_dim=2,
         success_threshold=0.5,

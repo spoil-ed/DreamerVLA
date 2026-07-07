@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.models.embodiment.chameleon_model import chameleon_vae_ori
-from dreamervla.models.encoder.rynnvla_image_ops import (
+from dreamervla.models.embodiment.rynnvla_image_ops import (
     generate_crop_size_list,
     var_center_crop,
 )

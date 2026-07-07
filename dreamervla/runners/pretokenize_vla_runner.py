@@ -117,7 +117,7 @@ def _apply_libero_eval_render_regime(root_cfg: DictConfig, eval_cfg: Any) -> Non
     apply_libero_render_regime(backend, shard_id, gpu_pool)
 
 
-def build_chunk_env_cfg(
+def build_libero_env_cfg(
     eval_cfg: Any,
     *,
     task_ids: list[int],
@@ -126,11 +126,11 @@ def build_chunk_env_cfg(
     seed: int,
     resolution: int,
 ) -> DictConfig:
-    """Assemble the LiberoChunkEnv DictConfig from the Hydra eval block."""
-    chunk_cfg = OmegaConf.select(eval_cfg, "chunk_env", default=None)
-    if chunk_cfg is None:
+    """Assemble the LiberoEnv DictConfig from the Hydra eval block."""
+    libero_env_cfg = OmegaConf.select(eval_cfg, "libero_env", default=None)
+    if libero_env_cfg is None:
         raise ValueError(
-            "eval.chunk_env config block is required for eval.scheme=rlinf_chunk"
+            "eval.libero_env config block is required for eval.scheme=rlinf_chunk"
         )
     return OmegaConf.create(
         {
@@ -138,15 +138,15 @@ def build_chunk_env_cfg(
                 OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
             ),
             "seed": int(seed),
-            "group_size": int(chunk_cfg.group_size),
+            "group_size": int(libero_env_cfg.group_size),
             "is_eval": True,
             "use_fixed_reset_state_ids": True,
             "use_ordered_reset_state_ids": True,
-            "auto_reset": bool(chunk_cfg.auto_reset),
-            "ignore_terminations": bool(chunk_cfg.ignore_terminations),
+            "auto_reset": bool(libero_env_cfg.auto_reset),
+            "ignore_terminations": bool(libero_env_cfg.ignore_terminations),
             "max_episode_steps": int(max_steps),
-            "reset_wait_steps": int(chunk_cfg.reset_wait_steps),
-            "reset_gripper_open": bool(chunk_cfg.reset_gripper_open),
+            "reset_wait_steps": int(libero_env_cfg.reset_wait_steps),
+            "reset_gripper_open": bool(libero_env_cfg.reset_gripper_open),
             "use_rel_reward": False,
             "use_step_penalty": False,
             "reward_coef": 1.0,
@@ -529,7 +529,7 @@ class PretokenizeVLARunner(BaseRunner):
             save_rollout_video,
             select_libero_action_chunk,
         )
-        from dreamervla.envs.libero_env import build_libero_eval_record
+        from dreamervla.envs.libero.utils import build_libero_eval_record
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
@@ -595,42 +595,27 @@ class PretokenizeVLARunner(BaseRunner):
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         num_envs = int(OmegaConf.select(eval_cfg, "num_envs", default=1))
-        scheme = str(OmegaConf.select(eval_cfg, "scheme", default="slots")).strip().lower()
-        if scheme not in ("slots", "rlinf_chunk"):
+        scheme = str(
+            OmegaConf.select(eval_cfg, "scheme", default="rlinf_chunk")
+        ).strip().lower()
+        if scheme != "rlinf_chunk":
             raise ValueError(
-                f"eval.scheme must be 'slots' or 'rlinf_chunk', got {scheme!r}"
+                f"eval.scheme must be 'rlinf_chunk', got {scheme!r}"
             )
-        if num_envs > 1 and scheme == "rlinf_chunk":
-            return self._evaluate_libero_rlinf_chunk(
-                epoch=epoch,
-                eval_cfg=eval_cfg,
-                backbone=backbone,
-                item_processor=item_processor,
-                task_ids=task_ids,
-                num_episodes=num_episodes,
-                max_steps=max_steps,
-                action_steps=action_steps,
-                history_length=history_length,
-                resolution=resolution,
-                seed=seed,
-                num_envs=num_envs,
-            )
-        if num_envs > 1:
-            return self._evaluate_libero_parallel(
-                epoch=epoch,
-                eval_cfg=eval_cfg,
-                backbone=backbone,
-                item_processor=item_processor,
-                task_ids=task_ids,
-                num_episodes=num_episodes,
-                max_steps=max_steps,
-                action_steps=action_steps,
-                history_length=history_length,
-                resolution=resolution,
-                seed=seed,
-                num_steps_wait=num_steps_wait,
-                num_envs=num_envs,
-            )
+        return self._evaluate_libero_rlinf_chunk(
+            epoch=epoch,
+            eval_cfg=eval_cfg,
+            backbone=backbone,
+            item_processor=item_processor,
+            task_ids=task_ids,
+            num_episodes=num_episodes,
+            max_steps=max_steps,
+            action_steps=action_steps,
+            history_length=history_length,
+            resolution=resolution,
+            seed=seed,
+            num_envs=num_envs,
+        )
 
         total_episodes, total_successes = 0, 0
         task_records: list[dict[str, int]] = []
@@ -818,155 +803,6 @@ class PretokenizeVLARunner(BaseRunner):
         """
         return None
 
-    def _evaluate_libero_parallel(
-        self,
-        *,
-        epoch: int,
-        eval_cfg: Any,
-        backbone: Any,
-        item_processor: Any,
-        task_ids: list[int],
-        num_episodes: int,
-        max_steps: int,
-        action_steps: int,
-        history_length: int,
-        resolution: int,
-        seed: int,
-        num_steps_wait: int,
-        num_envs: int,
-    ) -> dict[str, float]:
-        """Parallel osmesa LIBERO eval: K subprocess envs stepped in lockstep.
-
-        Per-episode success is identical to the sequential path: each slot
-        reproduces the same frame-history/padded construction, calls the same
-        ``_generate_actions``, and feeds ``env.step`` the same (non-gripper-
-        processed) ``action.tolist()`` for the same ``(task, init_state)``. Only
-        the render regime (K osmesa subprocesses vs one in-process env) differs.
-        """
-        from dreamervla.envs import select_libero_action_chunk
-        from dreamervla.envs.libero_eval_env import make_libero_eval_env
-        from dreamervla.runners.libero_rollout_runner import (
-            SuccessTally,
-            build_grid_work_list,
-            run_vectorized_rollout,
-        )
-        from dreamervla.runners.vec_rollout_env import VecRolloutEnv
-
-        render_backend, render_shard_id, render_gpu_pool = _eval_render_regime_params(
-            self.cfg, eval_cfg
-        )
-        task_suite_name = str(
-            OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
-        )
-        reconfigure_per_episode = bool(
-            OmegaConf.select(eval_cfg, "reconfigure_per_episode", default=False)
-        )
-        cfg_kwargs = {
-            "task_suite_name": task_suite_name,
-            "resolution": int(resolution),
-            "seed": int(seed),
-            "num_steps_wait": int(num_steps_wait),
-            "max_steps": int(max_steps),
-            "reconfigure_per_episode": reconfigure_per_episode,
-            "_libero_render_backend": str(render_backend).strip().lower(),
-            "_libero_render_gpu_pool": list(render_gpu_pool or []),
-            "_libero_render_shard_id": int(render_shard_id),
-        }
-        env_vars = {
-            key: os.environ[key]
-            for key in (
-                "DVLA_DATA_ROOT",
-                "LIBERO_CONFIG_PATH",
-                "MUJOCO_GL",
-                "PYOPENGL_PLATFORM",
-            )
-            if key in os.environ
-        }
-
-        work_list = build_grid_work_list(task_ids, num_episodes)
-        n_slots = min(int(num_envs), len(work_list))
-
-        def _pop_eval_action(action_chunk: Any, action_queue: list, steps: int) -> Any:
-            # Byte-identical to the sequential replan: select_libero_action_chunk
-            # slices/asserts the chunk, one action pops per step, and env.step gets
-            # action.tolist() with NO OFT gripper post-process (the sequential
-            # RynnVLA eval does not gripper-process its actions).
-            if not action_queue:
-                action_queue.extend(select_libero_action_chunk(action_chunk, steps))
-            return np.asarray(action_queue.pop(0)).tolist()
-
-        def _infer_fn(preps: list[dict]) -> list[_EvalInferResult]:
-            outs: list[_EvalInferResult] = []
-            for prep in preps:
-                # Set the single per-step raw-obs attribute right before this
-                # slot's generate call. infer_fn processes slots one-at-a-time,
-                # so this is the current raw obs for the slot being generated.
-                # Required by the OFT base override; harmless for RynnVLA.
-                self._libero_current_raw_obs = prep.get("raw_obs")
-                # Thread this slot's OWN OFT extractor + env_step onto the shared
-                # self.* shims the OFT base override reads, so the override runs
-                # per-slot-isolated (no cross-slot history/context). RynnVLA slots
-                # carry oft_extractor=None and leave these shims untouched.
-                oft_extractor = prep.get("oft_extractor")
-                if oft_extractor is not None:
-                    self._base_oft_extractor = oft_extractor
-                    self._libero_current_eval_context = {
-                        "env_step": int(prep.get("env_step", 0))
-                    }
-                predicted = self._generate_actions(
-                    backbone,
-                    item_processor,
-                    prep["padded"],
-                    prep["state"],
-                    prep["task_description"],
-                    action_steps,
-                )
-                outs.append(_EvalInferResult(predicted))
-            return outs
-
-        tally = SuccessTally()
-        run_t0 = time.time()
-        print(
-            f"  [Eval] parallel osmesa rollout: num_envs={n_slots} "
-            f"episodes={len(work_list)} render_backend={render_backend}",
-            flush=True,
-        )
-        with VecRolloutEnv(
-            num_envs=n_slots,
-            cfg_kwargs=cfg_kwargs,
-            env_vars=env_vars,
-            factory=make_libero_eval_env,
-        ) as vec_env:
-            extractors = [
-                _EvalFrameHistoryExtractor(history_length) for _ in range(n_slots)
-            ]
-            # OFT base eval only: give each slot its own OFT extractor so the K
-            # slots do not share one frame deque. Returns None for RynnVLA.
-            for slot_extractor in extractors:
-                oft_slot = self._make_parallel_oft_slot_extractor()
-                if oft_slot is not None:
-                    slot_extractor.attach_oft_extractor(oft_slot)
-            run_vectorized_rollout(
-                vec_env,
-                extractors,
-                _infer_fn,
-                work_list,
-                episode_horizon=max_steps,
-                on_episode=tally.on_episode,
-                action_steps=action_steps,
-                pop_action=_pop_eval_action,
-            )
-
-        metrics = tally.summarize(episodes_per_task=num_episodes)
-        avg_success = float(metrics["eval_success_rate"])
-        run_dt = time.time() - run_t0
-        print(
-            f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
-            f"(parallel num_envs={n_slots}) total_time={run_dt:.1f}s",
-            flush=True,
-        )
-        return metrics
-
     def _evaluate_libero_rlinf_chunk(
         self,
         *,
@@ -991,7 +827,7 @@ class PretokenizeVLARunner(BaseRunner):
         import math
 
         from dreamervla.envs import select_libero_action_chunk
-        from dreamervla.envs.libero_chunk_env import LiberoChunkEnv
+        from dreamervla.envs.libero.libero_env import LiberoEnv
         from dreamervla.runners.libero_chunk_eval import run_rlinf_chunk_eval
 
         # Render regime was already applied in-process by evaluate_libero
@@ -1013,33 +849,14 @@ class PretokenizeVLARunner(BaseRunner):
                 slot_extractor.attach_oft_extractor(oft_slot)
                 has_oft = True
         if int(history_length) > 1 and not has_oft:
-            # Chunk-cadence prepare() sees one frame per chunk, not per step, so
-            # a real multi-frame history diverges from the sequential oracle.
-            # The OFT base path ignores frame_history (raw obs + own extractor).
-            print(
-                "  [Eval] eval.scheme=rlinf_chunk needs history_length==1 for "
-                "non-OFT policies; falling back to the slots scheme.",
-                flush=True,
-            )
-            return self._evaluate_libero_parallel(
-                epoch=epoch,
-                eval_cfg=eval_cfg,
-                backbone=backbone,
-                item_processor=item_processor,
-                task_ids=task_ids,
-                num_episodes=num_episodes,
-                max_steps=max_steps,
-                action_steps=action_steps,
-                history_length=history_length,
-                resolution=resolution,
-                seed=seed,
-                num_steps_wait=int(
-                    OmegaConf.select(eval_cfg, "num_steps_wait", default=10)
-                ),
-                num_envs=num_envs,
+            raise ValueError(
+                "eval.scheme=rlinf_chunk requires eval.history_length==1 for "
+                "non-OFT policies. OFT base eval provides per-slot extractor history; "
+                "other policies must use history_length=1 until they implement the "
+                "same chunk-cadence extractor contract."
             )
 
-        env_cfg = build_chunk_env_cfg(
+        env_cfg = build_libero_env_cfg(
             eval_cfg,
             task_ids=task_ids,
             num_episodes=num_episodes,
@@ -1050,7 +867,7 @@ class PretokenizeVLARunner(BaseRunner):
         n_chunk_steps = math.ceil(int(max_steps) / int(action_steps))
         num_epochs = math.ceil(total_episodes / n_envs)
 
-        chunk_env_ref: list[Any] = [None]
+        libero_env_ref: list[Any] = [None]
 
         def _policy_fn(obs: dict) -> np.ndarray:
             chunks = []
@@ -1061,9 +878,9 @@ class PretokenizeVLARunner(BaseRunner):
                         "wrist_image": obs["wrist_images"][i],
                         "state": obs["states"][i],
                         "raw_obs": (
-                            chunk_env_ref[0].current_raw_obs[i]
-                            if chunk_env_ref[0] is not None
-                            and chunk_env_ref[0].current_raw_obs is not None
+                            libero_env_ref[0].current_raw_obs[i]
+                            if libero_env_ref[0] is not None
+                            and libero_env_ref[0].current_raw_obs is not None
                             else None
                         ),
                     },
@@ -1107,10 +924,10 @@ class PretokenizeVLARunner(BaseRunner):
             f"epochs={num_epochs} render_backend={render_backend}",
             flush=True,
         )
-        with LiberoChunkEnv(env_cfg, num_envs=n_envs) as chunk_env:
-            chunk_env_ref[0] = chunk_env
+        with LiberoEnv(env_cfg, num_envs=n_envs) as libero_env:
+            libero_env_ref[0] = libero_env
             tally = run_rlinf_chunk_eval(
-                chunk_env,
+                libero_env,
                 _policy_fn,
                 n_chunk_steps=n_chunk_steps,
                 num_epochs=num_epochs,

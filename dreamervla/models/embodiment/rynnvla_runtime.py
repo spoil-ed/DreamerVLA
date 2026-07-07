@@ -18,7 +18,7 @@ from dreamervla.models.embodiment.chameleon_model.chameleon_vae_ori.vocab import
     VocabInfo,
     VocabTranslation,
 )
-from dreamervla.models.encoder.rynnvla_image_ops import (
+from dreamervla.models.embodiment.rynnvla_image_ops import (
     generate_crop_size_list,
     var_center_crop,
 )

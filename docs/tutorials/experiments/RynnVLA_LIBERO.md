@@ -33,7 +33,7 @@ python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
   match_reference_demos=true match_reference_lengths=true
 
 python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
-  dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2" \
+  dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h1" \
   reference_dir="${DVLA_DATA_ROOT}/processed_data/RynnVLA_LIBERO_libero_goal/no_noops_t_256_remaining_reward" \
   match_reference_demos=true match_reference_lengths=true require_complete_attr=true require_config=true
 

@@ -103,6 +103,8 @@ def test_oft_preprocess_script_checks_env_and_repairs_partial_sidecars() -> None
     assert "OVERWRITE_ARGS=(overwrite=true)" in source
     assert "FAKE_ARGS=(fake_oft_components=true)" in source
     assert 'OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-input_tokens}"' in source
+    assert 'OFT_HISTORY="${OFT_HISTORY:-1}"' in source
+    assert 'OFT_IMAGE_KEYS="${OFT_IMAGE_KEYS:-agentview_rgb}"' in source
     assert 'OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"' in source
     assert 'chunk_size="${OFT_CHUNK_SIZE}"' in source
     assert "repair incomplete action-hidden sidecar" in source

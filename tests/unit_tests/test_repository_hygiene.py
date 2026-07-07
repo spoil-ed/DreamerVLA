@@ -614,7 +614,7 @@ def test_preprocess_libero_utils_reexports_canonical_env_helpers() -> None:
     compat_path = project_root / "dreamervla" / "preprocess" / "libero_utils" / "libero_utils.py"
     text = compat_path.read_text(encoding="utf-8")
 
-    assert "from dreamervla.envs.libero_env import" in text
+    assert "from dreamervla.envs.libero.utils import" in text
     assert "OffScreenRenderEnv" not in text
     assert "def get_libero_env" not in text
     assert "def get_libero_image" not in text
@@ -623,7 +623,9 @@ def test_preprocess_libero_utils_reexports_canonical_env_helpers() -> None:
 
 def test_rynnvla_processor_shared_helpers_have_single_home() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    runtime_path = project_root / "dreamervla" / "models" / "encoder" / "rynnvla_runtime.py"
+    runtime_path = (
+        project_root / "dreamervla" / "models" / "embodiment" / "rynnvla_runtime.py"
+    )
     preprocess_path = project_root / "dreamervla" / "preprocess" / "item_processor.py"
     conversation_path = project_root / "dreamervla" / "preprocess" / "conversation.py"
 
@@ -637,7 +639,7 @@ def test_rynnvla_processor_shared_helpers_have_single_home() -> None:
         (runtime_text, runtime_path),
         (preprocess_text, preprocess_path),
     ):
-        assert "from dreamervla.models.encoder.rynnvla_image_ops import" in text, path.relative_to(
+        assert "from dreamervla.models.embodiment.rynnvla_image_ops import" in text, path.relative_to(
             project_root
         )
         assert "def center_crop" not in text, path.relative_to(project_root)

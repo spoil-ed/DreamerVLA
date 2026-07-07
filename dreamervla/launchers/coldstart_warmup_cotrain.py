@@ -1056,7 +1056,7 @@ def build_pipeline_plan(
         "render_backend": selected_render_backend,
     }
     eval_cfg = dict(cfg.get("eval") or {})
-    eval_enabled = bool(eval_cfg.get("enabled", False))
+    eval_enabled = bool(eval_cfg.get("enabled", False) or debug_enabled)
     eval_interval_global_steps = _eval_interval_global_steps(
         eval_cfg,
         debug=debug_enabled,
@@ -1839,7 +1839,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         cfg_obj = compose(config_name=config_name, overrides=overrides)
     cfg: dict[str, Any] = OmegaConf.to_container(cfg_obj, resolve=True)  # type: ignore[assignment]
+    previous_data_root = os.environ.get("DVLA_DATA_ROOT")
     os.environ["DVLA_DATA_ROOT"] = str(cfg.get("data_root") or _data_root())
+    try:
+        return _run_pipeline_main(cfg, overrides)
+    finally:
+        if previous_data_root is None:
+            os.environ.pop("DVLA_DATA_ROOT", None)
+        else:
+            os.environ["DVLA_DATA_ROOT"] = previous_data_root
+
+
+def _run_pipeline_main(cfg: dict[str, Any], overrides: Sequence[str]) -> int:
     python_cmd = str(cfg["python"])
     if python_cmd == "python" and not _has_override(overrides, "python"):
         python_cmd = sys.executable

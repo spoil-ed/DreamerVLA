@@ -33,7 +33,7 @@ init:
   encoder_state_ckpt: null
 
 encoder:
-  _target_: dreamervla.models.encoder.RynnVLAEncoder
+  _target_: dreamervla.models.embodiment.RynnVLAEncoder
   model_path: ${init.vla_ckpt_path}
   tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
   text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
@@ -57,11 +57,10 @@ eval:
   # state leakage, and matches the ~0.55 OFT-traj1 baseline. Verified 2026-07-05.
   reconfigure_per_episode: true
   enumerate_all_init_states: false
-  # Parallel eval scheme: rlinf_chunk is the default osmesa path aligned with the
-  # RLinf LiberoEnv chunk_step benchmark (64 envs x 8-action chunks). slots keeps
-  # the older VecRolloutEnv fallback.
+  # Parallel eval scheme. rlinf_chunk uses the RLinf-style LiberoEnv substrate:
+  # ReconfigureSubprocEnv subprocesses plus LiberoEnv.chunk_step action chunks.
   scheme: rlinf_chunk
-  chunk_env:
+  libero_env:
     reset_wait_steps: 10      # == sequential num_steps_wait oracle (RLinf uses 15)
     reset_gripper_open: true
     auto_reset: false

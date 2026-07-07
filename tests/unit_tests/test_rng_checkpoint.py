@@ -49,7 +49,7 @@ def test_restore_rng_state_tolerates_missing_or_none_payload():
 
 
 def _build_online_modules():
-    from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
+    from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 
     wm = torch.nn.Linear(3, 2)
     policy = torch.nn.Linear(3, 2)

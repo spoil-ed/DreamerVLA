@@ -40,7 +40,7 @@ from dreamervla.algorithms.dreamervla import (
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.dataset import BaseDataset
-from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 from dreamervla.runners._dreamer_runner_common import save_viz_strip
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
@@ -1495,7 +1495,7 @@ class DreamerVLARunner(BaseRunner):
             self.actor_update_route is not None
             and self.actor_update_route.requires_classifier
         ):
-            from dreamervla.models.reward import build_classifier
+            from dreamervla.algorithms.critic import build_classifier
 
             classifier_ckpt_path = OmegaConf.select(
                 cfg, "init.classifier_state_ckpt", default=None

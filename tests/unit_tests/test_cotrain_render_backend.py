@@ -29,7 +29,7 @@ class _FakeOsmesa:
 
 @pytest.fixture
 def patched(monkeypatch):
-    import dreamervla.envs.online_egl_venv as egl_mod
+    import dreamervla.envs.libero.venv as egl_mod
     import dreamervla.runners.vec_rollout_env as vec_mod
 
     _FakeEgl.last = None

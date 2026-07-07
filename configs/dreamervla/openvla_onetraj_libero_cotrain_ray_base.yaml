@@ -90,7 +90,7 @@ ray_components:
       return_predictions: false
       freeze_backbone: true
   policy:
-    target: dreamervla.models.actor.LatentToOpenVLAHiddenStateActor
+    target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
     kwargs:
       hidden_dim: null
       source_token_count: ${task.openvla_oft.input_tokens.token_count}
@@ -112,7 +112,7 @@ ray_components:
       num_bridge_heads: 8
       bridge_dropout: 0.1
   classifier:
-    target: dreamervla.models.reward.latent_success_classifier.LatentSuccessClassifier
+    target: dreamervla.algorithms.critic.latent_success_classifier.LatentSuccessClassifier
     kwargs:
       latent_dim: ${task.openvla_oft.input_tokens.classifier_latent_dim}
       action_dim: ${task.action_dim}
@@ -132,6 +132,7 @@ ray_components:
       num_heads: 8
       mlp_ratio: 4.0
       dropout: 0.1
+      output_dim: 1
       granularity: chunk
       chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
       chunk_pool: last
@@ -171,7 +172,7 @@ env:
     max_episode_steps: 512
     max_steps_per_rollout_epoch: 512
   cfg:
-    target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
+    target: dreamervla.envs.libero.libero_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
     kwargs:
       task_suite_name: ${task.suite}
@@ -262,7 +263,10 @@ learner:
     batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
-    classifier_threshold: 0.5
+    classifier_loss_type: bce
+    classifier_sampling_protocol: wmpo
+    classifier_balance_batches: true
+    classifier_threshold: null
     lr: 1.0e-4
     device: auto
     precision: bf16

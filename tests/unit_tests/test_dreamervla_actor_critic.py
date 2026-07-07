@@ -7,7 +7,7 @@ from dreamervla.algorithms.dreamervla import (
     compute_replay_lambda_returns,
     normalize_returns_for_actor_critic,
 )
-from dreamervla.models.critic.twohot_critic import (
+from dreamervla.algorithms.critic.twohot_critic import (
     ReturnPercentileTracker,
     TwohotCritic,
     symexp,

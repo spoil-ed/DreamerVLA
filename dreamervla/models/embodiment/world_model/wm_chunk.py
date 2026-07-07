@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from dreamervla.models.world_model.wm import WorldModel
+from dreamervla.models.embodiment.world_model.wm import WorldModel
 
 
 class _WMStyleFeedForward(nn.Module):

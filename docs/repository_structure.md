@@ -31,18 +31,20 @@ Dot-prefixed local tool folders are ignored by this main structure map.
 
 ```text
 dreamervla/
-├── algorithms/           # PPO, GRPO, DINO-LUMOS, TD-MPC, actor-critic steps
+├── algorithms/           # PPO/GRPO/LUMOS, actor modules, critics/classifiers
+│   ├── actor/            # BaseActor, VLAPolicy, OpenVLA/RynnVLA actor adapters
+│   ├── critic/           # Critic and success-classifier/verifier modules
+│   ├── reward/           # Algorithmic reward model protocols and registries
+│   └── ...
 ├── train.py              # Canonical Hydra train/eval entrypoint
 ├── dataset/              # Offline datasets and online rollout dumpers
 ├── diagnostics/          # Diagnostics, eval CLIs, smoke checks
-├── envs/                 # LIBERO sim and online env wrappers
-├── models/               # Encoders, actors, critics, rewards, world models
-│   ├── embodiment/       # Vendored OpenVLA-OFT and Chameleon/RynnVLA components
-│   ├── actor/            # BaseActor, VLAPolicy, RynnVLAActionHiddenActor, VLAActionHeadActor
-│   ├── critic/           # Critic modules
-│   ├── encoder/          # BaseEncoder plus encoder input protocol helpers
-│   ├── reward/           # Latent success classifier
-│   └── world_model/      # BaseWorldModel and retained WM architectures
+├── envs/                 # LIBERO three-file env surface plus world-model env
+├── models/               # Embodiment models only
+│   └── embodiment/       # VLA/encoder code plus retained world-model architectures
+│       ├── openvla_oft/  # Vendored OpenVLA-OFT model/runtime components
+│       ├── chameleon_model/ # Chameleon/RynnVLA components
+│       └── world_model/  # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Dataset preprocessing, xllmx helpers, hidden extraction
 ├── scheduler/            # Optional Ray backend scheduling primitives
 ├── workers/              # Optional Ray backend workers
@@ -99,18 +101,21 @@ top-level config only when they have a runner, defaults, and tests.
 
 ## Interface Boundaries
 
-Runners own orchestration: datasets, encoders, world models, actors,
-critics, optimizers, logging, and checkpoints. Shared lifecycle and checkpoint
+Runners own orchestration: datasets, embodiment encoders, world models, actors,
+critics/classifiers, optimizers, logging, and checkpoints. Shared lifecycle and checkpoint
 plumbing belongs in `dreamervla/runners/base_runner.py`.
 
 Models stay behind focused public interfaces:
 
-- Encoders inherit `BaseEncoder` and use `encoder/protocol.py` helpers for
-  structured VLA input batches.
+- VLA/encoder code is one embodiment boundary. Encoders inherit `BaseEncoder`
+  and use `models/embodiment/protocol.py` helpers for structured VLA input
+  batches.
+- World models inherit `BaseWorldModel`; canonical implementations live under
+  `dreamervla/models/embodiment/world_model/`.
 - Actors inherit `BaseActor`; canonical implementations live in
-  `dreamervla/models/actor/`.
-- World models inherit `BaseWorldModel`; Dreamer-style actor adapters live in
-  `base_world_model.py`.
+  `dreamervla/algorithms/actor/`.
+- Critic and classifier code is one verifier/value boundary. Canonical
+  implementations live in `dreamervla/algorithms/critic/`.
 - Datasets inherit `BaseDataset` and expose `data_spec` plus
   `get_normalizer()`.
 

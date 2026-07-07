@@ -3,7 +3,7 @@
 现有成果
 Related Work
 target的论文有：
-- WoVR[https://arxiv.org/abs/2602.13977]
+- video-WM reference[https://arxiv.org/abs/2602.13977]
 - WMPO[https://arxiv.org/abs/2511.09515]
 - Dreamer[https://arxiv.org/abs/2301.04104]
 - DayDreamer[https://arxiv.org/abs/2206.14176]

@@ -253,7 +253,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
     mode = resolve_oft_policy_mode(
         _project_path(args.oft_ckpt), getattr(args, "policy_mode", "auto")

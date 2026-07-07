@@ -25,14 +25,14 @@ pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/d
 
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256
 hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_legacy_action_hidden_vla_policy_h2
-rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h2
+rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_legacy_action_hidden_vla_policy_h1
+rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h1
 
 legacy_action_hidden:
   expected_action_head_type: legacy
   expected_obs_hidden_source: action_query
   expected_prompt_style: vla_policy
-  expected_history: 2
+  expected_history: 1
   expected_include_state: true
   expected_rotate_images_180: true
   token_dim: 1024
@@ -42,7 +42,7 @@ legacy_input_tokens:
   expected_action_head_type: legacy
   expected_obs_hidden_source: input_token_embedding
   expected_prompt_style: vla_policy
-  expected_history: 2
+  expected_history: 1
   expected_include_state: true
   expected_rotate_images_180: true
   wm_obs_dim: 8388608
@@ -64,14 +64,14 @@ openvla_oft:
   use_l1_regression: true
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h2
-  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h2
+  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
+  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
   failure_action_hidden_dir: null
   failure_input_token_hidden_dir: null
   expected_action_head_type: oft_l1_regression
   expected_obs_hidden_source: action_query
   expected_prompt_style: vla_policy
-  expected_history: 2
+  expected_history: 1
   expected_include_state: true
   expected_rotate_images_180: true
   wm_obs_dim: 229376
@@ -108,13 +108,13 @@ openvla_oft:
     action_emb_dim: 10
     num_action_repeat: 1
     model_dim: 4148
-  sft_policy_target: dreamervla.models.encoder.OpenVLAOFTPolicy
+  sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
-  wm_target: dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel
-  classifier_target: dreamervla.models.reward.LatentSuccessClassifier
-  actor_target: dreamervla.models.actor.RynnVLAActionHiddenActor
+  wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
+  classifier_target: dreamervla.algorithms.critic.LatentSuccessClassifier
+  actor_target: dreamervla.algorithms.actor.RynnVLAActionHiddenActor
   actor_head_type: legacy
   actor_adapter_type: residual_mlp
   actor_adapter_hidden_dim: 1024
   actor_freeze_output_projection: false
-  critic_target: dreamervla.models.critic.twohot_critic.TwohotCritic
+  critic_target: dreamervla.algorithms.critic.twohot_critic.TwohotCritic

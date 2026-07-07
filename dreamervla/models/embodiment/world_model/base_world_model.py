@@ -7,11 +7,11 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from dreamervla.models.world_model.common import (
+from dreamervla.models.embodiment.world_model.common import (
     _module_device,
     _module_dtype,
 )
-from dreamervla.models.world_model.reward_heads import _reward_pred
+from dreamervla.models.embodiment.world_model.reward_heads import _reward_pred
 
 
 class BaseWorldModel(nn.Module, ABC):

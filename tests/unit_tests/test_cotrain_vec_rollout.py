@@ -31,7 +31,7 @@ def _full_record() -> dict:
 
 # --------------------------------------------------------------- Task 1
 def test_dreamer_image_from_record_matches_format_obs_formula():
-    from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv as Env
+    from dreamervla.envs.libero.libero_env import DreamerVLAOnlineTrainEnv as Env
     from dreamervla.runners.vectorized_collect import dreamer_image_from_record
 
     rec, size = _rec(), 64

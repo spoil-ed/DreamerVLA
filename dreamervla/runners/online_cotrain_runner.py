@@ -37,7 +37,7 @@ from dreamervla.algorithms.dreamervla import (
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.models.reward import build_classifier
+from dreamervla.algorithms.critic import build_classifier
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_dreamervla import (
@@ -294,7 +294,7 @@ def build_rollout_vec_env(
     # egl device regime). Deferred until the egl path is GPU-verified at low per-GPU
     # concurrency, so the merge can be validated against a known-good baseline.
     if render_backend == "egl":
-        from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
+        from dreamervla.envs.libero.venv import OnlineEglVecEnv
 
         egl_device_pool = parse_device_ids(render_devices)
         adapter_cfg_kwargs = {
@@ -361,7 +361,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         ) != "mean":
             cls_kwargs["latent_dim"] = int(OmegaConf.select(cfg, "world_model.obs_dim"))
         self._classifier_target = str(
-            cls_kwargs.get("_target_") or "dreamervla.models.reward.LatentSuccessClassifier"
+            cls_kwargs.get("_target_") or "dreamervla.algorithms.critic.LatentSuccessClassifier"
         )
         self._classifier_cls_kwargs = {
             key: value for key, value in cls_kwargs.items() if key != "_target_"
@@ -444,7 +444,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 OmegaConf.select(
                     env_cfg,
                     "_target_",
-                    default="dreamervla.envs.train_env.DreamerVLAOnlineTrainEnv",
+                    default="dreamervla.envs.libero.libero_env.DreamerVLAOnlineTrainEnv",
                 )
             ),
             "task_suite_name": str(
@@ -823,6 +823,15 @@ class OnlineCotrainRunner(DreamerVLARunner):
         episode_horizon = int(OmegaConf.select(cfg, "env.episode_horizon", default=200))
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(oc, "classifier_early_neg_stride", default=8))
+        classifier_loss_type = OmegaConf.select(oc, "classifier_loss_type", default=None)
+        if classifier_loss_type is not None and str(classifier_loss_type).lower() == "auto":
+            classifier_loss_type = None
+        classifier_sampling_protocol = str(
+            OmegaConf.select(oc, "classifier_sampling_protocol", default="lumos")
+        )
+        classifier_balance_batches = bool(
+            OmegaConf.select(oc, "classifier_balance_batches", default=False)
+        )
         ckpt_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=2000))
         # Multi-env defaults to the stable osmesa path. EGL is explicit opt-in and
         # requires render devices that do not overlap the training CUDA devices.
@@ -923,6 +932,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
             "train_cls_inline": train_cls_inline,
             "cls_bs": cls_bs,
             "early_neg_stride": early_neg_stride,
+            "classifier_loss_type": classifier_loss_type,
+            "classifier_sampling_protocol": classifier_sampling_protocol,
+            "classifier_balance_batches": classifier_balance_batches,
             "batch_size": batch_size,
             "optim_cfg": optim_cfg,
             "algo": algo,
@@ -1158,6 +1170,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     grad_clip=float(
                         OmegaConf.select(knobs["optim_cfg"], "grad_clip_norm", default=1.0)
                     ),
+                    loss_type=knobs["classifier_loss_type"],
+                    sampling_protocol=knobs["classifier_sampling_protocol"],
+                    balance_batches=knobs["classifier_balance_batches"],
                 )
                 metrics["cls/loss"] = float(cls_metrics["loss"])
                 metrics["cls/acc"] = float(cls_metrics["acc"])
@@ -1559,7 +1574,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 getattr(
                     self,
                     "_classifier_target",
-                    "dreamervla.models.reward.LatentSuccessClassifier",
+                    "dreamervla.algorithms.critic.LatentSuccessClassifier",
                 )
             ),
             init_args=getattr(self, "_classifier_cls_kwargs", {}),

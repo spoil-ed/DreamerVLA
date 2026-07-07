@@ -58,7 +58,7 @@ OFT_CKPT = PROJECT_ROOT / "data/checkpoints/OpenVLA-OFT/libero_goal"
 SIDECAR_DIR = (
     PROJECT_ROOT
     / "data/datasets/processed_data"
-    / "libero_goal_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h2"
+    / "libero_goal_no_noops_t_256_oft_official_legacy_action_hidden_vla_policy_h1"
 )
 REWARD_DIR = (
     PROJECT_ROOT
@@ -235,7 +235,7 @@ def test_inline_matches_offline_sidecar():
 
     ensure_openvla_oft_on_path()
 
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
     # ── load model ────────────────────────────────────────────────────────────
     device = torch.device("cuda:0")
@@ -428,7 +428,7 @@ def _load_oft_policy():
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
     policy = OpenVLAOFTPolicy(
         model_path=str(OFT_CKPT),
@@ -636,7 +636,7 @@ def _load_oft_discrete_policy():
     from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
     policy = OpenVLAOFTPolicy(
         model_path=str(ONE_TRAJ_DISCRETE_CKPT),

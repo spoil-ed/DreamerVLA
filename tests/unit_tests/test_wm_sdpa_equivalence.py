@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamervla.models.world_model.wm_chunk import _WMStyleAttention
+from dreamervla.models.embodiment.world_model.wm_chunk import _WMStyleAttention
 
 # Float32 CPU tolerance: SDPA's fused reduction differs from the manual matmul.
 _ATOL = 1e-5

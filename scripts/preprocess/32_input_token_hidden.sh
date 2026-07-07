@@ -25,7 +25,7 @@ cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
-INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_input_token_embedding_vla_policy_h2"
+INPUT_TOKEN_HIDDEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_input_token_embedding_vla_policy_h1"
 VLA_CKPT="${VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${LIBERO_SUITE}}"
 TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768"
 TEXT_TOKENIZER_PATH="${DVLA_DATA_ROOT}/checkpoints/chameleon/tokenizer/text_tokenizer.json"
@@ -70,8 +70,8 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${INPUT_TOKEN_HIDDEN_DIR}" ]]; then
     chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
     action_head_type=legacy \
     obs_hidden_source=input_token_embedding \
-    history=2 \
-    include_state=true \
+    history=1 \
+    include_state=false \
     rotate_images_180=true \
     action_dim=7 \
     time_horizon="${TIME_HORIZON}" \
@@ -89,8 +89,8 @@ elif [[ "${OVERWRITE}" != "1" ]]; then
     chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
     action_head_type=legacy \
     obs_hidden_source=input_token_embedding \
-    history=2 \
-    include_state=true \
+    history=1 \
+    include_state=false \
     rotate_images_180=true \
     action_dim=7 \
     time_horizon="${TIME_HORIZON}"

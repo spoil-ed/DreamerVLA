@@ -26,8 +26,8 @@ from dreamervla.algorithms.dreamervla import (
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.dataset.online_rollout_dumper import RolloutDumper
-from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
-from dreamervla.models.reward import build_classifier
+from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.algorithms.critic import build_classifier
 from dreamervla.runners._online_dreamervla_dist import (  # noqa: E402
     _dist_all_reduce_flag,
     _dist_all_reduce_int,
@@ -38,6 +38,10 @@ from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
 from dreamervla.runners.online_replay import (
     OnlineReplay,
     get_replay_task_stats_global,
+)
+from dreamervla.runners.latent_classifier_runner import (
+    _classifier_loss_and_predictions,
+    _success_probabilities_from_logits,
 )
 from dreamervla.runners.online_utils import (
     build_encoder,
@@ -268,6 +272,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--classifier-updates-per-train", type=int, default=1)
     parser.add_argument("--classifier-grad-clip", type=float, default=1.0)
     parser.add_argument(
+        "--classifier-loss-type",
+        choices=["auto", "ce", "bce"],
+        default="auto",
+        help="Classifier online update loss. auto selects BCE for one-logit heads and CE for two-logit heads.",
+    )
+    parser.add_argument(
+        "--classifier-sampling-protocol",
+        choices=["lumos", "wmpo"],
+        default="lumos",
+        help="Classifier replay window sampling protocol for online updates.",
+    )
+    parser.add_argument(
+        "--classifier-balance-batches",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Alternate positive/negative classifier replay windows inside each batch.",
+    )
+    parser.add_argument(
         "--classifier-early-neg-stride",
         type=int,
         default=8,
@@ -332,6 +354,10 @@ def online_classifier_update_step(
     batch_size: int,
     early_neg_stride: int,
     grad_clip: float,
+    loss_type: str | None = None,
+    label_smoothing: float = 0.0,
+    sampling_protocol: str = "lumos",
+    balance_batches: bool = False,
 ) -> dict[str, Any]:
     module = _unwrap(classifier)
     cfg = module.cfg
@@ -341,6 +367,8 @@ def online_classifier_update_step(
         chunk_size=int(getattr(cfg, "chunk_size", 1)),
         chunk_pool=str(getattr(cfg, "chunk_pool", "last")),
         early_neg_stride=int(early_neg_stride),
+        sampling_protocol=str(sampling_protocol),
+        balance_batches=bool(balance_batches),
     )
     windows = cls_batch["windows"].to(device, non_blocking=True)
     labels = cls_batch["labels"].to(device, non_blocking=True)
@@ -374,7 +402,16 @@ def online_classifier_update_step(
         )
     else:
         logits = classifier(windows, **forward_kwargs)
-    loss = torch.nn.functional.cross_entropy(logits, labels)
+    resolved_loss_type = None if loss_type is None else str(loss_type).lower()
+    if resolved_loss_type in {None, "", "auto"}:
+        resolved_loss_type = "bce" if int(logits.shape[-1]) == 1 else "ce"
+    loss, preds = _classifier_loss_and_predictions(
+        logits,
+        labels,
+        loss_type=str(resolved_loss_type),
+        label_smoothing=float(label_smoothing),
+        class_weight=None,
+    )
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -384,8 +421,8 @@ def online_classifier_update_step(
     classifier.eval()
     module.eval()
     with torch.no_grad():
-        probs = torch.softmax(logits.detach(), dim=-1)[:, 1]
-        preds = logits.detach().argmax(dim=-1)
+        probs = _success_probabilities_from_logits(logits.detach())
+        preds = preds.detach()
         acc = (preds == labels).float().mean()
         pred_pos = preds == 1
         true_pos_label = labels == 1
@@ -413,6 +450,9 @@ def online_classifier_update_step(
         ),
         "updated": 1.0,
         "skipped_single_class_batch": 0.0,
+        "loss_type": str(resolved_loss_type),
+        "sampling_protocol": str(sampling_protocol),
+        "balance_batches": bool(balance_batches),
         "batch": _json_safe(
             {key: value for key, value in cls_batch.items() if key != "windows"}
         ),
@@ -738,7 +778,7 @@ def main() -> None:
 
     # Per-rank env seed: different rollouts on each rank gives 4× online data
     # diversity for the shared (DDP-synced) policy gradient updates.
-    from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
+    from dreamervla.envs.libero.libero_env import DreamerVLAOnlineTrainEnv
 
     env_seed = int(args.seed) + rank * 1000
     env = DreamerVLAOnlineTrainEnv(
@@ -1359,6 +1399,17 @@ def main() -> None:
                                             args.classifier_early_neg_stride
                                         ),
                                         grad_clip=float(args.classifier_grad_clip),
+                                        loss_type=(
+                                            None
+                                            if str(args.classifier_loss_type) == "auto"
+                                            else str(args.classifier_loss_type)
+                                        ),
+                                        sampling_protocol=str(
+                                            args.classifier_sampling_protocol
+                                        ),
+                                        balance_batches=bool(
+                                            args.classifier_balance_batches
+                                        ),
                                     )
                                 )
                             classifier_metrics = {

@@ -67,7 +67,7 @@ class OnlineReplay:
         self._classifier_pending_windows: deque[
             tuple[Mapping[str, Any], int, int, bool]
         ] = deque()
-        self._classifier_pending_key: tuple[int, int, str, int] | None = None
+        self._classifier_pending_key: tuple[Any, ...] | None = None
 
     def state_dict(self) -> dict[str, Any]:
         """Return mutable replay contents and cursors for checkpoint resume."""
@@ -669,11 +669,22 @@ class OnlineReplay:
         chunk_size: int,
         chunk_pool: str,
         early_neg_stride: int,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> dict[str, torch.Tensor]:
         window = int(window)
         chunk_size = int(chunk_size)
         window_env = window * chunk_size
         stride = max(1, int(early_neg_stride))
+        sampling_protocol = str(sampling_protocol).lower()
+        if sampling_protocol not in {"lumos", "wmpo"}:
+            raise ValueError(
+                "sampling_protocol must be one of {'lumos', 'wmpo'}, "
+                f"got {sampling_protocol!r}"
+            )
+        balance_batches = bool(balance_batches)
+        if balance_batches and int(batch_size) % 2:
+            raise ValueError("balanced classifier batches require an even batch_size")
         candidates = [
             record
             for record in self._valid_records()
@@ -699,7 +710,14 @@ class OnlineReplay:
         is_end_window: list[bool] = []
         proprio_windows: list[np.ndarray] = []
         lang_embs: list[np.ndarray] = []
-        pending_key = (window_env, chunk_size, str(chunk_pool), stride)
+        pending_key = (
+            window_env,
+            chunk_size,
+            str(chunk_pool),
+            stride,
+            sampling_protocol,
+            balance_batches,
+        )
         if self._classifier_pending_key != pending_key:
             self._classifier_pending_windows.clear()
             self._classifier_pending_key = pending_key
@@ -781,37 +799,89 @@ class OnlineReplay:
             is_end_window.append(bool(end_window))
 
         target_batch = int(batch_size)
-        while len(windows) < target_batch:
-            if self._classifier_pending_windows:
-                pending_record, end, label, end_window = (
-                    self._classifier_pending_windows.popleft()
-                )
-                _append_window(
-                    pending_record,
-                    end=end,
-                    label=label,
-                    end_window=end_window,
-                )
-                continue
-
-            record = random.choice(candidates)
-            episode = record["episode"]
-            finish_step = int(record.get("finish_step", len(episode)))
-            sample_specs = [(finish_step, int(bool(record["success"])), True)]
-            if finish_step - stride >= window_env:
-                valid_ends = list(range(finish_step - stride, window_env - 1, -stride))
-                valid_ends = valid_ends or list(
-                    range(finish_step - 1, window_env - 1, -1)
-                )
-                if valid_ends:
-                    sample_specs.append((int(random.choice(valid_ends)), 0, False))
-            for end, label, end_window in sample_specs:
-                if len(windows) >= target_batch:
-                    self._classifier_pending_windows.append(
-                        (record, int(end), int(label), bool(end_window))
+        if sampling_protocol == "wmpo":
+            positive_specs: list[tuple[Mapping[str, Any], int, int, bool]] = []
+            negative_specs: list[tuple[Mapping[str, Any], int, int, bool]] = []
+            for record in candidates:
+                finish_step = int(record.get("finish_step", len(record["episode"])))
+                success = bool(record["success"])
+                if success:
+                    positive_specs.append((record, finish_step, 1, True))
+                    max_negative_end = int(finish_step) - int(window_env)
+                    if max_negative_end >= window_env:
+                        negative_ends = list(
+                            range(max_negative_end, window_env - 1, -stride)
+                        )
+                        if not negative_ends:
+                            negative_ends = [max_negative_end]
+                        for end in negative_ends:
+                            negative_specs.append((record, int(end), 0, False))
+                else:
+                    negative_ends = list(range(finish_step, window_env - 1, -stride))
+                    if not negative_ends:
+                        negative_ends = [finish_step]
+                    for end in negative_ends:
+                        negative_specs.append(
+                            (record, int(end), 0, int(end) == int(finish_step))
+                        )
+            if not positive_specs:
+                raise RuntimeError("online replay has no WMPO positive classifier windows")
+            if not negative_specs:
+                raise RuntimeError("online replay has no WMPO negative classifier windows")
+            if balance_batches:
+                for index in range(target_batch):
+                    specs = positive_specs if index % 2 == 0 else negative_specs
+                    record, end, label, end_window = random.choice(specs)
+                    _append_window(
+                        record,
+                        end=int(end),
+                        label=int(label),
+                        end_window=bool(end_window),
+                    )
+            else:
+                specs = positive_specs + negative_specs
+                while len(windows) < target_batch:
+                    record, end, label, end_window = random.choice(specs)
+                    _append_window(
+                        record,
+                        end=int(end),
+                        label=int(label),
+                        end_window=bool(end_window),
+                    )
+        else:
+            while len(windows) < target_batch:
+                if self._classifier_pending_windows:
+                    pending_record, end, label, end_window = (
+                        self._classifier_pending_windows.popleft()
+                    )
+                    _append_window(
+                        pending_record,
+                        end=end,
+                        label=label,
+                        end_window=end_window,
                     )
                     continue
-                _append_window(record, end=end, label=label, end_window=end_window)
+
+                record = random.choice(candidates)
+                episode = record["episode"]
+                finish_step = int(record.get("finish_step", len(episode)))
+                sample_specs = [(finish_step, int(bool(record["success"])), True)]
+                if finish_step - stride >= window_env:
+                    valid_ends = list(
+                        range(finish_step - stride, window_env - 1, -stride)
+                    )
+                    valid_ends = valid_ends or list(
+                        range(finish_step - 1, window_env - 1, -1)
+                    )
+                    if valid_ends:
+                        sample_specs.append((int(random.choice(valid_ends)), 0, False))
+                for end, label, end_window in sample_specs:
+                    if len(windows) >= target_batch:
+                        self._classifier_pending_windows.append(
+                            (record, int(end), int(label), bool(end_window))
+                        )
+                        continue
+                    _append_window(record, end=end, label=label, end_window=end_window)
 
         batch = {
             "windows": torch.from_numpy(np.stack(windows, axis=0)).to(torch.float32),

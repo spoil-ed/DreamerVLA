@@ -213,6 +213,7 @@ class EmbodiedFSDPActor(Worker):
             None if clip_log_ratio_value is None else float(clip_log_ratio_value)
         )
         entropy_coef = _entropy_coef(algorithm_cfg)
+        kl_coef = float(algorithm_cfg.get("kl_coef", algorithm_cfg.get("kl_beta", 0.0)))
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
         logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
         token_level_logprob = logprob_type == "token_level"
@@ -277,6 +278,8 @@ class EmbodiedFSDPActor(Worker):
             int(loss_mask.shape[1]), self.torch_device
         )
         zero_loss_steps = 0
+        behavior_kl_sum = 0.0
+        behavior_kl_count = 0
         # ─── group-aligned micro-batch slices (MEM-RL-01 / A3) ───────────────
         # Bound the update's peak activation memory to ONE contiguous block of
         # GRPO groups (``[b_lo:b_hi]`` on the rollout dim) instead of the full
@@ -399,6 +402,11 @@ class EmbodiedFSDPActor(Worker):
                         old_logprob,
                         clip_log_ratio=clip_log_ratio,
                     )
+                    behavior_kl = _approx_behavior_kl(
+                        new_logprob,
+                        old_logprob,
+                        clip_log_ratio=clip_log_ratio,
+                    )
                     ppo_clip = _ppo_clip_term(
                         ratio,
                         advantage,
@@ -411,18 +419,22 @@ class EmbodiedFSDPActor(Worker):
                             1.0 / per_rollout_count.to(self.torch_device)
                         )[b_lo:b_hi][step_mask]
                         loss = (
-                            (ppo_clip * step_weight).sum()
+                            ((ppo_clip + kl_coef * behavior_kl) * step_weight).sum()
                             - float(entropy_coef) * (entropy * step_weight).sum()
                         ) / float(num_rollouts)
                     else:
                         loss = (
-                            ppo_clip.sum() - float(entropy_coef) * entropy.sum()
+                            ppo_clip.sum()
+                            + kl_coef * behavior_kl.sum()
+                            - float(entropy_coef) * entropy.sum()
                         ) / float(loss_reduction_count)
                     loss.backward()
 
                     epoch_loss += float(loss.detach().cpu().item())
                     ratio_sum += float(ratio.detach().sum().cpu().item())
                     entropy_sum += float(entropy.detach().sum().cpu().item())
+                    behavior_kl_sum += float(behavior_kl.detach().sum().cpu().item())
+                    behavior_kl_count += int(behavior_kl.numel())
             grad_norm = self._clip_or_measure_grad_norm(optim_cfg)
             optimizer.step()
 
@@ -438,6 +450,9 @@ class EmbodiedFSDPActor(Worker):
             "actor/loss": _mean(losses),
             "actor/ratio_mean": _mean(ratio_means),
             "actor/entropy_mean": _mean(entropy_means),
+            "actor/behavior_kl_mean": behavior_kl_sum
+            / float(max(1, behavior_kl_count)),
+            "actor/kl_coef": float(kl_coef),
             "actor/policy_grad_norm": _mean(grad_norms),
             "actor/local_time_steps": float(local_time_steps),
             "actor/global_time_steps": float(global_time_steps),
@@ -743,6 +758,20 @@ def _zero_loss_from_policy_outputs(
     entropy: torch.Tensor,
 ) -> torch.Tensor:
     return new_logprob.sum() * 0.0 + entropy.sum() * 0.0
+
+
+def _approx_behavior_kl(
+    new_logprob: torch.Tensor,
+    old_logprob: torch.Tensor,
+    *,
+    clip_log_ratio: float | None,
+) -> torch.Tensor:
+    log_ratio = new_logprob - old_logprob.detach()
+    if clip_log_ratio is not None:
+        limit = float(clip_log_ratio)
+        log_ratio = log_ratio.clamp(min=-limit, max=limit)
+    ratio = torch.exp(log_ratio)
+    return ratio - 1.0 - log_ratio
 
 
 def _export_policy_state_dict(policy: nn.Module) -> dict[str, torch.Tensor]:

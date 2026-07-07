@@ -25,7 +25,7 @@ cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
-HIDDEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+HIDDEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_legacy_action_hidden_vla_policy_h1"
 BASE_VLA_CKPT="${BASE_VLA_CKPT:-${DVLA_DATA_ROOT}/checkpoints/VLA_model_256/${LIBERO_SUITE}}"
 VLA_CKPT="${VLA_CKPT:-${BASE_VLA_CKPT}}"
 VLA_MODEL_PATH="${VLA_MODEL_PATH:-${VLA_CKPT}}"
@@ -79,8 +79,8 @@ if [[ "${OVERWRITE}" == "1" || ! -d "${HIDDEN_DIR}" ]]; then
     chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
     action_head_type=legacy \
     obs_hidden_source=action_query \
-    history=2 \
-    include_state=true \
+    history=1 \
+    include_state=false \
     rotate_images_180=true \
     save_action_hidden=true \
     action_dim=7 \
@@ -100,8 +100,8 @@ elif [[ "${OVERWRITE}" != "1" ]]; then
     chameleon_vqgan_ckpt="${CHAMELEON_VQGAN_CKPT}" \
     action_head_type=legacy \
     obs_hidden_source=action_query \
-    history=2 \
-    include_state=true \
+    history=1 \
+    include_state=false \
     rotate_images_180=true \
     save_action_hidden=true \
     action_dim=7 \

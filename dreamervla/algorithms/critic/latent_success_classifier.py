@@ -25,6 +25,9 @@ class LatentSuccessClassifierConfig:
     num_heads: int = 16
     mlp_ratio: float = 4.0
     dropout: float = 0.1
+    # 2 keeps the historical CE/softmax classifier. 1 matches WMPO's
+    # binary BCE reward-model head while preserving the token input path.
+    output_dim: int = 2
     # head_type ∈ {transformer, linear, mlp2}. "transformer" is the original
     # 8-layer 137 M model. "linear" is a single nn.Linear(L*W, 2) — the
     # sklearn-LR-equivalent low-capacity head shown to hit F1≈0.87 on real
@@ -66,7 +69,8 @@ class LatentSuccessClassifier(nn.Module):
     Input shape contract: ``[B, W, latent_dim]`` where W == cfg.window. Tokenized
     windows such as ``[B, W, N, token_dim]`` are accepted and flattened at this
     boundary.
-    Output: ``[B, 2]`` logits.
+    Output: ``[B, output_dim]`` logits. ``output_dim=1`` is interpreted as a
+    binary success logit trained with BCE.
 
     ``cfg.head_type`` selects the architecture:
         - ``transformer``: original 8-layer Transformer (~137 M params)
@@ -124,6 +128,9 @@ class LatentSuccessClassifier(nn.Module):
                 f"num_lang_repeat={self.num_lang_repeat}"
             )
         self.cfg = cfg
+        self.output_dim = int(getattr(cfg, "output_dim", 2) or 2)
+        if self.output_dim not in (1, 2):
+            raise ValueError(f"output_dim must be 1 or 2, got {self.output_dim}")
         gran = str(getattr(cfg, "granularity", "action"))
         if gran not in ("action", "chunk"):
             raise ValueError(f"unknown granularity: {gran!r} (action|chunk)")
@@ -217,7 +224,7 @@ class LatentSuccessClassifier(nn.Module):
                 norm_first=True,
             )
             self.encoder = nn.TransformerEncoder(layer, num_layers=cfg.num_layers)
-            self.head = nn.Linear(cfg.hidden_dim, 2)
+            self.head = nn.Linear(cfg.hidden_dim, self.output_dim)
             nn.init.trunc_normal_(self.spatial_cls_token, std=0.02)
             nn.init.trunc_normal_(self.frame_pos_embed, std=0.02)
             nn.init.trunc_normal_(self.token_pos_embed, std=0.02)
@@ -239,17 +246,17 @@ class LatentSuccessClassifier(nn.Module):
                 norm_first=True,
             )
             self.encoder = nn.TransformerEncoder(layer, num_layers=cfg.num_layers)
-            self.head = nn.Linear(cfg.hidden_dim, 2)
+            self.head = nn.Linear(cfg.hidden_dim, self.output_dim)
             nn.init.trunc_normal_(self.cls_token, std=0.02)
             nn.init.trunc_normal_(self.pos_embed, std=0.02)
         elif ht == "linear":
-            self.head = nn.Linear(cfg.latent_dim * cfg.window, 2)
+            self.head = nn.Linear(cfg.latent_dim * cfg.window, self.output_dim)
         elif ht == "mlp2":
             self.head = nn.Sequential(
                 nn.Linear(cfg.latent_dim * cfg.window, cfg.hidden_dim),
                 nn.GELU(),
                 nn.Dropout(cfg.dropout),
-                nn.Linear(cfg.hidden_dim, 2),
+                nn.Linear(cfg.hidden_dim, self.output_dim),
             )
         else:
             raise ValueError(
@@ -443,7 +450,7 @@ class LatentSuccessClassifier(nn.Module):
         proprio: torch.Tensor | None = None,
         lang_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """latent_window: [B, W, latent_dim] or token grid -> logits [B, 2]."""
+        """latent_window: [B, W, latent_dim] or token grid -> logits [B, output_dim]."""
         if latent_window.shape[1] != self.cfg.window:
             raise ValueError(f"expected window={self.cfg.window}, got {latent_window.shape[1]}")
         ht = str(getattr(self.cfg, "head_type", "transformer"))
@@ -601,7 +608,11 @@ class LatentSuccessClassifier(nn.Module):
                 proprio=proprio_window,
                 lang_emb=lang_emb,
             )
-            probs = torch.softmax(logits, dim=-1)[:, 1]
+            probs = (
+                torch.sigmoid(logits.squeeze(-1))
+                if logits.shape[-1] == 1
+                else torch.softmax(logits, dim=-1)[:, 1]
+            )
             better = probs > score
             if better.any():
                 score = torch.where(better, probs.float(), score)

@@ -191,7 +191,7 @@ def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
 
     ensure_openvla_oft_on_path()
 
-    from dreamervla.models.encoder.openvla_oft_policy import OpenVLAOFTPolicy
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
     model_path = resolve_model_path(cfg["model_path"])
 

@@ -28,6 +28,7 @@ from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
+from dreamervla.runners.latent_classifier_runner import _success_probabilities_from_logits
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
@@ -179,6 +180,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         batch_size: int,
         early_neg_stride: int,
         grad_clip: float,
+        loss_type: str | None = None,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
         log_step_offset: int = 0,
         checkpoint_every: int = 0,
         checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
@@ -200,6 +204,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch_size=batch_size,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
+                loss_type=loss_type,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
             )
             last_acc = float(m["acc"])
             if i % self._replay_warmup_log_every() == 0:
@@ -244,6 +251,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch_size=batch_size,
                 early_neg_stride=early_neg_stride,
                 num_batches=val_num_batches,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
             )
             val_step = int(log_step_offset) + int(steps)
             if calibrate:
@@ -289,6 +298,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         batch_size: int,
         early_neg_stride: int,
         num_batches: int,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Forward-only held-out pass mirroring ``online_classifier_update_step``.
 
@@ -315,6 +326,8 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 chunk_size=int(getattr(cfg, "chunk_size", 1)),
                 chunk_pool=str(getattr(cfg, "chunk_pool", "last")),
                 early_neg_stride=int(early_neg_stride),
+                sampling_protocol=str(sampling_protocol),
+                balance_batches=bool(balance_batches),
             )
             windows = cls_batch["windows"].to(self.device, non_blocking=True)
             labels = cls_batch["labels"].to(self.device, non_blocking=True)
@@ -339,7 +352,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     )
                 else:
                     logits = self.classifier(windows, **forward_kwargs)
-                probs = torch.softmax(logits, dim=-1)[:, 1]
+                probs = _success_probabilities_from_logits(logits)
             probs_all.append(probs.detach().cpu().numpy())
             ys_all.append(labels.detach().cpu().numpy())
         return np.concatenate(probs_all), np.concatenate(ys_all)
@@ -441,6 +454,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         optim_cfg,
         early_neg_stride: int,
         grad_clip: float,
+        loss_type: str | None = None,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> tuple[float, float]:
         self.world_model.train()
         wm_last = 0.0
@@ -473,6 +489,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     batch_size=cls_batch_size,
                     early_neg_stride=early_neg_stride,
                     grad_clip=grad_clip,
+                    loss_type=loss_type,
+                    sampling_protocol=sampling_protocol,
+                    balance_batches=balance_batches,
                 )
                 cls_loss = float(cls_metrics.get("loss", 0.0))
                 cls_last = float(cls_metrics["acc"])
@@ -694,7 +713,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     getattr(
                         self,
                         "_classifier_target",
-                        "dreamervla.models.reward.LatentSuccessClassifier",
+                        "dreamervla.algorithms.critic.LatentSuccessClassifier",
                     )
                 ),
                 init_args=cls_kwargs,
@@ -811,6 +830,25 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
         optim_cfg = OmegaConf.select(cfg, "optim")
         early_neg_stride = int(OmegaConf.select(cfg, "online_rollout.classifier_early_neg_stride", default=8))
+        classifier_loss_type = OmegaConf.select(
+            cfg, "online_rollout.classifier_loss_type", default=None
+        )
+        if classifier_loss_type is not None and str(classifier_loss_type).lower() == "auto":
+            classifier_loss_type = None
+        classifier_sampling_protocol = str(
+            OmegaConf.select(
+                cfg,
+                "online_rollout.classifier_sampling_protocol",
+                default="lumos",
+            )
+        )
+        classifier_balance_batches = bool(
+            OmegaConf.select(
+                cfg,
+                "online_rollout.classifier_balance_batches",
+                default=False,
+            )
+        )
         grad_clip = float(OmegaConf.select(optim_cfg, "grad_clip_norm", default=1.0))
         seq_len = int(OmegaConf.select(cfg, "online_rollout.sequence_length", default=24))
         buffer_size = int(OmegaConf.select(cfg, "online_rollout.buffer_size", default=20000))
@@ -976,6 +1014,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch_size=cls_bs,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
+                loss_type=classifier_loss_type,
+                sampling_protocol=classifier_sampling_protocol,
+                balance_batches=classifier_balance_batches,
                 log_step_offset=wm_steps,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(
@@ -1041,6 +1082,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch_size=cls_bs,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
+                loss_type=classifier_loss_type,
+                sampling_protocol=classifier_sampling_protocol,
+                balance_batches=classifier_balance_batches,
                 log_step_offset=wm_steps,
                 checkpoint_every=warmup_checkpoint_every,
                 checkpoint_fn=(

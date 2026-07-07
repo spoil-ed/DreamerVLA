@@ -5,7 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from dreamervla.models.actor.openvla_discrete_token_actor import (
+from dreamervla.algorithms.actor.openvla_discrete_token_actor import (
     OpenVLADiscreteTokenActor,
 )
 

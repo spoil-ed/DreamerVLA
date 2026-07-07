@@ -538,6 +538,7 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
 
     replay = _seeded_replay(tmp_path)
     calls = {"wm": 0, "cls": 0}
+    cls_kwargs = []
     checkpoints = {"wm": 0, "cls": 0}
     logged = []
     progress = []
@@ -549,6 +550,13 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
 
     def fake_cls_step(**kw):
         assert kw["replay"] is replay
+        cls_kwargs.append(
+            (
+                kw.get("loss_type"),
+                kw.get("sampling_protocol"),
+                kw.get("balance_batches"),
+            )
+        )
         calls["cls"] += 1
         return {"loss": 0.2, "acc": 0.5, "f1": 0.0}
 
@@ -590,11 +598,15 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
         batch_size=2,
         early_neg_stride=8,
         grad_clip=1.0,
+        loss_type="bce",
+        sampling_protocol="wmpo",
+        balance_batches=True,
         log_step_offset=3,
         checkpoint_every=2,
         checkpoint_fn=lambda: checkpoints.__setitem__("cls", checkpoints["cls"] + 1),
     )
     assert calls == {"wm": 3, "cls": 5}
+    assert cls_kwargs == [("bce", "wmpo", True)] * 5
     assert checkpoints == {"wm": 1, "cls": 2}
     assert progress == [
         (1, 3, "wm-warmup", "update"),
@@ -828,8 +840,10 @@ def test_task_conditioned_classifier_receives_replay_task_ids():
             chunk_size: int,
             chunk_pool: str,
             early_neg_stride: int,
+            sampling_protocol: str = "lumos",
+            balance_batches: bool = False,
         ) -> dict[str, torch.Tensor]:
-            del chunk_size, chunk_pool, early_neg_stride
+            del chunk_size, chunk_pool, early_neg_stride, sampling_protocol, balance_batches
             return {
                 "windows": torch.ones(int(batch_size), int(window), 4),
                 "labels": torch.tensor([1, 0], dtype=torch.long),
@@ -1346,7 +1360,7 @@ def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch)
 
 
 def test_online_env_validation_accepts_oft_discrete_input_token_contract():
-    from dreamervla.envs.train_env import (
+    from dreamervla.envs.libero.libero_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
     )

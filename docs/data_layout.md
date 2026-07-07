@@ -145,7 +145,7 @@ Generated datasets resolve under `${DVLA_DATA_ROOT}/processed_data/<artifact>`.
 processed_data/<artifact>/marked_t_256/
 processed_data/<artifact>/no_noops_t_256/
 processed_data/<artifact>/no_noops_t_256_remaining_reward/
-processed_data/<artifact>/no_noops_t_256_legacy_action_hidden_vla_policy_h2/
+processed_data/<artifact>/no_noops_t_256_legacy_action_hidden_vla_policy_h1/
 processed_data/<artifact>/image_state_action_t_256/
 processed_data/<artifact>/convs/
 processed_data/<artifact>/tokens/

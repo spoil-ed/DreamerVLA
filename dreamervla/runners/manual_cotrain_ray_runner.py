@@ -448,7 +448,7 @@ class ManualCotrainRayRunner(BaseRunner):
         learner_metrics: dict[str, float] = {}
         if global_step % self._learner_update_step() == 0:
             learner_metrics = _with_train_learner_aliases(
-                _merge_metric_lists([learner.update("cotrain", 1).wait()])
+                _merge_metric_lists([learner.update(self._learner_update_phase(), 1).wait()])
             )
             sync_world_model_to_env = self._should_sync_world_model_after_learner_update(
                 learner_metrics
@@ -525,6 +525,7 @@ class ManualCotrainRayRunner(BaseRunner):
             **sync_metrics,
             **stage_times,
         }
+        metrics = _with_train_learner_aliases(metrics)
         checkpoint_start = time.perf_counter()
         self._maybe_save_manual_checkpoint(groups, global_step, metrics)
         metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
@@ -616,6 +617,22 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _learner_update_step(self) -> int:
         return self._positive_manual_int("learner_update_step", default=1)
+
+    def _learner_update_phase(self) -> str:
+        phase = str(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.learner_update_phase",
+                default="cotrain",
+            )
+        ).strip()
+        allowed = {"cotrain", "wm", "classifier", "rl"}
+        if phase not in allowed:
+            raise ValueError(
+                "manual_cotrain.learner_update_phase must be one of "
+                f"{sorted(allowed)}, got {phase!r}"
+            )
+        return phase
 
     def _rollout_epoch(self) -> int:
         return self._positive_manual_int("rollout_epoch", default=1)
@@ -1658,6 +1675,19 @@ def _with_train_learner_aliases(metrics: dict[str, float]) -> dict[str, float]:
     out = dict(metrics)
     if "learner/updates" in out and "train/learner_updates" not in out:
         out["train/learner_updates"] = float(out["learner/updates"])
+    aliases = {
+        "cls/updated": "train/classifier_updated",
+        "cls/updates": "train/classifier_updates",
+        "cls/acc": "train/classifier_acc",
+        "cls/f1": "train/classifier_f1",
+        "env/wm_env/classifier_success_rate": "train/wm_env_classifier_success_rate",
+        "env/wm_env/classifier_trajectory_success_rate": (
+            "train/wm_env_classifier_trajectory_success_rate"
+        ),
+    }
+    for source, target in aliases.items():
+        if source in out and target not in out:
+            out[target] = float(out[source])
     return out
 
 
@@ -2257,7 +2287,14 @@ def _load_runner_state_dicts(
         raise RuntimeError(
             f"{path} missing state_dicts for requested component(s): {missing}"
         )
-    return {name: state_dicts[name] for name in names}
+    loaded = {name: state_dicts[name] for name in names}
+    if (
+        isinstance(payload, dict)
+        and "classifier_threshold" in payload
+        and (components is None or "classifier" in names)
+    ):
+        loaded["classifier_threshold"] = float(payload["classifier_threshold"])
+    return loaded
 
 
 def _nonnegative_int(value: Any, field: str) -> int:

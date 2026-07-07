@@ -1,8 +1,8 @@
 """LUMOS-aligned latent W-frame classifier dataset.
 
 Mirrors ``upstream reward_model/videomae.py::SuccessWindowDataset`` exactly,
-but operates on **precomputed real RynnVLA action-hidden sidecar HDF5** instead
-of raw video frames. The positive/negative protocol is intentionally
+but operates on precomputed token/action-hidden sidecar HDF5 instead of raw
+video frames. The positive/negative protocol is intentionally
 identical so that downstream eval thresholds (``upstream reward_model/find_thre.py``,
 ``LUMOS/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
 
@@ -23,9 +23,8 @@ Per-demo (``finish_step = T``, ``complete ∈ {True, False}``, ``W = window``, `
 The class balance per epoch is therefore fixed by the demo counts:
   pos windows = #success_demos
   neg windows = #success_demos + 2 × #failure_demos
-For LIBERO-goal (433 success + 67 failure) → 433 : 567 ≈ 1 : 1.31.
-(Verified 2026-05-25; matches the F1 ≈ 0.91 ceiling estimate in
-[[dreamervla-classifier-ceiling]].)
+For the processed LIBERO-goal h1 corpus (433 success + 67 failure), this is
+433 : 567 ≈ 1 : 1.31. Exact counts depend on the selected raw/hidden dirs.
 
 Use ``dreamervla.dataset.wm_replay_classifier_dataset._find_demo_pairs`` to
 discover ``(raw_path, hidden_path, demo_key)`` triples — the raw path is
@@ -92,7 +91,10 @@ def _read_lang_emb(
 ) -> np.ndarray | None:
     if lang_emb_dir is None:
         return None
-    lang_path = Path(lang_emb_dir) / hid_p.name
+    if str(lang_emb_dir) == "__source_hidden__":
+        lang_path = hid_p
+    else:
+        lang_path = Path(lang_emb_dir) / hid_p.name
     if not lang_path.is_file():
         raise FileNotFoundError(f"missing language sidecar: {lang_path}")
     with h5py.File(str(lang_path), "r") as handle:
@@ -126,6 +128,13 @@ def _load_demo(
 
     with h5py.File(str(raw_p), "r") as fr:
         grp = fr[demo_key]
+        raw_len = int(grp["actions"].shape[0]) if "actions" in grp else T
+        if raw_len != T:
+            raise ValueError(
+                "raw/hidden length mismatch for "
+                f"{raw_p}:{demo_key} and {hid_p}:{demo_key}: "
+                f"raw actions length={raw_len}, hidden obs_embedding length={T}"
+            )
         dones = np.asarray(grp["dones"][...]) if "dones" in grp else None
         # Prefer sparse_rewards (collector convention; rewards is all-zeros there),
         # fall back to rewards for canonical data — matches BalancedTerminalDataset /
@@ -223,6 +232,8 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         proprio_keys: Sequence[str] | None = None,
         lang_emb_dir: str | Path | None = None,
         lang_emb_key: str = "lang_emb",
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> None:
         super().__init__()
         if window < 1:
@@ -233,9 +244,16 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
             raise ValueError(f"chunk_subsample must be >= 1, got {chunk_subsample}")
         if chunk_pool not in ("last", "first", "mean"):
             raise ValueError(f"chunk_pool must be last|first|mean, got {chunk_pool!r}")
+        sampling_protocol = str(sampling_protocol)
+        if sampling_protocol not in ("lumos", "wmpo"):
+            raise ValueError(
+                f"sampling_protocol must be 'lumos' or 'wmpo', got {sampling_protocol!r}"
+            )
         self.W = int(window)
         self.S = int(stride)
         self.seed = int(seed)
+        self.sampling_protocol = sampling_protocol
+        self.balance_batches = bool(balance_batches)
         # Chunk-level mode: each "frame" in the classifier window is pooled
         # from K=chunk_subsample consecutive env-step frames.  Window covers
         # W * K env-step frames total.  chunk_subsample=1 reduces to the
@@ -279,24 +297,137 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         if not self._demos:
             raise RuntimeError("LumosAlignedLatentTrainDataset: no demos loaded")
 
-        # composition summary — exact pos/neg windows per epoch
-        # success demo: 1 pos (end) + 1 neg (random earlier)
-        # failure demo: 2 neg (end is label=0 because complete=False, + random earlier)
         n_succ = sum(1 for d in self._demos if d.complete)
         n_fail = len(self._demos) - n_succ
-        n_pos_windows = n_succ
-        n_neg_windows = n_succ + 2 * n_fail
+        if self.sampling_protocol == "wmpo":
+            self._ensure_wmpo_pools()
+            n_pos_windows = n_succ
+            n_neg_windows = (
+                n_pos_windows if self.balance_batches else len(self._wmpo_negative_slots)
+            )
+        else:
+            # composition summary — exact pos/neg windows per epoch
+            # success demo: 1 pos (end) + 1 neg (random earlier)
+            # failure demo: 2 neg (end is label=0 because complete=False, + random earlier)
+            n_pos_windows = n_succ
+            n_neg_windows = n_succ + 2 * n_fail
         self._epoch_windows = n_pos_windows + n_neg_windows
         if verbose:
             print(
                 f"[lumos-latent:train] per-epoch windows: "
                 f"pos={n_pos_windows}  neg={n_neg_windows}  "
-                f"ratio={n_pos_windows}:{n_neg_windows}",
+                f"ratio={n_pos_windows}:{n_neg_windows} "
+                f"protocol={self.sampling_protocol} "
+                f"batch_balance={self.balance_batches}",
                 flush=True,
             )
 
     def __len__(self) -> int:
         return int(self._epoch_windows)
+
+    def summary(self) -> dict[str, int | str | bool]:
+        n_succ = sum(1 for d in self._demos if d.complete)
+        n_fail = len(self._demos) - n_succ
+        if getattr(self, "sampling_protocol", "lumos") == "wmpo":
+            self._ensure_wmpo_pools()
+            n_pos_windows = n_succ
+            n_neg_windows = (
+                n_pos_windows if self.balance_batches else len(self._wmpo_negative_slots)
+            )
+        else:
+            n_pos_windows = n_succ
+            n_neg_windows = n_succ + 2 * n_fail
+        return {
+            "num_demos": int(len(self._demos)),
+            "num_success_demos": int(n_succ),
+            "num_failure_demos": int(n_fail),
+            "epoch_pos_windows": int(n_pos_windows),
+            "epoch_neg_windows": int(n_neg_windows),
+            "sampling_protocol": str(getattr(self, "sampling_protocol", "lumos")),
+            "balance_batches": bool(getattr(self, "balance_batches", False)),
+            "window": int(self.W),
+            "stride": int(self.S),
+            "chunk_subsample": int(self.K),
+            "chunk_pool": str(self.chunk_pool),
+        }
+
+    def _ensure_wmpo_pools(self) -> None:
+        if hasattr(self, "_wmpo_positive_ids") and hasattr(self, "_wmpo_negative_slots"):
+            return
+        positive_ids: list[int] = []
+        negative_slots: list[tuple[int, int]] = []
+        for did, rec in enumerate(self._demos):
+            if rec.complete:
+                positive_ids.append(did)
+                for end in self._wmpo_success_negative_ends(
+                    finish_step=rec.finish_step
+                ):
+                    negative_slots.append((did, end))
+            else:
+                for end in self._wmpo_failure_negative_ends(
+                    finish_step=rec.finish_step
+                ):
+                    negative_slots.append((did, end))
+        if not positive_ids:
+            raise RuntimeError("WMPO sampling requires at least one successful trajectory")
+        if not negative_slots:
+            raise RuntimeError("WMPO sampling requires at least one negative clip")
+        self._wmpo_positive_ids = positive_ids
+        self._wmpo_negative_slots = negative_slots
+
+    def _wmpo_success_negative_ends(self, *, finish_step: int) -> list[int]:
+        """End indices for successful-trajectory negatives.
+
+        WMPO samples negatives from ``L <= i <= N-L``. In token/chunk mode,
+        ``window_env = L * chunk_subsample`` env-step frames, so successful
+        negatives must end at least one full clip before the terminal clip.
+        """
+        max_end = int(finish_step) - int(self.window_env)
+        if max_end < int(self.window_env):
+            return []
+        return list(range(int(self.window_env), max_end + 1, int(self.S)))
+
+    def _wmpo_failure_negative_ends(self, *, finish_step: int) -> list[int]:
+        max_end = int(finish_step)
+        if max_end < int(self.window_env):
+            return []
+        return list(range(int(self.window_env), max_end + 1, int(self.S)))
+
+    def _window_item(
+        self,
+        rec: _DemoRecord,
+        *,
+        end: int,
+        label: int,
+    ) -> tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]:
+        start = int(end) - int(self.window_env)
+        window = rec.obs[start:int(end)]
+        extra = self._window_extra(rec, start, int(end))
+        item = (self._to_tensor(self._pool_window(window)), int(label))
+        return (*item, extra) if extra else item
+
+    def _iter_wmpo_balanced(
+        self,
+        *,
+        rng: np.random.Generator,
+        demo_ids: list[int],
+    ) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
+        self._ensure_wmpo_pools()
+        local_positive_ids = [did for did in self._wmpo_positive_ids if did in set(demo_ids)]
+        local_negative_slots = [
+            slot for slot in self._wmpo_negative_slots if int(slot[0]) in set(demo_ids)
+        ]
+        if not local_positive_ids:
+            local_positive_ids = list(self._wmpo_positive_ids)
+        if not local_negative_slots:
+            local_negative_slots = list(self._wmpo_negative_slots)
+        while True:
+            pos_did = int(rng.choice(local_positive_ids))
+            pos_rec = self._demos[pos_did]
+            yield self._window_item(pos_rec, end=pos_rec.finish_step, label=1)
+
+            neg_did, neg_end = local_negative_slots[int(rng.integers(len(local_negative_slots)))]
+            yield self._window_item(self._demos[int(neg_did)], end=int(neg_end), label=0)
 
     # ---- WebDataset-style infinite stream with per-worker shard ---------
 
@@ -314,28 +445,25 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         if not demo_ids:
             return
 
+        if getattr(self, "sampling_protocol", "lumos") == "wmpo" and bool(
+            getattr(self, "balance_batches", False)
+        ):
+            yield from self._iter_wmpo_balanced(rng=rng, demo_ids=demo_ids)
+            return
+
         while True:
             for did in rng.permutation(demo_ids):
                 rec = self._demos[int(did)]
                 T = rec.finish_step
-                obs = rec.obs
                 # 1 end window — label = int(complete)
-                end_window = obs[T - self.window_env : T]
-                end_extra = self._window_extra(rec, T - self.window_env, T)
-                end_item = (self._to_tensor(self._pool_window(end_window)), int(rec.complete))
-                yield (*end_item, end_extra) if end_extra else end_item
+                yield self._window_item(rec, end=T, label=int(rec.complete))
                 # 1 random earlier window — label = 0
                 if T - self.S >= self.window_env:
                     ends = range(T - self.S, self.window_env - 1, -self.S)
                     ends_list = list(ends)
                     if ends_list:
                         end = int(rng.choice(ends_list))
-                        neg_window = obs[end - self.window_env : end]
-                        neg_extra = self._window_extra(
-                            rec, end - self.window_env, end
-                        )
-                        neg_item = (self._to_tensor(self._pool_window(neg_window)), 0)
-                        yield (*neg_item, neg_extra) if neg_extra else neg_item
+                        yield self._window_item(rec, end=end, label=0)
 
     def _to_tensor(self, win: np.ndarray) -> torch.Tensor:
         # fp16 → fp32 here so the model sees a consistent dtype.
@@ -429,16 +557,23 @@ class LumosAlignedLatentValDataset(Dataset):
         proprio_keys: Sequence[str] | None = None,
         lang_emb_dir: str | Path | None = None,
         lang_emb_key: str = "lang_emb",
+        sampling_protocol: str = "lumos",
     ) -> None:
         super().__init__()
         if chunk_subsample < 1:
             raise ValueError(f"chunk_subsample must be >= 1, got {chunk_subsample}")
         if chunk_pool not in ("last", "first", "mean"):
             raise ValueError(f"chunk_pool must be last|first|mean, got {chunk_pool!r}")
+        sampling_protocol = str(sampling_protocol)
+        if sampling_protocol not in ("lumos", "wmpo"):
+            raise ValueError(
+                f"sampling_protocol must be 'lumos' or 'wmpo', got {sampling_protocol!r}"
+            )
         self.W = int(window)
         self.S = int(stride)
         self.K = int(chunk_subsample)
         self.chunk_pool = chunk_pool
+        self.sampling_protocol = sampling_protocol
         self.window_env = self.W * self.K
         self.proprio_keys = tuple(str(key) for key in (proprio_keys or ()))
         self.lang_emb_dir = Path(lang_emb_dir) if lang_emb_dir is not None else None
@@ -481,10 +616,15 @@ class LumosAlignedLatentValDataset(Dataset):
             T = rec.finish_step
             # end window
             slots.append(_ValSlot(did, T, int(rec.complete), is_end_window=True))
-            # all earlier stride-S windows (env-step indexed; constrained so
-            # the pooled window of W*K env-step frames fits before `end`)
-            for end in range(T - self.S, self.window_env - 1, -self.S):
-                slots.append(_ValSlot(did, end, 0, is_end_window=False))
+            if self.sampling_protocol == "wmpo" and rec.complete:
+                earlier_ends = self._wmpo_success_negative_ends(finish_step=T)
+            else:
+                # LUMOS validation and failed WMPO trajectories enumerate all
+                # earlier stride-S windows. Failed terminal is already included
+                # above, so this starts at T-S.
+                earlier_ends = list(range(T - self.S, self.window_env - 1, -self.S))
+            for end in earlier_ends:
+                slots.append(_ValSlot(did, int(end), 0, is_end_window=False))
         self._slots = slots
         if verbose:
             n_pos = sum(1 for s in slots if s.label == 1)
@@ -497,6 +637,31 @@ class LumosAlignedLatentValDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self._slots)
+
+    def summary(self) -> dict[str, int | str]:
+        n_succ = sum(1 for d in self._demos if d.complete)
+        n_fail = len(self._demos) - n_succ
+        n_pos_windows = sum(1 for s in self._slots if s.label == 1)
+        n_neg_windows = len(self._slots) - n_pos_windows
+        return {
+            "num_demos": int(len(self._demos)),
+            "num_success_demos": int(n_succ),
+            "num_failure_demos": int(n_fail),
+            "num_windows": int(len(self._slots)),
+            "pos_windows": int(n_pos_windows),
+            "neg_windows": int(n_neg_windows),
+            "window": int(self.W),
+            "stride": int(self.S),
+            "chunk_subsample": int(self.K),
+            "chunk_pool": str(self.chunk_pool),
+            "sampling_protocol": str(getattr(self, "sampling_protocol", "lumos")),
+        }
+
+    def _wmpo_success_negative_ends(self, *, finish_step: int) -> list[int]:
+        max_end = int(finish_step) - int(self.window_env)
+        if max_end < int(self.window_env):
+            return []
+        return list(range(int(self.window_env), max_end + 1, int(self.S)))
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, dict[str, Any]]:
         slot = self._slots[idx]
@@ -549,8 +714,8 @@ class LumosAlignedLatentValDataset(Dataset):
     def trajectories(self) -> Iterator[tuple[np.ndarray, bool, int, str, dict[str, np.ndarray]]]:
         """Yield ``(obs[T,L], complete, finish_step, eid, extra)`` per demo.
 
-        Cast to fp32 once here so the consumer (episode-level eval) can
-        slide stride-1 windows without re-casting.
+        Keep obs in its cached dtype. Token-grid sidecars are large, so
+        episode-level eval casts only the current inference batch to fp32.
         """
         for rec in self._demos:
             extra: dict[str, np.ndarray] = {}
@@ -559,7 +724,7 @@ class LumosAlignedLatentValDataset(Dataset):
             if rec.lang_emb is not None:
                 extra["lang_emb"] = rec.lang_emb.astype(np.float32, copy=False)
             yield (
-                rec.obs.astype(np.float32, copy=False),
+                rec.obs,
                 rec.complete,
                 rec.finish_step,
                 rec.eid,

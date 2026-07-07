@@ -11,8 +11,8 @@ def _latent_success_classifier_cls():
     path = (
         Path(__file__).resolve().parents[2]
         / "dreamervla"
-        / "models"
-        / "reward"
+        / "algorithms"
+        / "critic"
         / "latent_success_classifier.py"
     )
     spec = importlib.util.spec_from_file_location(
@@ -140,8 +140,8 @@ def test_latent_success_classifier_messages_use_role_based_wm_wording() -> None:
     source = (
         Path(__file__).resolve().parents[2]
         / "dreamervla"
-        / "models"
-        / "reward"
+        / "algorithms"
+        / "critic"
         / "latent_success_classifier.py"
     ).read_text(encoding="utf-8")
     assert ("DINO" + "-WM") not in source
@@ -150,7 +150,7 @@ def test_latent_success_classifier_messages_use_role_based_wm_wording() -> None:
 
 
 def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:
-    from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
+    from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
     wm = ChunkAwareWorldModel(
         chunk_size=2,

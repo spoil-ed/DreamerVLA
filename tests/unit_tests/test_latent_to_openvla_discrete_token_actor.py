@@ -4,10 +4,10 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dreamervla.models.actor.latent_to_openvla_discrete_token_actor import (
+from dreamervla.algorithms.actor.latent_to_openvla_discrete_token_actor import (
     LatentToOpenVLADiscreteTokenActor,
 )
-from dreamervla.models.actor.latent_to_openvla_hidden_state_actor import (
+from dreamervla.algorithms.actor.latent_to_openvla_hidden_state_actor import (
     LatentToOpenVLAHiddenStateActor,
 )
 

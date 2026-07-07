@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
-from dreamervla.models.world_model.wm_chunk import ChunkAwareWorldModel
+from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

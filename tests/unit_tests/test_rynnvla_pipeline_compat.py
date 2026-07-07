@@ -13,15 +13,15 @@ from torch import nn
 from dreamervla.dataset.pixel_hidden_sequence_dataset import (
     PixelHiddenSequenceDataset,
 )
-from dreamervla.models.actor import (
+from dreamervla.algorithms.actor import (
     LatentToActionHiddenActor,
     LatentToOpenVLADiscreteTokenActor,
     OpenVLADiscreteTokenActor,
     RynnVLAActionHiddenActor,
     VLAActionHeadActor,
 )
-from dreamervla.models.reward import LatentSuccessClassifier
-from dreamervla.models.world_model.wm import WorldModel
+from dreamervla.algorithms.critic import LatentSuccessClassifier
+from dreamervla.models.embodiment.world_model.wm import WorldModel
 from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 

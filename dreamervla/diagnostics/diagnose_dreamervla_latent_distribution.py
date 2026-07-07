@@ -23,7 +23,7 @@ from dreamervla.envs import (
     get_libero_image,
     quat2axisangle,
 )
-from dreamervla.models.actor import RynnVLAActionHiddenActor
+from dreamervla.algorithms.actor import RynnVLAActionHiddenActor
 from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
 from dreamervla.utils.paths import data_path
 

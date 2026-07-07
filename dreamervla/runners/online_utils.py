@@ -37,7 +37,7 @@ def build_encoder(args: argparse.Namespace, device: torch.device) -> torch.nn.Mo
     action_head_type = str(getattr(args, "action_head_type", None) or "legacy")
     encoder_target = str(
         getattr(args, "encoder_target", None)
-        or "dreamervla.models.encoder.RynnVLAEncoder"
+        or "dreamervla.models.embodiment.RynnVLAEncoder"
     )
     print(
         f"[init] encoder source: target={encoder_target} model_path={args.vla_ckpt_path} "

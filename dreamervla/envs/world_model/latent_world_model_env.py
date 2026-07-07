@@ -867,9 +867,13 @@ class LatentWorldModelEnv:
             raw_is_logits
             and score_tensor.ndim >= 2
             and score_tensor.shape[0] == latent.shape[0]
-            and score_tensor.shape[-1] == 2
         ):
-            score_tensor = torch.sigmoid(score_tensor[..., 1])
+            if score_tensor.shape[-1] == 1:
+                score_tensor = torch.sigmoid(score_tensor[..., 0])
+            elif score_tensor.shape[-1] == 2:
+                score_tensor = torch.softmax(score_tensor, dim=-1)[..., 1]
+            else:
+                score_tensor = score_tensor[..., -1]
         elif score_tensor.ndim > 1 and score_tensor.shape[0] == latent.shape[0]:
             score_tensor = score_tensor[..., -1]
         scores = score_tensor.reshape(-1)

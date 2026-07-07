@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
-from dreamervla.models.world_model.wm import WorldModel
+from dreamervla.models.embodiment.world_model.wm import WorldModel
 from dreamervla.runners.oft_collect_common import make_preprocess_config
 
 
@@ -189,6 +189,7 @@ def test_wm_source_uses_role_based_wm_wording() -> None:
         Path(__file__).resolve().parents[2]
         / "dreamervla"
         / "models"
+        / "embodiment"
         / "world_model"
         / "wm.py"
     ).read_text(encoding="utf-8")

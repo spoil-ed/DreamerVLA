@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from dreamervla.models.world_model.block_linear import BlockLinear
+from dreamervla.models.embodiment.world_model.block_linear import BlockLinear
 
 
 class RMSNorm(nn.Module):

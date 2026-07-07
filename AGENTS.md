@@ -36,12 +36,17 @@ log. Shipped work and open work live in [docs/HISTORY.md](docs/HISTORY.md) and
     `OnlineCotrainPipelineRunner`, `OnlineCotrainRunner`, `ManualCotrainRayRunner`,
     and `OnlineCotrainRayRunner`.
     WM, classifier, VLA SFT, and eval runners are also here.
-  - `models/` - VLA encoders/policies, world models, actors, critics, reward heads.
-  - `algorithms/` - LUMOS/PPO-style update code, actor-update registry, reward-model
-    registry, verifier protocol.
+  - `models/` - embodiment model implementations only. `models/embodiment/`
+    contains VLA/encoder code and world-model modules; VLA and encoder are the
+    same embodiment boundary.
+  - `algorithms/` - LUMOS/PPO-style update code, actor modules, critic/classifier
+    modules, actor-update registry, reward-model registry, and verifier protocol.
+    Critic and classifier are the same value/verifier boundary and live under
+    `algorithms/critic/`.
   - `dataset/` and `preprocess/` - LIBERO HDF5 datasets, rollout dumps, manifests,
     hidden sidecars, and validation utilities.
-  - `envs/` - LIBERO train/eval env wrappers plus `envs/world_model/LatentWorldModelEnv`.
+  - `envs/` - `envs/libero/{libero_env.py,utils.py,venv.py}` plus
+    `envs/world_model/LatentWorldModelEnv`.
   - `workers/`, `scheduler/`, `hybrid_engines/` - opt-in Ray async cotrain backend:
     env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
   - `diagnostics/` - importable smoke checks and measurement CLIs.
@@ -201,14 +206,19 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
   cohesive `configs/<group>/...yaml`, and add an `experiment/<name>.yaml`. Add a shell
   launcher only when `python -m dreamervla.train experiment=<name>` is not enough.
 - **New actor update:** register an `ActorUpdateRoute` in `dreamervla/algorithms/registry.py`
-  and select it with `algorithm.update_type`.
+  and select it with `algorithm.update_type`. Actor modules live under
+  `dreamervla/algorithms/actor/`.
 - **New LUMOS reward model:** implement the reward protocol and register it in
   `dreamervla/algorithms/reward/`.
-- **New verifier/classifier:** satisfy `algorithms/verifier/SuccessVerifier` and select
-  it through the `classifier` Hydra component.
-- **New VLA, actor, WM, critic, or dataset:** implement the existing protocol/kwargs
-  contract and wire it through Hydra. Do not add `if model == ...` branches to training
-  loops when a registry or target can express the choice.
+- **New verifier/classifier/critic:** satisfy `algorithms/verifier/SuccessVerifier`
+  when used as a success verifier. Implement critic/classifier modules under
+  `dreamervla/algorithms/critic/` and select them through Hydra.
+- **New VLA, encoder, WM, actor, critic/classifier, or dataset:** implement the
+  existing protocol/kwargs contract and wire it through Hydra. VLA/encoder/WM code
+  belongs under `dreamervla/models/embodiment/`; actor code belongs under
+  `dreamervla/algorithms/actor/`; critic/classifier code belongs under
+  `dreamervla/algorithms/critic/`. Do not add `if model == ...` branches to
+  training loops when a registry or target can express the choice.
 - **New env:** LIBERO is the stable env/data surface today. Adding another env requires
   task config, rollout record schema, reward labels, and tests.
 

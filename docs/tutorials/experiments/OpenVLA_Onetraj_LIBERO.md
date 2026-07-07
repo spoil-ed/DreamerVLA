@@ -51,6 +51,30 @@ dry-run 只打印计划，不检查资产、不启动训练。
 Ray collection 计划中应能看到底层 route `experiment=collect_rollouts_ray`；
 cotrain online 计划中应能看到 `experiment=openvla_onetraj_libero_cotrain_ray`。
 
+## Classifier 口径
+
+OpenVLA one-trajectory h1 主线 classifier 使用 token-WMPO 口径：
+
+- token hidden 输入来自 `*_oft_input_token_embedding_vla_policy_h1`
+- `classifier.output_dim=1`
+- `training.loss_type=bce`
+- `data.sampling_protocol=wmpo`
+- `data.balance_batches=true`
+
+standalone 训练入口是：
+
+```bash
+python -m dreamervla.train \
+  experiment=latent_classifier_openvla_onetraj_libero_goal_h1
+```
+
+`experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1` 保留为显式别名。
+cotrain warmup 和 online/Ray learner 也使用同一组
+`classifier_loss_type=bce`、`classifier_sampling_protocol=wmpo`、
+`classifier_balance_batches=true`。warmup 写出的 `classifier_warmup.ckpt`
+会携带校准阈值；async Ray 的 `ray_async_init.ckpt` 会保留该 metadata，Ray
+learner 在 `classifier_threshold=null` 时使用 ckpt 阈值。
+
 ## 完整训练
 
 这是推荐入口，会自动执行 collection、warmup、consolidate warmup checkpoint，

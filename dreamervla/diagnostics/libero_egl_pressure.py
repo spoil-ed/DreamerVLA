@@ -245,7 +245,7 @@ def _gpu_pool_from_arg(value: Any) -> list[int]:
 
 
 def _build_online_env(config: PressureWorkerConfig) -> Any:
-    from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv
+    from dreamervla.envs.libero.libero_env import DreamerVLAOnlineTrainEnv
 
     return DreamerVLAOnlineTrainEnv(
         {

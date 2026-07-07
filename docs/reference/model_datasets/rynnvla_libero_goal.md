@@ -25,11 +25,11 @@ to 1024 dims. Per frame:
 
 Sidecar attrs expected by the WM route
 (`task.legacy_action_hidden.*`): `action_head_type=legacy`,
-`obs_hidden_source=action_query`, `prompt_style=vla_policy`, `history=2`,
-`include_state=true`, `rotate_images_180=true`.
+`obs_hidden_source=action_query`, `prompt_style=vla_policy`, `history=1`,
+`include_state=false`, `rotate_images_180=true`.
 
 Reference sidecar:
-`data/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2/`.
+`data/processed_data/libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h1/`.
 
 This is the RynnVLA-002 latent contract.  The WM token axis is an
 action-slot axis (`time_horizon × action_dim`), so downstream actor code can

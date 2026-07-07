@@ -23,7 +23,7 @@ collect:
 env:
   num_workers: 112   # osmesa CPU env-stepping processes; ~112 of 128 cores, ~16-core headroom (the e2e launcher profile/autoscale still overrides this)
   cfg:
-    target: dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv
+    target: dreamervla.envs.libero.libero_env:DreamerVLAOnlineTrainEnv
     use_from_config: true
     render_backend: osmesa
 

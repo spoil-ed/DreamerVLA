@@ -549,7 +549,7 @@ def collect_rollouts(
     torch.cuda.set_device(gpu_id)
     torch.cuda.set_per_process_memory_fraction(memory_fraction, device=gpu_id)
 
-    from dreamervla.envs.train_env import (
+    from dreamervla.envs.libero.libero_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
     )

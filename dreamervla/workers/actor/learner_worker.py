@@ -435,6 +435,13 @@ class LearnerWorker(Worker):
                 ),
                 early_neg_stride=int(self.train_cfg.get("classifier_early_neg_stride", 8)),
                 grad_clip=float(self._optim_cfg().get("grad_clip_norm", 1.0)),
+                loss_type=self.train_cfg.get("classifier_loss_type", None),
+                sampling_protocol=str(
+                    self.train_cfg.get("classifier_sampling_protocol", "lumos")
+                ),
+                balance_batches=bool(
+                    self.train_cfg.get("classifier_balance_batches", False)
+                ),
             )
         if float(raw.get("updated", 1.0)) > 0.5:
             self._cotrain_classifier_updates += 1
@@ -444,6 +451,7 @@ class LearnerWorker(Worker):
             "cls/acc": float(raw.get("acc", 0.0)),
             "cls/f1": float(raw.get("f1", 0.0)),
             "cls/updated": float(raw.get("updated", 1.0)),
+            "cls/updates": float(self._cotrain_classifier_updates),
             "cls/skipped_single_class_batch": float(
                 raw.get("skipped_single_class_batch", 0.0)
             ),
@@ -488,7 +496,7 @@ class LearnerWorker(Worker):
                 policy=self._required_module("policy"),
                 chunk_world_model=self._required_module("world_model"),
                 classifier=self._required_module("classifier"),
-                classifier_threshold=float(self.train_cfg.get("classifier_threshold", 0.5)),
+                classifier_threshold=self._classifier_threshold(),
                 actor_optimizer=self._required_optimizer("policy"),
                 obs=obs_for_update,
                 device=self.torch_device,
@@ -661,6 +669,12 @@ class LearnerWorker(Worker):
         if optimizer is None:
             raise RuntimeError(f"LearnerWorker optimizer {name!r} has not been initialized")
         return optimizer
+
+    def _classifier_threshold(self) -> float:
+        value = self.train_cfg.get("classifier_threshold", None)
+        if value is None:
+            value = self.init_ckpt.get("classifier_threshold", 0.5)
+        return float(value)
 
     def _validate_dreamervla_cotrain_components(self) -> None:
         missing = [

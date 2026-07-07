@@ -31,12 +31,12 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
 
 
 def test_world_model_package_exports_role_based_wm_aliases() -> None:
-    from dreamervla.models.world_model import (
+    from dreamervla.models.embodiment.world_model import (
         ChunkAwareWorldModel,
         WorldModel,
     )
-    from dreamervla.models.world_model.wm import WorldModel as ModuleWorldModel
-    from dreamervla.models.world_model.wm_chunk import (
+    from dreamervla.models.embodiment.world_model.wm import WorldModel as ModuleWorldModel
+    from dreamervla.models.embodiment.world_model.wm_chunk import (
         ChunkAwareWorldModel as ModuleChunkAwareWorldModel,
     )
 
@@ -137,15 +137,15 @@ def test_removed_route_files_are_absent() -> None:
         "dreamervla/cli/eval_embedding_distribution.py",
         "dreamervla/cli/eval_wm.py",
         "dreamervla/cli/train_pure_vae.py",
-        "dreamervla/models/world_model/causal_transformer.py",
-        "dreamervla/models/world_model/causal_transformer_v2.py",
-        "dreamervla/models/world_model/image_codec.py",
-        "dreamervla/models/world_model/semantic_bottleneck.py",
-        "dreamervla/models/world_model/token_io.py",
-        "dreamervla/models/world_model/transdreamer_original.py",
-        "dreamervla/models/world_model/transdreamer_transformer.py",
-        "dreamervla/models/world_model/tssm.py",
-        "dreamervla/models/world_model/tssm_discrete.py",
+        "dreamervla/models/embodiment/world_model/causal_transformer.py",
+        "dreamervla/models/embodiment/world_model/causal_transformer_v2.py",
+        "dreamervla/models/embodiment/world_model/image_codec.py",
+        "dreamervla/models/embodiment/world_model/semantic_bottleneck.py",
+        "dreamervla/models/embodiment/world_model/token_io.py",
+        "dreamervla/models/embodiment/world_model/transdreamer_original.py",
+        "dreamervla/models/embodiment/world_model/transdreamer_transformer.py",
+        "dreamervla/models/embodiment/world_model/tssm.py",
+        "dreamervla/models/embodiment/world_model/tssm_discrete.py",
         "dreamervla/models/vla_actor.py",
         "dreamervla/models/vla_policy.py",
         "dreamervla/runners/pretokenize_sft_runner.py",
@@ -287,7 +287,7 @@ def test_removed_runner_routes_are_not_importable() -> None:
 
 def test_world_model_package_exposes_only_retained_architectures() -> None:
     import dreamervla.models as models
-    import dreamervla.models.world_model as world_model
+    import dreamervla.models.embodiment.world_model as world_model
 
     removed_world_models = {
         "CausalTransformerCell",
@@ -305,12 +305,30 @@ def test_world_model_package_exposes_only_retained_architectures() -> None:
         assert not hasattr(models, name)
 
 
-def test_models_package_exports_fail_fast_symbols() -> None:
+def test_models_package_exports_embodiment_fail_fast_symbols() -> None:
     import dreamervla.models as models
 
-    for name in ("Critic", "VLAPolicy", "WorldModel"):
+    assert "Critic" not in models.__all__
+    assert "VLAPolicy" not in models.__all__
+    assert not hasattr(models, "Critic")
+    assert not hasattr(models, "VLAPolicy")
+
+    for name in ("WorldModel",):
         assert name in models.__all__
         assert getattr(models, name) is not None
+
+
+def test_algorithms_package_exports_actor_and_critic_symbols() -> None:
+    import dreamervla.algorithms.actor as actor
+    import dreamervla.algorithms.critic as critic
+
+    for name in ("VLAPolicy",):
+        assert name in actor.__all__
+        assert getattr(actor, name) is not None
+
+    for name in ("Critic", "LatentSuccessClassifier", "TwohotCritic"):
+        assert name in critic.__all__
+        assert getattr(critic, name) is not None
 
 
 def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None:

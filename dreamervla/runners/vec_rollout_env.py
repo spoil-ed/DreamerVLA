@@ -69,7 +69,7 @@ def default_env_factory(cfg_kwargs: dict[str, Any]) -> Any:
             hydra.utils.instantiate({"_target_": str(target), **cfg})
         )
 
-    from dreamervla.envs.train_env import (
+    from dreamervla.envs.libero.libero_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
     )

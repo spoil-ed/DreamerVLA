@@ -328,7 +328,7 @@ def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
+                "_target_": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
                 "obs_dim": 229376,
                 "token_count": 56,
                 "token_dim": 4096,
@@ -407,7 +407,7 @@ def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> No
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
+                "_target_": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
                 "obs_dim": 229376,
                 "token_count": 56,
                 "token_dim": 4096,
@@ -436,7 +436,7 @@ def test_validate_cfg_rejects_nested_chunk_world_model_sequence_length_mismatch(
         {
             "ray_components": {
                 "world_model": {
-                    "target": "dreamervla.models.world_model.wm_chunk.ChunkAwareWorldModel",
+                    "target": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
                     "kwargs": {
                         "obs_dim": 35840,
                         "token_count": 35,

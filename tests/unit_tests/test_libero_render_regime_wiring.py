@@ -269,7 +269,7 @@ def test_sync_cotrain_env_kwargs_carry_libero_render_regime() -> None:
     assert kwargs["_libero_render_shard_id"] == 0
 
 
-def test_libero_eval_env_module_import_does_not_import_libero_backend() -> None:
+def test_libero_utils_module_import_does_not_import_libero_backend() -> None:
     code = textwrap.dedent(
         """
         import importlib.abc
@@ -282,7 +282,7 @@ def test_libero_eval_env_module_import_does_not_import_libero_backend() -> None:
                 return None
 
         sys.meta_path.insert(0, BlockLibero())
-        import dreamervla.envs.libero_env as libero_env
+        import dreamervla.envs.libero.utils as libero_env
         assert libero_env.TASK_MAX_STEPS["libero_goal"] == 300
         """
     )

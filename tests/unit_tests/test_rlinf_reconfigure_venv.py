@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from dreamervla.envs.rlinf_reconfigure_venv import ReconfigureSubprocEnv
+from dreamervla.envs.libero.venv import ReconfigureSubprocEnv
 
 
 class _TagEnv:

@@ -1,6 +1,6 @@
 """Single-process port of RLinf's env eval loop (env_worker.evaluate).
 
-Drives a LiberoChunkEnv through epochs of [reset -> n_chunk_steps x
+Drives a LiberoEnv through epochs of [reset -> n_chunk_steps x
 (policy_fn -> chunk_step)]. Metrics follow RLinf: an episode is counted when
 its env is NEWLY done (prev-done mask when auto_reset is off, per-chunk dones
 when auto_reset is on), reading ``episode.success_once``. Deviations: the

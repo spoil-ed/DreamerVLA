@@ -67,9 +67,9 @@ def _find_demo_pairs(
 ) -> list[tuple[Path, Path, str]]:
     """Match raw demos (actions) with precomputed obs_embedding by filename.
 
-    Returns a list of (raw_path, hidden_path, demo_key) — demo_key like
-    'open_the_middle_drawer_..._demo.hdf5/data/demo_0'. Each raw file may
-    contain many demo_groups (demo_0, demo_1, ...); each gets one tuple.
+    Returns a list of (raw_path, hidden_path, demo_key) where ``demo_key`` is
+    an HDF5 path like ``data/demo_0``. Each raw file may contain many demo
+    groups; each raw/hidden intersection with ``obs_embedding`` gets one tuple.
     """
     raw_dir = Path(raw_dir)
     hidden_dir = Path(hidden_dir)
@@ -79,13 +79,16 @@ def _find_demo_pairs(
         hid_p = hidden_dir / raw_p.name
         if not hid_p.exists():
             continue
-        with h5py.File(str(hid_p), "r") as hh:
-            if "data" not in hh:
+        with h5py.File(str(raw_p), "r") as rr, h5py.File(str(hid_p), "r") as hh:
+            if "data" not in rr or "data" not in hh:
                 continue
-            demo_keys = list(hh["data"].keys())
-        # filter demos that actually have obs_embedding
-        with h5py.File(str(hid_p), "r") as hh:
-            keep_keys = [k for k in demo_keys if "obs_embedding" in hh[f"data/{k}"]]
+            raw_keys = set(rr["data"].keys())
+            hidden_keys = list(hh["data"].keys())
+            keep_keys = [
+                k
+                for k in hidden_keys
+                if k in raw_keys and "obs_embedding" in hh[f"data/{k}"]
+            ]
         for k in keep_keys:
             pairs.append((raw_p, hid_p, f"data/{k}"))
     return pairs

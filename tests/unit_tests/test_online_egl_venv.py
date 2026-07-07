@@ -17,7 +17,7 @@ import os
 import numpy as np
 import pytest
 
-from dreamervla.envs.online_egl_venv import OnlineEglVecEnv
+from dreamervla.envs.libero.venv import OnlineEglVecEnv
 
 # ── module-level fakes (must be importable for spawn pickling) ────────────────
 

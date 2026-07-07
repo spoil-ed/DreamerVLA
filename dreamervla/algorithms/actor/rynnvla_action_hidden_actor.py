@@ -5,8 +5,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from dreamervla.models.actor._load import extract_state_dict
-from dreamervla.models.actor.base_actor import BaseActor
+from dreamervla.algorithms.actor._load import extract_state_dict
+from dreamervla.algorithms.actor.base_actor import BaseActor
 from dreamervla.models.embodiment.chameleon_model.modeling_xllmx_chameleon_ck_action_head import (
     L1RegressionActionHead,
 )

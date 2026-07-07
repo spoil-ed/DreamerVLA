@@ -8,28 +8,28 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
-from dreamervla.models.actor._load import extract_state_dict
-from dreamervla.models.actor.base_actor import BaseActor
+from dreamervla.algorithms.actor._load import extract_state_dict
+from dreamervla.algorithms.actor.base_actor import BaseActor
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 logger = logging.getLogger(__name__)
 
 
-class LatentToOpenVLAHiddenStateActor(BaseActor):
-    """Bridge query-before VLA hidden states to OpenVLA discrete action tokens."""
+class OpenVLADiscreteTokenActor(BaseActor):
+    """OpenVLA discrete action-token policy over predicted action hidden slots.
+
+    This actor does not invent a new discrete head.  It adapts DreamerVLA world
+    model action-hidden slots, applies the OpenVLA LM head to the action-token
+    vocabulary tail, samples OpenVLA action token IDs, and decodes those IDs with
+    the same bin-center rule used by OpenVLA-OFT's ``ActionTokenizer``.
+    """
 
     def __init__(
         self,
         hidden_dim: int | None = None,
-        source_token_count: int | None = None,
-        source_token_dim: int = 4096,
-        hidden_state_dim: int = 4096,
+        action_hidden_dim: int = 4096,
         action_dim: int = 7,
         time_horizon: int = 8,
-        bridge_hidden_dim: int = 1024,
-        num_bridge_layers: int = 2,
-        num_bridge_heads: int = 8,
-        bridge_dropout: float = 0.1,
         vocab_size: int = 32000,
         action_token_bins: int = 256,
         min_action: float = -1.0,
@@ -39,19 +39,10 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         freeze_lm_head: bool = True,
         init_lm_head_ckpt: str | None = None,
         head_type: str = "oft_discrete_token",
-        **kwargs: Any,
+        **_: Any,
     ) -> None:
-        if "action_hidden_dim" in kwargs:
-            raise TypeError(
-                "LatentToOpenVLAHiddenStateActor uses hidden_state_dim; "
-                "action_hidden_dim belongs only to legacy action-hidden routes."
-            )
         super().__init__()
-        self.source_token_count = (
-            int(source_token_count) if source_token_count is not None else None
-        )
-        self.source_token_dim = int(source_token_dim)
-        self.hidden_state_dim = int(hidden_state_dim)
+        self.action_hidden_dim = int(action_hidden_dim)
         self.action_dim = int(action_dim)
         self.time_horizon = int(time_horizon)
         self.action_token_bins = int(action_token_bins)
@@ -59,10 +50,9 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         self.max_action = float(max_action)
         self.adapter_type = str(adapter_type).lower()
         self.head_type = str(head_type).lower()
-        self.bridge_hidden_dim = int(bridge_hidden_dim)
         if self.head_type != "oft_discrete_token":
             raise ValueError(
-                "LatentToOpenVLAHiddenStateActor requires head_type='oft_discrete_token'."
+                "OpenVLADiscreteTokenActor requires head_type='oft_discrete_token'."
             )
         if self.adapter_type not in {"identity", "mlp", "residual_mlp"}:
             raise ValueError(
@@ -70,34 +60,14 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             )
         if self.action_token_bins < 2:
             raise ValueError("action_token_bins must be >= 2")
-        if self.bridge_hidden_dim % int(num_bridge_heads) != 0:
-            raise ValueError(
-                "bridge_hidden_dim must be divisible by num_bridge_heads: "
-                f"{self.bridge_hidden_dim} % {int(num_bridge_heads)} != 0"
-            )
 
-        self.action_token_count = self.time_horizon * self.action_dim
-        expected_flat = (
-            None
-            if self.source_token_count is None
-            else self.source_token_count * self.source_token_dim
-        )
-        self.hidden_dim = (
-            int(hidden_dim)
-            if hidden_dim is not None
-            else int(expected_flat)
-            if expected_flat is not None
-            else None
-        )
-        if (
-            expected_flat is not None
-            and self.hidden_dim is not None
-            and self.hidden_dim != expected_flat
-        ):
+        self.token_count = self.time_horizon * self.action_dim
+        expected_flat = self.token_count * self.action_hidden_dim
+        self.hidden_dim = expected_flat if hidden_dim is None else int(hidden_dim)
+        if self.hidden_dim != expected_flat:
             raise ValueError(
-                "LatentToOpenVLAHiddenStateActor flat hidden dim mismatch: "
-                f"hidden_dim={self.hidden_dim}, expected source_token_count * "
-                f"source_token_dim = {expected_flat}"
+                "OpenVLADiscreteTokenActor flat hidden dim mismatch: "
+                f"hidden_dim={self.hidden_dim}, expected {expected_flat}"
             )
 
         lm_head_state = (
@@ -108,10 +78,10 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         weight = lm_head_state.get("weight")
         if weight is not None:
             vocab_size = int(weight.shape[0])
-            if int(weight.shape[1]) != self.hidden_state_dim:
+            if int(weight.shape[1]) != self.action_hidden_dim:
                 raise ValueError(
-                    "OpenVLA LM head hidden-state dim mismatch: "
-                    f"checkpoint={tuple(weight.shape)}, hidden_state_dim={self.hidden_state_dim}"
+                    "OpenVLA LM head hidden dim mismatch: "
+                    f"checkpoint={tuple(weight.shape)}, action_hidden_dim={self.action_hidden_dim}"
                 )
         self.vocab_size = int(vocab_size)
         if self.vocab_size <= self.action_token_bins:
@@ -119,42 +89,14 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 f"vocab_size={self.vocab_size} must exceed action_token_bins={self.action_token_bins}"
             )
 
-        self.source_proj = (
-            nn.Identity()
-            if self.source_token_dim == self.bridge_hidden_dim
-            else nn.Linear(self.source_token_dim, self.bridge_hidden_dim)
-        )
-        self.action_queries = nn.Parameter(
-            torch.randn(self.action_token_count, self.bridge_hidden_dim) * 0.02
-        )
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.bridge_hidden_dim,
-            nhead=int(num_bridge_heads),
-            dim_feedforward=self.bridge_hidden_dim * 4,
-            dropout=float(bridge_dropout),
-            batch_first=True,
-            activation="gelu",
-            norm_first=True,
-        )
-        self.bridge = nn.TransformerDecoder(
-            decoder_layer,
-            num_layers=int(num_bridge_layers),
-            norm=nn.LayerNorm(self.bridge_hidden_dim),
-        )
-        self.hidden_state_proj = (
-            nn.Identity()
-            if self.bridge_hidden_dim == self.hidden_state_dim
-            else nn.Linear(self.bridge_hidden_dim, self.hidden_state_dim)
-        )
-
         if self.adapter_type == "identity":
             self.adapter = nn.Identity()
         else:
             self.adapter = nn.Sequential(
-                nn.LayerNorm(self.hidden_state_dim),
-                nn.Linear(self.hidden_state_dim, int(adapter_hidden_dim)),
+                nn.LayerNorm(self.action_hidden_dim),
+                nn.Linear(self.action_hidden_dim, int(adapter_hidden_dim)),
                 nn.GELU(),
-                nn.Linear(int(adapter_hidden_dim), self.hidden_state_dim),
+                nn.Linear(int(adapter_hidden_dim), self.action_hidden_dim),
             )
             if self.adapter_type == "residual_mlp":
                 final_linear = self.adapter[-1]
@@ -162,7 +104,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                     nn.init.zeros_(final_linear.weight)
                     nn.init.zeros_(final_linear.bias)
 
-        self.lm_head = nn.Linear(self.hidden_state_dim, self.vocab_size, bias=False)
+        self.lm_head = nn.Linear(self.action_hidden_dim, self.vocab_size, bias=False)
         if lm_head_state:
             missing, unexpected = self.lm_head.load_state_dict(lm_head_state, strict=False)
             logger.info(
@@ -226,60 +168,48 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         strip_prefixes = ("module.", "backbone.", *prefixes)
         return extract_state_dict(candidates, strip_prefixes, {"weight"})
 
-    def _source_tokens(self, hidden: torch.Tensor) -> torch.Tensor:
-        if hidden.ndim == 2:
-            if self.hidden_dim is not None and int(hidden.shape[-1]) != self.hidden_dim:
-                raise ValueError(
-                    f"flat hidden dim mismatch: got {hidden.shape[-1]}, expected {self.hidden_dim}"
-                )
-            if self.source_token_count is None:
-                if int(hidden.shape[-1]) % self.source_token_dim != 0:
-                    raise ValueError(
-                        "flat hidden dim must be divisible by source_token_dim when "
-                        "source_token_count is omitted"
-                    )
-                token_count = int(hidden.shape[-1]) // self.source_token_dim
-            else:
-                token_count = self.source_token_count
-            return hidden.reshape(hidden.shape[0], token_count, self.source_token_dim)
+    def _reshape_action_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim == 3:
-            if int(hidden.shape[-1]) != self.source_token_dim:
+            if hidden.shape[1:] != (self.token_count, self.action_hidden_dim):
                 raise ValueError(
-                    f"source token dim mismatch: got {hidden.shape[-1]}, expected {self.source_token_dim}"
+                    "OpenVLADiscreteTokenActor hidden sequence shape mismatch: "
+                    f"got {tuple(hidden.shape)}, expected [B,{self.token_count},{self.action_hidden_dim}]"
                 )
-            if self.source_token_count is not None and int(hidden.shape[1]) != int(
-                self.source_token_count
-            ):
+            action_hidden = hidden
+        elif hidden.ndim == 2:
+            if int(hidden.shape[-1]) != self.hidden_dim:
                 raise ValueError(
-                    "source token count mismatch: "
-                    f"got {hidden.shape[1]}, expected {self.source_token_count}"
+                    f"OpenVLADiscreteTokenActor hidden dim mismatch: got {hidden.shape[-1]}, "
+                    f"expected {self.hidden_dim}"
                 )
-            return hidden
-        raise ValueError(
-            f"hidden must be flat [B,N*D] or tokenized [B,N,D], got {tuple(hidden.shape)}"
-        )
+            action_hidden = hidden.reshape(
+                hidden.shape[0], self.token_count, self.action_hidden_dim
+            )
+        else:
+            raise ValueError(
+                f"Unsupported OpenVLADiscreteTokenActor hidden shape: {tuple(hidden.shape)}"
+            )
+        return action_hidden.to(dtype=self.lm_head.weight.dtype)
 
-    def _hidden_state_slots(self, hidden: torch.Tensor) -> torch.Tensor:
-        source = self._source_tokens(hidden)
-        dtype = self.action_queries.dtype
-        source = self.source_proj(source.to(dtype=dtype))
-        queries = self.action_queries.to(device=source.device, dtype=source.dtype)
-        queries = queries.unsqueeze(0).expand(source.shape[0], -1, -1)
-        bridged = self.bridge(tgt=queries, memory=source)
-        hidden_state = self.hidden_state_proj(bridged)
-        adapted = self.adapter(hidden_state)
+    def _action_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        action_hidden = self._reshape_action_hidden(hidden)
+        adapted = self.adapter(action_hidden)
         if self.adapter_type == "residual_mlp":
-            adapted = hidden_state + adapted
+            adapted = action_hidden + adapted
         return adapted
 
     def _action_token_logits(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden_state = self._hidden_state_slots(hidden)
-        ids = self._action_token_ids.to(device=hidden_state.device)
+        action_hidden = self._action_hidden(hidden)
+        # Compute ONLY the action-token columns by slicing the lm_head weight to
+        # the action token rows first, so the full [.., vocab_size] logits tensor
+        # is never materialized (the vocab tail is only used to extract these
+        # columns). Mathematically + gradient identical to
+        # ``self.lm_head(action_hidden).index_select(-1, action_token_ids)`` —
+        # lm_head has no bias, and unselected rows get zero gradient either way.
+        ids = self._action_token_ids.to(device=action_hidden.device)
         action_weight = self.lm_head.weight.index_select(0, ids)
-        action_logits = torch.nn.functional.linear(
-            hidden_state.to(dtype=action_weight.dtype), action_weight
-        )
-        return action_logits.float(), hidden_state.float()
+        action_logits = torch.nn.functional.linear(action_hidden, action_weight)
+        return action_logits.float(), action_hidden.float()
 
     def _classes_to_actions(self, classes: torch.Tensor) -> torch.Tensor:
         values = self._action_values_by_class.to(device=classes.device, dtype=torch.float32)
@@ -316,7 +246,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
     def forward(self, batch: dict[str, Any]) -> Any:
         mode = batch.get("mode")
         hidden = batch["hidden"]
-        logits, hidden_state = self._action_token_logits(hidden)
+        logits, action_hidden = self._action_token_logits(hidden)
         dist = Categorical(logits=logits)
         greedy_classes = logits.argmax(dim=-1)
         greedy_chunk = self._chunk_from_classes(greedy_classes)
@@ -328,6 +258,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             token_ids = self._classes_to_token_ids(classes)
             action_chunk = self._chunk_from_classes(classes)
             token_log_prob = dist.log_prob(classes)
+            token_level = _is_token_level_logprob(batch)
             extra = {
                 "action_chunk": greedy_chunk,
                 "action_token_ids": token_ids.reshape(
@@ -337,17 +268,24 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                     greedy_token_ids.shape[0], self.time_horizon, self.action_dim
                 ),
                 "action_token_logits": logits,
-                "hidden_state": hidden_state,
+                "action_hidden": action_hidden,
                 "mean_chunk": greedy_chunk,
                 "std_chunk": torch.zeros_like(greedy_chunk),
             }
             if bool(batch.get("return_chunk", False)):
-                log_prob = token_log_prob.sum(dim=-1)
+                log_prob = (
+                    self._reshape_action_tokens(token_log_prob)
+                    if token_level
+                    else token_log_prob.sum(dim=-1)
+                )
                 return action_chunk, log_prob, extra
             first_action = action_chunk[:, 0, :]
-            first_log_prob = token_log_prob.reshape(
-                logits.shape[0], self.time_horizon, self.action_dim
-            )[:, 0].sum(dim=-1)
+            first_token_log_prob = self._reshape_action_tokens(token_log_prob)[:, 0]
+            first_log_prob = (
+                first_token_log_prob
+                if token_level
+                else first_token_log_prob.sum(dim=-1)
+            )
             return first_action, first_log_prob, extra
 
         if mode == "evaluate":
@@ -374,12 +312,29 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
             token_log_prob = dist.log_prob(classes)
             token_entropy = dist.entropy()
+            token_level = _is_token_level_logprob(batch)
             if action.ndim == 3:
-                log_prob = token_log_prob.sum(dim=-1)
-                entropy = token_entropy.sum(dim=-1)
+                log_prob = (
+                    self._reshape_action_tokens(token_log_prob)
+                    if token_level
+                    else token_log_prob.sum(dim=-1)
+                )
+                entropy = (
+                    self._reshape_action_tokens(token_entropy)
+                    if token_level
+                    else token_entropy.sum(dim=-1)
+                )
             elif action.ndim == 2:
-                log_prob = token_log_prob[:, : self.action_dim].sum(dim=-1)
-                entropy = token_entropy[:, : self.action_dim].sum(dim=-1)
+                log_prob = (
+                    token_log_prob
+                    if token_level
+                    else token_log_prob[:, : self.action_dim].sum(dim=-1)
+                )
+                entropy = (
+                    token_entropy
+                    if token_level
+                    else token_entropy[:, : self.action_dim].sum(dim=-1)
+                )
             else:
                 raise ValueError(f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}")
             return (
@@ -391,12 +346,19 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                         greedy_token_ids.shape[0], self.time_horizon, self.action_dim
                     ),
                     "action_token_logits": logits,
-                    "hidden_state": hidden_state,
+                    "action_hidden": action_hidden,
                     "mean_chunk": greedy_chunk,
                     "std_chunk": torch.zeros_like(greedy_chunk),
                 },
             )
-        raise ValueError(f"Unknown LatentToOpenVLAHiddenStateActor forward mode: {mode!r}")
+        raise ValueError(f"Unknown OpenVLADiscreteTokenActor forward mode: {mode!r}")
+
+    def _reshape_action_tokens(self, value: torch.Tensor) -> torch.Tensor:
+        return value.reshape(value.shape[0], self.time_horizon, self.action_dim)
 
 
-__all__ = ["LatentToOpenVLAHiddenStateActor"]
+def _is_token_level_logprob(batch: dict[str, Any]) -> bool:
+    return str(batch.get("logprob_type", "")).lower() == "token_level"
+
+
+__all__ = ["OpenVLADiscreteTokenActor"]

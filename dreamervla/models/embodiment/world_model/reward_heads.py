@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dreamervla.models.world_model.common import MLPHead
+from dreamervla.models.embodiment.world_model.common import MLPHead
 
 
 def symexp(x: torch.Tensor) -> torch.Tensor:

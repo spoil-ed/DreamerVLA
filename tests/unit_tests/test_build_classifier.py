@@ -8,7 +8,7 @@ to the default LatentSuccessClassifier — byte-identical to the old call sites.
 
 from omegaconf import OmegaConf
 
-from dreamervla.models.reward import LatentSuccessClassifier, build_classifier
+from dreamervla.algorithms.critic import LatentSuccessClassifier, build_classifier
 
 
 def test_build_classifier_defaults_to_latent_success_for_legacy_blob():
@@ -21,7 +21,7 @@ def test_build_classifier_defaults_to_latent_success_for_legacy_blob():
 def test_build_classifier_honors_hydra_target():
     model = build_classifier(
         {
-            "_target_": "dreamervla.models.reward.LatentSuccessClassifier",
+            "_target_": "dreamervla.algorithms.critic.LatentSuccessClassifier",
             "latent_dim": 8,
         }
     )

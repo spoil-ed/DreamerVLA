@@ -17,7 +17,7 @@ from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-from dreamervla.models.encoder.rynnvla_encoder import RynnVLAEncoder
+from dreamervla.models.embodiment.rynnvla_encoder import RynnVLAEncoder
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
     ACTION_HIDDEN_KEY,

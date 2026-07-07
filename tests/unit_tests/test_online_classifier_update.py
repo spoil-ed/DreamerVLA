@@ -17,12 +17,23 @@ class _TinyClassifier(torch.nn.Module):
         return self.head(windows.reshape(windows.shape[0], -1))
 
 
+class _TinyBCEClassifier(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cfg = SimpleNamespace(window=2, chunk_size=1, chunk_pool="last")
+        self.head = torch.nn.Linear(2, 1)
+
+    def forward(self, windows: torch.Tensor) -> torch.Tensor:
+        return self.head(windows.reshape(windows.shape[0], -1))
+
+
 class _Replay:
     def __init__(self, labels: list[int]) -> None:
         self.labels = torch.tensor(labels, dtype=torch.long)
+        self.last_kwargs = {}
 
     def sample_classifier_windows(self, batch_size: int, **kwargs):
-        del kwargs
+        self.last_kwargs = dict(kwargs)
         batch_size = int(batch_size)
         labels = self.labels[:batch_size]
         return {
@@ -80,3 +91,29 @@ def test_online_classifier_update_keeps_mixed_batch_training() -> None:
     assert optimizer.step_calls == 1
     assert metrics["skipped_single_class_batch"] == 0.0
     assert metrics["pos_frac"] == 0.5
+
+
+def test_online_classifier_update_supports_wmpo_bce_single_logit() -> None:
+    classifier = _TinyBCEClassifier()
+    optimizer = _CountingSGD(classifier.parameters())
+    replay = _Replay([0, 1])
+
+    metrics = online_classifier_update_step(
+        classifier=classifier,
+        optimizer=optimizer,
+        replay=replay,
+        device=torch.device("cpu"),
+        batch_size=2,
+        early_neg_stride=8,
+        grad_clip=1.0,
+        loss_type="bce",
+        sampling_protocol="wmpo",
+        balance_batches=True,
+    )
+
+    assert optimizer.step_calls == 1
+    assert replay.last_kwargs["sampling_protocol"] == "wmpo"
+    assert replay.last_kwargs["balance_batches"] is True
+    assert metrics["updated"] == 1.0
+    assert metrics["pos_frac"] == 0.5
+    assert 0.0 <= metrics["prob_mean"] <= 1.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -1786,6 +1787,43 @@ def test_async_cotrain_phase_online_only_consolidates_missing_ray_init_ckpt(
     assert f"init.warmup_ckpt_path={ray_init}" in rec.calls[0]
 
 
+def test_launcher_main_restores_dvla_data_root_after_inline_call(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import torch
+
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    class _Recorder:
+        def run(self, *_args, **_kwargs):
+            return None
+
+    original_data_root = tmp_path / "original_data"
+    monkeypatch.setenv("DVLA_DATA_ROOT", str(original_data_root))
+    monkeypatch.setattr(mod, "subprocess", _Recorder())
+
+    run_root = tmp_path / "run"
+    ckpt_dir = run_root / "cotrain" / "ckpt"
+    ckpt_dir.mkdir(parents=True)
+    torch.save({"world_model": {"wm": torch.ones(1)}}, ckpt_dir / "wm_warmup.ckpt")
+    torch.save({"classifier": {"cls": torch.zeros(1)}}, ckpt_dir / "classifier_warmup.ckpt")
+
+    exit_code = mod.main(
+        [
+            f"run_root={run_root}",
+            f"data_root={tmp_path / 'inline_data'}",
+            "cotrain_engine=async",
+            "cotrain_phase=online",
+            "skip_asset_check=false",
+            "collect_num_tasks=1",
+        ]
+    )
+
+    assert exit_code == 0
+    assert os.environ["DVLA_DATA_ROOT"] == str(original_data_root)
+
+
 def test_validate_warmup_outputs_requires_split_ckpts(tmp_path) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import validate_warmup_outputs
 
@@ -1939,6 +1977,29 @@ def test_async_eval_runs_segmented_post_step_libero_eval_and_writes_trend_summar
     assert summary["records"][-1]["eval_best_success_rate"] == 0.35
     assert summary["records"][-1]["eval_success_rate_drop"] == 0.0
     assert summary["records"][-1]["eval_significant_drop"] == 0.0
+
+
+def test_debug_async_cotrain_enables_post_step_eval_each_global_step(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    cfg["debug"] = True
+    cfg["eval"]["enabled"] = False
+    cfg["eval"]["debug_interval_global_steps"] = 1
+
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=2,
+        launcher_cfg=cfg,
+        cotrain_overrides=["manual_cotrain.global_steps=2"],
+    )
+
+    assert plan.eval_enabled is True
+    assert plan.eval_interval_global_steps == 1
 
 
 def test_post_step_eval_egl_device_defaults_to_last_eval_gpu_for_split_render() -> None:

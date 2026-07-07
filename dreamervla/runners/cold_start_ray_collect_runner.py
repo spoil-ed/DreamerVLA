@@ -196,7 +196,7 @@ class ColdStartRayCollectRunner(BaseRunner):
         env_cfg = self._cfg_from(
             "env.cfg",
             {
-                "target": "dreamervla.envs.train_env:DreamerVLAOnlineTrainEnv",
+                "target": "dreamervla.envs.libero.libero_env:DreamerVLAOnlineTrainEnv",
                 "use_from_config": True,
             },
         )

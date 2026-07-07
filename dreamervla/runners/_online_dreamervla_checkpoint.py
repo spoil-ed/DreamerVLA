@@ -12,7 +12,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.models.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 from dreamervla.runners._online_dreamervla_dist import _unwrap
 from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state

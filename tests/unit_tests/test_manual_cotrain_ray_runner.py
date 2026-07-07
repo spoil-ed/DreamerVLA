@@ -593,6 +593,28 @@ def test_sum_metric_lists_derives_wm_classifier_success_rates() -> None:
     assert metrics["env/wm_env/classifier_trajectory_success_rate"] == 0.75
 
 
+def test_train_metric_aliases_include_update_counts_and_classifier_success() -> None:
+    metrics = manual_runner._with_train_learner_aliases(
+        {
+            "learner/updates": 3.0,
+            "cls/updated": 1.0,
+            "cls/updates": 7.0,
+            "cls/acc": 0.75,
+            "cls/f1": 0.5,
+            "env/wm_env/classifier_success_rate": 0.25,
+            "env/wm_env/classifier_trajectory_success_rate": 0.5,
+        }
+    )
+
+    assert metrics["train/learner_updates"] == 3.0
+    assert metrics["train/classifier_updated"] == 1.0
+    assert metrics["train/classifier_updates"] == 7.0
+    assert metrics["train/classifier_acc"] == 0.75
+    assert metrics["train/classifier_f1"] == 0.5
+    assert metrics["train/wm_env_classifier_success_rate"] == 0.25
+    assert metrics["train/wm_env_classifier_trajectory_success_rate"] == 0.5
+
+
 def test_manual_runner_reports_real_env_success_rate_metrics() -> None:
     runner = runners.ManualCotrainRayRunner(_cfg())
     metrics = runner._real_env_success_rate_metrics(
@@ -707,7 +729,7 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.env.wm.cfg.kwargs.observation_format == "tensor"
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_low == 0.2
     assert cfg.actor.train_cfg.algorithm_cfg.clip_ratio_high == 0.28
-    assert cfg.actor.train_cfg.algorithm_cfg.filter_rewards is True
+    assert cfg.actor.train_cfg.algorithm_cfg.filter_rewards is False
     assert cfg.actor.train_cfg.algorithm_cfg.rewards_lower_bound == 0.5
     assert cfg.actor.train_cfg.algorithm_cfg.rewards_upper_bound == 4.5
     assert cfg.actor.train_cfg.algorithm_cfg.reward_type == "action_level"
@@ -715,7 +737,11 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.actor.train_cfg.algorithm_cfg.entropy_type == "token_level"
     assert cfg.actor.train_cfg.algorithm_cfg.loss_type == "actor"
     assert cfg.actor.train_cfg.algorithm_cfg.loss_agg_func == "token-mean"
+    assert cfg.algorithm.kl_beta == 0.0
+    assert cfg.actor.train_cfg.lr == 5.0e-7
+    assert cfg.actor.train_cfg.optimizers.policy.lr == 5.0e-7
     assert cfg.actor.train_cfg.algorithm_cfg.kl_beta == 0.0
+    assert "kl_coef" not in cfg.actor.train_cfg.algorithm_cfg
     assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio is None
     assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "token_mean"
     assert cfg.rollout.train_cfg.logprob_type == "token_level"
@@ -880,7 +906,8 @@ def test_manual_runner_loads_component_init_ckpt(tmp_path) -> None:
                 "world_model": {"wm.weight": torch.ones(1)},
                 "classifier": {"cls.weight": torch.full((1,), 2.0)},
                 "policy": {"unused": torch.full((1,), 3.0)},
-            }
+            },
+            "classifier_threshold": 0.125,
         },
         ckpt,
     )
@@ -895,12 +922,13 @@ def test_manual_runner_loads_component_init_ckpt(tmp_path) -> None:
     runner = manual_runner.ManualCotrainRayRunner(cfg)
     loaded = runner._load_init_ckpt("learner.init_ckpt")
 
-    assert sorted(loaded) == ["classifier", "world_model"]
+    assert sorted(loaded) == ["classifier", "classifier_threshold", "world_model"]
     assert torch.equal(loaded["world_model"]["wm.weight"], torch.ones(1))
     assert torch.equal(
         loaded["classifier"]["cls.weight"],
         torch.full((1,), 2.0),
     )
+    assert loaded["classifier_threshold"] == 0.125
 
 
 class _FakeActorGroup:
@@ -1417,7 +1445,7 @@ def test_dynamic_wm_progress_sums_multiple_real_workers() -> None:
             env_channel_name="env",
             rollout_channel_name="rollout",
             actor_channel_name="actor",
-            timeout_s=0.001,
+            timeout_s=0.05,
             poll_s=0.0,
             progress=progress,  # type: ignore[arg-type]
         )
@@ -1732,6 +1760,38 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert "time/manual_cotrain/actor_run_training_s" in metrics
     assert "time/manual_cotrain/learner_update_wm_classifier_s" in metrics
     assert "time/manual_cotrain/learner_to_wm_env_sync_s" in metrics
+
+
+def test_run_global_step_can_update_only_world_model_for_fixed_classifier() -> None:
+    cfg = _cfg(ngpu=2)
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 1
+    cfg.manual_cotrain.wm_rollout_epoch = 1
+    cfg.manual_cotrain.learner_update_phase = "wm"
+    runner = runners.ManualCotrainRayRunner(cfg)
+    learner = _FakeLearnerGroup()
+    groups = {
+        "ActorGroup": _FakeActorGroup(),
+        "RolloutGroup": _FakeRolloutGroup(),
+        "LearnerGroup": learner,
+        "RealEnvGroup": _FakeEnvGroup({"env/trajectory_shards": 1.0, "env/steps": 2.0}),
+        "WMEnvGroup": _FakeEnvGroup(
+            {
+                "env/trajectory_shards": 1.0,
+                "env/wm_env/trajectory_shards": 1.0,
+                "env/steps": 2.0,
+            }
+        ),
+        "ReplayGroup": _FakeReplayGroup(),
+        "env_channel": _FakeChannel(),
+        "actor_channel": _FakeChannel(["wm0"]),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+    }
+
+    runner._run_global_step(groups, global_step=1)
+
+    assert learner.update_call == ("wm", 1)
 
 
 def test_run_global_step_does_not_sync_wm_to_env_when_classifier_update_skips() -> None:

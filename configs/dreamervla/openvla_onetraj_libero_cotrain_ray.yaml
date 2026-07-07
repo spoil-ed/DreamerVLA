@@ -20,6 +20,7 @@ manual_cotrain:
   ngpu: 1
   global_steps: 1000  # cotrain epochs
   learner_update_step: 1
+  learner_update_phase: cotrain
   checkpoint_every: 0
   save_replay_state: false
   sync_every: 1
@@ -54,7 +55,10 @@ algorithm:
   clip_ratio_high: 0.28
   clip_ratio_c: 3.0
   reward_coef: 5.0
-  filter_rewards: true
+  # WMEnv emits dense classifier probabilities per chunk; RLinf's bounded
+  # summed-reward filter is for sparse/normalized returns and drops every rollout
+  # here before the actor optimizer can step.
+  filter_rewards: false
   rewards_lower_bound: 0.5
   rewards_upper_bound: 4.5
   gamma: 0.99
@@ -145,7 +149,10 @@ learner:
     batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
-    classifier_threshold: 0.5
+    classifier_loss_type: bce
+    classifier_sampling_protocol: wmpo
+    classifier_balance_batches: true
+    classifier_threshold: null
     lr: 1.0e-4
     device: auto
     precision: bf16

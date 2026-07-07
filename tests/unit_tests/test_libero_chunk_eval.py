@@ -3,12 +3,12 @@
 import numpy as np
 from omegaconf import OmegaConf
 
-from dreamervla.envs.libero_chunk_env import LiberoChunkEnv
+from dreamervla.envs.libero.libero_env import LiberoEnv
 from dreamervla.runners.libero_chunk_eval import ChunkEvalTally, run_rlinf_chunk_eval
 
 
 class _ScriptedChunkEnv:
-    """LiberoChunkEnv stand-in: (task, trial) grid of 2 tasks x 3 trials,
+    """LiberoEnv stand-in: (task, trial) grid of 2 tasks x 3 trials,
     success iff (task_id + trial_id) is even, episodes end after 1 chunk."""
 
     def __init__(self, num_envs, auto_reset=False):
@@ -70,7 +70,7 @@ class _TaskSuite:
         return [object(), object(), object()]
 
 
-class _LiberoChunkEnvNoInit(LiberoChunkEnv):
+class _LiberoEnvNoInit(LiberoEnv):
     def _load_task_suite(self):
         return _TaskSuite()
 
@@ -132,7 +132,7 @@ def test_driver_records_env_chunk_and_action_step_units():
     assert tally.env_action_steps == 12
 
 
-def test_libero_chunk_env_ordered_reset_ids_tile_to_requested_num_envs():
+def test_libero_env_ordered_reset_ids_tile_to_requested_num_envs():
     cfg = OmegaConf.create(
         {
             "seed": 7,
@@ -148,7 +148,7 @@ def test_libero_chunk_env_ordered_reset_ids_tile_to_requested_num_envs():
             "init_params": {"camera_heights": 64, "camera_widths": 64},
         }
     )
-    env = _LiberoChunkEnvNoInit(cfg, num_envs=8)
+    env = _LiberoEnvNoInit(cfg, num_envs=8)
 
     assert len(env.reset_state_ids) == 8
     assert env.reset_state_ids.tolist() == [0, 1, 2, 3, 4, 5, 0, 1]
@@ -159,7 +159,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
 
     created: dict[str, int] = {}
 
-    class FakeLiberoChunkEnv:
+    class FakeLiberoEnv:
         def __init__(self, _cfg, num_envs):
             created["num_envs"] = int(num_envs)
 
@@ -181,8 +181,8 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
             }
 
     monkeypatch.setattr(
-        "dreamervla.envs.libero_chunk_env.LiberoChunkEnv",
-        FakeLiberoChunkEnv,
+        "dreamervla.envs.libero.libero_env.LiberoEnv",
+        FakeLiberoEnv,
     )
     monkeypatch.setattr(
         "dreamervla.runners.libero_chunk_eval.run_rlinf_chunk_eval",
@@ -207,7 +207,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
             {
                 "task_suite_name": "libero_goal",
                 "render_backend": "osmesa",
-                "chunk_env": {
+                "libero_env": {
                     "reset_wait_steps": 10,
                     "reset_gripper_open": True,
                     "auto_reset": False,
@@ -231,15 +231,15 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     assert created["num_envs"] == 64
 
 
-def test_build_chunk_env_cfg_maps_eval_knobs():
+def test_build_libero_env_cfg_maps_eval_knobs():
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.pretokenize_vla_runner import build_chunk_env_cfg
+    from dreamervla.runners.pretokenize_vla_runner import build_libero_env_cfg
 
     eval_cfg = OmegaConf.create(
         {
             "task_suite_name": "libero_goal",
-            "chunk_env": {
+            "libero_env": {
                 "reset_wait_steps": 10,
                 "reset_gripper_open": True,
                 "auto_reset": False,
@@ -248,7 +248,7 @@ def test_build_chunk_env_cfg_maps_eval_knobs():
             },
         }
     )
-    cfg = build_chunk_env_cfg(
+    cfg = build_libero_env_cfg(
         eval_cfg,
         task_ids=[0, 2],
         num_episodes=3,

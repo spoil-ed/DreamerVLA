@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID  # noqa: E402
 from dreamervla.diagnostics._common import resolve_device  # noqa: E402
-from dreamervla.envs.train_env import DreamerVLAOnlineTrainEnv  # noqa: E402
+from dreamervla.envs.libero.libero_env import DreamerVLAOnlineTrainEnv  # noqa: E402
 from dreamervla.runners.online_utils import (  # noqa: E402
     build_encoder,
     load_world_model_state,

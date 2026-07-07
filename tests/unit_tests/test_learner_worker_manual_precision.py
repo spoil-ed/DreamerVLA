@@ -212,6 +212,7 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
         "cls/f1": 1.0,
         "cls/skipped_single_class_batch": 0.0,
         "cls/updated": 1.0,
+        "cls/updates": 1.0,
     }
     rl_metrics = learner.update("rl", 1)
     assert rl_metrics["rl/actor_loss"] == 0.75
@@ -227,6 +228,36 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
     assert metrics["cls/loss"] == 0.5
     assert metrics["rl/actor_loss"] == 0.75
     assert calls == ["wm", "classifier", "rl", "wm", "classifier", "rl"]
+
+
+def test_dreamervla_rl_update_uses_init_classifier_threshold_when_cfg_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dreamervla.workers.actor.learner_worker as mod
+
+    seen_thresholds: list[float] = []
+
+    def fake_rl_step(**kwargs):
+        seen_thresholds.append(float(kwargs["classifier_threshold"]))
+        return {"actor_loss": 0.75, "returns_mean": 0.25, "actor_grad_norm": 0.125}
+
+    monkeypatch.setattr(mod, "dino_lumos_step", fake_rl_step)
+    _patch_dummy_syncer(monkeypatch)
+
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["classifier_threshold"] = None
+    learner = LearnerWorker(
+        _cotrain_model_cfg(),
+        {"classifier_threshold": 0.125},
+        train_cfg,
+        _DirectReplay(),
+    )
+    learner.init()
+
+    metrics = learner.update("rl", 1)
+
+    assert metrics["rl/actor_loss"] == 0.75
+    assert seen_thresholds == [0.125]
 
 
 def test_dreamervla_wm_update_samples_replay_without_images(
