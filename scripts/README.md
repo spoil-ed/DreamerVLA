@@ -20,6 +20,7 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `run_wandb_relay_sync.sh` | CPU-side W&B offline relay helper for air-gapped GPU runs |
 | `start_ray.sh` | Start a local single-node Ray head for manual backend debugging |
 | `check_ray.sh` | Inspect the active Ray cluster status |
+| `experiments/wm_single_episode_overfit.sh` | Dry-run-by-default WM overfit/action-sensitivity diagnostic |
 
 ## Install Steps
 
@@ -181,6 +182,12 @@ Check resume completeness before a long run with:
 | Script | Purpose |
 | --- | --- |
 | `eval/launch_openvla_oft_official_libero_eval.sh` | OpenVLA-OFT eval launcher via `configs/scripts/openvla_oft_official_eval.yaml` |
+
+## Experiment Diagnostics
+
+| Script | Purpose |
+| --- | --- |
+| `experiments/wm_single_episode_overfit.sh` | Run the single-episode Chunk-WM overfit probe; pass `--run` to train and write `metrics.jsonl`, `summary.json`, and `summary.md` |
 
 Python modules:
 

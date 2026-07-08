@@ -15,7 +15,7 @@ Normal changes are Hydra overrides, e.g.
 | [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `rynnvla_libero` | `world_model_chunk`, `dreamervla_rynn_wm_lumos` |
 | [OpenVLA one-traj cold-start cotrain](OpenVLA_Onetraj_LIBERO.md) | `goal\|object\|spatial\|10` launcher shorthand | `collect_rollouts_ray`, `oft_discrete_token_world_model_chunk`, `dreamervla_oft_discrete_token_wm_lumos`, `openvla_onetraj_libero_cotrain_ray`, `eval_libero_vla` |
 | [Ray/manual cotrain backend](../../../spec/04_complete_loop.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, legacy `online_cotrain_ray_*` |
-| [WM single-episode overfit probe](wm_single_episode_overfit.py) | `libero_goal` HDF5 + hidden sidecar | diagnostic script; dry-run unless `--run` is passed |
+| [WM single-episode overfit probe](../../../scripts/experiments/wm_single_episode_overfit.sh) | `libero_goal` HDF5 + hidden sidecar | diagnostic script; dry-run unless `--run` is passed |
 
 The `task=` token is snake_case; on-disk data artifacts keep their historical
 `task.artifact_name` directories (e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths
@@ -27,16 +27,17 @@ The WM single-episode overfit probe is intentionally not a launcher and does not
 unless `--run` is passed:
 
 ```bash
-python docs/tutorials/experiments/wm_single_episode_overfit.py
+bash scripts/experiments/wm_single_episode_overfit.sh
 ```
 
 To run it on an explicitly selected GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=7 \
-  python docs/tutorials/experiments/wm_single_episode_overfit.py --run \
+  bash scripts/experiments/wm_single_episode_overfit.sh --run \
   --out-dir "${DVLA_DATA_ROOT}/outputs/world_model_probe/single_episode_overfit"
 ```
 
 It records `metrics.jsonl` with `true`, `zero`, and `random` action-chunk rollout
-comparisons so action sensitivity can be checked without starting cotrain.
+comparisons, then writes `summary.json` and `summary.md` so the final hidden-MSE
+trend and action-sensitivity table are visible without opening TensorBoard.

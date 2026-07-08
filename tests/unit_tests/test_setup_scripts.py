@@ -738,6 +738,7 @@ def test_release_scripts_tree_is_curated() -> None:
     assert top_level_dirs == {
         "download",
         "eval",
+        "experiments",
         "install",
         "preprocess",
     }
