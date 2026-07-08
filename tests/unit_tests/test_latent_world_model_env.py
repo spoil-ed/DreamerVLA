@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import torch
@@ -88,6 +90,18 @@ class _ZeroOneLogitClassifier(torch.nn.Module):
 class _MalformedDictClassifier(torch.nn.Module):
     def forward(self, latent):
         return {"unknown": torch.zeros(latent.shape[0], 1, device=latent.device)}
+
+
+class _WindowCaptureClassifier(torch.nn.Module):
+    def __init__(self, window: int) -> None:
+        super().__init__()
+        self.cfg = SimpleNamespace(window=int(window))
+        self.windows: list[torch.Tensor] = []
+
+    def forward(self, latent_window, *, task_ids=None, proprio=None, lang_emb=None):
+        del task_ids, proprio, lang_emb
+        self.windows.append(latent_window.detach().cpu().clone())
+        return torch.zeros(latent_window.shape[0], 1, device=latent_window.device)
 
 
 def test_latent_world_model_env_step_returns_env_tuple():
@@ -256,6 +270,68 @@ def test_latent_world_model_env_chunk_step_batch_uses_one_wm_call() -> None:
     assert infos[0]["slot_id"] == 0
     assert infos[1]["slot_id"] == 1
     assert env.get_metrics()["wm_forward_calls"] == 1.0
+
+
+def test_latent_world_model_env_chunk_classifier_uses_rolling_history() -> None:
+    classifier = _WindowCaptureClassifier(window=3)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    env.chunk_step_batch(
+        np.array([[[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert len(classifier.windows) == 1
+    assert classifier.windows[0].tolist() == [
+        [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]],
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0]],
+        [[1.0, 0.0], [1.0, 2.0], [4.0, 2.0]],
+    ]
+
+
+def test_latent_world_model_env_reports_classifier_score_distribution() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=2,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+    env.reset_slot(1, task_id=1, episode_id=10)
+
+    env.chunk_step_batch(
+        np.array(
+            [
+                [[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]],
+                [[0.0, 1.0], [2.0, 0.0], [0.0, 3.0]],
+            ],
+            dtype=np.float32,
+        ),
+        env_ids=[0, 1],
+    )
+
+    metrics = env.get_metrics(reset=True)
+
+    assert metrics["score_mean"] == pytest.approx(20.0 / 6.0)
+    assert metrics["score_p50"] == pytest.approx(3.0)
+    assert metrics["score_p90"] == pytest.approx(6.0)
+    assert metrics["score_max"] == pytest.approx(6.0)
+
+    reset_metrics = env.get_metrics()
+    assert reset_metrics["score_mean"] == 0.0
+    assert reset_metrics["score_p50"] == 0.0
+    assert reset_metrics["score_p90"] == 0.0
+    assert reset_metrics["score_max"] == 0.0
 
 
 def test_latent_world_model_env_chunk_step_batch_marks_done_only_on_final_step() -> None:

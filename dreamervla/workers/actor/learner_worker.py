@@ -145,11 +145,13 @@ class LearnerWorker(Worker):
             raise ValueError(f"unknown component for weight sync: {name!r}")
         self._syncer().push(name, self.components[name].state_dict(), int(version))
 
-    def state_dicts(self) -> dict[str, dict[str, torch.Tensor]]:
-        return {
+    def state_dicts(self) -> dict[str, Any]:
+        state_dicts: dict[str, Any] = {
             name: _cpu_state_dict(module)
             for name, module in self.components.items()
         }
+        state_dicts["classifier_threshold"] = float(self._classifier_threshold())
+        return state_dicts
 
     def _build_components(self) -> dict[str, nn.Module]:
         components: dict[str, nn.Module] = {}

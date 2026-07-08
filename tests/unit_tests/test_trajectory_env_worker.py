@@ -81,6 +81,26 @@ def _batched_counter_env_cfg() -> dict[str, Any]:
     }
 
 
+def _tiny_wm_env_cfg() -> dict[str, Any]:
+    return {
+        "target": "dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv",
+        "kwargs": {
+            "world_model": {
+                "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+                "kwargs": {"hidden_dim": 4, "action_dim": 3},
+            },
+            "classifier": {
+                "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+                "kwargs": {"hidden_dim": 4, "window": 3},
+            },
+            "latent_dim": 4,
+            "action_dim": 3,
+            "success_threshold": 0.5,
+            "num_envs": 1,
+        },
+    }
+
+
 def _short_horizon_counter_env_cfg() -> dict[str, Any]:
     return {
         "target": "dreamervla.workers.env._test_envs:CounterEnv",
@@ -292,6 +312,33 @@ def test_env_worker_propagates_component_and_step_versions_to_replay() -> None:
         assert step["wm_version"] == 3
         assert step["classifier_version"] == 3
         assert step["reward_or_classifier_version"] == 3
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_applies_classifier_threshold_from_component_state() -> None:
+    worker = WMEnvWorker(
+        env_cfg=_tiny_wm_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+    )
+    try:
+        worker.init()
+
+        assert worker.envs[0].success_threshold == 0.5
+
+        worker.load_component_states(
+            {
+                "classifier": {},
+                "classifier_threshold": 0.95,
+            },
+            version=3,
+        )
+
+        assert worker.envs[0].success_threshold == 0.95
     finally:
         worker.close()
 

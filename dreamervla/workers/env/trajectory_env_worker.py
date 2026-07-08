@@ -982,6 +982,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._model_versions: dict[str, int] = {}
         self.global_step = 0
         self._pending_component_states: dict[str, tuple[dict[str, Any], int]] = {}
+        self._pending_classifier_threshold: float | None = None
         self._last_apply_completed_episodes = 0
         self._last_apply_successful_episodes = 0
         self._last_apply_physical_steps = 0
@@ -2481,12 +2482,16 @@ class BaseTrajectoryEnvWorker(Worker):
 
     def load_component_states(
         self,
-        state_dicts: Mapping[str, dict[str, Any]],
+        state_dicts: Mapping[str, Any],
         version: int,
     ) -> dict[str, float]:
         """Load multiple learner-owned component states with one worker RPC."""
 
         metrics: dict[str, float] = {}
+        if "classifier_threshold" in state_dicts:
+            threshold = float(state_dicts["classifier_threshold"])
+            self.set_classifier_threshold(threshold)
+            metrics["sync/classifier_threshold"] = threshold
         for component in ("world_model", "classifier"):
             if component not in state_dicts:
                 continue
@@ -2506,6 +2511,8 @@ class BaseTrajectoryEnvWorker(Worker):
     def _apply_pending_component_states(self) -> None:
         for component, (state_dict, version) in self._pending_component_states.items():
             self._apply_component_state(component, state_dict, version)
+        if self._pending_classifier_threshold is not None:
+            self.set_classifier_threshold(float(self._pending_classifier_threshold))
 
     def _apply_component_state(
         self,
@@ -2527,6 +2534,24 @@ class BaseTrajectoryEnvWorker(Worker):
             if self.role == "wm_env":
                 raise TypeError(
                     f"WMEnvWorker env {type(env).__name__} must expose {loader_name}()"
+                )
+
+    def set_classifier_threshold(self, threshold: float) -> None:
+        value = float(threshold)
+        self._pending_classifier_threshold = value
+        for env in self.envs:
+            setter = getattr(env, "set_success_threshold", None)
+            if callable(setter):
+                setter(value)
+                continue
+            elif hasattr(env, "success_threshold"):
+                env.success_threshold = value
+                continue
+            if self.role == "wm_env":
+                raise TypeError(
+                    "WMEnvWorker env "
+                    f"{type(env).__name__} must expose set_success_threshold() "
+                    "or success_threshold"
                 )
 
     def close(self) -> None:

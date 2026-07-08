@@ -230,6 +230,20 @@ def test_dreamervla_cotrain_mode_routes_real_update_steps(monkeypatch: pytest.Mo
     assert calls == ["wm", "classifier", "rl", "wm", "classifier", "rl"]
 
 
+def test_learner_state_dicts_include_classifier_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["classifier_threshold"] = 0.875
+    learner = LearnerWorker(_cotrain_model_cfg(), {}, train_cfg, _DirectReplay())
+    learner.init()
+
+    state_dicts = learner.state_dicts()
+
+    assert state_dicts["classifier_threshold"] == 0.875
+
+
 def test_dreamervla_rl_update_uses_init_classifier_threshold_when_cfg_null(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

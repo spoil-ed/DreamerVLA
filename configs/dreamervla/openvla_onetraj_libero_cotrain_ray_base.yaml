@@ -83,7 +83,7 @@ ray_components:
       chunk_rollout_chunks: 1
       chunk_rollout_loss_scale: 0.0
       reward_head_type: binary
-      reward_loss_scale: 32.0
+      reward_loss_scale: 0.0
       reward_hidden_dim: 1024
       reward_init_logit: 0.0
       reward_pos_weight: 1.0

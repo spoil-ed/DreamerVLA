@@ -839,7 +839,9 @@ class ChunkAwareWorldModel(WorldModel):
         hiddens, matching parent's convention.
         """
         obs = batch["obs_embedding"]
-        actions = batch["actions"]
+        actions = batch.get("current_actions")
+        if not isinstance(actions, torch.Tensor):
+            actions = batch["actions"]
         H = self.num_hist
         K = self.chunk_size
         vision_tokens = self.obs_to_tokens(obs)
@@ -853,7 +855,9 @@ class ChunkAwareWorldModel(WorldModel):
             raise ValueError(f"chunk_loss requires T >= H+K = {H + K}, got T={T}")
         if actions.shape[1] < H - 1 + K:
             raise ValueError(
-                f"actions length {actions.shape[1]} too short for chunk loss (need >= {H - 1 + K})"
+                "action sequence length "
+                f"{actions.shape[1]} too short for chunk loss "
+                f"(need >= {H - 1 + K})"
             )
 
         actions = self._validate_actions(actions, int(actions.shape[1]))

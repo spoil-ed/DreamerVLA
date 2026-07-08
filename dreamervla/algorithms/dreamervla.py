@@ -90,24 +90,46 @@ def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
 _WM_LOG_METRIC_KEYS = (
     "loss",
     "hidden_rec_loss",
+    "hidden_mse",
+    "next_latent_mse",
     "hidden_cosine_loss",
     "full_hidden_rec_loss",
     "full_hidden_cosine_loss",
     "proprio_reconstruction_loss",
+    "proprio_pred_norm",
+    "proprio_target_norm",
+    "reward_loss",
+    "reward_pred_mean",
+    "reward_target_mean",
+    "reward_binary_acc",
+    "rollout_loss",
+    "rollout_mse",
+    "rollout_cosine_loss",
+    "rollout_chunks",
+    "hidden_pred_norm",
+    "hidden_target_norm",
+    "grad_norm",
 )
 
 
 def namespaced_world_model_metrics(raw: Mapping[str, Any]) -> dict[str, float]:
     """Return the public ``wm/*`` metric subset emitted by learner loops."""
     metrics: dict[str, float] = {}
+
+    def _as_float(value: Any) -> float:
+        if isinstance(value, torch.Tensor):
+            return float(value.detach().cpu())
+        return float(value)
+
     for key in _WM_LOG_METRIC_KEYS:
         if key not in raw:
             continue
-        value = raw[key]
-        if isinstance(value, torch.Tensor):
-            metrics[f"wm/{key}"] = float(value.detach().cpu())
-        else:
-            metrics[f"wm/{key}"] = float(value)
+        metrics[f"wm/{key}"] = _as_float(raw[key])
+    if "wm/hidden_rec_loss" not in metrics:
+        for alias in ("hidden_mse", "next_latent_mse"):
+            if alias in raw:
+                metrics["wm/hidden_rec_loss"] = _as_float(raw[alias])
+                break
     return metrics
 
 
@@ -180,6 +202,10 @@ def world_model_pretrain_step(
             float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(default)
         )
 
+    hidden_mse = _f("hidden_mse", _f("next_latent_mse"))
+    next_latent_mse = _f("next_latent_mse", hidden_mse)
+    hidden_rec_loss = _f("hidden_rec_loss", hidden_mse)
+
     return {
         "loss": float(loss_tensor.detach().cpu()),
         "kl_loss": _f("kl_loss"),
@@ -187,6 +213,9 @@ def world_model_pretrain_step(
         "rep_kl": _f("rep_kl"),
         "transition_loss": _f("transition_loss"),
         "reward_loss": _f("reward_loss"),
+        "reward_pred_mean": _f("reward_pred_mean"),
+        "reward_target_mean": _f("reward_target_mean"),
+        "reward_binary_acc": _f("reward_binary_acc"),
         "success_return_loss": _f("success_return_loss"),
         "success_return_pred_mean": _f("success_return_pred_mean"),
         "success_return_target_mean": _f("success_return_target_mean"),
@@ -199,7 +228,9 @@ def world_model_pretrain_step(
         "image_recon_mse_loss": _f("image_recon_mse_loss"),
         "image_decoder_loss": _f("image_decoder_loss"),
         "image_recon_accuracy": _f("image_recon_accuracy"),
-        "hidden_rec_loss": _f("hidden_rec_loss"),
+        "hidden_rec_loss": hidden_rec_loss,
+        "hidden_mse": hidden_mse,
+        "next_latent_mse": next_latent_mse,
         "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
         "hidden_cosine_loss": _f("hidden_cosine_loss"),
         "full_hidden_rec_loss": _f("full_hidden_rec_loss"),

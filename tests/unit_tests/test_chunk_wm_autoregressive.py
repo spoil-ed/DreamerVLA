@@ -166,3 +166,58 @@ def test_predict_next_chunk_rolls_forward_autoregressively() -> None:
     assert torch.allclose(seen_histories[2][:, -2], out["hidden_seq"][:, 0])
     assert torch.allclose(seen_histories[2][:, -1], out["hidden_seq"][:, 1])
     assert torch.allclose(out["hidden"], out["hidden_seq"][:, -1])
+
+
+def test_chunk_loss_uses_current_actions_for_transition_targets() -> None:
+    wm = _tiny_chunk_wm(chunk_rollout_chunks=2, chunk_rollout_loss_scale=1.0)
+    H = wm.num_hist
+    K = wm.chunk_size
+    T = H + 2 * K
+    obs = torch.randn(1, T, wm.obs_dim)
+    previous_actions = torch.full((1, T, wm.action_dim), -10.0)
+    current_actions = torch.arange(
+        T * wm.action_dim,
+        dtype=torch.float32,
+    ).reshape(1, T, wm.action_dim)
+    captured_chunks: list[torch.Tensor] = []
+    captured_history_actions: list[torch.Tensor] = []
+
+    def fake_predict_next_chunk(self, latent_arg, action_chunk):
+        captured_chunks.append(action_chunk.detach().clone())
+        captured_history_actions.append(latent_arg["actions"].detach().clone())
+        hidden_seq = torch.zeros(1, K, self.token_count, self.token_dim)
+        next_hidden = hidden_seq[:, -1]
+        next_history = torch.cat(
+            [latent_arg["history"][:, 1:], next_hidden[:, None]],
+            dim=1,
+        )
+        next_actions = torch.zeros_like(latent_arg["actions"])
+        return {
+            "hidden": next_hidden,
+            "hidden_seq": hidden_seq,
+            "history": next_history,
+            "actions": next_actions,
+        }
+
+    wm.predict_next_chunk = types.MethodType(fake_predict_next_chunk, wm)
+
+    wm(
+        {
+            "mode": "chunk_loss",
+            "obs_embedding": obs,
+            "actions": previous_actions,
+            "current_actions": current_actions,
+        }
+    )
+
+    assert len(captured_chunks) == 2
+    assert torch.allclose(captured_chunks[0], current_actions[:, H - 1 : H - 1 + K])
+    assert torch.allclose(
+        captured_chunks[1],
+        current_actions[:, H - 1 + K : H - 1 + 2 * K],
+    )
+    assert torch.allclose(
+        captured_history_actions[0][:, : H - 1],
+        current_actions[:, : H - 1],
+    )
+    assert torch.allclose(captured_history_actions[0][:, -1], current_actions[:, H - 1])

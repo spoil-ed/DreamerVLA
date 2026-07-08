@@ -563,6 +563,40 @@ def test_sum_metric_lists_derives_batch_size_distribution_metrics() -> None:
     assert metrics["env/wm_env/batch_size_max"] == 8.0
 
 
+def test_sum_metric_lists_derives_wm_score_distribution_metrics() -> None:
+    metrics = _sum_metric_lists(
+        [
+            {
+                "env/wm_env/score_sum": 2.0,
+                "env/wm_env/score_count": 4.0,
+                "env/wm_env/score_mean": 0.5,
+                "env/wm_env/score_p50": 0.4,
+                "env/wm_env/score_p90": 0.8,
+                "env/wm_env/score_max": 0.9,
+            },
+            {
+                "env/wm_env/score_sum": 1.8,
+                "env/wm_env/score_count": 2.0,
+                "env/wm_env/score_mean": 0.9,
+                "env/wm_env/score_p50": 0.9,
+                "env/wm_env/score_p90": 0.95,
+                "env/wm_env/score_max": 1.0,
+            },
+        ]
+    )
+
+    assert metrics["env/wm_env/score_sum"] == pytest.approx(3.8)
+    assert metrics["env/wm_env/score_count"] == 6.0
+    assert metrics["env/wm_env/score_mean"] == pytest.approx(3.8 / 6.0)
+    assert metrics["env/wm_env/score_p50"] == pytest.approx(
+        (0.4 * 4.0 + 0.9 * 2.0) / 6.0
+    )
+    assert metrics["env/wm_env/score_p90"] == pytest.approx(
+        (0.8 * 4.0 + 0.95 * 2.0) / 6.0
+    )
+    assert metrics["env/wm_env/score_max"] == 1.0
+
+
 def test_sum_metric_lists_derives_wm_classifier_success_rates() -> None:
     metrics = _sum_metric_lists(
         [
@@ -1077,6 +1111,7 @@ class _FakeEnvGroup:
         self.classifier_versions: list[int] = []
         self.world_model_states: list[dict] = []
         self.classifier_states: list[dict] = []
+        self.classifier_thresholds: list[float] = []
         self.component_state_versions: list[int] = []
         self.component_state_keys: list[list[str]] = []
         self.progress_configs: list[tuple[str | None, float]] = []
@@ -1119,7 +1154,12 @@ class _FakeEnvGroup:
         return _Ready([None])
 
     def load_component_states(self, state_dicts, version: int):
-        states = {str(key): dict(value) for key, value in dict(state_dicts).items()}
+        states = {}
+        for key, value in dict(state_dicts).items():
+            if str(key) == "classifier_threshold":
+                states[str(key)] = float(value)
+            else:
+                states[str(key)] = dict(value)
         self.component_state_versions.append(int(version))
         self.component_state_keys.append(sorted(states))
         if "world_model" in states:
@@ -1128,6 +1168,8 @@ class _FakeEnvGroup:
         if "classifier" in states:
             self.classifier_states.append(states["classifier"])
             self.classifier_versions.append(int(version))
+        if "classifier_threshold" in states:
+            self.classifier_thresholds.append(float(states["classifier_threshold"]))
         return _Ready([{"sync/load_component_states_s": 0.5}])
 
 
@@ -1150,6 +1192,7 @@ class _FakeLearnerGroup:
                 {
                     "world_model": {"wm": 1},
                     "classifier": {"cls": 2},
+                    "classifier_threshold": 0.95,
                     "policy": {"unused": 3},
                     "sync/state_dicts_s": 0.6,
                 }
@@ -1733,11 +1776,14 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert groups["actor_channel"].gets == []
     assert learner.synced == []
     assert wm_env.component_state_versions == [1]
-    assert wm_env.component_state_keys == [["classifier", "world_model"]]
+    assert wm_env.component_state_keys == [
+        ["classifier", "classifier_threshold", "world_model"]
+    ]
     assert wm_env.wm_versions == [1]
     assert wm_env.classifier_versions == [1]
     assert wm_env.world_model_states == [{"wm": 1}]
     assert wm_env.classifier_states == [{"cls": 2}]
+    assert wm_env.classifier_thresholds == [0.95]
     assert metrics["env/trajectory_shards"] == 3.0
     assert metrics["env/steps"] == 6.0
     assert metrics["actor/received_shards"] == 2.0
@@ -1834,11 +1880,12 @@ def test_run_global_step_does_not_sync_wm_to_env_when_classifier_update_skips() 
     metrics = runner._run_global_step(groups, global_step=1)
 
     assert wm_env.component_state_versions == [1]
-    assert wm_env.component_state_keys == [["classifier"]]
+    assert wm_env.component_state_keys == [["classifier", "classifier_threshold"]]
     assert wm_env.wm_versions == []
     assert wm_env.classifier_versions == [1]
     assert wm_env.world_model_states == []
     assert wm_env.classifier_states == [{"cls": 2}]
+    assert wm_env.classifier_thresholds == [0.95]
     assert metrics["sync/wm_env_world_model_skipped_classifier_not_updated"] == 1.0
 
 

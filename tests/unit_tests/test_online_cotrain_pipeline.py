@@ -136,6 +136,44 @@ def test_world_model_pretrain_step_forwards_condition_sidecars():
     assert wm.seen["lang_emb"] is lang_emb
 
 
+def test_world_model_pretrain_step_preserves_chunk_hidden_mse_metrics():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class ChunkMetricWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {
+                "_loss": loss,
+                "loss": loss.detach(),
+                "hidden_mse": loss.detach() + 1.0,
+                "next_latent_mse": loss.detach() + 2.0,
+                "hidden_cosine_loss": loss.detach() + 3.0,
+            }
+
+    wm = ChunkMetricWM()
+    optimizer = torch.optim.SGD(wm.parameters(), lr=0.01)
+
+    metrics = world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=optimizer,
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+    )
+
+    assert metrics["hidden_mse"] == 2.0
+    assert metrics["next_latent_mse"] == 3.0
+    assert metrics["hidden_rec_loss"] == 2.0
+
+
 def test_online_cotrain_actor_update_uses_registry():
     import inspect
 
@@ -909,6 +947,32 @@ def test_world_model_metrics_namespace_includes_hidden_losses():
         "wm/hidden_cosine_loss": 3.0,
         "wm/full_hidden_rec_loss": 4.0,
         "wm/full_hidden_cosine_loss": 5.0,
+    }
+
+
+def test_world_model_metrics_namespace_aliases_chunk_hidden_mse():
+    from dreamervla.algorithms.dreamervla import namespaced_world_model_metrics
+
+    assert namespaced_world_model_metrics(
+        {
+            "loss": 1.0,
+            "hidden_mse": 2.0,
+            "next_latent_mse": 3.0,
+            "reward_loss": 4.0,
+            "hidden_pred_norm": 5.0,
+            "hidden_target_norm": 6.0,
+            "grad_norm": 7.0,
+            "ignored": 8.0,
+        }
+    ) == {
+        "wm/loss": 1.0,
+        "wm/hidden_rec_loss": 2.0,
+        "wm/hidden_mse": 2.0,
+        "wm/next_latent_mse": 3.0,
+        "wm/reward_loss": 4.0,
+        "wm/hidden_pred_norm": 5.0,
+        "wm/hidden_target_norm": 6.0,
+        "wm/grad_norm": 7.0,
     }
 
 

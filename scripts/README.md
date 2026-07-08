@@ -11,8 +11,6 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `download_assets.sh` | Hydra wrapper for selected download steps under `scripts/download/` |
 | `preprocess_libero.sh` | Hydra wrapper that preprocesses the standard LIBERO suites |
 | `preprocess/prepare_libero_data.sh` | Hydra wrapper for one LIBERO suite preprocessing chain |
-| `train_vla.sh` | VLA SFT via Hydra experiment configs |
-| `train_wm.sh` | World-model and classifier training via Hydra experiment configs |
 | `train_dreamervla.sh` | DreamerVLA training via Hydra experiment configs |
 | `collect_parallel.sh` | Data-parallel Ray cold-start collection (one job per GPU), merged into one dir for the warmup/cotrain launcher (`skip_collect=true`) |
 | `e2e_coldstart_warmup_cotrain_ray.sh` | Ray cold-start collection followed by offline WM/classifier warmup |
@@ -82,9 +80,6 @@ Common launcher flags stay intentionally small:
     bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=libero_goal
     bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1 num_procs=8
 
-    bash scripts/train_wm.sh experiment=world_model_chunk task=libero_goal \
-      gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20
-
 LIBERO preprocessing GPU and worker controls:
 
 - `gpus=0` selects visible GPUs and is passed through as `CUDA_VISIBLE_DEVICES`.
@@ -122,7 +117,15 @@ Process multiple LIBERO suites:
 Training launchers are Hydra wrappers. `experiment=...` selects a config group under
 `configs/experiment/`; `task=...`, `gpus=...`, `ngpu=...`, `batch_size=...`,
 and `num_workers=...` are script-level overrides; any other `key=value`
-argument is passed to the real training config unchanged.
+argument is passed to the real training config unchanged. The release tree ships
+`train_dreamervla.sh` as the generic grouped-training wrapper; standalone VLA/WM
+wrappers are intentionally not part of `scripts/`.
+
+Role-based WM routes are still selected by experiment name when invoked through
+the Python training entry:
+
+    python -m dreamervla.train experiment=world_model_chunk task=libero_goal
+
 Grouped training defaults to `logger=tensorboard_wandb`, so each run writes
 local TensorBoard events under `${training.out_dir}/log/tensorboard` and W&B run
 files under `${training.out_dir}/log/wandb`. W&B defaults to online mode; add

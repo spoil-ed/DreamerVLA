@@ -13,11 +13,13 @@ sequence. Normal changes are Hydra overrides:
 gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20 out_dir=/tmp/run
 ```
 
-Shell launchers (`scripts/train_vla.sh`, `train_wm.sh`, `train_dreamervla.sh`) are
-thin: they set project/data roots and call the grouped Hydra entry. All experiment
-choice is `experiment=<name>` plus ordinary Hydra keys. The pipeline task name is the
-Hydra `task=` value (snake_case, e.g. `task=openvla_onetraj_libero`). On-disk data
-artifacts keep their historical names via `task.artifact_name` (e.g.
+Shell launchers are thin: they set project/data roots and call Hydra-backed Python
+entry points. The release tree keeps current mainline wrappers under `scripts/`, such
+as `train_dreamervla.sh` and the cold-start e2e launchers; archived standalone VLA/WM
+wrappers are not part of the active script surface. All experiment choice is
+`experiment=<name>` plus ordinary Hydra keys. The pipeline task name is the Hydra
+`task=` value (snake_case, e.g. `task=openvla_onetraj_libero`). On-disk data artifacts
+keep their historical names via `task.artifact_name` (e.g.
 `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths inside commands intentionally mix the
 snake_case `task=` token with the CamelCase artifact directory.
 
@@ -66,6 +68,22 @@ profile values live in the `worldmodel/` configs.
 > The mainline `model_dim` is **4106** (8 configs) and the RynnVLA action-hidden WM is
 > **1034**. These are adjustable but must match the WM checkpoint they load — a run that
 > resumes a `model_dim=1024` warmup checkpoint is incompatible with the current sizing.
+
+## WM single-episode overfit probe
+
+`wm_single_episode_overfit.py` is a diagnostic script, not a training launcher.  It is
+dry-run by default and only trains when `--run` is supplied.  The probe fixes one
+LIBERO episode, trains the Chunk-WM on sliding windows from that episode, and records
+imagined rollouts under three action interventions:
+
+- `true`: demo action chunk
+- `zero`: all-zero action chunk
+- `random`: random action chunk with a deterministic seed
+
+The important comparison is whether `true` action rollout becomes clearly better than
+`zero` / `random` in `*_mse`, `*_cos`, and classifier max score.  If all three stay
+nearly identical, the WM is fitting mostly from latent history instead of using the
+action channel strongly enough.
 
 ## Memory / OOM (online cotrain)
 
@@ -138,14 +156,11 @@ The OFT route requires the moojink transformers fork
 The install scripts make this fork **the single authoritative transformers in the main
 `dreamervla` env** (`scripts/install/40_third_party.sh`); `scripts/install/60_verify.sh`
 FATAL-checks that the installed transformers is the fork, so no separate env is needed.
-See
-[`RLinf_aligned_LIBERO_rollout_execution_plan.md`](../../archive/plans/RLinf_aligned_LIBERO_rollout_execution_plan.md)
-for the full OpenVLA-OFT / RLinf action contract and root-cause record.
+The OpenVLA-OFT / RLinf action contract is encoded in the current rollout env,
+worker, and config tests; keep those tests as the source of truth when changing
+the route.
 
 ## Validation notes
 
-- [`RLinf_aligned_LIBERO_rollout_execution_plan.md`](../../archive/plans/RLinf_aligned_LIBERO_rollout_execution_plan.md)
-  — the OpenVLA-OFT / RLinf action contract and the shared standalone / no-Ray / Ray
-  rollout core.
 - [`spec/`](../../../spec/00_overview.md) — architecture entry points for overview,
   complete loop, Ray implementation, current implementation, and data contracts.

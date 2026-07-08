@@ -13,24 +13,30 @@ Normal changes are Hydra overrides, e.g.
 | Pipeline | Hydra `task=` | Main configs |
 | --- | --- | --- |
 | [RynnVLA_LIBERO](RynnVLA_LIBERO.md) | `rynnvla_libero` | `world_model_chunk`, `dreamervla_rynn_wm_lumos` |
-| [OpenVLA one-traj](OpenVLA_Onetraj_LIBERO.md) | `openvla_onetraj_libero` | `oft_discrete_token_world_model_chunk`, `dreamervla_oft_discrete_token_wm_lumos` |
-| [OFT action-hidden WM (Scheme A)](OpenVLA_Onetraj_LIBERO_action_hidden_world_model.md) | `openvla_onetraj_libero` | `oft_world_model_chunk`, `oft_latent_classifier_chunk`, `dreamervla_oft_wm_lumos`, `online_cotrain_oft_action_hidden` |
-| [OFT backbone-latent WM (Scheme 1)](OpenVLA_Onetraj_LIBERO_backbone_latent_world_model.md) | `openvla_onetraj_libero` | `oft_world_model_chunk_input_tokens`, `dreamervla_oft_wm_lumos_input_tokens`, `online_cotrain_oft_backbone_latent` |
-| [Cold-start rollout collection](OpenVLA_Onetraj_LIBERO_coldstart_rollout_collection.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_onetraj`, `oft_discrete_token_world_model_chunk` |
-| [Cold-start collect + warmup + cotrain](OpenVLA_Onetraj_LIBERO_coldstart_warmup_cotrain.md) | `openvla_onetraj_coldstart_libero` | `collect_rollouts_ray`, `online_cotrain_pipeline_oft_action_hidden` |
+| [OpenVLA one-traj cold-start cotrain](OpenVLA_Onetraj_LIBERO.md) | `goal\|object\|spatial\|10` launcher shorthand | `collect_rollouts_ray`, `oft_discrete_token_world_model_chunk`, `dreamervla_oft_discrete_token_wm_lumos`, `openvla_onetraj_libero_cotrain_ray`, `eval_libero_vla` |
 | [Ray/manual cotrain backend](../../../spec/04_complete_loop.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, legacy `online_cotrain_ray_*` |
+| [WM single-episode overfit probe](wm_single_episode_overfit.py) | `libero_goal` HDF5 + hidden sidecar | diagnostic script; dry-run unless `--run` is passed |
 
 The `task=` token is snake_case; on-disk data artifacts keep their historical
 `task.artifact_name` directories (e.g. `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths
 inside the commands mix the two — this is intentional (see EXPLAINED.md).
 
-## Validation notes
+## Diagnostics
 
-- [RLinf-aligned LIBERO rollout](../../archive/plans/RLinf_aligned_LIBERO_rollout_execution_plan.md) — the
-  OpenVLA-OFT / RLinf action contract and the shared rollout core.
-- [Architecture index](../../../spec/00_overview.md) — target-mainline group topology.
-- [Complete loop](../../../spec/04_complete_loop.md) — collect, warmup, cotrain,
-  trajectory PPO, checkpoint, and eval coverage.
-- [Architecture overview](../../../spec/00_overview.md) — worker groups, placement, channels, and current implementation status.
-- [Cold-start cotrain bracket checklist](../../reports/audits/online_cotrain_bracket_resolution_checklist.md) —
-  focused review checklist for bracket/order issues in the cotrain path.
+The WM single-episode overfit probe is intentionally not a launcher and does not run
+unless `--run` is passed:
+
+```bash
+python docs/tutorials/experiments/wm_single_episode_overfit.py
+```
+
+To run it on an explicitly selected GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=7 \
+  python docs/tutorials/experiments/wm_single_episode_overfit.py --run \
+  --out-dir "${DVLA_DATA_ROOT}/outputs/world_model_probe/single_episode_overfit"
+```
+
+It records `metrics.jsonl` with `true`, `zero`, and `random` action-chunk rollout
+comparisons so action sensitivity can be checked without starting cotrain.

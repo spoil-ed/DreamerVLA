@@ -477,6 +477,10 @@ class ManualCotrainRayRunner(BaseRunner):
                 component_states = {
                     "classifier": dict(state_dicts.get("classifier", {})),
                 }
+                if "classifier_threshold" in state_dicts:
+                    component_states["classifier_threshold"] = float(
+                        state_dicts["classifier_threshold"]
+                    )
                 if sync_world_model_to_env:
                     component_states["world_model"] = dict(
                         state_dicts.get("world_model", {})
@@ -1514,6 +1518,10 @@ class ManualCotrainRayRunner(BaseRunner):
                 for name in ("world_model", "classifier")
                 if isinstance(state_dicts.get(name), dict)
             }
+            if "classifier_threshold" in payload:
+                component_states["classifier_threshold"] = float(
+                    payload["classifier_threshold"]
+                )
             if component_states:
                 wm_env.load_component_states(
                     component_states,
@@ -1554,14 +1562,22 @@ class ManualCotrainRayRunner(BaseRunner):
             "world_model": dict(learner_states.get("world_model", {})),
             "classifier": dict(learner_states.get("classifier", {})),
         }
+        classifier_threshold = (
+            float(learner_states["classifier_threshold"])
+            if "classifier_threshold" in learner_states
+            else None
+        )
+        payload = {
+            "global_step": int(global_step),
+            "cfg": _plain(self.cfg),
+            "metrics": dict(metrics),
+            "state_dicts": state_dicts,
+            "replay": replay_state,
+        }
+        if classifier_threshold is not None:
+            payload["classifier_threshold"] = classifier_threshold
         torch.save(
-            {
-                "global_step": int(global_step),
-                "cfg": _plain(self.cfg),
-                "metrics": dict(metrics),
-                "state_dicts": state_dicts,
-                "replay": replay_state,
-            },
+            payload,
             ckpt_path,
         )
         run_metadata = self._manual_checkpoint_run_metadata(ckpt_dir)
@@ -1705,6 +1721,10 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
     for key, values in values_by_key.items():
         if key.endswith("/batch_size_avg"):
             continue
+        if key.endswith("/score_mean") or key.endswith("/score_p50") or key.endswith(
+            "/score_p90"
+        ):
+            continue
         if key.endswith("/classifier_success_rate") or key.endswith(
             "/classifier_trajectory_success_rate"
         ):
@@ -1712,6 +1732,8 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
         if key.endswith("/batch_size_min"):
             summed[key] = float(min(values))
         elif key.endswith("/batch_size_max"):
+            summed[key] = float(max(values))
+        elif key.endswith("/score_max"):
             summed[key] = float(max(values))
         else:
             summed[key] = float(sum(values))
@@ -1726,6 +1748,32 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
         )
         if denominator > 0:
             summed[f"{prefix}batch_size_avg"] = float(value / denominator)
+    for key, value in list(summed.items()):
+        if not key.endswith("/score_sum"):
+            continue
+        prefix = key[: -len("score_sum")]
+        count = summed.get(f"{prefix}score_count", 0.0)
+        if count > 0:
+            summed[f"{prefix}score_mean"] = float(value / count)
+    for suffix in ("score_p50", "score_p90"):
+        for key, values in values_by_key.items():
+            if not key.endswith(f"/{suffix}"):
+                continue
+            prefix = key[: -len(suffix)]
+            counts = values_by_key.get(f"{prefix}score_count", [])
+            if len(counts) == len(values) and sum(counts) > 0.0:
+                # Worker-local quantiles cannot be merged exactly without raw
+                # samples; count-weighted values keep the debug metric bounded.
+                total = float(sum(counts))
+                summed[key] = float(
+                    sum(
+                        value * count
+                        for value, count in zip(values, counts, strict=True)
+                    )
+                    / total
+                )
+            else:
+                summed[key] = float(max(values))
     _derive_classifier_rate_metrics(summed)
     return summed
 
