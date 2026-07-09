@@ -1,0 +1,9 @@
+base_dir: null
+his: 2
+len_action: 5
+task_name: goal
+resolution: 512
+with_state: false
+img_names: [imgs_third_view]
+output_dir: ./generated_libero_convs/
+with_world_model: false
