@@ -47,6 +47,7 @@ def test_libero_original_reprocess_script_targets_artifact_root() -> None:
     assert "task_name=openvla_onetraj_libero" in text
     assert "artifact_name=OpenVLA_Onetraj_LIBERO_libero_goal" in text
     assert "only=[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]" in text
+    assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in text
     assert "OFT_LATENT_SCHEME" in text
     assert "both" in text
     assert "Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" in text
