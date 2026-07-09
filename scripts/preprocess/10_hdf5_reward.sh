@@ -85,8 +85,13 @@ if [[ "${OVERWRITE}" != "1" && -n "${filtered_hdf5}" ]]; then
   if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${HDF5_DIR}" reference_dir="${MARKED_DIR}"; then
     echo "[10_hdf5_reward] skip filter: ${HDF5_DIR}"
   else
-    echo "[10_hdf5_reward] existing filtered stage is incomplete; rerun with OVERWRITE=1 to rebuild ${HDF5_DIR}" >&2
-    exit 6
+    echo "[10_hdf5_reward] repair incomplete filtered stage: ${HDF5_DIR}" >&2
+    rm -rf "${HDF5_DIR}"
+    python -m dreamervla.preprocess.filter_marked_libero_hdf5 \
+      input_dir="${MARKED_DIR}" \
+      output_dir="${HDF5_DIR}" \
+      filter_noops=true \
+      overwrite=true
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${HDF5_DIR}"
@@ -113,8 +118,13 @@ if [[ "${OVERWRITE}" != "1" && -n "${reward_hdf5}" ]]; then
   if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${REWARD_DIR}" reference_dir="${HDF5_DIR}"; then
     echo "[10_hdf5_reward] skip reward: ${REWARD_DIR}"
   else
-    echo "[10_hdf5_reward] existing reward stage is incomplete; rerun with OVERWRITE=1 to rebuild ${REWARD_DIR}" >&2
-    exit 6
+    echo "[10_hdf5_reward] repair incomplete reward stage: ${REWARD_DIR}" >&2
+    rm -rf "${REWARD_DIR}"
+    python -m dreamervla.preprocess.preprocess_remaining_steps_reward \
+      input_dir="${HDF5_DIR}" \
+      output_dir="${REWARD_DIR}" \
+      metainfo_json="${META_JSON}" \
+      overwrite=true
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${REWARD_DIR}"

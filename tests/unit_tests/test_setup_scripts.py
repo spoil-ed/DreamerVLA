@@ -12,6 +12,55 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _write_hdf5_reward_repair_python_stub(path: Path) -> None:
+    path.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"${PYTHON_STUB_LOG}\"\n"
+        "module=''\n"
+        "prev=''\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"${prev}\" == '-m' ]]; then module=\"${arg}\"; fi\n"
+        "  prev=\"${arg}\"\n"
+        "done\n"
+        "get_value() {\n"
+        "  local key=\"$1\"\n"
+        "  shift\n"
+        "  local arg\n"
+        "  for arg in \"$@\"; do\n"
+        "    if [[ \"${arg}\" == \"${key}=\"* ]]; then\n"
+        "      printf '%s\\n' \"${arg#*=}\"\n"
+        "      return 0\n"
+        "    fi\n"
+        "  done\n"
+        "  return 1\n"
+        "}\n"
+        "case \"${module}\" in\n"
+        "  dreamervla.preprocess.check_artifacts)\n"
+        "    dir=\"$(get_value dir \"$@\" || true)\"\n"
+        "    if [[ -n \"${EXPECTED_HDF5_DIR:-}\" && \"${dir}\" == \"${EXPECTED_HDF5_DIR}\" && ! -f \"${dir}/stub_demo.hdf5\" ]]; then\n"
+        "      exit 1\n"
+        "    fi\n"
+        "    if [[ -n \"${EXPECTED_REWARD_DIR:-}\" && \"${dir}\" == \"${EXPECTED_REWARD_DIR}\" && ! -f \"${dir}/stub_demo.hdf5\" ]]; then\n"
+        "      exit 1\n"
+        "    fi\n"
+        "    ;;\n"
+        "  dreamervla.preprocess.filter_marked_libero_hdf5)\n"
+        "    out=\"$(get_value output_dir \"$@\")\"\n"
+        "    mkdir -p \"${out}\"\n"
+        "    touch \"${out}/stub_demo.hdf5\"\n"
+        "    ;;\n"
+        "  dreamervla.preprocess.preprocess_remaining_steps_reward)\n"
+        "    out=\"$(get_value output_dir \"$@\")\"\n"
+        "    mkdir -p \"${out}\"\n"
+        "    touch \"${out}/stub_demo.hdf5\"\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 def test_release_shell_entrypoints_are_self_contained() -> None:
     root = _project_root()
     libero_entrypoints = (
@@ -540,6 +589,117 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     assert any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
     assert hdf5_dir.joinpath("stub_demo.hdf5").is_file()
     assert reward_dir.joinpath("stub_demo.hdf5").is_file()
+
+
+def test_hdf5_reward_repairs_incomplete_filtered_stage_without_full_overwrite(
+    tmp_path: Path,
+) -> None:
+    root = _project_root()
+    data_root = tmp_path / "data"
+    raw_dir = data_root / "datasets" / "libero" / "libero_goal"
+    processed = data_root / "processed_data" / "libero_goal"
+    marked_dir = processed / "marked_t_256"
+    hdf5_dir = processed / "no_noops_t_256"
+    reward_dir = processed / "no_noops_t_256_remaining_reward"
+    log_path = tmp_path / "python_calls.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_stub = bin_dir / "python"
+
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "placeholder_demo.hdf5").touch()
+    marked_dir.mkdir(parents=True)
+    (marked_dir / "stub_demo.hdf5").touch()
+    hdf5_dir.mkdir(parents=True)
+    stale_hdf5 = hdf5_dir / "r0_shard_000.hdf5"
+    stale_hdf5.touch()
+    _write_hdf5_reward_repair_python_stub(python_stub)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DVLA_DATA_ROOT": str(data_root),
+            "EXPECTED_HDF5_DIR": str(hdf5_dir),
+            "EXPECTED_REWARD_DIR": str(reward_dir),
+            "PYTHON_STUB_LOG": str(log_path),
+            "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{env.get('PATH', '')}",
+            "TASK": "libero_goal",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[10_hdf5_reward] repair incomplete filtered stage" in result.stderr
+    assert hdf5_dir.joinpath("stub_demo.hdf5").is_file()
+    assert not stale_hdf5.exists()
+    calls = log_path.read_text(encoding="utf-8").splitlines()
+    assert any("filter_marked_libero_hdf5" in call for call in calls)
+    assert not any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
+
+
+def test_hdf5_reward_repairs_incomplete_reward_stage_without_full_overwrite(
+    tmp_path: Path,
+) -> None:
+    root = _project_root()
+    data_root = tmp_path / "data"
+    raw_dir = data_root / "datasets" / "libero" / "libero_goal"
+    processed = data_root / "processed_data" / "libero_goal"
+    marked_dir = processed / "marked_t_256"
+    hdf5_dir = processed / "no_noops_t_256"
+    reward_dir = processed / "no_noops_t_256_remaining_reward"
+    log_path = tmp_path / "python_calls.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_stub = bin_dir / "python"
+
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "placeholder_demo.hdf5").touch()
+    marked_dir.mkdir(parents=True)
+    (marked_dir / "stub_demo.hdf5").touch()
+    hdf5_dir.mkdir(parents=True)
+    (hdf5_dir / "stub_demo.hdf5").touch()
+    reward_dir.mkdir(parents=True)
+    stale_reward = reward_dir / "r0_shard_000.hdf5"
+    stale_reward.touch()
+    _write_hdf5_reward_repair_python_stub(python_stub)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DVLA_DATA_ROOT": str(data_root),
+            "EXPECTED_HDF5_DIR": str(hdf5_dir),
+            "EXPECTED_REWARD_DIR": str(reward_dir),
+            "PYTHON_STUB_LOG": str(log_path),
+            "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{env.get('PATH', '')}",
+            "TASK": "libero_goal",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[10_hdf5_reward] repair incomplete reward stage" in result.stderr
+    assert reward_dir.joinpath("stub_demo.hdf5").is_file()
+    assert not stale_reward.exists()
+    calls = log_path.read_text(encoding="utf-8").splitlines()
+    assert any("preprocess_remaining_steps_reward" in call for call in calls)
+    assert not any("filter_marked_libero_hdf5" in call for call in calls)
+    assert not any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
 
 
 def test_hdf5_reward_marked_validation_allows_failed_replays_to_drop_demos() -> None:
