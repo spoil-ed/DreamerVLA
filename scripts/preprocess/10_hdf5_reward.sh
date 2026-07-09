@@ -72,10 +72,7 @@ else
 fi
 
 python -m dreamervla.preprocess.check_artifacts command=metainfo path="${META_JSON}"
-python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
-  dir="${MARKED_DIR}" \
-  reference_dir="${RAW_LIBERO_DIR}" \
-  match_reference_demos=true
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${MARKED_DIR}"
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${marked_hdf5}" ]]; then

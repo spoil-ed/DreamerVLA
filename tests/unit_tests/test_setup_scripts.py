@@ -542,6 +542,25 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     assert reward_dir.joinpath("stub_demo.hdf5").is_file()
 
 
+def test_hdf5_reward_marked_validation_allows_failed_replays_to_drop_demos() -> None:
+    root = _project_root()
+    reward_text = (
+        root / "scripts" / "preprocess" / "10_hdf5_reward.sh"
+    ).read_text(encoding="utf-8")
+
+    marked_check = reward_text.split(
+        "python -m dreamervla.preprocess.check_artifacts command=metainfo path=\"${META_JSON}\"",
+        maxsplit=1,
+    )[1].split(
+        'marked_hdf5="$(find "${MARKED_DIR}"',
+        maxsplit=1,
+    )[0]
+
+    assert 'dir="${MARKED_DIR}"' in marked_check
+    assert 'reference_dir="${RAW_LIBERO_DIR}"' not in marked_check
+    assert "match_reference_demos=true" not in marked_check
+
+
 def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
