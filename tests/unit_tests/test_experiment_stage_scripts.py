@@ -20,6 +20,11 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         "cotrain_00_check.sh": "experiment_stage_checks cotrain-check",
         "cotrain_01_run.sh": "coldstart_warmup_cotrain",
         "cotrain_02_eval.sh": "eval_libero_vla",
+        "libero_original_00_check.sh": "libero-original-check",
+        "libero_original_01_train_cls_best.sh": "libero-original-cls-run",
+        "libero_original_02_warmup_wm_cls_best.sh": "libero-original-warmup-run",
+        "libero_original_03_rl_from_best.sh": "libero-original-rl-run",
+        "libero_original_04_eval_rl.sh": "eval_libero_vla",
     }
 
     for name, marker in expected.items():
@@ -46,5 +51,9 @@ def test_experiment_stage_check_module_exposes_required_commands() -> None:
         "wm-check",
         "pack-init",
         "cotrain-check",
+        "libero-original-check",
+        "libero-original-cls-run",
+        "libero-original-warmup-run",
+        "libero-original-rl-run",
     ):
         assert command in source

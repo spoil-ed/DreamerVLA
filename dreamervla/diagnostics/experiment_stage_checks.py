@@ -26,6 +26,9 @@ from dreamervla.utils.paths import PROJECT_ROOT, data_path
 DEFAULT_COLLECT_EXPERIMENT = "collect_rollouts_ray"
 DEFAULT_COLLECT_TASK = "openvla_onetraj_coldstart_libero"
 DEFAULT_CLASSIFIER_EXPERIMENT = "wmpo_token_classifier_openvla_onetraj_libero_goal_h1"
+DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT = "openvla_onetraj_libero_cotrain_noray"
+DEFAULT_ORIGINAL_TASK = "openvla_onetraj_libero"
+DEFAULT_ORIGINAL_TASK_IDS = "[0,1,2,3,4,5,6,7,8,9]"
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -317,6 +320,231 @@ def collect_output(args: argparse.Namespace) -> int:
     return 0
 
 
+def _compose_original_config(args: argparse.Namespace, overrides: list[str] | None = None) -> DictConfig:
+    return _compose_train_config(
+        args.experiment,
+        [f"task={args.task}", *(overrides or []), *list(args.overrides)],
+    )
+
+
+def _original_paths(cfg: DictConfig) -> dict[str, Path | None]:
+    oft = cfg.task.openvla_oft
+    failure_raw = OmegaConf.select(oft, "failure_hdf5_dir", default=None)
+    failure_hidden = OmegaConf.select(oft, "failure_input_token_hidden_dir", default=None)
+    return {
+        "checkpoint": Path(str(oft.ckpt_path)).expanduser(),
+        "dataset_statistics": Path(str(oft.dataset_statistics_path)).expanduser(),
+        "demo_raw": Path(str(oft.hdf5_dir)).expanduser(),
+        "wm_reward": Path(str(oft.hdf5_reward_dir)).expanduser(),
+        "hidden": Path(str(oft.input_token_hidden_dir)).expanduser(),
+        "failure_raw": Path(str(failure_raw)).expanduser() if failure_raw else None,
+        "failure_hidden": Path(str(failure_hidden)).expanduser() if failure_hidden else None,
+    }
+
+
+def libero_original_check(args: argparse.Namespace) -> int:
+    cfg = _compose_original_config(args)
+    paths = _original_paths(cfg)
+    counts: dict[str, int | None] = {}
+    for name, path in paths.items():
+        if path is None:
+            counts[name] = None
+            continue
+        if name in {"checkpoint", "dataset_statistics"}:
+            _require_path(path, name.replace("_", " "))
+            counts[name] = None
+        else:
+            counts[name] = _count_hdf5(path)
+    empty = [
+        name
+        for name, count in counts.items()
+        if count is not None and int(count) <= 0
+    ]
+    if empty:
+        raise FileNotFoundError(f"original LIBERO data directories contain no HDF5 files: {empty}")
+    _print_json(
+        {
+            "status": "ok",
+            "stage": "libero-original-check",
+            "experiment": args.experiment,
+            "task": args.task,
+            "suite": str(cfg.task.suite),
+            "paths": {
+                name: str(path) if path is not None else None
+                for name, path in paths.items()
+            },
+            "hdf5_counts": counts,
+            "wm_warmup_steps_default": int(
+                OmegaConf.select(cfg, "training.wm_warmup_steps", default=0) or 0
+            ),
+            "classifier_warmup_steps_default": int(
+                OmegaConf.select(cfg, "training.classifier_warmup_steps", default=0) or 0
+            ),
+        }
+    )
+    return 0
+
+
+def _default_original_run_root() -> Path:
+    return data_path(
+        "outputs",
+        "libero_original_best_wm_cls",
+        time.strftime("%Y%m%d_%H%M%S"),
+    )
+
+
+def _python_module_launch(
+    python_bin: str, module: str, *, ngpu: int = 1, master_port: int = 29500
+) -> list[str]:
+    if int(ngpu) <= 1:
+        return [python_bin, "-m", module]
+    return [
+        python_bin,
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        "--nnodes=1",
+        f"--nproc-per-node={int(ngpu)}",
+        f"--master_port={int(master_port)}",
+        "-m",
+        module,
+    ]
+
+
+def libero_original_cls_run(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else data_path(
+        "outputs",
+        "classifier",
+        "libero_original_best_cls",
+        time.strftime("%Y%m%d_%H%M%S"),
+    )
+    python_bin = str(args.python or sys.executable)
+    cmd = [
+        python_bin,
+        "-m",
+        "dreamervla.train",
+        f"experiment={args.experiment}",
+        f"task={args.task}",
+        f"training.out_dir={out_dir}",
+        f"training.num_epochs={int(args.epochs)}",
+        f"training.batch_size={int(args.batch_size)}",
+        f"training.val_batch_size={int(args.val_batch_size)}",
+        f"training.lr={float(args.lr)}",
+        f"training.eval_every={int(args.eval_every)}",
+        f"training.ckpt_every={int(args.ckpt_every)}",
+        *list(args.overrides),
+    ]
+    _print_json(
+        {
+            "status": "dry_run" if args.dry_run else "running",
+            "stage": "libero-original-cls-run",
+            "out_dir": str(out_dir),
+            "cmd": cmd,
+        }
+    )
+    if args.dry_run:
+        return 0
+    subprocess.run(cmd, check=True)
+    return 0
+
+
+def libero_original_warmup_run(args: argparse.Namespace) -> int:
+    cfg = _compose_original_config(args)
+    paths = _original_paths(cfg)
+    run_root = Path(args.run_root).expanduser() if args.run_root else _default_original_run_root()
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else run_root / "cotrain"
+    python_bin = str(args.python or sys.executable)
+    cmd = [
+        *_python_module_launch(
+            python_bin,
+            "dreamervla.train",
+            ngpu=int(args.ngpu),
+            master_port=int(args.master_port),
+        ),
+        f"experiment={args.experiment}",
+        f"task={args.task}",
+        f"training.out_dir={out_dir}",
+        "training.resume=false",
+        f"offline_warmup.data_dir={paths['wm_reward']}",
+        f"offline_warmup.hidden_dir={paths['hidden']}",
+        "offline_warmup.task_id=null",
+        f"env.task_ids={args.task_ids}",
+        f"training.wm_warmup_steps={int(args.wm_steps)}",
+        f"training.classifier_warmup_steps={int(args.classifier_steps)}",
+        f"training.warmup_replay_epochs={int(args.replay_epochs)}",
+        f"training.warmup_checkpoint_every={int(args.checkpoint_every)}",
+        f"++training.warmup_topk_k={int(args.topk_k)}",
+        f"dataloader.batch_size={int(args.wm_batch_size)}",
+        f"training.classifier_batch_size={int(args.classifier_batch_size)}",
+        f"online_rollout.buffer_size={int(args.buffer_size)}",
+        "online_rollout.total_env_steps=0",
+        *list(args.overrides),
+    ]
+    _print_json(
+        {
+            "status": "dry_run" if args.dry_run else "running",
+            "stage": "libero-original-warmup-run",
+            "run_root": str(run_root),
+            "out_dir": str(out_dir),
+            "wm_reward_dir": str(paths["wm_reward"]),
+            "hidden_dir": str(paths["hidden"]),
+            "ngpu": int(args.ngpu),
+            "cmd": cmd,
+        }
+    )
+    if args.dry_run:
+        return 0
+    subprocess.run(cmd, check=True)
+    return 0
+
+
+def libero_original_rl_run(args: argparse.Namespace) -> int:
+    cfg = _compose_original_config(args)
+    paths = _original_paths(cfg)
+    run_root = Path(args.run_root).expanduser()
+    out_dir = run_root / "cotrain"
+    if not args.dry_run:
+        _require_path(out_dir / "ckpt" / "wm_warmup.ckpt", "WM warmup checkpoint")
+        _require_path(
+            out_dir / "ckpt" / "classifier_warmup.ckpt",
+            "classifier warmup checkpoint",
+        )
+    python_bin = str(args.python or sys.executable)
+    cmd = [
+        *_python_module_launch(
+            python_bin,
+            "dreamervla.train",
+            ngpu=int(args.ngpu),
+            master_port=int(args.master_port),
+        ),
+        f"experiment={args.experiment}",
+        f"task={args.task}",
+        f"training.out_dir={out_dir}",
+        "training.resume=true",
+        f"offline_warmup.data_dir={paths['wm_reward']}",
+        f"offline_warmup.hidden_dir={paths['hidden']}",
+        "offline_warmup.task_id=null",
+        f"env.task_ids={args.task_ids}",
+        f"online_rollout.render_backend={args.render_backend}",
+        f"online_rollout.total_env_steps={int(args.total_env_steps)}",
+        *list(args.overrides),
+    ]
+    _print_json(
+        {
+            "status": "dry_run" if args.dry_run else "running",
+            "stage": "libero-original-rl-run",
+            "run_root": str(run_root),
+            "out_dir": str(out_dir),
+            "ngpu": int(args.ngpu),
+            "cmd": cmd,
+        }
+    )
+    if args.dry_run:
+        return 0
+    subprocess.run(cmd, check=True)
+    return 0
+
+
 def cls_check(args: argparse.Namespace) -> int:
     cfg = _compose_train_config(args.experiment, list(args.overrides))
     data_cfg = cfg.data
@@ -550,6 +778,62 @@ def build_parser() -> argparse.ArgumentParser:
     collect_output_p.add_argument("--num-tasks", type=int, default=None)
     collect_output_p.add_argument("overrides", nargs="*")
     collect_output_p.set_defaults(func=collect_output)
+
+    original_check_p = sub.add_parser("libero-original-check")
+    original_check_p.add_argument("--experiment", default=DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT)
+    original_check_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
+    original_check_p.add_argument("overrides", nargs="*")
+    original_check_p.set_defaults(func=libero_original_check)
+
+    original_cls_p = sub.add_parser("libero-original-cls-run")
+    original_cls_p.add_argument("--experiment", default=DEFAULT_CLASSIFIER_EXPERIMENT)
+    original_cls_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
+    original_cls_p.add_argument("--out-dir", default=None)
+    original_cls_p.add_argument("--python", default=None)
+    original_cls_p.add_argument("--epochs", type=int, default=32)
+    original_cls_p.add_argument("--batch-size", type=int, default=16)
+    original_cls_p.add_argument("--val-batch-size", type=int, default=64)
+    original_cls_p.add_argument("--lr", type=float, default=3.0e-5)
+    original_cls_p.add_argument("--eval-every", type=int, default=100)
+    original_cls_p.add_argument("--ckpt-every", type=int, default=100)
+    original_cls_p.add_argument("--dry-run", action="store_true")
+    original_cls_p.add_argument("overrides", nargs="*")
+    original_cls_p.set_defaults(func=libero_original_cls_run)
+
+    original_warmup_p = sub.add_parser("libero-original-warmup-run")
+    original_warmup_p.add_argument("--experiment", default=DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT)
+    original_warmup_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
+    original_warmup_p.add_argument("--run-root", default=None)
+    original_warmup_p.add_argument("--out-dir", default=None)
+    original_warmup_p.add_argument("--python", default=None)
+    original_warmup_p.add_argument("--ngpu", type=int, default=1)
+    original_warmup_p.add_argument("--master-port", type=int, default=29500)
+    original_warmup_p.add_argument("--wm-steps", type=int, default=20000)
+    original_warmup_p.add_argument("--classifier-steps", type=int, default=10000)
+    original_warmup_p.add_argument("--replay-epochs", type=int, default=5)
+    original_warmup_p.add_argument("--checkpoint-every", type=int, default=500)
+    original_warmup_p.add_argument("--topk-k", type=int, default=3)
+    original_warmup_p.add_argument("--wm-batch-size", type=int, default=32)
+    original_warmup_p.add_argument("--classifier-batch-size", type=int, default=128)
+    original_warmup_p.add_argument("--buffer-size", type=int, default=160000)
+    original_warmup_p.add_argument("--task-ids", default=DEFAULT_ORIGINAL_TASK_IDS)
+    original_warmup_p.add_argument("--dry-run", action="store_true")
+    original_warmup_p.add_argument("overrides", nargs="*")
+    original_warmup_p.set_defaults(func=libero_original_warmup_run)
+
+    original_rl_p = sub.add_parser("libero-original-rl-run")
+    original_rl_p.add_argument("--experiment", default=DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT)
+    original_rl_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
+    original_rl_p.add_argument("--run-root", required=True)
+    original_rl_p.add_argument("--python", default=None)
+    original_rl_p.add_argument("--ngpu", type=int, default=1)
+    original_rl_p.add_argument("--master-port", type=int, default=29500)
+    original_rl_p.add_argument("--total-env-steps", type=int, default=200000)
+    original_rl_p.add_argument("--task-ids", default=DEFAULT_ORIGINAL_TASK_IDS)
+    original_rl_p.add_argument("--render-backend", default="osmesa")
+    original_rl_p.add_argument("--dry-run", action="store_true")
+    original_rl_p.add_argument("overrides", nargs="*")
+    original_rl_p.set_defaults(func=libero_original_rl_run)
 
     cls_check_p = sub.add_parser("cls-check")
     cls_check_p.add_argument("--experiment", default=DEFAULT_CLASSIFIER_EXPERIMENT)
