@@ -40,8 +40,8 @@ runner:
     log_path: ${training.out_dir}/log
 
 data:
-  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal_no_noops_t_256
-  success_dir_hidden: ${data.success_dir_raw}_oft_input_token_embedding_vla_policy_h1
+  success_dir_raw: ${task.openvla_oft.hdf5_dir}
+  success_dir_hidden: ${task.openvla_oft.input_token_hidden_dir}
   failure_dir_raw: ${task.openvla_oft.failure_hdf5_dir}
   failure_dir_hidden: ${task.openvla_oft.failure_input_token_hidden_dir}
   window: 8

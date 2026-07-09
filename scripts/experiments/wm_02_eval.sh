@@ -27,7 +27,7 @@ PYTHON_BIN="${PYTHON:-python}"
 "${PYTHON_BIN}" -m dreamervla.diagnostics.eval_chunkwm_closeloop \
   --ckpt "${WM_CKPT}" \
   --config "${WM_CONFIG}" \
-  --success-dir-raw "${SUCCESS_DIR_RAW:-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256}" \
-  --success-dir-hidden "${SUCCESS_DIR_HIDDEN:-${DVLA_DATA_ROOT}/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1}" \
+  --success-dir-raw "${SUCCESS_DIR_RAW:-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256}" \
+  --success-dir-hidden "${SUCCESS_DIR_HIDDEN:-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_input_token_embedding_vla_policy_h1}" \
   --out "${WM_EVAL_OUT:-${DVLA_DATA_ROOT}/outputs/world_model_probe/wm_eval_summary.json}" \
   "$@"

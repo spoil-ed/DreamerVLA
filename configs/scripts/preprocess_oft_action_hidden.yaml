@@ -1,7 +1,7 @@
 openvla_oft_dir: ${oc.env:DVLA_ROOT,.}/dreamervla/models/embodiment/openvla_oft
-hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256
-out_c_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_oft_action_hidden_c_h8
-out_d_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_oft_action_hidden_d_h8
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
+out_c_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_action_hidden_c_h8
+out_d_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_action_hidden_d_h8
 out_action_dir: null
 out_input_token_dir: null
 skip_cd_sidecars: false

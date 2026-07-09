@@ -101,28 +101,34 @@ def test_standard_h1_classifier_experiment_composes() -> None:
     cfg = _compose(["experiment=latent_classifier_openvla_onetraj_libero_goal_h1"])
 
     assert cfg._target_ == "dreamervla.runners.LatentClassifierRunner"
-    assert cfg.task.hdf5_dir.endswith("data/processed_data/libero_goal_no_noops_t_256")
+    assert cfg.task.hdf5_dir.endswith(
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256"
+    )
     assert cfg.task.openvla_oft.input_token_hidden_dir.endswith(
-        "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
     )
     assert cfg.task.openvla_oft.action_hidden_dir.endswith(
         "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
         "no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1"
     )
     assert cfg.task.pretokenize_config_path.endswith(
-        "data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml"
+        "data/configs/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "his_1_third_view_wrist_w_state_1_256_pretokenize.yaml"
     )
     assert cfg.data.success_dir_raw.endswith(
-        "data/processed_data/libero_goal_no_noops_t_256"
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256"
     )
     assert cfg.data.success_dir_hidden.endswith(
-        "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
     )
     assert cfg.data.failure_dir_raw.endswith(
-        "data/processed_data/libero_goal_no_noops_t_256_failures"
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_failures"
     )
     assert cfg.data.failure_dir_hidden.endswith(
-        "data/processed_data/libero_goal_no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
     )
     assert cfg.data.lang_emb_dir == "__source_hidden__"
     assert cfg.data.chunk_subsample == cfg.task.openvla_oft.input_tokens.chunk_size == 8
@@ -154,10 +160,12 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.data.balance_batches is True
     assert cfg.classifier.token_count == cfg.task.openvla_oft.input_tokens.token_count
     assert cfg.data.success_dir_hidden.endswith(
-        "libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
+        "OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
     )
     assert cfg.data.failure_dir_hidden.endswith(
-        "libero_goal_no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
+        "OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_failures_oft_input_token_embedding_vla_policy_h1"
     )
 
 

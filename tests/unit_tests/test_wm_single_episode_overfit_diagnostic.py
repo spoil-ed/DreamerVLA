@@ -34,11 +34,13 @@ def test_default_artifact_paths_follow_dvla_data_root(
     )
     assert args.hidden_hdf5 == data_root / (
         "processed_data/"
-        "libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
+        "OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
         "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
     )
     assert args.raw_hdf5 == data_root / (
-        "processed_data/libero_goal_no_noops_t_256/"
+        "processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_remaining_reward/"
         "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
     )
     assert args.out_dir == data_root / "outputs/world_model_probe/single_episode_overfit"

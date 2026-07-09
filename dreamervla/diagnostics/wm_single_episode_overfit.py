@@ -94,7 +94,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=data_path(
             "processed_data/"
-            "libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
+            "OpenVLA_Onetraj_LIBERO_libero_goal/"
+            "no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
             "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
         ),
         help="Hidden sidecar HDF5 containing data/<demo>/obs_embedding and lang_emb.",
@@ -103,7 +104,8 @@ def parse_args() -> argparse.Namespace:
         "--raw-hdf5",
         type=Path,
         default=data_path(
-            "processed_data/libero_goal_no_noops_t_256/"
+            "processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+            "no_noops_t_256_remaining_reward/"
             "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
         ),
         help="Raw reward HDF5 containing actions, rewards, and proprio observations.",
