@@ -187,6 +187,19 @@ Check resume completeness before a long run with:
 
 | Script | Purpose |
 | --- | --- |
+| `experiments/collect_00_check.sh` | Validate OpenVLA-OFT checkpoint/statistics and target replay dirs before cold-start collection |
+| `experiments/collect_01_run.sh` | Run cold-start rollout collection into `${DVLA_DATA_ROOT}/collected_rollouts/<suite>/{reward,hidden}` and write collection metadata |
+| `experiments/collect_02_check.sh` | Summarize collected reward/hidden replay pairs and refresh `collection_manifest.json` |
+| `experiments/cls_00_check.sh` | Validate standalone WMPO token classifier data/config before training |
+| `experiments/cls_01_train.sh` | Train the WMPO token success classifier via `LatentClassifierRunner` |
+| `experiments/cls_02_eval.sh` | Summarize classifier validation logs/checkpoints into `classifier_eval_summary.json` |
+| `experiments/wm_00_check.sh` | Validate collected reward/hidden rollout shards for WM warmup |
+| `experiments/wm_01_train.sh` | Run WM-only warmup from collected rollout replay with classifier/online steps disabled |
+| `experiments/wm_02_eval.sh` | Evaluate a WM checkpoint with open-loop and closed-loop chunk rollout diagnostics |
+| `experiments/wm_cls_init_00_pack.sh` | Pack WM and classifier checkpoints into a cotrain init checkpoint schema |
+| `experiments/cotrain_00_check.sh` | Validate warmup/init artifacts before online cotrain |
+| `experiments/cotrain_01_run.sh` | Resume from a warmup run root and execute online cotrain |
+| `experiments/cotrain_02_eval.sh` | Run LIBERO eval for a trained cotrain/Dreamer checkpoint |
 | `experiments/wm_single_episode_00_check.sh` | Validate resolved config, WM/classifier checkpoints, and hidden/raw HDF5 inputs for the single-episode WM probe |
 | `experiments/wm_single_episode_01_train.sh` | Train the single-episode WM overfit checkpoint without running eval; writes `train_metrics.jsonl`, `train_summary.json`, and `wm_single_episode_step<N>.ckpt` |
 | `experiments/wm_single_episode_02_eval.sh` | Evaluate the trained single-episode WM checkpoint; writes `eval_metrics.jsonl`, `summary.json`, and `summary.md` |
