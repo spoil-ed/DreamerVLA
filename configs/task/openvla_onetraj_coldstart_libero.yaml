@@ -18,3 +18,6 @@ name: OpenVLA_Onetraj_ColdStart_LIBERO
 # data is marked at the folder level and never collides with the offline namespace.
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
+
+openvla_oft:
+  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1

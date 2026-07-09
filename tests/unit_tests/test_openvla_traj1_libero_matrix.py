@@ -105,6 +105,10 @@ def test_standard_h1_classifier_experiment_composes() -> None:
     assert cfg.task.openvla_oft.input_token_hidden_dir.endswith(
         "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
     )
+    assert cfg.task.openvla_oft.action_hidden_dir.endswith(
+        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
+        "no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1"
+    )
     assert cfg.task.pretokenize_config_path.endswith(
         "data/configs/libero_goal/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml"
     )

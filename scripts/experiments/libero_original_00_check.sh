@@ -25,4 +25,5 @@ PYTHON_BIN="${PYTHON:-python}"
 "${PYTHON_BIN}" -m dreamervla.diagnostics.experiment_stage_checks libero-original-check \
   --experiment "${ORIGINAL_COTRAIN_EXPERIMENT:-openvla_onetraj_libero_cotrain_noray}" \
   --task "${ORIGINAL_TASK:-openvla_onetraj_libero}" \
+  --hidden-dir "${ORIGINAL_HIDDEN_DIR:-}" \
   "$@"

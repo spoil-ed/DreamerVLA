@@ -327,24 +327,35 @@ def _compose_original_config(args: argparse.Namespace, overrides: list[str] | No
     )
 
 
-def _original_paths(cfg: DictConfig) -> dict[str, Path | None]:
+def _original_paths(
+    cfg: DictConfig, *, hidden_dir: str | None = None
+) -> dict[str, Path | None]:
     oft = cfg.task.openvla_oft
     failure_raw = OmegaConf.select(oft, "failure_hdf5_dir", default=None)
     failure_hidden = OmegaConf.select(oft, "failure_input_token_hidden_dir", default=None)
+    resolved_hidden = hidden_dir if hidden_dir else str(oft.input_token_hidden_dir)
     return {
         "checkpoint": Path(str(oft.ckpt_path)).expanduser(),
         "dataset_statistics": Path(str(oft.dataset_statistics_path)).expanduser(),
         "demo_raw": Path(str(oft.hdf5_dir)).expanduser(),
         "wm_reward": Path(str(oft.hdf5_reward_dir)).expanduser(),
-        "hidden": Path(str(oft.input_token_hidden_dir)).expanduser(),
+        "hidden": Path(str(resolved_hidden)).expanduser(),
         "failure_raw": Path(str(failure_raw)).expanduser() if failure_raw else None,
         "failure_hidden": Path(str(failure_hidden)).expanduser() if failure_hidden else None,
     }
 
 
+def _original_hidden_candidates(cfg: DictConfig) -> dict[str, Path]:
+    oft = cfg.task.openvla_oft
+    return {
+        "action_hidden": Path(str(oft.action_hidden_dir)).expanduser(),
+        "input_token_hidden": Path(str(oft.input_token_hidden_dir)).expanduser(),
+    }
+
+
 def libero_original_check(args: argparse.Namespace) -> int:
     cfg = _compose_original_config(args)
-    paths = _original_paths(cfg)
+    paths = _original_paths(cfg, hidden_dir=args.hidden_dir)
     counts: dict[str, int | None] = {}
     for name, path in paths.items():
         if path is None:
@@ -372,6 +383,10 @@ def libero_original_check(args: argparse.Namespace) -> int:
             "paths": {
                 name: str(path) if path is not None else None
                 for name, path in paths.items()
+            },
+            "hidden_candidates": {
+                name: str(path)
+                for name, path in _original_hidden_candidates(cfg).items()
             },
             "hdf5_counts": counts,
             "wm_warmup_steps_default": int(
@@ -450,7 +465,7 @@ def libero_original_cls_run(args: argparse.Namespace) -> int:
 
 def libero_original_warmup_run(args: argparse.Namespace) -> int:
     cfg = _compose_original_config(args)
-    paths = _original_paths(cfg)
+    paths = _original_paths(cfg, hidden_dir=args.hidden_dir)
     run_root = Path(args.run_root).expanduser() if args.run_root else _default_original_run_root()
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else run_root / "cotrain"
     python_bin = str(args.python or sys.executable)
@@ -500,7 +515,7 @@ def libero_original_warmup_run(args: argparse.Namespace) -> int:
 
 def libero_original_rl_run(args: argparse.Namespace) -> int:
     cfg = _compose_original_config(args)
-    paths = _original_paths(cfg)
+    paths = _original_paths(cfg, hidden_dir=args.hidden_dir)
     run_root = Path(args.run_root).expanduser()
     out_dir = run_root / "cotrain"
     if not args.dry_run:
@@ -782,6 +797,7 @@ def build_parser() -> argparse.ArgumentParser:
     original_check_p = sub.add_parser("libero-original-check")
     original_check_p.add_argument("--experiment", default=DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT)
     original_check_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
+    original_check_p.add_argument("--hidden-dir", default=None)
     original_check_p.add_argument("overrides", nargs="*")
     original_check_p.set_defaults(func=libero_original_check)
 
@@ -806,6 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
     original_warmup_p.add_argument("--run-root", default=None)
     original_warmup_p.add_argument("--out-dir", default=None)
     original_warmup_p.add_argument("--python", default=None)
+    original_warmup_p.add_argument("--hidden-dir", default=None)
     original_warmup_p.add_argument("--ngpu", type=int, default=1)
     original_warmup_p.add_argument("--master-port", type=int, default=29500)
     original_warmup_p.add_argument("--wm-steps", type=int, default=20000)
@@ -826,6 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     original_rl_p.add_argument("--task", default=DEFAULT_ORIGINAL_TASK)
     original_rl_p.add_argument("--run-root", required=True)
     original_rl_p.add_argument("--python", default=None)
+    original_rl_p.add_argument("--hidden-dir", default=None)
     original_rl_p.add_argument("--ngpu", type=int, default=1)
     original_rl_p.add_argument("--master-port", type=int, default=29500)
     original_rl_p.add_argument("--total-env-steps", type=int, default=200000)

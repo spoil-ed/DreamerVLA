@@ -26,6 +26,7 @@ PYTHON_BIN="${PYTHON:-python}"
   --experiment "${ORIGINAL_COTRAIN_EXPERIMENT:-openvla_onetraj_libero_cotrain_noray}" \
   --task "${ORIGINAL_TASK:-openvla_onetraj_libero}" \
   --python "${PYTHON_BIN}" \
+  --hidden-dir "${ORIGINAL_HIDDEN_DIR:-}" \
   --ngpu "${NGPU:-1}" \
   --master-port "${MASTER_PORT:-29500}" \
   --run-root "${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/libero_original_best_wm_cls/$(date +%Y%m%d_%H%M%S)}" \
