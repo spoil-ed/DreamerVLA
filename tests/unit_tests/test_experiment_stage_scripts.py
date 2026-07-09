@@ -20,6 +20,7 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         "cotrain_00_check.sh": "experiment_stage_checks cotrain-check",
         "cotrain_01_run.sh": "coldstart_warmup_cotrain",
         "cotrain_02_eval.sh": "eval_libero_vla",
+        "libero_original_00_reprocess_data.sh": "prepare_libero_data.sh",
         "libero_original_00_check.sh": "libero-original-check",
         "libero_original_01_train_cls_best.sh": "libero-original-cls-run",
         "libero_original_02_warmup_wm_cls_best.sh": "libero-original-warmup-run",
@@ -34,6 +35,21 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         assert marker in text, name
         assert "DVLA_DATA_ROOT" in text, name
         assert "PYTHON_BIN" in text, name
+
+
+def test_libero_original_reprocess_script_targets_artifact_root() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "experiments" / "libero_original_00_reprocess_data.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert "task=libero_goal" in text
+    assert "libero_suite=libero_goal" in text
+    assert "task_name=openvla_onetraj_libero" in text
+    assert "artifact_name=OpenVLA_Onetraj_LIBERO_libero_goal" in text
+    assert "only=[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]" in text
+    assert "OFT_LATENT_SCHEME" in text
+    assert "both" in text
+    assert "Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" in text
 
 
 def test_experiment_stage_check_module_exposes_required_commands() -> None:

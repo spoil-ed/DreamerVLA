@@ -200,6 +200,7 @@ Check resume completeness before a long run with:
 | `experiments/cotrain_00_check.sh` | Validate warmup/init artifacts before online cotrain |
 | `experiments/cotrain_01_run.sh` | Resume from a warmup run root and execute online cotrain |
 | `experiments/cotrain_02_eval.sh` | Run LIBERO eval for a trained cotrain/Dreamer checkpoint |
+| `experiments/libero_original_00_reprocess_data.sh` | Reprocess LIBERO-Goal into the OpenVLA one-traj artifact root and extract OFT input-token/action-hidden sidecars |
 | `experiments/libero_original_00_check.sh` | Validate original LIBERO processed demos, remaining-reward data, OFT hidden sidecars, failures, and checkpoint assets |
 | `experiments/libero_original_01_train_cls_best.sh` | Train a high-budget standalone classifier on original LIBERO success/failure data |
 | `experiments/libero_original_02_warmup_wm_cls_best.sh` | Train high-budget WM+classifier warmup on original LIBERO data and write standard warmup checkpoints under `RUN_ROOT/cotrain/ckpt/` |
