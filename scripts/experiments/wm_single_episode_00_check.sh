@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WM single-episode overfit diagnostic. Dry-run by default; pass --run to train.
+# Stage 00: validate WM single-episode overfit inputs before training.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -10,8 +10,8 @@ else
   export DVLA_DATA_ROOT="${DVLA_ROOT}/data"
   _DVLA_DATA_ROOT_SRC="DEFAULTED from DVLA_ROOT"
 fi
-echo "[wm-single-episode] DVLA_ROOT      = ${DVLA_ROOT}" >&2
-echo "[wm-single-episode] DVLA_DATA_ROOT = ${DVLA_DATA_ROOT} (${_DVLA_DATA_ROOT_SRC})" >&2
+echo "[wm-single-episode-check] DVLA_ROOT      = ${DVLA_ROOT}" >&2
+echo "[wm-single-episode-check] DVLA_DATA_ROOT = ${DVLA_DATA_ROOT} (${_DVLA_DATA_ROOT_SRC})" >&2
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
@@ -22,4 +22,4 @@ if command -v conda >/dev/null 2>&1; then
 fi
 
 PYTHON_BIN="${PYTHON:-python}"
-"${PYTHON_BIN}" -m dreamervla.diagnostics.wm_single_episode_overfit "$@"
+"${PYTHON_BIN}" -m dreamervla.diagnostics.wm_single_episode_overfit --stage check "$@"

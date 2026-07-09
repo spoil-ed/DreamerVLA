@@ -187,6 +187,9 @@ Check resume completeness before a long run with:
 
 | Script | Purpose |
 | --- | --- |
+| `experiments/wm_single_episode_00_check.sh` | Validate resolved config, WM/classifier checkpoints, and hidden/raw HDF5 inputs for the single-episode WM probe |
+| `experiments/wm_single_episode_01_train.sh` | Train the single-episode WM overfit checkpoint without running eval; writes `train_metrics.jsonl`, `train_summary.json`, and `wm_single_episode_step<N>.ckpt` |
+| `experiments/wm_single_episode_02_eval.sh` | Evaluate the trained single-episode WM checkpoint; writes `eval_metrics.jsonl`, `summary.json`, and `summary.md` |
 | `experiments/wm_single_episode_overfit.sh` | Run the single-episode Chunk-WM overfit probe; pass `--run` to train and write `metrics.jsonl`, `summary.json`, and `summary.md` |
 
 Python modules:

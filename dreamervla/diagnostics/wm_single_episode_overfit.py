@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-ROOT = Path(__file__).resolve().parents[2]
+from dreamervla.utils.paths import data_path
 
 
 def _parse_report_steps(text: str) -> set[int]:
@@ -37,48 +37,82 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run",
         action="store_true",
-        help="Actually train. Without this flag the script prints the resolved plan and exits.",
+        help=(
+            "Execute GPU work for train/eval/all stages. Without this flag those "
+            "stages print the resolved plan and exit."
+        ),
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("all", "check", "train", "eval"),
+        default="all",
+        help=(
+            "Run the combined probe or one split stage. check validates inputs; "
+            "train trains and saves a checkpoint; eval evaluates a trained checkpoint."
+        ),
     )
     parser.add_argument(
         "--resolved-config",
         type=Path,
-        default=ROOT
-        / "data/outputs/coldstart_warmup_cotrain/fixed_cls_wm_vla_eval_g7_component_20260707_205109/cotrain/resolved_config.yaml",
+        default=data_path(
+            "outputs/coldstart_warmup_cotrain/"
+            "fixed_cls_wm_vla_eval_g7_component_20260707_205109/"
+            "cotrain/resolved_config.yaml"
+        ),
         help="Resolved cotrain config containing ray_components.world_model/classifier.",
     )
     parser.add_argument(
         "--wm-ckpt",
         type=Path,
-        default=ROOT
-        / "data/outputs/world_model_probe/current_actions_reward0_20260708_01/wm_probe_step1200.ckpt",
+        default=data_path(
+            "outputs/world_model_probe/current_actions_reward0_20260708_01/"
+            "wm_probe_step1200.ckpt"
+        ),
         help="World-model checkpoint with a top-level world_model state dict.",
+    )
+    parser.add_argument(
+        "--trained-wm-ckpt",
+        type=Path,
+        default=None,
+        help=(
+            "Trained world-model checkpoint for --stage eval. Defaults to "
+            "<out-dir>/wm_single_episode_step<steps>.ckpt."
+        ),
     )
     parser.add_argument(
         "--classifier-ckpt",
         type=Path,
-        default=ROOT
-        / "data/outputs/coldstart_warmup_cotrain/fixed_wm_wmpo_cls_mainline_20260707_01/init/fixed_wm_wmpo_cls_init.ckpt",
+        default=data_path(
+            "outputs/coldstart_warmup_cotrain/"
+            "fixed_wm_wmpo_cls_mainline_20260707_01/init/"
+            "fixed_wm_wmpo_cls_init.ckpt"
+        ),
         help="Classifier checkpoint containing state_dicts.classifier.",
     )
     parser.add_argument(
         "--hidden-hdf5",
         type=Path,
-        default=ROOT
-        / "data/processed_data/libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1/open_the_middle_drawer_of_the_cabinet_demo.hdf5",
+        default=data_path(
+            "processed_data/"
+            "libero_goal_no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
+            "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
+        ),
         help="Hidden sidecar HDF5 containing data/<demo>/obs_embedding and lang_emb.",
     )
     parser.add_argument(
         "--raw-hdf5",
         type=Path,
-        default=ROOT
-        / "data/processed_data/libero_goal_no_noops_t_256/open_the_middle_drawer_of_the_cabinet_demo.hdf5",
+        default=data_path(
+            "processed_data/libero_goal_no_noops_t_256/"
+            "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
+        ),
         help="Raw reward HDF5 containing actions, rewards, and proprio observations.",
     )
     parser.add_argument("--demo-key", default="demo_0")
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=ROOT / "data/outputs/world_model_probe/single_episode_overfit",
+        default=data_path("outputs/world_model_probe/single_episode_overfit"),
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=23)
@@ -105,6 +139,65 @@ def parse_args() -> argparse.Namespace:
 def _require_path(path: Path, label: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"{label} not found: {path}")
+
+
+def _require_hdf5_datasets(path: Path, label: str, demo_key: str, datasets: list[str]) -> None:
+    with h5py.File(path, "r") as f:
+        if "data" not in f:
+            raise KeyError(f"{label} missing group: data")
+        if demo_key not in f["data"]:
+            raise KeyError(f"{label} missing demo: data/{demo_key}")
+        demo = f["data"][demo_key]
+        for dataset in datasets:
+            node: Any = demo
+            parts = dataset.split("/")
+            for part in parts:
+                if part not in node:
+                    raise KeyError(f"{label} missing dataset: data/{demo_key}/{dataset}")
+                node = node[part]
+
+
+def _default_trained_wm_ckpt(args: argparse.Namespace) -> Path:
+    return args.out_dir / f"wm_single_episode_step{args.steps}.ckpt"
+
+
+def _required_paths(args: argparse.Namespace) -> dict[str, Path]:
+    paths = {
+        "resolved config": args.resolved_config,
+        "classifier checkpoint": args.classifier_ckpt,
+        "hidden HDF5": args.hidden_hdf5,
+        "raw HDF5": args.raw_hdf5,
+    }
+    if args.stage == "eval":
+        paths["trained WM checkpoint"] = args.trained_wm_ckpt
+    else:
+        paths["WM checkpoint"] = args.wm_ckpt
+    return paths
+
+
+def _validate_inputs(args: argparse.Namespace) -> None:
+    for label, path in _required_paths(args).items():
+        _require_path(path, label)
+    _require_hdf5_datasets(
+        args.hidden_hdf5,
+        "hidden HDF5",
+        args.demo_key,
+        ["obs_embedding", "lang_emb"],
+    )
+    _require_hdf5_datasets(
+        args.raw_hdf5,
+        "raw HDF5",
+        args.demo_key,
+        ["actions", "rewards", "obs/ee_pos", "obs/ee_ori", "obs/gripper_states"],
+    )
+
+
+def _metrics_path_for_stage(out_dir: Path, stage: str) -> Path:
+    if stage == "train":
+        return out_dir / "train_metrics.jsonl"
+    if stage == "eval":
+        return out_dir / "eval_metrics.jsonl"
+    return out_dir / "metrics.jsonl"
 
 
 def _append_json(path: Path, record: dict[str, Any]) -> None:
@@ -137,6 +230,8 @@ def _load_episode(
 
 def main() -> None:
     args = parse_args()
+    if args.trained_wm_ckpt is None:
+        args.trained_wm_ckpt = _default_trained_wm_ckpt(args)
     report_steps = _parse_report_steps(args.report_steps)
     probe_starts = [int(item) for item in args.probe_starts.split(",") if item.strip()]
 
@@ -146,7 +241,8 @@ def main() -> None:
                 "name": "data_check",
                 "checks": [
                     "resolved config exists",
-                    "WM checkpoint exists",
+                    "source WM checkpoint exists for train/all stages",
+                    "trained WM checkpoint exists for eval stage",
                     "classifier checkpoint exists",
                     "hidden HDF5 contains demo obs_embedding/lang_emb",
                     "raw HDF5 contains demo actions/rewards/proprio",
@@ -164,14 +260,20 @@ def main() -> None:
                 "name": "outputs",
                 "files": [
                     "metrics.jsonl",
+                    "train_metrics.jsonl",
+                    "train_summary.json",
+                    "train_summary.md",
+                    "eval_metrics.jsonl",
                     "summary.json",
                     "summary.md",
                     f"wm_single_episode_step{args.steps}.ckpt",
                 ],
             },
         ],
+        "stage": args.stage,
         "resolved_config": str(args.resolved_config),
         "wm_ckpt": str(args.wm_ckpt),
+        "trained_wm_ckpt": str(args.trained_wm_ckpt),
         "classifier_ckpt": str(args.classifier_ckpt),
         "hidden_hdf5": str(args.hidden_hdf5),
         "raw_hdf5": str(args.raw_hdf5),
@@ -184,21 +286,19 @@ def main() -> None:
         "report_steps": sorted(report_steps),
         "probe_starts": probe_starts,
     }
+    if args.stage == "check":
+        _validate_inputs(args)
+        print(json.dumps({"status": "ok", **plan}, indent=2, sort_keys=True))
+        return
+
     if not args.run:
         print(json.dumps({"dry_run": True, **plan}, indent=2, sort_keys=True))
         return
 
-    for label, path in {
-        "resolved config": args.resolved_config,
-        "WM checkpoint": args.wm_ckpt,
-        "classifier checkpoint": args.classifier_ckpt,
-        "hidden HDF5": args.hidden_hdf5,
-        "raw HDF5": args.raw_hdf5,
-    }.items():
-        _require_path(path, label)
+    _validate_inputs(args)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = args.out_dir / "metrics.jsonl"
+    metrics_path = _metrics_path_for_stage(args.out_dir, args.stage)
     error_path = args.out_dir / "error.txt"
     metrics_path.write_text("", encoding="utf-8")
     if error_path.exists():
@@ -236,21 +336,24 @@ def _run_probe(
     wm_cfg["kwargs"]["chunk_rollout_loss_scale"] = 0.0
     cls_cfg = OmegaConf.to_container(cfg.ray_components.classifier, resolve=True)
 
+    load_wm_ckpt = args.trained_wm_ckpt if args.stage == "eval" else args.wm_ckpt
     wm = _build_component(wm_cfg).to(device).train()
     classifier = _build_component(cls_cfg).to(device).eval()
-    wm_payload = torch.load(args.wm_ckpt, map_location="cpu")
+    wm_payload = torch.load(load_wm_ckpt, map_location="cpu")
     cls_payload = torch.load(args.classifier_ckpt, map_location="cpu")
     wm.load_state_dict(wm_payload["world_model"])
     classifier.load_state_dict(cls_payload["state_dicts"]["classifier"])
     threshold = float(cls_payload.get("classifier_threshold", 0.95))
 
-    optimizer = torch.optim.AdamW(
-        wm.parameters(),
-        lr=args.lr,
-        betas=(args.adam_beta1, args.adam_beta2),
-        eps=args.adam_eps,
-        weight_decay=0.0,
-    )
+    optimizer = None
+    if args.stage in {"all", "train"}:
+        optimizer = torch.optim.AdamW(
+            wm.parameters(),
+            lr=args.lr,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+            weight_decay=0.0,
+        )
     history = int(wm.num_hist)
     chunk = int(wm.chunk_size)
     episode_len = int(hidden.shape[0])
@@ -278,7 +381,7 @@ def _run_probe(
             "adam_eps": args.adam_eps,
             "max_steps": args.steps,
             "batch_size": args.batch_size,
-            "source_wm": str(args.wm_ckpt),
+            "source_wm": str(load_wm_ckpt),
         },
     )
 
@@ -401,10 +504,27 @@ def _run_probe(
         }
 
     start_time = time.time()
-    if 0 in report_steps:
+    if args.stage == "eval":
+        metric = eval_overfit()
+        metric.update({"event": "report", "step": args.steps, "elapsed_s": 0.0})
+        _append_json(metrics_path, metric)
+        summary = _write_summary(
+            args,
+            metrics_path,
+            load_wm_ckpt,
+            probe_starts,
+            source_wm_path=load_wm_ckpt,
+        )
+        print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+        return
+
+    if args.stage == "all" and 0 in report_steps:
         metric = eval_overfit()
         metric.update({"event": "report", "step": 0, "elapsed_s": 0.0})
         _append_json(metrics_path, metric)
+
+    if optimizer is None:
+        raise RuntimeError(f"optimizer was not initialized for stage {args.stage}")
 
     for step in range(1, args.steps + 1):
         offset = ((step - 1) * args.batch_size) % len(starts)
@@ -422,16 +542,24 @@ def _run_probe(
         grad = torch.nn.utils.clip_grad_norm_(wm.parameters(), max_norm=args.grad_clip)
         optimizer.step()
         if step in report_steps:
-            metric = eval_overfit()
-            metric.update(
-                {
-                    "event": "report",
-                    "step": step,
-                    "train_loss": float(loss.detach().cpu()),
-                    "grad_norm": float(torch.as_tensor(grad).cpu()),
-                    "elapsed_s": time.time() - start_time,
-                }
-            )
+            metric = {
+                "event": "train_report",
+                "step": step,
+                "train_loss": float(loss.detach().cpu()),
+                "grad_norm": float(torch.as_tensor(grad).cpu()),
+                "elapsed_s": time.time() - start_time,
+            }
+            if args.stage == "all":
+                metric = eval_overfit()
+                metric.update(
+                    {
+                        "event": "report",
+                        "step": step,
+                        "train_loss": float(loss.detach().cpu()),
+                        "grad_norm": float(torch.as_tensor(grad).cpu()),
+                        "elapsed_s": time.time() - start_time,
+                    }
+                )
             _append_json(metrics_path, metric)
 
     ckpt = args.out_dir / f"wm_single_episode_step{args.steps}.ckpt"
@@ -443,7 +571,10 @@ def _run_probe(
         metrics_path,
         {"event": "saved", "ckpt": str(ckpt), "elapsed_s": time.time() - start_time},
     )
-    summary = _write_summary(args, metrics_path, ckpt, probe_starts)
+    if args.stage == "train":
+        summary = _write_train_summary(args, metrics_path, ckpt)
+    else:
+        summary = _write_summary(args, metrics_path, ckpt, probe_starts)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
 
 
@@ -501,6 +632,7 @@ def _write_summary(
     metrics_path: Path,
     ckpt_path: Path,
     probe_starts: list[int],
+    source_wm_path: Path | None = None,
 ) -> dict[str, Any]:
     records = _read_jsonl(metrics_path)
     reports = [record for record in records if record.get("event") == "report"]
@@ -516,7 +648,7 @@ def _write_summary(
         "summary_json": str(args.out_dir / "summary.json"),
         "summary_md": str(args.out_dir / "summary.md"),
         "checkpoint": str(ckpt_path),
-        "source_wm": str(args.wm_ckpt),
+        "source_wm": str(source_wm_path or args.wm_ckpt),
         "demo_key": args.demo_key,
         "steps": int(args.steps),
         "first_report_step": int(first["step"]),
@@ -534,6 +666,63 @@ def _write_summary(
     summary_json.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     summary_md.write_text(_render_summary_markdown(summary), encoding="utf-8")
     return summary
+
+
+def _write_train_summary(
+    args: argparse.Namespace,
+    metrics_path: Path,
+    ckpt_path: Path,
+) -> dict[str, Any]:
+    records = _read_jsonl(metrics_path)
+    reports = [record for record in records if record.get("event") == "train_report"]
+    final_report = reports[-1] if reports else {}
+    saved = [record for record in records if record.get("event") == "saved"]
+    if not saved:
+        raise RuntimeError(f"no saved checkpoint record found in {metrics_path}")
+    summary: dict[str, Any] = {
+        "status": "complete",
+        "stage": "train",
+        "out_dir": str(args.out_dir),
+        "metrics_path": str(metrics_path),
+        "summary_json": str(args.out_dir / "train_summary.json"),
+        "summary_md": str(args.out_dir / "train_summary.md"),
+        "checkpoint": str(ckpt_path),
+        "source_wm": str(args.wm_ckpt),
+        "demo_key": args.demo_key,
+        "steps": int(args.steps),
+        "final_train_step": int(final_report.get("step", args.steps)),
+        "final_train_loss": (
+            float(final_report["train_loss"]) if "train_loss" in final_report else None
+        ),
+        "final_grad_norm": (
+            float(final_report["grad_norm"]) if "grad_norm" in final_report else None
+        ),
+    }
+    summary_json = args.out_dir / "train_summary.json"
+    summary_md = args.out_dir / "train_summary.md"
+    summary_json.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    summary_md.write_text(_render_train_summary_markdown(summary), encoding="utf-8")
+    return summary
+
+
+def _render_train_summary_markdown(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# WM Single-Episode Train Summary",
+            "",
+            f"- Status: `{summary['status']}`",
+            f"- Stage: `{summary['stage']}`",
+            f"- Steps: `{summary['steps']}`",
+            f"- Source WM: `{summary['source_wm']}`",
+            f"- Output dir: `{summary['out_dir']}`",
+            f"- Checkpoint: `{summary['checkpoint']}`",
+            f"- Final train loss: `{summary['final_train_loss']}`",
+            f"- Final grad norm: `{summary['final_grad_norm']}`",
+            f"- Raw metrics: `{summary['metrics_path']}`",
+            f"- JSON summary: `{summary['summary_json']}`",
+            "",
+        ]
+    )
 
 
 def _render_summary_markdown(summary: dict[str, Any]) -> str:
