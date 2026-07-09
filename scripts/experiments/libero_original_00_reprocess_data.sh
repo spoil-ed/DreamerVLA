@@ -15,6 +15,21 @@ echo "[libero-original-reprocess] DVLA_DATA_ROOT = ${DVLA_DATA_ROOT} (${_DVLA_DA
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
+_infer_gpu_count() {
+  local devices="$1"
+  if [[ -z "${devices}" ]]; then
+    echo 1
+    return
+  fi
+  devices="${devices// /}"
+  if [[ -z "${devices}" ]]; then
+    echo 1
+    return
+  fi
+  local comma_count="${devices//[^,]/}"
+  echo $((${#comma_count} + 1))
+}
+
 CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"
 if command -v conda >/dev/null 2>&1; then
   eval "$(conda shell.bash hook)"
@@ -24,7 +39,7 @@ fi
 PYTHON_BIN="${PYTHON:-python}"
 export PYTHON="${PYTHON_BIN}"
 PREPROCESS_GPUS="${PREPROCESS_GPUS:-${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}}"
-PREPROCESS_NGPU="${PREPROCESS_NGPU:-${NGPU:-1}}"
+PREPROCESS_NGPU="${PREPROCESS_NGPU:-${NGPU:-$(_infer_gpu_count "${PREPROCESS_GPUS}")}}"
 PREPROCESS_NUM_PROCS="${PREPROCESS_NUM_PROCS:-${PRETOKENIZE_PROCS:-8}}"
 PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-true}"
 OFT_CKPT_PATH="${OFT_CKPT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1}"

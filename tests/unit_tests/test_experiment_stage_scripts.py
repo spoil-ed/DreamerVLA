@@ -52,6 +52,16 @@ def test_libero_original_reprocess_script_targets_artifact_root() -> None:
     assert "Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" in text
 
 
+def test_libero_original_reprocess_infers_ngpu_from_cuda_visible_devices() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "experiments" / "libero_original_00_reprocess_data.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert "_infer_gpu_count" in text
+    assert 'PREPROCESS_NGPU="${PREPROCESS_NGPU:-${NGPU:-$(_infer_gpu_count "${PREPROCESS_GPUS}")}}"' in text
+    assert 'OFT_ACTION_HIDDEN_GPUS_VALUE="${OFT_ACTION_HIDDEN_GPUS:-${PREPROCESS_NGPU}}"' in text
+
+
 def test_experiment_stage_check_module_exposes_required_commands() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
