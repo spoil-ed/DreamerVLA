@@ -42,6 +42,7 @@ PREPROCESS_GPUS="${PREPROCESS_GPUS:-${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}}"
 PREPROCESS_NGPU="${PREPROCESS_NGPU:-${NGPU:-$(_infer_gpu_count "${PREPROCESS_GPUS}")}}"
 PREPROCESS_NUM_PROCS="${PREPROCESS_NUM_PROCS:-${PRETOKENIZE_PROCS:-8}}"
 PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"
+PREPROCESS_ONLY="${PREPROCESS_ONLY:-[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]}"
 OFT_CKPT_PATH="${OFT_CKPT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1}"
 OFT_POLICY_MODE_VALUE="${OFT_POLICY_MODE:-discrete}"
 OFT_LATENT_SCHEME_VALUE="${OFT_LATENT_SCHEME:-both}"
@@ -55,7 +56,7 @@ bash scripts/preprocess/prepare_libero_data.sh \
   libero_suite=libero_goal \
   task_name=openvla_onetraj_libero \
   artifact_name=OpenVLA_Onetraj_LIBERO_libero_goal \
-  "only=[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]" \
+  "only=${PREPROCESS_ONLY}" \
   "gpus=${PREPROCESS_GPUS}" \
   "ngpu=${PREPROCESS_NGPU}" \
   "num_procs=${PREPROCESS_NUM_PROCS}" \

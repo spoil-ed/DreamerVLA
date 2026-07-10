@@ -46,6 +46,7 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     prepare = (experiments_dir / "wm_full_dataset_prepare.sh").read_text(encoding="utf-8")
     assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in prepare
     assert 'OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-input_tokens}"' in prepare
+    assert 'PREPROCESS_ONLY="${PREPROCESS_ONLY:-[10_hdf5_reward,35_oft_action_hidden]}"' in prepare
     assert 'exec "${DVLA_ROOT}/scripts/experiments/libero_original_00_reprocess_data.sh"' in prepare
 
 
@@ -58,9 +59,10 @@ def test_libero_original_reprocess_script_targets_artifact_root() -> None:
     assert "libero_suite=libero_goal" in text
     assert "task_name=openvla_onetraj_libero" in text
     assert "artifact_name=OpenVLA_Onetraj_LIBERO_libero_goal" in text
-    assert "only=[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]" in text
+    assert 'PREPROCESS_ONLY="${PREPROCESS_ONLY:-[10_hdf5_reward,20_pretokenize_dataset,35_oft_action_hidden,40_validate]}"' in text
     assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in text
     assert "OFT_LATENT_SCHEME" in text
+    assert "PREPROCESS_ONLY" in text
     assert "both" in text
     assert "Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1" in text
 
