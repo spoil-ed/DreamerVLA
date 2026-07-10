@@ -42,5 +42,7 @@ PYTHON_BIN="${PYTHON:-python}"
   ++offline_warmup.infer_task_id_from_shard=true \
   optim.world_model.lr="${WM_LR:-2.0e-5}" \
   online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}" \
+  world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}" \
+  world_model.chunk_rollout_loss_scale="${WM_CHUNK_ROLLOUT_LOSS_SCALE:-0.2}" \
   world_model.proprio_reconstruction_loss_scale="${WM_PROPRIO_LOSS_SCALE:-0.0}" \
   "$@"

@@ -46,6 +46,11 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     assert '--wm-batch-size "${WM_BATCH_SIZE:-16}"' in full_wm
     assert 'optim.world_model.lr="${WM_LR:-2.0e-5}"' in full_wm
     assert 'online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}"' in full_wm
+    assert 'world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}"' in full_wm
+    assert (
+        'world_model.chunk_rollout_loss_scale="${WM_CHUNK_ROLLOUT_LOSS_SCALE:-0.2}"'
+        in full_wm
+    )
     assert (
         'world_model.proprio_reconstruction_loss_scale="${WM_PROPRIO_LOSS_SCALE:-0.0}"'
         in full_wm
