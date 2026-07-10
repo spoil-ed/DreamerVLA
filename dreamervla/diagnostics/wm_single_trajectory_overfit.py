@@ -5,18 +5,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import traceback
 from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 import torch
+from hydra import compose, initialize_config_dir
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
 
+from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.utils.paths import data_path
 
 DEFAULT_HDF5_FILENAME = "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -99,10 +106,7 @@ class ConvergenceTracker:
     def observe(self, *, mse: float, cosine_similarity: float) -> bool:
         """Record one evaluation and return whether convergence is confirmed."""
 
-        passed = (
-            mse <= self.mse_threshold
-            and cosine_similarity >= self.cosine_threshold
-        )
+        passed = mse <= self.mse_threshold and cosine_similarity >= self.cosine_threshold
         self.streak = self.streak + 1 if passed else 0
         return self.streak >= self.required_passes
 
@@ -113,8 +117,7 @@ def sliding_window_starts(*, episode_len: int, sequence_len: int) -> np.ndarray:
     count = episode_len - sequence_len + 1
     if count <= 0:
         raise ValueError(
-            f"episode length {episode_len} is shorter than sequence length "
-            f"{sequence_len}"
+            f"episode length {episode_len} is shorter than sequence length {sequence_len}"
         )
     return np.arange(count, dtype=np.int64)
 
@@ -235,9 +238,7 @@ def evaluate_all_windows(
             count = len(batch_starts)
             weighted_loss += float(output["_loss"].float().cpu()) * count
             weighted_mse += float(output["hidden_mse"].float().cpu()) * count
-            weighted_cosine_loss += (
-                float(output["hidden_cosine_loss"].float().cpu()) * count
-            )
+            weighted_cosine_loss += float(output["hidden_cosine_loss"].float().cpu()) * count
             sample_count += count
     model.train(was_training)
     return {
@@ -371,9 +372,7 @@ def run_overfit(
             flush=True,
         )
 
-        should_evaluate = (
-            epoch % settings.eval_every == 0 or epoch == settings.max_epochs
-        )
+        should_evaluate = epoch % settings.eval_every == 0 or epoch == settings.max_epochs
         if not should_evaluate:
             continue
         final_eval = evaluate_all_windows(
@@ -451,6 +450,297 @@ def run_overfit(
     return summary
 
 
+def _compose_config(task: str) -> DictConfig:
+    register_dreamervla_resolvers()
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs"),
+        job_name="wm_single_trajectory_overfit",
+        version_base=None,
+    ):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=openvla_onetraj_libero_cotrain_noray",
+                f"task={task}",
+                "logger=tensorboard",
+            ],
+        )
+    OmegaConf.resolve(cfg)
+    return cfg
+
+
+def _resolve_hdf5_paths(
+    args: argparse.Namespace,
+    cfg: DictConfig,
+) -> tuple[Path, Path]:
+    hidden_path = args.hidden_hdf5
+    if hidden_path is None:
+        hidden_path = Path(str(cfg.task.openvla_oft.input_token_hidden_dir)) / args.hdf5_filename
+    raw_path = args.raw_hdf5
+    if raw_path is None:
+        raw_path = Path(str(cfg.task.hdf5_reward_dir)) / args.hdf5_filename
+    return Path(hidden_path), Path(raw_path)
+
+
+def _settings_from_args(args: argparse.Namespace) -> RunSettings:
+    return RunSettings(
+        max_epochs=args.max_epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        grad_clip=args.grad_clip,
+        eval_every=args.eval_every,
+        mse_threshold=args.mse_threshold,
+        cosine_threshold=args.cosine_threshold,
+        required_passes=args.required_passes,
+        seed=args.seed,
+    )
+
+
+def build_plan(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve static Hydra configuration and return the dry-run plan."""
+
+    settings = _settings_from_args(args)
+    cfg = _compose_config(args.task)
+    hidden_path, raw_path = _resolve_hdf5_paths(args, cfg)
+    return {
+        "initialization": "random",
+        "task": args.task,
+        "world_model_target": str(cfg.world_model._target_),
+        "hidden_hdf5": str(hidden_path),
+        "raw_hdf5": str(raw_path),
+        "demo_key": args.demo_key,
+        "out_dir": str(args.out_dir),
+        "device": args.device,
+        "seed": settings.seed,
+        "max_epochs": settings.max_epochs,
+        "batch_size": settings.batch_size,
+        "lr": settings.lr,
+        "grad_clip": settings.grad_clip,
+        "eval_every": settings.eval_every,
+        "mse_threshold": settings.mse_threshold,
+        "cosine_threshold": settings.cosine_threshold,
+        "required_passes": settings.required_passes,
+    }
+
+
+def _require_demo(
+    path: Path,
+    *,
+    label: str,
+    demo_key: str,
+    datasets: Sequence[str],
+) -> int:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    with h5py.File(path, "r") as hdf5_file:
+        if "data" not in hdf5_file or demo_key not in hdf5_file["data"]:
+            raise KeyError(f"{label} missing demo: data/{demo_key}")
+        demo = hdf5_file["data"][demo_key]
+        lengths: set[int] = set()
+        for dataset_name in datasets:
+            node: Any = demo
+            for part in dataset_name.split("/"):
+                if part not in node:
+                    raise KeyError(f"{label} missing dataset: data/{demo_key}/{dataset_name}")
+                node = node[part]
+            if dataset_name != "lang_emb":
+                lengths.add(int(node.shape[0]))
+        if len(lengths) != 1:
+            raise ValueError(f"{label} datasets have inconsistent lengths: {lengths}")
+        return next(iter(lengths))
+
+
+def validate_inputs(hidden_path: Path, raw_path: Path, demo_key: str) -> None:
+    """Validate the selected demo structure without loading its large arrays."""
+
+    hidden_len = _require_demo(
+        hidden_path,
+        label="hidden HDF5",
+        demo_key=demo_key,
+        datasets=("obs_embedding", "lang_emb"),
+    )
+    raw_len = _require_demo(
+        raw_path,
+        label="raw HDF5",
+        demo_key=demo_key,
+        datasets=(
+            "actions",
+            "rewards",
+            "obs/ee_pos",
+            "obs/ee_ori",
+            "obs/gripper_states",
+        ),
+    )
+    if hidden_len != raw_len:
+        raise ValueError(f"hidden/raw demo lengths differ: hidden={hidden_len}, raw={raw_len}")
+
+
+def load_episode(
+    hidden_path: Path,
+    raw_path: Path,
+    demo_key: str,
+) -> EpisodeArrays:
+    """Load aligned hidden and raw arrays for one LIBERO demo."""
+
+    validate_inputs(hidden_path, raw_path, demo_key)
+    with h5py.File(hidden_path, "r") as hidden_file:
+        demo = hidden_file["data"][demo_key]
+        hidden = np.asarray(demo["obs_embedding"], dtype=np.float32)
+        lang = np.asarray(demo["lang_emb"], dtype=np.float32)
+    with h5py.File(raw_path, "r") as raw_file:
+        demo = raw_file["data"][demo_key]
+        actions = np.asarray(demo["actions"], dtype=np.float32)
+        rewards = np.asarray(demo["rewards"], dtype=np.float32)
+        proprio = np.concatenate(
+            [
+                np.asarray(demo["obs"]["ee_pos"], dtype=np.float32),
+                np.asarray(demo["obs"]["ee_ori"], dtype=np.float32),
+                np.asarray(demo["obs"]["gripper_states"], dtype=np.float32),
+            ],
+            axis=-1,
+        )
+    return EpisodeArrays(
+        hidden=hidden,
+        lang=lang,
+        actions=actions,
+        rewards=rewards,
+        proprio=proprio,
+    )
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+
+
+def _plot_curves(
+    metrics_path: Path,
+    output_path: Path,
+    *,
+    mse_threshold: float,
+    cosine_threshold: float,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    records = _read_jsonl(metrics_path)
+    train_records = [record for record in records if record["event"] == "train_epoch"]
+    eval_records = [record for record in records if record["event"] == "eval"]
+    figure, axes = plt.subplots(3, 1, figsize=(9, 10), constrained_layout=True)
+    axes[0].plot(
+        [record["epoch"] for record in train_records],
+        [record["train_loss"] for record in train_records],
+    )
+    axes[0].set(title="Training loss", xlabel="Epoch", ylabel="Loss")
+    axes[1].plot(
+        [record["epoch"] for record in eval_records],
+        [record["hidden_mse"] for record in eval_records],
+        marker="o",
+    )
+    axes[1].axhline(mse_threshold, color="tab:red", linestyle="--")
+    axes[1].set(title="Full-window hidden MSE", xlabel="Epoch", ylabel="MSE")
+    axes[2].plot(
+        [record["epoch"] for record in eval_records],
+        [record["cosine_similarity"] for record in eval_records],
+        marker="o",
+    )
+    axes[2].axhline(cosine_threshold, color="tab:red", linestyle="--")
+    axes[2].set(
+        title="Full-window cosine similarity",
+        xlabel="Epoch",
+        ylabel="Cosine similarity",
+    )
+    figure.savefig(output_path, dpi=160)
+    plt.close(figure)
+
+
+def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "# WM Single-Trajectory Overfit",
+                "",
+                f"- Status: `{summary['status']}`",
+                f"- Initialization: `{summary['initialization']}`",
+                f"- Demo: `{summary['demo_key']}`",
+                f"- Epochs completed: `{summary['epochs_completed']}`",
+                f"- Baseline MSE: `{summary['baseline_hidden_mse']:.8f}`",
+                f"- Best MSE: `{summary['best_hidden_mse']:.8f}`",
+                f"- Baseline cosine similarity: `{summary['baseline_cosine_similarity']:.8f}`",
+                f"- Best cosine similarity: `{summary['best_cosine_similarity']:.8f}`",
+                f"- Success streak: `{summary['success_streak']}`",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run dry-run validation or the requested single-trajectory overfit job."""
+
+    args = parse_args(argv)
+    plan = build_plan(args)
+    hidden_path = Path(plan["hidden_hdf5"])
+    raw_path = Path(plan["raw_hdf5"])
+    validate_inputs(hidden_path, raw_path, args.demo_key)
+    if not args.run:
+        print(json.dumps({"dry_run": True, **plan}, indent=2, sort_keys=True))
+        return 0
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    error_path = args.out_dir / "error.txt"
+    if error_path.exists():
+        error_path.unlink()
+    try:
+        settings = _settings_from_args(args)
+        np.random.seed(settings.seed)
+        torch.manual_seed(settings.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(settings.seed)
+        device = torch.device(args.device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA device requested but torch.cuda.is_available() is false")
+        cfg = _compose_config(args.task)
+        model = instantiate(cfg.world_model)
+        episode = load_episode(hidden_path, raw_path, args.demo_key)
+        summary = run_overfit(
+            model=model,
+            episode=episode,
+            settings=settings,
+            out_dir=args.out_dir,
+            device=device,
+        )
+        summary.update(
+            {
+                "task": args.task,
+                "demo_key": args.demo_key,
+                "hidden_hdf5": str(hidden_path),
+                "raw_hdf5": str(raw_path),
+                "out_dir": str(args.out_dir),
+            }
+        )
+        (args.out_dir / "summary.json").write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _write_summary_markdown(args.out_dir / "summary.md", summary)
+        _plot_curves(
+            args.out_dir / "metrics.jsonl",
+            args.out_dir / "overfit_curves.png",
+            mse_threshold=settings.mse_threshold,
+            cosine_threshold=settings.cosine_threshold,
+        )
+        print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+        return 0 if summary["status"] == "converged" else 2
+    except BaseException:
+        error_path.write_text(traceback.format_exc(), encoding="utf-8")
+        raise
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse the one-command overfit diagnostic arguments."""
 
@@ -477,3 +767,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cosine-threshold", type=float, default=0.95)
     parser.add_argument("--required-passes", type=int, default=3)
     return parser.parse_args(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
