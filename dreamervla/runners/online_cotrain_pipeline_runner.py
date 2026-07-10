@@ -80,6 +80,45 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         value = OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1)
         return max(1, int(value))
 
+    def _wm_profile_steps(self) -> int:
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_profile_steps", default=0)
+        return max(0, int(value))
+
+    def _record_wm_profile(
+        self, timings: dict[str, float], *, step: int, total_steps: int
+    ) -> None:
+        metrics = {
+            f"time/wm_warmup_{name}_ms": float(value) * 1000.0
+            for name, value in timings.items()
+        }
+        self._log_replay_warmup_metrics(metrics, step=int(step))
+        if not self.is_main_process:
+            return
+        order = (
+            "sample",
+            "batch_build",
+            "h2d",
+            "forward",
+            "backward",
+            "grad_clip",
+            "optimizer",
+            "metrics",
+            "total",
+        )
+        parts = [
+            f"{name}={float(timings[name]) * 1000.0:.1f}ms"
+            for name in order
+            if name in timings
+        ]
+        print(
+            f"[pipeline][wm-profile] step={int(step)}/{int(total_steps)} "
+            + " ".join(parts),
+            flush=True,
+        )
+
     def _print_pipeline_event(self, message: str) -> None:
         """Print one pipeline progress line from rank 0 only."""
         distributed = getattr(self, "distributed", None)
@@ -139,10 +178,21 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     ) -> float:
         self.world_model.train()
         last = 0.0
+        profile_steps = self._wm_profile_steps()
         for i in range(int(start_step), int(steps)):
-            wm_batch = self._build_wm_pretrain_batch(
-                replay.sample(batch_size, include_images=False)
-            )
+            do_profile = (i - int(start_step)) < profile_steps
+            profile_timings: dict[str, float] | None = {} if do_profile else None
+            profile_total_start = time.perf_counter()
+            profile_stage_start = profile_total_start
+            replay_batch = replay.sample(batch_size, include_images=False)
+            if profile_timings is not None:
+                now = time.perf_counter()
+                profile_timings["sample"] = now - profile_stage_start
+                profile_stage_start = now
+            wm_batch = self._build_wm_pretrain_batch(replay_batch)
+            if profile_timings is not None:
+                now = time.perf_counter()
+                profile_timings["batch_build"] = now - profile_stage_start
             if wm_batch is None:
                 self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
                 continue
@@ -153,7 +203,15 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 batch=wm_batch,
                 device=self.device,
                 optim_cfg=optim_cfg,
+                profile_timings=profile_timings,
             )
+            if profile_timings is not None:
+                profile_timings["total"] = time.perf_counter() - profile_total_start
+                self._record_wm_profile(
+                    profile_timings,
+                    step=i,
+                    total_steps=int(steps),
+                )
             last = float(m.get("loss", 0.0))
             if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(

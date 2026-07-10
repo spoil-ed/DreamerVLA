@@ -174,6 +174,46 @@ def test_world_model_pretrain_step_preserves_chunk_hidden_mse_metrics():
     assert metrics["hidden_rec_loss"] == 2.0
 
 
+def test_world_model_pretrain_step_populates_optional_profile_timings():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class TimedWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {"_loss": loss, "loss": loss.detach()}
+
+    wm = TimedWM()
+    optimizer = torch.optim.SGD(wm.parameters(), lr=0.01)
+    timings: dict[str, float] = {}
+
+    world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=optimizer,
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+        profile_timings=timings,
+    )
+
+    assert {
+        "h2d",
+        "forward",
+        "backward",
+        "grad_clip",
+        "optimizer",
+        "metrics",
+    }.issubset(timings)
+    assert all(timings[key] >= 0.0 for key in timings)
+
+
 def test_online_cotrain_actor_update_uses_registry():
     import inspect
 
@@ -697,6 +737,74 @@ def test_offline_warmup_wm_samples_without_images(monkeypatch):
     runner._offline_warmup_wm(Replay(), steps=1, batch_size=2, optim_cfg=None)
 
     assert sample_kwargs == [(2, {"include_images": False})]
+
+
+def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    profile_keys_by_step = []
+    logged = []
+
+    class Replay:
+        def sample(self, batch_size, **kwargs):
+            del batch_size, kwargs
+            return {
+                "obs_embedding": torch.zeros(2, 3, 4, dtype=torch.float16),
+                "actions": torch.zeros(2, 3, 7),
+                "rewards": torch.zeros(2, 3),
+                "dones": torch.zeros(2, 3),
+                "is_first": torch.zeros(2, 3, dtype=torch.bool),
+            }
+
+    def fake_wm_step(**kw):
+        timings = kw.get("profile_timings")
+        if timings is not None:
+            timings["h2d"] = 0.001
+            timings["forward"] = 0.002
+            timings["backward"] = 0.003
+            timings["grad_clip"] = 0.004
+            timings["optimizer"] = 0.005
+            timings["metrics"] = 0.006
+            profile_keys_by_step.append(set(timings))
+        else:
+            profile_keys_by_step.append(set())
+        return {"loss": 0.1}
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.cfg = OmegaConf.create({"training": {"wm_profile_steps": 1}})
+    runner.device = torch.device("cpu")
+    runner.world_model = torch.nn.Module()
+    runner.world_model_optimizer = object()
+    runner.policy = object()
+    runner._build_wm_pretrain_batch = lambda b: b
+    runner._log_replay_warmup_metrics = (
+        lambda metrics, **kwargs: logged.append((dict(metrics), kwargs["step"]))
+    )
+    runner.console_progress = lambda *_args, **_kwargs: None
+
+    runner._offline_warmup_wm(Replay(), steps=2, batch_size=2, optim_cfg=None)
+
+    assert profile_keys_by_step == [
+        {
+            "sample",
+            "batch_build",
+            "h2d",
+            "forward",
+            "backward",
+            "grad_clip",
+            "optimizer",
+            "metrics",
+        },
+        set(),
+    ]
+    time_metrics = {key for metrics, _step in logged for key in metrics}
+    assert "time/wm_warmup_sample_ms" in time_metrics
+    assert "time/wm_warmup_forward_ms" in time_metrics
+    assert "time/wm_warmup_total_ms" in time_metrics
 
 
 def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monkeypatch):

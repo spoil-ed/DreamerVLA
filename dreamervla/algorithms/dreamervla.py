@@ -22,6 +22,7 @@ imagination rollout trains the actor and value head:
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -140,6 +141,7 @@ def world_model_pretrain_step(
     batch: Mapping[str, Any],
     device: torch.device,
     optim_cfg: DictConfig,
+    profile_timings: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Phase-1 WM update: dispatch through ``world_model(batch)`` (forward).
 
@@ -148,6 +150,19 @@ def world_model_pretrain_step(
     here but kept in the signature for callers shared with the actor phase.
     """
     del policy  # batch is already encoded by the workspace; nothing to do here.
+
+    def _sync_for_profile() -> None:
+        if profile_timings is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
+
+    def _record_profile_stage(name: str, start: float) -> float:
+        _sync_for_profile()
+        now = time.perf_counter()
+        if profile_timings is not None:
+            profile_timings[name] = now - start
+        return now
+
+    profile_stage_start = time.perf_counter()
     flat_batch: dict[str, Any] = {}
     for key in (
         "obs_embedding",
@@ -180,21 +195,26 @@ def world_model_pretrain_step(
             flat_batch[key] = value.to(device)
         elif value is not None:
             flat_batch[key] = value
+    profile_stage_start = _record_profile_stage("h2d", profile_stage_start)
 
     world_model.train()
     with _manual_autocast_context(optim_cfg, device):
         losses = world_model(flat_batch)
+    profile_stage_start = _record_profile_stage("forward", profile_stage_start)
     loss_tensor = losses.get("_loss", losses.get("loss"))
     if not isinstance(loss_tensor, torch.Tensor):
         raise KeyError("world_model output must contain Tensor key 'loss' or '_loss'")
 
     optimizer.zero_grad(set_to_none=bool(optim_cfg.get("zero_grad_set_to_none", True)))
     loss_tensor.backward()
+    profile_stage_start = _record_profile_stage("backward", profile_stage_start)
     grad_norm = torch.nn.utils.clip_grad_norm_(
         world_model.parameters(),
         max_norm=float(optim_cfg.get("grad_clip_norm", 1.0)),
     )
+    profile_stage_start = _record_profile_stage("grad_clip", profile_stage_start)
     optimizer.step()
+    profile_stage_start = _record_profile_stage("optimizer", profile_stage_start)
 
     def _f(key: str, default: float = 0.0) -> float:
         v = losses.get(key)
@@ -206,7 +226,7 @@ def world_model_pretrain_step(
     next_latent_mse = _f("next_latent_mse", hidden_mse)
     hidden_rec_loss = _f("hidden_rec_loss", hidden_mse)
 
-    return {
+    metrics = {
         "loss": float(loss_tensor.detach().cpu()),
         "kl_loss": _f("kl_loss"),
         "dyn_kl": _f("dyn_kl"),
@@ -251,6 +271,8 @@ def world_model_pretrain_step(
         "latent_norm": _f("latent_norm"),
         "grad_norm": float(torch.as_tensor(grad_norm).detach().cpu()),
     }
+    _record_profile_stage("metrics", profile_stage_start)
+    return metrics
 
 
 def _detach_latent(value: Any) -> Any:

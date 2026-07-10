@@ -42,6 +42,7 @@ training:
   wm_warmup_steps: 1200
   classifier_warmup_steps: 1200
   replay_warmup_log_every: 1
+  wm_profile_steps: 0
   warmup_replay_epochs: 1
   warmup_replay_max_steps: 0
   warmup_checkpoint_every: 0

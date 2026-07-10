@@ -27,7 +27,7 @@ PYTHON_BIN="${PYTHON:-python}"
   --task "${ORIGINAL_TASK:-openvla_onetraj_libero}" \
   --python "${PYTHON_BIN}" \
   --hidden-dir "${ORIGINAL_HIDDEN_DIR:-}" \
-  --ngpu "${NGPU:-1}" \
+  --ngpu "${NGPU:-8}" \
   --master-port "${MASTER_PORT:-29500}" \
   --run-root "${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/wm_full_dataset/$(date +%Y%m%d_%H%M%S)}" \
   --wm-steps "${WM_WARMUP_STEPS:-20000}" \
@@ -40,7 +40,8 @@ PYTHON_BIN="${PYTHON:-python}"
   --buffer-size "${WARMUP_BUFFER_SIZE:-160000}" \
   --task-ids "${ORIGINAL_TASK_IDS:-[0,1,2,3,4,5,6,7,8,9]}" \
   ++offline_warmup.infer_task_id_from_shard=true \
-  optim.world_model.lr="${WM_LR:-2.0e-5}" \
+  training.wm_profile_steps="${WM_PROFILE_STEPS:-3}" \
+  optim.world_model.lr="${WM_LR:-3.0e-5}" \
   online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}" \
   world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}" \
   world_model.chunk_rollout_loss_scale="${WM_CHUNK_ROLLOUT_LOSS_SCALE:-0.2}" \
