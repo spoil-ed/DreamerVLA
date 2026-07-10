@@ -42,6 +42,14 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     assert "--classifier-steps 0" in full_wm
     assert "--classifier-batch-size 1" in full_wm
     assert "--wm-steps" in full_wm
+    assert '--replay-epochs "${WARMUP_REPLAY_EPOCHS:-10}"' in full_wm
+    assert '--wm-batch-size "${WM_BATCH_SIZE:-16}"' in full_wm
+    assert 'optim.world_model.lr="${WM_LR:-2.0e-5}"' in full_wm
+    assert 'online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}"' in full_wm
+    assert (
+        'world_model.proprio_reconstruction_loss_scale="${WM_PROPRIO_LOSS_SCALE:-0.0}"'
+        in full_wm
+    )
 
     prepare = (experiments_dir / "wm_full_dataset_prepare.sh").read_text(encoding="utf-8")
     assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in prepare
