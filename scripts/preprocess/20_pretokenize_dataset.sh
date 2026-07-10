@@ -85,7 +85,7 @@ if [[ "${OVERWRITE}" == "1" ]]; then
     tokenizer_path="${TOKENIZER_PATH}" \
     in_filename_dir="${CONVS_DIR}" \
     out_root="${TOKENS_DIR}" \
-    gpu_devices="${GPUS}" \
+    gpu_devices="'${GPUS}'" \
     overwrite=true
 else
   python -m dreamervla.preprocess.pretoken_state_action_model \
@@ -99,7 +99,7 @@ else
     tokenizer_path="${TOKENIZER_PATH}" \
     in_filename_dir="${CONVS_DIR}" \
     out_root="${TOKENS_DIR}" \
-    gpu_devices="${GPUS}"
+    gpu_devices="'${GPUS}'"
 fi
 
 bash "${DVLA_ROOT}/scripts/preprocess/concat_record_libero.sh" "${TOKENS_DIR}"
