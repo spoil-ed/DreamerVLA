@@ -22,6 +22,7 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `check_ray.sh` | Inspect the active Ray cluster status |
 | `experiments/wm_single_episode_overfit.sh` | Dry-run-by-default WM overfit/action-sensitivity diagnostic |
 | `experiments/wm_single_trajectory_overfit.sh` | Random-init single-trajectory WM learning verification with MSE/cosine convergence |
+| `experiments/wm_single_trajectory_raw_overfit.sh` | Raw-HDF5 single-trajectory state-dynamics overfit; does not require OFT/tokenizer preprocessing |
 
 ## Install Steps
 
@@ -212,6 +213,7 @@ Check resume completeness before a long run with:
 | `experiments/wm_single_episode_02_eval.sh` | Evaluate the trained single-episode WM checkpoint; writes `eval_metrics.jsonl`, `summary.json`, and `summary.md` |
 | `experiments/wm_single_episode_overfit.sh` | Run the single-episode Chunk-WM overfit probe; pass `--run` to train and write `metrics.jsonl`, `summary.json`, and `summary.md` |
 | `experiments/wm_single_trajectory_overfit.sh` | Randomly initialize the configured WM, repeatedly train on one LIBERO demo, and stop after full-window MSE/cosine convergence; dry-run unless `--run` is passed |
+| `experiments/wm_single_trajectory_raw_overfit.sh` | Train a small raw-state dynamics WM directly from one reward HDF5 demo; writes `raw_wm.ckpt`, `metrics.jsonl`, and `summary.json` |
 
 Python modules:
 
