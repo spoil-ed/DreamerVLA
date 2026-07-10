@@ -384,6 +384,33 @@ def test_multi_gpu_profile_aligns_world_model_full_dataset_recipe() -> None:
     assert expected <= set(cotrain)
 
 
+def test_multi_gpu_cotrain_warmup_command_composes_with_hydra(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    launcher_cfg = _launcher_cfg()
+    launcher_cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=8,
+        launcher_cfg=launcher_cfg,
+    )
+    train_module_at = len(plan.cotrain_warmup_cmd) - 1 - list(
+        reversed(plan.cotrain_warmup_cmd)
+    ).index("dreamervla.train")
+    overrides = plan.cotrain_warmup_cmd[train_module_at + 1 :]
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(config_name="train", overrides=overrides)
+
+    assert cfg.offline_warmup.infer_task_id_from_shard is True
+    assert cfg.online_rollout.sequence_length == 36
+    assert cfg.world_model.chunk_rollout_chunks == 4
+
+
 def test_launcher_dry_run_prints_both_commands(tmp_path, capsys) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import main
 
