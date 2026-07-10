@@ -199,6 +199,7 @@ Check resume completeness before a long run with:
 | `experiments/wm_00_check.sh` | Validate collected reward/hidden rollout shards for WM warmup |
 | `experiments/wm_01_train.sh` | Run WM-only warmup from collected rollout replay with classifier/online steps disabled |
 | `experiments/wm_02_eval.sh` | Evaluate a WM checkpoint with open-loop and closed-loop chunk rollout diagnostics |
+| `experiments/wm_full_dataset_train.sh` | Train the configured Chunk-WM on the complete original LIBERO replay with classifier and online rollout disabled |
 | `experiments/wm_cls_init_00_pack.sh` | Pack WM and classifier checkpoints into a cotrain init checkpoint schema |
 | `experiments/cotrain_00_check.sh` | Validate warmup/init artifacts before online cotrain |
 | `experiments/cotrain_01_run.sh` | Resume from a warmup run root and execute online cotrain |

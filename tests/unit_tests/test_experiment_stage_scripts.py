@@ -24,6 +24,7 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         "libero_original_00_check.sh": "libero-original-check",
         "libero_original_01_train_cls_best.sh": "libero-original-cls-run",
         "libero_original_02_warmup_wm_cls_best.sh": "libero-original-warmup-run",
+        "wm_full_dataset_train.sh": "libero-original-warmup-run",
         "libero_original_03_rl_from_best.sh": "libero-original-rl-run",
         "libero_original_04_eval_rl.sh": "eval_libero_vla",
     }
@@ -35,6 +36,11 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         assert marker in text, name
         assert "DVLA_DATA_ROOT" in text, name
         assert "PYTHON_BIN" in text, name
+
+    full_wm = (experiments_dir / "wm_full_dataset_train.sh").read_text(encoding="utf-8")
+    assert "--classifier-steps 0" in full_wm
+    assert "--classifier-batch-size 1" in full_wm
+    assert "--wm-steps" in full_wm
 
 
 def test_libero_original_reprocess_script_targets_artifact_root() -> None:
