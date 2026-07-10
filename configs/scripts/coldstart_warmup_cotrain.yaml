@@ -259,7 +259,10 @@ profiles:
       - training.classifier_warmup_steps=42
       - training.warmup_replay_epochs=0
       - training.warmup_checkpoint_every=200
-      - training.classifier_batch_size=12
-      - dataloader.batch_size=12
+      # Match the validated 8xH100 full-dataset WM recipe during the isolated
+      # DDP warmup phase. Async online keeps its smaller co-resident learner batch.
+      - training.classifier_batch_size=16
+      - dataloader.batch_size=16
+      - optim.world_model.lr=3.0e-5
       - online_rollout.buffer_size=160000
       - online_rollout.total_env_steps=200000
