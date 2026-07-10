@@ -253,8 +253,10 @@ warmup 与已验证的
 其他值：
 
 - `training.warmup_replay_epochs=10`，会按 replay sampleable windows 重算 update 数；例如 23160 是 replay epoch 推导值，不是配置里的 20000。
-- `training.warmup_checkpoint_every=500`，`training.warmup_topk_k=3`。
-- `training.wm_profile_steps=-1`，每个 WM update 都记录分段时耗。
+- `training.warmup_checkpoint_every=0`，`training.warmup_topk_k=0`：cotrain
+  长跑默认只保存最终 warmup ckpt，避免 rank0 在中间 checkpoint 反复 CPU clone
+  大模型造成内存峰值。
+- `training.wm_profile_steps=0`：长跑默认关闭逐 update CUDA synchronize profile。
 - `online_rollout.buffer_size=160000`。
 - `online_rollout.sequence_length=36`。
 - `world_model.chunk_rollout_chunks=4`，`chunk_rollout_loss_scale=0.2`。
@@ -494,9 +496,13 @@ time/wm_warmup_metrics_ms
 time/wm_warmup_total_ms
 ```
 
-`wm_full_dataset_train` 和 8 卡 cotrain `multi_gpu` profile 默认
-`wm_profile_steps=-1`。这些时耗会引入 CUDA synchronize，适合诊断吞吐；正式长跑
-若只关心速度，可用 `warmup.wm_steps` / `cotrain_overrides` 临时覆盖为 `0`。
+`wm_full_dataset_train` 默认 `wm_profile_steps=-1`，适合做完整 WM 时耗诊断。8 卡
+cotrain `multi_gpu` profile 默认 `wm_profile_steps=0`，避免正式长跑被 CUDA
+synchronize 拖慢；需要分析 cotrain warmup 时，用 launcher 控制临时打开：
+
+```bash
+warmup.wm_profile_steps=-1
+```
 
 `[pipeline][wm-warmup] step=... loss=...` 现在走 rank-0 event printer，8 卡 DDP
 不会再由每个 rank 重复打印同一条 loss；profile/progress 也按 rank-0 口径读。

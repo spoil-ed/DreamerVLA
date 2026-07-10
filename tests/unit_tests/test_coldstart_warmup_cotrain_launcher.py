@@ -368,9 +368,9 @@ def test_multi_gpu_profile_aligns_world_model_full_dataset_recipe() -> None:
     expected = {
         "training.wm_warmup_steps=20000",
         "training.warmup_replay_epochs=10",
-        "training.warmup_checkpoint_every=500",
-        "training.warmup_topk_k=3",
-        "training.wm_profile_steps=-1",
+        "training.warmup_checkpoint_every=0",
+        "training.warmup_topk_k=0",
+        "training.wm_profile_steps=0",
         "dataloader.batch_size=16",
         "optim.world_model.lr=3.0e-5",
         "online_rollout.buffer_size=160000",
@@ -484,6 +484,8 @@ def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
     episode_horizon = 123
     wm_steps = 11
     classifier_steps = 12
+    topk_k = 2
+    wm_profile_steps = 3
     batch_size = 13
     classifier_batch_size = 14
     concurrency_value = concurrency_override.split("=", 1)[1]
@@ -497,6 +499,8 @@ def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
             concurrency_override,
             f"warmup.wm_steps={wm_steps}",
             f"warmup.classifier_steps={classifier_steps}",
+            f"warmup.topk_k={topk_k}",
+            f"warmup.wm_profile_steps={wm_profile_steps}",
             f"warmup.batch_size={batch_size}",
             f"warmup.classifier_batch_size={classifier_batch_size}",
         ]
@@ -509,6 +513,8 @@ def test_launcher_exposes_direct_hydra_controls_for_collection_and_warmup(
     assert f"{expected_concurrency_key}={concurrency_value}" in out
     assert f"training.wm_warmup_steps={wm_steps}" in out
     assert f"training.classifier_warmup_steps={classifier_steps}" in out
+    assert f"training.warmup_topk_k={topk_k}" in out
+    assert f"training.wm_profile_steps={wm_profile_steps}" in out
     assert f"dataloader.batch_size={batch_size}" in out
     assert f"training.classifier_batch_size={classifier_batch_size}" in out
 
@@ -1176,9 +1182,9 @@ def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
         assert "training.wm_warmup_steps=20000" in cotrain
         assert "training.classifier_warmup_steps=42" in cotrain
         assert "training.warmup_replay_epochs=10" in cotrain
-        assert "training.warmup_checkpoint_every=500" in cotrain
-        assert "training.warmup_topk_k=3" in cotrain
-        assert "training.wm_profile_steps=-1" in cotrain
+        assert "training.warmup_checkpoint_every=0" in cotrain
+        assert "training.warmup_topk_k=0" in cotrain
+        assert "training.wm_profile_steps=0" in cotrain
         assert "training.classifier_batch_size=16" in cotrain
         assert "dataloader.batch_size=16" in cotrain
         assert "optim.world_model.lr=3.0e-5" in cotrain

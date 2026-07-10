@@ -75,6 +75,8 @@ warmup:
   classifier_steps: null
   replay_epochs: null
   checkpoint_every: null
+  topk_k: null
+  wm_profile_steps: null
   batch_size: null
   classifier_batch_size: null
   buffer_size: null
@@ -98,6 +100,8 @@ control_overrides:
     classifier_steps: training.classifier_warmup_steps
     replay_epochs: training.warmup_replay_epochs
     checkpoint_every: training.warmup_checkpoint_every
+    topk_k: training.warmup_topk_k
+    wm_profile_steps: training.wm_profile_steps
     batch_size: dataloader.batch_size
     classifier_batch_size: training.classifier_batch_size
     buffer_size: online_rollout.buffer_size
@@ -258,9 +262,9 @@ profiles:
       - training.wm_warmup_steps=20000
       - training.classifier_warmup_steps=42
       - training.warmup_replay_epochs=10
-      - training.warmup_checkpoint_every=500
-      - training.warmup_topk_k=3
-      - training.wm_profile_steps=-1
+      - training.warmup_checkpoint_every=0
+      - training.warmup_topk_k=0
+      - training.wm_profile_steps=0
       # Match the validated 8xH100 full-dataset WM recipe during the isolated
       # DDP warmup phase. dataloader.batch_size is per rank, so 8 GPUs give a
       # global WM update batch of roughly 16 * 8 = 128 replay windows.
