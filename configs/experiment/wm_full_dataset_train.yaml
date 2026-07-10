@@ -1,0 +1,49 @@
+# @package _global_
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /dreamervla: openvla_onetraj_libero_cotrain_noray
+  - _self_
+
+# Complete 8xH100 recipe for full-dataset Chunk-WM replay training.
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/wm_full_dataset/${now:%Y%m%d_%H%M%S}}/cotrain
+  resume: false
+  wm_warmup_steps: 20000
+  classifier_warmup_steps: 0
+  warmup_replay_epochs: 10
+  warmup_checkpoint_every: 500
+  warmup_topk_k: 3
+  wm_profile_steps: -1
+  classifier_batch_size: 1
+
+offline_warmup:
+  data_dir: ${task.openvla_oft.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  task_id: null
+  infer_task_id_from_shard: true
+
+online_rollout:
+  buffer_size: 160000
+  sequence_length: 36
+  total_env_steps: 0
+
+env:
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+dataloader:
+  batch_size: 16
+
+optim:
+  world_model:
+    lr: 3.0e-5
+
+world_model:
+  chunk_rollout_chunks: 4
+  chunk_rollout_loss_scale: 0.2
+  proprio_reconstruction_loss_scale: 0.0
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline
+    wandb_proxy: null

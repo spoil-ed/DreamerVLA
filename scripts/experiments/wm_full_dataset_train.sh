@@ -15,6 +15,16 @@ echo "[wm-full-dataset] DVLA_DATA_ROOT = ${DVLA_DATA_ROOT} (${_DVLA_DATA_ROOT_SR
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
+# Stable 8xH100 runtime defaults. Every value remains environment-overridable.
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-4}"
+export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"
+export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
+export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
+
 CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"
 if command -v conda >/dev/null 2>&1; then
   eval "$(conda shell.bash hook)"
@@ -22,30 +32,20 @@ if command -v conda >/dev/null 2>&1; then
 fi
 
 PYTHON_BIN="${PYTHON:-python}"
-WM_PROFILE_STEPS="${WM_PROFILE_STEPS:--1}"
-echo "[wm-full-dataset] WM_PROFILE_STEPS = ${WM_PROFILE_STEPS} (-1 profiles every update)" >&2
-"${PYTHON_BIN}" -m dreamervla.diagnostics.experiment_stage_checks libero-original-warmup-run \
-  --experiment "${ORIGINAL_COTRAIN_EXPERIMENT:-openvla_onetraj_libero_cotrain_noray}" \
-  --task "${ORIGINAL_TASK:-openvla_onetraj_libero}" \
-  --python "${PYTHON_BIN}" \
-  --hidden-dir "${ORIGINAL_HIDDEN_DIR:-}" \
-  --ngpu "${NGPU:-8}" \
-  --master-port "${MASTER_PORT:-29500}" \
-  --run-root "${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/wm_full_dataset/$(date +%Y%m%d_%H%M%S)}" \
-  --wm-steps "${WM_WARMUP_STEPS:-20000}" \
-  --classifier-steps 0 \
-  --replay-epochs "${WARMUP_REPLAY_EPOCHS:-10}" \
-  --checkpoint-every "${WARMUP_CHECKPOINT_EVERY:-500}" \
-  --topk-k "${WARMUP_TOPK_K:-3}" \
-  --wm-batch-size "${WM_BATCH_SIZE:-16}" \
-  --classifier-batch-size 1 \
-  --buffer-size "${WARMUP_BUFFER_SIZE:-160000}" \
-  --task-ids "${ORIGINAL_TASK_IDS:-[0,1,2,3,4,5,6,7,8,9]}" \
-  ++offline_warmup.infer_task_id_from_shard=true \
-  training.wm_profile_steps="${WM_PROFILE_STEPS}" \
-  optim.world_model.lr="${WM_LR:-3.0e-5}" \
-  online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}" \
-  world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}" \
-  world_model.chunk_rollout_loss_scale="${WM_CHUNK_ROLLOUT_LOSS_SCALE:-0.2}" \
-  world_model.proprio_reconstruction_loss_scale="${WM_PROPRIO_LOSS_SCALE:-0.0}" \
+NGPU="${NGPU:-8}"
+MASTER_PORT="${MASTER_PORT:-29500}"
+export RUN_ROOT="${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/wm_full_dataset/$(date +%Y%m%d_%H%M%S)}"
+
+echo "[wm-full-dataset] GPUs      = ${CUDA_VISIBLE_DEVICES:-all}" >&2
+echo "[wm-full-dataset] NGPU      = ${NGPU}" >&2
+echo "[wm-full-dataset] EXPERIMENT= wm_full_dataset_train" >&2
+echo "[wm-full-dataset] RUN_ROOT  = ${RUN_ROOT}" >&2
+
+"${PYTHON_BIN}" -m torch.distributed.run \
+  --standalone \
+  --nnodes=1 \
+  --nproc-per-node="${NGPU}" \
+  --master_port="${MASTER_PORT}" \
+  -m dreamervla.train \
+  experiment=wm_full_dataset_train \
   "$@"

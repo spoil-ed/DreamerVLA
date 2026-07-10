@@ -38,6 +38,41 @@ def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
     assert classifier.num_layers == 12
 
 
+def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=wm_full_dataset_train"],
+        )
+
+    assert cfg._target_ == "dreamervla.runners.OnlineCotrainPipelineRunner"
+    assert cfg.task.name == "OpenVLA_Onetraj_LIBERO"
+    assert cfg.training.out_dir == f"{tmp_path}/cotrain"
+    assert cfg.training.resume is False
+    assert cfg.training.wm_warmup_steps == 20000
+    assert cfg.training.classifier_warmup_steps == 0
+    assert cfg.training.warmup_replay_epochs == 10
+    assert cfg.training.warmup_checkpoint_every == 500
+    assert cfg.training.warmup_topk_k == 3
+    assert cfg.training.wm_profile_steps == -1
+    assert cfg.dataloader.batch_size == 16
+    assert cfg.optim.world_model.lr == 3.0e-5
+    assert cfg.online_rollout.buffer_size == 160000
+    assert cfg.online_rollout.sequence_length == 36
+    assert cfg.online_rollout.total_env_steps == 0
+    assert cfg.env.task_ids == list(range(10))
+    assert cfg.offline_warmup.infer_task_id_from_shard is True
+    assert cfg.world_model.chunk_rollout_chunks == 4
+    assert cfg.world_model.chunk_rollout_loss_scale == 0.2
+    assert cfg.world_model.proprio_reconstruction_loss_scale == 0.0
+
+
 def test_validate_cfg_warmup(tmp_path):
     import pytest
     from omegaconf import OmegaConf

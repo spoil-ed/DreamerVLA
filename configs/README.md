@@ -127,6 +127,7 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | WM training | `scripts/train_wm.sh` | `world_model_chunk` |
 | OpenVLA hidden_state WM training | `scripts/train_wm.sh experiment=oft_world_model_chunk` | `oft_world_model_chunk` |
 | DreamerVLA cotrain pipeline | `scripts/train_dreamervla.sh` | `openvla_onetraj_libero_cotrain_noray` |
+| Full-dataset WM warmup | `scripts/experiments/wm_full_dataset_train.sh` | `wm_full_dataset_train` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Experiments
@@ -146,6 +147,7 @@ default `BaseRunner.save_checkpoint()` writes to `checkpoints/latest.ckpt`.
 | `oft_latent_classifier_chunk` | `classifier/openvla_oft_input_token_chunk` |
 | `openvla_onetraj_libero_cotrain_noray` | `dreamervla/openvla_onetraj_libero_cotrain_noray` |
 | `openvla_onetraj_libero_cotrain_ray` | `dreamervla/openvla_onetraj_libero_cotrain_ray` |
+| `wm_full_dataset_train` | `dreamervla/openvla_onetraj_libero_cotrain_noray` with a WM-only full-replay recipe |
 | `eval_libero_vla` | `evaluation/libero_vla` |
 
 The earlier DreamerVLA LUMOS route aliases (`dreamervla_rynn_wm_lumos`,

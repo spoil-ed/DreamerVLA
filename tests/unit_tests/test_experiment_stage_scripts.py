@@ -24,7 +24,7 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         "libero_original_00_check.sh": "libero-original-check",
         "libero_original_01_train_cls_best.sh": "libero-original-cls-run",
         "libero_original_02_warmup_wm_cls_best.sh": "libero-original-warmup-run",
-        "wm_full_dataset_train.sh": "libero-original-warmup-run",
+        "wm_full_dataset_train.sh": "experiment=wm_full_dataset_train",
         "wm_full_dataset_prepare.sh": "libero_original_00_reprocess_data.sh",
         "libero_original_03_rl_from_best.sh": "libero-original-rl-run",
         "libero_original_04_eval_rl.sh": "eval_libero_vla",
@@ -39,22 +39,16 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         assert "PYTHON_BIN" in text, name
 
     full_wm = (experiments_dir / "wm_full_dataset_train.sh").read_text(encoding="utf-8")
-    assert "--classifier-steps 0" in full_wm
-    assert "--classifier-batch-size 1" in full_wm
-    assert "--wm-steps" in full_wm
-    assert '--replay-epochs "${WARMUP_REPLAY_EPOCHS:-10}"' in full_wm
-    assert '--wm-batch-size "${WM_BATCH_SIZE:-16}"' in full_wm
-    assert 'optim.world_model.lr="${WM_LR:-2.0e-5}"' in full_wm
-    assert 'online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}"' in full_wm
-    assert 'world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}"' in full_wm
-    assert (
-        'world_model.chunk_rollout_loss_scale="${WM_CHUNK_ROLLOUT_LOSS_SCALE:-0.2}"'
-        in full_wm
-    )
-    assert (
-        'world_model.proprio_reconstruction_loss_scale="${WM_PROPRIO_LOSS_SCALE:-0.0}"'
-        in full_wm
-    )
+    assert "torch.distributed.run" in full_wm
+    assert "experiment=wm_full_dataset_train" in full_wm
+    for config_owned_name in (
+        "WM_BATCH_SIZE",
+        "WM_LR",
+        "WARMUP_REPLAY_EPOCHS",
+        "WM_SEQUENCE_LENGTH",
+        "WM_CHUNK_ROLLOUT_CHUNKS",
+    ):
+        assert config_owned_name not in full_wm
 
     prepare = (experiments_dir / "wm_full_dataset_prepare.sh").read_text(encoding="utf-8")
     assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in prepare
@@ -63,13 +57,22 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     assert 'exec "${DVLA_ROOT}/scripts/experiments/libero_original_00_reprocess_data.sh"' in prepare
 
 
-def test_full_dataset_wm_script_profiles_every_update_by_default() -> None:
+def test_full_dataset_wm_script_embeds_h100_runtime_defaults() -> None:
     root = Path(__file__).resolve().parents[2]
     script = root / "scripts" / "experiments" / "wm_full_dataset_train.sh"
     text = script.read_text(encoding="utf-8")
 
-    assert 'WM_PROFILE_STEPS="${WM_PROFILE_STEPS:--1}"' in text
-    assert 'training.wm_profile_steps="${WM_PROFILE_STEPS}"' in text
+    for expected in (
+        'export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"',
+        'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"',
+        'export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-4}"',
+        'export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"',
+        'export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"',
+        'export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"',
+        'export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"',
+        'export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"',
+    ):
+        assert expected in text
 
 
 def test_libero_original_reprocess_script_targets_artifact_root() -> None:
