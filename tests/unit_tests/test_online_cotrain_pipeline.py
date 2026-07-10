@@ -889,6 +889,42 @@ def test_offline_warmup_wm_loss_progress_uses_rank_zero_event_printer(monkeypatc
     assert "[pipeline][wm-warmup]" not in capsys.readouterr().out
 
 
+def test_offline_warmup_classifier_progress_uses_rank_zero_event_printer(monkeypatch, capsys):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    monkeypatch.setattr(
+        mod,
+        "online_classifier_update_step",
+        lambda **_kwargs: {"loss": 0.2, "acc": 0.75, "f1": 0.5, "pos_frac": 0.25},
+    )
+
+    events = []
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.cfg = OmegaConf.create({"training": {"replay_warmup_log_every": 1}})
+    runner.device = torch.device("cpu")
+    runner.classifier = torch.nn.Module()
+    runner.classifier_optimizer = object()
+    runner._log_replay_warmup_metrics = lambda *_args, **_kwargs: None
+    runner._print_pipeline_event = lambda message: events.append(message)
+    runner._maybe_warmup_checkpoint = lambda **_kwargs: None
+    runner.console_progress = lambda *_args, **_kwargs: None
+
+    runner._offline_warmup_classifier(
+        object(),
+        steps=1,
+        batch_size=2,
+        early_neg_stride=1,
+        grad_clip=1.0,
+    )
+
+    assert events == [
+        "[pipeline][cls-warmup] step=0/1 loss=0.2000 acc=0.750 f1=0.500 pos=0.250"
+    ]
+    assert "[pipeline][cls-warmup]" not in capsys.readouterr().out
+
+
 def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monkeypatch):
     import dreamervla.runners.online_cotrain_pipeline_runner as mod
 

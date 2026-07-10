@@ -280,12 +280,11 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     },
                     step=int(log_step_offset) + i,
                 )
-                print(
+                self._print_pipeline_event(
                     f"[pipeline][cls-warmup] step={i}/{steps} "
                     f"loss={float(m['loss']):.4f} acc={last_acc:.3f} "
                     f"f1={float(m.get('f1', 0.0)):.3f} "
-                    f"pos={float(m.get('pos_frac', 0.0)):.3f}",
-                    flush=True,
+                    f"pos={float(m.get('pos_frac', 0.0)):.3f}"
                 )
             metrics = {
                 "loss": float(m["loss"]),
