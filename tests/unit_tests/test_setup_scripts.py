@@ -388,6 +388,15 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     ).read_text(encoding="utf-8")
 
 
+def test_concat_record_wrapper_honors_explicit_tokens_directory() -> None:
+    root = _project_root()
+    text = (root / "scripts" / "preprocess" / "concat_record_libero.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'TOKENS_DIR="${1:-${TOKENS_DIR:-' in text
+
+
 def test_preprocess_steps_are_numbered_registered_and_individually_runnable() -> None:
     root = _project_root()
     preprocess_dir = root / "scripts" / "preprocess"
