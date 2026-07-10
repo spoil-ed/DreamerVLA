@@ -39,4 +39,5 @@ PYTHON_BIN="${PYTHON:-python}"
   --classifier-batch-size 1 \
   --buffer-size "${WARMUP_BUFFER_SIZE:-160000}" \
   --task-ids "${ORIGINAL_TASK_IDS:-[0,1,2,3,4,5,6,7,8,9]}" \
+  ++offline_warmup.infer_task_id_from_shard=true \
   "$@"

@@ -857,6 +857,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         )
         env_task_ids = tuple(int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]))
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
+        infer_task_id_from_shard = bool(
+            OmegaConf.select(cfg, "offline_warmup.infer_task_id_from_shard", default=False)
+        )
         max_seed_eps = OmegaConf.select(cfg, "offline_warmup.max_episodes_per_task", default=None)
         # resume / need_wm / need_cls were computed above (before the heavy build) so the
         # offline-data existence check could fail fast; reuse them here.
@@ -889,6 +892,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 data_dir=data_dir,
                 hidden_dir=hidden_dir,
                 default_task_id=(int(default_task_id) if default_task_id is not None else None),
+                infer_task_id_from_shard=infer_task_id_from_shard,
                 max_episodes_per_task=(
                     int(max_seed_eps) if max_seed_eps is not None else None
                 ),

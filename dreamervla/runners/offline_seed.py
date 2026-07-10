@@ -17,6 +17,19 @@ import numpy as np
 
 from dreamervla.runners.online_replay import OnlineReplay
 
+_LIBERO_GOAL_TASKS = (
+    "open_the_middle_drawer_of_the_cabinet",
+    "put_the_bowl_on_the_stove",
+    "put_the_wine_bottle_on_top_of_the_cabinet",
+    "open_the_top_drawer_and_put_the_bowl_inside",
+    "put_the_bowl_on_top_of_the_cabinet",
+    "push_the_plate_to_the_front_of_the_stove",
+    "put_the_cream_cheese_in_the_bowl",
+    "turn_on_the_stove",
+    "put_the_bowl_on_the_plate",
+    "put_the_wine_bottle_on_the_rack",
+)
+
 
 def _demo_proprio_at(demo: h5py.Group, t: int) -> np.ndarray:
     obs = demo["obs"]
@@ -82,6 +95,7 @@ def seed_replay_from_offline(
     data_dir: str | Path,
     hidden_dir: str | Path,
     default_task_id: int | None = None,
+    infer_task_id_from_shard: bool = False,
     max_episodes_per_task: int | None = None,
 ) -> int:
     """Add demos from data_dir's reward shards to ``replay``. Returns the number of
@@ -114,6 +128,15 @@ def seed_replay_from_offline(
                         task_id = int(demo.attrs["task_id"])
                     elif default_task_id is not None:
                         task_id = int(default_task_id)
+                    elif infer_task_id_from_shard:
+                        task_name = shard.removesuffix("_demo.hdf5")
+                        try:
+                            task_id = _LIBERO_GOAL_TASKS.index(task_name)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"cannot infer task_id from shard {shard}; "
+                                "set offline_warmup.task_id or add a task-name mapping"
+                            ) from exc
                     else:
                         raise ValueError(
                             f"{shard}/{demo_key} has no task_id attr and no default_task_id "
