@@ -23,10 +23,15 @@ CUDA_VISIBLE_DEVICES=7 \
 The shell script remains a thin launcher for
 `python -m dreamervla.diagnostics.wm_single_trajectory_overfit`. Without `--run`,
 the command validates and prints the resolved plan without starting GPU training.
-CLI overrides select the resolved config, hidden HDF5, raw HDF5, demo key, output
-directory, maximum epochs, batch size, learning rate, evaluation interval, and
-success thresholds. Paths resolve relative to `DVLA_DATA_ROOT`; no machine-specific
-absolute data path is embedded in the implementation.
+The diagnostic composes the repository's static Hydra source with
+`experiment=openvla_onetraj_libero_cotrain_noray` and
+`task=openvla_onetraj_libero`, then instantiates `cfg.world_model`. It does not depend
+on a prior run's `resolved_config.yaml`. CLI overrides select the task, HDF5 filename,
+demo key, output directory, maximum epochs, batch size, learning rate, evaluation
+interval, and success thresholds. Data paths come from
+`task.openvla_oft.input_token_hidden_dir` and `task.hdf5_reward_dir`, which resolve
+relative to `DVLA_DATA_ROOT`; no machine-specific absolute data path is embedded in
+the implementation.
 
 ## Training And Evaluation
 
