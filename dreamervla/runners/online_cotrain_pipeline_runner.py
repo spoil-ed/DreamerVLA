@@ -219,7 +219,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     {"train/wm_warmup_loss": last},
                     step=i,
                 )
-                print(f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}", flush=True)
+                self._print_pipeline_event(
+                    f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}"
+                )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
                 total=int(steps),

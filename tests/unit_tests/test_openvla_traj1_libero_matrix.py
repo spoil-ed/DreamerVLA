@@ -193,6 +193,21 @@ def test_openvla_onetraj_cotrain_ray_uses_wmpo_classifier_protocol() -> None:
     assert cfg.learner.train_cfg.classifier_batch_size % 2 == 0
 
 
+def test_openvla_onetraj_cotrain_ray_aligns_world_model_full_dataset_recipe() -> None:
+    cfg = _compose(["experiment=openvla_onetraj_libero_cotrain_ray"])
+    wm = cfg.ray_components.world_model.kwargs
+
+    assert cfg.ray_data.replay_capacity == 160000
+    assert cfg.ray_data.sequence_length == 36
+    assert cfg.replay.cfg.capacity == 160000
+    assert cfg.replay.cfg.sequence_length == 36
+    assert cfg.learner.train_cfg.batch_size == 16
+    assert cfg.learner.train_cfg.optimizers.world_model.lr == 3.0e-5
+    assert wm.chunk_rollout_chunks == 4
+    assert wm.chunk_rollout_loss_scale == 0.2
+    assert wm.proprio_reconstruction_loss_scale == 0.0
+
+
 @pytest.mark.parametrize("_offline_task,coldstart_task,suite", MATRIX)
 def test_openvla_traj1_libero_tasks_define_vla_dataset_contract(
     _offline_task,

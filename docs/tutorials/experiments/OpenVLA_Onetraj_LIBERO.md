@@ -247,20 +247,25 @@ warmup 与已验证的
 
 | 组件 | steps | local batch / GPU | 8 卡 global batch | LR |
 | --- | ---: | ---: | ---: | ---: |
-| world model | 1200 | 16 | 128 | `3.0e-5` |
+| world model | `20000` 配置值；10 replay epochs 重算实际 update | 16 | 128 | `3.0e-5` |
 | classifier | 42 | 16 | 128 | `1.0e-4` |
 
 其他值：
 
-- `training.warmup_replay_epochs=0`，因此使用上表固定 update 数。
-- `training.warmup_checkpoint_every=200`。
+- `training.warmup_replay_epochs=10`，会按 replay sampleable windows 重算 update 数；例如 23160 是 replay epoch 推导值，不是配置里的 20000。
+- `training.warmup_checkpoint_every=500`，`training.warmup_topk_k=3`。
+- `training.wm_profile_steps=-1`，每个 WM update 都记录分段时耗。
 - `online_rollout.buffer_size=160000`。
-- `online_rollout.sequence_length=12`。
+- `online_rollout.sequence_length=36`。
+- `world_model.chunk_rollout_chunks=4`，`chunk_rollout_loss_scale=0.2`。
+- `world_model.proprio_reconstruction_loss_scale=0.0`。
 - warmup 命令追加 `online_rollout.total_env_steps=0`，不会误入 sync online rollout。
 - frozen OpenVLA encoder 在 replay warmup 时移到 CPU，给 WM/classifier 释放显存。
 
-batch 16 和 WM LR `3e-5` 来自纯 WM 8 卡方案。这里只在隔离的 DDP warmup 使用；
-不会把同样的 batch 和 LR 直接套到模型共驻的 async online Learner。
+batch 16 和 WM LR `3e-5` 来自纯 WM 8 卡方案。DDP 下 batch 16 是每 rank
+采样窗口数，8 卡 global update 约为 `16 * 8 = 128` 条窗口。`sequence_length=36`
+和 `chunk_rollout_chunks=4` 会明显增加单次 update 的计算量，日志 profile 里约
+8.3s/global update 属于这套重负载配置的量级。
 
 ### Async online
 
@@ -275,15 +280,16 @@ batch 16 和 WM LR `3e-5` 来自纯 WM 8 卡方案。这里只在隔离的 DDP w
 | max steps / rollout epoch | 512 |
 | Actor GRPO/PPO group size | 8 |
 | Actor policy LR | `5.0e-7` |
-| online Learner WM batch | 2 |
-| online Learner WM LR | `2.0e-6` |
+| online Learner WM batch | 16 |
+| online Learner WM LR | `3.0e-5` |
 | online classifier batch | 2 |
 | online classifier LR | `1.0e-4` |
 | precision | bf16 |
 
-online LR 有意低于 offline warmup：WM 从 `3e-5` 降到 `2e-6`，避免少量新
-real replay 让已 warmup 的动力学快速漂移；Actor 的 `5e-7` 用于稳定微调 VLA
-policy。没有真实 eval 证据时，不应随 GPU 数线性放大这些 online LR。
+online WM learner 也与 full-dataset WM recipe 对齐到 batch 16、LR `3e-5`、
+`sequence_length=36`、`chunk_rollout_chunks=4` 和 `chunk_rollout_loss_scale=0.2`。
+Actor 的 `5e-7` 仍用于稳定微调 VLA policy。若 async online 阶段显存不足，
+优先只降低 `learner.train_cfg.batch_size`，不要改 warmup recipe。
 
 `algorithm.group_size=8` 是 advantage 分组大小，不是 GPU 数，也不是
 `dataloader.batch_size`。
@@ -488,8 +494,12 @@ time/wm_warmup_metrics_ms
 time/wm_warmup_total_ms
 ```
 
-`wm_full_dataset_train` 默认 `wm_profile_steps=-1`。cotrain 默认关闭逐 update
-同步 profile 以避免 CUDA synchronize 降低吞吐；需要分析时在 config 中临时开启。
+`wm_full_dataset_train` 和 8 卡 cotrain `multi_gpu` profile 默认
+`wm_profile_steps=-1`。这些时耗会引入 CUDA synchronize，适合诊断吞吐；正式长跑
+若只关心速度，可用 `warmup.wm_steps` / `cotrain_overrides` 临时覆盖为 `0`。
+
+`[pipeline][wm-warmup] step=... loss=...` 现在走 rank-0 event printer，8 卡 DDP
+不会再由每个 rank 重复打印同一条 loss；profile/progress 也按 rank-0 口径读。
 
 ### Async global step
 

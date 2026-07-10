@@ -39,13 +39,14 @@ training:
   lr_warmup_steps: 0
   use_ema: false
   checkpoint_every: 2000
-  wm_warmup_steps: 1200
+  wm_warmup_steps: 20000
   classifier_warmup_steps: 1200
   replay_warmup_log_every: 1
-  wm_profile_steps: 0
-  warmup_replay_epochs: 1
+  wm_profile_steps: -1
+  warmup_replay_epochs: 10
   warmup_replay_max_steps: 0
-  warmup_checkpoint_every: 0
+  warmup_checkpoint_every: 500
+  warmup_topk_k: 3
   warmup_steps: 0
   train_actor_after_warmup: true
   train_classifier_inline: true
@@ -83,7 +84,7 @@ encoder:
 online_rollout:
   buffer_size: 20000
   replay_capacity_mode: total_sharded
-  sequence_length: 12
+  sequence_length: 36
   min_replay: 2000
   min_episodes_per_task: 1
   min_sampleable_windows: 0
@@ -150,7 +151,7 @@ world_model:
   proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
   proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
   num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
-  proprio_reconstruction_loss_scale: 1.0
+  proprio_reconstruction_loss_scale: 0.0
   lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
   lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
   num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
@@ -166,8 +167,8 @@ world_model:
   max_seq_len: 128
   hidden_loss_scale: 1.0
   cosine_loss_scale: 0.0
-  chunk_rollout_chunks: 1
-  chunk_rollout_loss_scale: 0.0
+  chunk_rollout_chunks: 4
+  chunk_rollout_loss_scale: 0.2
   reward_head_type: binary
   reward_loss_scale: 0.0
   reward_hidden_dim: 1024
@@ -298,7 +299,7 @@ optim:
   zero_grad_set_to_none: true
   world_model:
     name: adamw
-    lr: 2.0e-6
+    lr: 3.0e-5
     betas: [0.9, 0.999]
     eps: 1.0e-20
     weight_decay: 0.0
@@ -322,7 +323,7 @@ optim:
     weight_decay: 1.0e-4
 
 dataloader:
-  batch_size: 4
+  batch_size: 16
   debug_batch_size: 2
 
 collect:

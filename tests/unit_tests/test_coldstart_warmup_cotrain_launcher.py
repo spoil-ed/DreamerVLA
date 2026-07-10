@@ -332,11 +332,18 @@ def test_launcher_profiles_do_not_override_model_structure() -> None:
         "training.warmup_replay_epochs",
         "training.warmup_replay_max_steps",
         "training.warmup_checkpoint_every",
+        "training.warmup_topk_k",
+        "training.wm_profile_steps",
         "training.classifier_batch_size",
         "dataloader.batch_size",
         "optim.world_model.lr",
+        "offline_warmup.infer_task_id_from_shard",
         "online_rollout.buffer_size",
+        "online_rollout.sequence_length",
         "online_rollout.total_env_steps",
+        "world_model.chunk_rollout_chunks",
+        "world_model.chunk_rollout_loss_scale",
+        "world_model.proprio_reconstruction_loss_scale",
     }
 
     for profile in cfg["profiles"].values():
@@ -352,6 +359,29 @@ def test_release_profiles_keep_full_coldstart_pool_for_warmup() -> None:
             "online_rollout.buffer_size",
         )
         assert buffer_size >= 160_000
+
+
+def test_multi_gpu_profile_aligns_world_model_full_dataset_recipe() -> None:
+    cfg = _launcher_cfg()
+    cotrain = cfg["profiles"]["multi_gpu"]["cotrain"]
+
+    expected = {
+        "training.wm_warmup_steps=20000",
+        "training.warmup_replay_epochs=10",
+        "training.warmup_checkpoint_every=500",
+        "training.warmup_topk_k=3",
+        "training.wm_profile_steps=-1",
+        "dataloader.batch_size=16",
+        "optim.world_model.lr=3.0e-5",
+        "online_rollout.buffer_size=160000",
+        "online_rollout.sequence_length=36",
+        "offline_warmup.infer_task_id_from_shard=true",
+        "world_model.chunk_rollout_chunks=4",
+        "world_model.chunk_rollout_loss_scale=0.2",
+        "world_model.proprio_reconstruction_loss_scale=0.0",
+    }
+
+    assert expected <= set(cotrain)
 
 
 def test_launcher_dry_run_prints_both_commands(tmp_path, capsys) -> None:
@@ -1111,17 +1141,21 @@ def test_full_profiles_run_full_pipeline_by_default(profile) -> None:
 
     assert "training.debug=false" in cotrain
     assert "online_rollout.total_env_steps=200000" in cotrain
-    assert "training.wm_warmup_steps=1200" in cotrain
     if profile == "release":
+        assert "training.wm_warmup_steps=1200" in cotrain
         assert "training.classifier_warmup_steps=1200" in cotrain
         assert "training.warmup_replay_epochs=1" in cotrain
     else:
+        assert "training.wm_warmup_steps=20000" in cotrain
         assert "training.classifier_warmup_steps=42" in cotrain
-        assert "training.warmup_replay_epochs=0" in cotrain
-        assert "training.warmup_checkpoint_every=200" in cotrain
+        assert "training.warmup_replay_epochs=10" in cotrain
+        assert "training.warmup_checkpoint_every=500" in cotrain
+        assert "training.warmup_topk_k=3" in cotrain
+        assert "training.wm_profile_steps=-1" in cotrain
         assert "training.classifier_batch_size=16" in cotrain
         assert "dataloader.batch_size=16" in cotrain
         assert "optim.world_model.lr=3.0e-5" in cotrain
+        assert "online_rollout.sequence_length=36" in cotrain
     assert not any(
         item.startswith("training.warmup_replay_max_steps=") for item in cotrain
     )

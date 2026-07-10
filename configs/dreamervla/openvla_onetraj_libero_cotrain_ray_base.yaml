@@ -35,8 +35,8 @@ init:
 
 ray_data:
   task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  replay_capacity: 20000
-  sequence_length: 12
+  replay_capacity: 160000
+  sequence_length: 36
   min_replay_episodes: 1
 
 algorithm:
@@ -63,7 +63,7 @@ ray_components:
       proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
       proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
       num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
-      proprio_reconstruction_loss_scale: 1.0
+      proprio_reconstruction_loss_scale: 0.0
       lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
       lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
       num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
@@ -80,8 +80,8 @@ ray_components:
       max_seq_len: 128
       hidden_loss_scale: 1.0
       cosine_loss_scale: 0.0
-      chunk_rollout_chunks: 1
-      chunk_rollout_loss_scale: 0.0
+      chunk_rollout_chunks: 4
+      chunk_rollout_loss_scale: 0.2
       reward_head_type: binary
       reward_loss_scale: 0.0
       reward_hidden_dim: 1024
@@ -260,7 +260,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: dreamervla_cotrain
-    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
+    batch_size: 16
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_loss_type: bce
@@ -297,7 +297,7 @@ learner:
       zero_grad_set_to_none: true
     optimizers:
       world_model:
-        lr: 2.0e-6
+        lr: 3.0e-5
         weight_decay: 0.0
       policy:
         lr: 5.0e-7

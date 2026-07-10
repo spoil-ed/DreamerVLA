@@ -255,14 +255,22 @@ profiles:
         - collect.memory_fraction=0.9
     cotrain:
       - training.debug=false
-      - training.wm_warmup_steps=1200
+      - training.wm_warmup_steps=20000
       - training.classifier_warmup_steps=42
-      - training.warmup_replay_epochs=0
-      - training.warmup_checkpoint_every=200
+      - training.warmup_replay_epochs=10
+      - training.warmup_checkpoint_every=500
+      - training.warmup_topk_k=3
+      - training.wm_profile_steps=-1
       # Match the validated 8xH100 full-dataset WM recipe during the isolated
-      # DDP warmup phase. Async online keeps its smaller co-resident learner batch.
+      # DDP warmup phase. dataloader.batch_size is per rank, so 8 GPUs give a
+      # global WM update batch of roughly 16 * 8 = 128 replay windows.
       - training.classifier_batch_size=16
       - dataloader.batch_size=16
       - optim.world_model.lr=3.0e-5
+      - offline_warmup.infer_task_id_from_shard=true
       - online_rollout.buffer_size=160000
+      - online_rollout.sequence_length=36
       - online_rollout.total_env_steps=200000
+      - world_model.chunk_rollout_chunks=4
+      - world_model.chunk_rollout_loss_scale=0.2
+      - world_model.proprio_reconstruction_loss_scale=0.0

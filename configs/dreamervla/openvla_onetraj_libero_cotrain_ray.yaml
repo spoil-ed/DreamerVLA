@@ -146,7 +146,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: wm_classifier_only
-    batch_size: ${dvla_div:${env.train.total_num_envs},${learner.train_cfg.algorithm_cfg.imag_last},${algorithm.group_size}}
+    batch_size: 16
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_loss_type: bce
@@ -167,7 +167,7 @@ learner:
       zero_grad_set_to_none: true
     optimizers:
       world_model:
-        lr: 2.0e-6
+        lr: 3.0e-5
         weight_decay: 0.0
       classifier:
         lr: 1.0e-4
