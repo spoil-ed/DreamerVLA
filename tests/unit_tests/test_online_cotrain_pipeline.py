@@ -807,6 +807,48 @@ def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
     assert "time/wm_warmup_total_ms" in time_metrics
 
 
+def test_offline_warmup_wm_profiles_every_step_when_configured_negative(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    profile_enabled = []
+
+    class Replay:
+        def sample(self, batch_size, **kwargs):
+            del batch_size, kwargs
+            return {
+                "obs_embedding": torch.zeros(2, 3, 4, dtype=torch.float16),
+                "actions": torch.zeros(2, 3, 7),
+                "rewards": torch.zeros(2, 3),
+                "dones": torch.zeros(2, 3),
+                "is_first": torch.zeros(2, 3, dtype=torch.bool),
+            }
+
+    def fake_wm_step(**kwargs):
+        timings = kwargs.get("profile_timings")
+        profile_enabled.append(timings is not None)
+        if timings is not None:
+            timings["forward"] = 0.001
+        return {"loss": 0.1}
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.cfg = OmegaConf.create({"training": {"wm_profile_steps": -1}})
+    runner.device = torch.device("cpu")
+    runner.world_model = torch.nn.Module()
+    runner.world_model_optimizer = object()
+    runner.policy = object()
+    runner._build_wm_pretrain_batch = lambda batch: batch
+    runner._log_replay_warmup_metrics = lambda *_args, **_kwargs: None
+    runner.console_progress = lambda *_args, **_kwargs: None
+
+    runner._offline_warmup_wm(Replay(), steps=3, batch_size=2, optim_cfg=None)
+
+    assert profile_enabled == [True, True, True]
+
+
 def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monkeypatch):
     import dreamervla.runners.online_cotrain_pipeline_runner as mod
 

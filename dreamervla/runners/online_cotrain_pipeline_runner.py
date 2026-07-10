@@ -81,11 +81,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         return max(1, int(value))
 
     def _wm_profile_steps(self) -> int:
+        """Return the WM profile budget; ``-1`` profiles every warmup update."""
         cfg = getattr(self, "cfg", None)
         if cfg is None:
             return 0
         value = OmegaConf.select(cfg, "training.wm_profile_steps", default=0)
-        return max(0, int(value))
+        return int(value)
 
     def _record_wm_profile(
         self, timings: dict[str, float], *, step: int, total_steps: int
@@ -180,7 +181,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         last = 0.0
         profile_steps = self._wm_profile_steps()
         for i in range(int(start_step), int(steps)):
-            do_profile = (i - int(start_step)) < profile_steps
+            do_profile = profile_steps < 0 or (i - int(start_step)) < profile_steps
             profile_timings: dict[str, float] | None = {} if do_profile else None
             profile_total_start = time.perf_counter()
             profile_stage_start = profile_total_start

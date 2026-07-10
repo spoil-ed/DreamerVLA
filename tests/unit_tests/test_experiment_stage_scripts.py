@@ -63,6 +63,15 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     assert 'exec "${DVLA_ROOT}/scripts/experiments/libero_original_00_reprocess_data.sh"' in prepare
 
 
+def test_full_dataset_wm_script_profiles_every_update_by_default() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "experiments" / "wm_full_dataset_train.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert 'WM_PROFILE_STEPS="${WM_PROFILE_STEPS:--1}"' in text
+    assert 'training.wm_profile_steps="${WM_PROFILE_STEPS}"' in text
+
+
 def test_libero_original_reprocess_script_targets_artifact_root() -> None:
     root = Path(__file__).resolve().parents[2]
     script = root / "scripts" / "experiments" / "libero_original_00_reprocess_data.sh"

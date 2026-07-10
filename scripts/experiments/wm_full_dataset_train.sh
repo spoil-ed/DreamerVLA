@@ -22,6 +22,8 @@ if command -v conda >/dev/null 2>&1; then
 fi
 
 PYTHON_BIN="${PYTHON:-python}"
+WM_PROFILE_STEPS="${WM_PROFILE_STEPS:--1}"
+echo "[wm-full-dataset] WM_PROFILE_STEPS = ${WM_PROFILE_STEPS} (-1 profiles every update)" >&2
 "${PYTHON_BIN}" -m dreamervla.diagnostics.experiment_stage_checks libero-original-warmup-run \
   --experiment "${ORIGINAL_COTRAIN_EXPERIMENT:-openvla_onetraj_libero_cotrain_noray}" \
   --task "${ORIGINAL_TASK:-openvla_onetraj_libero}" \
@@ -40,7 +42,7 @@ PYTHON_BIN="${PYTHON:-python}"
   --buffer-size "${WARMUP_BUFFER_SIZE:-160000}" \
   --task-ids "${ORIGINAL_TASK_IDS:-[0,1,2,3,4,5,6,7,8,9]}" \
   ++offline_warmup.infer_task_id_from_shard=true \
-  training.wm_profile_steps="${WM_PROFILE_STEPS:-3}" \
+  training.wm_profile_steps="${WM_PROFILE_STEPS}" \
   optim.world_model.lr="${WM_LR:-3.0e-5}" \
   online_rollout.sequence_length="${WM_SEQUENCE_LENGTH:-36}" \
   world_model.chunk_rollout_chunks="${WM_CHUNK_ROLLOUT_CHUNKS:-4}" \
