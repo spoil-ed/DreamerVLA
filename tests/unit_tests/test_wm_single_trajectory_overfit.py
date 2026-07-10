@@ -5,6 +5,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 import torch
 
 from dreamervla.diagnostics import wm_single_trajectory_overfit as diag
@@ -212,6 +213,25 @@ def test_main_dry_run_does_not_create_output(
     assert payload["dry_run"] is True
     assert payload["initialization"] == "random"
     assert out_dir.exists() is False
+
+
+def test_run_input_error_is_written_to_output_directory(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(FileNotFoundError, match="hidden HDF5 not found"):
+        diag.main(
+            [
+                "--run",
+                "--hidden-hdf5",
+                str(tmp_path / "missing-hidden.hdf5"),
+                "--raw-hdf5",
+                str(tmp_path / "missing-raw.hdf5"),
+                "--out-dir",
+                str(out_dir),
+            ]
+        )
+
+    assert "hidden HDF5 not found" in (out_dir / "error.txt").read_text(encoding="utf-8")
 
 
 def test_experiment_launcher_is_thin_and_dry_run_safe() -> None:

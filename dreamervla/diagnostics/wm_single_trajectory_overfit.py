@@ -683,11 +683,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run dry-run validation or the requested single-trajectory overfit job."""
 
     args = parse_args(argv)
-    plan = build_plan(args)
-    hidden_path = Path(plan["hidden_hdf5"])
-    raw_path = Path(plan["raw_hdf5"])
-    validate_inputs(hidden_path, raw_path, args.demo_key)
     if not args.run:
+        plan = build_plan(args)
+        hidden_path = Path(plan["hidden_hdf5"])
+        raw_path = Path(plan["raw_hdf5"])
+        validate_inputs(hidden_path, raw_path, args.demo_key)
         print(json.dumps({"dry_run": True, **plan}, indent=2, sort_keys=True))
         return 0
 
@@ -696,6 +696,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if error_path.exists():
         error_path.unlink()
     try:
+        plan = build_plan(args)
+        hidden_path = Path(plan["hidden_hdf5"])
+        raw_path = Path(plan["raw_hdf5"])
+        validate_inputs(hidden_path, raw_path, args.demo_key)
         settings = _settings_from_args(args)
         np.random.seed(settings.seed)
         torch.manual_seed(settings.seed)
