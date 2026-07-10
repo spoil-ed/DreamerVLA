@@ -25,6 +25,7 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
         "libero_original_01_train_cls_best.sh": "libero-original-cls-run",
         "libero_original_02_warmup_wm_cls_best.sh": "libero-original-warmup-run",
         "wm_full_dataset_train.sh": "libero-original-warmup-run",
+        "wm_full_dataset_prepare.sh": "libero_original_00_reprocess_data.sh",
         "libero_original_03_rl_from_best.sh": "libero-original-rl-run",
         "libero_original_04_eval_rl.sh": "eval_libero_vla",
     }
@@ -41,6 +42,11 @@ def test_experiment_stage_scripts_cover_mainline_plan() -> None:
     assert "--classifier-steps 0" in full_wm
     assert "--classifier-batch-size 1" in full_wm
     assert "--wm-steps" in full_wm
+
+    prepare = (experiments_dir / "wm_full_dataset_prepare.sh").read_text(encoding="utf-8")
+    assert 'PREPROCESS_OVERWRITE="${PREPROCESS_OVERWRITE:-false}"' in prepare
+    assert 'OFT_LATENT_SCHEME="${OFT_LATENT_SCHEME:-input_tokens}"' in prepare
+    assert 'exec "${DVLA_ROOT}/scripts/experiments/libero_original_00_reprocess_data.sh"' in prepare
 
 
 def test_libero_original_reprocess_script_targets_artifact_root() -> None:
