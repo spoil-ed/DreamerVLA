@@ -84,6 +84,15 @@ def test_pretokenize_quotes_multi_gpu_hydra_value() -> None:
     assert 'gpu_devices="\'${GPUS}\'"' in text
 
 
+def test_cotrain_world_model_ddp_tracks_unused_parameters() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "dreamervla" / "runners" / "online_cotrain_runner.py").read_text(
+        encoding="utf-8"
+    )
+    assert "self.world_model," in source
+    assert "find_unused_parameters=True" in source
+
+
 def test_experiment_stage_check_module_exposes_required_commands() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (

@@ -648,7 +648,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         wm_ckpt = OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)
         if wm_ckpt:
             self._load_world_model_init_ckpt(str(wm_ckpt))
-        self.world_model = self.distributed.wrap_trainable_module(self.world_model)
+        self.world_model = self.distributed.wrap_trainable_module(
+            self.world_model,
+            find_unused_parameters=True,
+            broadcast_buffers=True,
+        )
         self.world_model_optimizer = build_optimizer(
             self.world_model, OmegaConf.select(cfg, "optim.world_model")
         )
