@@ -2,7 +2,7 @@
 # Single source of truth for collection (write) AND discrete-WM consumption (read):
 # suite=libero_object bound to ITS OWN traj1 DISCRETE ckpt (single-frame h1, no proprio).
 # Mirrors OpenVLA_Onetraj_ColdStart_LIBERO (goal) for the libero_object suite.
-# expected_obs_hidden_source=action_query / expected_prompt_style=vla_policy /
+# expected_obs_hidden_source=input_token_embedding / expected_prompt_style=vla_policy /
 # expected_rotate_images_180=true are inherited from libero_object.
 defaults:
   - openvla_onetraj_libero_object

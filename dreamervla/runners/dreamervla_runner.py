@@ -107,7 +107,7 @@ class DreamerVLARunner(BaseRunner):
         set_seed(int(self.config.seed) + self.rank)
 
         # ── model placeholders ──────────────────────────────────────────────
-        self.encoder = None  # RynnVLAEncoder   — frozen feature extractor
+        self.encoder = None  # OpenVLA-OFT policy / frozen feature extractor
         self.policy = None  # VLAPolicy         — Dreamer actor (latent space)
         self.ref_policy = None  # Frozen actor snapshot for KL/BC anchoring
         self.critic = None  # TwohotCritic      — twohot symlog value function
@@ -354,7 +354,7 @@ class DreamerVLARunner(BaseRunner):
         if isinstance(obs_embedding, torch.Tensor):
             if obs_embedding.ndim != 3:
                 raise ValueError(
-                    "Dreamer Rynn-hidden actor batch expects obs_embedding "
+                    "follow-up flat actor batch expects obs_embedding "
                     f"[B,T,D], got {tuple(obs_embedding.shape)}"
                 )
             return {

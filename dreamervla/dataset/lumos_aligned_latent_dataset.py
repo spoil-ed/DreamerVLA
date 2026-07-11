@@ -1,7 +1,7 @@
-"""LUMOS-aligned latent W-frame classifier dataset.
+"""LUMOS-aligned input-token W-frame classifier dataset.
 
 Mirrors ``upstream reward_model/videomae.py::SuccessWindowDataset`` exactly,
-but operates on precomputed token/action-hidden sidecar HDF5 instead of raw
+but operates on canonical OpenVLA-OFT input-token sidecar HDF5 instead of raw
 video frames. The positive/negative protocol is intentionally
 identical so that downstream eval thresholds (``upstream reward_model/find_thre.py``,
 ``LUMOS/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
@@ -55,7 +55,7 @@ from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 class _DemoRecord:
     """One episode's frozen latent + label metadata."""
 
-    obs: np.ndarray  # [T, L] float16, the real RynnVLA obs_embedding
+    obs: np.ndarray  # [T, 256, 4096] float16 input_token_embedding
     proprio: np.ndarray | None  # [T, P] float32 raw proprio, optional
     lang_emb: np.ndarray | None  # [D] float32 episode-level language embedding, optional
     finish_step: int  # 1-based step where dones first fires (clamped to T)
@@ -124,7 +124,6 @@ def _load_demo(
         # keep fp16 in memory to halve footprint; cast at __getitem__.
         obs = np.asarray(node[...], dtype=np.float16)
     T = int(obs.shape[0])
-    obs = obs.reshape(T, -1)
 
     with h5py.File(str(raw_p), "r") as fr:
         grp = fr[demo_key]
@@ -482,13 +481,13 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         return torch.from_numpy(np.ascontiguousarray(win)).float()
 
     def _pool_window(self, env_window: np.ndarray) -> np.ndarray:
-        """Aggregate a ``[W*K, L]`` env-step window into a ``[W, L]`` classifier window.
+        """Aggregate ``[W*K,...]`` env steps while preserving token-grid axes.
 
         If ``self.K == 1`` this is a no-op (env-step / action granularity).
         """
         if self.K == 1:
             return env_window
-        reshaped = env_window.reshape(self.W, self.K, env_window.shape[-1])
+        reshaped = env_window.reshape(self.W, self.K, *env_window.shape[1:])
         if self.chunk_pool == "last":
             return reshaped[:, -1]
         if self.chunk_pool == "first":
@@ -517,7 +516,7 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
     def collate_fn(
         batch: list[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]],
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
-        xs = torch.stack([b[0] for b in batch])  # [B, W, L]
+        xs = torch.stack([b[0] for b in batch])  # [B, W, 256, 4096]
         ys = torch.tensor([b[1] for b in batch], dtype=torch.long)
         if len(batch[0]) < 3:
             return xs, ys
@@ -680,7 +679,7 @@ class LumosAlignedLatentValDataset(Dataset):
         rec = self._demos[slot.demo_idx]
         env_window = rec.obs[slot.end_idx - self.window_env : slot.end_idx]
         if self.K > 1:
-            reshaped = env_window.reshape(self.W, self.K, env_window.shape[-1])
+            reshaped = env_window.reshape(self.W, self.K, *env_window.shape[1:])
             if self.chunk_pool == "last":
                 window = reshaped[:, -1]
             elif self.chunk_pool == "first":
@@ -724,7 +723,7 @@ class LumosAlignedLatentValDataset(Dataset):
     # ---- episode-level hook for LUMOS predict_success eval --------------
 
     def trajectories(self) -> Iterator[tuple[np.ndarray, bool, int, str, dict[str, np.ndarray]]]:
-        """Yield ``(obs[T,L], complete, finish_step, eid, extra)`` per demo.
+        """Yield ``(obs[T,256,4096], complete, finish_step, eid, extra)`` per demo.
 
         Keep obs in its cached dtype. Token-grid sidecars are large, so
         episode-level eval casts only the current inference batch to fp32.

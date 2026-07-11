@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import h5py
 from omegaconf import OmegaConf
 
 from dreamervla.diagnostics import experiment_stage_checks
@@ -133,11 +134,13 @@ def test_classifier_and_world_model_train_scripts_expose_resume_and_periodic_ckp
     assert "wm_step_*.ckpt" in world_model_text
 
 
-def test_pretokenize_quotes_multi_gpu_hydra_value() -> None:
+def test_input_token_preprocess_uses_configured_torchrun_world_size() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "preprocess" / "20_pretokenize_dataset.sh"
+    script = root / "scripts" / "preprocess" / "35_oft_input_tokens.sh"
     text = script.read_text(encoding="utf-8")
-    assert 'gpu_devices="\'${GPUS}\'"' in text
+    assert '--nproc-per-node="${OFT_INPUT_TOKEN_GPUS}"' in text
+    assert "dreamervla.preprocess.preprocess_oft_input_tokens" in text
+    assert "obs_hidden_source=input_token_embedding" in text
 
 
 def test_cotrain_world_model_ddp_tracks_unused_parameters() -> None:
@@ -181,8 +184,51 @@ def test_classifier_check_treats_missing_failure_dirs_as_optional(
     success_hidden = tmp_path / "success_hidden"
     success_raw.mkdir()
     success_hidden.mkdir()
-    (success_raw / "demo.hdf5").write_bytes(b"stub")
-    (success_hidden / "demo.hdf5").write_bytes(b"stub")
+    with h5py.File(success_raw / "demo.hdf5", "w") as handle:
+        handle.attrs["complete"] = True
+        demo = handle.create_group("data/demo_0")
+        demo.create_dataset("actions", shape=(1, 7), dtype="float32")
+        demo.create_dataset("rewards", shape=(1,), dtype="float32")
+        demo.create_dataset("dones", shape=(1,), dtype="uint8")
+        demo.create_dataset("robot_states", shape=(1, 9), dtype="float32")
+        demo.create_dataset("states", shape=(1, 5), dtype="float32")
+        obs = demo.create_group("obs")
+        obs.create_dataset("agentview_rgb", shape=(1, 1, 1, 3), dtype="uint8")
+        obs.create_dataset("eye_in_hand_rgb", shape=(1, 1, 1, 3), dtype="uint8")
+        obs.create_dataset("ee_pos", shape=(1, 3), dtype="float32")
+        obs.create_dataset("ee_ori", shape=(1, 3), dtype="float32")
+        obs.create_dataset("ee_states", shape=(1, 6), dtype="float32")
+        obs.create_dataset("gripper_states", shape=(1, 2), dtype="float32")
+        obs.create_dataset("joint_states", shape=(1, 7), dtype="float32")
+    with h5py.File(success_hidden / "demo.hdf5", "w") as handle:
+        handle.attrs["complete"] = True
+        handle.create_dataset(
+            "data/demo_0/obs_embedding",
+            shape=(1, 256, 4096),
+            dtype="float16",
+            fillvalue=0,
+        )
+    (success_hidden / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "action_head_type": "oft_discrete_token",
+                "obs_hidden_source": "input_token_embedding",
+                "hidden_key": "obs_embedding",
+                "token_count": 256,
+                "token_dim": 4096,
+                "hidden_dim": 1_048_576,
+                "obs_embedding_shape": [256, 4096],
+                "hidden_storage_format": "tokenized",
+                "num_images_in_input": 1,
+                "patches_per_image": 256,
+                "history": 1,
+                "include_state": False,
+                "sidecar_schema_version": 1,
+                "required_demo_datasets": ["obs_embedding"],
+            }
+        ),
+        encoding="utf-8",
+    )
     failure_raw = tmp_path / "missing_failures"
     failure_hidden = tmp_path / "missing_failure_hidden"
     cfg = OmegaConf.create(

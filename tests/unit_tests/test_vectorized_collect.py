@@ -119,8 +119,8 @@ def fake_infer(preps):
     out = []
     for i in range(len(preps)):
         action_chunk = [np.full(7, float(i), np.float64)]  # one action per slot
-        flat_hidden = torch.zeros(229376, dtype=torch.float16)
-        out.append((action_chunk, flat_hidden))
+        input_tokens = torch.zeros(256, 4096, dtype=torch.float16)
+        out.append((action_chunk, input_tokens))
     return out
 
 
@@ -308,7 +308,9 @@ def test_records_init_state_index_from_reset_record():
     assert captured["steps"][0]["init_state_index"] == 107
 
 
-def test_rotating_writer_slices_demos_through_vectorized_loop(tmp_path):
+def test_rotating_writer_slices_demos_through_vectorized_loop(
+    tmp_path, input_token_preprocess_config
+):
     """collect_vectorized only passes preprocess_config/data_attrs on the first demo;
     the rotating writer must re-emit them per shard so every sliced shard is readable."""
     import h5py
@@ -325,7 +327,7 @@ def test_rotating_writer_slices_demos_through_vectorized_loop(tmp_path):
     )
     n = collect_vectorized(
         vec, exts, fake_infer, writer, work_list, episode_horizon=5,
-        preprocess_config={"hidden_key": "obs_embedding"},
+        preprocess_config=input_token_preprocess_config,
         data_attrs={"task_suite_name": "libero_goal", "env_name": "x"},
     )
     writer.close()
@@ -353,7 +355,7 @@ def test_executes_action_chunk_open_loop_before_using_next_chunk():
         return [
             (
                 [np.array([base + j, 0, 0, 0, 0, 0, 0.9], np.float64) for j in range(3)],
-                torch.zeros(229376, dtype=torch.float16),
+                torch.zeros(256, 4096, dtype=torch.float16),
             )
             for _ in preps
         ]

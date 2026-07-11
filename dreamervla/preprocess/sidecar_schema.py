@@ -1,123 +1,312 @@
-"""Shared schema helpers for preprocessing sidecar HDF5 artifacts."""
+"""Exact schema for the only supported OpenVLA-OFT observation sidecar."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
+import h5py
+
 DEFAULT_HIDDEN_KEY = "obs_embedding"
-ACTION_HIDDEN_KEY = "action_hidden_states"
-ACTOR_SEQUENCE_KEYS = {
-    "hidden": "actor_hidden_states",
-    "input_ids": "actor_input_ids",
-    "attention_mask": "actor_attention_mask",
-    "seq_lens": "actor_seq_lens",
-}
 REQUIRED_DEMO_DATASETS_KEY = "required_demo_datasets"
 SIDECAR_SCHEMA_VERSION = 1
 
+INPUT_TOKEN_SOURCE = "input_token_embedding"
+INPUT_TOKEN_COUNT = 256
+INPUT_TOKEN_DIM = 4096
+INPUT_TOKEN_HIDDEN_DIM = INPUT_TOKEN_COUNT * INPUT_TOKEN_DIM
+INPUT_TOKEN_SHAPE = (INPUT_TOKEN_COUNT, INPUT_TOKEN_DIM)
+INPUT_TOKEN_STORAGE_FORMAT = "tokenized"
+INPUT_TOKEN_ACTION_HEAD = "oft_discrete_token"
+REMOVED_SIDECAR_FIELDS = (
+    "save_action_hidden",
+    "action_hidden_key",
+    "action_hidden_dim",
+    "action_hidden_sequence_dim",
+    "action_trigger_token_id",
+    "save_hidden_token",
+    "hidden_token_key",
+    "save_actor_sequence",
+    "actor_sequence_keys",
+    "actor_hidden_dim",
+    "actor_sequence_dim",
+)
+ALLOWED_DEMO_DATASETS = {DEFAULT_HIDDEN_KEY, "lang_emb"}
+REFERENCE_DEMO_DATASETS = ("actions", "rewards", "dones", "robot_states", "states")
+REFERENCE_OBS_DATASETS = (
+    "agentview_rgb",
+    "eye_in_hand_rgb",
+    "ee_pos",
+    "ee_ori",
+    "ee_states",
+    "gripper_states",
+    "joint_states",
+)
 
-def _unique_nonempty(values: Sequence[str]) -> list[str]:
-    result: list[str] = []
-    for value in values:
-        if not isinstance(value, str) or not value:
-            raise ValueError("sidecar dataset keys must be non-empty strings")
-        if value not in result:
-            result.append(value)
-    return result
 
-
-def actor_sequence_keys_from_config(config: Mapping[str, Any]) -> dict[str, str]:
-    """Return actor sequence dataset keys declared by a sidecar config.
-
-    Older configs did not record ``actor_sequence_keys``.  In that case the
-    historical dataset names remain the compatibility default.
-    """
-
-    configured = config.get("actor_sequence_keys")
-    if configured is None:
-        return dict(ACTOR_SEQUENCE_KEYS)
-    if not isinstance(configured, Mapping):
-        raise ValueError("actor_sequence_keys must be an object")
-    keys = dict(ACTOR_SEQUENCE_KEYS)
-    for name in keys:
-        value = configured.get(name)
-        if value is not None:
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"actor_sequence_keys.{name} must be a non-empty string")
-            keys[name] = value
-    return keys
-
-
-def required_demo_datasets(
-    *,
-    hidden_key: str = DEFAULT_HIDDEN_KEY,
-    save_action_hidden: bool = False,
-    save_actor_sequence: bool = False,
-    action_hidden_key: str = ACTION_HIDDEN_KEY,
-    actor_sequence_keys: Mapping[str, str] | None = None,
-    extra: Sequence[str] = (),
-) -> list[str]:
-    """Build the per-demo datasets expected in one generated sidecar."""
-
-    keys = [hidden_key]
-    if save_action_hidden:
-        keys.append(action_hidden_key)
-    if save_actor_sequence:
-        actor_keys = dict(ACTOR_SEQUENCE_KEYS)
-        if actor_sequence_keys is not None:
-            actor_keys.update(actor_sequence_keys)
-        keys.extend(
-            [
-                actor_keys["hidden"],
-                actor_keys["input_ids"],
-                actor_keys["attention_mask"],
-                actor_keys["seq_lens"],
-            ]
+def _input_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
+    expected = {
+        "obs_hidden_source": INPUT_TOKEN_SOURCE,
+        "action_head_type": INPUT_TOKEN_ACTION_HEAD,
+        "hidden_key": DEFAULT_HIDDEN_KEY,
+        "token_count": INPUT_TOKEN_COUNT,
+        "token_dim": INPUT_TOKEN_DIM,
+        "hidden_dim": INPUT_TOKEN_HIDDEN_DIM,
+        "hidden_storage_format": INPUT_TOKEN_STORAGE_FORMAT,
+        "num_images_in_input": 1,
+        "patches_per_image": INPUT_TOKEN_COUNT,
+        "history": 1,
+        "include_state": False,
+        "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
+        REQUIRED_DEMO_DATASETS_KEY: [DEFAULT_HIDDEN_KEY],
+    }
+    errors: list[str] = []
+    for key, wanted in expected.items():
+        got = config.get(key)
+        if got != wanted:
+            errors.append(f"{key}={got!r}, expected {wanted!r}")
+    shape = config.get("obs_embedding_shape")
+    if not isinstance(shape, (list, tuple)) or list(shape) != list(INPUT_TOKEN_SHAPE):
+        errors.append(
+            f"obs_embedding_shape={shape!r}, expected {list(INPUT_TOKEN_SHAPE)!r}"
         )
-    keys.extend(extra)
-    return _unique_nonempty(keys)
+    present_removed = [key for key in REMOVED_SIDECAR_FIELDS if key in config]
+    if present_removed:
+        errors.append(f"removed sidecar fields are present: {present_removed!r}")
+    return errors
+
+
+def validate_input_token_array_shape(
+    shape: Sequence[int],
+    *,
+    context: str,
+) -> None:
+    """Reject every external observation shape except ``[...,256,4096]``."""
+
+    trailing = tuple(int(dim) for dim in shape[-2:]) if len(shape) >= 2 else tuple(shape)
+    if trailing != INPUT_TOKEN_SHAPE:
+        raise ValueError(
+            f"{context} must use {INPUT_TOKEN_SOURCE} trailing shape "
+            f"{INPUT_TOKEN_SHAPE}, got {tuple(int(dim) for dim in shape)}"
+        )
+
+
+def validate_input_token_preprocess_config(
+    config: Mapping[str, Any],
+    *,
+    context: str,
+) -> None:
+    """Validate metadata without aliases, inferred defaults, or conversions."""
+
+    errors = _input_token_contract_errors(config)
+    if errors:
+        raise ValueError(
+            f"{context} does not satisfy the only supported observation contract:\n  - "
+            + "\n  - ".join(errors)
+        )
+
+
+def validate_input_token_sidecar_dir(
+    hidden_dir: str | Path,
+    *,
+    expected_filenames: Sequence[str] | None = None,
+    reference_dir: str | Path | None = None,
+    require_reference_complete: bool = False,
+    require_sparse_rewards: bool = False,
+) -> dict[str, Any]:
+    """Validate metadata and the complete reward/sidecar corpus before replay."""
+
+    directory = Path(hidden_dir).expanduser().resolve()
+    config_path = directory / "preprocess_config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"input-token sidecar is missing preprocess_config.json: {config_path}"
+        )
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError(f"{config_path} must contain a JSON object")
+    validate_input_token_preprocess_config(config, context=str(config_path))
+
+    paths = sorted(directory.glob("*.hdf5"))
+    if not paths:
+        raise FileNotFoundError(f"no input-token HDF5 shards under {directory}")
+
+    actual_names = {path.name for path in paths}
+    if expected_filenames is not None:
+        expected_names = {str(name) for name in expected_filenames}
+        if actual_names != expected_names:
+            raise ValueError(
+                "input-token sidecar file set mismatch: "
+                f"missing={sorted(expected_names - actual_names)!r}, "
+                f"extra={sorted(actual_names - expected_names)!r}"
+            )
+
+    reference = Path(reference_dir).expanduser().resolve() if reference_dir else None
+    if reference is not None:
+        reference_paths = sorted(reference.glob("*.hdf5"))
+        reference_names = {path.name for path in reference_paths}
+        if actual_names != reference_names:
+            raise ValueError(
+                "reward/hidden file set mismatch: "
+                f"missing_hidden={sorted(reference_names - actual_names)!r}, "
+                f"extra_hidden={sorted(actual_names - reference_names)!r}"
+            )
+
+    for path in paths:
+        with h5py.File(path, "r") as handle:
+            removed_attrs = [key for key in REMOVED_SIDECAR_FIELDS if key in handle.attrs]
+            if removed_attrs:
+                raise ValueError(
+                    f"{path} contains removed sidecar attributes: {removed_attrs!r}"
+                )
+            data = handle.get("data")
+            if not isinstance(data, h5py.Group) or not data.keys():
+                raise ValueError(f"{path} is missing a non-empty data group")
+            reference_handle = (
+                h5py.File(reference / path.name, "r") if reference is not None else None
+            )
+            try:
+                reference_data = (
+                    reference_handle.get("data") if reference_handle is not None else None
+                )
+                if reference_handle is not None and (
+                    not isinstance(reference_data, h5py.Group) or not reference_data.keys()
+                ):
+                    raise ValueError(
+                        f"{reference / path.name} is missing a non-empty data group"
+                    )
+                if isinstance(reference_data, h5py.Group):
+                    hidden_keys = {str(key) for key in data.keys()}
+                    reference_keys = {str(key) for key in reference_data.keys()}
+                    if hidden_keys != reference_keys:
+                        raise ValueError(
+                            f"{path.name} reward/hidden demo set mismatch: "
+                            f"missing_hidden={sorted(reference_keys - hidden_keys)!r}, "
+                            f"extra_hidden={sorted(hidden_keys - reference_keys)!r}"
+                        )
+
+                file_complete = bool(handle.attrs.get("complete", False))
+                for demo_key, demo in data.items():
+                    if not isinstance(demo, h5py.Group) or DEFAULT_HIDDEN_KEY not in demo:
+                        raise ValueError(
+                            f"{path}:data/{demo_key} is missing {DEFAULT_HIDDEN_KEY}"
+                        )
+                    unexpected = sorted(set(demo.keys()) - ALLOWED_DEMO_DATASETS)
+                    if unexpected:
+                        raise ValueError(
+                            f"{path}:data/{demo_key} contains unexpected datasets: "
+                            f"{unexpected!r}"
+                        )
+                    if not file_complete and not bool(demo.attrs.get("complete", False)):
+                        raise ValueError(
+                            f"{path}:data/{demo_key} is not marked complete"
+                        )
+                    dataset = demo[DEFAULT_HIDDEN_KEY]
+                    if not isinstance(dataset, h5py.Dataset) or dataset.ndim != 3:
+                        raise ValueError(
+                            f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY} must be "
+                            f"[T,{INPUT_TOKEN_COUNT},{INPUT_TOKEN_DIM}], got "
+                            f"{getattr(dataset, 'shape', None)!r}"
+                        )
+                    validate_input_token_array_shape(
+                        dataset.shape,
+                        context=f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY}",
+                    )
+                    hidden_length = int(dataset.shape[0])
+                    if hidden_length <= 0:
+                        raise ValueError(
+                            f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY} has zero frames"
+                        )
+                    if isinstance(reference_data, h5py.Group):
+                        reference_demo = reference_data[demo_key]
+                        if not isinstance(reference_demo, h5py.Group):
+                            raise ValueError(
+                                f"{reference / path.name}:data/{demo_key} must be a group"
+                            )
+                        if require_reference_complete and not (
+                            bool(reference_handle.attrs.get("complete", False))
+                            or bool(reference_demo.attrs.get("complete", False))
+                        ):
+                            raise ValueError(
+                                f"{reference / path.name}:data/{demo_key} reward demo "
+                                "is not marked complete"
+                            )
+                        actions = reference_demo.get("actions")
+                        if (
+                            not isinstance(actions, h5py.Dataset)
+                            or actions.ndim != 2
+                            or int(actions.shape[-1]) != 7
+                        ):
+                            raise ValueError(
+                                f"{reference / path.name}:data/{demo_key} is missing "
+                                "frame-aligned actions [T,7]"
+                            )
+                        reference_length = int(actions.shape[0])
+                        if reference_length <= 0:
+                            raise ValueError(
+                                f"{reference / path.name}:data/{demo_key}/actions has zero frames"
+                            )
+                        if hidden_length != reference_length:
+                            raise ValueError(
+                                f"{path.name}:data/{demo_key} reward/hidden length mismatch: "
+                                f"reward={reference_length}, hidden={hidden_length}"
+                            )
+                        required_fields = list(REFERENCE_DEMO_DATASETS)
+                        if require_sparse_rewards:
+                            required_fields.append("sparse_rewards")
+                        elif "sparse_rewards" in reference_demo:
+                            required_fields.append("sparse_rewards")
+                        for field in required_fields:
+                            value = reference_demo.get(field)
+                            if not isinstance(value, h5py.Dataset) or value.ndim < 1:
+                                raise ValueError(
+                                    f"{reference / path.name}:data/{demo_key} is missing "
+                                    f"frame-aligned {field}"
+                                )
+                            if int(value.shape[0]) != reference_length:
+                                raise ValueError(
+                                    f"{reference / path.name}:data/{demo_key}/{field} "
+                                    "length mismatch: "
+                                    f"expected={reference_length}, actual={int(value.shape[0])}"
+                                )
+                        obs = reference_demo.get("obs")
+                        if not isinstance(obs, h5py.Group):
+                            raise ValueError(
+                                f"{reference / path.name}:data/{demo_key} is missing obs"
+                            )
+                        for field in REFERENCE_OBS_DATASETS:
+                            value = obs.get(field)
+                            if not isinstance(value, h5py.Dataset) or value.ndim < 1:
+                                raise ValueError(
+                                    f"{reference / path.name}:data/{demo_key}/obs is "
+                                    f"missing frame-aligned {field}"
+                                )
+                            if int(value.shape[0]) != reference_length:
+                                raise ValueError(
+                                    f"{reference / path.name}:data/{demo_key}/obs/{field} "
+                                    "length mismatch: "
+                                    f"expected={reference_length}, actual={int(value.shape[0])}"
+                                )
+            finally:
+                if reference_handle is not None:
+                    reference_handle.close()
+    return config
+
+
+def required_demo_datasets() -> list[str]:
+    """Return the fixed per-demo dataset list for the canonical sidecar."""
+
+    return [DEFAULT_HIDDEN_KEY]
 
 
 def required_demo_datasets_from_config(config: Mapping[str, Any]) -> list[str]:
-    """Return required per-demo datasets from a sidecar config.
+    """Validate the exact metadata contract and return its fixed dataset key."""
 
-    New configs declare ``required_demo_datasets`` explicitly.  For compatibility
-    with older sidecars, fall back to the original flags and key fields.
-    """
-
-    configured = config.get(REQUIRED_DEMO_DATASETS_KEY)
-    if configured is not None:
-        if not isinstance(configured, list):
-            raise ValueError(f"{REQUIRED_DEMO_DATASETS_KEY} must be a list")
-        return _unique_nonempty(configured)
-
-    hidden_key = config.get("hidden_key", DEFAULT_HIDDEN_KEY)
-    if not isinstance(hidden_key, str) or not hidden_key:
-        raise ValueError("hidden_key must be a non-empty string")
-    action_hidden_key = config.get("action_hidden_key", ACTION_HIDDEN_KEY)
-    if not isinstance(action_hidden_key, str) or not action_hidden_key:
-        raise ValueError("action_hidden_key must be a non-empty string")
-    return required_demo_datasets(
-        hidden_key=hidden_key,
-        save_action_hidden=bool(config.get("save_action_hidden", False)),
-        save_actor_sequence=bool(config.get("save_actor_sequence", False)),
-        action_hidden_key=action_hidden_key,
-        actor_sequence_keys=actor_sequence_keys_from_config(config),
+    validate_input_token_preprocess_config(
+        config,
+        context="preprocess_config.json",
     )
-
-
-def annotate_preprocess_config(
-    config: dict[str, Any],
-    *,
-    required: Sequence[str],
-    action_hidden_key: str = ACTION_HIDDEN_KEY,
-    actor_sequence_keys: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    """Add schema metadata to a mutable preprocess config and return it."""
-
-    config["sidecar_schema_version"] = SIDECAR_SCHEMA_VERSION
-    config["action_hidden_key"] = action_hidden_key
-    config["actor_sequence_keys"] = dict(actor_sequence_keys or ACTOR_SEQUENCE_KEYS)
-    config[REQUIRED_DEMO_DATASETS_KEY] = _unique_nonempty(list(required))
-    return config
+    return required_demo_datasets()

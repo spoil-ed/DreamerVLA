@@ -176,7 +176,7 @@ def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:
 
     assert wm.supports_task_conditioning is True
     batch = {
-        "obs_embedding": torch.zeros(2, 4, 8),
+        "obs_embedding": torch.zeros(2, 4, 2, 4),
         "actions": torch.zeros(2, 4, 7),
         "rewards": torch.zeros(2, 4),
         "dones": torch.zeros(2, 4),

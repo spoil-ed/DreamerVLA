@@ -8,6 +8,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
+from dreamervla.config_resolvers import register_dreamervla_resolvers
 
 _REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
 _REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
@@ -21,6 +22,17 @@ def _contains_removed_wm_wording(text: str) -> bool:
         or _REMOVED_COMPACT_WM_ROUTE in lower
         or _REMOVED_DASHED_WM_LABEL in text
     )
+
+
+def _compose_mainline(*overrides: str):
+    register_dreamervla_resolvers()
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    base = [
+        "experiment=openvla_onetraj_libero_cotrain_noray",
+        "task=openvla_onetraj_libero",
+    ]
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        return compose(config_name="train", overrides=[*base, *overrides])
 
 
 def test_validate_cfg_rejects_unknown_logger_backend() -> None:
@@ -46,18 +58,19 @@ def test_validate_cfg_rejects_unknown_actor_update_route() -> None:
 
 
 def test_validate_cfg_rejects_oft_sidecar_mismatch() -> None:
-    cfg = OmegaConf.create(
-        {
-            "dataset": {"hidden_dir": "/tmp/wrong-sidecar"},
-            "task": {
-                "openvla_oft": {
-                    "action_hidden_dir": "/tmp/canonical-sidecar",
-                }
-            },
-        }
-    )
+    cfg = _compose_mainline()
+    OmegaConf.update(cfg, "dataset.hidden_dir", "/tmp/wrong-sidecar", force_add=True)
 
     with pytest.raises(ValueError, match="dataset.hidden_dir"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize("policy_mode", ["auto", "l1"])
+def test_validate_cfg_rejects_non_discrete_mainline_policy_mode(policy_mode: str) -> None:
+    cfg = _compose_mainline()
+    OmegaConf.update(cfg, "collect.policy_mode", policy_mode, force_add=True)
+
+    with pytest.raises(ValueError, match="collect.policy_mode must be 'discrete'"):
         validate_cfg(cfg)
 
 
@@ -191,64 +204,36 @@ def test_validate_cfg_can_require_existing_dataset_paths(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("task_name", "suite_time_horizon", "legacy_chunk_size", "legacy_tokens", "legacy_obs_dim"),
-    [
-        ("libero_goal", 5, 5, 35, 35840),
-        ("libero_object", 5, 5, 35, 35840),
-        ("libero_spatial", 10, 10, 70, 71680),
-        ("libero_10", 10, 10, 70, 71680),
-    ],
+    "task_name",
+    ["libero_goal", "libero_object", "libero_spatial", "libero_10"],
 )
-def test_task_latent_specs_are_explicit_model_derived_values(
-    task_name: str,
-    suite_time_horizon: int,
-    legacy_chunk_size: int,
-    legacy_tokens: int,
-    legacy_obs_dim: int,
-) -> None:
+def test_task_latent_specs_are_canonical_input_tokens(task_name: str) -> None:
+    register_dreamervla_resolvers()
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train", overrides=[f"task={task_name}"])
 
     assert cfg.task.action_dim == 7
-    assert cfg.task.time_horizon == suite_time_horizon
-
-    legacy = cfg.task.legacy_action_hidden
-    assert legacy.latent_stage == "query_after"
-    assert legacy.token_dim == 1024
-    assert legacy.chunk_size == legacy_chunk_size
-    assert legacy.token_count == legacy_tokens
-    assert legacy.wm_obs_dim == legacy_obs_dim
-    assert legacy.token_count == legacy.chunk_size * cfg.task.action_dim
-    assert legacy.wm_obs_dim == legacy.token_count * legacy.token_dim
-
-    input_tokens = cfg.task.legacy_input_tokens
-    assert input_tokens.latent_stage == "query_before"
-    assert input_tokens.chunk_size == legacy.chunk_size
-    assert input_tokens.token_count == 2048
-    assert input_tokens.token_dim == 4096
-    assert input_tokens.wm_obs_dim == 2048 * 4096
-
-    oft = cfg.task.openvla_oft
-    assert oft.latent_stage == "query_after"
-    assert oft.chunk_size == oft.time_horizon == 8
-    assert oft.token_count == oft.chunk_size * cfg.task.action_dim
-    assert oft.wm_obs_dim == oft.token_count * oft.token_dim
+    assert cfg.task.time_horizon == 8
+    assert "hidden_token_dir" not in cfg.task
+    assert "hidden_token_tokens" not in cfg.task
+    assert "hidden_token_specs" not in cfg.task
 
     oft_input = cfg.task.openvla_oft.input_tokens
     assert oft_input.latent_stage == "query_before"
-    assert oft_input.token_count == 512
+    assert oft_input.expected_obs_hidden_source == "input_token_embedding"
+    assert oft_input.token_count == 256
     assert oft_input.token_dim == 4096
-    assert oft_input.wm_obs_dim == 512 * 4096
+    assert oft_input.wm_obs_dim == 256 * 4096
 
 
-def test_validate_cfg_rejects_inconsistent_task_latent_spec() -> None:
+def test_validate_cfg_rejects_removed_task_latent_spec() -> None:
     cfg = OmegaConf.create(
         {
             "task": {
                 "action_dim": 7,
-                "legacy_action_hidden": {
+                "hidden_token_tokens": {
                     "wm_obs_dim": 35840,
                     "token_count": 70,
                     "token_dim": 1024,
@@ -258,28 +243,15 @@ def test_validate_cfg_rejects_inconsistent_task_latent_spec() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="task.legacy_action_hidden"):
+    with pytest.raises(ValueError, match="removed action-query/hidden-token"):
         validate_cfg(cfg)
 
 
-def test_validate_cfg_rejects_inconsistent_oft_input_token_patch_count() -> None:
-    cfg = OmegaConf.create(
-        {
-            "task": {
-                "openvla_oft": {
-                    "num_images_in_input": 1,
-                    "input_tokens": {
-                        "wm_obs_dim": 2097152,
-                        "token_count": 512,
-                        "token_dim": 4096,
-                        "patches_per_image": 256,
-                    },
-                }
-            }
-        }
-    )
+def test_validate_cfg_rejects_noncanonical_oft_input_token_patch_count() -> None:
+    cfg = _compose_mainline()
+    cfg.task.openvla_oft.input_tokens.patches_per_image = 128
 
-    with pytest.raises(ValueError, match="num_images_in_input \\* patches_per_image"):
+    with pytest.raises(ValueError, match="patches_per_image must be 256"):
         validate_cfg(cfg)
 
 
@@ -299,26 +271,8 @@ def test_validate_cfg_rejects_inconsistent_component_latent_tuple() -> None:
 
 
 def test_validate_cfg_rejects_world_model_latent_stage_mismatch() -> None:
-    cfg = OmegaConf.create(
-        {
-            "task": {
-                "legacy_action_hidden": {
-                    "wm_obs_dim": 35840,
-                    "token_count": 35,
-                    "token_dim": 1024,
-                    "chunk_size": 5,
-                    "latent_stage": "query_after",
-                },
-            },
-            "world_model": {
-                "obs_dim": 35840,
-                "token_count": 35,
-                "token_dim": 1024,
-                "chunk_size": 5,
-                "latent_stage": "query_before",
-            },
-        }
-    )
+    cfg = _compose_mainline()
+    cfg.world_model.latent_stage = "query_after"
 
     with pytest.raises(ValueError, match="latent_stage"):
         validate_cfg(cfg)
@@ -329,8 +283,8 @@ def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
         {
             "world_model": {
                 "_target_": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
-                "obs_dim": 229376,
-                "token_count": 56,
+                "obs_dim": 1_048_576,
+                "token_count": 256,
                 "token_dim": 4096,
                 "action_emb_dim": 10,
                 "num_action_repeat": 1,
@@ -384,7 +338,7 @@ def test_classifier_config_comments_use_role_based_wm_wording() -> None:
     assert offenders == {}
 
 
-def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:
+def test_openvla_coldstart_task_comment_documents_input_token_source() -> None:
     config_path = (
         Path(__file__).resolve().parents[2]
         / "configs"
@@ -396,11 +350,8 @@ def test_openvla_coldstart_task_comment_uses_role_based_wm_alias() -> None:
         if line.lstrip().startswith("#")
     )
 
-    assert "experiment=oft_discrete_token_world_model_chunk" in comment_text
-    assert (
-        f"experiment=oft_discrete_token_world_model_{_REMOVED_COMPACT_WM_ROUTE}_chunk"
-        not in comment_text
-    )
+    assert "obs_hidden_source=input_token_embedding" in comment_text
+    assert "obs_hidden_source=hidden_token" not in comment_text
 
 
 def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> None:
@@ -408,8 +359,8 @@ def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> No
         {
             "world_model": {
                 "_target_": "dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel",
-                "obs_dim": 229376,
-                "token_count": 56,
+                "obs_dim": 1_048_576,
+                "token_count": 256,
                 "token_dim": 4096,
                 "action_emb_dim": 10,
                 "num_action_repeat": 1,

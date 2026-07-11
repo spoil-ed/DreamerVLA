@@ -6,32 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_spec_superpowers_plans_are_marked_historical_reference() -> None:
-    plan_dir = ROOT / "spec" / "superpowers" / "plans"
-    plans = sorted(plan_dir.glob("*.md"))
-    assert plans
-
-    readme = ROOT / "spec" / "superpowers" / "README.md"
-    assert readme.exists()
-    text = readme.read_text(encoding="utf-8")
-    lowered = text.lower()
-    assert "historical/reference" in lowered
-    assert "not current architecture source of truth" in lowered
-
+def test_spec_index_points_only_to_release_architecture_docs() -> None:
     spec_index = (ROOT / "spec" / "README.md").read_text(encoding="utf-8")
-    assert "superpowers/README.md" in spec_index
 
-
-def test_spec_prompt_file_is_marked_reference_only() -> None:
-    prompt = ROOT / "spec" / "98_prompt.md"
-    text = prompt.read_text(encoding="utf-8")
-    lowered = text.lower()
-    assert "historical/reference prompt context" in lowered
-    assert "not current architecture source of truth" in lowered
-
-    spec_index = (ROOT / "spec" / "README.md").read_text(encoding="utf-8")
-    assert "98_prompt.md" in spec_index
-    assert "reference-only" in spec_index.lower()
+    assert "superpowers" not in spec_index
+    assert "98_prompt" not in spec_index
 
 
 def test_replay_buffer_metric_namespace_is_documented() -> None:

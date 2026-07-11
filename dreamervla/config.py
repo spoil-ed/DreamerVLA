@@ -9,6 +9,13 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.models.registry import validate_model_type
+from dreamervla.preprocess.sidecar_schema import (
+    INPUT_TOKEN_ACTION_HEAD,
+    INPUT_TOKEN_COUNT,
+    INPUT_TOKEN_DIM,
+    INPUT_TOKEN_HIDDEN_DIM,
+    INPUT_TOKEN_SOURCE,
+)
 from dreamervla.utils.metric_logger import MetricLogger
 
 
@@ -24,6 +31,8 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_algorithm_routes(cfg)
     _validate_training_batch(cfg, world_size=_resolve_world_size(world_size))
     _validate_resume_paths(cfg)
+    _validate_removed_observation_routes(cfg)
+    _validate_mainline_input_token_contract(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
     _validate_latent_dimension_contracts(cfg)
@@ -102,45 +111,198 @@ def _validate_resume_paths(cfg: DictConfig) -> None:
             raise ValueError(f"{key} does not exist: {value}")
 
 
+def _validate_removed_observation_routes(cfg: DictConfig) -> None:
+    """Reject configuration surfaces that could revive the 56x1024 route."""
+
+    removed_sections = (
+        "task.hidden_token_dir",
+        "task.hidden_token_tokens",
+        "task.hidden_token_specs",
+        "task.openvla_oft." + "hidden_token",
+        "task.openvla_oft.action_hidden_dir",
+        "task.openvla_oft." + "hidden_token_dir",
+        "latent_type",
+    )
+    present = [
+        key
+        for key in removed_sections
+        if OmegaConf.select(cfg, key, default=None) is not None
+    ]
+    if present:
+        raise ValueError(
+            "removed action-query/hidden-token configuration is not supported: "
+            + ", ".join(present)
+        )
+
+    source_paths = (
+        "dataset.expected_obs_hidden_source",
+        "env.obs_hidden_source",
+        "eval.obs_hidden_source",
+        "collect.oft_latent_spec.expected_obs_hidden_source",
+        "task.openvla_oft.expected_obs_hidden_source",
+        "task.openvla_oft.input_tokens.expected_obs_hidden_source",
+    )
+    for key in source_paths:
+        value = _select_str(cfg, key)
+        if value in {"action_query", "hidden_token"}:
+            raise ValueError(
+                f"{key}={value!r} is removed; use {INPUT_TOKEN_SOURCE!r}"
+            )
+
+    action_head_paths = (
+        "dataset.expected_action_head_type",
+        "env.action_head_type",
+        "encoder.action_head_type",
+        "task.openvla_oft.expected_action_head_type",
+        "task.openvla_oft.input_tokens.expected_action_head_type",
+    )
+    for key in action_head_paths:
+        if _select_str(cfg, key) == "action_query":
+            raise ValueError(
+                f"{key}='action_query' is removed; use {INPUT_TOKEN_ACTION_HEAD!r}"
+            )
+
+    target_paths = (
+        "encoder._target_",
+        "policy._target_",
+        "task.openvla_oft.actor_target",
+        "ray_components.policy.target",
+        "actor.policy_cfg.target",
+        "actor.policy_cfg._target_",
+    )
+    removed_target_fragments = (
+        "RynnVLA",
+        "LatentToHiddenTokenActor",
+        "OpenVLADiscreteTokenActor",
+        "VLAActionHeadActor",
+    )
+    for key in target_paths:
+        target = _select_str(cfg, key)
+        if target and any(fragment in target for fragment in removed_target_fragments):
+            raise ValueError(f"{key} points to removed observation interface: {target}")
+
+    for key in (
+        "world_model",
+        "classifier",
+        "ray_components.world_model.kwargs",
+        "ray_components.classifier.kwargs",
+        "learner.model_cfg.world_model.kwargs",
+        "learner.model_cfg.classifier.kwargs",
+        "inference.cfg.world_model.kwargs",
+    ):
+        token_count = _select_int(cfg, f"{key}.token_count")
+        token_dim = _select_int(cfg, f"{key}.token_dim")
+        if token_count == 56 and token_dim == 1024:
+            raise ValueError(
+                f"{key} exposes the removed 56x1024 observation interface"
+            )
+
+
+def _validate_mainline_input_token_contract(cfg: DictConfig) -> None:
+    """Pin every official OpenVLA route to one external observation schema."""
+
+    if OmegaConf.select(cfg, "task.openvla_oft", default=None) is None:
+        return
+
+    exact_values: dict[str, Any] = {
+        "task.openvla_oft.expected_action_head_type": INPUT_TOKEN_ACTION_HEAD,
+        "task.openvla_oft.expected_obs_hidden_source": INPUT_TOKEN_SOURCE,
+        "task.openvla_oft.expected_history": 1,
+        "task.openvla_oft.expected_include_state": False,
+        "task.openvla_oft.num_images_in_input": 1,
+        "task.openvla_oft.use_wrist_image": False,
+        "task.openvla_oft.use_proprio": False,
+        "task.openvla_oft.use_l1_regression": False,
+        "task.openvla_oft.input_tokens.expected_action_head_type": INPUT_TOKEN_ACTION_HEAD,
+        "task.openvla_oft.input_tokens.expected_obs_hidden_source": INPUT_TOKEN_SOURCE,
+        "task.openvla_oft.input_tokens.expected_history": 1,
+        "task.openvla_oft.input_tokens.expected_include_state": False,
+        "task.openvla_oft.input_tokens.num_images_in_input": 1,
+        "task.openvla_oft.input_tokens.patches_per_image": INPUT_TOKEN_COUNT,
+        "task.openvla_oft.input_tokens.token_count": INPUT_TOKEN_COUNT,
+        "task.openvla_oft.input_tokens.token_dim": INPUT_TOKEN_DIM,
+        "task.openvla_oft.input_tokens.wm_obs_dim": INPUT_TOKEN_HIDDEN_DIM,
+    }
+    for key, expected in exact_values.items():
+        got = OmegaConf.select(cfg, key, default=None)
+        if got != expected:
+            raise ValueError(f"{key} must be {expected!r}, got {got!r}")
+
+    input_token_dir = _select_str(cfg, "task.openvla_oft.input_token_dir")
+    if input_token_dir is None or "input_token_embedding" not in input_token_dir:
+        raise ValueError(
+            "task.openvla_oft.input_token_dir must name the "
+            "input_token_embedding sidecar"
+        )
+
+    component_specs = (
+        ("world_model", "obs_dim"),
+        ("classifier", None),
+        ("ray_components.world_model.kwargs", "obs_dim"),
+        ("ray_components.classifier.kwargs", None),
+        ("learner.model_cfg.world_model.kwargs", "obs_dim"),
+        ("learner.model_cfg.classifier.kwargs", None),
+        ("inference.cfg.world_model.kwargs", "obs_dim"),
+    )
+    for key, obs_dim_field in component_specs:
+        if OmegaConf.select(cfg, key, default=None) is None:
+            continue
+        token_count = _select_int(cfg, f"{key}.token_count")
+        token_dim = _select_int(cfg, f"{key}.token_dim")
+        if token_count is not None and token_count != INPUT_TOKEN_COUNT:
+            raise ValueError(
+                f"{key}.token_count must be {INPUT_TOKEN_COUNT}, got {token_count}"
+            )
+        if token_dim is not None and token_dim != INPUT_TOKEN_DIM:
+            raise ValueError(
+                f"{key}.token_dim must be {INPUT_TOKEN_DIM}, got {token_dim}"
+            )
+        if obs_dim_field is not None:
+            obs_dim = _select_int(cfg, f"{key}.{obs_dim_field}")
+            if obs_dim is not None and obs_dim != INPUT_TOKEN_HIDDEN_DIM:
+                raise ValueError(
+                    f"{key}.{obs_dim_field} must be {INPUT_TOKEN_HIDDEN_DIM}, "
+                    f"got {obs_dim}"
+                )
+
+    for key in (
+        "policy.source_token_count",
+        "ray_components.policy.kwargs.source_token_count",
+        "actor.policy_cfg.kwargs.source_token_count",
+    ):
+        value = _select_int(cfg, key)
+        if value is not None and value != INPUT_TOKEN_COUNT:
+            raise ValueError(f"{key} must be {INPUT_TOKEN_COUNT}, got {value}")
+    for key in (
+        "policy.source_token_dim",
+        "ray_components.policy.kwargs.source_token_dim",
+        "actor.policy_cfg.kwargs.source_token_dim",
+    ):
+        value = _select_int(cfg, key)
+        if value is not None and value != INPUT_TOKEN_DIM:
+            raise ValueError(f"{key} must be {INPUT_TOKEN_DIM}, got {value}")
+
+    for key in (
+        "collect.policy_mode",
+        "rollout.encoder_cfg.kwargs.policy_cfg.policy_mode",
+        "inference.cfg.policy.policy_mode",
+    ):
+        value = _select_str(cfg, key)
+        if value is not None and value != "discrete":
+            raise ValueError(f"{key} must be 'discrete', got {value!r}")
+
+
 def _validate_sidecar_routes(cfg: DictConfig) -> None:
     dataset_hidden = _select_str(cfg, "dataset.hidden_dir")
     if dataset_hidden is None:
         return
 
-    rynn_hidden = _select_str(cfg, "task.rynnvla_action_hidden_dir")
-    rynn_input_hidden = _select_str(cfg, "task.rynnvla_input_token_hidden_dir")
-    oft_hidden = _select_str(cfg, "task.openvla_oft.action_hidden_dir")
-    oft_input_hidden = _select_str(cfg, "task.openvla_oft.input_token_hidden_dir")
-
-    for candidate in (rynn_hidden, rynn_input_hidden, oft_hidden, oft_input_hidden):
-        if candidate is not None and dataset_hidden == candidate:
-            return
-
-    if rynn_hidden is not None and _looks_rynn_sidecar_cfg(cfg):
+    oft_input_tokens = _select_str(cfg, "task.openvla_oft.input_token_dir")
+    if oft_input_tokens is not None and dataset_hidden != oft_input_tokens:
         raise ValueError(
-            "dataset.hidden_dir must match task.rynnvla_action_hidden_dir for "
-            f"RynnVLA action-hidden routes: {dataset_hidden!r} != {rynn_hidden!r}"
-        )
-    if rynn_input_hidden is not None and _looks_rynn_input_token_cfg(cfg):
-        raise ValueError(
-            "dataset.hidden_dir must match task.rynnvla_input_token_hidden_dir "
-            f"for RynnVLA input-token routes: {dataset_hidden!r} != "
-            f"{rynn_input_hidden!r}"
-        )
-    if oft_hidden is not None and (
-        (rynn_hidden is None and rynn_input_hidden is None)
-        or _looks_oft_action_hidden_cfg(cfg)
-    ):
-        raise ValueError(
-            "dataset.hidden_dir must match task.openvla_oft.action_hidden_dir "
-            f"for OpenVLA-OFT action-hidden routes: {dataset_hidden!r} != "
-            f"{oft_hidden!r}"
-        )
-    if oft_input_hidden is not None and _looks_oft_input_token_cfg(cfg):
-        raise ValueError(
-            "dataset.hidden_dir must match task.openvla_oft.input_token_hidden_dir "
+            "dataset.hidden_dir must match task.openvla_oft.input_token_dir "
             f"for OpenVLA-OFT input-token routes: {dataset_hidden!r} != "
-            f"{oft_input_hidden!r}"
+            f"{oft_input_tokens!r}"
         )
 
 
@@ -219,28 +381,9 @@ def _validate_chunk_wm_sequence_length_for_component(
 
 
 def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
-    for key in (
-        "task.legacy_action_hidden",
-        "task.openvla_oft",
-    ):
-        _validate_latent_spec(
-            cfg,
-            key,
-            obs_dim_field="wm_obs_dim",
-            action_dim_key="task.action_dim",
-            check_action_token_count=True,
-        )
-    for key in (
-        "task.legacy_input_tokens",
-        "task.openvla_oft.input_tokens",
-    ):
+    for key in ("task.openvla_oft.input_tokens",):
         _validate_latent_spec(cfg, key, obs_dim_field="wm_obs_dim")
-    for key in (
-        "task.legacy_action_hidden",
-        "task.legacy_input_tokens",
-        "task.openvla_oft",
-        "task.openvla_oft.input_tokens",
-    ):
+    for key in ("task.openvla_oft.input_tokens",):
         _validate_latent_stage_value(cfg, key)
     _validate_oft_input_token_patch_contract(cfg)
 
@@ -309,12 +452,7 @@ def _matching_task_latent_stage(cfg: DictConfig, key: str) -> str | None:
     if obs_dim is None or token_count is None or token_dim is None:
         return None
 
-    for spec_key in (
-        "task.legacy_action_hidden",
-        "task.legacy_input_tokens",
-        "task.openvla_oft",
-        "task.openvla_oft.input_tokens",
-    ):
+    for spec_key in ("task.openvla_oft.input_tokens",):
         spec_obs_dim = _select_int(cfg, f"{spec_key}.wm_obs_dim")
         spec_token_count = _select_int(cfg, f"{spec_key}.token_count")
         spec_token_dim = _select_int(cfg, f"{spec_key}.token_dim")
@@ -992,42 +1130,11 @@ def _validate_existing_paths(cfg: DictConfig) -> None:
             raise ValueError(f"{key} does not exist: {value}")
 
 
-def _looks_rynn_sidecar_cfg(cfg: DictConfig) -> bool:
-    expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
-    task_action_head = _select_str(
-        cfg, "task.legacy_action_hidden.expected_action_head_type"
-    )
-    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
-    task_source = _select_str(
-        cfg, "task.legacy_action_hidden.expected_obs_hidden_source"
-    )
-    return (
-        expected_action_head is not None
-        and expected_action_head == task_action_head
-        and expected_source == task_source
-    )
-
-
-def _looks_rynn_input_token_cfg(cfg: DictConfig) -> bool:
-    expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
-    task_action_head = _select_str(
-        cfg, "task.legacy_input_tokens.expected_action_head_type"
-    )
-    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
-    task_source = _select_str(
-        cfg, "task.legacy_input_tokens.expected_obs_hidden_source"
-    )
-    return (
-        expected_action_head is not None
-        and expected_action_head == task_action_head
-        and expected_source is not None
-        and expected_source == task_source
-    )
-
-
 def _looks_oft_sidecar_cfg(cfg: DictConfig) -> bool:
     expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
-    task_action_head = _select_str(cfg, "task.openvla_oft.expected_action_head_type")
+    task_action_head = _select_str(
+        cfg, "task.openvla_oft.input_tokens.expected_action_head_type"
+    )
     expected_model_path = _select_str(cfg, "dataset.expected_model_path")
     oft_ckpt_path = _select_str(cfg, "task.openvla_oft.ckpt_path")
     target = _select_str(cfg, "_target_") or ""
@@ -1044,14 +1151,6 @@ def _looks_oft_sidecar_cfg(cfg: DictConfig) -> bool:
     )
 
 
-def _looks_oft_action_hidden_cfg(cfg: DictConfig) -> bool:
-    if not _looks_oft_sidecar_cfg(cfg):
-        return False
-    expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
-    task_source = _select_str(cfg, "task.openvla_oft.expected_obs_hidden_source")
-    return expected_source is None or expected_source == task_source
-
-
 def _looks_oft_input_token_cfg(cfg: DictConfig) -> bool:
     if not _looks_oft_sidecar_cfg(cfg):
         return False
@@ -1065,12 +1164,6 @@ def _looks_oft_input_token_cfg(cfg: DictConfig) -> bool:
 def _selected_sidecar_action_horizon_key(cfg: DictConfig) -> str | None:
     if _looks_oft_input_token_cfg(cfg):
         return "task.openvla_oft.input_tokens.chunk_size"
-    if _looks_oft_action_hidden_cfg(cfg):
-        return "task.openvla_oft.chunk_size"
-    if _looks_rynn_input_token_cfg(cfg):
-        return "task.legacy_input_tokens.chunk_size"
-    if _looks_rynn_sidecar_cfg(cfg):
-        return "task.legacy_action_hidden.chunk_size"
     return None
 
 

@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /VLA: openvla_oft
-  - _self_

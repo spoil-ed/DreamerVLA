@@ -7,9 +7,9 @@ import h5py
 import numpy as np
 import torch
 
-from dreamervla.preprocess.preprocess_oft_action_hidden import (
+from dreamervla.preprocess.preprocess_oft_input_tokens import (
     _load_oft_components,
-    _write_source_sidecars,
+    _write_source_input_tokens,
 )
 
 
@@ -54,7 +54,6 @@ def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
         chunk_size=2,
         prompt_style="vla_policy",
         resolution=256,
-        save_action_hidden=False,
         resolved_policy_mode="discrete",
         max_demos_per_file=None,
     )
@@ -62,12 +61,9 @@ def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
     out_input = tmp_path / "input" / source.name
     out_input.parent.mkdir()
 
-    stats = _write_source_sidecars(
+    stats = _write_source_input_tokens(
         source_path=source,
-        out_c_path=None,
-        out_d_path=None,
-        out_action_path=None,
-        out_input_path=out_input,
+        out_input_token_path=out_input,
         components=components,
         args=args,
         rank=0,

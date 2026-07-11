@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate one generated LIBERO preprocessing artifact tree.
+# Validate one canonical OpenVLA input-token preprocessing artifact tree.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -10,7 +10,7 @@ LIBERO_SUITE="${LIBERO_SUITE:-${TASK}}"
 TASK_NAME="${TASK_NAME:-${TASK}}"
 if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
   case "${TASK_NAME}" in
-    rynnvla_libero|openvla_onetraj_libero) LIBERO_SUITE="libero_goal" ;;
+    openvla_onetraj_libero) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
 ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
@@ -20,12 +20,14 @@ fi
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
+REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
+OFT_HISTORY="${OFT_HISTORY:-1}"
+INPUT_TOKEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_oft_input_token_embedding_vla_policy_h${OFT_HISTORY}"
 
-python -m dreamervla.preprocess.validate_libero_data_prep \
-  data_root="${DVLA_DATA_ROOT}" \
-  processed_data_root="${PROCESSED_DATA_ROOT}" \
-  suites="[${ARTIFACT_NAME}]" \
-  his=1 \
-  action_horizon=1 \
-  image_resolution=256 \
-  check_action_hidden=false
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+  dir="${INPUT_TOKEN_DIR}" \
+  reference_dir="${REWARD_DIR}" \
+  match_reference_demos=true \
+  match_reference_lengths=true \
+  require_complete_attr=true \
+  require_config=true

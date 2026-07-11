@@ -34,10 +34,11 @@ def test_latent_success_classifier_predict_success_returns_score():
 
     classifier = LatentSuccessClassifier(
         LatentSuccessClassifierConfig(
-            latent_dim=1,
-            window=2,
-            head_type="linear",
-        )
+                latent_dim=1,
+                window=2,
+                head_type="linear",
+                granularity="action",
+            )
     ).eval()
     with torch.no_grad():
         classifier.head.weight.zero_()

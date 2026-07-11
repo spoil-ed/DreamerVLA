@@ -16,8 +16,10 @@ def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
                 "openvla_oft": {
                     "num_images_in_input": 1,
                     "dataset_statistics_key": "libero_goal_no_noops",
-                    "expected_action_head_type": "oft_discrete_token",
-                    "expected_include_state": False,
+                    "input_tokens": {
+                        "expected_action_head_type": "oft_discrete_token",
+                        "expected_include_state": False,
+                    },
                 },
             }
         }
@@ -28,7 +30,7 @@ def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
     assert policy_cfg == {
         "model_path": "/tmp/oft",
         "num_images_in_input": 1,
-        "policy_mode": "auto",
+        "policy_mode": "discrete",
         "unnorm_key": "libero_goal_no_noops",
         "expected_action_head_type": "oft_discrete_token",
         "expected_include_state": False,

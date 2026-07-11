@@ -36,7 +36,7 @@ def normalize_candidate(
     Strips ``prefixes`` from each key, casts matching tensors to float32, and
     keeps only keys that land in ``expected_keys``.
 
-    ``require_all_valid`` reproduces the original RynnVLA whole-candidate guard:
+    ``require_all_valid`` reproduces the original VLA whole-candidate guard:
     when True, a candidate is skipped entirely (returns ``{}``) unless *every*
     entry is a ``(str, tensor)`` pair.  When False (latent / discrete-token
     behaviour) non-conforming entries are skipped individually.

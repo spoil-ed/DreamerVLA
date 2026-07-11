@@ -6,7 +6,7 @@ each EnvWorker's ``CUDA_VISIBLE_DEVICES`` and ``MUJOCO_EGL_DEVICE_ID`` from
 spawned LIBERO env slots via ``env.num_envs_per_worker``. The children inherit
 that already-bound regime; they do not pick independent render devices.
 
-``env_cfg["egl_device_pool"]`` remains only as a legacy compatibility path for
+``env_cfg["egl_device_pool"]`` remains only as a compatibility path for
 old callers. Native child death is fatal by default; set
 ``env_cfg["egl_max_respawns"]`` to opt into dropping the partial episode and
 respawning the affected slot.
@@ -158,7 +158,7 @@ def _env_subprocess_main(  # noqa: ANN001
             elif cmd == "set_task":
                 # payload is (task_id, start_episode_id) — resume/diversity continues the
                 # init_state from a caller-chosen episode_id instead of always 0. An int
-                # payload (legacy) starts at 0.
+                # payload starts at 0.
                 if isinstance(payload, tuple):
                     cur_task, episode_id = int(payload[0]), int(payload[1])
                 else:
@@ -450,7 +450,7 @@ class EnvWorker(Worker):
         episode_id is the init_state selector (env reset uses
         init_state = episode_id % num_init_states), so a non-zero start lets the Ray
         scheduler give each episode a DISTINCT init_state and continue past what is
-        already collected on resume (default 0 = legacy behaviour).
+        already collected on resume (default 0).
         """
         slot_id = int(slot_id)
         self.task_id = int(task_id)

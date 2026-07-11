@@ -20,7 +20,4 @@ This directory is organized by document lifetime and reader intent.
   notes.
 - [`tutorials/experiments/`](tutorials/experiments/): runnable experiment recipes.
 - [`reports/`](reports/): audits and review records.
-- [`superpowers/`](superpowers/): active agent TODOs plus archived plans/specs/results.
-- [`archive/`](archive/): historical plans useful for context but no longer the primary
-  execution entry.
 - [`papers/`](papers/): LaTeX paper workspaces, kept as self-contained projects.

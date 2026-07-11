@@ -10,12 +10,12 @@ from dreamervla.models.embodiment.world_model.base_world_model import BaseWorldM
 
 
 class WorldModel(BaseWorldModel):
-    """WM-style predictor over full RynnVLA action-token hidden states.
+    """World model over tokenized OpenVLA-OFT input embeddings.
 
-    The model accepts either legacy flattened sidecars or tokenized RynnVLA
-    action hidden states. Internally it keeps the ``time_horizon * action_dim``
-    token structure, appends one action token per environment timestep, and uses
-    a causal transformer to predict future observation tokens.
+    The external observation boundary is tokenized ``[B,T,256,4096]`` (or one
+    frame ``[B,256,4096]``). Flat action-query/hidden-token observations are not
+    accepted. Internally the model appends one action-conditioning token per
+    environment timestep and predicts future observation tokens.
     """
 
     def __init__(
@@ -23,8 +23,8 @@ class WorldModel(BaseWorldModel):
         obs_dim: int | None = None,
         action_dim: int = 7,
         token_count: int | None = None,
-        token_dim: int = 1024,
-        time_horizon: int | None = 5,
+        token_dim: int = 4096,
+        time_horizon: int | None = 8,
         model_dim: int = 512,
         depth: int = 6,
         heads: int = 8,
@@ -52,22 +52,30 @@ class WorldModel(BaseWorldModel):
         freeze_backbone: bool = False,
         freeze_input_embeddings: bool = False,
         latent_stage: str | None = None,
-        latent_source: str = "RynnVLA legacy [5,7,1024] action hidden",
+        latent_source: str = "OpenVLA-OFT input_token_embedding [256,4096]",
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
         self.token_dim = int(token_dim)
-        self.time_horizon = int(time_horizon) if time_horizon is not None else 5
+        self.time_horizon = int(time_horizon) if time_horizon is not None else 8
         self.token_count = (
             int(token_count)
             if token_count is not None
-            else self.time_horizon * self.action_dim
+            else 256
         )
         self.obs_dim = (
             int(obs_dim)
             if obs_dim is not None
             else self.token_count * self.token_dim
         )
+        if (
+            self.token_count == 56
+            and self.token_dim == 1024
+        ) or self.obs_dim == 56 * 1024:
+            raise ValueError(
+                "the removed 56x1024 observation interface is closed; "
+                "use input_token_embedding [256,4096]"
+            )
         self.model_dim = int(model_dim)
         self.num_hist = int(num_hist)
         self.num_pred = int(num_pred)
@@ -268,7 +276,7 @@ class WorldModel(BaseWorldModel):
     def freeze_backbone(self) -> int:
         """Freeze only an attached feature backbone/encoder, if this variant has one.
 
-        The precomputed-hidden RynnVLA route does not instantiate the upstream
+        The precomputed-hidden VLA route does not instantiate the upstream
         feature encoder, so this is intentionally a no-op there.  We keep
         it explicit to avoid accidentally freezing the dynamics predictor.
         """
@@ -320,30 +328,14 @@ class WorldModel(BaseWorldModel):
         )
 
     def obs_to_tokens(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        """Normalize flat or tokenized action-hidden inputs to ``[B,T,N,D]``."""
-        if obs_embedding.ndim == 2:
-            if obs_embedding.shape[-1] != self.obs_dim:
-                raise ValueError(
-                    f"obs dim mismatch: got {obs_embedding.shape[-1]}, expected {self.obs_dim}. "
-                    f"This route predicts {self.latent_source}."
-                )
-            tokens = obs_embedding.reshape(
-                obs_embedding.shape[0], 1, self.token_count, self.token_dim
-            )
-        elif obs_embedding.ndim == 3:
+        """Validate tokenized observations and normalize to ``[B,T,N,D]``."""
+        if obs_embedding.ndim == 3:
             if obs_embedding.shape[1:] == (self.token_count, self.token_dim):
                 tokens = obs_embedding[:, None]
-            elif obs_embedding.shape[-1] == self.obs_dim:
-                tokens = obs_embedding.reshape(
-                    obs_embedding.shape[0],
-                    obs_embedding.shape[1],
-                    self.token_count,
-                    self.token_dim,
-                )
             else:
                 raise ValueError(
-                    "obs_embedding must be flat [B,T,obs_dim] / [B,obs_dim] "
-                    "or tokenized [B,N,token_dim] / [B,T,N,token_dim]; "
+                    "obs_embedding must be tokenized [B,N,token_dim] or "
+                    "[B,T,N,token_dim]; flat observations are closed; "
                     f"got {tuple(obs_embedding.shape)}"
                 )
         elif obs_embedding.ndim == 4:
@@ -355,8 +347,8 @@ class WorldModel(BaseWorldModel):
             tokens = obs_embedding
         else:
             raise ValueError(
-                "obs_embedding must be flat [B,T,obs_dim] / [B,obs_dim] "
-                "or tokenized [B,N,token_dim] / [B,T,N,token_dim]; "
+                "obs_embedding must be tokenized [B,N,token_dim] or "
+                "[B,T,N,token_dim]; flat observations are closed; "
                 f"got {tuple(obs_embedding.shape)}"
             )
         if tokens.shape[1] > self.max_seq_len:
@@ -365,26 +357,6 @@ class WorldModel(BaseWorldModel):
             )
         return tokens.to(device=self._module_device(), dtype=self._module_dtype())
 
-    def tokens_to_flat(self, obs_tokens: torch.Tensor) -> torch.Tensor:
-        """Flatten tokenized action hidden for legacy call sites and sidecars."""
-        if obs_tokens.ndim == 3:
-            if obs_tokens.shape[-2:] != (self.token_count, self.token_dim):
-                raise ValueError(
-                    f"tokenized obs shape mismatch: got {tuple(obs_tokens.shape)}, "
-                    f"expected trailing dims ({self.token_count}, {self.token_dim})"
-                )
-            return obs_tokens.reshape(obs_tokens.shape[0], self.obs_dim)
-        if obs_tokens.ndim == 4:
-            if obs_tokens.shape[-2:] != (self.token_count, self.token_dim):
-                raise ValueError(
-                    f"tokenized obs shape mismatch: got {tuple(obs_tokens.shape)}, "
-                    f"expected trailing dims ({self.token_count}, {self.token_dim})"
-                )
-            return obs_tokens.reshape(obs_tokens.shape[0], obs_tokens.shape[1], self.obs_dim)
-        raise ValueError(
-            f"obs_tokens must be [B,N,D] or [B,T,N,D], got {tuple(obs_tokens.shape)}"
-        )
-
     def _obs_embedding_from_obs(
         self, obs: dict[str, torch.Tensor] | torch.Tensor
     ) -> torch.Tensor:
@@ -392,11 +364,7 @@ class WorldModel(BaseWorldModel):
             return obs
         if "obs_embedding" in obs:
             return obs["obs_embedding"]
-        if "visual" in obs:
-            return obs["visual"]
-        raise KeyError(
-            "WorldModel expects obs to contain `obs_embedding` or action-hidden `visual`."
-        )
+        raise KeyError("WorldModel expects obs to contain `obs_embedding`.")
 
     def _block_causal_mask(
         self,
@@ -609,7 +577,7 @@ class WorldModel(BaseWorldModel):
                 return history[:, -1]
             if history.ndim == 5:
                 return history[:, :, -1]
-        raise KeyError("RynnVLA latent must contain `hidden` or `history`.")
+        raise KeyError("VLA latent must contain `hidden` or `history`.")
 
     def _latent_history(
         self, latent: dict[str, torch.Tensor] | torch.Tensor

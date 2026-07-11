@@ -77,7 +77,7 @@ def test_hf_checkpoint_helpers_resolve_nested_and_load_prefixed_tensors(
     assert torch.equal(tensors["output_projection.weight"], torch.ones(2, 3))
 
 
-def test_base_runner_prefers_legacy_latest_hf_when_canonical_missing(
+def test_base_runner_prefers_compat_latest_hf_when_canonical_missing(
     tmp_path: Path,
 ) -> None:
     cfg = OmegaConf.create(
@@ -87,10 +87,10 @@ def test_base_runner_prefers_legacy_latest_hf_when_canonical_missing(
         }
     )
     workspace = _ConcreteRunner(cfg)
-    legacy_hf = tmp_path / "out" / "ckpt" / "latest_hf"
-    legacy_hf.mkdir(parents=True)
+    compat_hf = tmp_path / "out" / "ckpt" / "latest_hf"
+    compat_hf.mkdir(parents=True)
 
-    assert workspace.get_hf_checkpoint_path(prefer_existing=True) == legacy_hf
+    assert workspace.get_hf_checkpoint_path(prefer_existing=True) == compat_hf
 
 
 class _ToyDataset(Dataset[int]):

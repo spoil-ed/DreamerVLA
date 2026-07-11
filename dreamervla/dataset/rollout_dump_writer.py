@@ -19,7 +19,7 @@ Schema (reward HDF5, per demo at data/demo_<i>/):
     data group attrs: env meta
 
     Sidecar (same filename, separate dir):
-        data/demo_<i>/obs_embedding  (T, D) legacy or (T, N, D) input-token float16
+        data/demo_<i>/obs_embedding  (T, 256, 4096) input_token_embedding float16
         data/demo_<i>/lang_emb       (D_lang,) optional demo-level float16
 
 preprocess_config.json is written once to hidden_dir/preprocess_config.json.
@@ -34,6 +34,11 @@ from typing import Any
 
 import h5py
 import numpy as np
+
+from dreamervla.preprocess.sidecar_schema import (
+    validate_input_token_array_shape,
+    validate_input_token_preprocess_config,
+)
 
 _CANONICAL_EPISODE_METADATA_KEYS = frozenset(("global_step", "env_step"))
 
@@ -105,7 +110,7 @@ class RolloutDumpWriter:
                 ee_states        (6,)              float64
                 gripper_states   (2,)              float64
                 joint_states     (7,)              float64
-            obs_embedding   array-like (D,) legacy or (N,D) input-token float16
+            obs_embedding   array-like (256,4096) input_token_embedding float16
             lang_emb         optional array-like (D_lang,) demo-level language embedding
 
         ``preprocess_config`` is written to hidden_dir/preprocess_config.json
@@ -118,6 +123,16 @@ class RolloutDumpWriter:
             raise RuntimeError("RolloutDumpWriter has been closed")
         if not steps:
             return
+        if not self._preprocess_config_written and preprocess_config is None:
+            raise ValueError(
+                "the first rollout demo must provide the canonical input-token "
+                "preprocess_config"
+            )
+        if preprocess_config is not None:
+            validate_input_token_preprocess_config(
+                preprocess_config,
+                context="RolloutDumpWriter preprocess_config",
+            )
 
         T = len(steps)
         demo_key = f"demo_{index}"
@@ -146,7 +161,16 @@ class RolloutDumpWriter:
         )  # (T, S)
         obs_embedding = np.stack(
             [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
-        )  # (T, D) legacy or (T, N, D) input-token
+        )  # (T, 256, 4096)
+        if obs_embedding.ndim != 3:
+            raise ValueError(
+                "rollout obs_embedding must be tokenized [T,256,4096], "
+                f"got {obs_embedding.shape}"
+            )
+        validate_input_token_array_shape(
+            obs_embedding.shape,
+            context="rollout obs_embedding",
+        )
         lang_emb = None
         if steps[0].get("lang_emb") is not None:
             lang_emb = np.asarray(steps[0]["lang_emb"], dtype=np.float16).reshape(-1)

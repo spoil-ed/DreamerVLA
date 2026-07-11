@@ -105,7 +105,7 @@ class BaseRunner(ABC):
         # RLinf-style canonical checkpoint directory.
         return self.get_run_dir().joinpath("checkpoints")
 
-    def get_legacy_checkpoint_dir(self) -> pathlib.Path:
+    def get_compat_checkpoint_dir(self) -> pathlib.Path:
         # Compatibility with older DreamerVLA latest.ckpt checkpoints.
         return self.get_run_dir().joinpath("ckpt")
 
@@ -884,9 +884,9 @@ class BaseRunner(ABC):
             return canonical_path
         if canonical_path.is_file():
             return canonical_path
-        legacy_path = self.get_legacy_checkpoint_dir().joinpath(f"{tag}.ckpt")
-        if legacy_path.is_file():
-            return legacy_path
+        compat_path = self.get_compat_checkpoint_dir().joinpath(f"{tag}.ckpt")
+        if compat_path.is_file():
+            return compat_path
         return canonical_path
 
     def get_hf_checkpoint_path(
@@ -901,9 +901,9 @@ class BaseRunner(ABC):
             return canonical_path
         if canonical_path.is_dir():
             return canonical_path
-        legacy_path = self.get_legacy_checkpoint_dir().joinpath(f"{tag}_hf")
-        if legacy_path.is_dir():
-            return legacy_path
+        compat_path = self.get_compat_checkpoint_dir().joinpath(f"{tag}_hf")
+        if compat_path.is_dir():
+            return compat_path
         return canonical_path
 
     def _save_checkpoint_sidecars(

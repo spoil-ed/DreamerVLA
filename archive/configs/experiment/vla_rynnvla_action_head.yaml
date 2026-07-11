@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /VLA: rynnvla_action_head
-  - _self_

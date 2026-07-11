@@ -2,191 +2,125 @@
 
 \subsection{Overview}
 
-We propose \textbf{DreamerVLA}, a Dreamer-style training framework that combines the semantic prior of a pretrained Vision-Language-Action (VLA) model with the long-horizon optimization ability of latent world models. The current DreamerVLA pipeline uses a pi0-style action-query VLA head to produce action-conditioned hidden observations, trains a DreamerV3 recurrent state-space model (RSSM) over these hidden observations, and then optimizes an actor-critic policy through imagined latent rollouts.
-
-At each time step $t$, the robot observes two RGB views, a language instruction, and proprioceptive state:
+DreamerVLA couples a one-trajectory OpenVLA-OFT policy with a token-space
+world model and a success classifier.  The system uses one external observation
+representation throughout collection, replay, warm-up, and online cotraining:
+the projected visual input tokens produced before the language-model action
+positions.  For each environment step $t$,
 \[
-o_t = \{I_t^{\text{third}}, I_t^{\text{wrist}}, x_t^{\text{prop}}, l\}.
+E_t = f_{\mathrm{OFT}}^{\mathrm{vision}}(I_t,\ell)
+    \in \mathbb{R}^{256\times4096},
 \]
-The VLA model first converts this multimodal observation into an action-query hidden sequence
+where $I_t$ is the current agent-view image and $\ell$ is the task instruction.
+The 256 visual tokens are persisted under the HDF5 key
+\texttt{obs\_embedding}; action-decoder states are never used as world-model
+observations.
+
+The trainable system contains three components: (i) a chunk-aware Transformer
+world model that predicts future input-token grids, (ii) a spatial success
+classifier trained on windows of the same token grids, and (iii) an actor bridge
+that maps predicted input tokens to OpenVLA-OFT's internal discrete action
+positions.  The bridge creates action positions only inside the decoder; they
+are not stored in replay and do not define a second observation interface.
+
+\subsection{Cold-Start and Online Cotraining Pipeline}
+
+Training follows four stages.  First, the one-trajectory OpenVLA-OFT checkpoint
+collects real LIBERO rollouts.  Each rollout produces a reward shard and a
+shape-aligned input-token sidecar.  Before reuse, the loader verifies the source
+name, token count, token width, storage format, and every per-demo tensor shape.
+
+Second, collected episodes seed a shared online replay.  Third, the world model
+and success classifier are warmed up from this replay using exactly the update
+functions used online.  Finally, real and imagined trajectories are interleaved
+during cotraining.  In the synchronous route one runner owns the loop.  In the
+asynchronous route, the actor group owns FSDP policy updates, the rollout group
+owns no-gradient policy inference, the environment group owns real and imagined
+stepping, and the learner group owns world-model and classifier updates.
+
+\subsection{Input-Token Observation Contract}
+
+For an episode of length $T$, the sidecar stores
 \[
-u_t = f_{\text{VLA}}^{\text{query}}(o_t) \in \mathbb{R}^{K \times 1024},
+\mathcal{E}=[E_1,\ldots,E_T]
+    \in \mathbb{R}^{T\times256\times4096}.
 \]
-where $K$ is the action horizon. We flatten this sequence into the world-model observation
+The contract fixes one image, one-frame policy history, 256 patches, and a token
+width of 4096.  Its flattened size, $1{,}048{,}576$, is metadata only; model
+interfaces retain the two token axes.  Reward and sidecar shards must have the
+same files, demonstrations, and frame lengths.  This validation is performed
+before collection resume, replay seeding, standalone classifier training, and
+standalone world-model training.
+
+Language and proprioception remain distinct conditioning signals.  They are
+projected to compact embeddings and concatenated to token channels inside the
+world model and classifier; they do not alter the persisted visual-token
+schema.
+
+\subsection{Chunk-Aware Token World Model}
+
+Let $a_t\in\mathbb{R}^{7}$ denote the robot action and let $K=8$ be the action
+chunk length.  The world model embeds the action and concatenates it to every
+visual token.  Optional language and proprioceptive embeddings are concatenated
+in the same role-separated manner.  Given a history of $H$ token grids, a
+Transformer transition predicts the next grid,
 \[
-e_t = \mathrm{vec}(u_t) \in \mathbb{R}^{5120},
+\widehat{E}_{t+1}
+  = F_\theta(E_{t-H+1:t},a_t,p_t,\ell).
 \]
-using $K=5$ in our LIBERO configuration. These hidden observations are precomputed and stored in sidecar HDF5 files aligned with the original demonstrations, so world-model and actor-critic training do not backpropagate through the large VLA backbone.
-
-DreamerVLA contains three trainable components:
-\begin{enumerate}
-    \item an \textbf{action-hidden DreamerV3 world model} that uses pi0 action-query hidden states as observations for a discrete RSSM while reconstructing pixels and action-hidden observations;
-    \item a \textbf{pi0 action-hidden actor} that maps imagined RSSM features back to action-query hidden states and reuses the pretrained pi0 output projection to produce action chunks;
-    \item a \textbf{two-hot critic} trained from DreamerV3-style imagined $\lambda$-returns.
-\end{enumerate}
-
-This design keeps the VLA backbone fixed as a semantic action-conditioned encoder, learns compact task dynamics in latent space, and optimizes the action head through imagined rollouts without additional environment interaction.
-
-\subsection{Overall Training Pipeline}
-
-DreamerVLA is trained in four stages. First, we prepare LIBERO demonstrations by removing no-op transitions and storing synchronized third-person RGB, wrist RGB, robot states, actions, rewards, and terminal labels. The action horizon is set to $K=5$, and each action is represented as a 7-dimensional continuous control vector.
-
-Second, we warm-start the VLA policy with supervised action prediction. Starting from the pretrained RynnVLA/Chameleon backbone, we fine-tune a pi0-style action-query head on LIBERO demonstrations. Instead of predicting actions directly from all language-image tokens, the head appends one learned action query for each future action step and regresses an action chunk from the resulting query hidden states. This stage provides the supervised VLA checkpoint used by all downstream DreamerVLA components.
-
-Third, we freeze the VLA backbone and precompute action-conditioned hidden observations for every frame. The resulting sidecar files store $e_t$ together with metadata for the VLA checkpoint, action horizon, action-head type, and hidden-source type. The dataset loader checks this metadata at startup, preventing stale hidden sidecars from being mixed with incompatible checkpoints.
-
-Fourth, we train the action-hidden DreamerV3 world model and then optimize the actor and critic with imagined rollouts. World-model pretraining can be run as a standalone stage, and the resulting checkpoint can be loaded into joint DreamerVLA training. In the actor-critic stage, posterior latent states inferred from replay windows initialize imagined trajectories; the actor produces action chunks from imagined hidden states, and the first action in each chunk advances the RSSM rollout.
-
-\subsection{Frozen VLA Action-Query Features}
-
-We use the pretrained RynnVLA/Chameleon model as a frozen multimodal encoder. For each frame, the third-person view, wrist-camera view, task text, and optional proprioceptive state are serialized into the prompt format used by the VLA model. The Chameleon image tokenizer and text tokenizer convert the input into a unified token sequence, which is processed by the frozen Transformer backbone.
-
-The pi0-style action-query head appends $K$ learned query tokens, one per future action step. Context tokens condition these queries through attention, and the head exposes the query outputs as compact action-conditioned hidden states:
+Multi-step prediction is autoregressive: each predicted grid is appended to
+the history before the next action is applied.  For $J$ predicted chunks, the
+training loss is
 \[
-u_t = [u_t^1,\ldots,u_t^K],
-\qquad
-u_t^k \in \mathbb{R}^{1024}.
+\mathcal{L}_{\mathrm{WM}}
+ = \sum_{j=1}^{JK} \alpha_j
+   \left\|\widehat{E}_{t+j}-E_{t+j}\right\|_2^2
+   + \lambda_{\cos}
+   \bigl(1-\cos(\widehat{E}_{t+j},E_{t+j})\bigr),
 \]
-The world model uses their flattened representation $e_t=\mathrm{vec}(u_t)$ as its observation. Compared with storing a full VLA token sequence, this representation is smaller and directly aligned with the downstream action head. During Dreamer training, the VLA backbone remains frozen and is not included in the optimization graph.
+with optional auxiliary reward and proprioceptive reconstruction terms.  The
+mainline keeps the visual tokens explicit rather than accepting flattened
+observation vectors.
 
-\subsection{Action-Hidden DreamerV3 World Model}
+\subsection{Spatial Success Classifier}
 
-The world model follows the DreamerV3 recurrent state-space model, but replaces the standard pixel encoder with a lightweight encoder over precomputed action-hidden observations. Given action-hidden observations $\{e_t\}_{t=1}^{T}$ and actions $\{a_t\}_{t=1}^{T}$, the encoder maps each $e_t$ into the RSSM observation space. The RSSM state is
+The classifier receives a window
+$E_{t-W+1:t}\in\mathbb{R}^{W\times256\times4096}$.
+Each visual token is projected to the classifier width, augmented with temporal
+and spatial position embeddings, and processed by a Transformer encoder with a
+classification token.  A binary head estimates
 \[
-s_t = (h_t, z_t),
+q_\phi(y_t=1\mid E_{t-W+1:t},p_{t-W+1:t},\ell),
 \]
-where $h_t \in \mathbb{R}^{8192}$ is a deterministic recurrent state and $z_t$ is a discrete stochastic state with $32$ variables and $64$ categories per variable. The flattened latent feature is
-\[
-\phi_t = [h_t; \mathrm{vec}(z_t)] \in \mathbb{R}^{10240}.
-\]
+where $y_t$ indicates task success.  Warm-up and online updates share the same
+balanced WMPO sampling protocol and binary cross-entropy objective.  During
+imagined rollout, this score supplies the success signal used by policy
+optimization.
 
-\paragraph{RSSM transition and posterior.}
-The deterministic transition is a DreamerV3 block-GRU update conditioned on the previous deterministic state, stochastic state, and action:
-\[
-h_t = g_\theta(h_{t-1}, z_{t-1}, a_t).
-\]
-The model predicts a prior distribution $p_\theta(z_t \mid h_t)$ and an observation-conditioned posterior
-\[
-q_\theta(z_t \mid h_t, e_t).
-\]
-We use the DreamerV3 unimix categorical parameterization and split the KL regularizer into dynamics and representation terms:
-\[
-\mathcal{L}_{\text{dyn}} =
-\mathrm{KL}\big(\mathrm{sg}(q_\theta(z_t \mid h_t,e_t)) \,\|\, p_\theta(z_t \mid h_t)\big),
-\]
-\[
-\mathcal{L}_{\text{rep}} =
-\mathrm{KL}\big(q_\theta(z_t \mid h_t,e_t) \,\|\, \mathrm{sg}(p_\theta(z_t \mid h_t))\big).
-\]
+\subsection{OpenVLA Discrete-Action Bridge}
 
-\paragraph{Multi-target reconstruction.}
-The RSSM is trained with both visual and action-hidden reconstruction losses. A pixel decoder reconstructs the concatenated third-person and wrist images from $\phi_t$:
+The actor consumes a predicted token grid
+$\widehat{E}_t\in\mathbb{R}^{256\times4096}$.  A Transformer decoder attends a
+set of $K\times7=56$ learned action positions to the 256 source tokens, producing
+4096-dimensional states only inside the OpenVLA decoder.  The frozen or
+finetuned language-model head converts those states into categorical action
+tokens, which are mapped to continuous controls.  For action dimension $d$ and
+chunk step $k$,
 \[
-\hat{I}_t = d_{\text{img}}(\phi_t),
-\qquad
-\mathcal{L}_{\text{img}} = \|\hat{I}_t - I_t\|_2^2.
+\pi_\psi(z_{k,d}\mid\widehat{E}_t)
+  = \operatorname{softmax}\bigl(W_{\mathrm{LM}}h_{k,d}\bigr).
 \]
-A hidden decoder predicts the flattened pi0 action-query hidden observation:
-\[
-\hat{e}_t = d_{\text{hid}}(\phi_t),
-\qquad
-\mathcal{L}_{\text{hid}} = \|\hat{e}_t - e_t\|_2^2.
-\]
-This hidden reconstruction is the bridge between the RSSM and the pi0 action-hidden actor: during imagination, the actor consumes $\hat{e}_t$ rather than raw pixels or full VLA token states.
+The policy objective operates on token-level log probabilities.  This decoder
+construction preserves OpenVLA-OFT's action vocabulary while maintaining a
+single, unambiguous world-model observation state.
 
-\paragraph{Reward and continuation.}
-The world model predicts sparse task reward and continuation from the latent feature:
-\[
-\hat{r}_t = d_r(\phi_t), \qquad \hat{c}_t = d_c(\phi_t).
-\]
-For LIBERO-style sparse success rewards, the implementation uses a binary reward head. The continuation head is trained with a binary cross-entropy objective over non-terminal targets.
+\subsection{Cotraining Objective}
 
-The full world-model objective is
-\[
-\mathcal{L}_{\text{WM}}
-=
-\lambda_{\text{img}}\mathcal{L}_{\text{img}}
-+ \lambda_{\text{dyn}}\mathcal{L}_{\text{dyn}}
-+ \lambda_{\text{rep}}\mathcal{L}_{\text{rep}}
-+ \lambda_{\text{hid}}\mathcal{L}_{\text{hid}}
-+ \lambda_r\mathcal{L}_{r}
-+ \lambda_c\mathcal{L}_{c}.
-\]
-
-\subsection{Pi0 Action-Hidden Actor}
-
-Instead of using a small MLP policy, DreamerVLA reuses the action prior learned by the supervised pi0-style VLA head. The world model first decodes an imagined latent feature into a reconstructed action-hidden vector,
-\[
-\hat{e}_t = d_{\text{hid}}(\phi_t) \in \mathbb{R}^{5120},
-\]
-which is reshaped into
-\[
-\hat{u}_t \in \mathbb{R}^{K \times 1024}.
-\]
-A lightweight adapter refines this sequence, and the pretrained pi0 output projection maps each action-query hidden state to a continuous action. The actor therefore outputs an action chunk
-\[
-\mu_{t:t+K-1} = \pi_\psi(\hat{u}_t) \in \mathbb{R}^{K \times A}.
-\]
-In our LIBERO configuration, $K=5$ and $A=7$. During imagination, the first action in the chunk is used as the action mean,
-\[
-\mu_t = \mu_{t:t+K-1}[0],
-\]
-and a learned diagonal log-standard deviation defines a Gaussian policy:
-\[
-a_t \sim \mathcal{N}(\mu_t, \mathrm{diag}(\sigma^2)).
-\]
-The actor can freeze or fine-tune the pi0 output projection. In both cases, the policy is initialized from the supervised VLA checkpoint and further optimized by DreamerV3 actor-critic updates.
-
-\subsection{Imagination-Based Actor-Critic Learning}
-
-Actor-critic training starts from posterior latent states inferred from replay sequences. From each start state, the world model generates an imagined trajectory of horizon $H$:
-\[
-a_t \sim \pi_\psi(\cdot \mid \phi_t),
-\qquad
-s_{t+1} \sim p_\theta(\cdot \mid s_t,a_t),
-\qquad
-\hat{r}_{t+1}=d_r(\phi_{t+1}), \quad
-\hat{c}_{t+1}=d_c(\phi_{t+1}).
-\]
-Gradients are stopped through imagined world-model states, matching the standard DreamerV3 actor update.
-
-The critic receives the RSSM feature $\phi_t$ and predicts a categorical distribution over symlog value bins. Its scalar value is the symexp-transformed expectation:
-\[
-V_\omega(\phi_t)=\mathrm{symexp}\left(\mathbb{E}_{b\sim p_\omega(\cdot\mid \phi_t)}[b]\right).
-\]
-A Polyak-averaged target critic provides bootstrap values. We compute continuation-weighted $\lambda$-returns:
-\[
-R_t^\lambda =
-\hat{r}_{t+1}
-+ \gamma \hat{c}_{t+1}
-\left((1-\lambda)V_{\bar{\omega}}(\phi_{t+1})
-+ \lambda R_{t+1}^{\lambda}\right).
-\]
-
-The actor is trained with a likelihood-ratio objective using the imagined advantage:
-\[
-\mathcal{L}_{\pi}
-=
--
-\mathbb{E}\left[
-w_t
-\left(
-\log \pi_\psi(a_t\mid \phi_t)\,
-\mathrm{sg}\left(\frac{R_t^\lambda - V_\omega(\phi_t)}{S}\right)
-+ \eta \mathcal{H}[\pi_\psi(\cdot\mid \phi_t)]
-\right)
-\right],
-\]
-where $w_t$ is the cumulative continuation discount and $S=\max(1,P_{95}^{\text{ema}}-P_{5}^{\text{ema}})$ is the running percentile return scale. The critic is trained by maximizing the log probability of the two-hot symlog target:
-\[
-\mathcal{L}_{V}
-=
--
-\mathbb{E}\left[
-\log p_\omega\left(\mathrm{twohot}(\mathrm{sg}(R_t^\lambda)) \mid \phi_t\right)
-\right].
-\]
-
-\subsection{Training Strategy}
-
-Training alternates between two phases on the same replay windows. First, the world model is updated using real image sequences, precomputed action-hidden observations, actions, rewards, and terminal labels. Second, the actor and critic are updated from imagined rollouts produced by the learned RSSM. Only the world model, pi0 action-hidden actor, and critic are optimized; the VLA backbone used to generate action-query hidden observations remains frozen throughout.
+World-model and classifier parameters are optimized from replay, while actor
+parameters are optimized from grouped real and imagined trajectories.  The
+actor update combines relative advantages, clipped likelihood ratios, entropy
+regularization, and a reference-policy KL penalty.  Parameter ownership is
+explicit: the rollout replica periodically pulls actor weights, and imagined
+environment workers periodically receive world-model and classifier weights.
+All reported task quality is measured in the real LIBERO environment; imagined
+success is a training signal rather than an evaluation substitute.

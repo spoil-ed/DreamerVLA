@@ -29,6 +29,12 @@ from torch.utils.data.distributed import DistributedSampler
 from dreamervla.utils.json_logger import JsonLogger
 
 
+def unwrap_module(module: torch.nn.Module) -> torch.nn.Module:
+    """Return the trainable module behind DDP/FSDP, or the input unchanged."""
+
+    return module.module if isinstance(module, (DDP, FSDP)) else module
+
+
 class _NullJsonLogger:
     def __enter__(self) -> _NullJsonLogger:
         return self
@@ -179,9 +185,7 @@ class NopretokenizeSFTDistributedHelper:
         )
 
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
-        if isinstance(module, (DDP, FSDP)):
-            return module.module
-        return module
+        return unwrap_module(module)
 
     def clip_grad_norm(self, module: torch.nn.Module, max_norm: float) -> float:
         if isinstance(module, FSDP):
@@ -373,12 +377,8 @@ class NopretokenizeSFTDistributedHelper:
         )
 
     def _reduce_device(self) -> torch.device:
-        if torch.cuda.is_available():
-            if self.is_distributed:
-                return torch.device(f"cuda:{self.local_rank}")
-            smallest_cuda_device = self._smallest_visible_cuda_device()
-            if smallest_cuda_device is not None:
-                return smallest_cuda_device
+        if self.is_distributed and torch.cuda.is_available():
+            return torch.device(f"cuda:{self.local_rank}")
         return torch.device("cpu")
 
     def _smallest_visible_cuda_device(self) -> torch.device | None:

@@ -20,9 +20,8 @@ def test_manual_cotrain_ray_tiny_completes_full_global_step(tmp_path: Path) -> N
     env["PYTHONPATH"] = str(repo)
     cmd = [
         sys.executable,
-        "-m",
-        "dreamervla.train",
-        "experiment=manual_cotrain_ray_tiny",
+        str(repo / "tests" / "helpers" / "run_manual_cotrain_fixture.py"),
+        str(repo / "tests" / "fixtures" / "manual_cotrain_ray_tiny.yaml"),
         "manual_cotrain.learner_update_step=1",
         f"training.out_dir={out_dir}",
     ]

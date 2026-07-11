@@ -1,3 +1,0 @@
-source_dir_patterns: []
-all_patterns: null
-processed_data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data

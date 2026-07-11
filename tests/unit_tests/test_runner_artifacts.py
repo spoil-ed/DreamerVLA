@@ -42,19 +42,19 @@ def test_base_runner_uses_rlinf_style_run_artifact_dirs(tmp_path: Path) -> None:
     )
 
 
-def test_base_runner_prefers_new_checkpoint_dir_but_resumes_legacy_latest(
+def test_base_runner_prefers_new_checkpoint_dir_but_resumes_compat_latest(
     tmp_path: Path,
 ) -> None:
     out_dir = tmp_path / "run"
-    legacy_latest = out_dir / "ckpt" / "latest.ckpt"
-    legacy_latest.parent.mkdir(parents=True)
-    legacy_latest.write_bytes(b"legacy")
+    compat_latest = out_dir / "ckpt" / "latest.ckpt"
+    compat_latest.parent.mkdir(parents=True)
+    compat_latest.write_bytes(b"legacy_payload")
     runner = _ConcreteRunner(OmegaConf.create({"training": {"out_dir": str(out_dir)}}))
 
     assert runner.get_checkpoint_path("latest") == out_dir / "checkpoints" / "latest.ckpt"
     assert (
         runner.get_checkpoint_path("latest", prefer_existing=True)
-        == legacy_latest.resolve()
+        == compat_latest.resolve()
     )
 
     new_latest = out_dir / "checkpoints" / "latest.ckpt"

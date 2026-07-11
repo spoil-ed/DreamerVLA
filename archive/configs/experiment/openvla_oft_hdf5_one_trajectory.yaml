@@ -1,5 +1,0 @@
-# @package _global_
-defaults:
-  - override /VLA: openvla_oft_one_trajectory
-  - override /task: openvla_onetraj_libero
-  - _self_

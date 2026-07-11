@@ -22,7 +22,7 @@ def test_rollout_batch_output_accepts_optional_hidden_sidecar():
     assert out.sidecars["hidden"] == hidden
 
 
-def test_rollout_batch_output_preserves_legacy_dict_shape():
+def test_rollout_batch_output_preserves_compat_dict_shape():
     actions = [np.zeros(7, dtype=np.float32)]
     hidden = [np.ones(4, dtype=np.float16)]
     out = RolloutBatchOutput(
@@ -33,7 +33,7 @@ def test_rollout_batch_output_preserves_legacy_dict_shape():
         sidecars={"obs_embedding": hidden},
     )
 
-    assert out.to_legacy_dict() == {
+    assert out.to_compat_dict() == {
         "actions": actions,
         "logprobs": [0.0],
         "values": [1.0],

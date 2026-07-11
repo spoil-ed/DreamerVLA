@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Smoke-test the online LIBERO env wrapper.
+"""Smoke-test the online LIBERO training env.
 
 Example:
   MUJOCO_GL=osmesa python -m dreamervla.diagnostics.smoke_libero_online_env --task-id 0 --steps 3
@@ -13,11 +13,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-from dreamervla.envs import ACTION_LOW, LIBEROOnlineEnv
+from dreamervla.envs import ACTION_LOW, DreamerVLAOnlineTrainEnv
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Smoke-test LIBEROOnlineEnv")
+    parser = argparse.ArgumentParser(description="Smoke-test DreamerVLAOnlineTrainEnv")
     parser.add_argument("--task-suite", default="libero_goal")
     parser.add_argument("--task-id", type=int, default=0)
     parser.add_argument("--steps", type=int, default=3)
@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    env = LIBEROOnlineEnv(
+    env = DreamerVLAOnlineTrainEnv(
         task_suite_name=args.task_suite,
         task_id=args.task_id,
         resolution=args.resolution,

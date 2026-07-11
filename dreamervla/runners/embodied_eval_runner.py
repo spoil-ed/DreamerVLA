@@ -55,20 +55,20 @@ from dreamervla.utils.torch_utils import freeze_module
 
 
 def normalize_dreamer_actor_input_source(source: Any) -> str:
-    """Normalize legacy eval actor-input names to the current latent path."""
+    """Validate the supported Dreamer actor-input source."""
     value = "latent" if source is None else str(source).strip().lower()
     if value == "rssm":
         return "latent"
-    if value not in {"latent", "encoder", "encoder_sequence"}:
+    if value not in {"latent", "encoder"}:
         raise ValueError(
             "eval.dreamer_actor_input_source must be one of: "
-            "latent, encoder, encoder_sequence"
+            "latent, encoder"
         )
     return value
 
 
 def normalize_dreamer_rollout_mode(mode: Any) -> str:
-    """Normalize legacy Dreamer eval rollout names to current mode names."""
+    """Normalize Dreamer eval rollout names to current mode names."""
     value = "stateless" if mode is None else str(mode).strip().lower()
     if value == "online_rssm":
         return "online_latent"
@@ -117,7 +117,7 @@ class EmbodiedEvalRunner(
             "num_images_in_input": int(
                 OmegaConf.select(cfg, "task.openvla_oft.num_images_in_input", default=1)
             ),
-            "policy_mode": "auto",
+            "policy_mode": "discrete",
             "unnorm_key": str(
                 OmegaConf.select(
                     cfg,
@@ -126,10 +126,14 @@ class EmbodiedEvalRunner(
                 )
             ),
             "expected_action_head_type": OmegaConf.select(
-                cfg, "task.openvla_oft.expected_action_head_type", default=None
+                cfg,
+                "task.openvla_oft.input_tokens.expected_action_head_type",
+                default=None,
             ),
             "expected_include_state": OmegaConf.select(
-                cfg, "task.openvla_oft.expected_include_state", default=None
+                cfg,
+                "task.openvla_oft.input_tokens.expected_include_state",
+                default=None,
             ),
             "_rank": 0,
         }
@@ -207,7 +211,7 @@ class EmbodiedEvalRunner(
                 OmegaConf.select(
                     cfg,
                     "task.openvla_oft.input_tokens.expected_obs_hidden_source",
-                    default="action_query",
+                    default="input_token_embedding",
                 )
             ),
             expected_action_head_type=policy_cfg.get("expected_action_head_type"),
@@ -244,7 +248,7 @@ class EmbodiedEvalRunner(
     ) -> list[int]:
         """Ordered init-state indices for one task's eval episodes.
 
-        Default (``enumerate_all_init_states=False``) preserves the historical
+        Default (``enumerate_all_init_states=False``) preserves the standard
         behavior of running the first ``num_episodes`` init states. When
         enabled, every init state is visited exactly once in ascending order
         (RLinf-style deterministic enumeration, no RNG).
@@ -959,24 +963,11 @@ class EmbodiedEvalRunner(
         policy_cfg = OmegaConf.select(cfg, "policy")
         if policy_cfg is None:
             raise ValueError("Dreamer eval requires `policy` in the saved cfg.")
-        if getattr(self, "_dreamer_policy_source", "ckpt") == "ckpt":
-            # The Dreamer checkpoint below fully restores the policy.  Avoid
-            # re-reading the 40GB VLA training checkpoint just to warm-start
-            # action_head during construction.
-            policy_cfg = copy.deepcopy(policy_cfg)
-            with open_dict(policy_cfg):
-                policy_cfg.init_action_head_ckpt = None
-            if self.distributed.is_main_process:
-                print(
-                    "  [Eval] policy source=ckpt; skipped action_head warm-start during policy init."
-                )
         self.policy = hydra.utils.instantiate(policy_cfg).to(self.device)
         if getattr(self, "_dreamer_policy_source", "ckpt") == "ckpt":
             self._load_module_state(self.policy, state_dicts["policy"], "policy")
         elif self.distributed.is_main_process:
-            print(
-                "  [Eval] using init policy/action_head; skipped Dreamer checkpoint policy state."
-            )
+            print("  [Eval] using configured initial policy state.")
         self.policy.eval()
 
         self.target_critic = None
@@ -1531,50 +1522,11 @@ class EmbodiedEvalRunner(
                 )
             action_chunk_env = self._unnorm_actions(action_chunk_raw)
 
-            action_hidden = None
-            wm_style_action_hidden = None
-            if self._use_action_query_obs_hidden():
-                hidden_states, seq_input_ids, seq_attention_mask = (
-                    self._encode_hidden_sequence_from_tokenized([tokens])
-                )
-                action_hidden = self.encoder.extract_action_hidden(
-                    hidden_states=hidden_states,
-                    input_ids=seq_input_ids,
-                    attention_mask=seq_attention_mask,
-                    target_token_id=self._action_token_id,
-                    eval=True,
-                )
-                try:
-                    wm_frame_history = self._dreamer_wm_frame_history(frame_history)
-                    wm_tokens = self._dreamer_wm_observation_input_ids(
-                        item_processor=item_processor,
-                        frame_history=wm_frame_history,
-                        state=state,
-                        task_description=task_description,
-                    )
-                    wm_hidden = self._obs_embedding_for_wm([wm_tokens])
-                    wm_style_action_hidden = self._action_hidden_tokens_for_trace(
-                        wm_hidden
-                    )
-                except Exception as exc:
-                    if bool(
-                        OmegaConf.select(
-                            self.cfg, "eval.trace_policy_debug_verbose", default=False
-                        )
-                    ):
-                        print(
-                            f"  [Eval][trace] failed to compute wm_style_action_hidden: {exc}",
-                            flush=True,
-                        )
-
             self._write_policy_trace(
                 source="vla",
                 state=state,
                 action_chunk_raw=action_chunk_raw,
                 action_chunk_env=action_chunk_env,
-                action_hidden=action_hidden,
-                wm_style_action_hidden=wm_style_action_hidden,
-                obs_embedding=wm_style_action_hidden,
                 input_ids=np.asarray(tokens, dtype=np.float32),
             )
             return [
@@ -1655,50 +1607,6 @@ class EmbodiedEvalRunner(
                 )
             hidden_tensor = self._hidden_tensor_from_eval_obs(obs_embedding)
             actor_input_source = getattr(self, "_dreamer_actor_input_source", "latent")
-            if actor_input_source == "encoder_sequence":
-                if self._wm_expects_pixel_images():
-                    raise RuntimeError(
-                        "eval.dreamer_actor_input_source=encoder_sequence requires tokenized VLA inputs"
-                    )
-                if input_ids is None:
-                    raise RuntimeError(
-                        "eval.dreamer_actor_input_source=encoder_sequence is not supported for OFT eval"
-                    )
-                hidden_states, seq_input_ids, seq_attention_mask = (
-                    self._encode_hidden_sequence_from_tokenized([input_ids])
-                )
-                hidden_states = self._maybe_add_hidden_noise(hidden_states)
-                action, _, _ = self.policy(
-                    {
-                        "mode": "sample",
-                        "hidden_states": hidden_states,
-                        "input_ids": seq_input_ids,
-                        "attention_mask": seq_attention_mask,
-                        "target_token_id": self._action_token_id,
-                        "deterministic": bool(
-                            getattr(self, "_dreamer_deterministic", True)
-                        ),
-                        "return_chunk": True,
-                    }
-                )
-                action_chunk = action.squeeze(0).detach().cpu().float().numpy()
-                actions = self._unnorm_actions(action_chunk)
-                if actions.ndim == 1:
-                    actions = actions[None]
-                if bool(
-                    OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)
-                ):
-                    print(
-                        "  [Eval][action-seq] "
-                        f"chunk_shape={tuple(actions.shape)} "
-                        f"first={np.array2string(actions[0], precision=4, suppress_small=False)}",
-                        flush=True,
-                    )
-                return [
-                    actions[i].astype(np.float32)
-                    for i in range(min(len(actions), int(action_steps)))
-                ]
-
             if actor_input_source == "encoder":
                 if not hasattr(self.world_model, "encoder"):
                     raise RuntimeError(
@@ -1783,15 +1691,15 @@ class EmbodiedEvalRunner(
         live_hidden = None
         recon_hidden = None
         if actor_input_source == "latent":
-            live_hidden = self._action_hidden_tokens_for_trace(hidden_tensor)
-            recon_hidden = self._action_hidden_tokens_for_trace(feat)
+            live_hidden = self._input_token_grid_for_trace(hidden_tensor)
+            recon_hidden = self._input_token_grid_for_trace(feat)
         self._write_policy_trace(
             source="dreamer",
             state=state,
             action_chunk_raw=action_chunk_np,
             action_chunk_env=np.stack(env_actions, axis=0),
-            live_action_hidden=live_hidden,
-            recon_action_hidden=recon_hidden,
+            live_input_token_grid=live_hidden,
+            recon_input_token_grid=recon_hidden,
             obs_embedding=obs_embedding,
             actor_input=feat,
             latent=latent if "latent" in locals() else None,

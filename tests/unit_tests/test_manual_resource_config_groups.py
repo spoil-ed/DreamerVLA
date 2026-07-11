@@ -2,21 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+
+
+def _tiny_fixture_with(*group_files: str):
+    root = Path(__file__).resolve().parents[2]
+    configs = [
+        OmegaConf.load(root / "tests" / "fixtures" / "manual_cotrain_ray_tiny.yaml")
+    ]
+    configs.extend(OmegaConf.load(root / "configs" / path) for path in group_files)
+    return OmegaConf.merge(*configs)
 
 
 def test_manual_precision_and_parallelism_groups_compose_for_ray_backend() -> None:
-    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
-
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=manual_cotrain_ray_tiny",
-                "+precision=bf16",
-                "+parallelism=fsdp",
-            ],
-        )
+    cfg = _tiny_fixture_with("precision/bf16.yaml", "parallelism/fsdp.yaml")
 
     assert cfg.learner.train_cfg.precision == "bf16"
     assert cfg.learner.num_workers == 1
@@ -29,16 +28,7 @@ def test_manual_precision_and_parallelism_groups_compose_for_ray_backend() -> No
 
 def test_scheduler_group_and_ray_scripts_are_manual_ops_entrypoints() -> None:
     root = Path(__file__).resolve().parents[2]
-    config_dir = str(root / "configs")
-
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=[
-                "experiment=manual_cotrain_ray_tiny",
-                "+scheduler=local",
-            ],
-        )
+    cfg = _tiny_fixture_with("scheduler/local.yaml")
 
     assert cfg.scheduler.cluster.num_nodes == 1
     assert cfg.scheduler.component_placement.learner.strategy == "node"

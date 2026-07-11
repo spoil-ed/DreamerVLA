@@ -7,7 +7,10 @@ from pathlib import Path
 
 import h5py
 
-from dreamervla.preprocess.sidecar_schema import required_demo_datasets_from_config
+from dreamervla.preprocess.sidecar_schema import (
+    required_demo_datasets_from_config,
+    validate_input_token_sidecar_dir,
+)
 from dreamervla.utils.hydra_config import script_namespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +100,11 @@ def validate_hdf5_dir(
     files = _hdf5_files(path)
     if require_config and not (path / "preprocess_config.json").is_file():
         raise RuntimeError(f"missing preprocess_config.json under: {path}")
+    if require_config:
+        try:
+            validate_input_token_sidecar_dir(path, reference_dir=reference_dir)
+        except (FileNotFoundError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
 
     if reference_dir is not None:
         reference = _project_path(reference_dir)

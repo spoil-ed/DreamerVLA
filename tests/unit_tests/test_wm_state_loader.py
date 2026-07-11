@@ -12,17 +12,18 @@ from dreamervla.runners.online_utils import load_world_model_state_from_dict
 class _TinyWM(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        # Current layout: reward_head.net.net.* (legacy ckpts use reward_head.net.*).
+        # Canonical nested reward-head layout.
         self.reward_head = nn.Module()
         self.reward_head.net = nn.Module()
         self.reward_head.net.net = nn.Linear(4, 1)
         self.backbone = nn.Linear(3, 3)
 
 
-def _legacy_state(*, mismatch: bool) -> dict[str, torch.Tensor]:
+def _state(*, mismatch: bool, old_reward_key: bool = False) -> dict[str, torch.Tensor]:
+    reward_prefix = "reward_head.net" if old_reward_key else "reward_head.net.net"
     state = {
-        "module.reward_head.net.weight": torch.zeros(1, 4),
-        "module.reward_head.net.bias": torch.zeros(1),
+        f"module.{reward_prefix}.weight": torch.zeros(1, 4),
+        f"module.{reward_prefix}.bias": torch.zeros(1),
         "module.backbone.bias": torch.zeros(3),
     }
     state["module.backbone.weight"] = (
@@ -31,39 +32,34 @@ def _legacy_state(*, mismatch: bool) -> dict[str, torch.Tensor]:
     return state
 
 
-def test_remap_and_skip_on_default() -> None:
+def test_exact_loader_strips_distributed_prefix() -> None:
     model = _TinyWM()
-    missing, _ = load_world_model_state_from_dict(model, _legacy_state(mismatch=True))
-    # module. stripped + reward head remapped -> loaded (not missing).
-    assert "reward_head.net.net.weight" not in missing
-    # shape-mismatched backbone.weight skipped -> reported missing.
-    assert "backbone.weight" in missing
-    assert "backbone.bias" not in missing
+    missing, unexpected = load_world_model_state_from_dict(model, _state(mismatch=False))
+    assert missing == []
+    assert unexpected == []
 
 
-def test_remap_off_leaves_legacy_key_unmapped() -> None:
-    model = _TinyWM()
-    missing, unexpected = load_world_model_state_from_dict(
-        model, _legacy_state(mismatch=False), remap_reward_head=False
-    )
-    # Without remap the legacy key stays reward_head.net.weight -> unexpected;
-    # the model's reward_head.net.net.weight goes unfilled -> missing.
-    assert "reward_head.net.weight" in unexpected
-    assert "reward_head.net.net.weight" in missing
-
-
-def test_skip_off_raises_on_shape_mismatch() -> None:
+def test_old_reward_key_is_rejected() -> None:
     model = _TinyWM()
     with pytest.raises(RuntimeError):
         load_world_model_state_from_dict(
-            model, _legacy_state(mismatch=True), skip_shape_mismatch=False
+            model,
+            _state(mismatch=False, old_reward_key=True),
+        )
+
+
+def test_shape_mismatch_is_rejected() -> None:
+    model = _TinyWM()
+    with pytest.raises(RuntimeError):
+        load_world_model_state_from_dict(
+            model, _state(mismatch=True)
         )
 
 
 def test_reset_reward_head_drops_reward_tensors() -> None:
     model = _TinyWM()
     missing, _ = load_world_model_state_from_dict(
-        model, _legacy_state(mismatch=False), reset_reward_head=True
+        model, _state(mismatch=False), reset_reward_head=True
     )
     assert "reward_head.net.net.weight" in missing
     assert "backbone.bias" not in missing

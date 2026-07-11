@@ -11,7 +11,7 @@ the verifier's best ``p(success)`` at ``score_step``.
 This is the DreamerVLA-side reproduction of the LUMOS/verl PPO loop. The
 rollout drives the WM in chunk mode (``ChunkAwareWorldModel.
 predict_next_chunk``) so one WM call advances ``action_chunks_len`` env
-steps in lockstep with the RynnVLA actor's K-step action chunk.
+steps in lockstep with the VLA actor's K-step action chunk.
 
 Contrast with ``dino_lumos_dense_step`` (``ppo/dense.py``), which decodes a
 dense per-step state-reward from the WM hidden at every imagined env-step.
@@ -20,7 +20,7 @@ dense per-step state-reward from the WM hidden at every imagined env-step.
         → encode to WM latent
         → repeat for GRPO group
         → loop episode_max_steps // K chunks:
-              RynnVLA actor (chunk-output)  → action_chunk[B, K, 7]
+              VLA actor (chunk-output)  → action_chunk[B, K, 7]
               chunk WM (chunk-input)     → next K latent frames
               accumulate K latents to a video buffer
         → LatentSuccessClassifier.predict_success on the video
@@ -84,7 +84,7 @@ def build_valid_chunk_count(
     Args:
         finish_step: [B] env-step index of the success frame, or T_max-1 for
             failed episodes.
-        chunk_size: K, env-steps per actor decision (e.g., 5 for RynnVLA).
+        chunk_size: K, env-steps per actor decision (e.g., 5 for VLA).
         num_chunks: total chunks in the episode (=T_max // K).
 
     Returns:
@@ -237,7 +237,7 @@ def _predict_next_chunk_mb(
     The imagination forward is per-rollout independent, so slicing the batch and
     concatenating the outputs is numerically identical to one full call — but the
     attention activations are bounded to ``micro_batch`` rollouts. ``micro_batch
-    <= 0`` keeps the single full call. This is a SECONDARY bound inside a slice;
+    <= 0`` keeps the single full call. This is an inner bound inside a slice;
     it is also the only bound on the WM forward for the full-batch fallback.
     """
     b = int(action_chunk.shape[0])
@@ -333,7 +333,7 @@ def _imagine_and_score_slice(
             .to(feat_dtype)
         )
         with torch.no_grad():
-            # Stochastic full action chunk — the PPO action unit for RynnVLA/LUMOS:
+            # Stochastic full action chunk — the PPO action unit for VLA/LUMOS:
             # one policy decision emits K env actions.
             action_chunk, old_lp, _sample_extra = policy(
                 {
@@ -542,7 +542,7 @@ def dino_lumos_step(
     """One LUMOS PPO step.
 
     Shape conventions:
-        K       = algorithm_cfg.lumos.chunk_size (RynnVLA actor time_horizon, default 5)
+        K       = algorithm_cfg.lumos.chunk_size (VLA actor time_horizon, default 5)
         T_max   = algorithm_cfg.lumos.episode_max_steps (libero_goal: 300)
         num_chunks = T_max // K
         group_size = algorithm_cfg.ppo_rollouts_per_start
@@ -574,9 +574,9 @@ def dino_lumos_step(
         lumos_cfg.get("filter_zero_variance_groups", True)
     )
 
-    legacy_group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
-    group_size_min = int(lumos_cfg.get("ppo_rollouts_per_start_min", legacy_group_size))
-    group_size_max = int(lumos_cfg.get("ppo_rollouts_per_start_max", legacy_group_size))
+    compat_group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
+    group_size_min = int(lumos_cfg.get("ppo_rollouts_per_start_min", compat_group_size))
+    group_size_max = int(lumos_cfg.get("ppo_rollouts_per_start_max", compat_group_size))
     if group_size_min < 1 or group_size_max < group_size_min:
         raise ValueError(
             "algorithm.lumos ppo rollout bounds must satisfy "

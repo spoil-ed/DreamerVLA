@@ -184,7 +184,7 @@ class _EvalFrameHistoryExtractor:
     def __init__(self, history_length: int) -> None:
         self._history_length = max(1, int(history_length))
         self._frame_history: list[tuple[Image.Image, Image.Image]] = []
-        # Optional per-slot OFT base-eval state (None for RynnVLA). The OFT base
+        # Optional per-slot OFT base-eval state (None for VLA). The OFT base
         # override's ``_generate_actions`` reads a single shared extractor plus an
         # ``env_step`` from ``self._libero_current_eval_context``; parallel slots
         # step in lockstep, so each slot must carry its OWN extractor and step
@@ -221,9 +221,9 @@ class _EvalFrameHistoryExtractor:
             "state": record["state"],
             "task_description": task_description,
             # Raw LIBERO obs for the OFT base override's _generate_actions,
-            # which reads self._libero_current_raw_obs (ignored by RynnVLA).
+            # which reads self._libero_current_raw_obs (ignored by VLA).
             "raw_obs": record.get("raw_obs"),
-            # Per-slot OFT base-eval state (None/0 for RynnVLA); the parallel
+            # Per-slot OFT base-eval state (None/0 for VLA); the parallel
             # _infer_fn threads these onto self before this slot's generate call.
             "oft_extractor": self._oft_extractor,
             "env_step": env_step,
@@ -796,7 +796,7 @@ class PretokenizeVLARunner(BaseRunner):
         return metrics
 
     def _make_parallel_oft_slot_extractor(self) -> Any:
-        """Return a fresh per-slot OFT extractor, or None (RynnVLA / non-OFT).
+        """Return a fresh per-slot OFT extractor, or None (VLA / non-OFT).
 
         Overridden by the OFT base eval runner to hand each parallel slot its own
         OFTRolloutHiddenExtractor instance (isolated frame deque + prompt cache).

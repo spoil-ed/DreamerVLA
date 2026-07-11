@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class LatentToOpenVLAHiddenStateActor(BaseActor):
-    """Bridge query-before VLA hidden states to OpenVLA discrete action tokens."""
+    """Bridge ``[B,256,4096]`` input tokens to internal action slots."""
 
     def __init__(
         self,
         hidden_dim: int | None = None,
-        source_token_count: int | None = None,
+        source_token_count: int | None = 256,
         source_token_dim: int = 4096,
         hidden_state_dim: int = 4096,
         action_dim: int = 7,
@@ -41,19 +41,38 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         head_type: str = "oft_discrete_token",
         **kwargs: Any,
     ) -> None:
-        if "action_hidden_dim" in kwargs:
+        if "hidden_token_dim" in kwargs:
             raise TypeError(
                 "LatentToOpenVLAHiddenStateActor uses hidden_state_dim; "
-                "action_hidden_dim belongs only to legacy action-hidden routes."
+                "hidden_token_dim belongs to the removed 56x1024 route."
+            )
+        if hidden_dim is not None:
+            raise TypeError(
+                "flat hidden_dim observations are removed; pass tokenized "
+                "input_token_embedding [B,256,4096]"
             )
         super().__init__()
-        self.source_token_count = (
-            int(source_token_count) if source_token_count is not None else None
-        )
+        self.source_token_count = int(source_token_count or 256)
         self.source_token_dim = int(source_token_dim)
+        if self.source_token_count != 256 or self.source_token_dim != 4096:
+            raise ValueError(
+                "LatentToOpenVLAHiddenStateActor requires source tokens "
+                "[256,4096], got "
+                f"[{self.source_token_count},{self.source_token_dim}]"
+            )
         self.hidden_state_dim = int(hidden_state_dim)
         self.action_dim = int(action_dim)
         self.time_horizon = int(time_horizon)
+        if self.hidden_state_dim != 4096:
+            raise ValueError(
+                "OpenVLA decoder hidden_state_dim is fixed to 4096, got "
+                f"{self.hidden_state_dim}"
+            )
+        if self.action_dim != 7 or self.time_horizon != 8:
+            raise ValueError(
+                "LIBERO mainline action geometry is fixed to [8,7], got "
+                f"[{self.time_horizon},{self.action_dim}]"
+            )
         self.action_token_bins = int(action_token_bins)
         self.min_action = float(min_action)
         self.max_action = float(max_action)
@@ -77,28 +96,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             )
 
         self.action_token_count = self.time_horizon * self.action_dim
-        expected_flat = (
-            None
-            if self.source_token_count is None
-            else self.source_token_count * self.source_token_dim
-        )
-        self.hidden_dim = (
-            int(hidden_dim)
-            if hidden_dim is not None
-            else int(expected_flat)
-            if expected_flat is not None
-            else None
-        )
-        if (
-            expected_flat is not None
-            and self.hidden_dim is not None
-            and self.hidden_dim != expected_flat
-        ):
-            raise ValueError(
-                "LatentToOpenVLAHiddenStateActor flat hidden dim mismatch: "
-                f"hidden_dim={self.hidden_dim}, expected source_token_count * "
-                f"source_token_dim = {expected_flat}"
-            )
+        self.hidden_dim = None
 
         lm_head_state = (
             self._load_lm_head_state_dict(str(init_lm_head_ckpt))
@@ -227,21 +225,6 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         return extract_state_dict(candidates, strip_prefixes, {"weight"})
 
     def _source_tokens(self, hidden: torch.Tensor) -> torch.Tensor:
-        if hidden.ndim == 2:
-            if self.hidden_dim is not None and int(hidden.shape[-1]) != self.hidden_dim:
-                raise ValueError(
-                    f"flat hidden dim mismatch: got {hidden.shape[-1]}, expected {self.hidden_dim}"
-                )
-            if self.source_token_count is None:
-                if int(hidden.shape[-1]) % self.source_token_dim != 0:
-                    raise ValueError(
-                        "flat hidden dim must be divisible by source_token_dim when "
-                        "source_token_count is omitted"
-                    )
-                token_count = int(hidden.shape[-1]) // self.source_token_dim
-            else:
-                token_count = self.source_token_count
-            return hidden.reshape(hidden.shape[0], token_count, self.source_token_dim)
         if hidden.ndim == 3:
             if int(hidden.shape[-1]) != self.source_token_dim:
                 raise ValueError(
@@ -256,7 +239,8 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 )
             return hidden
         raise ValueError(
-            f"hidden must be flat [B,N*D] or tokenized [B,N,D], got {tuple(hidden.shape)}"
+            "hidden must be tokenized input_token_embedding [B,256,4096]; "
+            f"flat observations are closed, got {tuple(hidden.shape)}"
         )
 
     def _hidden_state_slots(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -324,6 +308,12 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
         if mode == "sample":
             deterministic = bool(batch.get("deterministic", False))
+            logprob_type = str(batch.get("logprob_type", "sequence")).lower()
+            if logprob_type not in {"sequence", "token_level"}:
+                raise ValueError(
+                    "logprob_type must be 'sequence' or 'token_level', got "
+                    f"{logprob_type!r}"
+                )
             classes = greedy_classes if deterministic else dist.sample()
             token_ids = self._classes_to_token_ids(classes)
             action_chunk = self._chunk_from_classes(classes)
@@ -342,7 +332,13 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 "std_chunk": torch.zeros_like(greedy_chunk),
             }
             if bool(batch.get("return_chunk", False)):
-                log_prob = token_log_prob.sum(dim=-1)
+                log_prob = (
+                    token_log_prob.reshape(
+                        token_log_prob.shape[0], self.time_horizon, self.action_dim
+                    )
+                    if logprob_type == "token_level"
+                    else token_log_prob.sum(dim=-1)
+                )
                 return action_chunk, log_prob, extra
             first_action = action_chunk[:, 0, :]
             first_log_prob = token_log_prob.reshape(
@@ -352,6 +348,12 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
         if mode == "evaluate":
             action = batch["action"]
+            logprob_type = str(batch.get("logprob_type", "sequence")).lower()
+            if logprob_type not in {"sequence", "token_level"}:
+                raise ValueError(
+                    "logprob_type must be 'sequence' or 'token_level', got "
+                    f"{logprob_type!r}"
+                )
             action_token_ids = batch.get("action_token_ids")
             if action_token_ids is not None:
                 classes = self._token_ids_to_classes(action_token_ids.to(logits.device))
@@ -374,7 +376,17 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
             token_log_prob = dist.log_prob(classes)
             token_entropy = dist.entropy()
-            if action.ndim == 3:
+            if logprob_type == "token_level" and action.ndim == 3:
+                log_prob = token_log_prob.reshape(
+                    token_log_prob.shape[0], self.time_horizon, self.action_dim
+                )
+                entropy = token_entropy.reshape(
+                    token_entropy.shape[0], self.time_horizon, self.action_dim
+                )
+            elif logprob_type == "token_level" and action.ndim == 2:
+                log_prob = token_log_prob[:, : self.action_dim]
+                entropy = token_entropy[:, : self.action_dim]
+            elif action.ndim == 3:
                 log_prob = token_log_prob.sum(dim=-1)
                 entropy = token_entropy.sum(dim=-1)
             elif action.ndim == 2:

@@ -21,7 +21,7 @@ training:
   resume: false
 
 collect:
-  policy_mode: auto        # auto-detect l1 vs discrete from the checkpoint
+  policy_mode: discrete
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
   gpu_id: 0                # single-process device; ignored under torchrun
   task_ids: all            # "all", csv ("0,2"), int, or list

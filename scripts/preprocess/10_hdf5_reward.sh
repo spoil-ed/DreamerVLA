@@ -10,7 +10,7 @@ LIBERO_SUITE="${LIBERO_SUITE:-${TASK}}"
 TASK_NAME="${TASK_NAME:-${TASK}}"
 if [[ "${LIBERO_SUITE}" == "${TASK}" ]]; then
   case "${TASK_NAME}" in
-    rynnvla_libero|openvla_onetraj_libero) LIBERO_SUITE="libero_goal" ;;
+    openvla_onetraj_libero) LIBERO_SUITE="libero_goal" ;;
   esac
 fi
 ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"
@@ -40,7 +40,7 @@ EOF
 raw_hdf5="$(find "${RAW_LIBERO_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${raw_hdf5}" ]]; then
   echo "No raw LIBERO HDF5 files found under: ${RAW_LIBERO_DIR}" >&2
-  echo "Run: bash scripts/download_assets.sh download.rynnvla=false download.libero=true env.LIBERO_SUITES=${LIBERO_SUITE}" >&2
+  echo "Run: bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=${LIBERO_SUITE}" >&2
   exit 2
 fi
 

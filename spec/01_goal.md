@@ -41,9 +41,12 @@ bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal
 - `ColdStartRayCollectRunner`：Ray collection。
 - `OnlineCotrainPipelineRunner`：sync warmup + online cotrain pipeline。
 - `ManualCotrainRayRunner`：当前 manual Ray cotrain route。
-- `OnlineCotrainRunner` / `OnlineCotrainRayRunner`：保留的 online cotrain 路线。
-- `LatentWMRunner`、`ActionHiddenWMRunner`、`LatentClassifierRunner`：单组件训练。
-- `OpenVLAOFTRunner`、`VLASFTRunner`、`EmbodiedEvalRunner`：VLA 训练与评估入口。
+- `OnlineCotrainRunner` / `OnlineCotrainRayRunner`：同步与可选 Ray online cotrain 路线。
+- `LatentClassifierRunner`：classifier 单组件训练。
+- `EmbodiedEvalRunner`：VLA / DreamerVLA 统一评估入口。
+
+完整 replay 的 world-model 单组件训练复用
+`OnlineCotrainPipelineRunner` 的 warmup 路径，不另设第二套 WM Runner 接口。
 
 ## Run Artifacts
 

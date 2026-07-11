@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
+def test_input_token_pipeline_uses_traj1_proprio_language_wm_profile():
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -15,7 +15,10 @@ def test_oft_backbone_pipeline_uses_traj1_proprio_language_wm_profile():
 
     wm = cfg.world_model
     classifier = cfg.classifier
-    assert cfg.latent_type == "backbone_latent"
+    assert "latent_type" not in cfg
+    assert cfg.env.obs_hidden_source == "input_token_embedding"
+    assert wm.token_count == 256
+    assert wm.token_dim == 4096
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every == 500
@@ -102,8 +105,8 @@ def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(
 
     assert cls_cfg.task.name == wm_cfg.task.name == "OpenVLA_Onetraj_LIBERO"
     assert cls_cfg.data.success_dir_hidden == wm_cfg.offline_warmup.hidden_dir
-    assert cls_cfg.data.success_dir_raw == cls_cfg.task.openvla_oft.hdf5_reward_dir
-    assert wm_cfg.offline_warmup.data_dir == cls_cfg.task.openvla_oft.hdf5_reward_dir
+    assert cls_cfg.data.success_dir_raw == cls_cfg.task.collected_reward_dir
+    assert wm_cfg.offline_warmup.data_dir == cls_cfg.task.collected_reward_dir
     assert wm_cfg.offline_warmup.data_dir == cls_cfg.data.success_dir_raw
 
 

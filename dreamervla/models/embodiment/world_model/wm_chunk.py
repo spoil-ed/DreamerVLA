@@ -142,7 +142,7 @@ class _WMStyleTransformer(nn.Module):
 
 
 class ChunkAwareWorldModel(WorldModel):
-    """Chunk WM over original VLA hidden tokens with WM-style conditioning.
+    """Chunk WM over OpenVLA-OFT input tokens with WM-style conditioning.
 
     The transition model keeps each observation token in source token space and
     concatenates an encoded action to every observation token channel, matching
@@ -155,8 +155,7 @@ class ChunkAwareWorldModel(WorldModel):
     def __init__(
         self,
         *args: Any,
-        chunk_size: int = 5,
-        mask_init_scale: float = 0.02,
+        chunk_size: int = 8,
         chunk_rollout_chunks: int = 1,
         chunk_rollout_loss_scale: float = 0.0,
         grad_checkpoint: bool = False,
@@ -178,7 +177,7 @@ class ChunkAwareWorldModel(WorldModel):
         requested_model_dim = (
             args_list[5] if len(args_list) > 5 else kwargs.get("model_dim")
         )
-        token_dim_hint = int(args_list[3] if len(args_list) > 3 else kwargs.get("token_dim", 1024))
+        token_dim_hint = int(args_list[3] if len(args_list) > 3 else kwargs.get("token_dim", 4096))
         heads_hint = int(args_list[7] if len(args_list) > 7 else kwargs.get("heads", 8))
         safe_parent_model_dim = max(token_dim_hint, heads_hint)
         if safe_parent_model_dim % heads_hint != 0:
@@ -190,7 +189,6 @@ class ChunkAwareWorldModel(WorldModel):
             kwargs["model_dim"] = safe_parent_model_dim
 
         super().__init__(*args_list, **kwargs)
-        del mask_init_scale  # Kept only for old config/checkpoint compatibility.
         self.action_emb_dim = int(action_emb_dim)
         self.num_action_repeat = int(num_action_repeat)
         self.action_condition_dim = self.action_emb_dim * self.num_action_repeat
@@ -626,7 +624,7 @@ class ChunkAwareWorldModel(WorldModel):
             if history.ndim == 4 and history.shape[-1] == self.obs_dim:
                 history = history[:, -1]
             return self._obs_tokens_from_obs(history)[:, -1]
-        raise KeyError("RynnVLA latent must contain `hidden` or `history`.")
+        raise KeyError("VLA latent must contain `hidden` or `history`.")
 
     def _latent_history(
         self, latent: dict[str, torch.Tensor] | torch.Tensor
@@ -767,8 +765,7 @@ class ChunkAwareWorldModel(WorldModel):
 
         Args:
             latent: dict with ``history`` [B,H,N,token_dim], ``actions`` [B,H,A],
-                ``hidden`` [B,N,token_dim]; flat legacy hidden tensors are also
-                accepted and normalized at the boundary.
+                and tokenized ``hidden`` [B,N,token_dim].
             action_chunk: [B, K, A] where K == ``self.chunk_size``.
 
         Returns dict with:
@@ -1115,85 +1112,3 @@ class ChunkAwareWorldModel(WorldModel):
         if isinstance(batch, dict) and batch.get("mode") == "chunk_loss":
             return self.chunk_loss(batch)
         return super().forward(batch)
-
-    # ------------------------------------------------------------------ #
-    # Ckpt loading                                                       #
-    # ------------------------------------------------------------------ #
-    @classmethod
-    def from_rynn_wm_ckpt(
-        cls,
-        ckpt_path: str | Path,
-        chunk_size: int = 5,
-        device: str | torch.device = "cpu",
-        strict: bool = False,
-    ) -> ChunkAwareWorldModel:
-        """Load a chunk WM checkpoint using config stored in the checkpoint.
-
-        This helper expects a checkpoint whose config matches the current
-        WM-style concat-action architecture.  Older projection or
-        mask-token chunk checkpoints are not shape-compatible.
-        """
-        sd = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-        if not isinstance(sd, dict) or "model" not in sd:
-            raise ValueError(
-                f"ckpt {ckpt_path} does not have the expected 'model' key; "
-                f"top-level keys = {list(sd) if isinstance(sd, dict) else type(sd)}"
-            )
-        cfg_blob = sd.get("cfg", {})
-        wm_cfg = (
-            cfg_blob.get("world_model", cfg_blob.get("model", {}))
-            if hasattr(cfg_blob, "get")
-            else {}
-        )
-        if not wm_cfg:
-            raise ValueError(
-                f"ckpt {ckpt_path} cfg blob missing 'world_model' section; "
-                f"cannot reconstruct architecture"
-            )
-        kwargs: dict[str, Any] = {}
-        for key in (
-            "obs_dim",
-            "action_dim",
-            "token_count",
-            "token_dim",
-            "model_dim",
-            "latent_stage",
-            "latent_source",
-            "action_emb_dim",
-            "num_action_repeat",
-            "proprio_dim",
-            "proprio_emb_dim",
-            "num_proprio_repeat",
-            "proprio_reconstruction_loss_scale",
-            "lang_dim",
-            "lang_emb_dim",
-            "num_lang_repeat",
-            "dim_head",
-            "depth",
-            "heads",
-            "mlp_dim",
-            "dropout",
-            "num_hist",
-            "num_pred",
-            "max_seq_len",
-            "hidden_loss_scale",
-            "cosine_loss_scale",
-            "rollout_loss_scale",
-            "rollout_horizon",
-            "rollout_context",
-            "reward_head_type",
-            "reward_loss_scale",
-            "reward_hidden_dim",
-            "reward_init_logit",
-            "reward_pos_weight",
-            "return_predictions",
-        ):
-            if key in wm_cfg:
-                kwargs[key] = wm_cfg[key]
-        wm = cls(chunk_size=chunk_size, **kwargs)
-        missing, unexpected = wm.load_state_dict(sd["model"], strict=False)
-        if strict and (missing or unexpected):
-            raise RuntimeError(
-                f"strict load_state_dict failed: missing={missing[:5]} unexpected={unexpected[:5]}"
-            )
-        return wm.to(device)

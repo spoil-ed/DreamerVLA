@@ -105,7 +105,16 @@ def _hydra_string_value(value: str) -> str:
     return f"'{value}'" if "," in value else value
 
 
-def _write_complete_collected_pair(reward, hidden, shard_name: str, task_ids: list[int]) -> None:
+def _write_complete_collected_pair(
+    reward,
+    hidden,
+    shard_name: str,
+    task_ids: list[int],
+    *,
+    obs_hidden_source: str = "input_token_embedding",
+    token_count: int = 256,
+    token_dim: int = 4096,
+) -> None:
     import h5py
     import numpy as np
 
@@ -137,10 +146,36 @@ def _write_complete_collected_pair(reward, hidden, shard_name: str, task_ids: li
             obs.create_dataset("gripper_states", data=np.zeros((1, 2), dtype=np.float32))
             obs.create_dataset("joint_states", data=np.zeros((1, 7), dtype=np.float32))
             hdemo = hdata.create_group(f"demo_{idx}")
-            hdemo.create_dataset("obs_embedding", data=np.zeros((1, 8), dtype=np.float16))
+            hdemo.create_dataset(
+                "obs_embedding",
+                shape=(1, token_count, token_dim),
+                dtype=np.float16,
+                fillvalue=0,
+            )
             hdemo.attrs["complete"] = True
         rdata.attrs["num_demos"] = len(task_ids)
         hdata.attrs["num_demos"] = len(task_ids)
+    (hidden / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "action_head_type": "oft_discrete_token",
+                "obs_hidden_source": obs_hidden_source,
+                "hidden_key": "obs_embedding",
+                "token_count": token_count,
+                "token_dim": token_dim,
+                "hidden_dim": token_count * token_dim,
+                "obs_embedding_shape": [token_count, token_dim],
+                "hidden_storage_format": "tokenized",
+                "num_images_in_input": 1,
+                "patches_per_image": token_count,
+                "history": 1,
+                "include_state": False,
+                "sidecar_schema_version": 1,
+                "required_demo_datasets": ["obs_embedding"],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path) -> None:
@@ -152,7 +187,7 @@ def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path)
 
     assert plan.mode == "ray"
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.input_token_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.input_token_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
@@ -275,7 +310,7 @@ def test_noray_launcher_plan_uses_pure_hydra_collector(tmp_path) -> None:
     assert plan.mode == "noray"
     assert "experiment=collect_rollouts_ray" not in plan.collect_cmd
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.input_token_hidden_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.input_token_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
@@ -619,6 +654,13 @@ def test_launcher_aggregates_collection_after_collect(tmp_path, monkeypatch, cap
 
         def run(self, cmd, **_kwargs):
             self.calls.append(list(cmd))
+            if len(self.calls) == 1:
+                _write_complete_collected_pair(
+                    tmp_path / "collected_rollouts/libero_goal/reward",
+                    tmp_path / "collected_rollouts/libero_goal/hidden",
+                    "ray_shard_000.hdf5",
+                    [0],
+                )
 
     monkeypatch.setattr(mod, "subprocess", _Recorder())
 
@@ -641,9 +683,22 @@ def test_launcher_prints_phase_start_banners(tmp_path, monkeypatch, capsys) -> N
 
         def run(self, cmd, **_kwargs):
             self.calls.append(list(cmd))
+            if len(self.calls) == 1:
+                _write_complete_collected_pair(
+                    tmp_path / "collected_rollouts/libero_goal/reward",
+                    tmp_path / "collected_rollouts/libero_goal/hidden",
+                    "ray_shard_000.hdf5",
+                    [0],
+                )
 
     rec = _Recorder()
     monkeypatch.setattr(mod, "subprocess", rec)
+    _write_complete_collected_pair(
+        tmp_path / "collected_rollouts/libero_goal/reward",
+        tmp_path / "collected_rollouts/libero_goal/hidden",
+        "ray_shard_000.hdf5",
+        [0],
+    )
 
     exit_code = mod.main(
         [f"run_root={tmp_path}", f"data_root={tmp_path}", "skip_asset_check=true"]
@@ -671,6 +726,12 @@ def test_launcher_banner_marks_skipped_collection(tmp_path, monkeypatch, capsys)
 
     rec = _Recorder()
     monkeypatch.setattr(mod, "subprocess", rec)
+    _write_complete_collected_pair(
+        tmp_path / "collected_rollouts/libero_goal/reward",
+        tmp_path / "collected_rollouts/libero_goal/hidden",
+        "ray_shard_000.hdf5",
+        [0],
+    )
 
     exit_code = mod.main(
         [
@@ -827,6 +888,8 @@ def test_collect_resume_function_handles_skip_and_manifest(tmp_path, monkeypatch
     with h5py.File(str(reward / "ray_shard_000.hdf5"), "w") as rf, h5py.File(
         str(hidden / "ray_shard_000.hdf5"), "w"
     ) as hf:
+        rf.attrs["complete"] = True
+        hf.attrs["complete"] = True
         rdata = rf.create_group("data")
         hdata = hf.create_group("data")
         for idx in range(2):
@@ -848,9 +911,35 @@ def test_collect_resume_function_handles_skip_and_manifest(tmp_path, monkeypatch
             obs.create_dataset("ee_states", data=[[0] * 6])
             obs.create_dataset("gripper_states", data=[[0] * 2])
             obs.create_dataset("joint_states", data=[[0] * 7])
-            hdata.create_group(f"demo_{idx}").create_dataset("obs_embedding", data=[[0] * 8])
+            hdata.create_group(f"demo_{idx}").create_dataset(
+                "obs_embedding",
+                shape=(1, 256, 4096),
+                dtype="float16",
+                fillvalue=0,
+            )
         rdata.attrs["num_demos"] = 2
         hdata.attrs["num_demos"] = 2
+    (hidden / "preprocess_config.json").write_text(
+        json.dumps(
+            {
+                "action_head_type": "oft_discrete_token",
+                "obs_hidden_source": "input_token_embedding",
+                "hidden_key": "obs_embedding",
+                "token_count": 256,
+                "token_dim": 4096,
+                "hidden_dim": 1_048_576,
+                "obs_embedding_shape": [256, 4096],
+                "hidden_storage_format": "tokenized",
+                "num_images_in_input": 1,
+                "patches_per_image": 256,
+                "history": 1,
+                "include_state": False,
+                "sidecar_schema_version": 1,
+                "required_demo_datasets": ["obs_embedding"],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = mod.collect_resume(
         plan,
@@ -946,21 +1035,137 @@ def test_reused_coldstart_output_validation_requires_sidecar_metadata(tmp_path) 
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
-    reward_dir.mkdir()
-    hidden_dir.mkdir()
-    (reward_dir / "shard_000.hdf5").touch()
-    (hidden_dir / "shard_000.hdf5").touch()
+    _write_complete_collected_pair(
+        reward_dir,
+        hidden_dir,
+        "shard_000.hdf5",
+        [0],
+    )
+    config_path = hidden_dir / "preprocess_config.json"
+    config_text = config_path.read_text(encoding="utf-8")
+    config_path.unlink()
 
     errors = validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir)
 
     assert any("preprocess_config.json" in error for error in errors)
 
-    (hidden_dir / "preprocess_config.json").write_text(
-        '{"hidden_key": "obs_embedding"}',
-        encoding="utf-8",
-    )
+    config_path.write_text(config_text, encoding="utf-8")
 
     assert validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir) == []
+
+
+def test_reused_coldstart_output_validation_rejects_56_token_sidecar(tmp_path) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import validate_collected_outputs
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    _write_complete_collected_pair(
+        reward_dir,
+        hidden_dir,
+        "shard_000.hdf5",
+        [0],
+        obs_hidden_source="hidden_token",
+        token_count=56,
+    )
+
+    errors = validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir)
+
+    assert any("obs_hidden_source" in error for error in errors)
+    assert any("token_count" in error for error in errors)
+    assert any("obs_embedding_shape" in error for error in errors)
+
+
+def test_collect_resume_rejects_count_complete_56_token_collection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import dreamervla.launchers.coldstart_warmup_cotrain as mod
+
+    monkeypatch.setenv("DVLA_DATA_ROOT", str(tmp_path))
+    plan = mod.build_pipeline_plan(
+        mode="ray",
+        profile="smoke",
+        run_root=tmp_path / "run",
+        python="python",
+        launcher_cfg=_launcher_cfg(),
+    )
+    _write_complete_collected_pair(
+        plan.reward_dir,
+        plan.hidden_dir,
+        "ray_shard_000.hdf5",
+        [0, 1],
+        obs_hidden_source="hidden_token",
+        token_count=56,
+    )
+
+    with pytest.raises(ValueError, match="input-token schema"):
+        mod.collect_resume(
+            plan,
+            target_episodes=2,
+            num_tasks=2,
+            skip_collect=False,
+        )
+
+
+def test_collected_validation_rejects_56x1024_in_later_shard(tmp_path) -> None:
+    import h5py
+
+    from dreamervla.launchers.coldstart_warmup_cotrain import validate_collected_outputs
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    _write_complete_collected_pair(
+        reward_dir, hidden_dir, "shard_000.hdf5", [0]
+    )
+    _write_complete_collected_pair(
+        reward_dir, hidden_dir, "shard_001.hdf5", [1]
+    )
+    with h5py.File(hidden_dir / "shard_001.hdf5", "r+") as handle:
+        demo = handle["data/demo_0"]
+        del demo["obs_embedding"]
+        demo.create_dataset(
+            "obs_embedding",
+            shape=(1, 56, 1024),
+            dtype="float16",
+            fillvalue=0,
+        )
+
+    errors = validate_collected_outputs(
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+    )
+
+    assert any("shard_001.hdf5" in error for error in errors)
+    assert any("(1, 56, 1024)" in error for error in errors)
+
+
+def test_collected_validation_rejects_56x1024_in_later_demo(tmp_path) -> None:
+    import h5py
+
+    from dreamervla.launchers.coldstart_warmup_cotrain import validate_collected_outputs
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    _write_complete_collected_pair(
+        reward_dir, hidden_dir, "shard_000.hdf5", [0, 1]
+    )
+    with h5py.File(hidden_dir / "shard_000.hdf5", "r+") as handle:
+        demo = handle["data/demo_1"]
+        del demo["obs_embedding"]
+        demo.create_dataset(
+            "obs_embedding",
+            shape=(1, 56, 1024),
+            dtype="float16",
+            fillvalue=0,
+        )
+
+    errors = validate_collected_outputs(
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+    )
+
+    assert any("data/demo_1/obs_embedding" in error for error in errors)
+    assert any("(1, 56, 1024)" in error for error in errors)
 
 
 def test_e2e_shell_scripts_select_expected_modes() -> None:
@@ -1837,6 +2042,12 @@ def test_async_cotrain_phase_online_only_consolidates_missing_ray_init_ckpt(
     ckpt_dir.mkdir(parents=True)
     torch.save({"world_model": {"wm": torch.ones(1)}}, ckpt_dir / "wm_warmup.ckpt")
     torch.save({"classifier": {"cls": torch.zeros(1)}}, ckpt_dir / "classifier_warmup.ckpt")
+    _write_complete_collected_pair(
+        tmp_path / "collected_rollouts/libero_goal/reward",
+        tmp_path / "collected_rollouts/libero_goal/hidden",
+        "ray_shard_000.hdf5",
+        [0],
+    )
 
     exit_code = mod.main(
         [
@@ -1877,11 +2088,18 @@ def test_launcher_main_restores_dvla_data_root_after_inline_call(
     ckpt_dir.mkdir(parents=True)
     torch.save({"world_model": {"wm": torch.ones(1)}}, ckpt_dir / "wm_warmup.ckpt")
     torch.save({"classifier": {"cls": torch.zeros(1)}}, ckpt_dir / "classifier_warmup.ckpt")
+    inline_data = tmp_path / "inline_data"
+    _write_complete_collected_pair(
+        inline_data / "collected_rollouts/libero_goal/reward",
+        inline_data / "collected_rollouts/libero_goal/hidden",
+        "ray_shard_000.hdf5",
+        [0],
+    )
 
     exit_code = mod.main(
         [
             f"run_root={run_root}",
-            f"data_root={tmp_path / 'inline_data'}",
+            f"data_root={inline_data}",
             "cotrain_engine=async",
             "cotrain_phase=online",
             "skip_asset_check=false",

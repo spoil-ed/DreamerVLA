@@ -1,108 +1,53 @@
-"""OFT hidden-state extractor for online rollout collection.
+"""OpenVLA-OFT input-token extractor for online rollout collection.
 
-The sidecar ``obs_embedding`` field (shape ``(229376,)`` float16 per frame)
-is computed by:
+Each frame emits projected current-frame vision patch tokens as
+``obs_embedding [num_images * patches_per_image, token_dim]``.  The one-trajectory
+mainline uses one image, 256 patches, and a 4096-wide projection, so persisted
+sidecars are ``[T, 256, 4096]``.  The model's 56 action positions remain internal
+to action decoding and are never returned as the world-model observation.
 
-1. Stacking ``history`` frames of each camera view, in order
-   ``[t-history+1, ..., t]  ×  [view_0, view_1, ...]`` (time-major).
-2. Rotating each image 180° if ``rotate_images_180=True``.
-3. Resizing each image to 224×224 with TF lanczos3 and applying a centre-crop
-   (scale 0.9, BICUBIC resize back) via
-   ``experiments.robot.openvla_utils.prepare_images_for_vla``.
-4. Running ``vla.predict_action(...)`` which returns
-   ``(actions, actions_hidden_states)`` where
-   ``actions_hidden_states`` has shape ``(1, 56, 4096)`` = ``(1, ACTION_DIM *
-   NUM_ACTIONS_CHUNK, token_dim)`` — these are the last-layer LM hidden states
-   at the 56 action-query token positions.
-5. Squeezing the batch dimension to ``[56, 4096]``.
-6. Reshaping to ``(229376,)`` and casting to float16.
-
-Image-preprocessing note:
-    The offline sidecars (``*_action_hidden_*``) were built using
-    ``dreamervla.preprocess.preprocess_oft_action_hidden._prepare_images_for_vla``
-    which resizes via **PIL LANCZOS** and centre-crops via **PIL BICUBIC**.
-    This extractor uses ``experiments.robot.openvla_utils.prepare_images_for_vla``
-    which resizes via **TF lanczos3** (JPEG-encode-decode roundtrip first) and
-    crops via **TF crop_and_resize** (bilinear).  The two pipelines are not
-    numerically identical: empirically, against the gold libero_goal sidecar,
-    TF prep gives max_abs_err ≤ 0.25 and Pearson r ≥ 0.9996 (8 pairs, demos
-    0–1), while PIL prep gives max_abs_err up to 1.93 and r as low as 0.982.
-    TF is kept because it is the real-robot deployment path and is far closer
-    to the offline gold than PIL.  The residual ~0.25 is therefore a
-    **PIL-vs-TF prep difference**, not purely fp16 non-determinism; see the
-    consistency gate tolerance comment in the test file.
-
-Hook target:
-    The tensor comes directly from the RETURN VALUE of
-    ``vla.predict_action(...)`` (second element of the tuple).  No
-    ``register_forward_hook`` is required; the Prismatic model exposes the
-    action-query hidden states as a first-class output.
-
-    Hook-target location for future swaps (e.g. RynnVLA):
-        ``HOOK_TARGET = "predict_action_return[1]"``  — sentinel kept here so
-        alternative backends can override at a single site.
-
-Dimension decomposition:
-    229376 = 56 × 4096
-    56     = NUM_ACTIONS_CHUNK(8) × ACTION_DIM(7)
-    4096   = token_dim (LLM hidden size)
-
-History protocol:
-    ``OFTRolloutHiddenExtractor`` maintains an internal frame buffer per view.
-    On the first call (or after ``reset()``), the buffer is filled by repeating
-    the first frame (padding), matching the offline preprocessor's
-    ``_history_indices`` which pads with the earliest available frame.
-    The collector calls ``reset()`` at episode start and ``step(obs)`` per
-    environment step.
+``OFTRolloutHiddenExtractor`` maintains the configured per-view history buffer.
+At episode start it pads history by repeating the first frame, matching offline
+preprocessing.  Image preparation follows the deployment path before projected
+vision tokens are selected from ``_process_vision_features``.
 """
 
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import torch
 
-# ── sentinel: the single place to change when swapping hook target ──────────
-# For OFT: second return value of vla.predict_action()
-# For RynnVLA-legacy: encoder.extract_action_hidden() / obs_to_action_hidden()
-HOOK_TARGET = "predict_action_return[1]"  # noqa: S105  (not a secret)
 
-
-def flatten_action_hidden(h: torch.Tensor) -> torch.Tensor:
-    """Flatten an action-query hidden tensor to the sidecar shape.
-
-    Args:
-        h: Tensor of shape ``(..., 56, 4096)`` where the leading dims can be
-           a batch size of 1 or absent.  Any leading batch dimension of size 1
-           is squeezed automatically.
-
-    Returns:
-        1-D float16 tensor of shape ``(229376,)``.
-    """
-    # Squeeze a leading batch dim of 1 so [1,56,4096] and [56,4096] both work.
-    if h.ndim == 3 and h.shape[0] == 1:
-        h = h.squeeze(0)
-    return h.reshape(-1).to(torch.float16)
-
-
-def input_token_hidden_from_projected(
+def input_token_embedding_from_projected(
     projected: torch.Tensor,
-    model: Any,
     *,
-    image_keys: list[str],
+    image_keys: Sequence[str],
+    patches_per_image: int,
 ) -> torch.Tensor:
-    """Return current-frame projected vision patch tokens for input-token sidecars.
+    """Validate and return the canonical projected current-frame token grid."""
 
-    WM input-token sidecars keep frame observations as patch-token batches
-    ``[B, N, D]``.  The flat-equivalent ``N * D`` is metadata only and must not
-    become the sidecar storage shape.
-    """
-    per_image = int(model.vision_backbone.get_num_patches())
-    token_count = per_image * len(list(image_keys))
-    return projected[:, -token_count:, :]
+    keys = tuple(image_keys)
+    if len(keys) != 1:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires one image; "
+            f"got image_keys={keys!r}"
+        )
+    if int(patches_per_image) != 256:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires patches_per_image=256, "
+            f"got {int(patches_per_image)}"
+        )
+    if projected.ndim != 3 or tuple(projected.shape[1:]) != (256, 4096):
+        raise ValueError(
+            "projected vision tokens must have shape [B,256,4096], "
+            f"got {tuple(projected.shape)}"
+        )
+    return projected
 
 
 @dataclass(frozen=True)
@@ -125,20 +70,16 @@ class OFTDecodeOutput:
 
 
 class OFTRolloutHiddenExtractor:
-    """Wraps an ``OpenVLAOFTPolicy`` to capture the action-query hidden states.
+    """Wrap an ``OpenVLAOFTPolicy`` and capture projected input-token embeddings.
 
-    Maintains a per-view frame history buffer so that each call to ``step``
-    produces an ``obs_embedding`` consistent with the offline sidecar protocol
-    (history=2, two camera views, rotate_images_180=True, TF-based centre-crop;
-    see module docstring for the measured residual vs the PIL-built sidecars).
+    Each call to ``step`` produces the canonical one-image, history-one
+    ``obs_embedding`` used by the offline sidecar protocol.
 
     Args:
         policy: An ``OpenVLAOFTPolicy`` instance loaded via
             ``OpenVLAOFTPolicy`` constructor.
-        image_keys: Camera view keys to read from the obs dict, in the same
-            order as the offline preprocessor (default:
-            ``["agentview_rgb", "eye_in_hand_rgb"]``).
-        history: Number of past frames to stack per view (default: 2).
+        image_keys: The single camera key to read (default: ``["agentview_rgb"]``).
+        history: Fixed to one for the mainline.
         rotate_images_180: Whether to flip each image 180° before processing
             (default: True, matching the libero_goal sidecar config).
         center_crop: Whether to apply TF-based centre-crop (scale 0.9) after
@@ -155,16 +96,12 @@ class OFTRolloutHiddenExtractor:
         ``action_chunk`` — list of ``np.ndarray`` actions (one per open-loop
                           step), from ``vla.predict_action``
         ``hidden_state`` — CPU float16 tensor equivalent to sidecar
-                          ``obs_embedding[t]``.  For ``input_token_embedding``
-                          this is tokenized ``[N, token_dim]``; for legacy
-                          ``action_query`` it remains flat.
+                          ``obs_embedding[t]`` as ``[N, token_dim]``.
         ``lang_emb`` — available as ``extractor.step(...).lang_emb``; demo-level
                        CPU float16 language embedding matching offline preprocess.
 
     The obs dict must contain uint8 ``np.ndarray`` images under each key in
-    ``image_keys``, with shape ``(H, W, 3)``.  Optionally it may contain a
-    ``"state"`` key with an 8-dim proprio vector (used when
-    ``policy.use_proprio`` is True).
+    ``image_keys``, with shape ``(H, W, 3)``.
     """
 
     def __init__(
@@ -172,21 +109,33 @@ class OFTRolloutHiddenExtractor:
         policy: Any,
         *,
         image_keys: list[str] | None = None,
-        history: int = 2,
+        history: int = 1,
         rotate_images_180: bool = True,
         center_crop: bool = True,
         unnorm_key: str = "libero_goal_no_noops",
-        obs_hidden_source: str = "action_query",
+        obs_hidden_source: str = "input_token_embedding",
     ) -> None:
         self._policy = policy
         self._image_keys: list[str] = (
-            image_keys if image_keys is not None else ["agentview_rgb", "eye_in_hand_rgb"]
+            image_keys if image_keys is not None else ["agentview_rgb"]
         )
-        self._history = max(1, int(history))
+        self._history = int(history)
+        if len(self._image_keys) != 1 or self._history != 1:
+            raise ValueError(
+                "OpenVLA-OFT input-token mainline requires one image and history=1"
+            )
+        if bool(getattr(policy, "use_proprio", False)):
+            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
         self._rotate_images_180 = bool(rotate_images_180)
         self._center_crop = bool(center_crop)
         self._unnorm_key = unnorm_key
         self._obs_hidden_source = str(obs_hidden_source)
+        if self._obs_hidden_source != "input_token_embedding":
+            raise ValueError(
+                "OpenVLA-OFT rollout observations must use "
+                "obs_hidden_source='input_token_embedding'; "
+                f"got {self._obs_hidden_source!r}"
+            )
         # Per-view deque of (H, W, 3) uint8 numpy arrays (already rotated).
         # Length is always exactly self._history after the first step.
         self._buffers: dict[str, deque] = {
@@ -273,9 +222,8 @@ class OFTRolloutHiddenExtractor:
         and batched (step_batch) collection share one inference code path.
 
         Args:
-            obs: Observation dict.  Must contain uint8 ``np.ndarray`` images under each
-                key in ``self._image_keys`` (shape ``(H, W, 3)``).  Optionally contains
-                ``"state"`` (8-dim float32 array) when ``policy.use_proprio`` is True.
+            obs: Observation dict. Must contain a uint8 ``np.ndarray`` image under
+                ``agentview_rgb`` with shape ``(H, W, 3)``.
             task_description: Natural-language task string.
 
         Returns:
@@ -291,8 +239,6 @@ class OFTRolloutHiddenExtractor:
 
         model = self._policy.vla
         processor = self._policy.processor
-        use_proprio = bool(getattr(self._policy, "use_proprio", False))
-
         prompt = (
             f"In: What action should the robot take to {task_description.lower()}?\nOut:"
         )
@@ -333,19 +279,11 @@ class OFTRolloutHiddenExtractor:
             [self._view_pixel_values(processor, img) for img in processed_images], dim=1
         ).to(device, dtype=torch.bfloat16)
 
-        # ── 4. Proprio (same normalization as offline preprocess) ─────────────
-        proprio = None
-        if use_proprio and "state" in obs:
-            from experiments.robot.openvla_utils import normalize_proprio
-
-            proprio_norm_stats = model.norm_stats[self._unnorm_key]["proprio"]
-            proprio = normalize_proprio(obs["state"], proprio_norm_stats)
-
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
-            "proprio": proprio,
+            "proprio": None,
         }
 
     def step(
@@ -367,8 +305,7 @@ class OFTRolloutHiddenExtractor:
             Tuple of:
                 - action_chunk: list of actions (length = NUM_ACTIONS_CHUNK)
                 - hidden_state: CPU float16 tensor matching the offline sidecar
-                  ``obs_embedding[t]``.  Input-token sidecars are tokenized
-                  ``[N, token_dim]``; legacy action-query sidecars are flat.
+                  ``obs_embedding[t]`` as tokenized ``[N, token_dim]``.
                 - lang_emb: CPU float16 language sidecar on the output object.
         """
         if self._decoder is None:
@@ -381,26 +318,14 @@ class OFTRolloutHiddenExtractor:
         prep = self.prepare(obs, task_description)
         return self._decoder.predict_batch([prep])[0]
 
-    # ── Backward-compat shim: old callers used __call__(obs, task) ───────────
-    def __call__(
-        self,
-        obs: dict[str, Any],
-        task_description: str,
-    ) -> OFTDecodeOutput:
-        """Alias for ``step``; initialises history on first call if not reset."""
-        return self.step(obs, task_description)
-
-
 # ── batched (step_batch) inference ──────────────────────────────────────────
 # Feeds K prepared observations through ONE VLA forward.  The upstream OFT
 # ``predict_action`` wrapper has two batch==1 assumptions that break for B>1:
 #   - modeling_prismatic.py:972  appends a [1,1] token via cat(dim=1)
 #   - modeling_prismatic.py:924  reshape(NUM_ACTIONS_CHUNK, ACTION_DIM) drops the batch
-# Everything else in the L1-regression path is batch-safe, so we bypass the wrapper
-# and call the internals directly with a batched token-append and a (B, chunk, dim)
-# reshape.  Verified bit-exact vs ``OFTRolloutHiddenExtractor.step`` at B=1 and
-# action-partner-invariant (no cross-batch leakage) by
-# the rollout-hidden extractor tests.
+# The discrete headless path is batch-safe once those two assumptions are handled,
+# so this module calls the internals directly with a batched token append and a
+# ``(B, chunk, dim)`` reshape.
 
 
 def _left_pad_batch(
@@ -453,17 +378,15 @@ class OFTBatchedDecoder:
     ``(B, chunk, dim)`` decode reshape.  Verified bit-exact vs
     ``OFTRolloutHiddenExtractor.step`` at B=1.
 
-    Head mode is auto-detected: ``action_head`` present -> L1-regression decode;
-    ``action_head is None`` -> discrete (headless / one-trajectory) decode from LM logits.
-    The ``obs_embedding`` (action-query hidden) is identical either way; only the action
-    decode differs.
+    The decoder accepts only the headless one-trajectory checkpoint and decodes
+    discrete actions from LM logits.
     """
 
     def __init__(
         self,
         policy: Any,
         unnorm_key: str,
-        obs_hidden_source: str = "action_query",
+        obs_hidden_source: str = "input_token_embedding",
         image_keys: list[str] | None = None,
     ) -> None:
         from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
@@ -472,13 +395,26 @@ class OFTBatchedDecoder:
         from prismatic.vla.constants import ACTION_DIM, IGNORE_INDEX, NUM_ACTIONS_CHUNK
 
         self._model = policy.vla
-        self._action_head = policy.action_head  # None => discrete (headless) decode
-        self._proprio_projector = policy.proprio_projector
+        if policy.action_head is not None:
+            raise ValueError("L1/action-query checkpoints are closed")
+        if getattr(policy, "proprio_projector", None) is not None:
+            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        if bool(getattr(policy, "use_proprio", False)):
+            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        self._proprio_projector = None
         self._unnorm_key = unnorm_key
         self._obs_hidden_source = str(obs_hidden_source)
-        self._image_keys = (
-            list(image_keys) if image_keys is not None else ["agentview_rgb", "eye_in_hand_rgb"]
-        )
+        if self._obs_hidden_source != "input_token_embedding":
+            raise ValueError(
+                "OpenVLA-OFT rollout observations must use "
+                "obs_hidden_source='input_token_embedding'; "
+                f"got {self._obs_hidden_source!r}"
+            )
+        self._image_keys = list(image_keys) if image_keys is not None else ["agentview_rgb"]
+        if self._image_keys != ["agentview_rgb"]:
+            raise ValueError(
+                "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb']"
+            )
         self._action_dim = int(ACTION_DIM)
         self._num_chunks = int(NUM_ACTIONS_CHUNK)
         self._span = int(ACTION_DIM * NUM_ACTIONS_CHUNK)
@@ -493,8 +429,8 @@ class OFTBatchedDecoder:
 
     @property
     def is_discrete(self) -> bool:
-        """True when headless (no L1 action head; actions decoded from the LM logits)."""
-        return self._action_head is None
+        """The only supported decoder mode is discrete."""
+        return True
 
     def predict_batch(
         self, preps: list[dict[str, Any]]
@@ -508,8 +444,8 @@ class OFTBatchedDecoder:
 
         Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions, a
         CPU float16 ``obs_embedding`` tensor, and a CPU float16 demo-level
-        ``lang_emb`` sidecar. Input-token sidecars are tokenized ``[N, token_dim]``;
-        legacy action-query sidecars are flat.
+        ``lang_emb`` sidecar. Input-token sidecars are tokenized
+        ``[N, token_dim]``.
         Raises if ``preps`` is empty.
         """
         if not preps:
@@ -521,20 +457,15 @@ class OFTBatchedDecoder:
             self._bos_id,
         )
         pixel_values = torch.cat([p["pixel_values"] for p in preps], dim=0)
-        use_proprio = preps[0]["proprio"] is not None
-        proprio = (
-            np.stack([np.asarray(p["proprio"]).reshape(-1) for p in preps], axis=0)
-            if use_proprio
-            else None
+        if any(p["proprio"] is not None for p in preps):
+            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        actions, hidden, lang_emb = self._forward(
+            input_ids, attention_mask, pixel_values, None
         )
-        actions, hidden, lang_emb = self._forward(input_ids, attention_mask, pixel_values, proprio)
         out: list[OFTDecodeOutput] = []
         for i in range(len(preps)):
             action_chunk = [actions[i, j] for j in range(actions.shape[1])]
-            if self._obs_hidden_source == "input_token_embedding":
-                hidden_state = hidden[i].detach().cpu().to(torch.float16)
-            else:
-                hidden_state = flatten_action_hidden(hidden[i : i + 1].cpu())
+            hidden_state = hidden[i].detach().cpu().to(torch.float16)
             lang_state = lang_emb[i].detach().cpu().to(torch.float16)
             out.append(OFTDecodeOutput(action_chunk, hidden_state, lang_state))
         return out
@@ -548,7 +479,8 @@ class OFTBatchedDecoder:
     ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """Batched replica of ``predict_action`` + ``_regression_or_discrete_prediction``."""
         model = self._model
-        use_proprio = proprio is not None
+        if proprio is not None:
+            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
 
         # FIX1: batched trailing-29871 ('') append (upstream cats a [1,1] token -> B==1 only)
         if not torch.all(input_ids[:, -1] == 29871):
@@ -581,25 +513,15 @@ class OFTBatchedDecoder:
             projected = model._process_vision_features(
                 pixel_values, language_embeddings, use_film=False
             )
-            input_token_hidden = None
-            if self._obs_hidden_source == "input_token_embedding":
-                input_token_hidden = input_token_hidden_from_projected(
-                    projected,
-                    model,
-                    image_keys=self._image_keys,
-                )
-            if use_proprio:
-                proprio_t = torch.Tensor(proprio).to(projected.device, dtype=projected.dtype)
-                projected = model._process_proprio_features(
-                    projected, proprio_t, self._proprio_projector
-                )
-
+            input_token_embedding = input_token_embedding_from_projected(
+                projected,
+                image_keys=self._image_keys,
+                patches_per_image=int(model.vision_backbone.get_num_patches()),
+            )
             num_patches = (
                 model.vision_backbone.get_num_patches()
                 * model.vision_backbone.get_num_images_in_input()
             )
-            if use_proprio:
-                num_patches += 1
 
             input_embeddings = input_embeddings * ~all_actions_mask.unsqueeze(-1)
             multimodal_embeddings, multimodal_attention_mask = model._build_multimodal_attention(
@@ -627,30 +549,19 @@ class OFTBatchedDecoder:
             )
             last_hidden = lm_out.hidden_states[-1]
             start = num_patches + num_prompt_tokens
-            actions_hidden_states = last_hidden[:, start : start + self._span, :]  # (B,56,D)
-            normalized = self._decode(lm_out, actions_hidden_states, start, input_ids.shape[0])
+            normalized = self._decode(lm_out, start, input_ids.shape[0])
         actions = model._unnormalize_actions(normalized, self._unnorm_key)
-        hidden = input_token_hidden if input_token_hidden is not None else actions_hidden_states
-        return actions, hidden, lang_emb
+        return actions, input_token_embedding, lang_emb
 
     def _decode(
         self,
         lm_out: Any,
-        actions_hidden_states: torch.Tensor,
         action_start: int,
         batch_size: int,
     ) -> np.ndarray:
-        """Decode normalized actions ``(B, chunk, dim)`` — L1 head, or discrete logits->bins."""
-        if self._action_head is not None:
-            # L1-regression head: MLP over the action-query hidden states.
-            normalized = self._action_head.predict_action(actions_hidden_states)
-            return (
-                normalized.reshape(batch_size, self._num_chunks, self._action_dim)
-                .float()
-                .cpu()
-                .numpy()
-            )  # FIX2: keep the batch dim
-        # Discrete (headless / one-trajectory) LM-head: argmax the logits at the action
+        """Decode normalized discrete actions as ``(B, chunk, dim)``."""
+
+        # Headless one-trajectory LM: argmax logits at the action
         # positions -> bin centers.  Mirrors the upstream discrete branch but keeps batch.
         model = self._model
         action_logits = lm_out.logits[:, action_start : action_start + self._span, :]

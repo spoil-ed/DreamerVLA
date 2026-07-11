@@ -26,6 +26,7 @@ from dreamervla.dataset.collection_manifest import (
     next_shard_index,
     online_rollout_episode_counts,
 )
+from dreamervla.preprocess.sidecar_schema import validate_input_token_preprocess_config
 from dreamervla.runners.base_runner import (
     BaseRunner,
     _atomic_torch_save,
@@ -144,7 +145,7 @@ class OnlineCotrainRayRunner(BaseRunner):
 
         policy_cfg = self._cfg_from("policy.cfg", _default_policy_cfg())
         # Decouple the rollout from the concrete model: the inference worker class is
-        # config-selectable. Default = RynnVLA encoder->WM->actor InferenceWorker; OFT
+        # config-selectable. Default = VLA encoder->WM->actor InferenceWorker; OFT
         # selects RolloutInferenceWorker (model-agnostic OFTRolloutBundle producing
         # action + obs_embedding), the same path the collect runner uses.
         infer_worker_cls = _resolve_worker_cls(
@@ -200,7 +201,7 @@ class OnlineCotrainRayRunner(BaseRunner):
         if infer_worker_cls is RolloutInferenceWorker:
             # OFT recipe: build the OFT rollout inference cfg via the SAME programmatic
             # derivation the collect path uses (OFTRolloutBundle -> action + obs_embedding),
-            # not the RynnVLA encoder->WM->actor _default_inference_cfg. DRY: no hand-authored
+            # not the VLA encoder->WM->actor _default_inference_cfg. DRY: no hand-authored
             # OFT field YAML. init_ckpt stays empty — the OFT base policy loads from the
             # bundle's model_path; the learned actor trains only in imagination.
             infer_cfg = dict((oft_plan or self._oft_worker_plan())["inference"])
@@ -1404,11 +1405,11 @@ class OnlineCotrainRayRunner(BaseRunner):
         if not isinstance(cfg, dict):
             raise TypeError("checkpoint must be a mapping")
         if "save_interval" not in cfg:
-            legacy_interval = cfg.get(
+            compat_interval = cfg.get(
                 "every_updates",
                 OmegaConf.select(self.cfg, "training.checkpoint_every", default=0),
             )
-            cfg["save_interval"] = legacy_interval
+            cfg["save_interval"] = compat_interval
         cfg.setdefault("save_final", False)
         cfg.setdefault("filename", "learner.ckpt")
         cfg.setdefault("latest_name", "latest.ckpt")
@@ -1475,6 +1476,18 @@ class OnlineCotrainRayRunner(BaseRunner):
         manifest_root = cfg.get("manifest_root")
         if manifest_root in (None, ""):
             manifest_root = str(Path(reward_dir).expanduser().parent)
+        preprocess_config = dict(
+            cfg.get(
+                "preprocess_config",
+                plan_dump.get("preprocess_config", _default_preprocess_config()),
+            )
+            or {}
+        )
+        if enabled:
+            validate_input_token_preprocess_config(
+                preprocess_config,
+                context="rollout.dump.preprocess_config",
+            )
         return {
             "enabled": enabled,
             "reward_dir": reward_dir,
@@ -1483,13 +1496,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             "keep_last_global_steps": int(cfg.get("keep_last_global_steps", 0)),
             "shard_prefix": str(cfg.get("shard_prefix", "cotrain_episode")),
             "demos_per_shard": int(cfg.get("demos_per_shard", 1)),
-            "preprocess_config": dict(
-                cfg.get(
-                    "preprocess_config",
-                    plan_dump.get("preprocess_config", _default_preprocess_config()),
-                )
-                or {}
-            ),
+            "preprocess_config": preprocess_config,
             "data_attrs": dict(
                 cfg.get(
                     "data_attrs",
@@ -1578,7 +1585,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             candidates.extend(
                 [
                     self.get_checkpoint_dir() / "latest.ckpt",
-                    self.get_legacy_checkpoint_dir() / "latest.ckpt",
+                    self.get_compat_checkpoint_dir() / "latest.ckpt",
                     self.get_run_dir() / "latest.ckpt",
                 ]
             )
@@ -2680,10 +2687,20 @@ def _default_inference_cfg(policy_cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _default_preprocess_config() -> dict[str, Any]:
     return {
-        "action_head_type": "unknown",
+        "action_head_type": "oft_discrete_token",
+        "obs_hidden_source": "input_token_embedding",
         "history": 1,
         "include_state": False,
         "hidden_key": "obs_embedding",
+        "token_count": 256,
+        "token_dim": 4096,
+        "hidden_dim": 1048576,
+        "obs_embedding_shape": [256, 4096],
+        "hidden_storage_format": "tokenized",
+        "num_images_in_input": 1,
+        "patches_per_image": 256,
+        "sidecar_schema_version": 1,
+        "required_demo_datasets": ["obs_embedding"],
     }
 
 

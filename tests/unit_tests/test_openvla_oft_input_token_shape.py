@@ -4,12 +4,24 @@ import json
 from pathlib import Path
 
 import h5py
-import numpy as np
+import pytest
 import torch
 
 from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
+from dreamervla.algorithms.critic.latent_success_classifier import (
+    LatentSuccessClassifier,
+    LatentSuccessClassifierConfig,
+)
 from dreamervla.models.embodiment.world_model.wm import WorldModel
+from dreamervla.preprocess.sidecar_schema import (
+    SIDECAR_SCHEMA_VERSION,
+    validate_input_token_preprocess_config,
+    validate_input_token_sidecar_dir,
+)
 from dreamervla.runners.oft_collect_common import make_preprocess_config
+from dreamervla.runners.rollout_hidden_extractor import (
+    input_token_embedding_from_projected,
+)
 
 
 def test_input_token_preprocess_config_records_dim_decomposition() -> None:
@@ -37,6 +49,7 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
 
     out = make_preprocess_config(cfg)
 
+    assert out["obs_hidden_source"] == "input_token_embedding"
     assert out["num_images_in_input"] == 1
     assert out["patches_per_image"] == 256
     assert out["token_count"] == 256
@@ -46,30 +59,90 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
     assert out["hidden_storage_format"] == "tokenized"
 
 
-def test_input_token_sidecar_accepts_tokenized_storage_with_flat_metadata(tmp_path) -> None:
+def test_preprocess_config_rejects_hidden_token_semantic_alias() -> None:
+    cfg = {
+        "_policy_mode": "discrete",
+        "_use_proprio": False,
+        "expected_action_head_type": "oft_discrete_token",
+        "expected_obs_hidden_source": "hidden_token",
+        "expected_prompt_style": "vla_policy",
+        "expected_history": 1,
+        "expected_rotate_images_180": True,
+        "time_horizon": 8,
+        "token_dim": 4096,
+        "action_dim": 7,
+        "num_images_in_input": 1,
+        "patches_per_image": 256,
+        "token_count": 256,
+        "hidden_dim": 1_048_576,
+        "chunk_size": 8,
+        "resolution": 256,
+        "model_path": "/tmp/oft",
+        "unnorm_key": "libero_goal_no_noops",
+        "task_suite_name": "libero_goal",
+    }
+
+    with pytest.raises(ValueError, match="input_token_embedding"):
+        make_preprocess_config(cfg)
+
+
+def test_input_token_embedding_preserves_canonical_projected_tokens() -> None:
+    projected = torch.zeros(2, 256, 4096)
+    projected[:, -1, -1] = 3
+
+    actual = input_token_embedding_from_projected(
+        projected,
+        image_keys=["agentview_rgb"],
+        patches_per_image=256,
+    )
+
+    assert actual.shape == (2, 256, 4096)
+    torch.testing.assert_close(actual, projected)
+
+
+def test_input_token_embedding_rejects_insufficient_projected_tokens() -> None:
+    with pytest.raises(ValueError, match=r"\[B,256,4096\]"):
+        input_token_embedding_from_projected(
+            torch.zeros(2, 255, 4096),
+            image_keys=["agentview_rgb"],
+            patches_per_image=256,
+        )
+
+
+def _write_sidecar_fixture(tmp_path: Path, *, flat: bool = False, token_count: int = 256) -> None:
     (tmp_path / "preprocess_config.json").write_text(
         json.dumps(
             {
                 "action_head_type": "oft_discrete_token",
                 "obs_hidden_source": "input_token_embedding",
                 "hidden_key": "obs_embedding",
-                "token_count": 3,
-                "token_dim": 4,
-                "hidden_dim": 12,
+                "token_count": token_count,
+                "token_dim": 4096,
+                "hidden_dim": token_count * 4096,
+                "obs_embedding_shape": [token_count, 4096],
                 "num_images_in_input": 1,
-                "patches_per_image": 3,
+                "patches_per_image": token_count,
                 "hidden_storage_format": "tokenized",
+                "history": 1,
+                "include_state": False,
+                "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
+                "required_demo_datasets": ["obs_embedding"],
             }
         ),
         encoding="utf-8",
     )
     with h5py.File(tmp_path / "shard.hdf5", "w") as handle:
+        handle.attrs["complete"] = True
         demo = handle.create_group("data/demo_0")
-        demo.create_dataset("obs_embedding", data=np.zeros((2, 3, 4), dtype=np.float16))
+        shape = (2, token_count * 4096) if flat else (2, token_count, 4096)
+        demo.create_dataset("obs_embedding", shape=shape, dtype="float16")
+
+
+def test_input_token_sidecar_accepts_only_canonical_tokenized_storage(tmp_path) -> None:
+    _write_sidecar_fixture(tmp_path)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
-    dataset.load_actor_sequence = False
 
     dataset._validate_hidden_sidecar(
         expected_model_path=None,
@@ -82,29 +155,10 @@ def test_input_token_sidecar_accepts_tokenized_storage_with_flat_metadata(tmp_pa
 
 
 def test_input_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp_path) -> None:
-    (tmp_path / "preprocess_config.json").write_text(
-        json.dumps(
-            {
-                "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "input_token_embedding",
-                "hidden_key": "obs_embedding",
-                "token_count": 3,
-                "token_dim": 4,
-                "hidden_dim": 12,
-                "num_images_in_input": 1,
-                "patches_per_image": 3,
-                "hidden_storage_format": "tokenized",
-            }
-        ),
-        encoding="utf-8",
-    )
-    with h5py.File(tmp_path / "shard.hdf5", "w") as handle:
-        demo = handle.create_group("data/demo_0")
-        demo.create_dataset("obs_embedding", data=np.zeros((2, 12), dtype=np.float16))
+    _write_sidecar_fixture(tmp_path, flat=True)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
-    dataset.load_actor_sequence = False
 
     try:
         dataset._validate_hidden_sidecar(
@@ -116,35 +170,16 @@ def test_input_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp
             require_preprocess_config=True,
         )
     except ValueError as exc:
-        assert "input-token obs_embedding shape mismatch" in str(exc)
+        assert "must be [T,256,4096]" in str(exc)
     else:
         raise AssertionError("flat input-token sidecar storage must be rejected")
 
 
 def test_input_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path) -> None:
-    (tmp_path / "preprocess_config.json").write_text(
-        json.dumps(
-            {
-                "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "input_token_embedding",
-                "hidden_key": "obs_embedding",
-                "token_count": 4,
-                "token_dim": 4,
-                "hidden_dim": 16,
-                "num_images_in_input": 1,
-                "patches_per_image": 3,
-                "hidden_storage_format": "tokenized",
-            }
-        ),
-        encoding="utf-8",
-    )
-    with h5py.File(tmp_path / "shard.hdf5", "w") as handle:
-        demo = handle.create_group("data/demo_0")
-        demo.create_dataset("obs_embedding", data=np.zeros((2, 4, 4), dtype=np.float16))
+    _write_sidecar_fixture(tmp_path, token_count=255)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
-    dataset.load_actor_sequence = False
 
     try:
         dataset._validate_hidden_sidecar(
@@ -156,9 +191,16 @@ def test_input_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path
             require_preprocess_config=True,
         )
     except ValueError as exc:
-        assert "token_count decomposition mismatch" in str(exc)
+        assert "token_count=255, expected 256" in str(exc)
     else:
         raise AssertionError("bad token_count decomposition must be rejected")
+
+
+def test_sidecar_identity_does_not_alias_ckpts_and_checkpoints_paths() -> None:
+    assert not PixelHiddenSequenceDataset._same_path(
+        "/tmp/data/ckpts/model",
+        "/tmp/data/checkpoints/model",
+    )
 
 
 def test_wm_rollout_returns_tokenized_obs_embedding() -> None:
@@ -182,6 +224,160 @@ def test_wm_rollout_returns_tokenized_obs_embedding() -> None:
 
     assert out["obs_embedding"].shape == (2, 3, 2, 4)
     assert out["obs_tokens"].shape == (2, 3, 2, 4)
+
+
+def test_world_model_constructor_rejects_removed_56x1024_interface() -> None:
+    with pytest.raises(ValueError, match="removed 56x1024"):
+        WorldModel(
+            obs_dim=56 * 1024,
+            token_count=56,
+            token_dim=1024,
+            model_dim=8,
+            depth=1,
+            heads=2,
+            mlp_dim=16,
+        )
+
+
+def test_classifier_constructor_rejects_removed_56x1024_interface() -> None:
+    with pytest.raises(ValueError, match="removed 56x1024"):
+        LatentSuccessClassifier(
+            LatentSuccessClassifierConfig(
+                latent_dim=1024,
+                token_count=56,
+                token_dim=1024,
+                window=2,
+                hidden_dim=8,
+                num_layers=1,
+                num_heads=2,
+                head_type="spatial_tf",
+            )
+        )
+
+
+@pytest.mark.parametrize("head_type", ["transformer", "linear", "mlp2"])
+def test_classifier_constructor_rejects_flat_57344_alias_regardless_of_token_dim(
+    head_type: str,
+) -> None:
+    with pytest.raises(ValueError, match="removed 56x1024"):
+        LatentSuccessClassifier(
+            LatentSuccessClassifierConfig(
+                latent_dim=56 * 1024,
+                token_count=None,
+                token_dim=4096,
+                window=2,
+                hidden_dim=8,
+                head_type=head_type,
+            )
+        )
+
+
+def test_classifier_does_not_infer_removed_57344_flat_width() -> None:
+    with pytest.raises(ValueError, match="latent_dim must be explicit"):
+        LatentSuccessClassifier(
+            LatentSuccessClassifierConfig(
+                latent_dim=None,
+                token_count=None,
+                token_dim=1024,
+                time_horizon=8,
+                action_dim=7,
+                window=1,
+                hidden_dim=8,
+                head_type="linear",
+            )
+        )
+
+
+def _canonical_sidecar_metadata() -> dict[str, object]:
+    return {
+        "action_head_type": "oft_discrete_token",
+        "obs_hidden_source": "input_token_embedding",
+        "hidden_key": "obs_embedding",
+        "token_count": 256,
+        "token_dim": 4096,
+        "hidden_dim": 1_048_576,
+        "obs_embedding_shape": [256, 4096],
+        "hidden_storage_format": "tokenized",
+        "num_images_in_input": 1,
+        "patches_per_image": 256,
+        "history": 1,
+        "include_state": False,
+        "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
+        "required_demo_datasets": ["obs_embedding"],
+    }
+
+
+@pytest.mark.parametrize("field", ["sidecar_schema_version", "required_demo_datasets"])
+def test_sidecar_schema_requires_explicit_contract_declarations(field: str) -> None:
+    metadata = _canonical_sidecar_metadata()
+    metadata.pop(field)
+
+    with pytest.raises(ValueError, match=field):
+        validate_input_token_preprocess_config(metadata, context="test sidecar")
+
+
+@pytest.mark.parametrize("field", ["save_action_hidden", "action_hidden_key"])
+def test_sidecar_schema_rejects_removed_action_hidden_fields(field: str) -> None:
+    metadata = _canonical_sidecar_metadata()
+    metadata[field] = True if field.startswith("save_") else "action_hidden_states"
+
+    with pytest.raises(ValueError, match="removed sidecar fields"):
+        validate_input_token_preprocess_config(metadata, context="test sidecar")
+
+
+def test_sidecar_hdf5_rejects_removed_action_hidden_attribute(tmp_path) -> None:
+    _write_sidecar_fixture(tmp_path)
+    with h5py.File(tmp_path / "shard.hdf5", "a") as handle:
+        handle.attrs["save_action_hidden"] = False
+
+    with pytest.raises(ValueError, match="removed sidecar attributes"):
+        validate_input_token_sidecar_dir(tmp_path)
+
+
+def test_sidecar_hdf5_rejects_extra_action_hidden_dataset(tmp_path) -> None:
+    _write_sidecar_fixture(tmp_path)
+    with h5py.File(tmp_path / "shard.hdf5", "a") as handle:
+        handle["data/demo_0"].create_dataset(
+            "action_hidden_states",
+            shape=(2, 56, 4096),
+            dtype="float16",
+        )
+
+    with pytest.raises(ValueError, match="unexpected datasets"):
+        validate_input_token_sidecar_dir(tmp_path)
+
+
+def test_world_model_rejects_flat_canonical_observation() -> None:
+    model = WorldModel(
+        obs_dim=256 * 4096,
+        token_count=256,
+        token_dim=4096,
+        model_dim=8,
+        depth=1,
+        heads=2,
+        mlp_dim=16,
+    )
+
+    with pytest.raises(ValueError, match="flat observations are closed"):
+        model.obs_to_tokens(torch.zeros(1, 256 * 4096))
+
+
+def test_classifier_rejects_flat_canonical_observation() -> None:
+    classifier = LatentSuccessClassifier(
+        LatentSuccessClassifierConfig(
+            latent_dim=4096,
+            token_count=256,
+            token_dim=4096,
+            window=2,
+            hidden_dim=8,
+            num_layers=1,
+            num_heads=2,
+            head_type="spatial_tf",
+        )
+    )
+
+    with pytest.raises(ValueError, match="flat observation inputs are not supported"):
+        classifier(torch.zeros(1, 2, 256 * 4096))
 
 
 def test_wm_source_uses_role_based_wm_wording() -> None:

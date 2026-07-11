@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
 from types import SimpleNamespace
 
 import torch
 
-from dreamervla.runners.online_dreamervla import online_classifier_update_step
+from dreamervla.runners.classifier_update import online_classifier_update_step
+
+
+def test_classifier_update_has_role_based_module() -> None:
+    assert importlib.util.find_spec("dreamervla.runners.classifier_update") is not None
 
 
 class _TinyClassifier(torch.nn.Module):

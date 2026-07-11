@@ -1,6 +1,6 @@
 # Route Reference
 
-This file maps public experiments to their runner family and current status. Hydra remains the
+This file maps release experiments to their runner family. Hydra remains the
 source of truth; this table is a reader index.
 
 ## Mainline OpenVLA-OFT Cold Start
@@ -11,7 +11,6 @@ source of truth; this table is a reader index.
 | collect, no-Ray | `experiment=collect_rollouts_onetraj` | `CollectRolloutsRunner` | current |
 | sync warmup + cotrain baseline | `experiment=openvla_onetraj_libero_cotrain_noray` | `OnlineCotrainPipelineRunner` | current baseline |
 | async manual cotrain | `experiment=openvla_onetraj_libero_cotrain_ray` | `ManualCotrainRayRunner` | current manual route |
-| tiny manual smoke | `experiment=manual_cotrain_ray_tiny` | `ManualCotrainRayRunner` | local smoke |
 
 Pipeline launcher:
 
@@ -21,26 +20,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   task=goal profile=multi_gpu cotrain_engine=async render_backend=osmesa
 ```
 
-## Core Training Routes
+## Supporting Training Entrypoints
 
 | Family | Experiments | Runner |
 | --- | --- | --- |
-| VLA SFT | `vla_rynnvla_action_head`, `vla_sft_one_trajectory` | `VLASFTRunner` |
-| OpenVLA-OFT SFT | `openvla_oft_hdf5`, `openvla_oft_hdf5_one_trajectory`, `openvla_oft_hdf5_one_trajectory_l1` | `OpenVLAOFTRunner` |
-| world model | `world_model_step`, `world_model_chunk`, `oft_world_model_chunk`, `oft_discrete_token_world_model_chunk` | `LatentWMRunner` |
-| classifier | `latent_classifier_libero_goal_chunk`, `oft_latent_classifier_chunk` | `LatentClassifierRunner` |
-| DreamerVLA offline/online LUMOS | `dreamervla_rynn_wm_lumos`, `dreamervla_oft_wm_lumos`, `dreamervla_oft_discrete_token_wm_lumos` | `JointDreamerVLARunner` |
+| world model | `wm_full_dataset_train` | `OnlineCotrainPipelineRunner` warmup path |
 | eval | `eval_libero_vla` | `EmbodiedEvalRunner` |
-
-## Optional Or Legacy Routes
-
-| Experiment | Runner | Status |
-| --- | --- | --- |
-| `online_cotrain_ray_oft_backbone_latent` | `OnlineCotrainRayRunner` | optional legacy Ray route |
-| `online_cotrain_ray_oft_action_hidden` | `OnlineCotrainRayRunner` | optional legacy Ray route |
-| `online_cotrain_ray_world_model_env_tiny` | `OnlineCotrainRayRunner` | world-model-env smoke |
-
-Do not make legacy Ray routes the default path unless the active task explicitly asks for them.
 
 ## Config Ownership
 

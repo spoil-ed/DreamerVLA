@@ -1,6 +1,6 @@
 # Component Map And Names
 
-名称按 runtime 角色命名，不按实验历史命名。同一个角色只保留一个正式名称。
+名称按 runtime 角色命名，不按实验时间线命名。同一个角色只保留一个正式名称。
 
 ## Runtime Roles
 
@@ -26,7 +26,7 @@
 | `dreamervla.dataset` | online replay、rollout dump、HDF5 dataset、manifest。 |
 | `dreamervla.envs` | LIBERO train/eval env 和 world-model env。 |
 | `dreamervla.models.actor` | VLA actor 与 latent-to-action actor。 |
-| `dreamervla.models.encoder` | VLA/OFT/RynnVLA encoder。 |
+| `dreamervla.models.encoder` | VLA/OFT/VLA encoder。 |
 | `dreamervla.models.world_model` | Dreamer/TSSM/DINO world model 实现。 |
 | `dreamervla.models.reward` | latent success classifier。 |
 | `dreamervla.workers.actor` | `EmbodiedFSDPActor` 与 `LearnerWorker`。 |
@@ -41,4 +41,3 @@
 - 用角色名：`ActorGroup`、`RolloutGroup`、`LearnerGroup`、`EnvGroup`。
 - 避免 `new`、`v2`、`manager`、`async` 这类不表达职责的核心名。
 - config、metrics、checkpoint 和 tests 中出现的名称视为公共接口。
-- 历史路线可保留，但不要让历史名成为新主线的正式概念。

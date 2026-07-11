@@ -1,5 +1,5 @@
 # @package _global_
-# Target manual-cotrain Ray route for OpenVLA-OFT backbone_latent/query-before tokens.
+# Target manual-cotrain Ray route for OpenVLA-OFT input-token embeddings.
 #
 # This composes the existing OFT backbone latent component definitions, then
 # switches the runner topology to the manual-notes four-group route.
@@ -116,7 +116,7 @@ rollout:
     kwargs:
       policy_cfg:
         model_path: ${task.openvla_oft.ckpt_path}
-        policy_mode: auto
+        policy_mode: discrete
         num_images_in_input: ${task.openvla_oft.num_images_in_input}
         unnorm_key: ${task.openvla_oft.dataset_statistics_key}
       unnorm_key: ${task.openvla_oft.dataset_statistics_key}
@@ -174,7 +174,7 @@ learner:
         weight_decay: 0.0
 
 env:
-  # Keep inherited legacy env.* keys so existing launcher overrides compose.
+  # Keep the inherited input-token environment contract.
   cfg:
     action_postprocess: openvla_oft
     render_backend: ${render_backend}

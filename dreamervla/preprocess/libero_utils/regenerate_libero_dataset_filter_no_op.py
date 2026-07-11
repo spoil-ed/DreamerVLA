@@ -27,7 +27,7 @@ import numpy as np
 import robosuite.utils.transform_utils as T
 from libero.libero import benchmark
 
-from dreamervla.preprocess.libero_utils.libero_utils import (
+from dreamervla.envs.libero.utils import (
     get_libero_dummy_action,
     get_libero_env,
 )

@@ -17,7 +17,7 @@ def _tiny_chunk_wm(**overrides) -> ChunkAwareWorldModel:
         "token_dim": 4,
         "time_horizon": 2,
         "latent_stage": "query_after",
-        "latent_source": "tiny action-query hidden",
+        "latent_source": "tiny tokenized test input",
         "action_emb_dim": 2,
         "num_action_repeat": 1,
         "model_dim": 6,
@@ -173,7 +173,7 @@ def test_chunk_loss_uses_current_actions_for_transition_targets() -> None:
     H = wm.num_hist
     K = wm.chunk_size
     T = H + 2 * K
-    obs = torch.randn(1, T, wm.obs_dim)
+    obs = torch.randn(1, T, wm.token_count, wm.token_dim)
     previous_actions = torch.full((1, T, wm.action_dim), -10.0)
     current_actions = torch.arange(
         T * wm.action_dim,

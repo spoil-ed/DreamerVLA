@@ -2,7 +2,7 @@ name: preprocess_suite
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false
-only: [10_hdf5_reward, 20_pretokenize_dataset]
+only: [10_hdf5_reward, 35_oft_input_tokens, 40_validate]
 task: libero_goal
 libero_suite: ${task}
 task_name: ${task}
@@ -20,24 +20,14 @@ env:
   ARTIFACT_NAME: ${artifact_name}
   TASK_LABEL: ${task_label}
   OFT_CKPT: null
-  OFT_POLICY_MODE: null
-  OFT_LATENT_SCHEME: null
   OFT_HISTORY: null
   OFT_IMAGE_KEYS: null
-  OFT_ACTION_HIDDEN_GPUS: ${ngpu}
-  PRETOKENIZE_PROCS: ${num_procs}
+  OFT_INPUT_TOKEN_GPUS: ${ngpu}
   GPUS: ${gpus}
-  ACTION_HIDDEN_GPUS: ${ngpu}
 steps:
   - id: 10_hdf5_reward
     script: scripts/preprocess/10_hdf5_reward.sh
-  - id: 20_pretokenize_dataset
-    script: scripts/preprocess/20_pretokenize_dataset.sh
-  - id: 30_action_hidden
-    script: scripts/preprocess/30_action_hidden.sh
-  - id: 32_input_token_hidden
-    script: scripts/preprocess/32_input_token_hidden.sh
-  - id: 35_oft_action_hidden
-    script: scripts/preprocess/35_oft_action_hidden.sh
+  - id: 35_oft_input_tokens
+    script: scripts/preprocess/35_oft_input_tokens.sh
   - id: 40_validate
     script: scripts/preprocess/40_validate.sh

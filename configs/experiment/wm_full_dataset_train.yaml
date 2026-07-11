@@ -17,8 +17,8 @@ training:
   classifier_batch_size: 1
 
 offline_warmup:
-  data_dir: ${task.openvla_oft.hdf5_reward_dir}
-  hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  data_dir: ${task.collected_reward_dir}
+  hidden_dir: ${task.collected_input_token_dir}
   task_id: null
   infer_task_id_from_shard: true
 

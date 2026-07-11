@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from dreamervla.workers.inference._test_rollout_stub import BACKBONE_DIM
 from dreamervla.workers.rollout.record_adapter import build_dump_step
+
+INPUT_TOKEN_SHAPE = (256, 4096)
 
 
 def _full_record() -> dict:
@@ -27,7 +28,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
     full_record["gripper_states"] = np.array([7.0, 8.0], dtype=np.float64)
     step = build_dump_step(
         full_record=full_record,
-        obs_embedding=np.zeros(BACKBONE_DIM, np.float16),
+        obs_embedding=np.zeros(INPUT_TOKEN_SHAPE, np.float16),
         lang_emb=np.arange(6, dtype=np.float32),
         action=np.ones(7, np.float32),
         reward=0.0,
@@ -35,7 +36,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
         done=True,
     )
     assert step["actions"].shape == (7,)
-    assert step["obs_embedding"].shape == (BACKBONE_DIM,)
+    assert step["obs_embedding"].shape == INPUT_TOKEN_SHAPE
     assert step["obs_embedding"].dtype == np.float16
     assert np.array_equal(step["lang_emb"], np.arange(6, dtype=np.float32))
     assert int(step["dones"]) == 1 and int(step["sparse_rewards"]) == 1
@@ -47,7 +48,9 @@ def test_build_dump_step_matches_writer_schema() -> None:
         assert key in step["obs"]
 
 
-def test_step_round_trips_through_rollout_dump_writer(tmp_path) -> None:
+def test_step_round_trips_through_rollout_dump_writer(
+    tmp_path, input_token_preprocess_config
+) -> None:
     import h5py
 
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
@@ -55,7 +58,7 @@ def test_step_round_trips_through_rollout_dump_writer(tmp_path) -> None:
     steps = [
         build_dump_step(
             full_record=_full_record(),
-            obs_embedding=np.zeros(BACKBONE_DIM, np.float16),
+            obs_embedding=np.zeros(INPUT_TOKEN_SHAPE, np.float16),
             lang_emb=np.arange(6, dtype=np.float32),
             action=np.ones(7, np.float32),
             reward=0.0,
@@ -65,22 +68,34 @@ def test_step_round_trips_through_rollout_dump_writer(tmp_path) -> None:
         for t in range(3)
     ]
     writer = RolloutDumpWriter(tmp_path / "reward", tmp_path / "hidden", "shard.hdf5")
-    writer.write_demo(index=0, steps=steps, task_id=0, episode_horizon=3, episode_success=True)
+    writer.write_demo(
+        index=0,
+        steps=steps,
+        preprocess_config=input_token_preprocess_config,
+        task_id=0,
+        episode_horizon=3,
+        episode_success=True,
+    )
     writer.close()
     with h5py.File(tmp_path / "hidden" / "shard.hdf5", "r") as handle:
-        assert handle["data"]["demo_0"]["obs_embedding"].shape == (3, BACKBONE_DIM)
+        assert handle["data"]["demo_0"]["obs_embedding"].shape == (
+            3,
+            *INPUT_TOKEN_SHAPE,
+        )
         assert handle["data"]["demo_0"]["lang_emb"].shape == (6,)
     with h5py.File(tmp_path / "reward" / "shard.hdf5", "r") as handle:
         assert handle["data"]["demo_0"]["obs"]["agentview_rgb"].shape == (3, 256, 256, 3)
         assert int(handle["data"]["demo_0"]["sparse_rewards"][-1]) == 1
 
 
-def test_build_dump_step_preserves_tokenized_hidden_shape(tmp_path) -> None:
+def test_build_dump_step_preserves_input_token_shape(
+    tmp_path, input_token_preprocess_config
+) -> None:
     import h5py
 
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 
-    tokenized = np.zeros((2, 4), dtype=np.float16)
+    tokenized = np.zeros(INPUT_TOKEN_SHAPE, dtype=np.float16)
     steps = [
         build_dump_step(
             full_record=_full_record(),
@@ -94,8 +109,18 @@ def test_build_dump_step_preserves_tokenized_hidden_shape(tmp_path) -> None:
         for t in range(2)
     ]
     writer = RolloutDumpWriter(tmp_path / "reward", tmp_path / "hidden", "shard.hdf5")
-    writer.write_demo(index=0, steps=steps, task_id=0, episode_horizon=2, episode_success=True)
+    writer.write_demo(
+        index=0,
+        steps=steps,
+        preprocess_config=input_token_preprocess_config,
+        task_id=0,
+        episode_horizon=2,
+        episode_success=True,
+    )
     writer.close()
 
     with h5py.File(tmp_path / "hidden" / "shard.hdf5", "r") as handle:
-        assert handle["data"]["demo_0"]["obs_embedding"].shape == (2, 2, 4)
+        assert handle["data"]["demo_0"]["obs_embedding"].shape == (
+            2,
+            *INPUT_TOKEN_SHAPE,
+        )

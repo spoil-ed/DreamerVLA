@@ -21,15 +21,14 @@ def test_model_and_algorithm_layout_is_converged() -> None:
 
 
 def test_converged_public_imports() -> None:
-    from dreamervla.algorithms.actor import OpenVLADiscreteTokenActor
+    from dreamervla.algorithms.actor import LatentToOpenVLAHiddenStateActor
     from dreamervla.algorithms.critic import LatentSuccessClassifier, TwohotCritic
-    from dreamervla.models.embodiment import OpenVLAOFTPolicy, RynnVLAEncoder
+    from dreamervla.models.embodiment import OpenVLAOFTPolicy
     from dreamervla.models.embodiment.world_model import ChunkAwareWorldModel, WorldModel
 
     assert OpenVLAOFTPolicy is not None
-    assert RynnVLAEncoder is not None
     assert WorldModel is not None
     assert ChunkAwareWorldModel is not None
-    assert OpenVLADiscreteTokenActor is not None
+    assert LatentToOpenVLAHiddenStateActor is not None
     assert TwohotCritic is not None
     assert LatentSuccessClassifier is not None

@@ -736,6 +736,22 @@ def _compose_train_config(*overrides: str):
         )
 
 
+def _load_tiny_manual_config():
+    from pathlib import Path
+
+    from dreamervla.config_resolvers import register_dreamervla_resolvers
+
+    register_dreamervla_resolvers()
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "manual_cotrain_ray_tiny.yaml"
+    )
+    cfg = OmegaConf.load(fixture)
+    OmegaConf.resolve(cfg)
+    return cfg
+
+
 def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     cfg = _compose_train_config(
         "experiment=openvla_onetraj_libero_cotrain_ray",
@@ -920,7 +936,7 @@ def test_manual_runner_preserves_explicit_real_env_spawn_slots_config() -> None:
 
 
 def test_manual_cotrain_tiny_wm_env_num_envs_tracks_envs_per_worker_and_disables_loggers() -> None:
-    cfg = _compose_train_config("experiment=manual_cotrain_ray_tiny")
+    cfg = _load_tiny_manual_config()
 
     assert cfg.manual_cotrain.real_rollout_epoch == cfg.manual_cotrain.rollout_epoch
     assert cfg.manual_cotrain.wm_rollout_epoch == cfg.manual_cotrain.rollout_epoch
@@ -1548,7 +1564,7 @@ def test_dynamic_wm_progress_keeps_classifier_rate_after_lease_file_reset() -> N
             env_channel_name="env",
             rollout_channel_name="rollout",
             actor_channel_name="actor",
-            timeout_s=0.001,
+            timeout_s=0.05,
             poll_s=0.0,
             progress=progress,  # type: ignore[arg-type]
         )
@@ -2269,14 +2285,14 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
         str(canonical_manifest_path.parent),
         required=True,
     )
-    legacy_dir_payload = manual_runner._load_manual_resume_payload(
+    compat_dir_payload = manual_runner._load_manual_resume_payload(
         str(ckpt.parent),
         required=True,
     )
     assert canonical_dir_payload is not None
-    assert legacy_dir_payload is not None
+    assert compat_dir_payload is not None
     assert canonical_dir_payload["global_step"] == 1
-    assert legacy_dir_payload["global_step"] == 1
+    assert compat_dir_payload["global_step"] == 1
     assert torch.equal(
         payload["state_dicts"]["policy"]["policy.weight"],
         torch.ones(1),

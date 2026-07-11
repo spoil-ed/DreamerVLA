@@ -15,11 +15,7 @@ from dreamervla.algorithms.critic.twohot_critic import (
 
 
 def build_classifier(config: Mapping[str, Any]) -> Any:
-    """Construct a success classifier from a config mapping.
-
-    A config carrying a Hydra ``_target_`` is built via ``hydra.utils.instantiate``.
-    Legacy configs without a target still construct ``LatentSuccessClassifier``.
-    """
+    """Construct the explicitly targeted success classifier."""
     from omegaconf import OmegaConf
 
     plain = (
@@ -27,12 +23,11 @@ def build_classifier(config: Mapping[str, Any]) -> Any:
         if OmegaConf.is_config(config)
         else dict(config)
     )
-    if plain.get("_target_"):
-        import hydra
+    if not plain.get("_target_"):
+        raise ValueError("classifier config requires an explicit Hydra _target_")
+    import hydra
 
-        return hydra.utils.instantiate(config)
-    plain.pop("_target_", None)
-    return LatentSuccessClassifier(LatentSuccessClassifierConfig(**plain))
+    return hydra.utils.instantiate(config)
 
 
 __all__ = [

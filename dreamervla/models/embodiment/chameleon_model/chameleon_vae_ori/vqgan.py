@@ -25,7 +25,7 @@ class VectorQuantizer2(nn.Module):
 
     # NOTE: due to a bug the beta term was applied to the wrong term. for
     # backwards compatibility we use the buggy version by default, but you can
-    # specify legacy=False to fix it.
+    # specify compat_mode=False to fix it.
     def __init__(
         self,
         n_e,
@@ -34,13 +34,13 @@ class VectorQuantizer2(nn.Module):
         remap=None,
         unknown_index="random",
         sane_index_shape=False,
-        legacy=True,
+        compat_mode=True,
     ):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
         self.beta = beta
-        self.legacy = legacy
+        self.compat_mode = compat_mode
 
         self.embedding = nn.Embedding(self.n_e, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
@@ -112,7 +112,7 @@ class VectorQuantizer2(nn.Module):
         min_encodings = None
 
         # compute loss for embedding
-        if not self.legacy:
+        if not self.compat_mode:
             loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + torch.mean(
                 (z_q - z.detach()) ** 2
             )

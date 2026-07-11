@@ -19,27 +19,35 @@ SEQ_LEN = 4    # sequence_length; positive window at start=(T-SEQ_LEN), negative
 IMAGE_H = 256
 IMAGE_W = 256
 ACTION_DIM = 7
-HIDDEN_DIM = 229376   # 229376 = 56 * 4096
+INPUT_TOKEN_SHAPE = (256, 4096)
+INPUT_TOKEN_DIM = 256 * 4096
 STATE_DIM = 79        # libero_goal S
 
 PREPROCESS_CONFIG = {
     "action_dim": 7,
-    "action_head_type": "oft_l1_regression",
+    "action_head_type": "oft_discrete_token",
     "center_crop": True,
-    "chunk_size": 4,
+    "chunk_size": 8,
     "hidden_key": "obs_embedding",
-    "history": 2,
-    "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
-    "include_state": True,
+    "history": 1,
+    "image_keys": ["agentview_rgb"],
+    "include_state": False,
     "model_path": "/fake/model/path",
-    "num_images_in_input": 4,
-    "obs_hidden_source": "action_query",
+    "num_images_in_input": 1,
+    "patches_per_image": 256,
+    "token_count": 256,
+    "hidden_dim": INPUT_TOKEN_DIM,
+    "obs_embedding_shape": [256, 4096],
+    "hidden_storage_format": "tokenized",
+    "obs_hidden_source": "input_token_embedding",
     "output_dtype": "float16",
     "prompt_style": "vla_policy",
     "resolution": 256,
     "rotate_images_180": True,
     "time_horizon": 8,
     "token_dim": 4096,
+    "sidecar_schema_version": 1,
+    "required_demo_datasets": ["obs_embedding"],
 }
 
 
@@ -62,7 +70,9 @@ def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
             "gripper_states": rng.standard_normal(2),
             "joint_states": rng.standard_normal(7),
         },
-        "obs_embedding": rng.standard_normal(HIDDEN_DIM).astype(np.float16),
+        "obs_embedding": np.broadcast_to(
+            np.asarray(t, dtype=np.float16), INPUT_TOKEN_SHAPE
+        ),
     }
 
 
@@ -105,11 +115,11 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
     cfg = json.loads((hidden_dir / "preprocess_config.json").read_text())
     assert cfg["hidden_key"] == "obs_embedding"
     assert cfg["time_horizon"] == 8
-    assert cfg["history"] == 2
-    assert cfg["action_head_type"] == "oft_l1_regression"
-    assert cfg["obs_hidden_source"] == "action_query"
+    assert cfg["history"] == 1
+    assert cfg["action_head_type"] == "oft_discrete_token"
+    assert cfg["obs_hidden_source"] == "input_token_embedding"
     assert cfg["prompt_style"] == "vla_policy"
-    assert cfg["include_state"] is True
+    assert cfg["include_state"] is False
     assert cfg["rotate_images_180"] is True
 
     # ── Round-trip: load via BalancedTerminalDataset ───────────────────────────
@@ -122,11 +132,11 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
         image_size=64,  # resize to small for speed
         expected_model_path="/fake/model/path",
         expected_time_horizon=8,
-        expected_action_head_type="oft_l1_regression",
-        expected_obs_hidden_source="action_query",
+        expected_action_head_type="oft_discrete_token",
+        expected_obs_hidden_source="input_token_embedding",
         expected_prompt_style="vla_policy",
-        expected_history=2,
-        expected_include_state=True,
+        expected_history=1,
+        expected_include_state=False,
         expected_rotate_images_180=True,
         reward_mode="sparse",
     )
@@ -144,7 +154,7 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
         assert "images" in item, f"{label} item missing images"
         assert "actions" in item, f"{label} item missing actions"
         assert "rewards" in item, f"{label} item missing rewards"
-        assert item["obs_embedding"].shape == (SEQ_LEN, HIDDEN_DIM), (
+        assert item["obs_embedding"].shape == (SEQ_LEN, *INPUT_TOKEN_SHAPE), (
             f"{label} obs_embedding shape mismatch: {item['obs_embedding'].shape}"
         )
         assert item["images"].shape == (SEQ_LEN, 6, 64, 64), (
@@ -241,7 +251,7 @@ def test_writer_shapes(tmp_path: Path) -> None:
 
     with h5py.File(hidden_dir / shard_name, "r") as f:
         demo = f["data"]["demo_0"]
-        assert demo["obs_embedding"].shape == (T, HIDDEN_DIM)
+        assert demo["obs_embedding"].shape == (T, *INPUT_TOKEN_SHAPE)
 
 
 def test_writer_data_attrs(tmp_path: Path) -> None:
@@ -308,8 +318,8 @@ def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
             "seed": 17,
             "render_backend": "egl",
             "hidden_key": "obs_embedding",
-            "hidden_dim": HIDDEN_DIM,
-            "token_count": 56,
+            "hidden_dim": INPUT_TOKEN_DIM,
+            "token_count": 256,
             "token_dim": 4096,
             "ignored_none": None,
             "ignored_dict": {"not": "an attr scalar"},
@@ -327,6 +337,8 @@ def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
         assert attrs["env_step"] == 4567
         assert attrs["chunk_size"] == PREPROCESS_CONFIG["chunk_size"]
         assert attrs["hidden_key"] == "obs_embedding"
+        assert attrs["hidden_dim"] == INPUT_TOKEN_DIM
+        assert attrs["token_count"] == 256
         assert attrs["token_dim"] == 4096
         for forbidden in (
             "horizon",
@@ -343,8 +355,6 @@ def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
             "timeout",
             "seed",
             "render_backend",
-            "hidden_dim",
-            "token_count",
             "ignored_none",
             "ignored_dict",
             "ignored_array",

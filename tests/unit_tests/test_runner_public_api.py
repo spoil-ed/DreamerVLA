@@ -91,7 +91,7 @@ def test_runner_directory_contains_route_specific_runners() -> None:
     assert not (runner_dir.parent / "workspace_impl").exists()
 
 
-def test_removed_legacy_compatibility_shims_are_absent() -> None:
+def test_removed_compatibility_shims_are_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
     assert not (
@@ -220,7 +220,6 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
 
 def test_train_config_resolves_public_default_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
-    assert not (config_dir / "archive").exists()
 
     train_config = (config_dir / "train.yaml").read_text(encoding="utf-8")
     assert "experiment: openvla_onetraj_libero_cotrain_ray" in train_config

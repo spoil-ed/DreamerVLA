@@ -29,8 +29,8 @@ def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
     assert _policy_device_from_id("cuda:2") == torch.device("cuda:2")
 
 
-def test_vla_latent_spec_derives_flat_dim_from_policy() -> None:
-    from dreamervla.runners.oft_collect_common import vla_latent_spec
+def test_vla_input_token_spec_derives_flat_dim_from_policy() -> None:
+    from dreamervla.runners.oft_collect_common import vla_input_token_spec
 
     class _VisionBackbone:
         per_image = 5
@@ -46,7 +46,7 @@ def test_vla_latent_spec_derives_flat_dim_from_policy() -> None:
         vision_backbone = _VisionBackbone()
         token_dim = 11
 
-    spec = vla_latent_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
+    spec = vla_input_token_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
     assert spec["per_image"] == _VisionBackbone.per_image
     assert spec["patches_per_image"] == _VisionBackbone.per_image
     assert spec["views"] == _VisionBackbone.views
@@ -79,22 +79,30 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
                 "ckpt_path": str(tmp_path / "ckpt"),
                 "dataset_statistics_key": "libero_goal_no_noops",
                 "hdf5_reward_dir": str(tmp_path / "reward"),
-                "action_hidden_dir": str(tmp_path / "hidden"),
-                "expected_action_head_type": "oft_discrete_token",
-                "expected_include_state": False,
-                "expected_obs_hidden_source": "input_token_embedding",
-                "expected_prompt_style": "vla_policy",
-                "expected_history": 1,
-                "expected_rotate_images_180": True,
-                "time_horizon": 8,
-                "token_dim": 4096,
-                "chunk_size": 8,
+                "input_token_dir": str(tmp_path / "hidden"),
+                "input_tokens": {
+                    "expected_action_head_type": "oft_discrete_token",
+                    "expected_include_state": False,
+                    "expected_obs_hidden_source": "input_token_embedding",
+                    "expected_prompt_style": "vla_policy",
+                    "expected_history": 1,
+                    "expected_rotate_images_180": True,
+                    "time_horizon": 8,
+                    "token_count": 256,
+                    "token_dim": 4096,
+                    "wm_obs_dim": 1_048_576,
+                    "patches_per_image": 256,
+                    "chunk_size": 8,
+                },
             },
         },
     }
     plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
     assert plan["inference"]["decoder"]["target"].endswith("oft_rollout:OFTRolloutBundle")
-    assert plan["inference"]["action_steps"] == cfg["task"]["openvla_oft"]["chunk_size"]
+    assert (
+        plan["inference"]["action_steps"]
+        == cfg["task"]["openvla_oft"]["input_tokens"]["chunk_size"]
+    )
     assert plan["inference"]["decoder"]["kwargs"]["history"] == 1
     assert (
         plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"]
@@ -108,7 +116,10 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     assert env_kwargs["validate_canonical"] is False
     assert plan["dump"]["preprocess_config"]["hidden_key"] == "obs_embedding"
     assert plan["dump"]["preprocess_config"]["action_head_type"] == "oft_discrete_token"
-    assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "input_token_embedding"
+    assert (
+        plan["dump"]["preprocess_config"]["obs_hidden_source"]
+        == "input_token_embedding"
+    )
     assert plan["dump"]["preprocess_config"]["num_images_in_input"] == 1
 
 
@@ -136,16 +147,21 @@ def test_oft_collect_plan_respects_cpu_inference_device_override(tmp_path) -> No
                 "ckpt_path": str(tmp_path / "ckpt"),
                 "dataset_statistics_key": "libero_goal_no_noops",
                 "hdf5_reward_dir": str(tmp_path / "reward"),
-                "action_hidden_dir": str(tmp_path / "hidden"),
-                "expected_action_head_type": "oft_discrete_token",
-                "expected_include_state": False,
-                "expected_obs_hidden_source": "input_token_embedding",
-                "expected_prompt_style": "vla_policy",
-                "expected_history": 1,
-                "expected_rotate_images_180": True,
-                "time_horizon": 8,
-                "token_dim": 4096,
-                "chunk_size": 8,
+                "input_token_dir": str(tmp_path / "hidden"),
+                "input_tokens": {
+                    "expected_action_head_type": "oft_discrete_token",
+                    "expected_include_state": False,
+                    "expected_obs_hidden_source": "input_token_embedding",
+                    "expected_prompt_style": "vla_policy",
+                    "expected_history": 1,
+                    "expected_rotate_images_180": True,
+                    "time_horizon": 8,
+                    "token_count": 256,
+                    "token_dim": 4096,
+                    "wm_obs_dim": 1_048_576,
+                    "patches_per_image": 256,
+                    "chunk_size": 8,
+                },
             },
         },
     }

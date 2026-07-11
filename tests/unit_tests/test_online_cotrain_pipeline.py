@@ -14,7 +14,7 @@ def test_online_cotrain_runner_has_extracted_methods():
     assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
 
 
-def test_wm_pretrain_batch_omits_images_when_action_hidden_exists():
+def test_wm_pretrain_batch_omits_images_when_input_tokens_exist():
     from dreamervla.runners.online_cotrain_pipeline_runner import (
         OnlineCotrainPipelineRunner,
     )
@@ -38,7 +38,7 @@ def test_wm_pretrain_batch_omits_images_when_action_hidden_exists():
     assert "images" not in wm_batch
 
 
-def test_wm_pretrain_batch_accepts_action_hidden_without_images():
+def test_wm_pretrain_batch_accepts_input_tokens_without_images():
     from dreamervla.runners.online_cotrain_pipeline_runner import (
         OnlineCotrainPipelineRunner,
     )
@@ -572,7 +572,25 @@ def test_classifier_warmup_hf_sidecar_uses_config_target(tmp_path, monkeypatch):
 # tests.runners.test_offline_seed — that path is fragile / wrong). The shape
 # below mirrors what the collector / RolloutDumpWriter writes.
 # --------------------------------------------------------------------------
-def _demo_steps(T, success, emb_dim=16):
+_INPUT_TOKEN_PREPROCESS_CONFIG = {
+    "action_head_type": "oft_discrete_token",
+    "obs_hidden_source": "input_token_embedding",
+    "hidden_key": "obs_embedding",
+    "token_count": 256,
+    "token_dim": 4096,
+    "hidden_dim": 1_048_576,
+    "obs_embedding_shape": [256, 4096],
+    "hidden_storage_format": "tokenized",
+    "num_images_in_input": 1,
+    "patches_per_image": 256,
+    "history": 1,
+    "include_state": False,
+    "sidecar_schema_version": 1,
+    "required_demo_datasets": ["obs_embedding"],
+}
+
+
+def _demo_steps(T, success):
     steps = []
     for t in range(T):
         steps.append({
@@ -589,12 +607,14 @@ def _demo_steps(T, success, emb_dim=16):
                 "ee_states": np.zeros(6, np.float64), "gripper_states": np.zeros(2, np.float64),
                 "joint_states": np.zeros(7, np.float64),
             },
-            "obs_embedding": np.full(emb_dim, t, np.float16),
+            "obs_embedding": np.broadcast_to(
+                np.asarray(t, dtype=np.float16), (256, 4096)
+            ),
         })
     return steps
 
 
-def _seeded_replay(tmp_path, emb_dim=16, seq_len=4):
+def _seeded_replay(tmp_path, seq_len=4):
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
     from dreamervla.runners.offline_seed import seed_replay_from_offline
     from dreamervla.runners.online_replay import OnlineReplay
@@ -602,8 +622,13 @@ def _seeded_replay(tmp_path, emb_dim=16, seq_len=4):
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
         for i in range(4):
-            w.write_demo(index=i, steps=_demo_steps(8, success=(i % 2 == 0), emb_dim=emb_dim),
-                         task_id=0, episode_id=i)
+            w.write_demo(
+                index=i,
+                steps=_demo_steps(8, success=(i % 2 == 0)),
+                preprocess_config=_INPUT_TOKEN_PREPROCESS_CONFIG,
+                task_id=0,
+                episode_id=i,
+            )
     replay = OnlineReplay(capacity=10_000, sequence_length=seq_len, task_ids=(0,), rank=0)
     seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir, default_task_id=0)
     return replay
@@ -1180,7 +1205,7 @@ def test_debug_overrides_disable_replay_epoch_and_lumos_bounds():
 
 
 def test_task_conditioned_classifier_receives_replay_task_ids():
-    from dreamervla.runners.online_dreamervla import online_classifier_update_step
+    from dreamervla.runners.classifier_update import online_classifier_update_step
 
     class Replay:
         def sample_classifier_windows(
@@ -1591,6 +1616,30 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
 
 
+def test_wm_only_run_never_calibrates_or_checkpoints_classifier(
+    tmp_path, monkeypatch
+):
+    calls: list[str] = []
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        total_env_steps=0,
+        cfg_updates={
+            "training.classifier_warmup_steps": 0,
+            "offline_warmup.debug_classifier_warmup_steps": 0,
+            "algorithm.lumos.calibrate_threshold": True,
+            "algorithm.lumos.classifier_min_val_f1": 0.9,
+        },
+    )
+
+    history = runner.run()
+
+    assert history == []
+    assert calls == ["build", "seed", "wm_warmup", "save_wm"]
+    assert not (tmp_path / "ckpt" / "classifier_warmup.ckpt").exists()
+
+
 def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
     from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
 
@@ -1755,12 +1804,11 @@ def test_online_env_validation_accepts_oft_discrete_input_token_contract():
     env._validate_canonical_config()
 
 
-def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
+def test_online_rollout_uses_only_oft_input_token_extractor():
     import dreamervla.runners.online_cotrain_runner as mod
 
     runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
     runner.device = torch.device("cpu")
-    runner._latent_type = "backbone_latent"
     calls: list[str] = []
 
     class FakeExtractor:
@@ -1774,7 +1822,7 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
 
                 def __iter__(self):
                     yield []
-                    yield torch.arange(4, dtype=torch.float16).reshape(1, 4)
+                    yield torch.zeros(1, 256, 4096, dtype=torch.float16)
 
             return DecodeOutput()
 
@@ -1793,11 +1841,7 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
             calls.append(f"policy:{tuple(batch['hidden'].shape)}")
             return torch.zeros(1, 2, 7), torch.zeros(1), {}
 
-    def fail_rynn_input_token(*_args, **_kwargs):
-        raise AssertionError("OFT backbone rollout must not call Rynn input-token extraction")
-
     runner._oft_input_token_extractor = FakeExtractor()
-    monkeypatch.setattr(mod, "obs_to_input_token_embedding", fail_rynn_input_token)
 
     action, obs_embedding, latent = runner._rollout_action(
         FakeWorldModel(),
@@ -1810,13 +1854,13 @@ def test_backbone_rollout_uses_oft_input_token_extractor(monkeypatch):
     )
 
     assert action.shape == (7,)
-    assert obs_embedding.shape == (1, 1, 4)
-    assert latent["hidden"].shape == (1, 1, 4)
+    assert obs_embedding.shape == (1, 256, 4096)
+    assert latent["hidden"].shape == (1, 256, 4096)
     assert torch.equal(runner._last_rollout_lang_emb, torch.arange(6, dtype=torch.float16))
     assert calls == [
         "reset",
         "step:Pick up the block",
-        "encode:(1, 1, 4)",
+        "encode:(1, 256, 4096)",
         "actor_input",
         "policy:(1, 6)",
     ]
@@ -1869,7 +1913,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
             pass
 
         def step(self, _obs, _desc):
-            return [], torch.zeros(4)
+                return [], torch.zeros(1, 256, 4096)
 
     class FakeWorldModel:
         def __call__(self, batch):
@@ -1895,8 +1939,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
     runner.processor = None
     runner.world_model = FakeWorldModel()
     runner.policy = FakePolicy()
-    runner._latent_type = "action_hidden"
-    runner._oft_action_hidden_extractor = FakeExtractor()
+    runner._oft_input_token_extractor = FakeExtractor()
     runner._build_env = lambda _cfg: fake_env
     runner.resume = lambda: None
     runner.console_progress = lambda *_args, **_kwargs: None

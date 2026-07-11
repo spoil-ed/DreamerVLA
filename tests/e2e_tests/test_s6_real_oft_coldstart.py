@@ -22,7 +22,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     from hydra import compose, initialize_config_dir
 
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
-    from dreamervla.runners.oft_collect_common import load_policy, vla_latent_spec
+    from dreamervla.runners.oft_collect_common import load_policy, vla_input_token_spec
     from dreamervla.train import run
 
     if ray.is_initialized():
@@ -37,7 +37,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
                 "collect.episodes_per_task=2",
                 "collect.episode_horizon=64",
                 f"task.openvla_oft.hdf5_reward_dir={tmp_path / 'reward'}",
-                f"task.openvla_oft.action_hidden_dir={tmp_path / 'hidden'}",
+                f"task.openvla_oft.input_token_dir={tmp_path / 'hidden'}",
                 f"training.out_dir={tmp_path / 'run'}",
             ],
         )
@@ -47,17 +47,14 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     sidecar = next((tmp_path / "hidden").glob("*.hdf5"))
     with h5py.File(sidecar, "r") as handle:
         demo0 = handle["data"]["demo_0"]["obs_embedding"]
-        if preprocess_cfg["obs_hidden_source"] == "input_token_embedding":
-            plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
-            policy = load_policy(dict(plan["collect"], _rank=0), 0)
-            spec = vla_latent_spec(
-                policy.vla,
-                plan["inference"]["decoder"]["kwargs"]["image_keys"],
-            )
-            expected_dim = spec["flat_dim"]
-        else:
-            expected_dim = int(cfg.task.openvla_oft.wm_obs_dim)
-        assert demo0.shape[1] == expected_dim
+        assert preprocess_cfg["obs_hidden_source"] == "input_token_embedding"
+        plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
+        policy = load_policy(dict(plan["collect"], _rank=0), 0)
+        spec = vla_input_token_spec(
+            policy.vla,
+            plan["inference"]["decoder"]["kwargs"]["image_keys"],
+        )
+        assert tuple(demo0.shape[1:]) == (spec["token_count"], spec["token_dim"])
         assert str(demo0.dtype) == "float16"
     assert preprocess_cfg["hidden_key"] == "obs_embedding"
     assert not ray.is_initialized()

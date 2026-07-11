@@ -29,25 +29,12 @@ training:
   lr_warmup_steps: 0
 
 init:
-  vla_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/VLA_model_256/libero_goal
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
   encoder_state_ckpt: null
 
-encoder:
-  _target_: dreamervla.models.embodiment.RynnVLAEncoder
-  model_path: ${init.vla_ckpt_path}
-  tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/models--Alpha-VLLM--Lumina-mGPT-7B-768
-  text_tokenizer_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/text_tokenizer.json
-  chameleon_vqgan_config: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.yaml
-  chameleon_vqgan_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/chameleon/tokenizer/vqgan.ckpt
-  resolution: 256
-  action_dim: 7
-  time_horizon: 5
-  action_head_type: legacy
-  pool: mean
-
 eval:
-  ckpt_path: null
-  ckpt_kind: auto
+  ckpt_path: ${task.openvla_oft.ckpt_path}
+  ckpt_kind: vla
   seed: ${seed}
   task_suite_name: libero_goal
   num_episodes_per_task: 3
@@ -90,8 +77,8 @@ eval:
   dreamer_wm_history_length: 2
   dreamer_wm_rotate_images: true
   dreamer_wm_prompt_style: vla_policy
-  dreamer_wm_include_state: true
-  obs_hidden_source: auto
+  dreamer_wm_include_state: false
+  obs_hidden_source: input_token_embedding
   target_token_id: 10004
   dreamer_which_image_block: -2
   dreamer_which_image_blocks: [-2, -1]

@@ -55,7 +55,7 @@ from dreamervla.runners.oft_collect_common import (
     oft_open_loop_action,
     resolve_model_path,
     sidecar_to_numpy,
-    vla_latent_spec,
+    vla_input_token_spec,
 )
 from dreamervla.runners.render_device_config import (
     cuda_visible_devices_from_env,
@@ -269,7 +269,7 @@ def _run_episode(
             ee_states        (6,)        float64
             gripper_states   (2,)        float64
             joint_states     (7,)        float64
-        obs_embedding   (229376,) float16
+        obs_embedding   (256,4096) float16 — projected input-token embedding
 
     Image rotation contract:
         full_record() is called with pixel_rotate_180=False (env default), so
@@ -521,6 +521,12 @@ def collect_rollouts(
         invoked after each episode completes; used by the runner console API.
     """
     _require_keys(cfg)
+    if str(cfg["expected_obs_hidden_source"]) != "input_token_embedding":
+        raise ValueError(
+            "OpenVLA-OFT collection requires "
+            "expected_obs_hidden_source='input_token_embedding'; "
+            f"got {cfg['expected_obs_hidden_source']!r}"
+        )
     cfg["_rank"] = rank
     cfg["_world_size"] = world_size
     cfg["_local_rank"] = local_rank
@@ -587,12 +593,11 @@ def collect_rollouts(
 
     policy = _load_policy(cfg, gpu_id)
     _assert_policy_mode_matches(cfg)
-    if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
-        spec = vla_latent_spec(policy.vla, image_keys)
-        cfg["token_count"] = int(spec["token_count"])
-        cfg["hidden_dim"] = int(spec["flat_dim"])
-        cfg["patches_per_image"] = int(spec["patches_per_image"])
-        cfg["num_images_in_input"] = int(spec["num_images_in_input"])
+    spec = vla_input_token_spec(policy.vla, image_keys)
+    cfg["token_count"] = int(spec["token_count"])
+    cfg["hidden_dim"] = int(spec["flat_dim"])
+    cfg["patches_per_image"] = int(spec["patches_per_image"])
+    cfg["num_images_in_input"] = int(spec["num_images_in_input"])
     extractor = OFTRolloutHiddenExtractor(
         policy,
         image_keys=image_keys,

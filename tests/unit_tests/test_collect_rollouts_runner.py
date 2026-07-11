@@ -25,12 +25,15 @@ def test_collect_rollouts_experiment_composes_and_validates():
     assert cfg._target_ == "dreamervla.runners.CollectRolloutsRunner"
     oft = cfg.task.openvla_oft
     assert str(oft.ckpt_path).endswith("Openvla-oft-SFT-libero-goal-traj1")
-    assert oft.expected_action_head_type == "oft_discrete_token"
-    assert oft.expected_include_state is False
-    assert oft.expected_obs_hidden_source == "action_query"
-    assert int(oft.expected_history) == 1
+    input_tokens = oft.input_tokens
+    assert input_tokens.expected_action_head_type == "oft_discrete_token"
+    assert input_tokens.expected_include_state is False
+    assert input_tokens.expected_obs_hidden_source == "input_token_embedding"
+    assert int(input_tokens.expected_history) == 1
     assert int(oft.time_horizon) == 8
-    assert str(oft.action_hidden_dir).endswith("_oft_legacy_action_hidden_vla_policy_h1")
+    assert str(oft.input_token_dir).endswith(
+        "_oft_input_token_embedding_vla_policy_h1"
+    )
     assert "OpenVLA_Onetraj_LIBERO_libero_goal" in str(oft.hdf5_reward_dir)
     assert cfg.collect.envs_per_gpu == 1
 
@@ -48,20 +51,25 @@ def _fake_cfg():
                     "ckpt_path": "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1",
                     "dataset_statistics_key": "libero_goal_no_noops",
                     "hdf5_reward_dir": "data/processed_data/X/no_noops_t_256_remaining_reward",
-                    "action_hidden_dir": "data/processed_data/X/no_noops_t_256_oft_legacy_action_hidden_vla_policy_h1",
-                    "expected_action_head_type": "oft_discrete_token",
-                    "expected_include_state": False,
-                    "expected_obs_hidden_source": "input_token_embedding",
-                    "expected_prompt_style": "vla_policy",
-                    "expected_rotate_images_180": True,
-                    "expected_history": 1,
-                    "time_horizon": 8,
-                    "token_dim": 4096,
-                    "chunk_size": 8,
+                    "input_token_dir": "data/processed_data/X/no_noops_t_256_oft_input_token_embedding_vla_policy_h1",
+                    "input_tokens": {
+                        "expected_action_head_type": "oft_discrete_token",
+                        "expected_include_state": False,
+                        "expected_obs_hidden_source": "input_token_embedding",
+                        "expected_prompt_style": "vla_policy",
+                        "expected_rotate_images_180": True,
+                        "expected_history": 1,
+                        "time_horizon": 8,
+                        "token_dim": 4096,
+                        "token_count": 256,
+                        "wm_obs_dim": 1_048_576,
+                        "patches_per_image": 256,
+                        "chunk_size": 8,
+                    },
                 },
             },
             "collect": {
-                "policy_mode": "auto",
+                "policy_mode": "discrete",
                 "task_ids": "all",
                 "episodes_per_task": 2,
                 "episode_horizon": 64,
@@ -81,7 +89,13 @@ def test_build_collect_cfg_maps_task_and_collect():
     assert cc["model_path"].endswith("Openvla-oft-SFT-libero-goal-traj1")
     assert cc["unnorm_key"] == "libero_goal_no_noops"
     assert cc["reward_dir"].endswith("no_noops_t_256_remaining_reward")
-    assert cc["hidden_dir"].endswith("_oft_legacy_action_hidden_vla_policy_h1")
+    assert cc["hidden_dir"].endswith(
+        "_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cc["expected_obs_hidden_source"] == "input_token_embedding"
+    assert cc["token_count"] == 256
+    assert cc["hidden_dim"] == 1_048_576
+    assert cc["patches_per_image"] == 256
     assert cc["expected_history"] == 1
     # OFT single-view default from the central collect config (NOT len(image_keys)=2):
     # the checkpoint does not persist num_images_in_input and the discrete VLA wants 1.

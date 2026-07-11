@@ -1,8 +1,0 @@
-suites: [libero_goal, libero_object, libero_spatial, libero_10]
-data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
-processed_data_root: null
-his: 1
-action_horizon: 1
-image_resolution: 256
-skip_configs: false
-check_action_hidden: false

@@ -14,12 +14,11 @@ gpus=0,1 ngpu=2 batch_size=16 num_workers=4 num_epochs=20 out_dir=/tmp/run
 ```
 
 Shell launchers are thin: they set project/data roots and call Hydra-backed Python
-entry points. The release tree keeps current mainline wrappers under `scripts/`, such
-as `train_dreamervla.sh` and the cold-start e2e launchers; archived standalone VLA/WM
-wrappers are not part of the active script surface. All experiment choice is
+entry points. The release tree keeps current wrappers under `scripts/`, such
+as `train_dreamervla.sh` and the cold-start e2e launchers. All experiment choice is
 `experiment=<name>` plus ordinary Hydra keys. The pipeline task name is the Hydra
 `task=` value (snake_case, e.g. `task=openvla_onetraj_libero`). On-disk data artifacts
-keep their historical names via `task.artifact_name` (e.g.
+use `task.artifact_name` (e.g.
 `OpenVLA_Onetraj_LIBERO_libero_goal`), so paths inside commands intentionally mix the
 snake_case `task=` token with the CamelCase artifact directory.
 
@@ -27,23 +26,19 @@ snake_case `task=` token with the CamelCase artifact directory.
 
 | Recipe | Scheme | What it builds |
 | --- | --- | --- |
-| `rynnvla_libero` | Scheme A (legacy action-hidden) | RynnVLA + LIBERO-Goal full pipeline |
 | `openvla_onetraj_libero` | discrete-token route | OpenVLA-OFT one-trajectory baseline |
-| `openvla_onetraj_libero` action-hidden WM | Scheme A (query_after) | OFT action-slot hidden WM (offline + online cotrain) |
-| `openvla_onetraj_libero` backbone-latent WM | Scheme 1 (query_before) | OFT input-token (backbone) latent WM |
+| `openvla_onetraj_libero` input-token WM | query_before | OFT projected vision-token WM (offline + online cotrain) |
 | `openvla_onetraj_coldstart_libero` | cold-start | fresh rollout collection (+ warmup + cotrain) |
 
-## Latent schemes
+## Observation contract
 
-- **Scheme A (action-hidden, query_after):** action-slot hidden tokens produced by the
-  VLA action head are consumed directly by the WM, classifier, and DreamerVLA actor.
-  Mainline route. Short sequence (action-hidden, ~56 tokens).
-- **Scheme 1 (backbone-latent, query_before):** the WM target is the future
-  backbone/DINO-style visual-language latent (input tokens, ~512 tokens, ~9× longer).
-  The actor is `LatentToOpenVLADiscreteTokenActor` (a discrete bridge over the latent).
+The OpenVLA-OFT mainline persists projected current-frame vision embeddings before
+the language-model action positions. With one image, the sidecar is `[T,256,4096]`
+and declares `obs_hidden_source=input_token_embedding`. The actor bridges those 256
+source tokens to the discrete action decoder; its internal action slots are not a WM
+observation and are never written as a sidecar.
 - **Discrete-token route:** the OpenVLA-OFT one action-probability route used by the
-  one-trajectory baseline (discrete tokens, not the L1 Gaussian route — the L1 route is
-  a separate, not-yet-validated gap).
+  one-trajectory baseline. L1/action-query checkpoints are explicitly rejected.
 
 ## World model architecture (WM chunk predictor)
 
@@ -52,22 +47,15 @@ The world model is the WM paradigm migrated onto **discrete** OpenVLA-OFT latent
 `predict_next_chunk` rolls K env-steps autoregressively. Training uses `num_hist=3`
 autoregressive recursion (a 3-term window, free-running).
 
-Sized per scheme under a ~1B cap:
-
-- **query_after** (action-hidden, seq≈168): full-width attention inner =
-  `heads*dim_head = 4096 = model_dim` (no compression of the dense 4096-d VLA tokens),
-  lean FFN `mlp_dim = model_dim`. ~610M. `model_dim 4106`.
-- **query_before** (input-token, seq≈1536): half-width attention inner = `2048 =
-  0.5*model_dim`, lean FFN. ~313M, because its sequence is ~9× longer. `model_dim 4106`.
-- RynnVLA action-hidden WM: smaller latent, `model_dim 1034`.
-
+The input-token route uses `token_count=256`, `token_dim=4096`, and
+`wm_obs_dim=1048576`. Proprio, language, and action conditioning widths are separate
+from this external observation shape and are derived from Hydra metadata.
 The rollout length is a hyperparameter: with horizon H, chunk K, N chunks,
 `sequence_length = H + N*K + 1`. `num_hist=3` is required by the recursion. Predictor
 profile values live in the `worldmodel/` configs.
 
-> The mainline `model_dim` is **4106** (8 configs) and the RynnVLA action-hidden WM is
-> **1034**. These are adjustable but must match the WM checkpoint they load — a run that
-> resumes a `model_dim=1024` warmup checkpoint is incompatible with the current sizing.
+> The mainline `model_dim` is **4148**. This is adjustable but must match the WM
+> checkpoint being loaded.
 
 ## WM single-episode overfit probe
 
@@ -100,7 +88,7 @@ B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_p
    strided selection)
 3. cap `algorithm.lumos.episode_max_steps` / `algorithm.ppo_rollouts_per_start`
 
-With `batch_size=12, imag_last=4` the action-hidden route fits an 80GB GPU at ~66.7 GB.
+With `batch_size=12, imag_last=4` the input-token route fits an 80GB GPU at ~66.7 GB.
 The OFT latent is large; shrink `B_eff` first (chunk-granular video, sliced `lm_head`).
 `training.debug=true` (or `debug=true` to the e2e scripts) runs a tiny smoke instead of
 the full pipeline.

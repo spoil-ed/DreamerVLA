@@ -5,7 +5,7 @@ from pathlib import Path
 from dreamervla.diagnostics import wm_single_trajectory_vla_overfit as diag
 
 
-def test_vla_args_use_runtime_hidden_token_mode() -> None:
+def test_vla_args_use_discrete_input_token_mainline() -> None:
     args = diag._vla_args(Path("/tmp/vla"), "agentview_rgb")
 
     assert args.policy_mode == "discrete"

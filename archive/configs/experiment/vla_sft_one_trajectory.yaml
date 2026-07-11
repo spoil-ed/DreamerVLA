@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /VLA: rynnvla_one_trajectory
-  - _self_

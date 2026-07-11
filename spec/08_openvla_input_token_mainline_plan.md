@@ -300,7 +300,7 @@ Expected: old filenames, output arguments, and `hidden_token` metadata fail asse
 
 - [ ] **Step 3: Rename and simplify the preprocessing route**
 
-Keep policy-mode detection, image preparation, projected vision-token extraction, language embedding, HDF5 atomic writes, distributed sharding, completion attributes, and artifact validation. Delete C/D MLP sidecar output and the OpenVLA action-query/56-token sidecar output. The only episode dataset written by this module is:
+Pin policy mode to the discrete one-trajectory checkpoint and reject L1 component checkpoints. Keep image preparation, projected vision-token extraction, language embedding, HDF5 atomic writes, distributed sharding, completion attributes, and artifact validation. Delete C/D MLP sidecar output and the OpenVLA action-query/56-token sidecar output. The only episode dataset written by this module is:
 
 ```python
 demo_out.create_dataset(

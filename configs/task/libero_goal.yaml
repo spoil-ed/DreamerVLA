@@ -6,20 +6,10 @@ name: libero_goal
 suite: libero_goal
 task_name: goal
 
-action_horizon: 5
-time_horizon: 5
-
-legacy_action_hidden:
-  wm_obs_dim: 35840
-  token_count: 35
-  chunk_size: 5
-  latent_source: RynnVLA legacy [5,7,1024] action hidden
+action_horizon: 8
+time_horizon: 8
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650
-  resume_step: 6650
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/dataset_statistics.json
-  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/action_head--6650_checkpoint.pt
-  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_goal_hdf5_latest_6650/proprio_projector--6650_checkpoint.pt
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+  dataset_statistics_path: ${task.openvla_oft.ckpt_path}/dataset_statistics.json
   failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_failures

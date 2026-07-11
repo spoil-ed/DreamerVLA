@@ -32,19 +32,40 @@ def test_script_config_composes_real_hydra_yaml() -> None:
     assert cfg["overwrite"] is True
 
 
-def test_script_config_rejects_legacy_flags() -> None:
+def test_script_config_rejects_compat_flags() -> None:
     with pytest.raises(SystemExit, match="Use Hydra override syntax"):
         script_config("preprocess_remaining_steps_reward", ["--input-dir", "/tmp/in"])
 
 
 def test_script_namespace_preserves_config_values() -> None:
     args = script_namespace(
-        "preprocess_rynn_pixel_hidden",
+        "preprocess_oft_input_tokens",
         [
-            "image_keys=[agentview_rgb,eye_in_hand_rgb]",
-            "history=2",
+            "max_files=3",
+            "output_dtype=float32",
         ],
     )
 
-    assert args.image_keys == ["agentview_rgb", "eye_in_hand_rgb"]
-    assert args.history == 2
+    assert args.max_files == 3
+    assert args.output_dtype == "float32"
+
+
+def test_oft_input_token_preprocess_has_one_public_output() -> None:
+    cfg = script_config("preprocess_oft_input_tokens")
+
+    assert cfg["out_input_token_dir"].endswith(
+        "_oft_input_token_embedding_vla_policy_h1"
+    )
+    assert cfg["obs_hidden_source"] == "input_token_embedding"
+    assert cfg["image_keys"] == ["agentview_rgb"]
+    assert cfg["history"] == 1
+    assert cfg["patches_per_image"] == 256
+    for removed in (
+        "out_c_dir",
+        "out_d_dir",
+        "out_hidden_token_flat_dir",
+        "out_hidden_token_dir",
+        "skip_cd_sidecars",
+        "save_hidden_token",
+    ):
+        assert removed not in cfg

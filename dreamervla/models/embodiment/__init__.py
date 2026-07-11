@@ -6,10 +6,6 @@ from dreamervla.models.embodiment.protocol import (
     EncoderInputBatch,
     build_encoder_input_batch,
 )
-from dreamervla.models.embodiment.rynnvla_encoder import (
-    RynnVLAEncoder,
-    RynnVLAEncoderOutput,
-)
 from dreamervla.models.embodiment.world_model import ChunkAwareWorldModel, WorldModel
 
 __all__ = [
@@ -17,8 +13,6 @@ __all__ = [
     "ChunkAwareWorldModel",
     "EncoderInputBatch",
     "OpenVLAOFTPolicy",
-    "RynnVLAEncoder",
-    "RynnVLAEncoderOutput",
     "WorldModel",
     "build_encoder_input_batch",
 ]

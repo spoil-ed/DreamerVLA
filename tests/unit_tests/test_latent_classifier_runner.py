@@ -485,11 +485,12 @@ def test_bce_classifier_loss_uses_float_targets_and_sigmoid_predictions() -> Non
 def test_predict_success_supports_single_bce_logit() -> None:
     model = LatentSuccessClassifier(
         LatentSuccessClassifierConfig(
-            latent_dim=1,
-            window=1,
-            head_type="linear",
-            output_dim=1,
-        )
+                latent_dim=1,
+                window=1,
+                head_type="linear",
+                output_dim=1,
+                granularity="action",
+            )
     )
     with torch.no_grad():
         model.head.weight.fill_(1.0)

@@ -143,7 +143,8 @@ ${DVLA_DATA_ROOT}/collected_rollouts/<suite>/
 
 OpenVLA one-trajectory h1 主线 classifier 使用 token-WMPO 口径：
 
-- hidden 来自 `*_oft_input_token_embedding_vla_policy_h1`。
+- 观测 token 来自 `*_oft_input_token_embedding_vla_policy_h1`，每帧形状为
+  `[256,4096]`。
 - `classifier.output_dim=1`。
 - loss 是 BCE。
 - sampling protocol 是 `wmpo`。
@@ -430,9 +431,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-NGPU=8 \
+GPU_COUNT=8 \
 DVLA_DATA_ROOT=/inspire/qb-ilm/project/space-intelligence-multimodality/liuzhenyang-240108540154/spoil/data \
-  bash scripts/experiments/wm_full_dataset_train.sh \
+  bash scripts/experiments/world_model_training/train.sh \
   > logs/wm_train.log 2>&1
 ```
 

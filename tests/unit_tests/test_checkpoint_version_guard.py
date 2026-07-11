@@ -30,9 +30,9 @@ def test_load_runner_payload_accepts_current_version(tmp_path):
     assert load_runner_payload(path)["marker"] == 42
 
 
-def test_load_runner_payload_accepts_legacy_payload_without_version(tmp_path):
+def test_load_runner_payload_accepts_compat_payload_without_version(tmp_path):
     # Old / HF-style payloads predate the field; dual-read must still load them.
-    path = tmp_path / "legacy.ckpt"
+    path = tmp_path / "legacy_payload.ckpt"
     torch.save({"state_dicts": {"x": 1}}, path)
 
     assert "state_dicts" in load_runner_payload(path)

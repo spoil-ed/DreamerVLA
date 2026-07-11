@@ -37,7 +37,7 @@ def _make_steps(n, success):
                     "gripper_states": np.zeros(2),
                     "joint_states": np.zeros(7),
                 },
-                "obs_embedding": np.zeros(16, dtype=np.float16),
+                "obs_embedding": np.zeros((256, 4096), dtype=np.float16),
                 "success": success,
             }
         )
@@ -48,13 +48,18 @@ def test_per_trajectory_shard_name():
     assert per_trajectory_shard_name("traj", 3, 41) == "traj_t03_ep000041.hdf5"
 
 
-def test_writes_one_identity_named_pair_per_trajectory(tmp_path):
+def test_writes_one_identity_named_pair_per_trajectory(
+    tmp_path, input_token_preprocess_config
+):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
             index=0,
             steps=_make_steps(3, success=True),
-            preprocess_config={"chunk_size": 8, "token_dim": 4, "token_count": 4},
+            preprocess_config={
+                **input_token_preprocess_config,
+                "chunk_size": 8,
+            },
             data_attrs={"task_suite_name": "libero_goal"},
             task_id=0,
             episode_id=0,
@@ -100,12 +105,13 @@ def test_writes_one_identity_named_pair_per_trajectory(tmp_path):
     assert lines[1]["file"] == "traj_t01_ep000003.hdf5"
 
 
-def test_rewrite_same_identity_overwrites(tmp_path):
+def test_rewrite_same_identity_overwrites(tmp_path, input_token_preprocess_config):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
             index=0,
             steps=_make_steps(2, False),
+            preprocess_config=input_token_preprocess_config,
             task_id=0,
             episode_id=0,
             episode_success=False,
@@ -171,12 +177,15 @@ def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
     assert list(hidden_dir.glob("*.hdf5")) == []
 
 
-def test_no_tmp_files_left_after_successful_write(tmp_path):
+def test_no_tmp_files_left_after_successful_write(
+    tmp_path, input_token_preprocess_config
+):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
             index=0,
             steps=_make_steps(2, True),
+            preprocess_config=input_token_preprocess_config,
             task_id=0,
             episode_id=0,
             episode_success=True,

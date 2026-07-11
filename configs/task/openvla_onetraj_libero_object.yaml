@@ -8,23 +8,13 @@ task_name: object
 
 artifact_name: OpenVLA_Onetraj_LIBERO_libero_object
 
-pretokenize_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize.yaml
-pretokenize_val_ind_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ind.yaml
-pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/configs/${task.artifact_name}/his_1_third_view_wrist_w_state_1_256_pretokenize_val_ood.yaml
-
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_remaining_reward
-rynnvla_action_hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_legacy_action_hidden_vla_policy_h1
-rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h1
 
 openvla_oft:
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-object-traj1
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-object-traj1
-  resume_step: null
   dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-object-traj1/dataset_statistics.json
   dataset_statistics_key: libero_object_no_noops
-  action_head_ckpt: null
-  proprio_projector_ckpt: null
   action_horizon: 8
   time_horizon: 8
   image_resolution: 224
@@ -34,29 +24,22 @@ openvla_oft:
   use_l1_regression: false
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
-  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
+  input_token_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
   failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_failures
-  failure_action_hidden_dir: null
-  failure_input_token_hidden_dir: null
+  failure_input_token_dir: null
   expected_action_head_type: oft_discrete_token
-  expected_obs_hidden_source: action_query
+  expected_obs_hidden_source: input_token_embedding
   expected_prompt_style: vla_policy
   expected_history: 1
   expected_include_state: false
   expected_rotate_images_180: true
-  wm_obs_dim: 229376
-  token_count: 56
-  token_dim: 4096
   chunk_size: 8
   wm_sequence_length: 36
-  latent_stage: query_after
-  latent_source: OpenVLA-OFT discrete action-query hidden [56,4096]
   sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
   classifier_target: dreamervla.algorithms.critic.LatentSuccessClassifier
-  actor_target: dreamervla.algorithms.actor.OpenVLADiscreteTokenActor
+  actor_target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
   actor_head_type: oft_discrete_token
   actor_adapter_type: residual_mlp
   actor_adapter_hidden_dim: 1024
@@ -66,8 +49,3 @@ openvla_oft:
   action_token_bins: 256
   min_action: -1.0
   max_action: 1.0
-  input_tokens:
-    proprio_keys: [ee_pos, ee_ori, gripper_states]
-    proprio_dim: 8
-    proprio_emb_dim: 10
-    model_dim: 4148

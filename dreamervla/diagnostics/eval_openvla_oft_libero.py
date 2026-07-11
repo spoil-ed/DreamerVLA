@@ -33,7 +33,7 @@ SUITE_ALIASES = {
     "libero10": "libero_10",
     "libero_long": "libero_10",
 }
-CAMERA_INPUTS = ("primary", "primary+wrist")
+CAMERA_INPUTS = ("primary",)
 
 
 def _project_root() -> Path:
@@ -103,18 +103,15 @@ def parse_suite_name(value: str) -> str:
     return suite
 
 
-def resolve_num_images_for_camera_inputs(camera_inputs: str | None, num_images: int | None) -> int | None:
-    if camera_inputs is None:
-        return num_images
-    if camera_inputs not in CAMERA_INPUTS:
-        raise ValueError(f"Unsupported camera_inputs={camera_inputs!r}; expected one of {CAMERA_INPUTS}")
-    expected_num_images = 1 if camera_inputs == "primary" else 2
-    if num_images is not None and int(num_images) != expected_num_images:
-        raise ValueError(
-            f"camera_inputs={camera_inputs!r} conflicts with num_images={num_images}; "
-            f"expected num_images={expected_num_images}"
-        )
-    return expected_num_images
+def resolve_num_images_for_camera_inputs(
+    camera_inputs: str | None,
+    num_images: int | None,
+) -> int:
+    if camera_inputs not in {None, "primary"}:
+        raise ValueError("OpenVLA-OFT mainline requires camera_inputs='primary'")
+    if num_images not in {None, 1}:
+        raise ValueError("OpenVLA-OFT mainline requires num_images=1")
+    return 1
 
 
 def _plain(value: Any) -> Any:
@@ -181,12 +178,18 @@ def _task_ids_from_config(value: Any) -> list[int] | None:
 
 def _config_from_mapping(cfg: Mapping[str, Any]) -> EvalOpenVLAOFTConfig:
     suite = parse_suite_name(str(cfg["suite"]))
-    policy_mode = str(cfg.get("policy_mode", "auto"))
-    if policy_mode not in {"auto", "discrete", "l1"}:
-        raise ValueError("policy_mode must be one of: auto, discrete, l1")
+    policy_mode = str(cfg.get("policy_mode", "discrete"))
+    if policy_mode != "discrete":
+        raise ValueError("policy_mode must be discrete")
     camera_inputs = _optional_str(cfg.get("camera_inputs"))
-    if camera_inputs is not None and camera_inputs not in CAMERA_INPUTS:
-        raise ValueError(f"camera_inputs must be one of {CAMERA_INPUTS}, got {camera_inputs!r}")
+    if camera_inputs not in {None, "primary"}:
+        raise ValueError("OpenVLA-OFT mainline requires camera_inputs=primary")
+    num_images = _optional_int(cfg.get("num_images"))
+    if num_images not in {None, 1}:
+        raise ValueError("OpenVLA-OFT mainline requires num_images=1")
+    use_proprio = _optional_bool(cfg.get("use_proprio"))
+    if bool(use_proprio):
+        raise ValueError("OpenVLA-OFT mainline does not include proprio")
     return EvalOpenVLAOFTConfig(
         ckpt=Path(str(cfg["ckpt"])),
         suite=suite,
@@ -197,9 +200,9 @@ def _config_from_mapping(cfg: Mapping[str, Any]) -> EvalOpenVLAOFTConfig:
         output_dir=_optional_path(cfg.get("output_dir")),
         openvla_oft_root=_optional_path(cfg.get("openvla_oft_root")),
         policy_mode=policy_mode,
-        num_images=_optional_int(cfg.get("num_images")),
+        num_images=num_images,
         camera_inputs=camera_inputs,
-        use_proprio=_optional_bool(cfg.get("use_proprio")),
+        use_proprio=use_proprio,
         center_crop=_bool(cfg.get("center_crop", True), default=True),
         num_open_loop_steps=int(cfg.get("num_open_loop_steps", 8)),
         env_img_res=int(cfg.get("env_img_res", 256)),
@@ -266,7 +269,7 @@ def run_eval(cfg: Mapping[str, Any]) -> int:
     cfg.env_img_res = int(args.env_img_res)
     cfg.seed = int(args.seed)
     cfg.use_wandb = False
-    cfg.camera_inputs = args.camera_inputs or ("primary+wrist" if cfg.num_images_in_input > 1 else "primary")
+    cfg.camera_inputs = "primary"
 
     run_tag = _timestamp()
     task_note = args.task_ids if args.task_ids is not None else "all"

@@ -1,6 +1,4 @@
-"""RUN-01: NopretokenizeSFTDistributedHelper gains THREE default-off opt-ins so
-``online_dreamervla.main`` can route its DDP wrapping through the shared helper
-while every existing OFT caller stays byte-identical.
+"""NopretokenizeSFTDistributedHelper DDP option contracts.
 
 DDP / the process group cannot be constructed on a single CPU process, so these
 tests follow the established pattern in ``test_reduce_mean_dict_batched.py``:
@@ -50,7 +48,7 @@ def _patch_ddp(monkeypatch) -> None:
 
 
 def test_wrap_trainable_module_default_kwargs_are_byte_identical(monkeypatch):
-    """No opt-in args → the exact historical DDP kwargs (the OFT-caller contract)."""
+    """No opt-in args -> the exact DDP kwargs used by the OFT-caller contract."""
     _patch_ddp(monkeypatch)
     helper = _make_helper(world_size=2)
 
@@ -73,7 +71,7 @@ def test_wrap_trainable_module_find_unused_parameters_opt_in(monkeypatch):
     )
 
     assert wrapped.kwargs["find_unused_parameters"] is True
-    # the other opt-in stays at its historical default
+    # the other opt-in stays at its default
     assert wrapped.kwargs["broadcast_buffers"] is False
 
 
@@ -90,7 +88,7 @@ def test_wrap_trainable_module_broadcast_buffers_opt_in(monkeypatch):
 
 
 def test_wrap_trainable_module_both_opt_ins_match_online_wm_contract(monkeypatch):
-    """online_dreamervla wm/policy/critic use FUP=True + broadcast_buffers=True."""
+    """The online WM/policy/critic route can opt into both DDP flags."""
     _patch_ddp(monkeypatch)
     helper = _make_helper(world_size=2)
 

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from torch import nn
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -148,3 +149,49 @@ def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> N
 
     assert loss.item() == 1.25
     assert metrics["loss_value"] == 1.25
+
+
+@pytest.mark.parametrize(
+    "kwargs,match",
+    [
+        ({"use_l1_regression": True}, "L1/action-query"),
+        ({"use_proprio": True}, "does not include proprio"),
+        ({"num_images_in_input": 2}, "num_images_in_input=1"),
+    ],
+)
+def test_openvla_oft_policy_constructor_rejects_removed_routes(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+
+    with pytest.raises(ValueError, match=match):
+        OpenVLAOFTPolicy(model_path="/does/not/matter", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs,match",
+    [
+        ({"action_head": nn.Linear(1, 1), "use_l1_regression": True}, "L1/action-query"),
+        ({"proprio_projector": nn.Linear(1, 1), "use_proprio": True}, "does not include proprio"),
+    ],
+)
+def test_openvla_oft_from_modules_rejects_removed_components(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+
+    base = {
+        "vla": _TinyForwardVLA(),
+        "action_head": None,
+        "action_tokenizer": _TinyActionTokenizer(),
+        "num_patches": 0,
+        "use_l1_regression": False,
+        "use_proprio": False,
+        "proprio_projector": None,
+    }
+    base.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        OpenVLAOFTPolicy.from_modules(**base)

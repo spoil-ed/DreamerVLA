@@ -4,24 +4,16 @@ python: python
 dry_run: false
 only: []
 download:
-  rynnvla: true
   openvla_oft: false
   openvla_one_traj: false
   libero: true
   calvin: false
 env:
-  RYNNVLA_CHAMELEON_REPO: Alibaba-DAMO-Academy/WorldVLA
-  LUMINA_REPO: Alpha-VLLM/Lumina-mGPT-7B-768
-  RYNNVLA_REPO: Alibaba-DAMO-Academy/RynnVLA-002
   LIBERO_SUITES:
     - libero_goal
     - libero_object
     - libero_spatial
     - libero_10
-  DOWNLOAD_RYNNVLA_CHAMELEON: true
-  DOWNLOAD_RYNNVLA_LUMINA: true
-  DOWNLOAD_RYNNVLA_VLA: true
-  DOWNLOAD_ACTION_WM: true
   OPENVLA_OFT_REPOS: []
   OPENVLA_ONE_TRAJ_REPOS:
     - Haozhan72/Openvla-oft-SFT-libero-spatial-traj1:Openvla-oft-SFT-libero-spatial-traj1
@@ -35,21 +27,6 @@ env:
     - task_ABCD_D
   EXTRACT_CALVIN: false
 steps:
-  - id: 10_rynnvla_common
-    script: scripts/download/10_rynnvla.sh
-    enabled: ${download.rynnvla}
-    env:
-      DOWNLOAD_RYNNVLA_VLA: false
-      DOWNLOAD_ACTION_WM: false
-      SUITE: ""
-  - id: 10_rynnvla_suite
-    script: scripts/download/10_rynnvla.sh
-    enabled: ${download.rynnvla}
-    for_each: ${env.LIBERO_SUITES}
-    env:
-      DOWNLOAD_RYNNVLA_CHAMELEON: false
-      DOWNLOAD_RYNNVLA_LUMINA: false
-      SUITE: "{item}"
   - id: 20_openvla_oft
     script: scripts/download/20_openvla_oft.sh
     enabled: ${download.openvla_oft}

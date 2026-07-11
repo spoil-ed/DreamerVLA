@@ -52,7 +52,7 @@ def test_build_transition_has_replay_keys_and_dtypes():
     )
 
     rec = _full_record()
-    emb = np.arange(229376, dtype=np.float32)
+    emb = np.arange(256 * 4096, dtype=np.float32).reshape(256, 4096)
     wm = np.arange(7, dtype=np.float32)
     lang_emb = np.arange(6, dtype=np.float32)
     tr = build_cotrain_replay_transition(
@@ -82,7 +82,7 @@ def test_build_transition_truncated_keeps_discount_one():
     from dreamervla.runners.online_cotrain_runner import build_cotrain_replay_transition
 
     tr = build_cotrain_replay_transition(
-        _full_record(), np.zeros(8, np.float32), np.zeros(7, np.float32),
+        _full_record(), np.zeros((256, 4096), np.float32), np.zeros(7, np.float32),
         reward=0.0, terminated=False, truncated=True,
         task_id=0, task_description="t", step=10, is_first=False, image_size=64,
     )
@@ -96,27 +96,31 @@ def test_validate_rollout_cfg_rejects_bad_backend():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
     with pytest.raises(ValueError, match="render_backend"):
-        validate_rollout_cfg(num_envs=4, render_backend="vulkan", latent_type="action_hidden")
+        validate_rollout_cfg(num_envs=4, render_backend="vulkan")
 
 
-def test_validate_rollout_cfg_rejects_multienv_backbone_latent():
+def test_validate_rollout_cfg_accepts_multienv_input_tokens():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
-    with pytest.raises(ValueError, match="backbone_latent"):
-        validate_rollout_cfg(num_envs=4, render_backend="egl", latent_type="backbone_latent")
+    validate_rollout_cfg(
+        num_envs=4,
+        render_backend="egl",
+        render_devices=[2, 3],
+        compute_devices=[0, 1],
+    )
 
 
-def test_validate_rollout_cfg_accepts_singleenv_anything():
+def test_validate_rollout_cfg_accepts_singleenv_input_tokens():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
-    validate_rollout_cfg(num_envs=1, render_backend="osmesa", latent_type="backbone_latent")
+    validate_rollout_cfg(num_envs=1, render_backend="osmesa")
 
 
 def test_validate_rollout_cfg_rejects_zero_envs():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
     with pytest.raises(ValueError, match="num_envs"):
-        validate_rollout_cfg(num_envs=0, render_backend="egl", latent_type="action_hidden")
+        validate_rollout_cfg(num_envs=0, render_backend="egl")
 
 
 def test_validate_rollout_cfg_requires_render_devices_for_multienv_egl():
@@ -126,7 +130,6 @@ def test_validate_rollout_cfg_requires_render_devices_for_multienv_egl():
         validate_rollout_cfg(
             num_envs=4,
             render_backend="egl",
-            latent_type="action_hidden",
             render_devices=[],
             compute_devices=[0, 1],
         )
@@ -139,7 +142,6 @@ def test_validate_rollout_cfg_rejects_egl_render_compute_overlap():
         validate_rollout_cfg(
             num_envs=4,
             render_backend="egl",
-            latent_type="action_hidden",
             render_devices=[1, 2],
             compute_devices=[0, 1],
         )
@@ -151,7 +153,6 @@ def test_validate_rollout_cfg_accepts_disjoint_egl_render_devices():
     validate_rollout_cfg(
         num_envs=4,
         render_backend="egl",
-        latent_type="action_hidden",
         render_devices=[2, 3],
         compute_devices=[0, 1],
     )
@@ -262,12 +263,11 @@ class _FakeExtractor:
     def step(self, obs, desc):
         import torch
 
-        return ([np.zeros(7, np.float32)], torch.zeros(8))
+        return ([np.zeros(7, np.float32)], torch.zeros(1, 256, 4096))
 
 
 class _FakeWorldModel:
-    """Minimal WM stub for the actor-driven rollout: carries the action_hidden as the
-    'latent' and returns an actor-input feature; the actor produces the env action."""
+    """Minimal WM stub carrying input-token observations through rollout."""
 
     def __call__(self, batch):
         import torch

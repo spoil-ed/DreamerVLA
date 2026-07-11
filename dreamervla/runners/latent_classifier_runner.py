@@ -1,11 +1,12 @@
 """LatentSuccessClassifier training runner (LUMOS-aligned).
 
 Launch path:
-    bash scripts/train_wm.sh experiment=latent_classifier_libero_goal_chunk
-        → python -m dreamervla.train --config-name train experiment=latent_classifier_libero_goal_chunk
-            → dreamervla.runners.LatentClassifierRunner.run()
-                → dreamervla.dataset.lumos_aligned_latent_dataset
-                → dreamervla.algorithms.critic.LatentSuccessClassifier
+    python -m dreamervla.train \
+        experiment=latent_classifier_openvla_onetraj_libero_goal_h1 \
+        task=openvla_onetraj_libero
+        → dreamervla.runners.LatentClassifierRunner.run()
+            → dreamervla.dataset.lumos_aligned_latent_dataset
+            → dreamervla.algorithms.critic.LatentSuccessClassifier
 
 Why a dedicated runner, not another standalone script:
   * The existing v3 / wm_replay classifier scripts are 500+ lines each and bypass
@@ -50,6 +51,7 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentValDataset,
 )
 from dreamervla.algorithms.critic import LatentSuccessClassifier, LatentSuccessClassifierConfig
+from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
 from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
@@ -304,6 +306,19 @@ class LatentClassifierRunner(BaseRunner):
 
         # ----- datasets ---------------------------------------------------
         d = self.cfg.data
+        validate_input_token_sidecar_dir(
+            d.success_dir_hidden,
+            reference_dir=d.success_dir_raw,
+        )
+        failure_hidden_dir = OmegaConf.select(d, "failure_dir_hidden")
+        if failure_hidden_dir is not None:
+            failure_raw_dir = OmegaConf.select(d, "failure_dir_raw")
+            if failure_raw_dir is None:
+                raise ValueError("failure_dir_hidden requires failure_dir_raw")
+            validate_input_token_sidecar_dir(
+                failure_hidden_dir,
+                reference_dir=failure_raw_dir,
+            )
         # Chunk-level (Type B) classifier: each window frame is pooled from
         # K = chunk_subsample env-step frames. Defaults reduce to env-step
         # (action) granularity for backwards compatibility.

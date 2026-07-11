@@ -341,12 +341,13 @@ def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> N
     assert out.versions["policy"] == 0
 
 
-def test_oft_rollout_selects_image_keys_from_checkpoint_num_images() -> None:
+def test_oft_rollout_rejects_non_mainline_image_counts() -> None:
     keys = ["agentview_rgb", "eye_in_hand_rgb"]
 
     assert _select_image_keys_for_policy(keys, 1) == ["agentview_rgb"]
-    assert _select_image_keys_for_policy(keys, 2) == keys
-    with pytest.raises(ValueError, match="exceeds configured image_keys"):
+    with pytest.raises(ValueError, match="requires num_images_in_input=1"):
+        _select_image_keys_for_policy(keys, 2)
+    with pytest.raises(ValueError, match="requires num_images_in_input=1"):
         _select_image_keys_for_policy(keys, 3)
 
 

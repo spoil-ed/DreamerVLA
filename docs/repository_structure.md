@@ -32,7 +32,7 @@ Dot-prefixed local tool folders are ignored by this main structure map.
 ```text
 dreamervla/
 ├── algorithms/           # PPO/GRPO/LUMOS, actor modules, critics/classifiers
-│   ├── actor/            # BaseActor, VLAPolicy, OpenVLA/RynnVLA actor adapters
+│   ├── actor/            # BaseActor, VLAPolicy, and action adapters
 │   ├── critic/           # Critic and success-classifier/verifier modules
 │   ├── reward/           # Algorithmic reward model protocols and registries
 │   └── ...
@@ -43,13 +43,12 @@ dreamervla/
 ├── models/               # Embodiment models only
 │   └── embodiment/       # VLA/encoder code plus retained world-model architectures
 │       ├── openvla_oft/  # Vendored OpenVLA-OFT model/runtime components
-│       ├── chameleon_model/ # Chameleon/RynnVLA components
+│       ├── chameleon_model/ # Chameleon model components
 │       └── world_model/  # BaseWorldModel and retained WM architectures
-├── preprocess/           # Dataset preprocessing, xllmx helpers, hidden extraction
+├── preprocess/           # Canonical reward and OpenVLA input-token preprocessing
 ├── scheduler/            # Optional Ray backend scheduling primitives
 ├── workers/              # Optional Ray backend workers
 ├── hybrid_engines/       # Optional Ray backend object-store / weight-sync helpers
-├── legacy/               # Isolated non-mainline utilities for old artifacts
 ├── utils/                # Checkpoints, logging, optim, EMA, visualization
 └── runners/              # Public route runners, distributed and online-training helpers
 ```
@@ -70,29 +69,18 @@ scripts/*.sh
 Public runner classes are exported from `dreamervla.runners`. Route
 configs should target those public names rather than implementation classes.
 
-## Active Routes
+## Release Routes
 
 ```text
-VLA SFT:
-  vla_rynnvla_action_head
-  vla_sft_one_trajectory
-  openvla_oft_hdf5
-  openvla_oft_hdf5_one_trajectory
-  openvla_oft_hdf5_one_trajectory_l1
+Collection:
+  collect_rollouts_ray
+  collect_rollouts_onetraj
 
-World model / classifier:
-  world_model_step
-  world_model_chunk
-  oft_world_model_chunk
-  latent_classifier_libero_goal_chunk
-  oft_latent_classifier_chunk
+Cotrain:
+  openvla_onetraj_libero_cotrain_noray
+  openvla_onetraj_libero_cotrain_ray
 
-DreamerVLA:
-  dreamervla_rynn_wm_actor_critic
-  dreamervla_rynn_wm_lumos
-  dreamervla_oft_wm_lumos
-
-Evaluation:
+Eval:
   eval_libero_vla
 ```
 

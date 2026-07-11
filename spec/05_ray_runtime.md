@@ -40,5 +40,3 @@ GPU1..GPU(N-1):
 - `experiment=openvla_onetraj_libero_cotrain_ray`
 - `_target_=dreamervla.runners.ManualCotrainRayRunner`
 - wrapper：`scripts/e2e_manual_cotrain_async.sh`
-
-legacy `OnlineCotrainRayRunner` 仍在仓库中，但当前 manual route 是主要 Ray cotrain route。

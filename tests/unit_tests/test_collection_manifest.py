@@ -136,7 +136,7 @@ def test_next_shard_index_respects_prefix(tmp_path):
 
 
 def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
-    root = tmp_path / "online_cotrain_backbone_latent"
+    root = tmp_path / "online_cotrain_input_token_embedding"
     for episode_id, global_step, success in (
         (1, 120, True),
         (2, 121, False),
@@ -195,7 +195,7 @@ def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
 
 
 def test_load_online_rollout_episodes_rebuilds_eight_dim_proprio(tmp_path):
-    root = tmp_path / "online_cotrain_backbone_latent"
+    root = tmp_path / "online_cotrain_input_token_embedding"
     reward = root / "reward" / "ep.hdf5"
     hidden = root / "hidden" / "ep.hdf5"
     _write_reward_hidden_pair(
@@ -282,10 +282,13 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
         json.dumps(
             {
                 "hidden_key": "obs_embedding",
-                "hidden_dim": 229376,
+                "hidden_dim": 1_048_576,
                 "chunk_size": 8,
-                "token_count": 56,
+                "token_count": 256,
                 "token_dim": 4096,
+                "obs_hidden_source": "input_token_embedding",
+                "obs_embedding_shape": [256, 4096],
+                "hidden_storage_format": "tokenized",
                 "output_dtype": "float16",
             }
         ),
@@ -323,10 +326,13 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
     assert manifest["collected_counts"] == {"total": 2, "per_task": {"0": 1, "1": 1}}
     assert manifest["policy_checkpoint"] == "/ckpts/openvla"
     assert manifest["hidden_schema"]["hidden_key"] == "obs_embedding"
-    assert manifest["hidden_schema"]["hidden_dim"] == 229376
+    assert manifest["hidden_schema"]["hidden_dim"] == 1_048_576
     assert manifest["hidden_schema"]["chunk_size"] == 8
-    assert manifest["hidden_schema"]["token_count"] == 56
+    assert manifest["hidden_schema"]["token_count"] == 256
     assert manifest["hidden_schema"]["token_dim"] == 4096
+    assert manifest["hidden_schema"]["obs_hidden_source"] == "input_token_embedding"
+    assert manifest["hidden_schema"]["obs_embedding_shape"] == [256, 4096]
+    assert manifest["hidden_schema"]["hidden_storage_format"] == "tokenized"
     assert manifest["backend"] in {"unknown", "egl", "osmesa"}
     assert manifest["shards"] == ["shard_000.hdf5"]
     assert manifest["created_at"].endswith("Z")

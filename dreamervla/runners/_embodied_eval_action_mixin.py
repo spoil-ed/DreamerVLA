@@ -143,14 +143,10 @@ class EmbodiedEvalActionMixin:
                 policy_target = str(
                     OmegaConf.select(self.cfg, "policy._target_", default="")
                 )
-                return (
-                    "RynnVLAActionHiddenActor" in policy_name
-                    or "VLAActionHeadActor" in policy_name
-                    or (
-                        "RynnVLAActionHiddenActor" in policy_target
-                        or "VLAActionHeadActor" in policy_target
-                    )
-                )
+                return "LatentToOpenVLAHiddenStateActor" in {
+                    policy_name,
+                    policy_target.rsplit(".", 1)[-1],
+                }
             if normalized in {"true", "1", "yes", "y"}:
                 return True
             if normalized in {"false", "0", "no", "n"}:
@@ -364,27 +360,15 @@ class EmbodiedEvalActionMixin:
                     flush=True,
                 )
 
-    def _action_hidden_tokens_for_trace(
-        self, hidden: torch.Tensor | None
+    @staticmethod
+    def _input_token_grid_for_trace(
+        hidden: torch.Tensor | None,
     ) -> torch.Tensor | None:
         if hidden is None:
             return None
-        if hidden.ndim == 3:
+        if hidden.ndim == 3 and tuple(hidden.shape[-2:]) == (256, 4096):
             return hidden
-        if hidden.ndim != 2:
-            return None
-        token_dim = int(
-            OmegaConf.select(self.cfg, "policy.action_hidden_dim", default=1024)
-        )
-        time_horizon = int(
-            OmegaConf.select(self.cfg, "policy.time_horizon", default=5)
-        )
-        action_dim = int(OmegaConf.select(self.cfg, "policy.action_dim", default=7))
-        token_count = time_horizon * action_dim
-        expected = token_count * token_dim
-        if int(hidden.shape[-1]) != expected:
-            return None
-        return hidden.reshape(hidden.shape[0], token_count, token_dim)
+        return None
 
     def _hidden_action_compare_summary(self) -> dict[str, float | str | int | bool]:
         count = int(getattr(self, "_hidden_action_compare_count", 0))

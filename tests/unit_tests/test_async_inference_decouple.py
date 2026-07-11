@@ -2,7 +2,7 @@
 
 The async OnlineCotrainRayRunner resolves its inference worker class from config
 (inference.worker_target), so OFT can select the model-agnostic RolloutInferenceWorker
-(OFTRolloutBundle) instead of the RynnVLA-specific InferenceWorker. The OFT rollout is a
+(OFTRolloutBundle) instead of the VLA-specific InferenceWorker. The OFT rollout is a
 fixed base policy in the async overlap loop, so its pull_weights is a no-op.
 """
 
@@ -26,7 +26,7 @@ def test_resolve_worker_cls_dotted_form():
     assert cls is RolloutInferenceWorker
 
 
-def test_default_inference_worker_is_rynnvla():
+def test_inference_worker_target_resolves_explicitly():
     cls = _resolve_worker_cls(
         "dreamervla.workers.inference.inference_worker:InferenceWorker"
     )

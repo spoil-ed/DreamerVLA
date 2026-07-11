@@ -546,7 +546,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     task_ids: tuple[int, ...] | None = None
     resolution: int = 256
     image_size: int = 64
-    history_length: int = 2
+    history_length: int = 1
     warmup_steps: int = 10
     seed: int = 0
     max_steps: int | None = None
@@ -558,9 +558,9 @@ class DreamerVLAOnlineTrainEnvConfig:
     pixel_rotate_180: bool = False
     vla_rotate_180: bool = True
     prompt_style: Literal["vla_policy"] = "vla_policy"
-    include_state: bool = True
-    obs_hidden_source: Literal["action_query", "input_token_embedding"] = "action_query"
-    action_head_type: Literal["legacy", "oft_discrete_token", "oft_l1_regression"] = "legacy"
+    include_state: bool = False
+    obs_hidden_source: Literal["input_token_embedding"] = "input_token_embedding"
+    action_head_type: Literal["oft_discrete_token"] = "oft_discrete_token"
     target_token_id: int = DEFAULT_ACTION_TOKEN_ID
     full_record: bool = False
     validate_canonical: bool = True
@@ -581,7 +581,7 @@ class DreamerVLAOnlineTrainEnv:
     ``reset()`` returns ``(obs, info)``. ``step(action)`` returns
     ``(obs, reward, terminated, truncated, info)``.
 
-    ``action_input='normalized'`` means the caller passes RynnVLA/VLA policy-scale
+    ``action_input='normalized'`` means the caller passes VLA/VLA policy-scale
     actions in [-1, 1].  The env executes raw LIBERO actions and records those
     raw actions as ``info['wm_action']`` because the RSSM is trained on HDF5
     executed-action scale.
@@ -917,28 +917,26 @@ class DreamerVLAOnlineTrainEnv:
 
     def _validate_canonical_config(self) -> None:
         errors: list[str] = []
-        if int(self.cfg.history_length) < 1:
-            errors.append(f"history_length={self.cfg.history_length}, expected >= 1")
+        if int(self.cfg.history_length) != 1:
+            errors.append(f"history_length={self.cfg.history_length}, expected 1")
         if str(self.cfg.prompt_style) != "vla_policy":
             errors.append(
                 f"prompt_style={self.cfg.prompt_style!r}, expected 'vla_policy'"
             )
         if not bool(self.cfg.vla_rotate_180):
             errors.append("vla_rotate_180=False, expected True")
-        if str(self.cfg.obs_hidden_source) not in ("action_query", "input_token_embedding"):
+        if str(self.cfg.obs_hidden_source) != "input_token_embedding":
             errors.append(
                 f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected "
-                "'action_query' or 'input_token_embedding'"
+                "'input_token_embedding'"
             )
-        if str(self.cfg.action_head_type) not in (
-            "legacy",
-            "oft_discrete_token",
-            "oft_l1_regression",
-        ):
+        if str(self.cfg.action_head_type) != "oft_discrete_token":
             errors.append(
                 f"action_head_type={self.cfg.action_head_type!r}, expected "
-                "legacy, oft_discrete_token, or oft_l1_regression"
+                "oft_discrete_token"
             )
+        if bool(self.cfg.include_state):
+            errors.append("include_state=True, expected False")
         if self.cfg.action_input not in {"raw", "normalized"}:
             errors.append(
                 f"action_input={self.cfg.action_input!r}, expected raw or normalized"
@@ -1180,123 +1178,13 @@ def build_dreamervla_online_train_envs(
     ]
 
 
-TrainEnv = DreamerVLAOnlineTrainEnv
-
-
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
-from typing import Any, Literal
-
-
-
-@dataclass(frozen=True)
-class LIBEROOnlineEnvConfig(DreamerVLAOnlineTrainEnvConfig):
-    """Backwards-compatible config name for the canonical online env."""
-
-    task_suite_name: str = "libero_goal"
-    history_length: int = 2
-    action_input: Literal["raw", "normalized"] = "raw"
-
-
-class LIBEROOnlineEnv(DreamerVLAOnlineTrainEnv):
-    """Backwards-compatible env name backed by `DreamerVLAOnlineTrainEnv`."""
-
-    cfg: LIBEROOnlineEnvConfig
-
-    def __init__(
-        self,
-        task_suite_name: str = "libero_goal",
-        task_id: int = 0,
-        task_ids: Sequence[int] | None = None,
-        resolution: int = 256,
-        image_size: int = 64,
-        history_length: int = 2,
-        warmup_steps: int = 10,
-        seed: int = 0,
-        max_steps: int | None = None,
-        action_input: Literal["raw", "normalized"] = "raw",
-        clip_actions: bool = True,
-        sparse_success_reward: bool = True,
-        task_sampling: Literal["sequential", "random"] = "sequential",
-        init_state_sampling: Literal["sequential", "random"] = "sequential",
-        pixel_rotate_180: bool = False,
-        vla_rotate_180: bool = True,
-        **overrides: Any,
-    ) -> None:
-        reward_mode = "sparse_success" if bool(sparse_success_reward) else "raw"
-        config = LIBEROOnlineEnvConfig(
-            task_suite_name=str(task_suite_name),
-            task_id=int(task_id),
-            task_ids=None if task_ids is None else tuple(int(x) for x in task_ids),
-            resolution=int(resolution),
-            image_size=int(image_size),
-            history_length=int(history_length),
-            warmup_steps=int(warmup_steps),
-            seed=int(seed),
-            max_steps=None if max_steps is None else int(max_steps),
-            action_input=action_input,
-            clip_actions=bool(clip_actions),
-            reward_mode=reward_mode,
-            task_sampling=task_sampling,
-            init_state_sampling=init_state_sampling,
-            pixel_rotate_180=bool(pixel_rotate_180),
-            vla_rotate_180=bool(vla_rotate_180),
-        )
-        super().__init__(config=config, **overrides)
-
-    @classmethod
-    def from_config(
-        cls, config: LIBEROOnlineEnvConfig | dict[str, Any]
-    ) -> LIBEROOnlineEnv:
-        if isinstance(config, LIBEROOnlineEnvConfig):
-            payload = config.__dict__.copy()
-        else:
-            payload = dict(config)
-        if "reward_mode" in payload and "sparse_success_reward" not in payload:
-            payload["sparse_success_reward"] = (
-                payload.pop("reward_mode") == "sparse_success"
-            )
-        return cls(**payload)
-
-
-def build_libero_online_envs(
-    *,
-    task_suite_name: str = "libero_goal",
-    task_ids: Iterable[int] | None = None,
-    num_envs: int | None = None,
-    seed: int = 0,
-    **kwargs: Any,
-) -> list[LIBEROOnlineEnv]:
-    """Build one env per task id for simple synchronous online collection."""
-
-    ids = [int(x) for x in (task_ids if task_ids is not None else [0])]
-    if num_envs is not None:
-        ids = (
-            [ids[0] for _ in range(int(num_envs))]
-            if len(ids) == 1
-            else ids[: int(num_envs)]
-        )
-    return [
-        LIBEROOnlineEnv(
-            task_suite_name=task_suite_name,
-            task_id=task_id,
-            seed=int(seed) + idx,
-            **kwargs,
-        )
-        for idx, task_id in enumerate(ids)
-    ]
-
 __all__ = [
     "ACTION_HIGH",
     "ACTION_LOW",
     "DreamerVLAOnlineTrainEnv",
     "DreamerVLAOnlineTrainEnvConfig",
-    "LIBEROOnlineEnv",
-    "LIBEROOnlineEnvConfig",
     "LiberoEnv",
-    "TrainEnv",
     "build_dreamervla_online_train_envs",
-    "build_libero_online_envs",
     "normalize_libero_action",
     "unnormalize_libero_action",
 ]

@@ -169,7 +169,7 @@ class InferenceWorker(Worker):
         out = RolloutBatchOutput(
             actions=actions_np,
             sidecars=sidecars,
-        ).to_legacy_dict()
+        ).to_compat_dict()
         out["timing"] = {
             "encode_s": float(encode_s),
             "world_model_s": float(world_model_s),

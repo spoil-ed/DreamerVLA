@@ -41,7 +41,9 @@ class CollectRolloutsRunner(BaseRunner):
         oft = cfg.task.openvla_oft
         latent_spec = OmegaConf.select(cfg, "collect.oft_latent_spec", default=None)
         input_tokens = OmegaConf.select(cfg, "task.openvla_oft.input_tokens", default=None)
-        latent = latent_spec if latent_spec is not None else (input_tokens or oft)
+        if input_tokens is None:
+            raise ValueError("task.openvla_oft.input_tokens is required for collection")
+        latent = latent_spec if latent_spec is not None else input_tokens
         expected_history = int(latent.expected_history)
         num_images_in_input = resolve_num_images_in_input(cfg.collect)
         image_keys = select_vla_image_keys(
@@ -53,20 +55,16 @@ class CollectRolloutsRunner(BaseRunner):
         if OmegaConf.is_config(task_ids):
             task_ids = OmegaConf.to_container(task_ids, resolve=True)
         reward_dir = OmegaConf.select(cfg, "collect.hdf5_reward_dir", default=oft.hdf5_reward_dir)
-        hidden_default = oft.action_hidden_dir
-        if str(latent.expected_obs_hidden_source) == "input_token_embedding":
-            hidden_default = OmegaConf.select(
-                cfg,
-                "task.openvla_oft.input_token_hidden_dir",
-                default=hidden_default,
-            )
+        hidden_default = oft.input_token_dir
         hidden_dir = OmegaConf.select(cfg, "collect.hidden_dir", default=hidden_default)
         render_devices = OmegaConf.select(cfg, "collect.render_devices", default=[])
         if OmegaConf.is_config(render_devices):
             render_devices = OmegaConf.to_container(render_devices, resolve=True)
         collect_cfg = {
             "model_path": str(oft.ckpt_path),
-            "policy_mode": str(OmegaConf.select(cfg, "collect.policy_mode", default="auto")),
+            "policy_mode": str(
+                OmegaConf.select(cfg, "collect.policy_mode", default="discrete")
+            ),
             "unnorm_key": str(oft.dataset_statistics_key),
             "task_suite_name": str(cfg.task.suite),
             "task_ids": task_ids,
@@ -118,6 +116,9 @@ class CollectRolloutsRunner(BaseRunner):
             collect_cfg["token_count"] = int(token_count)
         if hidden_dim is not None:
             collect_cfg["hidden_dim"] = int(hidden_dim)
+        patches_per_image = OmegaConf.select(latent, "patches_per_image", default=None)
+        if patches_per_image is not None:
+            collect_cfg["patches_per_image"] = int(patches_per_image)
         num_inference_workers = OmegaConf.select(
             cfg, "collect.num_inference_workers", default=None
         )

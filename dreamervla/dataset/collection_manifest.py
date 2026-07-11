@@ -337,8 +337,8 @@ def format_collection_report(summary: dict[str, Any], *, root: str | Path) -> st
 def next_shard_index(directory: str | Path, *, prefix: str) -> int:
     """One past the highest shard index in ``directory`` for ``prefix``.
 
-    Supports both legacy ``{prefix}_{NNN}.hdf5`` names and metadata-rich names
-    such as ``{prefix}_gs000040_success_{NNN}.hdf5``.
+    Supports numeric ``{prefix}_{NNN}.hdf5`` names and metadata-rich names such
+    as ``{prefix}_gs000040_success_{NNN}.hdf5``.
     """
     path = Path(directory).expanduser()
     if not path.is_dir():

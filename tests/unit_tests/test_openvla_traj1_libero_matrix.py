@@ -6,6 +6,8 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+from dreamervla.config import validate_cfg
+
 MATRIX = [
     ("openvla_onetraj_libero", "openvla_onetraj_coldstart_libero", "libero_goal"),
     (
@@ -20,6 +22,21 @@ MATRIX = [
     ),
     ("openvla_onetraj_libero_10", "openvla_onetraj_coldstart_libero_10", "libero_10"),
 ]
+
+MAINLINE_ROUTES = (
+    ("collect_rollouts_onetraj", "coldstart", "dreamervla.runners.CollectRolloutsRunner"),
+    ("collect_rollouts_ray", "coldstart", "dreamervla.runners.ColdStartRayCollectRunner"),
+    (
+        "openvla_onetraj_libero_cotrain_noray",
+        "offline",
+        "dreamervla.runners.OnlineCotrainPipelineRunner",
+    ),
+    (
+        "openvla_onetraj_libero_cotrain_ray",
+        "offline",
+        "dreamervla.runners.ManualCotrainRayRunner",
+    ),
+)
 
 
 def _compose(overrides: list[str]):
@@ -39,62 +56,115 @@ def _compose_unresolved(overrides: list[str]):
 def _assert_openvla_traj1_contract(cfg) -> None:
     oft = cfg.task.openvla_oft
     assert oft.dataset_statistics_key == f"{cfg.task.suite}_no_noops"
-    assert oft.expected_action_head_type == "oft_discrete_token"
-    assert oft.expected_obs_hidden_source == "hidden_token"
-    assert oft.expected_include_state is False
-    assert oft.expected_history == 1
+    assert "hidden_token" not in oft
     assert oft.num_images_in_input == 1
     assert oft.use_proprio is False
     assert oft.use_wrist_image is False
     assert oft.use_l1_regression is False
-    assert oft.wm_obs_dim == oft.token_count * oft.token_dim
-    assert oft.actor_target == "dreamervla.algorithms.actor.OpenVLADiscreteTokenActor"
+    assert (
+        oft.actor_target
+        == "dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor"
+    )
     assert oft.actor_head_type == "oft_discrete_token"
 
-    hidden_token = oft.hidden_token
-    assert hidden_token.expected_action_head_type == oft.expected_action_head_type
-    assert hidden_token.expected_obs_hidden_source == "hidden_token"
-    assert hidden_token.expected_prompt_style == oft.expected_prompt_style
-    assert hidden_token.expected_include_state == oft.expected_include_state
-    assert hidden_token.expected_history == oft.expected_history
-    assert hidden_token.num_images_in_input == oft.num_images_in_input
-    assert hidden_token.patches_per_image == 256
-    assert hidden_token.token_count == oft.num_images_in_input * hidden_token.patches_per_image
-    assert hidden_token.wm_obs_dim == hidden_token.token_count * hidden_token.token_dim
-    assert "num_images_in_input*patches_per_image" in hidden_token.latent_source
-    assert list(hidden_token.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
-    assert hidden_token.proprio_dim == 8
-    assert hidden_token.proprio_emb_dim == 10
-    assert hidden_token.lang_dim == 4096
-    assert hidden_token.lang_emb_dim == 32
-    assert hidden_token.action_emb_dim == 10
-    assert hidden_token.model_dim == 4096 + 10 + 32 + 10
+    input_tokens = oft.input_tokens
+    assert input_tokens.expected_action_head_type == "oft_discrete_token"
+    assert input_tokens.expected_obs_hidden_source == "input_token_embedding"
+    assert input_tokens.expected_prompt_style == "vla_policy"
+    assert input_tokens.expected_include_state is False
+    assert input_tokens.expected_history == 1
+    assert input_tokens.num_images_in_input == oft.num_images_in_input
+    assert input_tokens.patches_per_image == 256
+    assert input_tokens.token_count == oft.num_images_in_input * input_tokens.patches_per_image
+    assert input_tokens.wm_obs_dim == input_tokens.token_count * input_tokens.token_dim
+    assert "num_images_in_input*patches_per_image" in input_tokens.latent_source
+    assert list(input_tokens.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
+    assert input_tokens.proprio_dim == 8
+    assert input_tokens.proprio_emb_dim == 10
+    assert input_tokens.lang_dim == 4096
+    assert input_tokens.lang_emb_dim == 32
+    assert input_tokens.action_emb_dim == 10
+    assert input_tokens.model_dim == 4096 + 10 + 32 + 10
+
+
+@pytest.mark.parametrize("offline_task,coldstart_task,_suite", MATRIX)
+@pytest.mark.parametrize("experiment,task_kind,target", MAINLINE_ROUTES)
+def test_every_mainline_route_suite_composition_has_exact_input_token_contract(
+    offline_task,
+    coldstart_task,
+    _suite,
+    experiment,
+    task_kind,
+    target,
+    tmp_path,
+) -> None:
+    task = coldstart_task if task_kind == "coldstart" else offline_task
+    overrides = [f"experiment={experiment}", f"task={task}"]
+    if experiment.endswith("_noray"):
+        reward_dir = tmp_path / "reward"
+        hidden_dir = tmp_path / "hidden"
+        reward_dir.mkdir()
+        hidden_dir.mkdir()
+        overrides.extend(
+            [
+                f"offline_warmup.data_dir={reward_dir}",
+                f"offline_warmup.hidden_dir={hidden_dir}",
+            ]
+        )
+    cfg = _compose(overrides)
+
+    validate_cfg(cfg)
+    assert cfg._target_ == target
+    _assert_openvla_traj1_contract(cfg)
+
+    if experiment == "collect_rollouts_onetraj":
+        assert cfg.collect.policy_mode == "discrete"
+        assert cfg.collect.num_images_in_input == 1
+    elif experiment == "collect_rollouts_ray":
+        assert cfg.collect.policy_mode == "discrete"
+        assert cfg.collect.num_images_in_input == 1
+    elif experiment.endswith("_noray"):
+        assert cfg.world_model.token_count == 256
+        assert cfg.world_model.token_dim == 4096
+        assert cfg.world_model.obs_dim == 1_048_576
+        assert cfg.classifier.token_count == 256
+        assert cfg.classifier.token_dim == 4096
+        assert cfg.policy.source_token_count == 256
+        assert cfg.policy.source_token_dim == 4096
+    else:
+        assert cfg.ray_components.world_model.kwargs.token_count == 256
+        assert cfg.ray_components.world_model.kwargs.token_dim == 4096
+        assert cfg.ray_components.world_model.kwargs.obs_dim == 1_048_576
+        assert cfg.ray_components.classifier.kwargs.token_count == 256
+        assert cfg.ray_components.classifier.kwargs.token_dim == 4096
+        assert cfg.ray_components.policy.kwargs.source_token_count == 256
+        assert cfg.ray_components.policy.kwargs.source_token_dim == 4096
 
 
 @pytest.mark.parametrize("offline_task,_coldstart_task,_suite", MATRIX)
-def test_openvla_traj1_hidden_token_dims_are_resolver_expressions(
+def test_openvla_traj1_input_token_dims_are_resolver_expressions(
     offline_task,
     _coldstart_task,
     _suite,
 ) -> None:
     raw_cfg = _compose_unresolved([f"task={offline_task}"])
     raw = OmegaConf.to_container(
-        raw_cfg.task.openvla_oft.hidden_token,
+        raw_cfg.task.openvla_oft.input_tokens,
         resolve=False,
     )
     cfg = _compose([f"task={offline_task}"])
 
     assert raw["token_count"] == (
-        "${dvla_mul:${task.openvla_oft.hidden_token.num_images_in_input},"
-        "${task.openvla_oft.hidden_token.patches_per_image}}"
+        "${dvla_mul:${task.openvla_oft.input_tokens.num_images_in_input},"
+        "${task.openvla_oft.input_tokens.patches_per_image}}"
     )
     assert raw["wm_obs_dim"] == (
-        "${dvla_mul:${task.openvla_oft.hidden_token.token_count},"
-        "${task.openvla_oft.hidden_token.token_dim}}"
+        "${dvla_mul:${task.openvla_oft.input_tokens.token_count},"
+        "${task.openvla_oft.input_tokens.token_dim}}"
     )
     assert cfg.task.openvla_oft.num_images_in_input == 1
-    assert cfg.task.openvla_oft.hidden_token.token_count == 256
-    assert cfg.task.openvla_oft.hidden_token.wm_obs_dim == 256 * 4096
+    assert cfg.task.openvla_oft.input_tokens.token_count == 256
+    assert cfg.task.openvla_oft.input_tokens.wm_obs_dim == 256 * 4096
 
 
 def test_standard_h1_classifier_experiment_composes() -> None:
@@ -104,32 +174,23 @@ def test_standard_h1_classifier_experiment_composes() -> None:
     assert cfg.task.hdf5_dir.endswith(
         "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256"
     )
-    assert cfg.task.openvla_oft.hidden_token_dir.endswith(
+    assert cfg.task.openvla_oft.input_token_dir.endswith(
         "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
         "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
     )
-    assert cfg.task.pretokenize_config_path.endswith(
-        "data/configs/OpenVLA_Onetraj_LIBERO_libero_goal/"
-        "his_1_third_view_wrist_w_state_1_256_pretokenize.yaml"
-    )
+    assert "pretokenize_config_path" not in cfg.task
+    assert cfg.data.success_dir_raw == cfg.task.collected_reward_dir
+    assert cfg.data.success_dir_hidden == cfg.task.collected_input_token_dir
     assert cfg.task.openvla_oft.hdf5_reward_dir.endswith(
         "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
         "no_noops_t_256_remaining_reward"
     )
-    assert cfg.data.success_dir_raw == cfg.task.openvla_oft.hdf5_reward_dir
-    assert cfg.data.success_dir_raw.endswith(
-        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
-        "no_noops_t_256_remaining_reward"
-    )
-    assert cfg.data.success_dir_hidden == cfg.task.openvla_oft.hidden_token_dir
-    assert cfg.data.success_dir_hidden.endswith(
-        "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/"
-        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
-    )
+    assert cfg.data.success_dir_raw.endswith("data/collected_rollouts/libero_goal/reward")
+    assert cfg.data.success_dir_hidden.endswith("data/collected_rollouts/libero_goal/hidden")
     assert cfg.data.failure_dir_raw is None
     assert cfg.data.failure_dir_hidden is None
     assert cfg.data.lang_emb_dir == "__source_hidden__"
-    assert cfg.data.chunk_subsample == cfg.task.openvla_oft.hidden_token.chunk_size == 8
+    assert cfg.data.chunk_subsample == cfg.task.openvla_oft.input_tokens.chunk_size == 8
     assert cfg.data.sampling_protocol == "wmpo"
     assert cfg.data.balance_batches is True
     assert cfg.training.loss_type == "bce"
@@ -156,12 +217,9 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.training.loss_type == "bce"
     assert cfg.data.sampling_protocol == "wmpo"
     assert cfg.data.balance_batches is True
-    assert cfg.classifier.token_count == cfg.task.openvla_oft.hidden_token.token_count
-    assert cfg.data.success_dir_raw == cfg.task.openvla_oft.hdf5_reward_dir
-    assert cfg.data.success_dir_hidden.endswith(
-        "OpenVLA_Onetraj_LIBERO_libero_goal/"
-        "no_noops_t_256_oft_input_token_embedding_vla_policy_h1"
-    )
+    assert cfg.classifier.token_count == cfg.task.openvla_oft.input_tokens.token_count
+    assert cfg.data.success_dir_raw == cfg.task.collected_reward_dir
+    assert cfg.data.success_dir_hidden == cfg.task.collected_input_token_dir
     assert cfg.data.failure_dir_raw is None
     assert cfg.data.failure_dir_hidden is None
 
@@ -216,4 +274,4 @@ def test_openvla_traj1_libero_tasks_define_vla_dataset_contract(
     assert coldstart.task.suite == suite
     _assert_openvla_traj1_contract(coldstart)
     assert "/collected_rollouts/" in str(coldstart.task.openvla_oft.hdf5_reward_dir)
-    assert coldstart.task.openvla_oft.hidden_token_dir.endswith("_h1")
+    assert coldstart.task.openvla_oft.input_token_dir.endswith("_h1")

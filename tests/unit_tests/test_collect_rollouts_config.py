@@ -44,14 +44,17 @@ def _discrete_cfg() -> dict:
         "unnorm_key": "libero_goal_no_noops",
         "task_suite_name": "libero_goal",
         "expected_history": 1,
-        "num_images_in_input": 2,
+        "num_images_in_input": 1,
         "expected_action_head_type": "oft_discrete_token",
         "expected_include_state": False,
-        "expected_obs_hidden_source": "action_query",
+        "expected_obs_hidden_source": "input_token_embedding",
         "expected_prompt_style": "vla_policy",
         "expected_rotate_images_180": True,
         "time_horizon": 8,
         "token_dim": 4096,
+        "patches_per_image": 256,
+        "token_count": 256,
+        "hidden_dim": 1_048_576,
         "action_dim": 7,
         "chunk_size": 8,
         "resolution": 256,
@@ -65,17 +68,17 @@ def test_make_preprocess_config_is_config_driven_discrete():
     cfg = _discrete_cfg()
     pc = _make_preprocess_config(cfg)
     assert pc["history"] == 1
-    assert pc["num_images_in_input"] == 2
+    assert pc["num_images_in_input"] == 1
     assert pc["action_head_type"] == "oft_discrete_token"
     assert pc["include_state"] is False
     assert pc["time_horizon"] == 8
-    assert pc["obs_hidden_source"] == "action_query"
+    assert pc["obs_hidden_source"] == "input_token_embedding"
     assert pc["prompt_style"] == "vla_policy"
     assert pc["rotate_images_180"] is True
     assert pc["hidden_key"] == "obs_embedding"
 
 
-def test_make_preprocess_config_l1_h2_variant():
+def test_make_preprocess_config_rejects_l1_h2_variant():
     cfg = _discrete_cfg()
     cfg.update(
         expected_history=2,
@@ -85,11 +88,8 @@ def test_make_preprocess_config_l1_h2_variant():
         _policy_mode="l1",
         _use_proprio=True,
     )
-    pc = _make_preprocess_config(cfg)
-    assert pc["history"] == 2
-    assert pc["num_images_in_input"] == 4
-    assert pc["action_head_type"] == "oft_l1_regression"
-    assert pc["include_state"] is True
+    with pytest.raises(ValueError, match="L1/action-query checkpoints are closed"):
+        _make_preprocess_config(cfg)
 
 
 def test_make_preprocess_config_missing_key_raises():
@@ -175,7 +175,13 @@ def test_vectorized_path_threads_obs_hidden_source_to_decoder(monkeypatch, tmp_p
     captured: dict[str, object] = {}
 
     class FakeDecoder:
-        def __init__(self, policy, unnorm_key, obs_hidden_source="action_query", image_keys=None):
+        def __init__(
+            self,
+            policy,
+            unnorm_key,
+            obs_hidden_source="input_token_embedding",
+            image_keys=None,
+        ):
             captured["obs_hidden_source"] = obs_hidden_source
             captured["image_keys"] = list(image_keys or [])
 

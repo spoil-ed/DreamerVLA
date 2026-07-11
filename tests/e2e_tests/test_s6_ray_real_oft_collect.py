@@ -36,8 +36,7 @@ def test_ray_real_oft_collect_writes_reward_and_matching_sidecar(tmp_path) -> No
             overrides=[
                 "experiment=collect_rollouts_ray",
                 f"task.openvla_oft.ckpt_path={oft_ckpt}",
-                f"task.openvla_oft.component_ckpt_dir={oft_ckpt}",
-                f"task.openvla_oft.action_hidden_dir={hidden_dir}",
+                f"task.openvla_oft.input_token_dir={hidden_dir}",
                 f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
                 "collect.task_ids=[0]",
                 "collect.episodes_per_task=1",
@@ -63,8 +62,8 @@ def test_ray_real_oft_collect_writes_reward_and_matching_sidecar(tmp_path) -> No
     with h5py.File(hidden_path, "r") as hidden_f:
         demo = hidden_f["data"]["demo_0"]
         assert hidden_key in demo
-        actual_hidden_dim = int(demo[hidden_key].shape[-1])
-    declared = preprocess.get("hidden_dim")
-    if declared is not None:
-        assert actual_hidden_dim == int(declared)
+        assert tuple(demo[hidden_key].shape[1:]) == (256, 4096)
+    assert preprocess["obs_hidden_source"] == "input_token_embedding"
+    assert preprocess["token_count"] == 256
+    assert preprocess["token_dim"] == 4096
     assert not ray.is_initialized()

@@ -523,8 +523,6 @@ class MultiStepRolloutWorker(Worker):
             step = getattr(extractor, "step", None)
             if step is not None:
                 return _hidden_and_extra_from_encoded(step(obs, task_description))
-            if callable(extractor):
-                return _hidden_and_extra_from_encoded(extractor(obs, task_description))
 
         encode = getattr(encoder, "encode_observation", None)
         if encode is None:

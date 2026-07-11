@@ -270,8 +270,8 @@ def main() -> None:
         default=str(
             PROJECT_ROOT
             / "data"
-            / "processed_data"
-            / "libero_goal/no_noops_t_256_remaining_reward"
+            / "collected_rollouts"
+            / "libero_goal/reward"
         ),
     )
     parser.add_argument(
@@ -279,8 +279,8 @@ def main() -> None:
         default=str(
             PROJECT_ROOT
             / "data"
-            / "processed_data"
-            / "libero_goal/no_noops_t_256_legacy_action_hidden_vla_policy_h2"
+            / "collected_rollouts"
+            / "libero_goal/hidden"
         ),
     )
     parser.add_argument("--num-demos", type=int, default=16)

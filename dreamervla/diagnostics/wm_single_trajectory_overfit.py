@@ -475,7 +475,7 @@ def _resolve_hdf5_paths(
 ) -> tuple[Path, Path]:
     hidden_path = args.hidden_hdf5
     if hidden_path is None:
-        hidden_path = Path(str(cfg.task.openvla_oft.input_token_hidden_dir)) / args.hdf5_filename
+        hidden_path = Path(str(cfg.task.openvla_oft.input_token_dir)) / args.hdf5_filename
     raw_path = args.raw_hdf5
     if raw_path is None:
         raw_path = Path(str(cfg.task.hdf5_reward_dir)) / args.hdf5_filename

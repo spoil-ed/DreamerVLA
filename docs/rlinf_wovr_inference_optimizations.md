@@ -65,7 +65,7 @@ GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
 / `perf: batch manual cotrain imagine pipeline` + 本次工作树 diff），env↔rollout
 主链路已是 **per-rank batch**：`_observation_batch_msg` / `ObservationBatchMsg`
 （key=`str(env_rank)`）↔ `MultiStepRolloutWorker._generate_from_rank_batch_key` /
-`RolloutResultBatchMsg`。per-slot 路径仅作 legacy 回退保留。
+`RolloutResultBatchMsg`。per-slot 路径仅作兼容回退保留。
 
 ---
 
@@ -124,7 +124,7 @@ GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
 同日第二轮（imagine 路径提速，按计划
 `docs/superpowers/plans/2026-07-02-manual-cotrain-imagine-speedup.md` TDD 执行）：
 
-4. **imagine 批量对齐**：`manual_cotrain.wm_envs_per_worker` 8 → 16
+4. **imagine 批量对齐**：`manual_cotrain.wm_envs_per_worker` 8 -> 16
    （`configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml`；测试
    `test_manual_cotrain_oft_wm_env_num_envs_tracks_wm_envs_per_worker`）。
    实测（下文 run B）表明单纯扩大批量吞吐不变——每次迭代耗时随 payload
@@ -138,10 +138,9 @@ GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
 6. **WM chunk 回退可见化**：`LatentWorldModelEnv._chunk_step_batch_fallback`
    首次触发时打一条 warning（`test_chunk_step_batch_fallback_warns_once`），
    防止静默丢失 chunk 批量。
-7. 其他既有失败修复：`spec/98_prompt.md` 补回 reference-only 前言
-   （`test_spec_prompt_file_is_marked_reference_only`）；教程精简后的
-   过时断言更新（`test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples`）；
-   活跃源里的外部方案名措辞清理 + 本报告/98_prompt 加入 hygiene skip。
+7. 其他既有失败修复：教程精简后的断言更新
+   （`test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples`）；
+   活跃源里的外部方案名措辞清理。
 
 按用户约束：优化聚焦 WM env imagine 部分；imagine step 语义不追求与外部
 方案形式对齐（原计划的 real-env bootstrap prefetch 已放弃）。
@@ -172,7 +171,7 @@ pytest tests/unit_tests -q   # 全量见第 5 节后记
 两侧同为 2 卡。启动期 debug 记录：
 
 1. 容器默认 seccomp 会拦截 CUDA 共享存储用的 `pidfd_getfd`
-   （历史 smoke 曾报 `RuntimeError: pidfd_getfd: Operation not permitted`），
+   （smoke 可能报 `RuntimeError: pidfd_getfd: Operation not permitted`），
    必须 `--security-opt seccomp=unconfined`。
 2. 首次启动失败：`ModuleNotFoundError: No module named
    'diffsynth.models.reward_model'` —— wan world-model env 依赖带
@@ -233,7 +232,7 @@ chunk/s × num_action_chunks(8) 折算）：
 
 - **bootstrap overlap 未实现**：每个 global step 头部有一段串行 reset 时间，
   规模大时可见；是下一轮最小改动候选。
-- **双路径并存**：per-slot legacy 路径（`_generate_from_key`、
+- **双路径并存**：per-slot 兼容路径（`_generate_from_key`、
   `apply_rollout_result` 单 slot 分支）仍在。功能上无害，但增加维护面；
   等 per-rank 路径 GPU 全量验证后可清理。
 - **WM chunk 模式是 best-effort**：`_looks_like_missing_chunk_mode` 的静默回退

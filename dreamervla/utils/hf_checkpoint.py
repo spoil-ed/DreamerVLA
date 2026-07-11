@@ -83,7 +83,7 @@ def _check_format_version(payload: Any, path: str | Path) -> None:
     """Fail loudly when a checkpoint is newer than this code can read.
 
     Only the unsafe direction is rejected. A missing or older ``format_version``
-    stays loadable so legacy / HF payloads keep working (dual-read contract).
+    stays loadable so checkpoint / HF payloads keep working (dual-read contract).
     """
     if not isinstance(payload, dict):
         return

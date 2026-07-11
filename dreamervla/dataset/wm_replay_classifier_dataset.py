@@ -61,11 +61,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import IterableDataset
 
+from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+
 
 def _find_demo_pairs(
     raw_dir: str | Path, hidden_dir: str | Path
 ) -> list[tuple[Path, Path, str]]:
-    """Match raw demos (actions) with precomputed obs_embedding by filename.
+    """Return exact raw/hidden pairs; mismatches are hard data errors.
 
     Returns a list of (raw_path, hidden_path, demo_key) where ``demo_key`` is
     an HDF5 path like ``data/demo_0``. Each raw file may contain many demo
@@ -74,22 +76,44 @@ def _find_demo_pairs(
     raw_dir = Path(raw_dir)
     hidden_dir = Path(hidden_dir)
     raw_files = sorted(raw_dir.glob("*.hdf5"))
+    hidden_files = sorted(hidden_dir.glob("*.hdf5"))
+    raw_names = {path.name for path in raw_files}
+    hidden_names = {path.name for path in hidden_files}
+    if raw_names != hidden_names:
+        raise ValueError(
+            "reward/hidden file set mismatch: "
+            f"missing_hidden={sorted(raw_names - hidden_names)!r}, "
+            f"extra_hidden={sorted(hidden_names - raw_names)!r}"
+        )
     pairs: list[tuple[Path, Path, str]] = []
     for raw_p in raw_files:
         hid_p = hidden_dir / raw_p.name
-        if not hid_p.exists():
-            continue
         with h5py.File(str(raw_p), "r") as rr, h5py.File(str(hid_p), "r") as hh:
             if "data" not in rr or "data" not in hh:
-                continue
+                raise ValueError(f"{raw_p.name} must contain data groups in both files")
             raw_keys = set(rr["data"].keys())
-            hidden_keys = list(hh["data"].keys())
-            keep_keys = [
-                k
-                for k in hidden_keys
-                if k in raw_keys and "obs_embedding" in hh[f"data/{k}"]
-            ]
-        for k in keep_keys:
+            hidden_keys = set(hh["data"].keys())
+            if raw_keys != hidden_keys:
+                raise ValueError(
+                    f"{raw_p.name} reward/hidden demo set mismatch: "
+                    f"missing_hidden={sorted(raw_keys - hidden_keys)!r}, "
+                    f"extra_hidden={sorted(hidden_keys - raw_keys)!r}"
+                )
+            for key in sorted(raw_keys):
+                raw_demo = rr[f"data/{key}"]
+                hidden_demo = hh[f"data/{key}"]
+                if "actions" not in raw_demo or "obs_embedding" not in hidden_demo:
+                    raise ValueError(
+                        f"{raw_p.name}:data/{key} requires actions and obs_embedding"
+                    )
+                raw_length = int(raw_demo["actions"].shape[0])
+                hidden_length = int(hidden_demo["obs_embedding"].shape[0])
+                if raw_length <= 0 or hidden_length <= 0 or raw_length != hidden_length:
+                    raise ValueError(
+                        f"{raw_p.name}:data/{key} reward/hidden length mismatch: "
+                        f"reward={raw_length}, hidden={hidden_length}"
+                    )
+        for k in sorted(raw_keys):
             pairs.append((raw_p, hid_p, f"data/{k}"))
     return pairs
 
@@ -153,6 +177,22 @@ class WMReplayClassifierDataset(IterableDataset):
         self.seed = int(seed)
         self.device = torch.device(device)
         self.include_swap_negatives = bool(include_swap_negatives)
+
+        validate_input_token_sidecar_dir(hidden_dir, reference_dir=raw_dir)
+        if failure_hidden_dir is not None:
+            if failure_raw_dir is None:
+                raise ValueError("failure_hidden_dir requires failure_raw_dir")
+            validate_input_token_sidecar_dir(
+                failure_hidden_dir,
+                reference_dir=failure_raw_dir,
+            )
+        if rollout_hidden_dir is not None:
+            if rollout_raw_dir is None:
+                raise ValueError("rollout_hidden_dir requires rollout_raw_dir")
+            validate_input_token_sidecar_dir(
+                rollout_hidden_dir,
+                reference_dir=rollout_raw_dir,
+            )
 
         # Chunk WM must be moved to device by the caller; we just hold the ref.
         self.chunk_wm = chunk_wm
@@ -237,7 +277,7 @@ class WMReplayClassifierDataset(IterableDataset):
         if rewards is not None:
             complete = bool(rewards[:T_common].sum() > 0)
         else:
-            complete = True  # legacy demos with no rewards array → assume success
+            complete = True
         return obs, actions, finish_step, complete
 
     # ─── Action perturbation ───────────────────────────────────────────────
@@ -309,8 +349,8 @@ class WMReplayClassifierDataset(IterableDataset):
     def _imagine_one(self, obs: np.ndarray, actions: np.ndarray) -> np.ndarray:
         """Return imagined latent sequence as float32 numpy.
 
-        RynnVLA chunk WMs emit tokenized hidden ``[T_out,N,token_dim]``;
-        older flat WMs continue to emit ``[T_out,obs_dim]``.
+        The mainline chunk WM emits tokenized input embeddings
+        ``[T_out,256,4096]``.
         """
         T = int(obs.shape[0])
         K = self.K

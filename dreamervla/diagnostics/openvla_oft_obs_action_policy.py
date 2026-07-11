@@ -6,7 +6,7 @@ The public surface is intentionally small:
     actions = policy(obs, task_description)
 
 `obs` should be the policy observation dict already prepared by the LIBERO eval
-code: at minimum `full_image`, optionally `wrist_image` and `state`.
+code and must contain the single mainline ``full_image`` view.
 """
 
 from __future__ import annotations
@@ -68,13 +68,13 @@ def resolve_unnorm_key(model: Any, task_suite_name: str, requested_unnorm_key: s
 
 
 def filter_observation_for_config(cfg: Any, obs: dict[str, Any]) -> dict[str, Any]:
-    """Keep only the observation fields the configured OpenVLA-OFT path consumes."""
-    filtered = {"full_image": obs["full_image"]}
-    if int(getattr(cfg, "num_images_in_input", 1)) > 1:
-        filtered.update({key: value for key, value in obs.items() if "wrist" in key})
+    """Keep the single image consumed by the discrete one-trajectory policy."""
+
+    if int(getattr(cfg, "num_images_in_input", 1)) != 1:
+        raise ValueError("OpenVLA-OFT mainline requires num_images_in_input=1")
     if bool(getattr(cfg, "use_proprio", False)):
-        filtered["state"] = obs["state"]
-    return filtered
+        raise ValueError("OpenVLA-OFT mainline does not include proprio")
+    return {"full_image": obs["full_image"]}
 
 
 @dataclass
@@ -99,6 +99,11 @@ class OpenVLAOFTObsActionPolicy:
         proprio_projector: Any = None,
         noisy_action_projector: Any = None,
     ) -> OpenVLAOFTObsActionPolicy:
+        if action_head is not None:
+            raise ValueError("L1/action-query checkpoints are closed")
+        if proprio_projector is not None:
+            raise ValueError("proprio checkpoint components are not part of the mainline")
+        filter_observation_for_config(cfg, {"full_image": object()})
         return cls(
             cfg=cfg,
             model=model,
@@ -117,7 +122,7 @@ class OpenVLAOFTObsActionPolicy:
         task_suite_name: str,
         openvla_oft_root: str | Path | None = None,
         gpu_id: str | int | None = None,
-        policy_mode: str = "auto",
+        policy_mode: str = "discrete",
         num_images_in_input: int | None = None,
         use_proprio: bool | None = None,
         center_crop: bool = True,
@@ -136,29 +141,25 @@ class OpenVLAOFTObsActionPolicy:
         has_action_head = checkpoint_has_component(checkpoint, "action_head")
         has_proprio = checkpoint_has_component(checkpoint, "proprio_projector")
 
-        mode = policy_mode
-        if mode == "auto":
-            mode = "l1" if has_action_head else "discrete"
-        if mode not in {"discrete", "l1"}:
-            raise ValueError(f"Unsupported policy_mode: {policy_mode}")
-        if mode == "l1" and not has_action_head:
-            raise FileNotFoundError(f"Missing action_head--*_checkpoint.pt under {checkpoint}")
-
-        use_l1_regression = mode == "l1"
-        resolved_use_proprio = bool(use_l1_regression and has_proprio) if use_proprio is None else bool(use_proprio)
-        if resolved_use_proprio and not has_proprio:
-            raise FileNotFoundError(f"Missing proprio_projector--*_checkpoint.pt under {checkpoint}")
-
-        if num_images_in_input is None:
-            num_images_in_input = 2 if use_l1_regression else 1
+        if str(policy_mode) != "discrete":
+            raise ValueError(
+                f"OpenVLA-OFT mainline requires policy_mode='discrete', got {policy_mode!r}"
+            )
+        if has_action_head:
+            raise ValueError("L1/action-query checkpoints are closed")
+        if has_proprio or bool(use_proprio):
+            raise ValueError("proprio checkpoint components are not part of the mainline")
+        if num_images_in_input is not None and int(num_images_in_input) != 1:
+            raise ValueError("OpenVLA-OFT mainline requires num_images_in_input=1")
+        num_images_in_input = 1
 
         cfg = GenerateConfig(
             pretrained_checkpoint=str(checkpoint),
-            use_l1_regression=use_l1_regression,
+            use_l1_regression=False,
             use_diffusion=False,
             use_film=False,
             num_images_in_input=int(num_images_in_input),
-            use_proprio=resolved_use_proprio,
+            use_proprio=False,
             center_crop=bool(center_crop),
             num_open_loop_steps=int(num_open_loop_steps),
             load_in_8bit=bool(load_in_8bit),

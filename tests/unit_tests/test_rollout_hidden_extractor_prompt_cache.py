@@ -78,8 +78,8 @@ class _StubPolicy:
 def _make_extractor(processor):
     return OFTRolloutHiddenExtractor(
         _StubPolicy(processor),
-        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
-        history=2,
+        image_keys=["agentview_rgb"],
+        history=1,
         rotate_images_180=False,
         center_crop=False,
         unnorm_key="dummy",

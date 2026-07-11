@@ -28,7 +28,6 @@ import cloudpickle
 import ctypes
 import gym
 import numpy as np
-import warnings
 import time
 
 from abc import ABC, abstractmethod
@@ -42,7 +41,6 @@ gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 gym_new_venv_step_type = Tuple[
     np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
 ]
-warnings.simplefilter("once", DeprecationWarning)
 _NP_TO_CT = {
     np.bool_: ctypes.c_bool,
     np.uint8: ctypes.c_uint8,
@@ -56,11 +54,6 @@ _NP_TO_CT = {
     np.float32: ctypes.c_float,
     np.float64: ctypes.c_double,
 }
-
-
-def deprecation(msg: str) -> None:
-    """Deprecation warning wrapper."""
-    warnings.warn(msg, category=DeprecationWarning, stacklevel=2)
 
 
 class CloudpickleWrapper(object):
@@ -116,23 +109,7 @@ class EnvWorker(ABC):
         pass
 
     def send(self, action: Optional[np.ndarray]) -> None:
-        """Send action signal to low-level worker.
-
-        When action is None, it indicates sending "reset" signal; otherwise
-        it indicates "step" signal. The paired return value from "recv"
-        function is determined by such kind of different signal.
-        """
-        if hasattr(self, "send_action"):
-            deprecation(
-                "send_action will soon be deprecated. "
-                "Please use send and recv for your own EnvWorker."
-            )
-            if action is None:
-                self.is_reset = True
-                self.result = self.reset()
-            else:
-                self.is_reset = False
-                self.send_action(action)
+        raise NotImplementedError
 
     def recv(
         self,
@@ -149,13 +126,6 @@ class EnvWorker(ABC):
         info) or (obs, rew, terminated, truncated, info), based on whether
         the environment is using the old step API or the new one.
         """
-        if hasattr(self, "get_result"):
-            deprecation(
-                "get_result will soon be deprecated. "
-                "Please use send and recv for your own EnvWorker."
-            )
-            if not self.is_reset:
-                self.result = self.get_result()
         return self.result
 
     @abstractmethod
@@ -1170,10 +1140,15 @@ class _EglEnvFn:
         return self.factory(self.cfg_kwargs)
 
 
-def _worker(parent: Any, p: Any, env_fn_wrapper: CloudpickleWrapper, obs_bufs: Any = None) -> None:
+def _egl_worker(
+    parent: Any,
+    p: Any,
+    env_fn_wrapper: CloudpickleWrapper,
+    obs_bufs: Any = None,
+) -> None:
     """Spawn-child loop serving the DreamerVLA online-rollout protocol.
 
-    Same skeleton as RLinf's ``rlinf/envs/libero/venv.py`` ``_worker`` (close the
+    Same skeleton as RLinf's worker loop (close the
     parent end, build the env from the cloudpickled ``env_fn``, then serve commands
     over the pipe), with DreamerVLA's command set and an explicit ``ready``/``error``
     init handshake so the parent can surface a child that fails to build.
@@ -1226,7 +1201,7 @@ def _worker(parent: Any, p: Any, env_fn_wrapper: CloudpickleWrapper, obs_bufs: A
 
 
 class _EglSubprocEnvWorker(SubprocEnvWorker):
-    """Spawn-context ``SubprocEnvWorker`` pointing at this module's ``_worker``.
+    """Spawn-context ``SubprocEnvWorker`` using DreamerVLA's EGL worker loop.
 
     Verbatim the RLinf ``ReconfigureSubprocEnvWorker`` pattern
     (``rlinf/envs/libero/venv.py``): force ``get_context("spawn")`` (so the egl GL
@@ -1239,7 +1214,7 @@ class _EglSubprocEnvWorker(SubprocEnvWorker):
         self.share_memory = share_memory
         self.buffer = None
         args = (self.parent_remote, self.child_remote, CloudpickleWrapper(env_fn), self.buffer)
-        self.process = ctx.Process(target=_worker, args=args, daemon=True)
+        self.process = ctx.Process(target=_egl_worker, args=args, daemon=True)
         self.process.start()
         self.child_remote.close()
         EnvWorker.__init__(self, env_fn)
@@ -1255,7 +1230,7 @@ def _default_factory(cfg_kwargs: dict[str, Any]) -> Any:
 class OnlineEglVecEnv(BaseVectorEnv):
     """K no-Ray online-rollout envs in K spawn subprocesses.
 
-    Drop-in for ``VecRolloutEnv`` on the legacy egl path: identical public API
+    Drop-in for ``VecRolloutEnv`` on the OpenVLA input-token EGL path: identical public API
     (``num_envs``, ``reset`` / ``step`` / ``set_task`` / ``close``, context manager),
     but each env runs through RLinf's vendored ``BaseVectorEnv`` + spawn
     ``SubprocEnvWorker`` with the per-child egl device pool.

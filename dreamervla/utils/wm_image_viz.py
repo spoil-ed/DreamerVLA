@@ -104,7 +104,7 @@ def _safe_decode(
     """Run ``decode_fn()`` and return its PIL, or ``None`` on any exception.
 
     When ``what`` is given, a failure prints the standardized
-    ``[viz] {what} decode failed ...`` diagnostic line (matching the legacy
+    ``[viz] {what} decode failed ...`` diagnostic line (matching the existing
     per-route messages, including the optional ``view`` segment). When ``what``
     is ``None`` the failure is swallowed silently, matching the routes that
     previously caught without printing.
@@ -153,7 +153,7 @@ class WorldModelImageVisualizer:
     Args:
         vqgan_config_path: path to Chameleon VQGAN yaml (same as encoder uses).
         vqgan_ckpt_path:   path to Chameleon VQGAN checkpoint.
-        encoder:           the frozen RynnVLA encoder instance (already on GPU).
+        encoder:           the frozen VLA encoder instance (already on GPU).
         device:            where the VQGAN runs (should match encoder's device).
         which_block:       which image block in wm_obs_input_ids to visualise.
                            -2 picks the third-view of the current frame under
@@ -596,7 +596,7 @@ class WorldModelImageVisualizer:
                 saved.append(path)
             return saved
 
-        # ── Route-0 legacy path ────────────────────────────────────────────
+        # ── Route-0 fallback path ────────────────────────────────────────────────
         cur_pooled, cur_full = self._encode_pooled_and_full(cur_ids)
         nxt_pooled, _ = self._encode_pooled_and_full(nxt_ids)
 

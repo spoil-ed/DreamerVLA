@@ -66,22 +66,30 @@ def test_coldstart_suite_binds_own_ckpt_and_suite(task, ckpt_suffix, unnorm_key,
     assert str(oft.ckpt_path).endswith(ckpt_suffix)
     assert oft.dataset_statistics_key == unnorm_key
     assert artifact in str(oft.hdf5_reward_dir)
-    assert str(oft.action_hidden_dir).endswith("_oft_legacy_action_hidden_vla_policy_h1")
+    assert "hidden_token" not in oft
+    assert str(oft.input_token_dir).endswith(
+        "_oft_input_token_embedding_vla_policy_h1"
+    )
     # generated rollouts live under a marked root, never the offline processed_data/
     assert "/collected_rollouts/" in str(oft.hdf5_reward_dir)
-    assert "/collected_rollouts/" in str(oft.action_hidden_dir)
+    assert "/collected_rollouts/" in str(oft.input_token_dir)
     assert "/processed_data/" not in str(oft.hdf5_reward_dir)
 
     # shared discrete one-traj (h1 / no-state) settings
-    assert oft.expected_action_head_type == "oft_discrete_token"
-    assert oft.expected_include_state is False
-    assert int(oft.expected_history) == 1
+    input_tokens = oft.input_tokens
+    assert input_tokens.expected_action_head_type == "oft_discrete_token"
+    assert input_tokens.expected_include_state is False
+    assert int(input_tokens.expected_history) == 1
     assert int(oft.time_horizon) == 8
-    assert int(oft.chunk_size) == 8
-    # cold-start stores the OFT action-query hidden consumed by the discrete actor.
-    assert oft.expected_obs_hidden_source == "action_query"
-    assert oft.expected_prompt_style == "vla_policy"
-    assert oft.expected_rotate_images_180 is True
+    assert int(input_tokens.chunk_size) == 8
+    assert input_tokens.expected_obs_hidden_source == "input_token_embedding"
+    assert input_tokens.expected_prompt_style == "vla_policy"
+    assert input_tokens.expected_rotate_images_180 is True
+    assert int(input_tokens.num_images_in_input) == 1
+    assert int(input_tokens.patches_per_image) == 256
+    assert int(input_tokens.token_count) == 256
+    assert int(input_tokens.token_dim) == 4096
+    assert int(input_tokens.wm_obs_dim) == 1_048_576
 
     # single-view central default (the cold-start fix): VLA sees 1 agentview image
     assert int(cfg.collect.num_images_in_input) == 1

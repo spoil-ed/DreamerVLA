@@ -1053,7 +1053,7 @@ class BaseTrajectoryEnvWorker(Worker):
             self._bootstrap_wm_initial_latents_from_replay()
             self._apply_pending_component_states()
             return
-        self._reject_legacy_spawn_config()
+        self._reject_compat_spawn_config()
         self._pin_inproc_render_backend()
         first_env = _build_env_from_cfg(self.env_cfg)
         if hasattr(first_env, "reset_slot") and hasattr(first_env, "step_slot"):
@@ -1121,7 +1121,7 @@ class BaseTrajectoryEnvWorker(Worker):
                     close()
             raise
 
-    def _reject_legacy_spawn_config(self) -> None:
+    def _reject_compat_spawn_config(self) -> None:
         raw = self.env_cfg.get("spawn_env_slots", False)
         enabled = str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
         if enabled:

@@ -68,20 +68,3 @@ def test_split_stage_cli_accepts_trained_checkpoint_override(
 
     assert args.stage == "eval"
     assert args.trained_wm_ckpt == trained_ckpt
-
-
-def test_split_experiment_scripts_are_stage_specific() -> None:
-    root = Path(__file__).resolve().parents[2]
-    experiments_dir = root / "scripts" / "experiments"
-    expected = {
-        "wm_single_episode_00_check.sh": "--stage check",
-        "wm_single_episode_01_train.sh": "--stage train",
-        "wm_single_episode_02_eval.sh": "--stage eval",
-    }
-
-    for name, marker in expected.items():
-        script = experiments_dir / name
-        assert script.is_file()
-        text = script.read_text(encoding="utf-8")
-        assert marker in text
-        assert "dreamervla.diagnostics.wm_single_episode_overfit" in text

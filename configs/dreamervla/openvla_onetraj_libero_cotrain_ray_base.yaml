@@ -1,8 +1,8 @@
 # @package _global_
-# Single-node Ray async online cotrain route for OpenVLA-OFT backbone_latent.
+# Single-node Ray async online cotrain route for OpenVLA-OFT input tokens.
 #
-# This is the WM-style OpenVLA-OFT route before the action query: the WM
-# consumes current-frame projected vision patch tokens from
+# This is the WM-style OpenVLA-OFT input-token route: the WM consumes
+# current-frame projected vision patch tokens from
 # task.openvla_oft.input_tokens, and the actor bridges those predicted latents
 # back to discrete OpenVLA action-token slots.
 defaults:
@@ -10,7 +10,6 @@ defaults:
   - /task: openvla_onetraj_coldstart_libero
 
 _target_: dreamervla.runners.OnlineCotrainRayRunner
-latent_type: backbone_latent
 seed: 7
 render_backend: osmesa
 
@@ -44,7 +43,7 @@ algorithm:
   rollout_epoch: 16
 
 # OFT query-before structural components. These shapes do not match the old
-# action-query warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
+# input-token warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
 # the checkpoint was trained with this route.
 ray_components:
   world_model:
@@ -157,8 +156,8 @@ collect:
   envs_per_gpu: 1
   memory_fraction: 0.9
   gpu_id: 0
-  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_backbone_latent/reward
-  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_backbone_latent/hidden
+  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_input_token_embedding/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_input_token_embedding/hidden
 
 env:
   num_workers: 1
@@ -195,10 +194,10 @@ rollout:
   require_classifier_evidence: true
   dump:
     enabled: true
-    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent
+    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding
     keep_last_global_steps: 8
-    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent/reward
-    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_backbone_latent/hidden
+    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding/reward
+    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding/hidden
     shard_prefix: cotrain_episode
     demos_per_shard: 1
     preprocess_config:
@@ -209,6 +208,15 @@ rollout:
       obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
       token_count: ${task.openvla_oft.input_tokens.token_count}
       token_dim: ${task.openvla_oft.input_tokens.token_dim}
+      hidden_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+      obs_embedding_shape:
+        - ${task.openvla_oft.input_tokens.token_count}
+        - ${task.openvla_oft.input_tokens.token_dim}
+      hidden_storage_format: tokenized
+      num_images_in_input: ${task.openvla_oft.input_tokens.num_images_in_input}
+      patches_per_image: ${task.openvla_oft.input_tokens.patches_per_image}
+      sidecar_schema_version: 1
+      required_demo_datasets: [obs_embedding]
       wm_obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
       chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
     data_attrs:
@@ -260,7 +268,7 @@ learner:
     classifier: ${ray_components.classifier}
   train_cfg:
     mode: dreamervla_cotrain
-    batch_size: 16
+    batch_size: 2
     classifier_batch_size: 2
     classifier_early_neg_stride: 8
     classifier_loss_type: bce
@@ -306,7 +314,7 @@ learner:
         lr: 1.0e-4
         weight_decay: 0.0
     syncer:
-      store_name: ray_cotrain_oft_backbone_latent_weight_store
+      store_name: ray_cotrain_oft_input_token_embedding_weight_store
 
 sync:
   weight_sync_every: 1
@@ -318,7 +326,7 @@ checkpoint:
   latest_name: latest.ckpt
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_backbone_latent/${task.name}/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_input_token_embedding/${task.name}/${now:%Y%m%d_%H%M%S}}
   max_steps: 1000
   distributed_strategy: single
   data_parallel: false

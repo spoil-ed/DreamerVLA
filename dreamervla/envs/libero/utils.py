@@ -1,6 +1,6 @@
 """Utilities for LIBERO environment rollout and evaluation.
 
-Adapted from RynnVLA-002/rynnvla-002/libero_util/libero_utils.py
+LIBERO environment and image helpers used by the OpenVLA-OFT mainline.
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ class LIBERODreamerEnv:
     """Small Dreamer-style wrapper around LIBERO OffScreenRenderEnv.
 
     The wrapper exposes ``reset() -> obs`` and ``step(action) -> (obs, reward,
-    done, info)`` while keeping the fields used by the RynnVLA/DreamerVLA
+    done, info)`` while keeping the fields used by the VLA/DreamerVLA
     tokenizers: third-view image, wrist image, proprioceptive state, task text,
     and a rolling image history.
     """

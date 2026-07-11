@@ -15,6 +15,7 @@ test doubles) that don't know about staleness still work.
 from __future__ import annotations
 
 from dreamervla.workers.actor.learner_worker import ReplayClient
+from dreamervla.workers.replay.replay_worker import ReplayWorker
 
 
 class _SpyReplay:
@@ -33,6 +34,15 @@ class _MinimalReplay:
 
     def sample(self, batch_size):
         return {"batch_size": batch_size}
+
+
+class _ClassifierSpyReplay:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict]] = []
+
+    def sample_classifier_windows(self, batch_size, **kwargs):
+        self.calls.append((int(batch_size), dict(kwargs)))
+        return {"batch_size": int(batch_size)}
 
 
 def test_default_path_sends_no_staleness_kwarg():
@@ -63,3 +73,61 @@ def test_forwards_include_images_when_explicitly_disabled():
     spy = _SpyReplay()
     ReplayClient(spy).sample(6, include_images=False)
     assert spy.calls == [(6, {"include_images": False})]
+
+
+def test_classifier_options_reach_local_replay_through_client():
+    spy = _ClassifierSpyReplay()
+
+    ReplayClient(spy).sample_classifier_windows(
+        8,
+        window=4,
+        chunk_size=2,
+        chunk_pool="last",
+        early_neg_stride=3,
+        sampling_protocol="wmpo",
+        balance_batches=True,
+    )
+
+    assert spy.calls == [
+        (
+            8,
+            {
+                "window": 4,
+                "chunk_size": 2,
+                "chunk_pool": "last",
+                "early_neg_stride": 3,
+                "sampling_protocol": "wmpo",
+                "balance_batches": True,
+            },
+        )
+    ]
+
+
+def test_classifier_options_reach_replay_through_ray_worker_facade():
+    spy = _ClassifierSpyReplay()
+    worker = ReplayWorker.__new__(ReplayWorker)
+    worker.replay = spy
+
+    worker.sample_classifier_windows(
+        6,
+        window=5,
+        chunk_size=2,
+        chunk_pool="mean",
+        early_neg_stride=7,
+        sampling_protocol="wmpo",
+        balance_batches=True,
+    )
+
+    assert spy.calls == [
+        (
+            6,
+            {
+                "window": 5,
+                "chunk_size": 2,
+                "chunk_pool": "mean",
+                "early_neg_stride": 7,
+                "sampling_protocol": "wmpo",
+                "balance_batches": True,
+            },
+        )
+    ]

@@ -48,7 +48,7 @@ def test_actor_update_registry_reports_available_names() -> None:
 def test_online_runner_uses_actor_update_registry() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (
-        project_root / "dreamervla" / "runners" / "online_dreamervla.py"
+        project_root / "dreamervla" / "runners" / "online_cotrain_runner.py"
     ).read_text(encoding="utf-8")
 
     assert "get_actor_update_route" in source
@@ -58,8 +58,9 @@ def test_online_runner_uses_actor_update_registry() -> None:
 def test_online_runner_branches_lumos_by_route_metadata() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (
-        project_root / "dreamervla" / "runners" / "online_dreamervla.py"
+        project_root / "dreamervla" / "runners" / "online_cotrain_runner.py"
     ).read_text(encoding="utf-8")
 
-    assert "actor_update_route.requires_classifier" in source
+    assert 'actor_update_route.world_model_arg != "chunk_world_model"' in source
+    assert "actor_update_route.step_fn(" in source
     assert 'args.actor_update_kind == "outcome"' not in source

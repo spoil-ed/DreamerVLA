@@ -18,7 +18,6 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 | cotrain（同步 pipeline，含 warmup） | `openvla_onetraj_libero_cotrain_noray` | `OnlineCotrainPipelineRunner` |
 | cotrain（Ray 异步 manual，**主路**） | `openvla_onetraj_libero_cotrain_ray` | `ManualCotrainRayRunner` |
 | 评估 | `eval_libero_vla` | `EmbodiedEvalRunner` |
-| CPU smoke | `manual_cotrain_ray_tiny` | `ManualCotrainRayRunner` |
 
 启动流程见 [`04_complete_loop.md`](04_complete_loop.md) 与 [`05_ray_runtime.md`](05_ray_runtime.md)；
 操作配方见 [`../docs/tutorials/experiments/OpenVLA_Onetraj_LIBERO.md`](../docs/tutorials/experiments/OpenVLA_Onetraj_LIBERO.md)。
@@ -33,15 +32,13 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 
 **OpenVLA-OFT 阶段工具**——训练主线消费的 OFT VLA/WM/classifier，本身不是 cotrain 流程：
 
-- VLA SFT：`openvla_oft_hdf5`、`openvla_oft_hdf5_one_trajectory`、`openvla_oft_hdf5_one_trajectory_l1`、`vla_sft_one_trajectory`
-- world model：`oft_world_model_chunk`、`oft_discrete_token_world_model_chunk`、`oft_world_model_chunk_input_tokens`
-- classifier：`oft_latent_classifier_chunk`、`oft_latent_classifier_chunk_input_tokens`
+- full-replay world model：`wm_full_dataset_train`
+- classifier：`latent_classifier_openvla_onetraj_libero_goal_h1`、
+  `wmpo_token_classifier_openvla_onetraj_libero_goal_h1`
+- 这三条工具与主线共享 `input_token_embedding [256,4096]` 观测契约。
 
-**RynnVLA 家族**——可替换的 VLA backbone 选项及其 WM/classifier：
-
-- VLA：`vla_rynnvla_action_head`、`vla_rynnvla_full_finetune`
-- world model：`world_model_chunk`、`world_model_step`、`world_model_chunk_input_tokens`
-- classifier：`latent_classifier_libero_goal_chunk`、`latent_classifier_libero_goal_chunk_input_tokens`
+**其他 VLA 家族**——其模型代码和已有数据产物仍作为独立支线保留；它们自己的
+hidden-token 语义不属于 OpenVLA-OFT 主线契约，不能据此改写为 input-token。
 
 ## 维护约定
 

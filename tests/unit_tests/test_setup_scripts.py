@@ -137,7 +137,6 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     download_steps = [
         root / "scripts" / "download" / name
         for name in (
-            "10_rynnvla.sh",
             "20_openvla_oft.sh",
             "30_openvla_oft_one_trajectory.sh",
             "40_libero_dataset.sh",
@@ -196,7 +195,6 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "--config-name download" in download_text
     assert "DOWNLOAD_STEPS" not in download_text
     assert "DOWNLOAD_ONLY" not in download_text
-    assert "10_rynnvla_chameleon.sh" not in download_text
     assert "20_lumina.sh" not in download_text
     assert "hf download" not in download_text
 
@@ -205,15 +203,12 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert 'source "${SCRIPT_DIR}/_env.sh"' not in download_step_text
     assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in download_step_text
     assert "hf download" in download_step_text
-    assert "Alibaba-DAMO-Academy/WorldVLA" in download_step_text
-    assert "RYNNVLA_CHAMELEON_REPO" in download_step_text
-    assert "Alpha-VLLM/Lumina-mGPT-7B-768" in download_step_text
-    assert "Alibaba-DAMO-Academy/RynnVLA-002" in download_step_text
     assert "Haozhan72/Openvla-oft-SFT-libero-spatial-traj1" in download_cfg_text
     assert "OPENVLA_OFT_REPOS" in download_cfg_text
     assert "download_libero_datasets.py" in download_step_text
     assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_step_text
-    assert 'CHECKPOINT_DIR="${DVLA_DATA_ROOT}/checkpoints"' in download_step_text
+    assert 'OPENVLA_OFT_CKPT_ROOT="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT"' in download_step_text
+    assert 'OPENVLA_ONE_TRAJ_ROOT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1"' in download_step_text
     assert "calvin" in download_step_text.lower()
     assert "CALVIN_DOWNLOAD_METHOD" in download_step_text
     assert "VyoJ/calvin-ABCD-D-shards" in download_step_text
@@ -346,11 +341,11 @@ def test_requirements_keep_runtime_dependency_set_curated() -> None:
     assert {"pytest", "ruff", "pre-commit"}.issubset(dev_deps)
 
 
-def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> None:
+def test_libero_data_script_uses_only_input_token_mainline_and_filters_noops() -> None:
     root = _project_root()
     process_all = root / "scripts" / "preprocess" / "process_all_libero_data.sh"
     prepare = root / "scripts" / "preprocess" / "prepare_libero_data.sh"
-    pretokenize = root / "scripts" / "preprocess" / "20_pretokenize_dataset.sh"
+    input_tokens = root / "scripts" / "preprocess" / "35_oft_input_tokens.sh"
     reward = root / "scripts" / "preprocess" / "10_hdf5_reward.sh"
     preprocess_cfg = (root / "configs" / "scripts" / "preprocess_suite.yaml").read_text(
         encoding="utf-8"
@@ -359,15 +354,13 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert prepare.is_file()
     process_text = process_all.read_text(encoding="utf-8")
     prepare_text = prepare.read_text(encoding="utf-8")
-    pretokenize_text = pretokenize.read_text(encoding="utf-8")
+    input_token_text = input_tokens.read_text(encoding="utf-8")
     reward_text = reward.read_text(encoding="utf-8")
 
-    assert "HIS=1" in pretokenize_text
-    assert "ACTION_HORIZON=1" in pretokenize_text
-    assert 'TASK_NAME="${TASK_NAME:-${TASK}}"' in pretokenize_text
-    assert 'ARTIFACT_NAME="${ARTIFACT_NAME:-${TASK_NAME}}"' in pretokenize_text
-    assert 'ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"' in pretokenize_text
-    assert "rynnvla_libero|openvla_onetraj_libero" in pretokenize_text
+    assert 'OFT_HISTORY="${OFT_HISTORY:-1}"' in input_token_text
+    assert "obs_hidden_source=input_token_embedding" in input_token_text
+    assert "time_horizon=8" in input_token_text
+    assert "patches_per_image=256" in input_token_text
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
     assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"' in reward_text
@@ -375,26 +368,17 @@ def test_libero_data_script_defaults_to_his1_len_action1_and_filter_noops() -> N
     assert "marked_t_256" in reward_text
     assert "no_noops_t_256" in reward_text
     assert "PREPROCESS_ONLY" not in prepare_text
-    assert "RUN_ACTION_HIDDEN" not in prepare_text
+    assert "HIDDEN_TOKEN" not in prepare_text
     assert "--config-name preprocess_suite" in prepare_text
     assert "--config-name preprocess_all" in process_text
     assert "OFT_HISTORY: null" in preprocess_cfg
     assert "OFT_IMAGE_KEYS: null" in preprocess_cfg
-    assert "OFT_ACTION_HIDDEN_GPUS: ${ngpu}" in preprocess_cfg
+    assert "OFT_INPUT_TOKEN_GPUS: ${ngpu}" in preprocess_cfg
     assert "10_hdf5_reward.sh" in preprocess_cfg
-    assert "20_pretokenize_dataset.sh" in preprocess_cfg
-    assert "chameleon/tokenizer/vqgan.yaml" in (
-        root / "scripts" / "preprocess" / "30_action_hidden.sh"
-    ).read_text(encoding="utf-8")
-
-
-def test_concat_record_wrapper_honors_explicit_tokens_directory() -> None:
-    root = _project_root()
-    text = (root / "scripts" / "preprocess" / "concat_record_libero.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert 'TOKENS_DIR="${1:-${TOKENS_DIR:-' in text
+    assert "35_oft_input_tokens.sh" in preprocess_cfg
+    assert "40_validate.sh" in preprocess_cfg
+    assert "20_pretokenize_dataset" not in preprocess_cfg
+    assert "HIDDEN_TOKEN_GPUS" not in preprocess_cfg
 
 
 def test_preprocess_steps_are_numbered_registered_and_individually_runnable() -> None:
@@ -407,10 +391,7 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
 
     expected_steps = (
         "10_hdf5_reward.sh",
-        "20_pretokenize_dataset.sh",
-        "30_action_hidden.sh",
-        "32_input_token_hidden.sh",
-        "35_oft_action_hidden.sh",
+        "35_oft_input_tokens.sh",
         "40_validate.sh",
     )
     assert "PREPROCESS_ONLY" not in (preprocess_dir / "prepare_libero_data.sh").read_text(
@@ -420,22 +401,14 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         path.name for path in preprocess_dir.glob("[0-9][0-9]_*.sh") if path.is_file()
     )
     assert numbered_steps == sorted(expected_steps)
-    hidden_main_docs = {"32_input_token_hidden.sh"}
     for step in expected_steps:
         script = preprocess_dir / step
         text = script.read_text(encoding="utf-8")
         assert script.is_file(), step
         assert 'source "${SCRIPT_DIR}/_env.sh"' not in text, step
         assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text, step
-        if step not in hidden_main_docs:
-            assert f"`preprocess/{step}`" in registry, step
-        if step in {
-            "10_hdf5_reward.sh",
-            "20_pretokenize_dataset.sh",
-            "30_action_hidden.sh",
-            "40_validate.sh",
-        }:
-            assert step in preprocess_cfg, step
+        assert f"`preprocess/{step}`" in registry, step
+        assert step in preprocess_cfg, step
 
 
 def test_preprocess_scripts_are_direct_copyable_commands() -> None:
@@ -443,10 +416,7 @@ def test_preprocess_scripts_are_direct_copyable_commands() -> None:
     preprocess_dir = root / "scripts" / "preprocess"
     scripts = [
         preprocess_dir / "10_hdf5_reward.sh",
-        preprocess_dir / "20_pretokenize_dataset.sh",
-        preprocess_dir / "30_action_hidden.sh",
-        preprocess_dir / "32_input_token_hidden.sh",
-        preprocess_dir / "35_oft_action_hidden.sh",
+        preprocess_dir / "35_oft_input_tokens.sh",
         preprocess_dir / "40_validate.sh",
     ]
 
@@ -460,12 +430,12 @@ def test_preprocess_scripts_are_direct_copyable_commands() -> None:
         assert re.search(r"\n\s*python -m ", text), script.name
 
 
-def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
+def test_train_launcher_has_no_compat_project_flag_mapping() -> None:
     root = _project_root()
     text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")
 
     assert "def _parse_args" not in text
-    for legacy_flag in (
+    for compat_flag in (
         "--config",
         "--task",
         "--gpus",
@@ -477,22 +447,20 @@ def test_train_launcher_has_no_legacy_project_flag_mapping() -> None:
         "--epochs",
         "--num-epochs",
     ):
-        assert re.search(rf"(?<![\w-]){re.escape(legacy_flag)}(?![\w-])", text) is None
+        assert re.search(rf"(?<![\w-]){re.escape(compat_flag)}(?![\w-])", text) is None
 
 
 def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
-    hdf5_dir = data_root / "processed_data" / "libero_goal" / "no_noops_t_256"
-    hdf5_dir.mkdir(parents=True)
-    (hdf5_dir / "demo.hdf5").touch()
-    (
+    reward_dir = (
         data_root
         / "processed_data"
         / "libero_goal"
-        / "tokens"
-        / "libero_goal_his_1_train_third_view_wrist_w_state_1_256"
-    ).mkdir(parents=True)
+        / "no_noops_t_256_remaining_reward"
+    )
+    reward_dir.mkdir(parents=True)
+    (reward_dir / "demo.hdf5").touch()
     log_path = tmp_path / "python_calls.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -514,6 +482,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
             "PYTHON_STUB_LOG": str(log_path),
             "REAL_PYTHON": sys.executable,
             "DVLA_DATA_ROOT": str(data_root),
+            "OFT_FAKE_COMPONENTS": "1",
             "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{env.get('PATH', '')}",
         }
     )
@@ -526,7 +495,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
             "gpus=4,5",
             "num_procs=3",
             "overwrite=true",
-            "only=[20_pretokenize_dataset]",
+            "only=[35_oft_input_tokens]",
         ],
         cwd=root,
         env=env,
@@ -540,13 +509,15 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     log_text = log_path.read_text(encoding="utf-8")
     assert "[workflow:preprocess_suite]" in workflow_output
     assert "config=preprocess_suite" in workflow_output
-    assert "run 20_pretokenize_dataset" in workflow_output
+    assert "run 35_oft_input_tokens" in workflow_output
 
-    dreamervla_calls = [line for line in log_text.splitlines() if "dreamervla.preprocess." in line]
+    dreamervla_calls = [
+        line
+        for line in log_text.splitlines()
+        if line.startswith("-m dreamervla.preprocess.")
+    ]
     assert dreamervla_calls
-    assert any(
-        "dreamervla.preprocess.pretoken_state_action_model" in line for line in dreamervla_calls
-    )
+    assert "dreamervla.preprocess.preprocess_oft_input_tokens" in log_text
     assert not any(
         re.search(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", line) for line in dreamervla_calls
     )
@@ -792,74 +763,22 @@ def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: P
 
     assert result.returncode == 2
     assert f"No raw LIBERO HDF5 files found under: {raw_dir}" in result.stderr
-    assert "download.rynnvla=false download.libero=true" in result.stderr
+    assert "only=[40_libero_dataset]" in result.stderr
     assert not log_path.exists()
 
 
-def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) -> None:
+def test_process_all_libero_data_dispatches_only_mainline_suite_workflow(tmp_path: Path) -> None:
     root = _project_root()
-    data_root = tmp_path / "data"
-    suite = "libero_goal"
-    processed = data_root / "processed_data" / suite
-    raw_dir = processed / "no_noops_t_256"
-    image_dir = processed / "image_state_action_t_256"
-    conv_dir = processed / "convs"
-    tokenizer_dir = data_root / "checkpoints" / "models--Alpha-VLLM--Lumina-mGPT-7B-768"
-    log_path = tmp_path / "python_calls.log"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    python_stub = bin_dir / "python"
-
-    raw_dir.mkdir(parents=True)
-    (raw_dir / "demo_0.hdf5").touch()
-    (image_dir / "task_0").mkdir(parents=True)
-    tokenizer_dir.mkdir(parents=True)
-    (tokenizer_dir / "tokenizer.model").touch()
-    conv_dir.mkdir(parents=True)
-    for split in ("train", "val_ind", "val_ood"):
-        (conv_dir / f"{suite}_his_1_{split}_third_view_wrist_w_state_1_256.json").write_text(
-            '[{"id": 0}]', encoding="utf-8"
-        )
-
-    python_stub.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'dreamervla.launchers.workflow' ]]; then\n"
-        '  exec "${REAL_PYTHON}" "$@"\n'
-        "fi\n"
-        'printf \'%s\\n\' "$*" >> "${PYTHON_STUB_LOG}"\n'
-        'if [[ "${1:-}" == \'-c\' ]]; then exec "${REAL_PYTHON}" "$@"; fi\n'
-        "module=''\n"
-        "prev=''\n"
-        'for arg in "$@"; do\n'
-        '  if [[ "${prev}" == \'-m\' ]]; then module="${arg}"; break; fi\n'
-        '  prev="${arg}"\n'
-        "done\n"
-        'case "${module}" in\n'
-        "  dreamervla.preprocess.pretoken_state_action_model) exit 42 ;;\n"
-        "  dreamervla.preprocess.validate_libero_data_prep) exit 77 ;;\n"
-        "  dreamervla.preprocess.concat_action_world_model_data_libero) exit 0 ;;\n"
-        "  dreamervla.preprocess.concat_record) exit 0 ;;\n"
-        "  *) exit 0 ;;\n"
-        "esac\n",
-        encoding="utf-8",
-    )
-    python_stub.chmod(0o755)
-
     env = os.environ.copy()
-    env.update(
-        {
-            "DVLA_DATA_ROOT": str(data_root),
-            "PYTHON_STUB_LOG": str(log_path),
-            "REAL_PYTHON": sys.executable,
-            "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{env.get('PATH', '')}",
-            "SUITES": suite,
-            "PRETOKENIZE_PROCS": "1",
-        }
-    )
+    env["DVLA_DATA_ROOT"] = str(tmp_path / "data")
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/process_all_libero_data.sh"],
+        [
+            "bash",
+            "scripts/preprocess/process_all_libero_data.sh",
+            "dry_run=true",
+            "tasks=[libero_goal]",
+        ],
         cwd=root,
         env=env,
         check=False,
@@ -867,21 +786,21 @@ def test_process_all_libero_data_stops_when_pretokenize_fails(tmp_path: Path) ->
         text=True,
     )
 
-    calls = log_path.read_text(encoding="utf-8").splitlines()
-    assert result.returncode == 1
-    assert any("dreamervla.preprocess.pretoken_state_action_model" in call for call in calls)
-    assert not any("dreamervla.preprocess.validate_libero_data_prep" in call for call in calls)
-    assert "[workflow:preprocess_all] run 20_pretokenize_dataset" in result.stdout
-    assert "returned non-zero exit status 42" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "[workflow:preprocess_all] run preprocess_suite" in result.stdout
+    assert "scripts/preprocess/prepare_libero_data.sh" in result.stdout
+    assert "task=libero_goal" in result.stdout
+    assert "pretoken" not in result.stdout.lower()
+    assert "hidden_token" not in result.stdout.lower()
 
 
 def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     root = _project_root()
     setup = (root / "SETUP.md").read_text(encoding="utf-8")
 
-    assert "stage 1: replay and mark no-ops" in setup
+    assert "1. `10_hdf5_reward`" in setup
     assert "keep_noops=true" in setup
-    assert "stage 2: filter marked no-ops" in setup
+    assert "filter the marked files" in setup
     assert "filter_noops=true" in setup
     assert "dreamervla.preprocess.filter_marked_libero_hdf5" in setup
     assert "${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256" in setup
@@ -938,7 +857,6 @@ def test_release_scripts_tree_is_curated() -> None:
         "eval_libero_vla.sh",
         "install_env.sh",
         "preprocess_libero.sh",
-        "restore_from_archive.sh",
         "run_wandb_relay_sync.sh",
         "start_ray.sh",
         "train_dreamervla.sh",
@@ -970,9 +888,7 @@ def test_scripts_tree_does_not_ship_python_modules() -> None:
 def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
     root = _project_root()
     active_shells = sorted(
-        path
-        for path in (root / "scripts").rglob("*.sh")
-        if "archive" not in path.relative_to(root / "scripts").parts
+        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
     )
     path_script_re = re.compile(r"dreamervla/[^\s\"']+\.py")
     offenders = {
@@ -1010,8 +926,6 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
     offenders: dict[str, list[str]] = {}
 
     for script in sorted((root / "scripts").rglob("*.sh")):
-        if "archive" in script.relative_to(root / "scripts").parts:
-            continue
         text = script.read_text(encoding="utf-8")
         commands = re.sub(r"\\\n\s*", " ", text).splitlines()
         for command in commands:
@@ -1048,13 +962,7 @@ def test_release_scripts_are_registered() -> None:
     scripts = root / "scripts"
     registry = (scripts / "README.md").read_text(encoding="utf-8")
     registered = set(re.findall(r"`([^`]+)`", registry))
-    allowed_unregistered = {
-        "README.md",
-        "preprocess/32_input_token_hidden.sh",
-        # deprecation tooling; documented in DEPRECATION-manifest.md, and the
-        # release-docs word ban disallows the "archive" in its filename here.
-        "restore_from_archive.sh",
-    }
+    allowed_unregistered = {"README.md"}
     script_files = sorted(
         path
         for path in scripts.rglob("*")
@@ -1084,7 +992,6 @@ def test_portable_data_layout_manifest_exists_and_is_linked() -> None:
     assert "${DVLA_DATA_ROOT}/processed_data" in manifest_text
     assert "scripts/download_assets.sh" in manifest_text
     assert "scripts/download/40_libero_dataset.sh" in manifest_text
-    assert "scripts/download/10_rynnvla.sh" in manifest_text
     assert "scripts/download/20_openvla_oft.sh" in manifest_text
     assert "scripts/download/30_openvla_oft_one_trajectory.sh" in manifest_text
     assert "scripts/preprocess/prepare_libero_data.sh" in manifest_text
@@ -1099,9 +1006,7 @@ def test_release_scripts_fall_back_to_dvla_root_data() -> None:
     old_relative_default = "${DVLA_DATA_ROOT:-" + "data}"
     active_paths = [
         *(
-            path
-            for path in (root / "scripts").rglob("*.sh")
-            if "archive" not in path.relative_to(root / "scripts").parts
+            path for path in (root / "scripts").rglob("*.sh") if path.is_file()
         ),
     ]
     relative_defaults = [
@@ -1134,12 +1039,11 @@ def test_release_text_does_not_reference_removed_setup_steps() -> None:
             for path in (root / "scripts").rglob("*")
             if path.is_file()
             and path.suffix in {".sh", ".md"}
-            and "archive" not in path.relative_to(root / "scripts").parts
             and "__pycache__" not in path.parts
         ),
     ]
     removed_step_re = re.compile(
-        r"10_worldvla\.sh|20_lumina\.sh|30_rynnvla\.sh|"
+        r"10_worldvla\.sh|20_lumina\.sh|"
         r"20_python_deps\.sh|30_third_party\.sh|40_verify\.sh"
     )
     offenders = {
@@ -1160,9 +1064,7 @@ def test_active_shell_scripts_do_not_pin_machine_local_environment() -> None:
         "/" + "/".join(("home", "user01", "miniconda3", "envs", "dreamervla")),
     )
     active_scripts = sorted(
-        path
-        for path in (root / "scripts").rglob("*.sh")
-        if "archive" not in path.relative_to(root / "scripts").parts
+        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
     )
 
     offenders: dict[str, list[str]] = {}
@@ -1189,7 +1091,6 @@ def test_active_entrypoints_use_canonical_data_directory_names() -> None:
             for path in (root / "scripts").rglob("*")
             if path.is_file()
             and path.suffix in {".sh", ".md"}
-            and "archive" not in path.relative_to(root / "scripts").parts
             and "__pycache__" not in path.parts
         ),
     ]
@@ -1229,7 +1130,7 @@ def test_stable_docs_use_release_language() -> None:
         "docs/data_layout.md": (root / "docs" / "data_layout.md").read_text(encoding="utf-8"),
     }
     banned_re = re.compile(
-        r"formal|legacy-only|archive|archived|Historical|Machine-specific|正式|不再|历史计划|过程性",
+        r"formal|action_query-only|Machine-specific|正式|不再|过程性",
         re.IGNORECASE,
     )
     offenders = {
@@ -1244,9 +1145,7 @@ def test_stable_docs_use_release_language() -> None:
 def test_active_scripts_do_not_include_machine_specific_wrappers() -> None:
     root = _project_root()
     active_shells = [
-        path
-        for path in (root / "scripts").rglob("*.sh")
-        if "archive" not in path.relative_to(root / "scripts").parts
+        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
     ]
     machine_specific_name_re = re.compile(r"(?:_45|g\d+)\.sh$")
     offenders = [

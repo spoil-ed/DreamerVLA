@@ -103,7 +103,7 @@ class RolloutInferenceWorker(Worker):
         sidecars = {"obs_embedding": hidden} if self._emit_hidden_sidecar else {}
         if self._emit_hidden_sidecar and has_lang:
             sidecars["lang_emb"] = lang
-        return RolloutBatchOutput(actions=actions, sidecars=sidecars).to_legacy_dict()
+        return RolloutBatchOutput(actions=actions, sidecars=sidecars).to_compat_dict()
 
     def reset_states(self, env_ids: list[int]) -> None:
         bundle = self._require_bundle()

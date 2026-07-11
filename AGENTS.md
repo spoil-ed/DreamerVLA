@@ -12,13 +12,10 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 The mainline experiments are `collect_rollouts_ray` / `collect_rollouts_onetraj`,
 `openvla_onetraj_libero_cotrain_noray` (sync pipeline) and
 `openvla_onetraj_libero_cotrain_ray` (Ray async manual cotrain), then `eval_libero_vla`.
-Everything else is a secondary route or a test fixture — the authoritative mainline vs
-secondary split is [spec/06_routes.md](spec/06_routes.md). The command-level reference is
-[spec/04_complete_loop.md](spec/04_complete_loop.md). Architecture source documents live
-under [spec/](spec/), with [spec/99_manual_notes.md](spec/99_manual_notes.md) as the
-highest-priority user guidance. Keep this file as the repository brief, not a history
-log. Shipped work and open work live in [docs/HISTORY.md](docs/HISTORY.md) and
-[docs/superpowers/TODO.md](docs/superpowers/TODO.md).
+The command-level reference is [spec/04_complete_loop.md](spec/04_complete_loop.md).
+Architecture source documents live under [spec/](spec/), with
+[spec/99_manual_notes.md](spec/99_manual_notes.md) as the highest-priority user
+guidance. Keep this file as the repository brief.
 
 ---
 
@@ -51,7 +48,6 @@ log. Shipped work and open work live in [docs/HISTORY.md](docs/HISTORY.md) and
     env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
   - `diagnostics/` - importable smoke checks and measurement CLIs.
   - `utils/` - checkpoint, logging, metrics, paths, timers, EGL, HF modules, shared helpers.
-  - `legacy/` - old artifact utilities. Do not import this from active configs or runners.
 - **`configs/`** - Hydra source of truth:
   - `train.yaml` composes `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
     `evaluation/`, `logger/`, and `experiment/`.
@@ -174,6 +170,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 - **Derive downstream shapes from task + sidecar metadata.** For OpenVLA-OFT routes,
   use `task.openvla_oft.input_tokens.*` and collected HDF5/preprocess metadata. Do not
   copy dimensions by hand between world model, classifier, actor, replay, and sidecars.
+  The one-trajectory mainline persists `input_token_embedding [256,4096]`; the
+  decoder's internal action slots are not an observation sidecar.
 - **Checkpoint-specific settings follow the checkpoint.** History, image rotation,
   prompt style, proprio/state inclusion, and action-head type are task/checkpoint
   metadata. Do not encode them as fixed schemes in runners.
@@ -226,14 +224,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 
 ## Optional Components
 
-- Target Ray async cotrain (`ManualCotrainRayRunner`) is the mainline, available through
+- Ray async cotrain (`ManualCotrainRayRunner`) is available through
   `experiment=openvla_onetraj_libero_cotrain_ray`.
-- Legacy Ray async cotrain (`OnlineCotrainRayRunner`) survives only as the shared base
-  config `dreamervla/openvla_onetraj_libero_cotrain_ray_base` and its direct runner unit
-  tests; it has no standalone mainline experiment.
-- RynnVLA (alternative VLA backbone) and the OpenVLA-OFT VLA/WM/classifier stage variants
-  remain as secondary routes; the full mainline-vs-secondary list is in
-  [spec/06_routes.md](spec/06_routes.md). Do not make them the default path.
 - `scheduler/`, `workers/`, and `hybrid_engines/` are backend primitives. Keep them
   behind Hydra-selected runners.
 

@@ -8,13 +8,13 @@ obs_embedding sidecar and converted to the per-step transition dicts that
 """
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
 
+from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
 from dreamervla.runners.online_replay import OnlineReplay
 
 _LIBERO_GOAL_TASKS = (
@@ -29,6 +29,57 @@ _LIBERO_GOAL_TASKS = (
     "put_the_bowl_on_the_plate",
     "put_the_wine_bottle_on_the_rack",
 )
+
+
+def _resolve_task_id(
+    *,
+    shard: str,
+    demo_key: str,
+    demo: h5py.Group,
+    default_task_id: int | None,
+    infer_task_id_from_shard: bool,
+) -> int:
+    if "task_id" in demo.attrs:
+        return int(demo.attrs["task_id"])
+    if default_task_id is not None:
+        return int(default_task_id)
+    if infer_task_id_from_shard:
+        task_name = shard.removesuffix("_demo.hdf5")
+        try:
+            return _LIBERO_GOAL_TASKS.index(task_name)
+        except ValueError as exc:
+            raise ValueError(
+                f"cannot infer task_id from shard {shard}; "
+                "set offline_warmup.task_id or add a task-name mapping"
+            ) from exc
+    raise ValueError(
+        f"{shard}/{demo_key} has no task_id attr and no default_task_id "
+        "was provided; re-collect with the identity-aware collector or "
+        "set offline_warmup.task_id for single-task data."
+    )
+
+
+def _preflight_task_ids(
+    data_dir: Path,
+    shards: list[str],
+    *,
+    default_task_id: int | None,
+    infer_task_id_from_shard: bool,
+) -> dict[tuple[str, str], int]:
+    """Resolve every demo identity before replay mutation begins."""
+
+    resolved: dict[tuple[str, str], int] = {}
+    for shard in shards:
+        with h5py.File(data_dir / shard, "r") as handle:
+            for demo_key, demo in handle["data"].items():
+                resolved[(shard, str(demo_key))] = _resolve_task_id(
+                    shard=shard,
+                    demo_key=str(demo_key),
+                    demo=demo,
+                    default_task_id=default_task_id,
+                    infer_task_id_from_shard=infer_task_id_from_shard,
+                )
+    return resolved
 
 
 def _demo_proprio_at(demo: h5py.Group, t: int) -> np.ndarray:
@@ -112,61 +163,53 @@ def seed_replay_from_offline(
     shards = sorted(p.name for p in data_dir.glob("*.hdf5"))
     if not shards:
         raise FileNotFoundError(f"no reward HDF5 shards under {data_dir}")
+    # Warmup is a public training boundary, so validate every paired shard and
+    # demo before adding even one transition. This prevents a valid first shard
+    # from masking a later 56-token/flat legacy sidecar.
+    validate_input_token_sidecar_dir(
+        hidden_dir,
+        expected_filenames=shards,
+        reference_dir=data_dir,
+        require_reference_complete=True,
+        require_sparse_rewards=True,
+    )
+    task_ids = _preflight_task_ids(
+        data_dir,
+        shards,
+        default_task_id=default_task_id,
+        infer_task_id_from_shard=infer_task_id_from_shard,
+    )
     cap = None if max_episodes_per_task is None else int(max_episodes_per_task)
     per_task: dict[int, int] = {}
     n_added = 0
     for shard in shards:
-        # Skip truncated/corrupt shards (e.g. a half-written file left by a crashed
-        # collect) so one bad shard does not abort warmup — mirrors the tolerant
-        # inspection in collection_manifest. A missing task_id is a real config error,
-        # so the ValueError below is NOT swallowed (it is not OSError/KeyError).
-        try:
-            with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
-                for demo_key in rf["data"]:
-                    demo = rf["data"][demo_key]
-                    if "task_id" in demo.attrs:
-                        task_id = int(demo.attrs["task_id"])
-                    elif default_task_id is not None:
-                        task_id = int(default_task_id)
-                    elif infer_task_id_from_shard:
-                        task_name = shard.removesuffix("_demo.hdf5")
-                        try:
-                            task_id = _LIBERO_GOAL_TASKS.index(task_name)
-                        except ValueError as exc:
-                            raise ValueError(
-                                f"cannot infer task_id from shard {shard}; "
-                                "set offline_warmup.task_id or add a task-name mapping"
-                            ) from exc
-                    else:
-                        raise ValueError(
-                            f"{shard}/{demo_key} has no task_id attr and no default_task_id "
-                            "was provided; re-collect with the identity-aware collector or "
-                            "set offline_warmup.task_id for single-task data."
-                        )
-                    if cap is not None and per_task.get(task_id, 0) >= cap:
-                        continue
-                    hidden_demo = hf["data"][demo_key]
-                    emb = np.asarray(hidden_demo["obs_embedding"][...])
-                    lang_emb = (
-                        np.asarray(hidden_demo["lang_emb"][...], dtype=np.float32)
-                        if "lang_emb" in hidden_demo
-                        else None
+        with h5py.File(data_dir / shard, "r") as rf, h5py.File(
+            hidden_dir / shard, "r"
+        ) as hf:
+            for demo_key in rf["data"]:
+                demo = rf["data"][demo_key]
+                task_id = task_ids[(shard, str(demo_key))]
+                if cap is not None and per_task.get(task_id, 0) >= cap:
+                    continue
+                hidden_demo = hf["data"][demo_key]
+                emb = np.asarray(hidden_demo["obs_embedding"][...])
+                lang_emb = (
+                    np.asarray(hidden_demo["lang_emb"][...], dtype=np.float32)
+                    if "lang_emb" in hidden_demo
+                    else None
+                )
+                if (
+                    replay.add_episode(
+                        _demo_to_transitions(
+                            demo,
+                            emb,
+                            task_id,
+                            lang_emb=lang_emb,
+                        ),
+                        source="coldstart",
                     )
-                    if (
-                        replay.add_episode(
-                            _demo_to_transitions(
-                                demo,
-                                emb,
-                                task_id,
-                                lang_emb=lang_emb,
-                            ),
-                            source="coldstart",
-                        )
-                        is not None
-                    ):
-                        n_added += 1
-                        per_task[task_id] = per_task.get(task_id, 0) + 1
-        except (OSError, KeyError) as exc:
-            warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
-            continue
+                    is not None
+                ):
+                    n_added += 1
+                    per_task[task_id] = per_task.get(task_id, 0) + 1
     return n_added

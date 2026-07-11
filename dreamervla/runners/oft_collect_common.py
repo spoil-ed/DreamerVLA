@@ -12,6 +12,16 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
+from dreamervla.preprocess.sidecar_schema import (
+    INPUT_TOKEN_COUNT,
+    INPUT_TOKEN_DIM,
+    INPUT_TOKEN_HIDDEN_DIM,
+    INPUT_TOKEN_SHAPE,
+    SIDECAR_SCHEMA_VERSION,
+    required_demo_datasets,
+    validate_input_token_preprocess_config,
+)
+
 
 def process_action(action: Any) -> np.ndarray:
     """Gripper post-process for OpenVLA-OFT LIBERO actions (shared by eval + collectors).
@@ -140,19 +150,13 @@ def _resolve_token_dim(vla: Any) -> int:
     raise ValueError("Could not derive token_dim from loaded VLA")
 
 
-def vla_latent_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
+def vla_input_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     """Return input-token sidecar dimensions derived from the loaded VLA."""
-    from dreamervla.preprocess.preprocess_oft_action_hidden import (
-        _input_token_sidecar_dims,
-    )
 
     token_dim = _resolve_token_dim(vla)
     patches_per_image = int(vla.vision_backbone.get_num_patches())
-    token_count, flat_dim = _input_token_sidecar_dims(
-        vla,
-        image_keys=list(image_keys),
-        token_dim=token_dim,
-    )
+    token_count = int(patches_per_image) * len(list(image_keys))
+    flat_dim = int(token_count) * int(token_dim)
     num_images_in_input = int(vla.vision_backbone.get_num_images_in_input())
     return {
         "per_image": int(patches_per_image),
@@ -197,14 +201,11 @@ def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
 
     device = _policy_device_from_id(gpu_id)
 
-    # Auto-detect head mode (l1 vs discrete) from the checkpoint, mirroring the offline
-    # preprocess (resolve_oft_policy_mode).  The one-trajectory cold-start ckpt is DISCRETE
-    # (no action_head -> actions decoded from LM logits), and discrete implies no proprio.
-    from dreamervla.preprocess.preprocess_oft_action_hidden import resolve_oft_policy_mode
+    # Validate the only supported checkpoint mode before constructing the policy.
+    from dreamervla.preprocess.preprocess_oft_input_tokens import resolve_oft_policy_mode
 
     mode = resolve_oft_policy_mode(model_path, str(cfg["policy_mode"]))
-    use_l1 = mode == "l1"
-    use_proprio = use_l1
+    use_proprio = False
     cfg["_policy_mode"] = mode
     cfg["_use_proprio"] = use_proprio
 
@@ -215,11 +216,10 @@ def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
     t0 = time.time()
     policy = OpenVLAOFTPolicy(
         model_path=model_path,
-        component_ckpt_dir=model_path,
         torch_dtype="bf16",
         num_images_in_input=int(cfg["num_images_in_input"]),
         use_lora=False,
-        use_l1_regression=use_l1,
+        use_l1_regression=False,
         use_diffusion=False,
         use_proprio=use_proprio,
         use_film=False,
@@ -254,11 +254,21 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["_use_proprio"], set by load_policy and asserted == task expectation by
     assert_policy_mode_matches); the remaining fields come straight from cfg.
     """
+    obs_hidden_source = str(cfg["expected_obs_hidden_source"])
+    if obs_hidden_source != "input_token_embedding":
+        raise ValueError(
+            "OpenVLA-OFT collection only supports "
+            "expected_obs_hidden_source='input_token_embedding'; "
+            f"got {obs_hidden_source!r}"
+        )
+
     mode = cfg["_policy_mode"]
+    if mode != "discrete":
+        raise ValueError("L1/action-query checkpoints are closed")
     use_proprio = cfg["_use_proprio"]
     config = {
-        "action_head_type": "oft_l1_regression" if mode == "l1" else "oft_discrete_token",
-        "obs_hidden_source": cfg["expected_obs_hidden_source"],
+        "action_head_type": "oft_discrete_token",
+        "obs_hidden_source": obs_hidden_source,
         "prompt_style": cfg["expected_prompt_style"],
         "history": int(cfg["expected_history"]),
         "include_state": bool(use_proprio),
@@ -275,29 +285,37 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "center_crop": True,
         "task_suite_name": cfg["task_suite_name"],
     }
-    if str(cfg["expected_obs_hidden_source"]) == "input_token_embedding":
-        token_count = cfg.get("token_count")
-        hidden_dim = cfg.get("hidden_dim")
-        patches_per_image = cfg.get("patches_per_image")
-        if token_count is not None:
-            config["token_count"] = int(token_count)
-            config["obs_embedding_shape"] = [
-                int(token_count),
-                int(cfg["token_dim"]),
-            ]
-        if hidden_dim is not None:
-            config["hidden_dim"] = int(hidden_dim)
-        if patches_per_image is not None:
-            config["patches_per_image"] = int(patches_per_image)
-        config["hidden_storage_format"] = "tokenized"
+    token_count = int(cfg["token_count"])
+    hidden_dim = int(cfg["hidden_dim"])
+    patches_per_image = int(cfg["patches_per_image"])
+    config["token_count"] = token_count
+    config["obs_embedding_shape"] = [token_count, int(cfg["token_dim"])]
+    config["hidden_dim"] = hidden_dim
+    config["patches_per_image"] = patches_per_image
+    config["hidden_storage_format"] = "tokenized"
+    config["sidecar_schema_version"] = SIDECAR_SCHEMA_VERSION
+    config["required_demo_datasets"] = required_demo_datasets()
+    if token_count != INPUT_TOKEN_COUNT or int(cfg["token_dim"]) != INPUT_TOKEN_DIM:
+        raise ValueError(
+            "OpenVLA-OFT collection requires input_token_embedding shape "
+            f"{INPUT_TOKEN_SHAPE}; got ({token_count}, {int(cfg['token_dim'])})"
+        )
+    if hidden_dim != INPUT_TOKEN_HIDDEN_DIM:
+        raise ValueError(
+            f"hidden_dim must be {INPUT_TOKEN_HIDDEN_DIM}, got {hidden_dim}"
+        )
+    validate_input_token_preprocess_config(
+        config,
+        context="OpenVLA-OFT collection preprocess config",
+    )
     return config
 
 
 def assert_policy_mode_matches(cfg: dict[str, Any]) -> None:
     """Early validation: ckpt-detected mode == task expected_* (RLinf-style)."""
-    detected_head = (
-        "oft_l1_regression" if cfg["_policy_mode"] == "l1" else "oft_discrete_token"
-    )
+    if cfg["_policy_mode"] != "discrete":
+        raise ValueError("L1/action-query checkpoints are closed")
+    detected_head = "oft_discrete_token"
     if detected_head != cfg["expected_action_head_type"]:
         raise ValueError(
             f"Detected OFT head {detected_head!r} from ckpt {cfg['model_path']!r} "

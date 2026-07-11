@@ -176,11 +176,9 @@ class ColdStartRayCollectRunner(BaseRunner):
         from dreamervla.runners.oft_collect_common import make_preprocess_config
 
         collect_cfg = CollectRolloutsRunner._build_collect_cfg(self)
-        mode = (
-            "l1"
-            if collect_cfg["expected_action_head_type"] == "oft_l1_regression"
-            else "discrete"
-        )
+        if collect_cfg["expected_action_head_type"] != "oft_discrete_token":
+            raise ValueError("L1/action-query checkpoints are closed")
+        mode = "discrete"
         collect_cfg["_policy_mode"] = mode
         collect_cfg["_use_proprio"] = bool(collect_cfg["expected_include_state"])
         preprocess_config = make_preprocess_config(collect_cfg)
@@ -741,9 +739,17 @@ def _default_inference_cfg(policy_cfg: dict[str, Any]) -> dict[str, Any]:
 def _default_preprocess_config() -> dict[str, Any]:
     return {
         "action_head_type": "oft_discrete_token",
+        "obs_hidden_source": "input_token_embedding",
         "history": 1,
         "include_state": False,
         "hidden_key": "obs_embedding",
+        "token_count": 256,
+        "token_dim": 4096,
+        "hidden_dim": 1048576,
+        "obs_embedding_shape": [256, 4096],
+        "hidden_storage_format": "tokenized",
+        "num_images_in_input": 1,
+        "patches_per_image": 256,
     }
 
 

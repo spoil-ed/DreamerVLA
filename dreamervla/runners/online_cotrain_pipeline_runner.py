@@ -5,8 +5,6 @@ trajectory HDF5, warms up the world model + success classifier on that unified
 buffer (same step functions as the online phase, so zero semantic drift), then
 runs the existing OnlineCotrainRunner online loop with RL enabled. WM and
 classifier warmup checkpoints are saved separately for independent resume.
-
-See docs/superpowers/specs/archive/2026-06-17-offline-warmup-online-cotrain-pipeline-design.md
 """
 from __future__ import annotations
 
@@ -28,7 +26,8 @@ from dreamervla.runners.base_runner import _atomic_torch_save
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
-from dreamervla.runners.online_dreamervla import _unwrap, online_classifier_update_step
+from dreamervla.runners.classifier_update import online_classifier_update_step
+from dreamervla.runners.distributed import unwrap_module as _unwrap
 from dreamervla.runners.latent_classifier_runner import _success_probabilities_from_logits
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
@@ -914,14 +913,22 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
 
         cfg = copy.deepcopy(self.cfg)
         self._apply_debug_overrides(cfg)
-        latent_type = str(OmegaConf.select(cfg, "latent_type", default="action_hidden"))
-        if latent_type not in ("action_hidden", "backbone_latent"):
-            raise ValueError(f"unknown latent_type={latent_type!r}")
-        self._latent_type = latent_type
-        env_image_keys = OmegaConf.select(cfg, "env.image_keys", default=["agentview_rgb", "eye_in_hand_rgb"])
-        self._num_views = len(list(env_image_keys)) if env_image_keys is not None else 2
-        if latent_type == "backbone_latent":
-            OmegaConf.update(cfg, "env.obs_hidden_source", "input_token_embedding", force_add=True)
+        removed_latent_type = OmegaConf.select(cfg, "latent_type", default=None)
+        if removed_latent_type is not None:
+            raise ValueError(
+                "latent_type route selection has been removed; the pipeline only "
+                "supports input_token_embedding [256,4096]"
+            )
+        env_image_keys = OmegaConf.select(
+            cfg, "env.image_keys", default=["agentview_rgb"]
+        )
+        self._num_views = len(list(env_image_keys)) if env_image_keys is not None else 1
+        OmegaConf.update(
+            cfg,
+            "env.obs_hidden_source",
+            "input_token_embedding",
+            force_add=True,
+        )
 
         # Identify that the collected cold-start dump exists BEFORE loading the heavy
         # WM/encoder/classifier. When warmup will seed from offline shards (i.e. no full
@@ -1083,6 +1090,11 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 cls_window=cls_window,
                 cls_chunk_size=cls_chunk_size,
             )
+            # A WM-only recipe must not calibrate, update, or checkpoint a
+            # randomly initialized classifier merely because no classifier
+            # checkpoint exists yet.
+            if int(cls_steps) <= 0:
+                need_cls = False
             self._print_pipeline_event(
                 "[pipeline][warmup] resolved replay warmup "
                 f"epochs={warmup_replay_epochs} wm_updates={wm_steps} "

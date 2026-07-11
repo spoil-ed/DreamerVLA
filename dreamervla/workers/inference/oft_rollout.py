@@ -16,7 +16,7 @@ class OFTRolloutBundle:
         history: int,
         rotate_images_180: bool = True,
         center_crop: bool = True,
-        obs_hidden_source: str = "action_query",
+        obs_hidden_source: str = "input_token_embedding",
         expected_action_head_type: str | None = None,
         expected_include_state: bool | None = None,
         device: str = "cuda",
@@ -28,11 +28,18 @@ class OFTRolloutBundle:
         cfg = dict(policy_cfg)
         cfg.setdefault("unnorm_key", str(unnorm_key))
         cfg.setdefault("_rank", 0)
-        self._policy = oft_collect_common.load_policy(cfg, device_ref)
         selected_image_keys = _select_image_keys_for_policy(
             image_keys,
-            cfg.get("num_images_in_input", len(image_keys)),
+            cfg.get("num_images_in_input", 1),
         )
+        if int(history) != 1:
+            raise ValueError("OpenVLA-OFT input-token mainline requires history=1")
+        if str(obs_hidden_source) != "input_token_embedding":
+            raise ValueError(
+                "OpenVLA-OFT rollout observations require "
+                "obs_hidden_source='input_token_embedding'"
+            )
+        self._policy = oft_collect_common.load_policy(cfg, device_ref)
         if expected_action_head_type is not None:
             cfg["expected_action_head_type"] = str(expected_action_head_type)
         if expected_include_state is not None:
@@ -89,14 +96,18 @@ def _select_image_keys_for_policy(
     image_keys: list[str],
     num_images_in_input: object,
 ) -> list[str]:
-    """Select the camera keys consumed by an OFT checkpoint."""
+    """Return the only camera key admitted by the one-image mainline."""
 
     keys = [str(key) for key in image_keys]
     count = int(num_images_in_input)
-    if count < 1:
-        raise ValueError(f"num_images_in_input must be >= 1, got {count}")
-    if count > len(keys):
+    if count != 1:
         raise ValueError(
-            f"num_images_in_input={count} exceeds configured image_keys={keys!r}"
+            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            f"got {count}"
         )
-    return keys[:count]
+    if not keys or keys[0] != "agentview_rgb":
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires primary image key "
+            f"'agentview_rgb', got {keys!r}"
+        )
+    return [keys[0]]

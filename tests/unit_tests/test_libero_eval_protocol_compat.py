@@ -111,7 +111,7 @@ def test_eval_libero_config_uses_latent_dreamer_defaults() -> None:
     assert OmegaConf.select(cfg, "eval.dreamer_rssm_action_source", default=None) is None
 
 
-def test_legacy_rssm_actor_input_source_normalizes_to_latent() -> None:
+def test_compat_rssm_actor_input_source_normalizes_to_latent() -> None:
     from dreamervla.runners.embodied_eval_runner import (
         normalize_dreamer_actor_input_source,
         normalize_dreamer_rollout_mode,
@@ -152,7 +152,9 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
             "eval": {},
             "task": {
                 "openvla_oft": {
-                    "input_tokens": {"expected_obs_hidden_source": "image_last"}
+                    "input_tokens": {
+                        "expected_obs_hidden_source": "input_token_embedding"
+                    }
                 }
             },
         }
@@ -162,7 +164,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
 
     assert OmegaConf.select(cfg, "eval.dreamer_rollout_mode") == "stateless"
     assert OmegaConf.select(cfg, "eval.dreamer_actor_input_source") == "latent"
-    assert OmegaConf.select(cfg, "eval.obs_hidden_source") == "image_last"
+    assert OmegaConf.select(cfg, "eval.obs_hidden_source") == "input_token_embedding"
 
 
 def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:

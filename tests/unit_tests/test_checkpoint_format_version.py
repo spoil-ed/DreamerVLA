@@ -36,12 +36,12 @@ def test_load_runner_payload_roundtrips_versioned_payload(tmp_path) -> None:
     assert torch.equal(loaded["state_dicts"]["world_model"]["w"], torch.zeros(2))
 
 
-def test_load_runner_payload_reads_legacy_unversioned_payload(tmp_path) -> None:
+def test_load_runner_payload_reads_compat_unversioned_payload(tmp_path) -> None:
     # Pre-X-01 checkpoints have no format_version; the loader must still read them.
     path = tmp_path / "ckpt" / "latest.ckpt"
     path.parent.mkdir(parents=True)
-    legacy = {"cfg": {}, "state_dicts": {"policy": {"p": torch.ones(1)}}, "pickles": {}}
-    torch.save(legacy, path)
+    legacy_payload = {"cfg": {}, "state_dicts": {"policy": {"p": torch.ones(1)}}, "pickles": {}}
+    torch.save(legacy_payload, path)
 
     loaded = load_runner_payload(path)
     assert loaded.get("format_version") is None

@@ -1186,7 +1186,7 @@ def build_pipeline_plan(
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
-            f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
+            f"task.openvla_oft.input_token_dir={hidden_dir}",
             f"++collect.hdf5_reward_dir={reward_dir}",
             f"++collect.hidden_dir={hidden_dir}",
             f"training.out_dir={collect_out}",
@@ -1360,23 +1360,45 @@ def validate_input_assets(
 
 
 def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
-    """Return missing output shards when reusing an existing cold-start dump."""
+    """Validate reusable cold-start shards against the OpenVLA input-token schema."""
+
+    from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+
     reward = Path(reward_dir).expanduser()
     hidden = Path(hidden_dir).expanduser()
     errors: list[str] = []
+    reward_shards: list[Path] = []
     if not reward.is_dir():
         errors.append(f"cold-start reward directory not found: {reward}")
-    elif not any(reward.glob("*.hdf5")):
-        errors.append(f"cold-start reward directory has no HDF5 shards: {reward}")
+    else:
+        reward_shards = sorted(reward.glob("*.hdf5"))
+        if not reward_shards:
+            errors.append(f"cold-start reward directory has no HDF5 shards: {reward}")
     if not hidden.is_dir():
         errors.append(f"cold-start hidden directory not found: {hidden}")
-    elif not any(hidden.glob("*.hdf5")):
-        errors.append(f"cold-start hidden directory has no HDF5 shards: {hidden}")
-    elif not (hidden / "preprocess_config.json").is_file():
-        errors.append(
-            "cold-start hidden directory is missing preprocess_config.json: "
-            f"{hidden / 'preprocess_config.json'}"
-        )
+    else:
+        hidden_shards = sorted(hidden.glob("*.hdf5"))
+        if not hidden_shards:
+            errors.append(f"cold-start hidden directory has no HDF5 shards: {hidden}")
+        if reward_shards and hidden_shards:
+            reward_names = [path.name for path in reward_shards]
+            hidden_names = {path.name for path in hidden_shards}
+            extras = sorted(hidden_names.difference(reward_names))
+            if extras:
+                errors.append(
+                    "cold-start hidden directory has unpaired shards: "
+                    + ", ".join(extras)
+                )
+            try:
+                validate_input_token_sidecar_dir(
+                    hidden,
+                    expected_filenames=reward_names,
+                    reference_dir=reward,
+                    require_reference_complete=True,
+                    require_sparse_rewards=True,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                errors.append(str(exc))
     return errors
 
 
@@ -1771,6 +1793,21 @@ def collect_resume(
             flush=True,
         )
 
+    has_existing_shards = any(plan.reward_dir.glob("*.hdf5")) or any(
+        plan.hidden_dir.glob("*.hdf5")
+    )
+    if skip_collect or has_existing_shards:
+        schema_errors = validate_collected_outputs(
+            reward_dir=plan.reward_dir,
+            hidden_dir=plan.hidden_dir,
+        )
+        if schema_errors:
+            joined = "\n  - ".join(schema_errors)
+            raise ValueError(
+                "cold-start collection does not match the required OpenVLA "
+                f"input-token schema:\n  - {joined}"
+            )
+
     if skip_collect:
         print("PHASE 1/2 SKIPPED: cold-start collection", flush=True)
         _write_collection_manifest(plan, target_episodes=target, num_tasks=num_tasks)
@@ -1804,6 +1841,16 @@ def collect_resume(
     )
     print("PHASE 1/2 START: cold-start collection", flush=True)
     subprocess.run(collect_cmd, check=True)
+    schema_errors = validate_collected_outputs(
+        reward_dir=plan.reward_dir,
+        hidden_dir=plan.hidden_dir,
+    )
+    if schema_errors:
+        joined = "\n  - ".join(schema_errors)
+        raise ValueError(
+            "cold-start collection does not match the required OpenVLA "
+            f"input-token schema after collection:\n  - {joined}"
+        )
     post = summarize_collection(
         plan.reward_dir,
         plan.hidden_dir,
@@ -1990,6 +2037,9 @@ def _write_collection_manifest(
             "chunk_size",
             "token_count",
             "token_dim",
+            "obs_hidden_source",
+            "obs_embedding_shape",
+            "hidden_storage_format",
             "output_dtype",
             "hidden_dim",
         ):

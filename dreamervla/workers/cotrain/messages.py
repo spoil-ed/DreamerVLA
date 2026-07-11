@@ -198,7 +198,7 @@ def pack_rollout_result_batch(
 def rollout_result_batch_to_messages(
     msg: RolloutResultBatchMsg,
 ) -> list[RolloutResultMsg]:
-    """Return per-slot rollout results from either legacy or batched payloads."""
+    """Return per-slot rollout results from either single-slot or batched payloads."""
 
     if msg.results:
         return list(msg.results)

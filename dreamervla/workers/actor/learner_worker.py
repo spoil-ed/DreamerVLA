@@ -746,6 +746,8 @@ class ReplayClient:
         chunk_size: int,
         chunk_pool: str,
         early_neg_stride: int,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> dict[str, Any]:
         return self._call(
             "sample_classifier_windows",
@@ -754,6 +756,8 @@ class ReplayClient:
             chunk_size=int(chunk_size),
             chunk_pool=str(chunk_pool),
             early_neg_stride=int(early_neg_stride),
+            sampling_protocol=str(sampling_protocol),
+            balance_batches=bool(balance_batches),
         )
 
     def classifier_window_count(self, *, window: int, chunk_size: int) -> int:
@@ -994,7 +998,7 @@ def namespaced_world_model_metrics(metrics: dict[str, Any]) -> dict[str, float]:
 def online_classifier_update_step(**kwargs: Any) -> dict[str, Any]:
     """Lazy import wrapper preserving optional-Ray import isolation."""
 
-    from dreamervla.runners.online_dreamervla import online_classifier_update_step as _impl
+    from dreamervla.runners.classifier_update import online_classifier_update_step as _impl
 
     return _impl(**kwargs)
 

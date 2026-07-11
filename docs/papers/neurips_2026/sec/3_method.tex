@@ -8,7 +8,7 @@ At each time step $t$, the robot receives a multimodal observation
 \[
 o_t = \{o_t^{img}, o_t^{txt}, o_t^{prop}\},
 \]
-where $o_t^{img}$ contains the third-person and wrist-camera RGB observations, $o_t^{txt}$ is the task instruction, and $o_t^{prop}$ denotes proprioceptive state. These inputs are first converted into a unified token sequence and passed through a frozen RynnVLA encoder to obtain a high-level semantic representation
+where $o_t^{img}$ contains the third-person and wrist-camera RGB observations, $o_t^{txt}$ is the task instruction, and $o_t^{prop}$ denotes proprioceptive state. These inputs are first converted into a unified token sequence and passed through a frozen VLA encoder to obtain a high-level semantic representation
 \[
 z_t^{\text{sem}} = f_{\text{VLA}}(o_t) \in \mathbb{R}^{4096}.
 \]
@@ -30,13 +30,13 @@ This decomposition enables the model to inherit rich language-grounded visual pr
 
 \subsection{Frozen VLA Encoder}
 
-We build our framework on top of a pretrained RynnVLA encoder and keep it frozen throughout training. Given the current observation, we first serialize the multimodal inputs into the same prompt format used during pretraining. Concretely, with history length $\texttt{his}=2$, the input sequence contains previous and current third-person images, previous and current wrist images, proprioceptive state, and task text:
+We build our framework on top of a pretrained VLA encoder and keep it frozen throughout training. Given the current observation, we first serialize the multimodal inputs into the same prompt format used during pretraining. Concretely, with history length $\texttt{his}=2$, the input sequence contains previous and current third-person images, previous and current wrist images, proprioceptive state, and task text:
 \[
 x_t =
 [\text{prev-third},\ \text{prev-wrist},\ \text{cur-third},\ \text{cur-wrist},\ \text{state},\ \text{text}].
 \]
 
-Images are discretized using the Chameleon VQ tokenizer, while the language instruction is tokenized using the Chameleon BPE tokenizer. The resulting token sequence is processed by the frozen RynnVLA Transformer backbone to produce a contextual hidden representation
+Images are discretized using the Chameleon VQ tokenizer, while the language instruction is tokenized using the Chameleon BPE tokenizer. The resulting token sequence is processed by the frozen VLA Transformer backbone to produce a contextual hidden representation
 \[
 z_t^{\text{sem}} = f_{\text{VLA}}(x_t).
 \]
@@ -63,7 +63,7 @@ To predict the next latent state, we condition on the current latent state and a
 \[
 \hat{s}_{t+1} = f_{\text{dyn}}(s_t, a_t).
 \]
-Unlike conventional RSSM-based world models that use GRUs, our transition model is implemented with a \textbf{causal Transformer backbone} inherited from a pretrained RynnVLA action-world-model checkpoint. Specifically, the current latent state and action are first embedded into tokens, augmented with learned type embeddings, and then processed by the Transformer to produce the next latent prior:
+Unlike conventional RSSM-based world models that use GRUs, our transition model is implemented with a \textbf{causal Transformer backbone} inherited from a pretrained VLA action-world-model checkpoint. Specifically, the current latent state and action are first embedded into tokens, augmented with learned type embeddings, and then processed by the Transformer to produce the next latent prior:
 \[
 p_\theta(z_{t+1} \mid h_{t+1}, a_t).
 \]
@@ -217,7 +217,7 @@ This categorical value parameterization substantially improves stability compare
 
 \subsection{Training Strategy}
 
-During all stages, the RynnVLA encoder remains frozen, and only the latent world model, actor, and critic are updated. Training alternates between:
+During all stages, the VLA encoder remains frozen, and only the latent world model, actor, and critic are updated. Training alternates between:
 
 \begin{enumerate}
     \item \textbf{World-model update}: optimize $\mathcal{L}_{\text{WM}}$ on real transitions;

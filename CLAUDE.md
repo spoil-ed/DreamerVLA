@@ -12,15 +12,15 @@ from AGENTS.md.
 
 - Launch the grouped Hydra entry with
   `python -m dreamervla.train experiment=<name> task=<suite>`.
-- Shell launchers such as `scripts/train_vla.sh`, `scripts/train_wm.sh`, and
-  `scripts/train_dreamervla.sh` forward ordinary `key=value` overrides to the
-  same grouped entry.
+- `scripts/train_dreamervla.sh` and the two cold-start e2e launchers forward
+  ordinary `key=value` overrides to grouped Hydra entrypoints.
 - Config groups are `experiment/`, `VLA/`, `worldmodel/`, `classifier/`,
   `dreamervla/`, `evaluation/`, `task/`, and `logger/`.
 - Mainline training defaults to `logger=tensorboard_wandb`; add
   `runner.logger.wandb_mode=offline` for offline W&B, or use
   `logger=tensorboard` / `logger=wandb` for a single backend.
-- OFT Scheme-A sidecars should match the preprocess launcher output, whose `history`follows the         checkpoint's `num_images_in_input` (the bundled OFT ckpts are 1-image →`${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1`).
+- OpenVLA-OFT sidecars use only `input_token_embedding [T,256,4096]`, one image,
+  and history one. Every training entry validates this exact contract.
 
 ## RLinf Alignment Snapshot
 
@@ -29,12 +29,12 @@ from AGENTS.md.
   backend behind explicit Hydra experiments.
 - Prefer early config validation for logger backends, actor-update routes,
   sidecar paths, resume checkpoints, batch/world-size divisibility,
-  horizon/chunk consistency, and token/action-hidden dimensions.
+  horizon/chunk consistency, and input-token dimensions.
 - Keep run artifacts under one root with stable places for checkpoints, logs,
   TensorBoard/W&B files, videos, diagnostics, JSONL records,
   `resolved_config.yaml`, and `run_manifest.json`.
-- Treat `${training.out_dir}/checkpoints` as canonical; legacy
-  `${training.out_dir}/ckpt/latest.ckpt` is resume-only compatibility.
+- Treat `${training.out_dir}/checkpoints` as the canonical run checkpoint root;
+  pipeline warm-up component checkpoints remain under `${RUN_ROOT}/cotrain/ckpt`.
 - Use RLinf-style metric namespaces: `train/`, `eval/`, `env/`, `rollout/`,
   and `time/`.
 - Add low-cost smoke/e2e configs for each mainline recipe so config, logger,

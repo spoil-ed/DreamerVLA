@@ -6,20 +6,10 @@ name: libero_spatial
 suite: libero_spatial
 task_name: spatial
 
-action_horizon: 10
-time_horizon: 10
-
-legacy_action_hidden:
-  wm_obs_dim: 71680
-  token_count: 70
-  chunk_size: 10
-  latent_source: RynnVLA legacy [10,7,1024] action hidden
+action_horizon: 8
+time_horizon: 8
 
 openvla_oft:
-  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_spatial
-  component_ckpt_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_spatial
-  resume_step: 150000
-  dataset_statistics_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_spatial/dataset_statistics.json
-  action_head_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_spatial/action_head--150000_checkpoint.pt
-  proprio_projector_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/OpenVLA-OFT/libero_spatial/proprio_projector--150000_checkpoint.pt
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
+  dataset_statistics_path: ${task.openvla_oft.ckpt_path}/dataset_statistics.json
   failure_hdf5_dir: null

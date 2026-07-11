@@ -10,7 +10,6 @@ CKPT="${CKPT:-${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SF
 TASK_IDS="${TASK_IDS:-}"
 NUM_TRIALS="${NUM_TRIALS:-10}"
 GPU_ID="${GPU_ID:-0}"
-POLICY_MODE="${POLICY_MODE:-discrete}"
 CAMERA_INPUTS="${CAMERA_INPUTS:-primary}"
 NUM_IMAGES="${NUM_IMAGES:-1}"
 USE_PROPRIO="${USE_PROPRIO:-0}"
@@ -34,7 +33,7 @@ python -m dreamervla.diagnostics.eval_openvla_oft_libero --config-name openvla_o
   num_trials="${NUM_TRIALS}" \
   gpu_id="${GPU_ID}" \
   seed="${SEED}" \
-  policy_mode="${POLICY_MODE}" \
+  policy_mode=discrete \
   camera_inputs="${CAMERA_INPUTS}" \
   num_images="${NUM_IMAGES}" \
   use_proprio="${USE_PROPRIO}" \

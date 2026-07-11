@@ -1151,7 +1151,7 @@ def test_ray_lumos_configs_expose_rlinf_rollout_scale(path: str) -> None:
     [
         (
             "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
-            "online_cotrain_backbone_latent",
+            "online_cotrain_input_token_embedding",
         ),
     ],
 )
@@ -1167,11 +1167,40 @@ def test_ray_cotrain_configs_dump_one_hdf5_per_episode(
     assert dump.enabled is True
     assert int(dump.demos_per_shard) == 1
     assert str(dump.shard_prefix) == "cotrain_episode"
+    assert int(dump.preprocess_config.sidecar_schema_version) == 1
+    assert list(dump.preprocess_config.required_demo_datasets) == ["obs_embedding"]
     unresolved = OmegaConf.to_yaml(dump, resolve=False)
     assert "/collected_rollouts/" in unresolved
     assert "OpenVLA_Onetraj_LIBERO" in unresolved
     assert f"/{subdir}/reward" in unresolved
     assert f"/{subdir}/hidden" in unresolved
+
+
+def test_rollout_dump_cfg_rejects_incomplete_explicit_sidecar_metadata() -> None:
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.online_cotrain_ray_runner import OnlineCotrainRayRunner
+
+    runner = OnlineCotrainRayRunner.__new__(OnlineCotrainRayRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "rollout": {
+                "dump": {
+                    "enabled": True,
+                    "preprocess_config": {
+                        "action_head_type": "oft_discrete_token",
+                        "obs_hidden_source": "input_token_embedding",
+                    },
+                }
+            }
+        }
+    )
+    runner.get_run_dir = lambda: Path("/tmp/dvla-test")
+
+    with pytest.raises(ValueError, match="only supported observation contract"):
+        runner._rollout_dump_cfg(oft_plan=None)
 
 
 @pytest.mark.parametrize(

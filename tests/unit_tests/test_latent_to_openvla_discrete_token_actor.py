@@ -4,40 +4,16 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dreamervla.algorithms.actor.latent_to_openvla_discrete_token_actor import (
-    LatentToOpenVLADiscreteTokenActor,
-)
-from dreamervla.algorithms.actor.latent_to_openvla_hidden_state_actor import (
-    LatentToOpenVLAHiddenStateActor,
-)
+from dreamervla.algorithms.actor import LatentToOpenVLAHiddenStateActor
 
 
-def _tiny_actor() -> LatentToOpenVLADiscreteTokenActor:
-    # Tiny discrete bridge for the query_before (backbone/input-token) route.
-    return LatentToOpenVLADiscreteTokenActor(
-        source_token_count=5,
-        source_token_dim=4,
-        action_hidden_dim=4,
-        action_dim=2,
-        time_horizon=3,
-        bridge_hidden_dim=4,
-        num_bridge_layers=1,
-        num_bridge_heads=2,
-        vocab_size=32,
-        action_token_bins=8,
-        adapter_type="identity",
-        init_lm_head_ckpt=None,
-        head_type="oft_discrete_token",
-    )
-
-
-def _tiny_hidden_state_actor() -> LatentToOpenVLAHiddenStateActor:
+def _tiny_mainline_actor() -> LatentToOpenVLAHiddenStateActor:
     return LatentToOpenVLAHiddenStateActor(
-        source_token_count=5,
-        source_token_dim=4,
-        hidden_state_dim=4,
-        action_dim=2,
-        time_horizon=3,
+        source_token_count=256,
+        source_token_dim=4096,
+        hidden_state_dim=4096,
+        action_dim=7,
+        time_horizon=8,
         bridge_hidden_dim=4,
         num_bridge_layers=1,
         num_bridge_heads=2,
@@ -45,69 +21,76 @@ def _tiny_hidden_state_actor() -> LatentToOpenVLAHiddenStateActor:
         action_token_bins=8,
         adapter_type="identity",
         init_lm_head_ckpt=None,
+        freeze_lm_head=False,
         head_type="oft_discrete_token",
     )
 
 
-def test_hidden_state_actor_uses_hidden_state_dim_only() -> None:
-    actor = _tiny_hidden_state_actor()
-    assert actor.hidden_state_dim == 4
-    assert not hasattr(actor, "action_hidden_dim")
+def _input_tokens(batch_size: int = 2) -> torch.Tensor:
+    return torch.zeros(batch_size, 256, 4096)
 
 
-def test_hidden_state_actor_rejects_action_hidden_dim_alias() -> None:
-    with pytest.raises(TypeError, match="action_hidden_dim"):
+def test_hidden_state_actor_uses_canonical_input_token_boundary() -> None:
+    actor = _tiny_mainline_actor()
+
+    assert actor.source_token_count == 256
+    assert actor.source_token_dim == 4096
+    assert actor.action_token_count == 56
+    assert actor.hidden_state_dim == 4096
+    assert isinstance(actor.lm_head, nn.Linear)
+
+
+def test_hidden_state_actor_rejects_removed_hidden_token_alias() -> None:
+    with pytest.raises(TypeError, match="removed 56x1024 route"):
+        LatentToOpenVLAHiddenStateActor(hidden_token_dim=1024)
+
+
+def test_hidden_state_actor_rejects_noncanonical_source_shape() -> None:
+    with pytest.raises(ValueError, match=r"requires source tokens \[256,4096\]"):
         LatentToOpenVLAHiddenStateActor(
-            source_token_count=5,
-            source_token_dim=4,
-            hidden_state_dim=4,
-            action_hidden_dim=4,
-            action_dim=2,
-            time_horizon=3,
-            bridge_hidden_dim=4,
-            num_bridge_layers=1,
-            num_bridge_heads=2,
-            vocab_size=32,
-            action_token_bins=8,
-            adapter_type="identity",
-            init_lm_head_ckpt=None,
-            head_type="oft_discrete_token",
+            source_token_count=56,
+            source_token_dim=1024,
         )
 
 
-def test_hidden_state_actor_decodes_backbone_latent_to_action_chunk() -> None:
+def test_hidden_state_actor_rejects_noncanonical_decoder_width() -> None:
+    with pytest.raises(ValueError, match="hidden_state_dim is fixed to 4096"):
+        LatentToOpenVLAHiddenStateActor(hidden_state_dim=1024)
+
+
+def test_hidden_state_actor_rejects_noncanonical_action_geometry() -> None:
+    with pytest.raises(ValueError, match=r"fixed to \[8,7\]"):
+        LatentToOpenVLAHiddenStateActor(time_horizon=4)
+
+
+def test_hidden_state_actor_rejects_flat_observation() -> None:
+    actor = _tiny_mainline_actor()
+
+    with pytest.raises(ValueError, match="flat observations are closed"):
+        actor.reference_action_chunk(torch.zeros(1, 256 * 4096))
+
+
+def test_hidden_state_actor_decodes_internal_action_slots() -> None:
     torch.manual_seed(0)
-    actor = _tiny_hidden_state_actor()
-    hidden = torch.randn(2, 5, 4)
-
-    chunk = actor.reference_action_chunk(hidden)
-    assert chunk.shape == (2, actor.time_horizon, actor.action_dim)
-
-
-def test_actor_decodes_backbone_latent_to_action_chunk() -> None:
-    torch.manual_seed(0)
-    actor = _tiny_actor()
-    # Tokenized backbone latent [B, source_token_count, source_token_dim].
-    hidden = torch.randn(2, 5, 4)
-
-    chunk = actor.reference_action_chunk(hidden)
-    assert chunk.shape == (2, actor.time_horizon, actor.action_dim)  # (2, 3, 2)
+    actor = _tiny_mainline_actor()
+    hidden = _input_tokens()
 
     action_chunk, log_prob, extra = actor(
         {"mode": "sample", "hidden": hidden, "return_chunk": True}
     )
-    assert action_chunk.shape == (2, 3, 2)
+
+    assert action_chunk.shape == (2, 8, 7)
     assert log_prob.shape == (2,)
-    assert extra["action_token_ids"].shape == (2, 3, 2)
+    assert extra["action_token_ids"].shape == (2, 8, 7)
+    assert extra["hidden_state"].shape == (2, 56, 4096)
 
 
-def test_actor_returns_token_level_logprobs_when_requested() -> None:
+def test_hidden_state_actor_token_level_logprobs_round_trip() -> None:
     torch.manual_seed(0)
-    actor = _tiny_actor()
-    actor.eval()
-    hidden = torch.randn(2, 5, 4)
+    actor = _tiny_mainline_actor().eval()
+    hidden = _input_tokens()
 
-    action_chunk, log_prob, extra = actor(
+    action_chunk, sampled_log_prob, extra = actor(
         {
             "mode": "sample",
             "hidden": hidden,
@@ -115,7 +98,7 @@ def test_actor_returns_token_level_logprobs_when_requested() -> None:
             "logprob_type": "token_level",
         }
     )
-    eval_log_prob, entropy, _ = actor(
+    evaluated_log_prob, entropy, _ = actor(
         {
             "mode": "evaluate",
             "hidden": hidden,
@@ -125,28 +108,7 @@ def test_actor_returns_token_level_logprobs_when_requested() -> None:
         }
     )
 
-    assert log_prob.shape == (2, 3, 2)
-    assert eval_log_prob.shape == (2, 3, 2)
-    assert entropy.shape == (2, 3, 2)
-    assert torch.allclose(eval_log_prob, log_prob)
-
-
-def test_actor_accepts_flat_and_tokenized_latent() -> None:
-    torch.manual_seed(0)
-    actor = _tiny_actor()
-    tokenized = torch.randn(2, 5, 4)
-    flat = tokenized.reshape(2, 5 * 4)  # [B, source_token_count * source_token_dim]
-
-    assert actor.reference_action_chunk(tokenized).shape == (2, 3, 2)
-    assert actor.reference_action_chunk(flat).shape == (2, 3, 2)
-
-
-def test_actor_is_discrete_with_no_l1_head() -> None:
-    actor = _tiny_actor()
-    # Discrete decode path: an OpenVLA LM head over the action-token vocabulary.
-    assert actor.head_type == "oft_discrete_token"
-    assert isinstance(actor.lm_head, nn.Linear)
-    # No L1 action head is constructed on this route.
-    assert not hasattr(actor, "action_head")
-    assert not hasattr(actor, "output_projection")
-
+    assert sampled_log_prob.shape == (2, 8, 7)
+    assert evaluated_log_prob.shape == (2, 8, 7)
+    assert entropy.shape == (2, 8, 7)
+    torch.testing.assert_close(evaluated_log_prob, sampled_log_prob)

@@ -55,7 +55,7 @@ def run_vectorized_rollout(
 
     ``pop_action(chunk, queue, action_steps) -> action`` refills ``queue`` from the
     decoded chunk and pops the next open-loop action. Defaults to
-    ``pop_open_loop_action`` (OFT collect: gripper-post-processed). The RynnVLA eval
+    ``pop_open_loop_action`` (OFT collect: gripper-post-processed). The VLA eval
     path injects a variant WITHOUT that gripper transform so the action fed to
     ``vec_env.step`` is byte-identical to the sequential eval (which does not
     gripper-process).

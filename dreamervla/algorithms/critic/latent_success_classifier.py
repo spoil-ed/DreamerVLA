@@ -1,4 +1,4 @@
-"""Transformer classifier over a window of DINO/VLA-hidden latent frames.
+"""Success classifier over OpenVLA-OFT input-token windows.
 
 Mirrors the VideoMAE classifier in upstream reward_model/videomae.py at the
 interface level — sliding W-frame window over a [T, latent_dim] sequence,
@@ -15,24 +15,24 @@ import torch.nn as nn
 
 @dataclass
 class LatentSuccessClassifierConfig:
-    latent_dim: int | None = None
+    latent_dim: int | None = 4096
     action_dim: int = 7
-    time_horizon: int = 5
-    token_dim: int = 1024
+    time_horizon: int = 8
+    token_dim: int = 4096
     window: int = 8
     hidden_dim: int = 1024
     num_layers: int = 8
     num_heads: int = 16
     mlp_ratio: float = 4.0
     dropout: float = 0.1
-    # 2 keeps the historical CE/softmax classifier. 1 matches WMPO's
+    # 2 keeps the CE/softmax classifier. 1 matches WMPO's
     # binary BCE reward-model head while preserving the token input path.
     output_dim: int = 2
     # head_type ∈ {transformer, linear, mlp2}. "transformer" is the original
     # 8-layer 137 M model. "linear" is a single nn.Linear(L*W, 2) — the
     # sklearn-LR-equivalent low-capacity head shown to hit F1≈0.87 on real
     # hidden (CLAUDE.md). "mlp2" is a 2-layer GELU MLP between the two.
-    head_type: str = "transformer"
+    head_type: str = "spatial_tf"
     # Time granularity at which the classifier consumes its window:
     #   "action": W consecutive env-step hiddens (the original LUMOS setup).
     #   "chunk":  W consecutive chunk-aggregated hiddens, where each chunk
@@ -41,18 +41,15 @@ class LatentSuccessClassifierConfig:
     #             (chunk-start frame), or "mean" (average over K frames).
     # Architecture is identical for both modes; only the data layer differs
     # (dataset stride at train time, video subsample at predict_success time).
-    granularity: str = "action"
-    chunk_size: int = 1
+    granularity: str = "chunk"
+    chunk_size: int = 8
     chunk_pool: str = "last"
-    # Tokenized frame windows [B,W,N,D] default to the historical flattened
-    # boundary. Scheme-B input-token / backbone latents can set "mean" to keep
-    # classifier size tied to token_dim instead of N*token_dim.
+    # Token pooling used by the configurable lightweight heads. The mainline
+    # spatial head preserves the full [B,W,256,4096] grid.
     token_pool: str = "flat"
-    # When the latent is stored FLAT ([B,W,N*token_dim], the online/replay form)
-    # and token_pool="mean", token_count lets forward() reshape flat -> tokens
-    # before pooling, so the input projection stays token_dim-sized instead of
-    # the (huge) N*token_dim flat dim. None keeps the historical flat behaviour.
-    token_count: int | None = None
+    # Token count is fixed to 256 for the mainline spatial head. Tiny non-spatial
+    # heads remain useful for unit-level architecture tests, not data adapters.
+    token_count: int | None = 256
     proprio_dim: int = 0
     proprio_emb_dim: int = 0
     num_proprio_repeat: int = 1
@@ -66,9 +63,8 @@ class LatentSuccessClassifierConfig:
 class LatentSuccessClassifier(nn.Module):
     """Binary success classifier over a window of latent frames.
 
-    Input shape contract: ``[B, W, latent_dim]`` where W == cfg.window. Tokenized
-    windows such as ``[B, W, N, token_dim]`` are accepted and flattened at this
-    boundary.
+    Mainline input shape contract: ``[B,W,256,4096]``. The spatial head keeps
+    that token grid intact; flat action-query/hidden-token inputs are rejected.
     Output: ``[B, output_dim]`` logits. ``output_dim=1`` is interpreted as a
     binary success logit trained with BCE.
 
@@ -82,6 +78,16 @@ class LatentSuccessClassifier(nn.Module):
         super().__init__()
         if cfg is None:
             cfg = LatentSuccessClassifierConfig(**kwargs)
+        configured_token_count = int(getattr(cfg, "token_count", 0) or 0)
+        configured_token_dim = int(getattr(cfg, "token_dim", 0) or 0)
+        configured_latent_dim = int(getattr(cfg, "latent_dim", 0) or 0)
+        if configured_latent_dim == 56 * 1024 or (
+            configured_token_count == 56 and configured_token_dim == 1024
+        ):
+            raise ValueError(
+                "the removed 56x1024 observation interface is closed; "
+                "use input_token_embedding [256,4096]"
+            )
         self.proprio_dim = int(getattr(cfg, "proprio_dim", 0) or 0)
         self.proprio_emb_dim = int(getattr(cfg, "proprio_emb_dim", 0) or 0)
         self.num_proprio_repeat = int(getattr(cfg, "num_proprio_repeat", 1) or 1)
@@ -113,7 +119,14 @@ class LatentSuccessClassifier(nn.Module):
         if cfg.latent_dim is None and str(getattr(cfg, "token_pool", "flat")) == "mean":
             cfg.latent_dim = int(self.state_token_dim)
         if cfg.latent_dim is None:
-            cfg.latent_dim = int(cfg.time_horizon) * int(cfg.action_dim) * int(cfg.token_dim)
+            raise ValueError(
+                "latent_dim must be explicit; inference from action slots is removed"
+            )
+        if int(cfg.latent_dim) == 56 * 1024:
+            raise ValueError(
+                "the removed 56x1024 observation interface is closed; "
+                "use input_token_embedding [256,4096]"
+            )
         if (
             self.supports_proprio_conditioning or self.supports_language_conditioning
         ) and int(cfg.latent_dim) != int(self.state_token_dim):
@@ -360,21 +373,11 @@ class LatentSuccessClassifier(nn.Module):
     def _vision_tokens(self, latent_window: torch.Tensor) -> torch.Tensor:
         if latent_window.ndim == 4:
             tokens = latent_window
-        elif (
-            latent_window.ndim == 3
-            and getattr(self.cfg, "token_count", None)
-            and int(latent_window.shape[-1]) == int(self.cfg.token_count) * int(self.cfg.token_dim)
-        ):
-            tokens = latent_window.reshape(
-                latent_window.shape[0],
-                latent_window.shape[1],
-                int(self.cfg.token_count),
-                int(self.cfg.token_dim),
-            )
         else:
             raise ValueError(
                 "head_type='spatial_tf' requires vision tokens shaped "
-                f"[B,W,N,{int(self.cfg.token_dim)}] or flat [B,W,N*D], "
+                f"[B,W,{int(self.cfg.token_count or 0)},{int(self.cfg.token_dim)}]; "
+                "flat observation inputs are not supported, "
                 f"got {tuple(latent_window.shape)}"
             )
         if int(tokens.shape[-1]) == self.obs_token_dim:
@@ -397,9 +400,9 @@ class LatentSuccessClassifier(nn.Module):
         bsz, window, token_count = int(tokens.shape[0]), int(tokens.shape[1]), int(tokens.shape[2])
         if window != int(self.cfg.window):
             raise ValueError(f"expected window={self.cfg.window}, got {window}")
-        if token_count > int(self.token_pos_embed.shape[2]):
+        if token_count != int(self.token_pos_embed.shape[2]):
             raise ValueError(
-                f"token_count {token_count} exceeds configured token_count "
+                f"token_count {token_count} does not match configured token_count "
                 f"{int(self.token_pos_embed.shape[2])}"
             )
         weight = self.vision_proj.weight

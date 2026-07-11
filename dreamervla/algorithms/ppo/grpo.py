@@ -41,7 +41,7 @@ def _slice_latent(value: Any, lo: int, hi: int) -> Any:
 def _entropy_coef(algorithm_cfg: Any) -> float:
     """The single PPO entropy coefficient, honored identically by every route.
 
-    Reads ``actent`` first, then ``entropy_coef`` (legacy alias), default 0.
+    Reads ``actent`` first, then ``entropy_coef`` (compatibility alias), default 0.
     """
     return float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
 

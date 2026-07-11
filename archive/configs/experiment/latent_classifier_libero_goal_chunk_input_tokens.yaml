@@ -1,4 +1,0 @@
-# @package _global_
-defaults:
-  - override /classifier: rynnvla_input_token_chunk
-  - _self_

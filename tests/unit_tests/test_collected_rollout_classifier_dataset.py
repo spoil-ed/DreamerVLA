@@ -19,28 +19,8 @@ SEQ_LEN = 4   # positive window at start=(T-SEQ_LEN), negative windows at 0..(T-
 IMAGE_H = 64
 IMAGE_W = 64
 ACTION_DIM = 7
-HIDDEN_DIM = 229376   # 229376 = 56 * 4096; must match what the base class expects
+INPUT_TOKEN_SHAPE = (256, 4096)
 STATE_DIM = 79
-
-PREPROCESS_CONFIG = {
-    "action_dim": 7,
-    "action_head_type": "oft_l1_regression",
-    "center_crop": True,
-    "chunk_size": 4,
-    "hidden_key": "obs_embedding",
-    "history": 2,
-    "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
-    "include_state": True,
-    "model_path": "/fake/model/path",
-    "num_images_in_input": 4,
-    "obs_hidden_source": "action_query",
-    "output_dtype": "float16",
-    "prompt_style": "vla_policy",
-    "resolution": 256,
-    "rotate_images_180": True,
-    "time_horizon": 8,
-    "token_dim": 4096,
-}
 
 
 def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
@@ -62,7 +42,9 @@ def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
             "gripper_states": rng.standard_normal(2),
             "joint_states": rng.standard_normal(7),
         },
-        "obs_embedding": rng.standard_normal(HIDDEN_DIM).astype(np.float16),
+        "obs_embedding": np.broadcast_to(
+            np.asarray(t, dtype=np.float16), INPUT_TOKEN_SHAPE
+        ),
     }
 
 
@@ -76,7 +58,7 @@ def _make_episode(success: bool) -> list[dict]:
 
 
 @pytest.fixture()
-def dump(tmp_path: Path):
+def dump(tmp_path: Path, input_token_preprocess_config):
     """Write a two-demo dump (one success, one failure) and return dirs."""
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 
@@ -89,8 +71,16 @@ def dump(tmp_path: Path):
         hidden_dir=hidden_dir,
         shard_name=shard_name,
     )
-    writer.write_demo(index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG)
-    writer.write_demo(index=1, steps=_make_episode(success=False), preprocess_config=PREPROCESS_CONFIG)
+    writer.write_demo(
+        index=0,
+        steps=_make_episode(success=True),
+        preprocess_config=input_token_preprocess_config,
+    )
+    writer.write_demo(
+        index=1,
+        steps=_make_episode(success=False),
+        preprocess_config=input_token_preprocess_config,
+    )
     writer.close()
 
     return {"reward_dir": reward_dir, "hidden_dir": hidden_dir}
@@ -108,14 +98,14 @@ def dataset(dump):
         hidden_dir=str(dump["hidden_dir"]),
         sequence_length=SEQ_LEN,
         image_size=64,
-        expected_model_path="/fake/model/path",
-        expected_time_horizon=8,
-        expected_action_head_type="oft_l1_regression",
-        expected_obs_hidden_source="action_query",
-        expected_prompt_style="vla_policy",
-        expected_history=2,
-        expected_include_state=True,
-        expected_rotate_images_180=True,
+        expected_model_path=None,
+        expected_time_horizon=None,
+        expected_action_head_type="oft_discrete_token",
+        expected_obs_hidden_source="input_token_embedding",
+        expected_prompt_style=None,
+        expected_history=1,
+        expected_include_state=False,
+        expected_rotate_images_180=None,
     )
 
 
@@ -138,7 +128,7 @@ def test_dataset_nonempty(dataset):
 def test_item_has_obs_embedding(dataset):
     item = dataset[0]
     assert "obs_embedding" in item
-    assert item["obs_embedding"].shape == (SEQ_LEN, HIDDEN_DIM)
+    assert item["obs_embedding"].shape == (SEQ_LEN, *INPUT_TOKEN_SHAPE)
 
 
 def test_item_has_success_float(dataset):

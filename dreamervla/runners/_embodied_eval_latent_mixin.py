@@ -1,9 +1,4 @@
-"""VLA-hidden encoding + dreamer-latent action/observation helpers.
-
-Closed cohesive group extracted from embodied_eval_runner.py (P3 god-file split,
-mixin route): inherited by the runner, MRO resolves every self-call unchanged.
-Behaviour-preserving.
-"""
+"""OpenVLA input-token and Dreamer latent evaluation helpers."""
 
 from __future__ import annotations
 
@@ -17,192 +12,6 @@ from PIL import Image
 
 
 class EmbodiedEvalLatentMixin:
-    def _encode_hidden_from_tokenized(
-        self, input_ids_list: list[list[int]]
-    ) -> torch.Tensor:
-        labels_list = [[-100] * len(seq) for seq in input_ids_list]
-        lengths = [len(seq) for seq in input_ids_list]
-        with torch.no_grad():
-            _, _, _, hidden_states, _, _, _ = self.encoder.backbone(
-                input_ids=input_ids_list,
-                labels=labels_list,
-                training=True,
-                output_hidden_states=True,
-                att_mask=False,
-            )
-        attention_mask = torch.zeros(
-            hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device
-        )
-        for idx, length in enumerate(lengths):
-            if length > 0:
-                attention_mask[idx, :length] = True
-        weights = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
-        return (
-            ((hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0))
-            .float()
-            .detach()
-        )
-
-    def _encode_hidden_sequence_from_tokenized(
-        self,
-        input_ids_list: list[list[int]],
-        target_token_id: int | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if target_token_id is None:
-            target_token_id = self._action_token_id
-        labels_list = [[-100] * len(seq) for seq in input_ids_list]
-        lengths = [len(seq) for seq in input_ids_list]
-        with torch.no_grad():
-            _, _, _, hidden_states, _, _, _ = self.encoder.backbone(
-                input_ids=input_ids_list,
-                labels=labels_list,
-                training=True,
-                output_hidden_states=True,
-                att_mask=False,
-            )
-
-        max_len = int(hidden_states.shape[1])
-        input_rows = []
-        mask_rows = []
-        for seq, length in zip(input_ids_list, lengths, strict=True):
-            # Append the action trigger as a marker.  The actor consumes all
-            # hidden states before this marker, matching native ActionHead.
-            row = [int(tok) for tok in seq[:max_len]] + [int(target_token_id)]
-            mask = [1] * min(int(length), max_len) + [1]
-            target_len = max_len + 1
-            if len(row) < target_len:
-                row.extend([0] * (target_len - len(row)))
-                mask.extend([0] * (target_len - len(mask)))
-            input_rows.append(row[:target_len])
-            mask_rows.append(mask[:target_len])
-        input_ids = torch.tensor(input_rows, dtype=torch.long, device=self.device)
-        attention_mask = torch.tensor(mask_rows, dtype=torch.bool, device=self.device)
-        return hidden_states.float().detach(), input_ids, attention_mask
-
-    def _obs_embedding_for_wm(self, input_ids_list: list[list[int]]) -> torch.Tensor:
-        if self._wm_io_mode() == "token":
-            return self._extract_image_bpe_ids(input_ids_list)
-        if self._use_action_query_obs_hidden():
-            hidden_states, input_ids, attention_mask = (
-                self._encode_hidden_sequence_from_tokenized(input_ids_list)
-            )
-            action_hidden = self.encoder.extract_action_hidden(
-                hidden_states=hidden_states,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                target_token_id=self._action_token_id,
-                eval=True,
-            )
-            return action_hidden.float().detach()
-        return self._encode_hidden_from_tokenized(input_ids_list)
-
-    def _use_action_query_obs_hidden(self) -> bool:
-        source = str(
-            OmegaConf.select(self.cfg, "eval.obs_hidden_source", default="auto")
-        ).lower()
-        if source not in {"auto", "pooled", "action_query"}:
-            raise ValueError(
-                "eval.obs_hidden_source must be one of: auto, pooled, action_query"
-            )
-        if source == "action_query":
-            return True
-        if source == "pooled":
-            return False
-        return str(
-            OmegaConf.select(self.cfg, "encoder.action_head_type", default="legacy")
-        ).lower() == "legacy"
-
-    def _dreamer_wm_observation_input_ids(
-        self,
-        item_processor: Any,
-        frame_history: list[tuple[Image.Image, Image.Image]],
-        state: np.ndarray,
-        task_description: str,
-    ) -> list[int]:
-        img_c: list[Image.Image] = []
-        for third_pil, wrist_pil in frame_history:
-            img_c.extend([third_pil, wrist_pil])
-        prompt_style = str(
-            OmegaConf.select(
-                self.cfg, "eval.dreamer_wm_prompt_style", default="vla_policy"
-            )
-        ).lower()
-        if prompt_style != "vla_policy":
-            raise ValueError("eval.dreamer_wm_prompt_style must be 'vla_policy'")
-        if not bool(
-            OmegaConf.select(self.cfg, "eval.dreamer_wm_include_state", default=True)
-        ):
-            raise ValueError("eval.dreamer_wm_include_state must be true")
-        if (
-            int(OmegaConf.select(self.cfg, "eval.dreamer_wm_history_length", default=2))
-            != 2
-        ):
-            raise ValueError(
-                "eval.dreamer_wm_history_length must be 2 to match the existing sidecar"
-            )
-
-        human_val = (
-            f"Finish the task: {task_description}."
-            + "<|state|>"
-            + "<|image|>" * len(img_c)
-        )
-        conv = {
-            "conversations": [{"from": "human", "value": human_val}],
-            "image": img_c,
-            "state": [state],
-            "action": [],
-        }
-        tokens = item_processor.process_item(conv, training_mode=False)
-        if isinstance(tokens, tuple):
-            tokens = tokens[0]
-        return [int(tok) for tok in tokens]
-
-    def _dreamer_wm_frame_history(
-        self,
-        frame_history: list[tuple[Image.Image, Image.Image]],
-    ) -> list[tuple[Image.Image, Image.Image]]:
-        """Return the image history used for Dreamer WM encoding.
-
-        Pure VLA rollout uses rotated history frames because its SFT data was
-        saved as rotated PNGs.  New action-hidden WM sidecars can now use the
-        same rotated two-step policy history; older sidecars can still request
-        raw single-frame inputs through eval.dreamer_wm_* overrides.
-        """
-        if not frame_history:
-            return frame_history
-
-        history_cfg = OmegaConf.select(
-            self.cfg, "eval.dreamer_wm_history_length", default=None
-        )
-        if history_cfg is None:
-            history_len = len(frame_history)
-        else:
-            history_len = max(1, int(history_cfg))
-        selected = list(frame_history[-history_len:])
-
-        rotate = bool(
-            OmegaConf.select(self.cfg, "eval.dreamer_wm_rotate_images", default=False)
-        )
-        if rotate:
-            return selected
-
-        raw_obs = getattr(self, "_libero_current_raw_obs", None)
-        if history_len == 1 and isinstance(raw_obs, dict):
-            if "agentview_image" in raw_obs and "robot0_eye_in_hand_image" in raw_obs:
-                third = np.asarray(raw_obs["agentview_image"], dtype=np.uint8)
-                wrist = np.asarray(raw_obs["robot0_eye_in_hand_image"], dtype=np.uint8)
-                return [(Image.fromarray(third), Image.fromarray(wrist))]
-
-        # `frame_history` entries were produced by get_libero_image(), which
-        # rotates env RGB by 180 degrees. Rotate them back to match HDF5 sidecar
-        # preprocessing when raw simulator observations are unavailable.
-        restored: list[tuple[Image.Image, Image.Image]] = []
-        for third_pil, wrist_pil in selected:
-            third = np.asarray(third_pil, dtype=np.uint8)[::-1, ::-1].copy()
-            wrist = np.asarray(wrist_pil, dtype=np.uint8)[::-1, ::-1].copy()
-            restored.append((Image.fromarray(third), Image.fromarray(wrist)))
-        return restored
-
     def _pixel_obs_for_wm(
         self, frame_history: list[tuple[Image.Image, Image.Image]]
     ) -> torch.Tensor:
@@ -280,14 +89,10 @@ class EmbodiedEvalLatentMixin:
             out["proprio"] = proprio
             return out, None
 
-        wm_frame_history = self._dreamer_wm_frame_history(frame_history)
-        input_ids = self._dreamer_wm_observation_input_ids(
-            item_processor=item_processor,
-            frame_history=wm_frame_history,
-            state=state,
-            task_description=task_description,
+        raise RuntimeError(
+            "token world-model evaluation requires the OpenVLA-OFT extractor; "
+            "alternate observation encoders are closed"
         )
-        return self._obs_embedding_for_wm([input_ids]), input_ids
 
     @staticmethod
     def _dreamer_oft_obs_from_libero_raw(
@@ -467,8 +272,8 @@ class EmbodiedEvalLatentMixin:
             context=getattr(self, "_libero_current_eval_context", None),
             source="online_latent",
         )
-        live_trace_hidden = self._action_hidden_tokens_for_trace(live_hidden_tensor)
-        recon_trace_hidden = self._action_hidden_tokens_for_trace(
+        live_trace_hidden = self._input_token_grid_for_trace(live_hidden_tensor)
+        recon_trace_hidden = self._input_token_grid_for_trace(
             feat if "feat" in locals() else None
         )
         self._write_policy_trace(
@@ -479,8 +284,8 @@ class EmbodiedEvalLatentMixin:
             ),
             action_chunk_raw=action_chunk_np[:max_actions],
             action_chunk_env=np.stack(env_actions, axis=0),
-            live_action_hidden=live_trace_hidden,
-            recon_action_hidden=recon_trace_hidden,
+            live_input_token_grid=live_trace_hidden,
+            recon_input_token_grid=recon_trace_hidden,
             obs_embedding=live_hidden,
             actor_input=feat if "feat" in locals() else None,
             latent=latent,

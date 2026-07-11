@@ -20,7 +20,7 @@ def test_libero_env_layout_matches_rlinf_style() -> None:
         "venv.py",
     }
 
-    deprecated_top_level = {
+    blocked_top_level = {
         "image_utils.py",
         "libero_env.py",
         "libero_chunk_env.py",
@@ -33,7 +33,7 @@ def test_libero_env_layout_matches_rlinf_style() -> None:
     }
     present = {path.name for path in env_dir.glob("*.py")}
 
-    assert deprecated_top_level.isdisjoint(present)
+    assert blocked_top_level.isdisjoint(present)
 
 
 def test_libero_env_exposes_chunk_as_method_not_env_type() -> None:

@@ -4,7 +4,6 @@ defaults:
   - _self_
 
 _target_: dreamervla.runners.OnlineCotrainPipelineRunner
-latent_type: backbone_latent
 seed: 7
 
 hydra:
@@ -17,8 +16,8 @@ trainer:
   debug: false
 
 offline_warmup:
-  data_dir: ${task.openvla_oft.hdf5_reward_dir}
-  hidden_dir: ${task.openvla_oft.input_token_hidden_dir}
+  data_dir: ${task.collected_reward_dir}
+  hidden_dir: ${task.collected_input_token_dir}
   task_id: null
   infer_task_id_from_shard: true
   max_episodes_per_task: null
@@ -71,8 +70,6 @@ init:
 encoder:
   _target_: dreamervla.models.embodiment.OpenVLAOFTPolicy
   model_path: ${task.openvla_oft.ckpt_path}
-  component_ckpt_dir: ${task.openvla_oft.component_ckpt_dir}
-  resume_step: ${task.openvla_oft.resume_step}
   torch_dtype: bf16
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
   use_lora: false

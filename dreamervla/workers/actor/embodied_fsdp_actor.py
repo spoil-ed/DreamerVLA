@@ -827,7 +827,7 @@ def _rollout_filter_mask(
     ``filter_rewards`` (RLinf ``fsdp_actor_worker.filter_rewards``): drop whole
     groups whose ``reward_coef``-scaled mean summed reward falls outside
     ``[rewards_lower_bound, rewards_upper_bound]`` (all-fail / all-success
-    degenerate groups). Falls back to the legacy zero-variance filter, then to
+    degenerate groups). Falls back to the zero-variance filter, then to
     keeping everything.
     """
     if bool(algorithm_cfg.get("filter_rewards", False)):

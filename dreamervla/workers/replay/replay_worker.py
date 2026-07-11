@@ -71,6 +71,8 @@ class ReplayWorker(Worker):
         chunk_size: int,
         chunk_pool: str,
         early_neg_stride: int,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
     ) -> dict[str, Any]:
         return self._replay().sample_classifier_windows(
             int(batch_size),
@@ -78,6 +80,8 @@ class ReplayWorker(Worker):
             chunk_size=int(chunk_size),
             chunk_pool=str(chunk_pool),
             early_neg_stride=int(early_neg_stride),
+            sampling_protocol=str(sampling_protocol),
+            balance_batches=bool(balance_batches),
         )
 
     def classifier_window_count(self, *, window: int, chunk_size: int) -> int:

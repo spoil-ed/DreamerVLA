@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 
 def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
@@ -16,7 +17,7 @@ def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
             self,
             policy,
             unnorm_key,
-            obs_hidden_source="action_query",
+            obs_hidden_source="input_token_embedding",
             image_keys=None,
         ) -> None:
             self.policy = policy
@@ -128,6 +129,60 @@ def test_oft_rollout_bundle_cpu_device_requests_cpu_policy_load(monkeypatch) -> 
     assert captured["device_ref"] == "cpu"
 
 
+@pytest.mark.parametrize(
+    ("policy_cfg", "image_keys", "history", "obs_hidden_source", "match"),
+    [
+        (
+            {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 2},
+            ["agentview_rgb", "eye_in_hand_rgb"],
+            1,
+            "input_token_embedding",
+            "requires num_images_in_input=1",
+        ),
+        (
+            {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 1},
+            ["agentview_rgb"],
+            2,
+            "input_token_embedding",
+            "history=1",
+        ),
+        (
+            {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 1},
+            ["agentview_rgb"],
+            1,
+            "hidden_token",
+            "obs_hidden_source='input_token_embedding'",
+        ),
+    ],
+)
+def test_oft_rollout_bundle_rejects_non_mainline_contract_before_loading(
+    monkeypatch,
+    policy_cfg,
+    image_keys,
+    history,
+    obs_hidden_source,
+    match,
+) -> None:
+    import dreamervla.runners.oft_collect_common as common
+    from dreamervla.workers.inference import oft_rollout
+
+    monkeypatch.setattr(
+        common,
+        "load_policy",
+        lambda *_args, **_kwargs: pytest.fail("invalid contract loaded a policy"),
+    )
+
+    with pytest.raises(ValueError, match=match):
+        oft_rollout.OFTRolloutBundle(
+            policy_cfg=policy_cfg,
+            unnorm_key="libero_goal_no_noops",
+            image_keys=image_keys,
+            history=history,
+            obs_hidden_source=obs_hidden_source,
+            device="cpu",
+        )
+
+
 def test_oft_rollout_bundle_validates_detected_policy_mode(monkeypatch) -> None:
     import pytest
 
@@ -144,11 +199,11 @@ def test_oft_rollout_bundle_validates_detected_policy_mode(monkeypatch) -> None:
 
     monkeypatch.setattr(common, "load_policy", _load_policy)
 
-    with pytest.raises(ValueError, match="Detected OFT head"):
+    with pytest.raises(ValueError, match="L1/action-query checkpoints are closed"):
         oft_rollout.OFTRolloutBundle(
             policy_cfg={
                 "model_path": "x",
-                "policy_mode": "auto",
+                "policy_mode": "discrete",
                 "num_images_in_input": 1,
             },
             unnorm_key="libero_goal_no_noops",

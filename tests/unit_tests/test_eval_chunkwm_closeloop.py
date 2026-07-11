@@ -20,7 +20,7 @@ def _tiny_wm_cfg() -> dict:
         "token_dim": 4,
         "time_horizon": 1,
         "latent_stage": "query_after",
-        "latent_source": "tiny action-query hidden",
+        "latent_source": "tiny input-token fixture",
         "action_emb_dim": 2,
         "num_action_repeat": 1,
         "model_dim": 6,
