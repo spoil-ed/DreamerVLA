@@ -34,12 +34,32 @@ fi
 PYTHON_BIN="${PYTHON:-python}"
 NGPU="${NGPU:-8}"
 MASTER_PORT="${MASTER_PORT:-29500}"
+WM_RESUME="${WM_RESUME:-${RESUME:-false}}"
+if [[ "${WM_RESUME}" == "true" && -z "${RUN_ROOT:-}" ]]; then
+  echo "[wm-full-dataset] WM_RESUME=true requires RUN_ROOT=/path/to/existing/run" >&2
+  exit 2
+fi
 export RUN_ROOT="${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/wm_full_dataset/$(date +%Y%m%d_%H%M%S)}"
+WARMUP_CHECKPOINT_EVERY="${WARMUP_CHECKPOINT_EVERY:-500}"
+WARMUP_TOPK_K="${WARMUP_TOPK_K:-3}"
+if [[ "${WM_RESUME}" == "true" ]]; then
+  _WM_COTRAIN_DIR="${RUN_ROOT}/cotrain"
+  _WM_PROGRESS_GLOB="${_WM_COTRAIN_DIR}/ckpt/warmup_progress/wm_step_*.ckpt"
+  if [[ ! -f "${_WM_COTRAIN_DIR}/ckpt/wm_warmup.ckpt" \
+    && ! -d "${_WM_COTRAIN_DIR}/ckpt/wm_warmup_hf" \
+    && -z "$(compgen -G "${_WM_PROGRESS_GLOB}")" ]]; then
+    echo "[wm-full-dataset] no WM warmup checkpoint/progress under ${_WM_COTRAIN_DIR}/ckpt" >&2
+    exit 2
+  fi
+fi
 
 echo "[wm-full-dataset] GPUs      = ${CUDA_VISIBLE_DEVICES:-all}" >&2
 echo "[wm-full-dataset] NGPU      = ${NGPU}" >&2
 echo "[wm-full-dataset] EXPERIMENT= wm_full_dataset_train" >&2
 echo "[wm-full-dataset] RUN_ROOT  = ${RUN_ROOT}" >&2
+echo "[wm-full-dataset] RESUME    = ${WM_RESUME}" >&2
+echo "[wm-full-dataset] CKPT_EVERY= ${WARMUP_CHECKPOINT_EVERY}" >&2
+echo "[wm-full-dataset] TOPK_K    = ${WARMUP_TOPK_K}" >&2
 
 "${PYTHON_BIN}" -m torch.distributed.run \
   --standalone \
@@ -48,4 +68,7 @@ echo "[wm-full-dataset] RUN_ROOT  = ${RUN_ROOT}" >&2
   --master_port="${MASTER_PORT}" \
   -m dreamervla.train \
   experiment=wm_full_dataset_train \
+  training.resume="${WM_RESUME}" \
+  training.warmup_checkpoint_every="${WARMUP_CHECKPOINT_EVERY}" \
+  training.warmup_topk_k="${WARMUP_TOPK_K}" \
   "$@"

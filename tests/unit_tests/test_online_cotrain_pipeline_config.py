@@ -81,6 +81,32 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.world_model.proprio_reconstruction_loss_scale == 0.0
 
 
+def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cls_cfg = compose(
+            config_name="train",
+            overrides=["experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1"],
+        )
+        wm_cfg = compose(
+            config_name="train",
+            overrides=["experiment=wm_full_dataset_train"],
+        )
+
+    assert cls_cfg.task.name == wm_cfg.task.name == "OpenVLA_Onetraj_LIBERO"
+    assert cls_cfg.data.success_dir_hidden == wm_cfg.offline_warmup.hidden_dir
+    assert cls_cfg.data.success_dir_raw == cls_cfg.task.openvla_oft.hdf5_dir
+    assert wm_cfg.offline_warmup.data_dir == cls_cfg.task.openvla_oft.hdf5_reward_dir
+    assert wm_cfg.offline_warmup.data_dir == f"{cls_cfg.data.success_dir_raw}_remaining_reward"
+
+
 def test_validate_cfg_warmup(tmp_path):
     import pytest
     from omegaconf import OmegaConf

@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from inspect import signature
 from pathlib import Path
@@ -166,6 +167,51 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         else:
             checkpoint_fn(int(step), metrics)
 
+    def _wm_prefetch_workers(self) -> int:
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_prefetch_workers", default=0) or 0
+        return max(0, int(value))
+
+    def _sample_wm_pretrain_batch(
+        self,
+        replay,
+        batch_size: int,
+        *,
+        profile: bool,
+    ) -> tuple[Any | None, dict[str, float] | None]:
+        profile_timings: dict[str, float] | None = {} if profile else None
+        profile_stage_start = time.perf_counter()
+        replay_batch = replay.sample(int(batch_size), include_images=False)
+        if profile_timings is not None:
+            now = time.perf_counter()
+            profile_timings["sample"] = now - profile_stage_start
+            profile_stage_start = now
+        wm_batch = self._build_wm_pretrain_batch(replay_batch)
+        if profile_timings is not None:
+            now = time.perf_counter()
+            profile_timings["batch_build"] = now - profile_stage_start
+        return wm_batch, profile_timings
+
+    def _run_wm_warmup_batch(
+        self,
+        wm_batch: Any,
+        *,
+        optim_cfg: Any,
+        profile_timings: dict[str, float] | None,
+    ) -> float:
+        m = world_model_pretrain_step(
+            policy=self.policy,
+            world_model=self.world_model,
+            optimizer=self.world_model_optimizer,
+            batch=wm_batch,
+            device=self.device,
+            optim_cfg=optim_cfg,
+            profile_timings=profile_timings,
+        )
+        return float(m.get("loss", 0.0))
+
     def _offline_warmup_wm(
         self,
         replay,
@@ -180,29 +226,25 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         self.world_model.train()
         last = 0.0
         profile_steps = self._wm_profile_steps()
-        for i in range(int(start_step), int(steps)):
-            do_profile = profile_steps < 0 or (i - int(start_step)) < profile_steps
-            profile_timings: dict[str, float] | None = {} if do_profile else None
+        start_i = int(start_step)
+        total_steps = int(steps)
+        prefetch_workers = self._wm_prefetch_workers()
+
+        def should_profile(step_idx: int) -> bool:
+            return profile_steps < 0 or (int(step_idx) - start_i) < profile_steps
+
+        def consume_batch(
+            i: int,
+            wm_batch: Any | None,
+            profile_timings: dict[str, float] | None,
+        ) -> None:
+            nonlocal last
             profile_total_start = time.perf_counter()
-            profile_stage_start = profile_total_start
-            replay_batch = replay.sample(batch_size, include_images=False)
-            if profile_timings is not None:
-                now = time.perf_counter()
-                profile_timings["sample"] = now - profile_stage_start
-                profile_stage_start = now
-            wm_batch = self._build_wm_pretrain_batch(replay_batch)
-            if profile_timings is not None:
-                now = time.perf_counter()
-                profile_timings["batch_build"] = now - profile_stage_start
             if wm_batch is None:
-                self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
-                continue
-            m = world_model_pretrain_step(
-                policy=self.policy,
-                world_model=self.world_model,
-                optimizer=self.world_model_optimizer,
-                batch=wm_batch,
-                device=self.device,
+                self.console_progress(i + 1, total_steps, "wm-warmup", unit="update")
+                return
+            last = self._run_wm_warmup_batch(
+                wm_batch,
                 optim_cfg=optim_cfg,
                 profile_timings=profile_timings,
             )
@@ -211,26 +253,53 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 self._record_wm_profile(
                     profile_timings,
                     step=i,
-                    total_steps=int(steps),
+                    total_steps=total_steps,
                 )
-            last = float(m.get("loss", 0.0))
             if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(
                     {"train/wm_warmup_loss": last},
                     step=i,
                 )
                 self._print_pipeline_event(
-                    f"[pipeline][wm-warmup] step={i}/{steps} loss={last:.4f}"
+                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
                 )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
-                total=int(steps),
+                total=total_steps,
                 every=checkpoint_every,
                 checkpoint_fn=checkpoint_fn,
                 metrics={"loss": last},
                 label="wm-warmup",
             )
-            self.console_progress(i + 1, int(steps), "wm-warmup", unit="update")
+            self.console_progress(i + 1, total_steps, "wm-warmup", unit="update")
+
+        if prefetch_workers > 0 and start_i < total_steps:
+            with ThreadPoolExecutor(max_workers=prefetch_workers) as executor:
+                future = executor.submit(
+                    self._sample_wm_pretrain_batch,
+                    replay,
+                    int(batch_size),
+                    profile=should_profile(start_i),
+                )
+                for i in range(start_i, total_steps):
+                    wm_batch, profile_timings = future.result()
+                    if i + 1 < total_steps:
+                        future = executor.submit(
+                            self._sample_wm_pretrain_batch,
+                            replay,
+                            int(batch_size),
+                            profile=should_profile(i + 1),
+                        )
+                    consume_batch(i, wm_batch, profile_timings)
+            return last
+
+        for i in range(start_i, total_steps):
+            wm_batch, profile_timings = self._sample_wm_pretrain_batch(
+                replay,
+                int(batch_size),
+                profile=should_profile(i),
+            )
+            consume_batch(i, wm_batch, profile_timings)
         return last
 
     def _offline_warmup_classifier(
@@ -485,17 +554,25 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         epoch_count = int(replay_epochs)
         if epoch_count <= 0:
             return int(wm_steps), int(cls_steps)
-        resolved_wm = cls._steps_for_replay_epochs(
-            replay,
-            replay_epochs=epoch_count,
-            batch_size=int(wm_batch_size),
+        resolved_wm = (
+            cls._steps_for_replay_epochs(
+                replay,
+                replay_epochs=epoch_count,
+                batch_size=int(wm_batch_size),
+            )
+            if int(wm_steps) > 0
+            else 0
         )
-        resolved_cls = cls._steps_for_classifier_replay_epochs(
-            replay,
-            replay_epochs=epoch_count,
-            batch_size=int(cls_batch_size),
-            window=int(cls_window),
-            chunk_size=int(cls_chunk_size),
+        resolved_cls = (
+            cls._steps_for_classifier_replay_epochs(
+                replay,
+                replay_epochs=epoch_count,
+                batch_size=int(cls_batch_size),
+                window=int(cls_window),
+                chunk_size=int(cls_chunk_size),
+            )
+            if int(cls_steps) > 0
+            else 0
         )
         max_steps = int(replay_max_steps)
         if max_steps > 0:

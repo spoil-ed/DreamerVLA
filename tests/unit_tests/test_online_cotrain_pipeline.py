@@ -925,6 +925,75 @@ def test_offline_warmup_classifier_progress_uses_rank_zero_event_printer(monkeyp
     assert "[pipeline][cls-warmup]" not in capsys.readouterr().out
 
 
+def test_offline_warmup_wm_uses_configured_prefetch_workers(monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runners.online_cotrain_pipeline_runner as mod
+
+    executor_workers = []
+    submitted = []
+    seen_batches = []
+
+    class FakeFuture:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self):
+            return self.value
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            executor_workers.append(int(max_workers))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            submitted.append((fn.__name__, args, kwargs))
+            return FakeFuture(fn(*args, **kwargs))
+
+    monkeypatch.setattr(mod, "ThreadPoolExecutor", FakeExecutor)
+
+    class Replay:
+        def __init__(self):
+            self.calls = 0
+
+        def sample(self, batch_size, **kwargs):
+            self.calls += 1
+            return {
+                "obs_embedding": torch.full((2, 3, 4), float(self.calls)),
+                "actions": torch.zeros(2, 3, 7),
+                "rewards": torch.zeros(2, 3),
+                "dones": torch.zeros(2, 3),
+                "is_first": torch.zeros(2, 3, dtype=torch.bool),
+            }
+
+    def fake_wm_step(**kw):
+        seen_batches.append(float(kw["batch"]["obs_embedding"][0, 0, 0]))
+        return {"loss": 0.1}
+
+    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
+
+    runner = mod.OnlineCotrainPipelineRunner.__new__(mod.OnlineCotrainPipelineRunner)
+    runner.cfg = OmegaConf.create({"training": {"wm_prefetch_workers": 2}})
+    runner.device = torch.device("cpu")
+    runner.world_model = torch.nn.Module()
+    runner.world_model_optimizer = object()
+    runner.policy = object()
+    runner._build_wm_pretrain_batch = lambda b: b
+    runner._log_replay_warmup_metrics = lambda *_args, **_kwargs: None
+    runner.console_progress = lambda *_args, **_kwargs: None
+
+    runner._offline_warmup_wm(Replay(), steps=3, batch_size=2, optim_cfg=None)
+
+    assert executor_workers == [2]
+    assert [item[0] for item in submitted] == ["_sample_wm_pretrain_batch"] * 3
+    assert seen_batches == [1.0, 2.0, 3.0]
+
+
 def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monkeypatch):
     import dreamervla.runners.online_cotrain_pipeline_runner as mod
 
@@ -1022,6 +1091,24 @@ def test_warmup_replay_epochs_use_classifier_window_count_for_classifier(tmp_pat
         cls_window=2,
         cls_chunk_size=2,
     ) == (4, 2)
+
+
+def test_warmup_replay_epochs_keep_explicit_zero_classifier_disabled(tmp_path):
+    from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+
+    replay = _seeded_replay(tmp_path, seq_len=4)
+
+    assert OnlineCotrainPipelineRunner._resolve_warmup_steps(
+        replay,
+        wm_steps=1200,
+        cls_steps=0,
+        replay_epochs=2,
+        replay_max_steps=0,
+        wm_batch_size=6,
+        cls_batch_size=1,
+        cls_window=2,
+        cls_chunk_size=2,
+    ) == (4, 0)
 
 
 def test_warmup_replay_epochs_cap_to_configured_budget(tmp_path):
@@ -1241,7 +1328,7 @@ class _FakeDistributed:
     world_size = 1
     is_main_process = True
 
-    def wrap_trainable_module(self, module):
+    def wrap_trainable_module(self, module, **_kwargs):
         return module
 
 
@@ -1339,8 +1426,10 @@ def _make_orchestration_runner(
         data_dir,
         hidden_dir,
         default_task_id=None,
+        infer_task_id_from_shard=False,
         max_episodes_per_task=None,
     ):
+        del data_dir, hidden_dir, default_task_id, infer_task_id_from_shard
         calls.append("seed")
         if seed_capture is not None:
             seed_capture["capacity_mode"] = replay.capacity_mode

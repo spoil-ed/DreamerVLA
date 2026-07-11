@@ -75,6 +75,32 @@ def test_full_dataset_wm_script_embeds_h100_runtime_defaults() -> None:
         assert expected in text
 
 
+def test_cls_and_full_dataset_wm_scripts_expose_resume_and_periodic_ckpts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    experiments_dir = root / "scripts" / "experiments"
+
+    cls_text = (experiments_dir / "cls_01_train.sh").read_text(encoding="utf-8")
+    assert 'CLS_RESUME="${CLS_RESUME:-${RESUME:-false}}"' in cls_text
+    assert 'export CLS_RUN_ROOT="${CLS_RUN_ROOT:-' in cls_text
+    assert 'CLS_CKPT_EVERY="${CLS_CKPT_EVERY:-250}"' in cls_text
+    assert 'training.out_dir="${CLS_RUN_ROOT}"' in cls_text
+    assert 'training.resume="${CLS_RESUME}"' in cls_text
+    assert '++training.resume_dir="${CLS_RESUME_DIR}"' in cls_text
+    assert 'training.ckpt_every="${CLS_CKPT_EVERY}"' in cls_text
+    assert "checkpoints/latest.ckpt" in cls_text
+    assert "ckpt/latest.ckpt" in cls_text
+
+    wm_text = (experiments_dir / "wm_full_dataset_train.sh").read_text(encoding="utf-8")
+    assert 'WM_RESUME="${WM_RESUME:-${RESUME:-false}}"' in wm_text
+    assert 'WARMUP_CHECKPOINT_EVERY="${WARMUP_CHECKPOINT_EVERY:-500}"' in wm_text
+    assert 'WARMUP_TOPK_K="${WARMUP_TOPK_K:-3}"' in wm_text
+    assert 'training.resume="${WM_RESUME}"' in wm_text
+    assert 'training.warmup_checkpoint_every="${WARMUP_CHECKPOINT_EVERY}"' in wm_text
+    assert 'training.warmup_topk_k="${WARMUP_TOPK_K}"' in wm_text
+    assert "wm_warmup.ckpt" in wm_text
+    assert "wm_step_*.ckpt" in wm_text
+
+
 def test_libero_original_reprocess_script_targets_artifact_root() -> None:
     root = Path(__file__).resolve().parents[2]
     script = root / "scripts" / "experiments" / "libero_original_00_reprocess_data.sh"
