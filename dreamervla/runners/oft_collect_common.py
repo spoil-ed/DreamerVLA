@@ -151,21 +151,35 @@ def _resolve_token_dim(vla: Any) -> int:
 
 
 def vla_input_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
-    """Return input-token sidecar dimensions derived from the loaded VLA."""
+    """Validate the loaded VLA against the exact input-token contract."""
 
     token_dim = _resolve_token_dim(vla)
     patches_per_image = int(vla.vision_backbone.get_num_patches())
-    token_count = int(patches_per_image) * len(list(image_keys))
-    flat_dim = int(token_count) * int(token_dim)
     num_images_in_input = int(vla.vision_backbone.get_num_images_in_input())
+    keys = list(image_keys)
+    if keys != ["agentview_rgb"]:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb'], "
+            f"got {keys!r}"
+        )
+    if (
+        patches_per_image != INPUT_TOKEN_COUNT
+        or token_dim != INPUT_TOKEN_DIM
+        or num_images_in_input != 1
+    ):
+        raise ValueError(
+            "loaded VLA does not satisfy input-token contract: "
+            f"patches={patches_per_image}, token_dim={token_dim}, "
+            f"num_images_in_input={num_images_in_input}"
+        )
     return {
-        "per_image": int(patches_per_image),
-        "patches_per_image": int(patches_per_image),
-        "views": int(num_images_in_input),
-        "num_images_in_input": int(num_images_in_input),
-        "token_dim": int(token_dim),
-        "token_count": int(token_count),
-        "flat_dim": int(flat_dim),
+        "per_image": INPUT_TOKEN_COUNT,
+        "patches_per_image": INPUT_TOKEN_COUNT,
+        "views": 1,
+        "num_images_in_input": 1,
+        "token_dim": INPUT_TOKEN_DIM,
+        "token_count": INPUT_TOKEN_COUNT,
+        "flat_dim": INPUT_TOKEN_HIDDEN_DIM,
     }
 
 
@@ -330,9 +344,15 @@ def assert_policy_mode_matches(cfg: dict[str, Any]) -> None:
 
 
 def resolve_num_images_in_input(collect_cfg: Any) -> int:
-    """Resolve OFT deployment image count from the central collect config."""
+    """Resolve and validate the fixed one-image mainline deployment."""
     val = OmegaConf.select(collect_cfg, "num_images_in_input", default=None)
-    return int(val) if val is not None else 1
+    count = int(val) if val is not None else 1
+    if count != 1:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            f"got {count}"
+        )
+    return count
 
 
 def select_vla_image_keys(
@@ -341,30 +361,21 @@ def select_vla_image_keys(
     history: int,
     num_images_in_input: int,
 ) -> list[str]:
-    """Select camera keys that produce the requested OFT image count.
-
-    ``task.image_keys`` names the camera views stored in rollout dumps. The OFT
-    policy input count is a separate deployment knob: the one-trajectory
-    discrete checkpoints use one current-frame camera even though dumps still
-    store both LIBERO views. The extractor stacks ``history * len(image_keys)``
-    images, so select the prefix of camera keys that matches the policy input
-    count when possible.
-    """
+    """Return the single primary camera admitted by the mainline."""
     keys = list(image_keys)
-    if not keys:
-        raise ValueError("task.image_keys must contain at least one camera key")
-    hist = max(1, int(history))
-    n_images = max(1, int(num_images_in_input))
-    if n_images % hist != 0:
+    if int(history) != 1:
         raise ValueError(
-            "num_images_in_input must be divisible by expected_history: "
-            f"{n_images} % {hist} != 0"
+            "OpenVLA-OFT input-token mainline requires expected_history=1, "
+            f"got {int(history)}"
         )
-    n_views = max(1, n_images // hist)
-    if n_views > len(keys):
+    if int(num_images_in_input) != 1:
         raise ValueError(
-            "task.image_keys does not contain enough camera views for "
-            f"num_images_in_input={n_images} and expected_history={hist}: "
-            f"need {n_views}, got {len(keys)}"
+            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            f"got {int(num_images_in_input)}"
         )
-    return keys[: min(len(keys), n_views)]
+    if keys != ["agentview_rgb"]:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires exactly one primary camera "
+            f"'agentview_rgb', got {keys!r}"
+        )
+    return ["agentview_rgb"]

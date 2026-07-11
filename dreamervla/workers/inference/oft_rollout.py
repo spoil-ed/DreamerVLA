@@ -105,9 +105,9 @@ def _select_image_keys_for_policy(
             "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
             f"got {count}"
         )
-    if not keys or keys[0] != "agentview_rgb":
+    if keys != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires primary image key "
+            "OpenVLA-OFT input-token mainline requires exactly one image key "
             f"'agentview_rgb', got {keys!r}"
         )
-    return [keys[0]]
+    return keys

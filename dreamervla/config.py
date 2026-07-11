@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -121,12 +122,21 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
         "task.openvla_oft." + "hidden_token",
         "task.openvla_oft.action_hidden_dir",
         "task.openvla_oft." + "hidden_token_dir",
+        "task.openvla_oft.action_head_ckpt",
+        "task.openvla_oft.proprio_projector_ckpt",
+        "task.openvla_oft.component_ckpt_dir",
+        "task.openvla_oft.resume_step",
+        "encoder.action_head_ckpt",
+        "encoder.proprio_projector_ckpt",
+        "encoder.component_ckpt_dir",
+        "encoder.resume_step",
         "latent_type",
     )
+    missing = object()
     present = [
         key
         for key in removed_sections
-        if OmegaConf.select(cfg, key, default=None) is not None
+        if OmegaConf.select(cfg, key, default=missing) is not missing
     ]
     if present:
         raise ValueError(
@@ -167,8 +177,13 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
         "policy._target_",
         "task.openvla_oft.actor_target",
         "ray_components.policy.target",
+        "ray_components.policy._target_",
         "actor.policy_cfg.target",
         "actor.policy_cfg._target_",
+        "rollout.policy_cfg.target",
+        "rollout.policy_cfg._target_",
+        "learner.model_cfg.policy.target",
+        "learner.model_cfg.policy._target_",
     )
     removed_target_fragments = (
         "RynnVLA",
@@ -181,20 +196,28 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
         if target and any(fragment in target for fragment in removed_target_fragments):
             raise ValueError(f"{key} points to removed observation interface: {target}")
 
-    for key in (
-        "world_model",
-        "classifier",
-        "ray_components.world_model.kwargs",
-        "ray_components.classifier.kwargs",
-        "learner.model_cfg.world_model.kwargs",
-        "learner.model_cfg.classifier.kwargs",
-        "inference.cfg.world_model.kwargs",
-    ):
-        token_count = _select_int(cfg, f"{key}.token_count")
-        token_dim = _select_int(cfg, f"{key}.token_dim")
-        if token_count == 56 and token_dim == 1024:
+    resolved = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
+    dimension_fields = {
+        "obs_dim",
+        "latent_dim",
+        "hidden_dim",
+        "wm_obs_dim",
+        "flat_dim",
+    }
+    token_count_fields = {"token_count", "source_token_count"}
+    for path, value in _iter_config_nodes(resolved):
+        field = path.rsplit(".", 1)[-1]
+        if field in dimension_fields and _is_exact_int(value, 56 * 1024):
             raise ValueError(
-                f"{key} exposes the removed 56x1024 observation interface"
+                f"{path} exposes the removed 56x1024 observation interface"
+            )
+        if field in token_count_fields and _is_exact_int(value, 56):
+            raise ValueError(
+                f"{path} exposes the removed 56-token observation interface"
+            )
+        if field == "obs_embedding_shape" and _int_sequence(value) == [56, 1024]:
+            raise ValueError(
+                f"{path} exposes the removed 56x1024 observation interface"
             )
 
 
@@ -1249,6 +1272,39 @@ def _select_int(cfg: DictConfig, key: str) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _iter_config_nodes(value: Any, path: str = "") -> Iterator[tuple[str, Any]]:
+    """Yield every resolved config node so nested aliases cannot bypass gates."""
+
+    if path:
+        yield path, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            yield from _iter_config_nodes(child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            child_path = f"{path}[{index}]" if path else f"[{index}]"
+            yield from _iter_config_nodes(child, child_path)
+
+
+def _is_exact_int(value: Any, expected: int) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return float(value) == float(expected) and int(value) == expected
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _int_sequence(value: Any) -> list[int] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    try:
+        return [int(item) for item in value]
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _resolve_world_size(world_size: int | None) -> int:

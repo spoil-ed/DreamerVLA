@@ -309,6 +309,7 @@ class LatentClassifierRunner(BaseRunner):
         validate_input_token_sidecar_dir(
             d.success_dir_hidden,
             reference_dir=d.success_dir_raw,
+            require_reference_complete=True,
         )
         failure_hidden_dir = OmegaConf.select(d, "failure_dir_hidden")
         if failure_hidden_dir is not None:
@@ -318,6 +319,7 @@ class LatentClassifierRunner(BaseRunner):
             validate_input_token_sidecar_dir(
                 failure_hidden_dir,
                 reference_dir=failure_raw_dir,
+                require_reference_complete=True,
             )
         # Chunk-level (Type B) classifier: each window frame is pooled from
         # K = chunk_subsample env-step frames. Defaults reduce to env-step

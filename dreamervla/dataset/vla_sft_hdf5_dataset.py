@@ -113,9 +113,9 @@ class VLASFTHDF5Dataset(Dataset):
         action_tokenizer: Any,
         dataset_statistics: dict[str, Any],
         action_horizon: int = 8,
-        image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
-        use_wrist_image: bool = True,
-        use_proprio: bool = True,
+        image_keys: Sequence[str] = ("agentview_rgb",),
+        use_wrist_image: bool = False,
+        use_proprio: bool = False,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,
         demos_per_task: int | None = None,
@@ -134,6 +134,14 @@ class VLASFTHDF5Dataset(Dataset):
         self.image_keys = tuple(str(key) for key in image_keys)
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
+        if self.image_keys != ("agentview_rgb",):
+            raise ValueError(
+                "OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)"
+            )
+        if self.use_wrist_image:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include a wrist image")
+        if self.use_proprio:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include VLA-side proprio")
         self.demos_per_task = None if demos_per_task is None else int(demos_per_task)
         self.demo_selection_seed = int(demo_selection_seed)
         self.prompt_builder_cls = PurePromptBuilder
@@ -294,9 +302,9 @@ class VLASFTHDF5DatasetFactory:
         dataset_statistics_path: str | Path | None = None,
         dataset_statistics_key: str = "libero_goal_no_noops",
         action_horizon: int = 8,
-        image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
-        use_wrist_image: bool = True,
-        use_proprio: bool = True,
+        image_keys: Sequence[str] = ("agentview_rgb",),
+        use_wrist_image: bool = False,
+        use_proprio: bool = False,
         batch_size: int = 1,
         num_workers: int = 0,
         shuffle: bool = True,
@@ -306,8 +314,13 @@ class VLASFTHDF5DatasetFactory:
         demos_per_task: int | None = None,
         demo_selection_seed: int = 0,
         max_samples: int | None = None,
-        **_unused_compat_kwargs: Any,
+        **unexpected_kwargs: Any,
     ) -> None:
+        if unexpected_kwargs:
+            raise TypeError(
+                "VLASFTHDF5DatasetFactory received unsupported arguments: "
+                f"{sorted(unexpected_kwargs)!r}"
+            )
         self.hdf5_dir = str(Path(hdf5_dir).expanduser().resolve())
         self.dataset_statistics_path = (
             None
@@ -319,6 +332,14 @@ class VLASFTHDF5DatasetFactory:
         self.image_keys = tuple(str(key) for key in image_keys)
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
+        if self.image_keys != ("agentview_rgb",):
+            raise ValueError(
+                "OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)"
+            )
+        if self.use_wrist_image:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include a wrist image")
+        if self.use_proprio:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include VLA-side proprio")
         self.batch_size = int(batch_size)
         self.num_workers = int(num_workers)
         self.shuffle = bool(shuffle)

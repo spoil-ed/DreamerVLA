@@ -157,7 +157,7 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
         assert item["obs_embedding"].shape == (SEQ_LEN, *INPUT_TOKEN_SHAPE), (
             f"{label} obs_embedding shape mismatch: {item['obs_embedding'].shape}"
         )
-        assert item["images"].shape == (SEQ_LEN, 6, 64, 64), (
+        assert item["images"].shape == (SEQ_LEN, 3, 64, 64), (
             f"{label} images shape mismatch: {item['images'].shape}"
         )
         assert item["actions"].shape == (SEQ_LEN, ACTION_DIM), (

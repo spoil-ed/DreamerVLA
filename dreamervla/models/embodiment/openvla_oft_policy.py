@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
+from dreamervla.preprocess.sidecar_schema import INPUT_TOKEN_COUNT, INPUT_TOKEN_DIM
 from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
 
@@ -21,6 +22,49 @@ def _torch_dtype(name: str | torch.dtype) -> torch.dtype:
     if normalized in {"fp32", "float32"}:
         return torch.float32
     raise ValueError(f"Unsupported torch dtype: {name}")
+
+
+def _resolve_loaded_token_dim(vla: Any) -> int:
+    for path in (
+        ("token_dim",),
+        ("hidden_size",),
+        ("config", "hidden_size"),
+        ("language_model", "config", "hidden_size"),
+        ("llm_backbone", "llm", "config", "hidden_size"),
+    ):
+        value = vla
+        for attribute in path:
+            value = getattr(value, attribute, None)
+            if value is None:
+                break
+        if value is not None:
+            return int(value)
+    raise ValueError("could not derive token_dim from loaded OpenVLA-OFT policy")
+
+
+def _validate_loaded_input_token_geometry(vla: Any) -> int:
+    """Validate the actual loaded backbone at the policy construction boundary."""
+
+    try:
+        patches = int(vla.vision_backbone.get_num_patches())
+        num_images = int(vla.vision_backbone.get_num_images_in_input())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "loaded OpenVLA-OFT policy must expose vision patch geometry"
+        ) from exc
+    token_dim = _resolve_loaded_token_dim(vla)
+    if (
+        patches != INPUT_TOKEN_COUNT
+        or token_dim != INPUT_TOKEN_DIM
+        or num_images != 1
+    ):
+        raise ValueError(
+            "loaded OpenVLA-OFT policy violates the input-token contract: "
+            f"patches={patches}, token_dim={token_dim}, "
+            f"num_images_in_input={num_images}; expected "
+            f"{INPUT_TOKEN_COUNT}x{INPUT_TOKEN_DIM} from one image"
+        )
+    return INPUT_TOKEN_COUNT
 
 
 class OpenVLAOFTPolicy(nn.Module):
@@ -47,12 +91,19 @@ class OpenVLAOFTPolicy(nn.Module):
             raise ValueError("L1/action-query checkpoints are closed")
         if bool(use_proprio):
             raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        if bool(use_film):
+            raise ValueError("OpenVLA-OFT input-token mainline does not use FiLM")
         if int(num_images_in_input) != 1:
             raise ValueError("OpenVLA-OFT input-token mainline requires num_images_in_input=1")
         if use_diffusion:
             raise NotImplementedError(
                 "DreamerVLA OpenVLA-OFT workspace currently does not implement diffusion training."
             )
+        from dreamervla.preprocess.preprocess_oft_input_tokens import (
+            resolve_oft_policy_mode,
+        )
+
+        resolve_oft_policy_mode(model_path, "discrete")
         ensure_openvla_oft_on_path()
 
         from peft import LoraConfig, get_peft_model
@@ -81,9 +132,9 @@ class OpenVLAOFTPolicy(nn.Module):
 
         self.model_path = str(Path(model_path).expanduser().resolve())
         self.use_l1_regression = False
-        self.use_diffusion = bool(use_diffusion)
+        self.use_diffusion = False
         self.use_proprio = False
-        self.use_film = bool(use_film)
+        self.use_film = False
         self.num_images_in_input = int(num_images_in_input)
 
         dtype = _torch_dtype(torch_dtype)
@@ -97,6 +148,7 @@ class OpenVLAOFTPolicy(nn.Module):
             trust_remote_code=trust_remote_code,
         )
         vla.vision_backbone.set_num_images_in_input(self.num_images_in_input)
+        num_patches = _validate_loaded_input_token_geometry(vla)
         if freeze_vla_backbone:
             for parameter in vla.parameters():
                 parameter.requires_grad = False
@@ -115,10 +167,7 @@ class OpenVLAOFTPolicy(nn.Module):
         self.proprio_projector = None
 
         self.action_tokenizer = ActionTokenizer(self.processor.tokenizer)
-        self.num_patches = (
-            self.vla.vision_backbone.get_num_patches()
-            * self.vla.vision_backbone.get_num_images_in_input()
-        )
+        self.num_patches = num_patches
 
     @classmethod
     def from_modules(
@@ -138,6 +187,16 @@ class OpenVLAOFTPolicy(nn.Module):
             raise ValueError("L1/action-query checkpoints are closed")
         if bool(use_proprio) or proprio_projector is not None:
             raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        if bool(use_diffusion):
+            raise ValueError("diffusion checkpoints are outside the discrete mainline")
+        if bool(use_film):
+            raise ValueError("OpenVLA-OFT input-token mainline does not use FiLM")
+        if int(num_patches) != INPUT_TOKEN_COUNT:
+            raise ValueError(
+                f"OpenVLA-OFT input-token mainline requires num_patches={INPUT_TOKEN_COUNT}, "
+                f"got {int(num_patches)}"
+            )
+        _validate_loaded_input_token_geometry(vla)
         self = cls.__new__(cls)
         nn.Module.__init__(self)
         self.vla = vla
@@ -146,9 +205,9 @@ class OpenVLAOFTPolicy(nn.Module):
         self.action_tokenizer = action_tokenizer
         self.num_patches = int(num_patches)
         self.use_l1_regression = False
-        self.use_diffusion = bool(use_diffusion)
+        self.use_diffusion = False
         self.use_proprio = False
-        self.use_film = bool(use_film)
+        self.use_film = False
         self.processor = None
         return self
 

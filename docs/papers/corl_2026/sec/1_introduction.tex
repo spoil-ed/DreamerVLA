@@ -1,7 +1,31 @@
 \section{Introduction}
 
-In embodied intelligence, an agent is required to predict the next action chunk given visual observations, language instructions, and proprioceptive signals. Existing methods can generally be categorized into two mainstream paradigms. The first is the Vision-Language-Action (VLA) paradigm, where the policy conditions on images, language instructions, and robot states to autoregressively generate an action chunk. The second is the world model paradigm, represented by Dreamer, which learns latent dynamics to predict future world states conditioned on actions, and employs an actor-critic framework to evaluate candidate actions and select the final action chunk.
+Vision--language--action (VLA) policies map visual observations and language
+instructions to action chunks, inheriting semantic and control priors from large
+pretrained models.  World models address a complementary problem: they predict
+how actions change future state and enable policy optimization through imagined
+trajectories.  Combining them requires a precise boundary between the policy's
+internal decoder state and the observation state learned by the world model.
 
-Both paradigms, however, suffer from their own limitations. Although VLA models possess strong semantic understanding and can generate the required action chunk conditioned on visual observations and language instructions, they generally lack an explicit mechanism for modeling the long-term consequences of actions. In particular, VLA models struggle to reason about how different action magnitudes or variations may lead to different future outcomes. While this limitation may not cause severe errors in single-step prediction, it implies that the current action is generated without sufficiently considering subsequent action choices and their long-term effects, resulting in weak long-horizon decision-making ability. In contrast, world models explicitly model environment dynamics and therefore naturally support long-horizon reasoning. However, they are typically weaker in semantic understanding, making it difficult to control robot behavior through high-level language instructions. Moreover, pure world model approaches are challenging to scale in real-world settings, since real-world data are expensive to collect, and the mismatch between the learned world model and the real environment can accumulate over multiple prediction steps, leading to a significant gap between simulated performance and real-world deployment.
+That boundary is often obscured by checkpoint-specific hidden tensors, flattened
+features, or multiple preprocessing routes.  Such ambiguity is especially risky
+in online cotraining, where collectors, replay buffers, world-model learners,
+success classifiers, actors, and evaluation workers must agree on shape and
+semantics.  A tensor that is convenient for decoding actions is not necessarily
+a valid observation of the environment.
 
-To combine the semantic generalization ability of VLA with the dynamics-aware optimization capability of world models, we propose DreamerVLA, a unified framework that trains VLA under the Dreamer paradigm. Our key observation is that the actor in Dreamer is functionally similar to a VLA policy, which makes it possible to replace the conventional actor with a VLA-based policy and incorporate VLA into the Dreamer training framework. Specifically, during training, we first use a pretrained VLA encoder to encode multimodal inputs, including text, images, and proprioceptive states, into an embedding vector that represents the current environment. This representation is then processed by a bottleneck module, which can be implemented using either TokenLearner or a simple MLP, in order to compress and refine the state representation. The resulting latent state is fed into a world model to predict the next environment state, while an actor-critic module is trained to evaluate the quality of state-action pairs and guide policy optimization. During inference, the agent can leverage the world model together with the actor-critic module to perform imagination-based decision-making, thereby enabling long-horizon planning and reasoning.
+DreamerVLA uses the projected visual input tokens of a one-trajectory
+OpenVLA-OFT checkpoint as its sole external observation representation.  The
+policy consumes one current agent-view image and produces a $256\times4096$
+token grid before its internal action positions.  Reward and token sidecars are
+paired exactly by shard, demonstration, and frame.  A chunk-aware world model
+predicts future grids, a spatial classifier estimates success on windows of the
+same grids, and an actor bridge decodes predicted grids through OpenVLA's
+discrete action vocabulary.
+
+The complete training path is
+\emph{collect rollouts $\rightarrow$ seed replay $\rightarrow$ warm up the world
+model and classifier $\rightarrow$ online cotrain}.  Synchronous and asynchronous
+executions share the same update functions and checkpoint contracts.  The
+asynchronous route assigns policy training, no-gradient inference, environment
+interaction, and world-model/classifier learning to explicit worker groups.

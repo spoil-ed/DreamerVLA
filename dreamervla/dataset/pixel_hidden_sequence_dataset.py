@@ -35,7 +35,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         hidden_dir: str | Path,
         sequence_length: int = 32,
         image_size: int = 256,
-        image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
+        image_keys: Sequence[str] = ("agentview_rgb",),
         proprio_keys: Sequence[str] | None = None,
         hidden_key: str = DEFAULT_HIDDEN_KEY,
         lang_emb_dir: str | Path | None = None,
@@ -148,6 +148,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         validate_input_token_sidecar_dir(
             self.hidden_dir,
             reference_dir=getattr(self, "hdf5_dir", None),
+            require_reference_complete=True,
         )
         errors: list[str] = []
         if expected_model_path and not self._same_path(

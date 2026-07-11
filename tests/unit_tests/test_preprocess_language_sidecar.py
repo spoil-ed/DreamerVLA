@@ -37,19 +37,19 @@ def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
 
     args = Namespace(
         fake_oft_components=True,
-        fake_num_patches=2,
+        fake_num_patches=256,
         num_images_in_input=None,
-        history=2,
-        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+        history=1,
+        image_keys=["agentview_rgb"],
         oft_ckpt=str(tmp_path / "fake_ckpt"),
         center_crop=False,
         unnorm_key="fake",
-        include_state=True,
+        include_state=False,
         rotate_images_180=False,
         hidden_key="obs_embedding",
         time_horizon=2,
         action_dim=3,
-        token_dim=8,
+        token_dim=4096,
         output_dtype="float16",
         chunk_size=2,
         prompt_style="vla_policy",
@@ -73,7 +73,7 @@ def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
     with h5py.File(out_input, "r") as handle:
         assert bool(handle.attrs["complete"])
         demo = handle["data"]["demo_0"]
-        assert demo["obs_embedding"].shape == (length, 4, 8)
-        assert demo["lang_emb"].shape == (8,)
+        assert demo["obs_embedding"].shape == (length, 256, 4096)
+        assert demo["lang_emb"].shape == (4096,)
         assert demo["lang_emb"].dtype == np.dtype("float16")
-        assert demo["lang_emb"].attrs["hidden_dim"] == 8
+        assert demo["lang_emb"].attrs["hidden_dim"] == 4096

@@ -342,13 +342,18 @@ def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> N
 
 
 def test_oft_rollout_rejects_non_mainline_image_counts() -> None:
-    keys = ["agentview_rgb", "eye_in_hand_rgb"]
+    keys = ["agentview_rgb"]
 
     assert _select_image_keys_for_policy(keys, 1) == ["agentview_rgb"]
     with pytest.raises(ValueError, match="requires num_images_in_input=1"):
         _select_image_keys_for_policy(keys, 2)
     with pytest.raises(ValueError, match="requires num_images_in_input=1"):
         _select_image_keys_for_policy(keys, 3)
+    with pytest.raises(ValueError, match="exactly one image key"):
+        _select_image_keys_for_policy(
+            ["agentview_rgb", "eye_in_hand_rgb"],
+            1,
+        )
 
 
 def test_generate_once_preserves_lang_emb_and_marks_final_bootstrap() -> None:

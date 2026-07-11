@@ -56,20 +56,22 @@ def test_action_head_type_attr_follows_mode() -> None:
     assert _action_head_type_for_mode("discrete") == "oft_discrete_token"
 
 
-def test_num_images_defaults_to_history_times_views() -> None:
+def test_num_images_accepts_only_one_image_history_one() -> None:
     args = Namespace(
         num_images_in_input=None,
         history=2,
         image_keys=["agentview_rgb", "eye_in_hand_rgb"],
     )
-    assert _resolve_num_images_in_input(args) == 4
+    with pytest.raises(ValueError, match="history=1"):
+        _resolve_num_images_in_input(args)
     args = Namespace(num_images_in_input=None, history=1, image_keys=["agentview_rgb"])
     assert _resolve_num_images_in_input(args) == 1
     args = Namespace(num_images_in_input=2, history=1, image_keys=["agentview_rgb"])
-    assert _resolve_num_images_in_input(args) == 2
+    with pytest.raises(ValueError, match="num_images_in_input=1"):
+        _resolve_num_images_in_input(args)
 
 
-def test_input_token_sidecar_dims_use_current_frame_patch_tokens() -> None:
+def test_input_token_sidecar_dims_accept_only_canonical_patch_tokens() -> None:
     class VisionBackbone:
         def get_num_patches(self) -> int:
             return 256
@@ -79,12 +81,19 @@ def test_input_token_sidecar_dims_use_current_frame_patch_tokens() -> None:
 
     token_count, flat_dim = _input_token_sidecar_dims(
         VLA(),
-        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+        image_keys=["agentview_rgb"],
         token_dim=4096,
     )
 
-    assert token_count == 512
-    assert flat_dim == 512 * 4096
+    assert token_count == 256
+    assert flat_dim == 256 * 4096
+
+    with pytest.raises(ValueError, match="one agentview image"):
+        _input_token_sidecar_dims(
+            VLA(),
+            image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+            token_dim=4096,
+        )
 
 
 def test_oft_preprocess_uses_lumos_prismatic_constants() -> None:
@@ -136,20 +145,20 @@ def test_fake_oft_components_write_structural_sidecars(tmp_path: Path) -> None:
 
     args = Namespace(
         fake_oft_components=True,
-        fake_num_patches=2,
+        fake_num_patches=256,
         num_images_in_input=None,
-        history=2,
-        image_keys=["agentview_rgb", "eye_in_hand_rgb"],
+        history=1,
+        image_keys=["agentview_rgb"],
         oft_ckpt=str(tmp_path / "fake_ckpt"),
         center_crop=False,
         unnorm_key="fake",
-        include_state=True,
+        include_state=False,
         rotate_images_180=False,
         hidden_key="obs_embedding",
         time_horizon=2,
         action_dim=3,
-        token_dim=8,
-        output_dtype="float32",
+        token_dim=4096,
+        output_dtype="float16",
         chunk_size=2,
         prompt_style="vla_policy",
         resolution=256,
@@ -172,11 +181,11 @@ def test_fake_oft_components_write_structural_sidecars(tmp_path: Path) -> None:
     with h5py.File(out_input, "r") as handle:
         assert bool(handle.attrs["complete"])
         assert handle.attrs["obs_hidden_source"] == "input_token_embedding"
-        assert handle.attrs["token_count"] == 4
-        assert handle.attrs["token_dim"] == 8
+        assert handle.attrs["token_count"] == 256
+        assert handle.attrs["token_dim"] == 4096
         assert handle.attrs["hidden_storage_format"] == "tokenized"
         demo = handle["data"]["demo_0"]
-        assert demo["obs_embedding"].shape == (length, 2 * 2, 8)
-        assert demo["lang_emb"].shape == (8,)
-        assert demo["lang_emb"].dtype == np.dtype("float32")
+        assert demo["obs_embedding"].shape == (length, 256, 4096)
+        assert demo["lang_emb"].shape == (4096,)
+        assert demo["lang_emb"].dtype == np.dtype("float16")
         assert "hidden_token_states" not in demo

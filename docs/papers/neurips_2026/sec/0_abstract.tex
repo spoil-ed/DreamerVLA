@@ -1,5 +1,15 @@
 \begin{abstract}
-Embodied intelligence research mainly follows two directions: Vision-Language-Action (VLA) models and world model–based reinforcement learning methods. VLA models benefit from strong semantic understanding provided by large vision-language models, but they often lack the ability to model environment dynamics and perform long-horizon reasoning. In contrast, world model approaches such as Dreamer can perform long-horizon planning through latent dynamics models, but they typically have weaker perception and limited semantic understanding.
-
-In this work, we explore the DreamerVLA that combines the strengths of both approaches. We first use a VLA encoder to embed multimodal observations, including images, language instructions, and proprioceptive states, into a fixed-length representation. A bottleneck module extracts a compact latent state that contains key physical information. A world model is then trained in the latent space, and an actor–critic module performs imagined rollouts to optimize the policy. This framework aims to integrate semantic perception with model-based planning for embodied decision making.
+Vision--language--action policies provide strong semantic priors for robot control,
+while world models provide action-conditioned prediction and imagination.  We
+present DreamerVLA, a one-trajectory OpenVLA-OFT cotraining system that connects
+these capabilities through one explicit observation contract.  Every real step
+is represented by the current agent-view image's projected input-token grid in
+$\mathbb{R}^{256\times4096}$; the same grid is used by collection, replay,
+world-model warm-up, success-classifier training, and online cotraining.  A
+chunk-aware Transformer predicts future token grids, a spatial classifier
+estimates success, and a discrete-action bridge creates OpenVLA action positions
+only inside the actor decoder.  The pipeline supports synchronous execution and
+a single-node asynchronous route with explicit actor, rollout, environment, and
+learner ownership.  This design removes ambiguous action-state sidecars and
+keeps all reported policy quality grounded in the real LIBERO environment.
 \end{abstract}

@@ -29,8 +29,8 @@ class VLASFTRLDSDatasetFactory:
         dataset_name: str = "libero_goal_no_noops",
         shuffle_buffer_size: int = 100_000,
         image_aug: bool = True,
-        use_wrist_image: bool = True,
-        use_proprio: bool = True,
+        use_wrist_image: bool = False,
+        use_proprio: bool = False,
         batch_size: int = 1,
         num_workers: int = 0,
     ) -> None:
@@ -40,6 +40,10 @@ class VLASFTRLDSDatasetFactory:
         self.image_aug = bool(image_aug)
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
+        if self.use_wrist_image:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include a wrist image")
+        if self.use_proprio:
+            raise ValueError("OpenVLA-OFT mainline SFT does not include VLA-side proprio")
         self.batch_size = int(batch_size)
         self.num_workers = int(num_workers)
 

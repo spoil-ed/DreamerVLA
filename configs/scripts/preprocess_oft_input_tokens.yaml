@@ -26,4 +26,4 @@ max_files: null
 max_demos_per_file: null
 overwrite: false
 fake_oft_components: false
-fake_num_patches: 4
+fake_num_patches: 256

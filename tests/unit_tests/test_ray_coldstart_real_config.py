@@ -29,12 +29,12 @@ def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
     assert _policy_device_from_id("cuda:2") == torch.device("cuda:2")
 
 
-def test_vla_input_token_spec_derives_flat_dim_from_policy() -> None:
+def test_vla_input_token_spec_accepts_only_canonical_policy() -> None:
     from dreamervla.runners.oft_collect_common import vla_input_token_spec
 
     class _VisionBackbone:
-        per_image = 5
-        views = 2
+        per_image = 256
+        views = 1
 
         def get_num_patches(self) -> int:
             return self.per_image
@@ -44,9 +44,9 @@ def test_vla_input_token_spec_derives_flat_dim_from_policy() -> None:
 
     class _VLA:
         vision_backbone = _VisionBackbone()
-        token_dim = 11
+        token_dim = 4096
 
-    spec = vla_input_token_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
+    spec = vla_input_token_spec(_VLA(), ["agentview_rgb"])
     assert spec["per_image"] == _VisionBackbone.per_image
     assert spec["patches_per_image"] == _VisionBackbone.per_image
     assert spec["views"] == _VisionBackbone.views
@@ -54,6 +54,11 @@ def test_vla_input_token_spec_derives_flat_dim_from_policy() -> None:
     assert spec["token_dim"] == _VLA.token_dim
     assert spec["token_count"] == _VisionBackbone.per_image * _VisionBackbone.views
     assert spec["flat_dim"] == spec["token_count"] * _VLA.token_dim
+
+    import pytest
+
+    with pytest.raises(ValueError, match="image_keys"):
+        vla_input_token_spec(_VLA(), ["agentview_rgb", "eye_in_hand_rgb"])
 
 
 def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
@@ -74,7 +79,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
             "suite": "libero_goal",
             "action_dim": 7,
             "image_resolution": 256,
-            "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+            "image_keys": ["agentview_rgb"],
             "openvla_oft": {
                 "ckpt_path": str(tmp_path / "ckpt"),
                 "dataset_statistics_key": "libero_goal_no_noops",
@@ -142,7 +147,7 @@ def test_oft_collect_plan_respects_cpu_inference_device_override(tmp_path) -> No
             "suite": "libero_goal",
             "action_dim": 7,
             "image_resolution": 256,
-            "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+            "image_keys": ["agentview_rgb"],
             "openvla_oft": {
                 "ckpt_path": str(tmp_path / "ckpt"),
                 "dataset_statistics_key": "libero_goal_no_noops",

@@ -77,7 +77,7 @@ def _assert_openvla_traj1_contract(cfg) -> None:
     assert input_tokens.patches_per_image == 256
     assert input_tokens.token_count == oft.num_images_in_input * input_tokens.patches_per_image
     assert input_tokens.wm_obs_dim == input_tokens.token_count * input_tokens.token_dim
-    assert "num_images_in_input*patches_per_image" in input_tokens.latent_source
+    assert "[256,4096]" in input_tokens.latent_source
     assert list(input_tokens.proprio_keys) == ["ee_pos", "ee_ori", "gripper_states"]
     assert input_tokens.proprio_dim == 8
     assert input_tokens.proprio_emb_dim == 10

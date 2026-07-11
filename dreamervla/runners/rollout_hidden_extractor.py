@@ -1,9 +1,8 @@
 """OpenVLA-OFT input-token extractor for online rollout collection.
 
-Each frame emits projected current-frame vision patch tokens as
-``obs_embedding [num_images * patches_per_image, token_dim]``.  The one-trajectory
-mainline uses one image, 256 patches, and a 4096-wide projection, so persisted
-sidecars are ``[T, 256, 4096]``.  The model's 56 action positions remain internal
+Each frame emits the one-image projected current-frame vision patch grid as
+``obs_embedding [256,4096]``. Persisted sidecars are
+``[T,256,4096]``. The model's 56 action positions remain internal
 to action decoding and are never returned as the world-model observation.
 
 ``OFTRolloutHiddenExtractor`` maintains the configured per-view history buffer.

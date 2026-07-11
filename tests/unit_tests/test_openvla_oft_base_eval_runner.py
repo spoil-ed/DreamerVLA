@@ -12,7 +12,7 @@ def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
     cfg = OmegaConf.create(
         {
             "task": {
-                "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+                "image_keys": ["agentview_rgb"],
                 "openvla_oft": {
                     "num_images_in_input": 1,
                     "dataset_statistics_key": "libero_goal_no_noops",

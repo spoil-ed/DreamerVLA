@@ -46,7 +46,7 @@ def _fake_cfg():
                 "suite": "libero_goal",
                 "action_dim": 7,
                 "image_resolution": 256,
-                "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+                "image_keys": ["agentview_rgb"],
                 "openvla_oft": {
                     "ckpt_path": "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1",
                     "dataset_statistics_key": "libero_goal_no_noops",

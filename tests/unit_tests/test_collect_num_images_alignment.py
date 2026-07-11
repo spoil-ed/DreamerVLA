@@ -52,8 +52,7 @@ def _make_cfg(num_images=None):
         {
             "task": {
                 "openvla_oft": oft,
-                # two stored camera views — must NOT dictate VLA num_images
-                "image_keys": ["agentview_rgb", "eye_in_hand_rgb"],
+                "image_keys": ["agentview_rgb"],
                 "suite": "libero_goal",
                 "action_dim": 7,
                 "image_resolution": 256,
@@ -79,10 +78,9 @@ def test_num_images_defaults_to_one_when_unset():
     assert _build(_make_cfg(num_images=None))["num_images_in_input"] == 1
 
 
-def test_num_images_reads_central_value_verbatim():
-    # proves the value is READ from the central config (not hardcoded to 1):
-    # a 2-view+wrist VLA can set 2, independent of len(image_keys).
-    assert _build(_make_cfg(num_images=2))["num_images_in_input"] == 2
+def test_num_images_rejects_non_mainline_central_value():
+    with pytest.raises(ValueError, match="num_images_in_input=1"):
+        _build(_make_cfg(num_images=2))
 
 
 def test_single_image_policy_uses_single_rollout_camera():
@@ -91,17 +89,25 @@ def test_single_image_policy_uses_single_rollout_camera():
     assert cc["image_keys"] == ["agentview_rgb"]
 
 
-def test_two_image_policy_uses_two_rollout_cameras():
-    cc = _build(_make_cfg(num_images=2))
+def test_two_image_policy_is_closed():
+    with pytest.raises(ValueError, match="num_images_in_input=1"):
+        _build(_make_cfg(num_images=2))
 
-    assert cc["image_keys"] == ["agentview_rgb", "eye_in_hand_rgb"]
 
-
-def test_image_selection_rejects_non_divisible_history():
-    with pytest.raises(ValueError, match="num_images_in_input"):
-        select_vla_image_keys(["agentview_rgb", "eye_in_hand_rgb"], history=2, num_images_in_input=1)
+def test_image_selection_rejects_non_mainline_history():
+    with pytest.raises(ValueError, match="expected_history=1"):
+        select_vla_image_keys(["agentview_rgb"], history=2, num_images_in_input=1)
 
 
 def test_image_selection_rejects_unavailable_views():
-    with pytest.raises(ValueError, match="task.image_keys"):
+    with pytest.raises(ValueError, match="num_images_in_input=1"):
         select_vla_image_keys(["agentview_rgb"], history=1, num_images_in_input=2)
+
+
+def test_image_selection_rejects_extra_stored_view() -> None:
+    with pytest.raises(ValueError, match="exactly one primary camera"):
+        select_vla_image_keys(
+            ["agentview_rgb", "eye_in_hand_rgb"],
+            history=1,
+            num_images_in_input=1,
+        )

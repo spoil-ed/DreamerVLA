@@ -47,10 +47,9 @@ class PixelSequenceDataset(BaseDataset):
       dones:     [T]
       is_first:  [T], always true at the first item of each sampled window
 
-    The two default image keys are LIBERO's third-person view and wrist view:
-    ``agentview_rgb`` and ``eye_in_hand_rgb``. They are concatenated along the
-    channel dimension, matching DreamerV3's "multiple image keys concatenate
-    channels before the CNN" behavior.
+    The default image key is the mainline agent-view camera. Explicit callers
+    may still select another pixel-only dataset layout; OpenVLA input-token
+    routes impose their stricter one-camera contract in the derived dataset.
     """
 
     def __init__(
@@ -58,7 +57,7 @@ class PixelSequenceDataset(BaseDataset):
         hdf5_dir: str | Path,
         sequence_length: int = 32,
         image_size: int = 64,
-        image_keys: Sequence[str] = ("agentview_rgb", "eye_in_hand_rgb"),
+        image_keys: Sequence[str] = ("agentview_rgb",),
         proprio_keys: Sequence[str] | None = None,
         max_files: int | None = None,
         max_demos_per_file: int | None = None,

@@ -42,12 +42,39 @@ class _TinyVLA:
         Path(path).mkdir(parents=True, exist_ok=True)
 
 
+class _TinyVisionBackbone:
+    def __init__(self, *, patches: int = 256, images: int = 1) -> None:
+        self.patches = patches
+        self.images = images
+
+    def get_num_patches(self) -> int:
+        return self.patches
+
+    def get_num_images_in_input(self) -> int:
+        return self.images
+
+
 class _TinyForwardVLA(nn.Module):
+    def __init__(
+        self,
+        *,
+        token_dim: int = 4096,
+        patches: int = 256,
+        images: int = 1,
+    ) -> None:
+        super().__init__()
+        self.token_dim = token_dim
+        self.vision_backbone = _TinyVisionBackbone(
+            patches=patches,
+            images=images,
+        )
+
     def forward(self, **kwargs):
         input_ids = kwargs["input_ids"]
         batch_size, seq_len = input_ids.shape
-        logits = torch.zeros(batch_size, seq_len, 32, device=input_ids.device)
-        hidden = torch.zeros(batch_size, seq_len, 4, device=input_ids.device)
+        total_len = self.vision_backbone.get_num_patches() + seq_len
+        logits = torch.zeros(batch_size, total_len, 32, device=input_ids.device)
+        hidden = torch.zeros(batch_size, total_len, 4, device=input_ids.device)
         return CausalLMOutputWithPast(
             loss=input_ids.float().sum() * 0.0 + torch.tensor(1.25, device=input_ids.device),
             logits=logits,
@@ -126,6 +153,35 @@ def test_vla_sft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -
     assert first.data_spec.demos_per_task == 1
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"image_keys": ("agentview_rgb", "eye_in_hand_rgb")}, "image_keys"),
+        ({"use_wrist_image": True}, "wrist image"),
+        ({"use_proprio": True}, "VLA-side proprio"),
+    ],
+)
+def test_vla_sft_hdf5_dataset_rejects_non_mainline_inputs(
+    tmp_path: Path,
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    from dreamervla.dataset.vla_sft_hdf5_dataset import VLASFTHDF5Dataset
+
+    _write_demo_file(tmp_path / "task_demo.hdf5", num_demos=1, length=1)
+    stats = {
+        "action": {"q01": [-1.0] * 7, "q99": [1.0] * 7, "mask": [True] * 7},
+        "proprio": {"q01": [-1.0] * 8, "q99": [1.0] * 8, "mask": [True] * 8},
+    }
+
+    with pytest.raises(ValueError, match=match):
+        VLASFTHDF5Dataset(
+            hdf5_dir=tmp_path,
+            processor=_TinyProcessor(),
+            action_tokenizer=_TinyActionTokenizer(),
+            dataset_statistics=stats,
+            **kwargs,
+        )
 def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> None:
     from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
@@ -133,7 +189,7 @@ def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> N
         vla=_TinyForwardVLA(),
         action_head=None,
         action_tokenizer=_TinyActionTokenizer(),
-        num_patches=0,
+        num_patches=256,
         use_l1_regression=False,
     )
     batch = {
@@ -156,6 +212,7 @@ def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> N
     [
         ({"use_l1_regression": True}, "L1/action-query"),
         ({"use_proprio": True}, "does not include proprio"),
+        ({"use_film": True}, "does not use FiLM"),
         ({"num_images_in_input": 2}, "num_images_in_input=1"),
     ],
 )
@@ -170,10 +227,32 @@ def test_openvla_oft_policy_constructor_rejects_removed_routes(
 
 
 @pytest.mark.parametrize(
+    ("component_name", "match"),
+    [
+        ("action_head--1_checkpoint.pt", "L1/action-query"),
+        ("proprio_projector--1_checkpoint.pt", "does not include proprio"),
+    ],
+)
+def test_openvla_oft_policy_constructor_rejects_checkpoint_components(
+    tmp_path: Path,
+    component_name: str,
+    match: str,
+) -> None:
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+
+    (tmp_path / component_name).write_bytes(b"")
+
+    with pytest.raises(ValueError, match=match):
+        OpenVLAOFTPolicy(model_path=str(tmp_path))
+
+
+@pytest.mark.parametrize(
     "kwargs,match",
     [
         ({"action_head": nn.Linear(1, 1), "use_l1_regression": True}, "L1/action-query"),
         ({"proprio_projector": nn.Linear(1, 1), "use_proprio": True}, "does not include proprio"),
+        ({"use_diffusion": True}, "diffusion checkpoints"),
+        ({"use_film": True}, "does not use FiLM"),
     ],
 )
 def test_openvla_oft_from_modules_rejects_removed_components(
@@ -186,7 +265,7 @@ def test_openvla_oft_from_modules_rejects_removed_components(
         "vla": _TinyForwardVLA(),
         "action_head": None,
         "action_tokenizer": _TinyActionTokenizer(),
-        "num_patches": 0,
+        "num_patches": 256,
         "use_l1_regression": False,
         "use_proprio": False,
         "proprio_projector": None,
@@ -195,3 +274,28 @@ def test_openvla_oft_from_modules_rejects_removed_components(
 
     with pytest.raises(ValueError, match=match):
         OpenVLAOFTPolicy.from_modules(**base)
+
+
+@pytest.mark.parametrize(
+    ("vla", "num_patches", "match"),
+    [
+        (_TinyForwardVLA(), 56, "num_patches=256"),
+        (_TinyForwardVLA(patches=56), 256, "patches=56"),
+        (_TinyForwardVLA(token_dim=1024), 256, "token_dim=1024"),
+        (_TinyForwardVLA(images=2), 256, "num_images_in_input=2"),
+    ],
+)
+def test_openvla_oft_from_modules_rejects_noncanonical_loaded_geometry(
+    vla: nn.Module,
+    num_patches: int,
+    match: str,
+) -> None:
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+
+    with pytest.raises(ValueError, match=match):
+        OpenVLAOFTPolicy.from_modules(
+            vla=vla,
+            action_head=None,
+            action_tokenizer=_TinyActionTokenizer(),
+            num_patches=num_patches,
+        )

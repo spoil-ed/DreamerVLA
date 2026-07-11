@@ -247,6 +247,24 @@ def test_validate_cfg_rejects_removed_task_latent_spec() -> None:
         validate_cfg(cfg)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "action_head_ckpt",
+        "proprio_projector_ckpt",
+        "component_ckpt_dir",
+        "resume_step",
+    ],
+)
+def test_validate_cfg_rejects_removed_oft_component_fields_even_when_null(
+    field: str,
+) -> None:
+    cfg = OmegaConf.create({"task": {"openvla_oft": {field: None}}})
+
+    with pytest.raises(ValueError, match="removed action-query/hidden-token"):
+        validate_cfg(cfg)
+
+
 def test_validate_cfg_rejects_noncanonical_oft_input_token_patch_count() -> None:
     cfg = _compose_mainline()
     cfg.task.openvla_oft.input_tokens.patches_per_image = 128
@@ -267,6 +285,65 @@ def test_validate_cfg_rejects_inconsistent_component_latent_tuple() -> None:
     )
 
     with pytest.raises(ValueError, match="world_model"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        {"classifier": {"latent_dim": 56 * 1024}},
+        {
+            "world_model": {
+                "obs_dim": 56 * 1024,
+                "token_count": 14,
+                "token_dim": 4096,
+            }
+        },
+        {"policy": {"source_token_count": 56, "source_token_dim": 1024}},
+        {
+            "actor": {
+                "policy_cfg": {
+                    "kwargs": {
+                        "source_token_count": 56,
+                        "source_token_dim": 4096,
+                    }
+                }
+            }
+        },
+    ],
+)
+def test_validate_cfg_unconditionally_rejects_removed_56_token_interfaces(
+    component: dict[str, Any],
+) -> None:
+    cfg = OmegaConf.create(component)
+
+    with pytest.raises(ValueError, match="removed 56"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("policy.cfg.kwargs.source_token_count", 56),
+        ("env.wm.cfg.kwargs.latent_dim", 56 * 1024),
+        ("collect.oft_latent_spec.token_count", 56),
+        ("collect.oft_latent_spec.wm_obs_dim", 56 * 1024),
+        ("rollout.dump.preprocess_config.token_count", 56),
+        ("rollout.dump.preprocess_config.hidden_dim", 56 * 1024),
+        ("rollout.dump.preprocess_config.flat_dim", 56 * 1024),
+        ("rollout.dump.preprocess_config.obs_embedding_shape", [56, 1024]),
+    ],
+)
+def test_validate_cfg_rejects_removed_geometry_at_any_nested_path(
+    path: str,
+    value: Any,
+) -> None:
+    cfg = _compose_mainline(
+        "experiment=openvla_onetraj_libero_cotrain_ray",
+    )
+    OmegaConf.update(cfg, path, value, force_add=True)
+
+    with pytest.raises(ValueError, match="removed 56"):
         validate_cfg(cfg)
 
 

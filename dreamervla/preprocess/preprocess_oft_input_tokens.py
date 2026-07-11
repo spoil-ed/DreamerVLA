@@ -157,15 +157,20 @@ def resolve_oft_policy_mode(checkpoint: str | Path, policy_mode: str = "discrete
             raise ValueError("L1/action-query checkpoints are closed")
         if mode == "auto":
             checkpoint = Path(checkpoint).expanduser()
-            if any(checkpoint.glob("action_head--*_checkpoint.pt")):
+            if any(checkpoint.glob("action_head--*.pt")):
                 raise ValueError("L1/action-query checkpoints are closed")
         raise ValueError(
             f"OpenVLA-OFT mainline requires policy_mode='discrete', got {policy_mode!r}"
         )
     checkpoint = Path(checkpoint).expanduser()
-    has_action_head = bool(sorted(checkpoint.glob("action_head--*_checkpoint.pt")))
+    has_action_head = bool(sorted(checkpoint.glob("action_head--*.pt")))
     if has_action_head:
         raise ValueError("L1/action-query checkpoints are closed")
+    has_proprio_projector = bool(
+        sorted(checkpoint.glob("proprio_projector--*.pt"))
+    )
+    if has_proprio_projector:
+        raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
     return "discrete"
 
 
@@ -176,9 +181,23 @@ def _action_head_type_for_mode(mode: str) -> str:
 
 
 def _resolve_num_images_in_input(args: SimpleNamespace) -> int:
-    if args.num_images_in_input is not None:
-        return int(args.num_images_in_input)
-    return int(args.history) * len(args.image_keys)
+    if int(args.history) != 1:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires history=1, "
+            f"got {int(args.history)}"
+        )
+    if list(args.image_keys) != ["agentview_rgb"]:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb'], "
+            f"got {list(args.image_keys)!r}"
+        )
+    count = 1 if args.num_images_in_input is None else int(args.num_images_in_input)
+    if count != 1:
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            f"got {count}"
+        )
+    return count
 
 
 class _FakeVisionBackbone:
@@ -267,8 +286,18 @@ def _input_token_sidecar_dims(
     token_dim: int,
 ) -> tuple[int, int]:
     per_image_patches = int(vla.vision_backbone.get_num_patches())
-    token_count = per_image_patches * len(tuple(image_keys))
-    return token_count, token_count * int(token_dim)
+    keys = tuple(image_keys)
+    if keys != ("agentview_rgb",):
+        raise ValueError(
+            "OpenVLA-OFT input-token mainline requires one agentview image, "
+            f"got {keys!r}"
+        )
+    if per_image_patches != INPUT_TOKEN_COUNT or int(token_dim) != INPUT_TOKEN_DIM:
+        raise ValueError(
+            "OpenVLA-OFT input-token sidecars require 256 patches with token_dim=4096, "
+            f"got patches={per_image_patches}, token_dim={int(token_dim)}"
+        )
+    return INPUT_TOKEN_COUNT, INPUT_TOKEN_COUNT * INPUT_TOKEN_DIM
 
 
 def _predict_input_token_chunk(
