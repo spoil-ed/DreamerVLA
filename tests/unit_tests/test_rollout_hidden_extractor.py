@@ -1,4 +1,4 @@
-"""OpenVLA-OFT input-token rollout extraction contracts."""
+"""OpenVLA-OFT hidden-token rollout extraction contracts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import torch
 from dreamervla.runners.rollout_hidden_extractor import (
     OFTBatchedDecoder,
     OFTRolloutHiddenExtractor,
-    input_token_embedding_from_projected,
+    hidden_token_from_projected,
 )
 
 TOKEN_COUNT = 256
@@ -90,10 +90,10 @@ def test_history_buffer_is_single_frame_on_mainline() -> None:
     assert len(second_history) == 1 and np.array_equal(second_history[0], second)
 
 
-def test_input_token_embedding_accepts_only_canonical_projected_shape() -> None:
+def test_hidden_token_accepts_only_canonical_projected_shape() -> None:
     projected = torch.zeros(2, TOKEN_COUNT, TOKEN_DIM)
     projected[:, -1, -1] = 7
-    hidden = input_token_embedding_from_projected(
+    hidden = hidden_token_from_projected(
         projected,
         image_keys=["agentview_rgb"],
         patches_per_image=TOKEN_COUNT,
@@ -103,13 +103,13 @@ def test_input_token_embedding_accepts_only_canonical_projected_shape() -> None:
     assert hidden.shape == (2, *EXPECTED_TOKEN_SHAPE)
 
     with pytest.raises(ValueError, match="one image"):
-        input_token_embedding_from_projected(
+        hidden_token_from_projected(
             projected,
             image_keys=["agentview_rgb", "eye_in_hand_rgb"],
             patches_per_image=TOKEN_COUNT,
         )
     with pytest.raises(ValueError, match=r"\[B,256,4096\]"):
-        input_token_embedding_from_projected(
+        hidden_token_from_projected(
             torch.zeros(2, TOKEN_COUNT, 1024),
             image_keys=["agentview_rgb"],
             patches_per_image=TOKEN_COUNT,

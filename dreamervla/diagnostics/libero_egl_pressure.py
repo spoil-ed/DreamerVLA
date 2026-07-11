@@ -263,7 +263,7 @@ def _build_online_env(config: PressureWorkerConfig) -> Any:
             "pixel_rotate_180": False,
             "prompt_style": "vla_policy",
             "include_state": False,
-            "obs_hidden_source": "input_token_embedding",
+            "obs_hidden_source": "hidden_token",
             "action_head_type": "oft_discrete_token",
             "full_record": False,
             "validate_canonical": True,

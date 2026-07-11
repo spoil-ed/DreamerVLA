@@ -26,7 +26,7 @@ from dreamervla.dataset.collection_manifest import (
     next_shard_index,
     online_rollout_episode_counts,
 )
-from dreamervla.preprocess.sidecar_schema import validate_input_token_preprocess_config
+from dreamervla.preprocess.sidecar_schema import validate_hidden_token_preprocess_config
 from dreamervla.runners.base_runner import (
     BaseRunner,
     _atomic_torch_save,
@@ -1484,7 +1484,7 @@ class OnlineCotrainRayRunner(BaseRunner):
             or {}
         )
         if enabled:
-            validate_input_token_preprocess_config(
+            validate_hidden_token_preprocess_config(
                 preprocess_config,
                 context="rollout.dump.preprocess_config",
             )
@@ -2688,7 +2688,7 @@ def _default_inference_cfg(policy_cfg: dict[str, Any]) -> dict[str, Any]:
 def _default_preprocess_config() -> dict[str, Any]:
     return {
         "action_head_type": "oft_discrete_token",
-        "obs_hidden_source": "input_token_embedding",
+        "obs_hidden_source": "hidden_token",
         "history": 1,
         "include_state": False,
         "hidden_key": "obs_embedding",

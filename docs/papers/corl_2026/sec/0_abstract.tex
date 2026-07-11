@@ -3,7 +3,7 @@ Vision--language--action policies provide strong semantic priors for robot contr
 while world models provide action-conditioned prediction and imagination.  We
 present DreamerVLA, a one-trajectory OpenVLA-OFT cotraining system that connects
 these capabilities through one explicit observation contract.  Every real step
-is represented by the current agent-view image's projected input-token grid in
+is represented by the current agent-view image's projected hidden-token grid in
 $\mathbb{R}^{256\times4096}$; the same grid is used by collection, replay,
 world-model warm-up, success-classifier training, and online cotraining.  A
 chunk-aware Transformer predicts future token grids, a spatial classifier

@@ -36,7 +36,7 @@ def test_wm_upper_bound_reads_only_official_data() -> None:
 
     assert cfg.pre_mainline.stage == "wm_upper_bound"
     assert cfg.offline_warmup.data_dir == cfg.task.hdf5_reward_dir
-    assert cfg.offline_warmup.hidden_dir == cfg.task.openvla_oft.input_token_dir
+    assert cfg.offline_warmup.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.online_rollout.total_env_steps == 0
     assert cfg.offline_warmup.require_reference_complete is False
@@ -50,7 +50,7 @@ def test_classifier_upper_bound_reads_only_official_data() -> None:
 
     assert cfg.pre_mainline.stage == "classifier_upper_bound"
     assert cfg.data.success_dir_raw == cfg.task.hdf5_reward_dir
-    assert cfg.data.success_dir_hidden == cfg.task.openvla_oft.input_token_dir
+    assert cfg.data.success_dir_hidden == cfg.task.openvla_oft.hidden_token_dir
     assert cfg.data.failure_dir_raw is None
     assert cfg.data.failure_dir_hidden is None
     assert cfg.data.train_split == "train"
@@ -70,7 +70,7 @@ def test_frozen_models_rl_is_policy_only_and_reads_official_replay() -> None:
     assert cfg.pre_mainline.stage == "frozen_models_rl"
     assert cfg._target_ == "dreamervla.runners.FrozenModelPolicyRunner"
     assert cfg.official_replay.data_dir == cfg.task.hdf5_reward_dir
-    assert cfg.official_replay.hidden_dir == cfg.task.openvla_oft.input_token_dir
+    assert cfg.official_replay.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
     assert list(cfg.official_replay.task_ids) == list(range(10))
     assert cfg.official_replay.capacity_mode == "total_sharded"
     assert cfg.official_replay.task_balanced is True
@@ -267,16 +267,38 @@ def test_pre_mainline_experiments_use_canonical_goal_sidecars(
 ) -> None:
     cfg = _compose_with_task(experiment, "openvla_onetraj_libero")
 
-    assert Path(str(cfg.task.openvla_oft.input_token_dir)).name == (
+    assert Path(str(cfg.task.openvla_oft.hidden_token_dir)).name == (
         "no_noops_t_256_oft_hidden_token_vla_policy_h1"
     )
     assert cfg.task.openvla_oft.expected_obs_hidden_source == "hidden_token"
     assert (
-        cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
+        cfg.task.openvla_oft.hidden_token.expected_obs_hidden_source
         == "hidden_token"
     )
-    assert cfg.task.openvla_oft.input_tokens.token_count == 256
-    assert cfg.task.openvla_oft.input_tokens.token_dim == 4096
+    assert cfg.task.openvla_oft.hidden_token.token_count == 256
+    assert cfg.task.openvla_oft.hidden_token.token_dim == 4096
+
+
+def test_pre_mainline_exposes_only_hidden_token_hydra_names() -> None:
+    cfg = _compose("classifier_official_upper_bound")
+
+    legacy_namespace = "input_" + "tokens"
+    legacy_dir = "input_" + "token_dir"
+    assert legacy_namespace not in cfg.task.openvla_oft
+    assert legacy_dir not in cfg.task.openvla_oft
+    assert cfg.task.openvla_oft.hidden_token.expected_obs_hidden_source == "hidden_token"
+    assert cfg.task.openvla_oft.hidden_token.token_count == 256
+    assert cfg.task.openvla_oft.hidden_token.token_dim == 4096
+    assert Path(str(cfg.task.openvla_oft.hidden_token_dir)).name == (
+        "no_noops_t_256_oft_hidden_token_vla_policy_h1"
+    )
+
+
+def test_classifier_official_recipe_enables_bounded_update_profiling_and_bf16() -> None:
+    cfg = _compose("classifier_official_upper_bound")
+
+    assert cfg.training.precision == "bf16"
+    assert cfg.training.update_profile_steps == 8
 
 
 @pytest.mark.parametrize(
@@ -328,7 +350,7 @@ def test_pre_mainline_rejects_joint_task_path_override(
     fake_reward = tmp_path / "libero_goal_failures"
     fake_hidden = tmp_path / "libero_goal_hidden_token_failures"
     OmegaConf.update(cfg, "task.hdf5_reward_dir", str(fake_reward))
-    OmegaConf.update(cfg, "task.openvla_oft.input_token_dir", str(fake_hidden))
+    OmegaConf.update(cfg, "task.openvla_oft.hidden_token_dir", str(fake_hidden))
     if experiment == "wm_official_upper_bound":
         OmegaConf.update(cfg, "offline_warmup.data_dir", str(fake_reward))
         OmegaConf.update(cfg, "offline_warmup.hidden_dir", str(fake_hidden))

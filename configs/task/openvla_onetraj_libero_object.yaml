@@ -24,9 +24,9 @@ openvla_oft:
   use_l1_regression: false
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  input_token_dir: ${task.hdf5_dir}_oft_hidden_token_vla_policy_h1
+  hidden_token_dir: ${task.hdf5_dir}_oft_hidden_token_vla_policy_h1
   failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256_failures
-  failure_input_token_dir: null
+  failure_hidden_token_dir: null
   expected_action_head_type: oft_discrete_token
   expected_obs_hidden_source: hidden_token
   expected_prompt_style: vla_policy

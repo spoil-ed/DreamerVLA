@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         default=data_path(
             "processed_data/"
             "OpenVLA_Onetraj_LIBERO_libero_goal/"
-            "no_noops_t_256_oft_input_token_embedding_vla_policy_h1/"
+            "no_noops_t_256_oft_hidden_token_vla_policy_h1/"
             "open_the_middle_drawer_of_the_cabinet_demo.hdf5"
         ),
         help="Hidden sidecar HDF5 containing data/<demo>/obs_embedding and lang_emb.",

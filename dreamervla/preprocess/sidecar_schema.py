@@ -13,14 +13,17 @@ DEFAULT_HIDDEN_KEY = "obs_embedding"
 REQUIRED_DEMO_DATASETS_KEY = "required_demo_datasets"
 SIDECAR_SCHEMA_VERSION = 1
 
-INPUT_TOKEN_SOURCE = "hidden_token"
-INPUT_TOKEN_COUNT = 256
-INPUT_TOKEN_DIM = 4096
-INPUT_TOKEN_HIDDEN_DIM = INPUT_TOKEN_COUNT * INPUT_TOKEN_DIM
-INPUT_TOKEN_SHAPE = (INPUT_TOKEN_COUNT, INPUT_TOKEN_DIM)
-INPUT_TOKEN_STORAGE_FORMAT = "tokenized"
-INPUT_TOKEN_ACTION_HEAD = "oft_discrete_token"
-LEGACY_INPUT_TOKEN_SOURCE = "input_token_embedding"
+HIDDEN_TOKEN_SOURCE = "hidden_token"
+HIDDEN_TOKEN_COUNT = 256
+HIDDEN_TOKEN_DIM = 4096
+HIDDEN_TOKEN_HIDDEN_DIM = HIDDEN_TOKEN_COUNT * HIDDEN_TOKEN_DIM
+HIDDEN_TOKEN_SHAPE = (HIDDEN_TOKEN_COUNT, HIDDEN_TOKEN_DIM)
+HIDDEN_TOKEN_STORAGE_FORMAT = "tokenized"
+HIDDEN_TOKEN_ACTION_HEAD = "oft_discrete_token"
+# The one intentional old public value. It is accepted only by the narrow
+# migration adapter below, after HDF5 attributes prove a [256, 4096] payload.
+# New artifacts must never emit it.
+LEGACY_PROJECTED_TOKEN_SOURCE = "input_token_embedding"
 REMOVED_SIDECAR_FIELDS = (
     "save_action_hidden",
     "action_hidden_key",
@@ -73,17 +76,17 @@ REFERENCE_OBS_DATASETS = (
 )
 
 
-def _input_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
+def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
     expected = {
-        "obs_hidden_source": INPUT_TOKEN_SOURCE,
-        "action_head_type": INPUT_TOKEN_ACTION_HEAD,
+        "obs_hidden_source": HIDDEN_TOKEN_SOURCE,
+        "action_head_type": HIDDEN_TOKEN_ACTION_HEAD,
         "hidden_key": DEFAULT_HIDDEN_KEY,
-        "token_count": INPUT_TOKEN_COUNT,
-        "token_dim": INPUT_TOKEN_DIM,
-        "hidden_dim": INPUT_TOKEN_HIDDEN_DIM,
-        "hidden_storage_format": INPUT_TOKEN_STORAGE_FORMAT,
+        "token_count": HIDDEN_TOKEN_COUNT,
+        "token_dim": HIDDEN_TOKEN_DIM,
+        "hidden_dim": HIDDEN_TOKEN_HIDDEN_DIM,
+        "hidden_storage_format": HIDDEN_TOKEN_STORAGE_FORMAT,
         "num_images_in_input": 1,
-        "patches_per_image": INPUT_TOKEN_COUNT,
+        "patches_per_image": HIDDEN_TOKEN_COUNT,
         "history": 1,
         "include_state": False,
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
@@ -95,15 +98,15 @@ def _input_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
         if got != wanted:
             errors.append(f"{key}={got!r}, expected {wanted!r}")
     shape = config.get("obs_embedding_shape")
-    if not isinstance(shape, (list, tuple)) or list(shape) != list(INPUT_TOKEN_SHAPE):
-        errors.append(f"obs_embedding_shape={shape!r}, expected {list(INPUT_TOKEN_SHAPE)!r}")
+    if not isinstance(shape, (list, tuple)) or list(shape) != list(HIDDEN_TOKEN_SHAPE):
+        errors.append(f"obs_embedding_shape={shape!r}, expected {list(HIDDEN_TOKEN_SHAPE)!r}")
     present_removed = [key for key in REMOVED_SIDECAR_FIELDS if key in config]
     if present_removed:
         errors.append(f"removed sidecar fields are present: {present_removed!r}")
     return errors
 
 
-def validate_input_token_array_shape(
+def validate_hidden_token_array_shape(
     shape: Sequence[int],
     *,
     context: str,
@@ -111,21 +114,21 @@ def validate_input_token_array_shape(
     """Reject every external observation shape except ``[...,256,4096]``."""
 
     trailing = tuple(int(dim) for dim in shape[-2:]) if len(shape) >= 2 else tuple(shape)
-    if trailing != INPUT_TOKEN_SHAPE:
+    if trailing != HIDDEN_TOKEN_SHAPE:
         raise ValueError(
-            f"{context} must use {INPUT_TOKEN_SOURCE} trailing shape "
-            f"{INPUT_TOKEN_SHAPE}, got {tuple(int(dim) for dim in shape)}"
+            f"{context} must use {HIDDEN_TOKEN_SOURCE} trailing shape "
+            f"{HIDDEN_TOKEN_SHAPE}, got {tuple(int(dim) for dim in shape)}"
         )
 
 
-def validate_input_token_preprocess_config(
+def validate_hidden_token_preprocess_config(
     config: Mapping[str, Any],
     *,
     context: str,
 ) -> None:
     """Validate metadata without aliases, inferred defaults, or conversions."""
 
-    errors = _input_token_contract_errors(config)
+    errors = _hidden_token_contract_errors(config)
     if errors:
         raise ValueError(
             f"{context} does not satisfy the only supported observation contract:\n  - "
@@ -151,8 +154,8 @@ def _normalize_known_legacy_config(
     before any normalized metadata is returned.
     """
 
-    if config.get("obs_hidden_source") != LEGACY_INPUT_TOKEN_SOURCE:
-        validate_input_token_preprocess_config(config, context=context)
+    if config.get("obs_hidden_source") != LEGACY_PROJECTED_TOKEN_SOURCE:
+        validate_hidden_token_preprocess_config(config, context=context)
         return dict(config), False
 
     unsafe_fields: list[str] = []
@@ -172,28 +175,28 @@ def _normalize_known_legacy_config(
         normalized.pop(key, None)
     normalized.update(
         {
-            "obs_hidden_source": INPUT_TOKEN_SOURCE,
-            "token_count": INPUT_TOKEN_COUNT,
-            "hidden_dim": INPUT_TOKEN_HIDDEN_DIM,
-            "patches_per_image": INPUT_TOKEN_COUNT,
-            "obs_embedding_shape": list(INPUT_TOKEN_SHAPE),
+            "obs_hidden_source": HIDDEN_TOKEN_SOURCE,
+            "token_count": HIDDEN_TOKEN_COUNT,
+            "hidden_dim": HIDDEN_TOKEN_HIDDEN_DIM,
+            "patches_per_image": HIDDEN_TOKEN_COUNT,
+            "obs_embedding_shape": list(HIDDEN_TOKEN_SHAPE),
         }
     )
-    validate_input_token_preprocess_config(normalized, context=context)
+    validate_hidden_token_preprocess_config(normalized, context=context)
     return normalized, True
 
 
 def _validate_known_legacy_hdf5_attrs(attrs: Any, *, context: str) -> None:
     expected_attrs: dict[str, Any] = {
-        "obs_hidden_source": LEGACY_INPUT_TOKEN_SOURCE,
+        "obs_hidden_source": LEGACY_PROJECTED_TOKEN_SOURCE,
         "hidden_key": DEFAULT_HIDDEN_KEY,
-        "hidden_dim": INPUT_TOKEN_HIDDEN_DIM,
-        "token_count": INPUT_TOKEN_COUNT,
-        "token_dim": INPUT_TOKEN_DIM,
-        "hidden_storage_format": INPUT_TOKEN_STORAGE_FORMAT,
+        "hidden_dim": HIDDEN_TOKEN_HIDDEN_DIM,
+        "token_count": HIDDEN_TOKEN_COUNT,
+        "token_dim": HIDDEN_TOKEN_DIM,
+        "hidden_storage_format": HIDDEN_TOKEN_STORAGE_FORMAT,
         "history": 1,
         "include_state": False,
-        "action_head_type": INPUT_TOKEN_ACTION_HEAD,
+        "action_head_type": HIDDEN_TOKEN_ACTION_HEAD,
     }
     errors: list[str] = []
     for key, expected in expected_attrs.items():
@@ -217,7 +220,7 @@ def _validate_known_legacy_hdf5_attrs(attrs: Any, *, context: str) -> None:
         )
 
 
-def validate_input_token_sidecar_dir(
+def validate_hidden_token_sidecar_dir(
     hidden_dir: str | Path,
     *,
     expected_filenames: Sequence[str] | None = None,
@@ -231,7 +234,7 @@ def validate_input_token_sidecar_dir(
     config_path = directory / "preprocess_config.json"
     if not config_path.is_file():
         raise FileNotFoundError(
-            f"input-token sidecar is missing preprocess_config.json: {config_path}"
+            f"hidden-token sidecar is missing preprocess_config.json: {config_path}"
         )
     with config_path.open("r", encoding="utf-8") as handle:
         config = json.load(handle)
@@ -244,14 +247,14 @@ def validate_input_token_sidecar_dir(
 
     paths = sorted(directory.glob("*.hdf5"))
     if not paths:
-        raise FileNotFoundError(f"no input-token HDF5 shards under {directory}")
+        raise FileNotFoundError(f"no hidden-token HDF5 shards under {directory}")
 
     actual_names = {path.name for path in paths}
     if expected_filenames is not None:
         expected_names = {str(name) for name in expected_filenames}
         if actual_names != expected_names:
             raise ValueError(
-                "input-token sidecar file set mismatch: "
+                "hidden-token sidecar file set mismatch: "
                 f"missing={sorted(expected_names - actual_names)!r}, "
                 f"extra={sorted(actual_names - expected_names)!r}"
             )
@@ -316,10 +319,10 @@ def validate_input_token_sidecar_dir(
                     if not isinstance(dataset, h5py.Dataset) or dataset.ndim != 3:
                         raise ValueError(
                             f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY} must be "
-                            f"[T,{INPUT_TOKEN_COUNT},{INPUT_TOKEN_DIM}], got "
+                            f"[T,{HIDDEN_TOKEN_COUNT},{HIDDEN_TOKEN_DIM}], got "
                             f"{getattr(dataset, 'shape', None)!r}"
                         )
-                    validate_input_token_array_shape(
+                    validate_hidden_token_array_shape(
                         dataset.shape,
                         context=f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY}",
                     )
@@ -413,7 +416,7 @@ def required_demo_datasets() -> list[str]:
 def required_demo_datasets_from_config(config: Mapping[str, Any]) -> list[str]:
     """Validate the exact metadata contract and return its fixed dataset key."""
 
-    validate_input_token_preprocess_config(
+    validate_hidden_token_preprocess_config(
         config,
         context="preprocess_config.json",
     )

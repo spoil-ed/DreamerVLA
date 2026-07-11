@@ -1,4 +1,4 @@
-# Shared OpenVLA-OFT input-token base for all four LIBERO suites.
+# Shared OpenVLA-OFT hidden-token base for all four LIBERO suites.
 
 image_resolution: 256
 image_size: 64
@@ -11,7 +11,7 @@ hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${t
 hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.suite}/no_noops_t_256_remaining_reward
 collected_rollout_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}
 collected_reward_dir: ${task.collected_rollout_dir}/reward
-collected_input_token_dir: ${task.collected_rollout_dir}/hidden
+collected_hidden_token_dir: ${task.collected_rollout_dir}/hidden
 openvla_oft:
   dataset_statistics_key: ${task.suite}_no_noops
   action_horizon: 8
@@ -23,8 +23,8 @@ openvla_oft:
   use_l1_regression: false
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  input_token_dir: ${task.hdf5_dir}_oft_hidden_token_vla_policy_h1
-  failure_input_token_dir: null
+  hidden_token_dir: ${task.hdf5_dir}_oft_hidden_token_vla_policy_h1
+  failure_hidden_token_dir: null
   expected_action_head_type: oft_discrete_token
   expected_obs_hidden_source: hidden_token
   expected_prompt_style: vla_policy
@@ -32,7 +32,7 @@ openvla_oft:
   expected_include_state: false
   expected_rotate_images_180: true
   chunk_size: ${task.openvla_oft.time_horizon}
-  input_tokens:
+  hidden_token:
     expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
     expected_obs_hidden_source: hidden_token
     expected_prompt_style: ${task.openvla_oft.expected_prompt_style}
@@ -41,9 +41,9 @@ openvla_oft:
     expected_rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
     num_images_in_input: ${task.openvla_oft.num_images_in_input}
     patches_per_image: 256
-    token_count: ${dvla_mul:${task.openvla_oft.input_tokens.num_images_in_input},${task.openvla_oft.input_tokens.patches_per_image}}
+    token_count: ${dvla_mul:${task.openvla_oft.hidden_token.num_images_in_input},${task.openvla_oft.hidden_token.patches_per_image}}
     token_dim: 4096
-    wm_obs_dim: ${dvla_mul:${task.openvla_oft.input_tokens.token_count},${task.openvla_oft.input_tokens.token_dim}}
+    wm_obs_dim: ${dvla_mul:${task.openvla_oft.hidden_token.token_count},${task.openvla_oft.hidden_token.token_dim}}
     chunk_size: ${task.openvla_oft.chunk_size}
     hidden_state_dim: 4096
     latent_stage: query_before
@@ -52,7 +52,7 @@ openvla_oft:
     proprio_dim: 8
     proprio_emb_dim: 10
     num_proprio_repeat: 1
-    lang_emb_dir: ${task.openvla_oft.input_token_dir}
+    lang_emb_dir: ${task.openvla_oft.hidden_token_dir}
     lang_dim: 4096
     lang_emb_dim: 32
     num_lang_repeat: 1

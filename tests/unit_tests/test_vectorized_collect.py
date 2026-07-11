@@ -119,8 +119,8 @@ def fake_infer(preps):
     out = []
     for i in range(len(preps)):
         action_chunk = [np.full(7, float(i), np.float64)]  # one action per slot
-        input_tokens = torch.zeros(256, 4096, dtype=torch.float16)
-        out.append((action_chunk, input_tokens))
+        hidden_token = torch.zeros(256, 4096, dtype=torch.float16)
+        out.append((action_chunk, hidden_token))
     return out
 
 
@@ -309,7 +309,7 @@ def test_records_init_state_index_from_reset_record():
 
 
 def test_rotating_writer_slices_demos_through_vectorized_loop(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     """collect_vectorized only passes preprocess_config/data_attrs on the first demo;
     the rotating writer must re-emit them per shard so every sliced shard is readable."""
@@ -327,7 +327,7 @@ def test_rotating_writer_slices_demos_through_vectorized_loop(
     )
     n = collect_vectorized(
         vec, exts, fake_infer, writer, work_list, episode_horizon=5,
-        preprocess_config=input_token_preprocess_config,
+        preprocess_config=hidden_token_preprocess_config,
         data_attrs={"task_suite_name": "libero_goal", "env_name": "x"},
     )
     writer.close()

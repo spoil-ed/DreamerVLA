@@ -1,4 +1,4 @@
-"""OpenVLA-OFT input-token online cotrain runner.
+"""OpenVLA-OFT hidden-token online cotrain runner.
 
 One-trajectory VLA -> parallel online rollout ->
 replay -> WM/classifier warmup -> WM/classifier + slow-policy RL cotrain.
@@ -9,7 +9,7 @@ machinery (``dreamervla.*`` only); the offline ``DreamerVLARunner.run()`` is lef
 untouched (this runner builds its own components from the same Hydra config + the
 inherited helpers).
 
-The only external observation is the current-frame projected input-token grid
+The only external observation is the current-frame projected hidden-token grid
 ``[256,4096]``. Action-query/hidden-token route selection has been removed.
 """
 
@@ -34,7 +34,7 @@ from dreamervla.algorithms.dreamervla import (
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.preprocess.sidecar_schema import INPUT_TOKEN_SHAPE
+from dreamervla.preprocess.sidecar_schema import HIDDEN_TOKEN_SHAPE
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.classifier_update import online_classifier_update_step
 from dreamervla.runners.distributed import unwrap_module as _unwrap
@@ -80,7 +80,7 @@ def build_cotrain_replay_transition(
     Multi-env env instances live in child processes, so the parent cannot call
     ``DreamerVLAOnlineTrainEnv.make_transition``. This rebuilds the same record
     from the child's ``full_record`` + per-slot state and is numerically
-    equivalent to ``make_transition`` for the OFT input-token rollout
+    equivalent to ``make_transition`` for the OFT hidden-token rollout
     (env action scale == ``wm_action`` scale; ``info['wm_action']`` is the
     executed env-scale action)."""
     done = bool(terminated or truncated)
@@ -117,7 +117,7 @@ def validate_rollout_cfg(
 ) -> None:
     """Early validation for the online rollout knobs (RLinf-style fail-fast).
 
-    ``num_envs>1`` enables the vectorized input-token rollout path."""
+    ``num_envs>1`` enables the vectorized hidden-token rollout path."""
     if num_envs < 1:
         raise ValueError(f"online_rollout.num_envs must be >= 1, got {num_envs}")
     if num_envs > 1:
@@ -446,7 +446,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 OmegaConf.select(
                     env_cfg,
                     "obs_hidden_source",
-                    default="input_token_embedding",
+                    default="hidden_token",
                 )
             ),
             "_libero_render_backend": render_backend,
@@ -523,11 +523,11 @@ class OnlineCotrainRunner(DreamerVLARunner):
         del processor, target_token_id
         is_first = bool(obs.get("is_first", False))
         task_desc = str(obs.get("task_description", ""))
-        extractor = getattr(self, "_oft_input_token_extractor", None)
+        extractor = getattr(self, "_oft_hidden_token_extractor", None)
         self._last_rollout_lang_emb = None
         if extractor is None:
             raise RuntimeError(
-                "online cotrain requires the OpenVLA-OFT input-token extractor"
+                "online cotrain requires the OpenVLA-OFT hidden-token extractor"
             )
         if is_first and hasattr(extractor, "reset"):
             extractor.reset()
@@ -542,9 +542,9 @@ class OnlineCotrainRunner(DreamerVLARunner):
         hidden = hidden_state.to(self.device).float()
         if hidden.ndim == 2:
             hidden = hidden.unsqueeze(0)
-        if hidden.ndim != 3 or tuple(hidden.shape[-2:]) != INPUT_TOKEN_SHAPE:
+        if hidden.ndim != 3 or tuple(hidden.shape[-2:]) != HIDDEN_TOKEN_SHAPE:
             raise ValueError(
-                "input-token extractor must return [256,4096] or "
+                "hidden-token extractor must return [256,4096] or "
                 f"[B,256,4096], got {tuple(hidden.shape)}"
             )
         return hidden
@@ -554,7 +554,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         frame. Returns (action[7], obs_embedding, latent).
 
         The env is driven by the TRAINED actor (``_actor_action_and_latent``): the OFT
-        extractor supplies only the projected input-token latent (the per-step
+        extractor supplies only the projected hidden-token latent (the per-step
         ``obs_embedding`` the WM + classifier consume); the action itself comes from the
         WM-latent + actor sample. The actor is an adapter split out of the VLA, KL/BC-anchored
         to a frozen ≈base reference, so deploying it is safe and closes the on-policy loop
@@ -562,7 +562,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         rollout success unmovable by PPO).
 
         For the OpenVLA mainline, ``obs_embedding`` is the projected current-frame
-        input-token embedding."""
+        hidden-token embedding."""
         is_first = bool(obs.get("is_first", False))
         obs_embedding = self._rollout_obs_embedding(processor, obs, target_token_id)
         chunk, latent = self._actor_action_chunk_and_latent(
@@ -578,12 +578,12 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if removed_latent_type is not None:
             raise ValueError(
                 "latent_type route selection has been removed; the only supported "
-                "observation is input_token_embedding [256,4096]"
+                "observation is hidden_token [256,4096]"
             )
         if self.distributed.is_main_process:
             print(
                 "[online-cotrain] runner begin. "
-                "obs_hidden_source=input_token_embedding",
+                "obs_hidden_source=hidden_token",
                 flush=True,
             )
         env_image_keys = OmegaConf.select(
@@ -593,7 +593,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         OmegaConf.update(
             cfg,
             "env.obs_hidden_source",
-            "input_token_embedding",
+            "hidden_token",
             force_add=True,
         )
 
@@ -610,7 +610,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         if total_env_steps <= 0:
             self.encoder = None
             self.processor = None
-            self._oft_input_token_extractor = None
+            self._oft_hidden_token_extractor = None
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
             self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
@@ -620,7 +620,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                 if hasattr(self.encoder, "_build_processor")
                 else None
             )
-            self._oft_input_token_extractor = self._build_oft_input_token_extractor(cfg)
+            self._oft_hidden_token_extractor = self._build_oft_hidden_token_extractor(cfg)
 
         self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
             device=self.device, dtype=torch.bfloat16
@@ -666,7 +666,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         )
         self._assert_optimizers_disjoint()
 
-    def _build_oft_input_token_extractor(self, cfg: DictConfig) -> Any | None:
+    def _build_oft_hidden_token_extractor(self, cfg: DictConfig) -> Any | None:
         encoder = getattr(self, "encoder", None)
         if encoder is None or not hasattr(encoder, "vla") or not hasattr(encoder, "processor"):
             return None
@@ -701,7 +701,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     default="libero_goal_no_noops",
                 )
             ),
-            obs_hidden_source="input_token_embedding",
+            obs_hidden_source="hidden_token",
         )
 
     def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
@@ -1225,17 +1225,17 @@ class OnlineCotrainRunner(DreamerVLARunner):
         continuous vectorized rollout, interleaving the same training burst per env-step.
         The vec env backend is chosen by ``render_backend`` (``build_rollout_vec_env``):
         egl -> RLinf-vendored ``OnlineEglVecEnv``, osmesa -> ``VecRolloutEnv``.
-        The single-env osmesa path (num_envs==1) uses the same input-token
+        The single-env osmesa path (num_envs==1) uses the same hidden-token
         contract."""
-        main_extractor = getattr(self, "_oft_input_token_extractor", None)
+        main_extractor = getattr(self, "_oft_hidden_token_extractor", None)
         if main_extractor is None:
             raise RuntimeError(
-                "vectorized cotrain (num_envs>1) requires an OFT input-token "
+                "vectorized cotrain (num_envs>1) requires an OFT hidden-token "
                 "extractor; none was built (non-OFT encoder?). Use num_envs=1."
             )
         # One extractor per slot (isolated history); reuse the main one for slot 0.
         extractors = [main_extractor] + [
-            self._build_oft_input_token_extractor(cfg) for _ in range(num_envs - 1)
+            self._build_oft_hidden_token_extractor(cfg) for _ in range(num_envs - 1)
         ]
 
         env_vars = {
@@ -1378,7 +1378,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
         env_step = 0
         ids = list(range(num_envs))
         while env_step < total_env_steps:
-            # Per slot: the OFT extractor supplies the input-token obs_embedding the
+            # Per slot: the OFT extractor supplies the hidden-token obs_embedding the
             # WM + classifier consume); the TRAINED actor produces the EXECUTED action from
             # the WM latent. (Was: the frozen OFT base action — which left the actor PPO
             # optimizes undeployed.)

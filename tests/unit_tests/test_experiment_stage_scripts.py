@@ -180,13 +180,13 @@ def test_classifier_and_world_model_train_scripts_expose_resume_and_periodic_ckp
     assert "wm_step_*.ckpt" in world_model_text
 
 
-def test_input_token_preprocess_uses_configured_torchrun_world_size() -> None:
+def test_hidden_token_preprocess_uses_configured_torchrun_world_size() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "preprocess" / "35_oft_input_tokens.sh"
+    script = root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
     text = script.read_text(encoding="utf-8")
-    assert '--nproc-per-node="${OFT_INPUT_TOKEN_GPUS}"' in text
-    assert "dreamervla.preprocess.preprocess_oft_input_tokens" in text
-    assert "obs_hidden_source=input_token_embedding" in text
+    assert '--nproc-per-node="${OFT_HIDDEN_TOKEN_GPUS}"' in text
+    assert "dreamervla.preprocess.preprocess_oft_hidden_token" in text
+    assert "obs_hidden_source=hidden_token" in text
 
 
 def test_cotrain_world_model_ddp_tracks_unused_parameters() -> None:
@@ -258,7 +258,7 @@ def test_classifier_check_treats_missing_failure_dirs_as_optional(
         json.dumps(
             {
                 "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "input_token_embedding",
+                "obs_hidden_source": "hidden_token",
                 "hidden_key": "obs_embedding",
                 "token_count": 256,
                 "token_dim": 4096,

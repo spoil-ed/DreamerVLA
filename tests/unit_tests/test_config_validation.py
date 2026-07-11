@@ -207,7 +207,7 @@ def test_validate_cfg_can_require_existing_dataset_paths(tmp_path: Path) -> None
     "task_name",
     ["libero_goal", "libero_object", "libero_spatial", "libero_10"],
 )
-def test_task_latent_specs_are_canonical_input_tokens(task_name: str) -> None:
+def test_task_latent_specs_are_canonical_hidden_token(task_name: str) -> None:
     register_dreamervla_resolvers()
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
@@ -220,12 +220,12 @@ def test_task_latent_specs_are_canonical_input_tokens(task_name: str) -> None:
     assert "hidden_token_tokens" not in cfg.task
     assert "hidden_token_specs" not in cfg.task
 
-    oft_input = cfg.task.openvla_oft.input_tokens
-    assert oft_input.latent_stage == "query_before"
-    assert oft_input.expected_obs_hidden_source == "input_token_embedding"
-    assert oft_input.token_count == 256
-    assert oft_input.token_dim == 4096
-    assert oft_input.wm_obs_dim == 256 * 4096
+    oft_hidden = cfg.task.openvla_oft.hidden_token
+    assert oft_hidden.latent_stage == "query_before"
+    assert oft_hidden.expected_obs_hidden_source == "hidden_token"
+    assert oft_hidden.token_count == 256
+    assert oft_hidden.token_dim == 4096
+    assert oft_hidden.wm_obs_dim == 256 * 4096
 
 
 def test_validate_cfg_rejects_removed_task_latent_spec() -> None:
@@ -265,9 +265,9 @@ def test_validate_cfg_rejects_removed_oft_component_fields_even_when_null(
         validate_cfg(cfg)
 
 
-def test_validate_cfg_rejects_noncanonical_oft_input_token_patch_count() -> None:
+def test_validate_cfg_rejects_noncanonical_oft_hidden_token_patch_count() -> None:
     cfg = _compose_mainline()
-    cfg.task.openvla_oft.input_tokens.patches_per_image = 128
+    cfg.task.openvla_oft.hidden_token.patches_per_image = 128
 
     with pytest.raises(ValueError, match="patches_per_image must be 256"):
         validate_cfg(cfg)
@@ -415,7 +415,7 @@ def test_classifier_config_comments_use_role_based_wm_wording() -> None:
     assert offenders == {}
 
 
-def test_openvla_coldstart_task_comment_documents_input_token_source() -> None:
+def test_openvla_coldstart_task_comment_documents_hidden_token_source() -> None:
     config_path = (
         Path(__file__).resolve().parents[2]
         / "configs"
@@ -427,8 +427,9 @@ def test_openvla_coldstart_task_comment_documents_input_token_source() -> None:
         if line.lstrip().startswith("#")
     )
 
-    assert "obs_hidden_source=input_token_embedding" in comment_text
-    assert "obs_hidden_source=hidden_token" not in comment_text
+    assert "obs_hidden_source=hidden_token" in comment_text
+    legacy_source = "input_" + "token_" + "embedding"
+    assert f"obs_hidden_source={legacy_source}" not in comment_text
 
 
 def test_validate_cfg_rejects_chunk_world_model_sequence_length_mismatch() -> None:

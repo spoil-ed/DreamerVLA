@@ -20,9 +20,9 @@ from dreamervla.diagnostics.wm_single_trajectory_overfit import (
     run_overfit,
 )
 from dreamervla.diagnostics.wm_single_trajectory_raw_overfit import load_raw_episode
-from dreamervla.preprocess.preprocess_oft_input_tokens import (
+from dreamervla.preprocess.preprocess_oft_hidden_token import (
     _load_oft_components,
-    _predict_input_token_chunk,
+    _predict_hidden_token_chunk,
     _task_prompt_from_path,
 )
 from dreamervla.utils.paths import data_path
@@ -69,7 +69,7 @@ def encode_raw_demo_with_vla(
         obs_group = hdf5["data"][demo_key]["obs"]
         for start in range(0, raw_episode.states.shape[0], batch_size):
             end = min(start + batch_size, raw_episode.states.shape[0])
-            input_tokens, lang_emb = _predict_input_token_chunk(
+            hidden_token, lang_emb = _predict_hidden_token_chunk(
                 components=components,
                 args=args,
                 obs_group=obs_group,
@@ -78,7 +78,7 @@ def encode_raw_demo_with_vla(
                 start=start,
                 end=end,
             )
-            hidden_chunks.append(input_tokens.astype(np.float32, copy=False))
+            hidden_chunks.append(hidden_token.astype(np.float32, copy=False))
             if lang_embedding is None:
                 lang_embedding = lang_emb[0].astype(np.float32, copy=False)
     if lang_embedding is None:

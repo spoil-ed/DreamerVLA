@@ -111,7 +111,7 @@ def _write_complete_collected_pair(
     shard_name: str,
     task_ids: list[int],
     *,
-    obs_hidden_source: str = "input_token_embedding",
+    obs_hidden_source: str = "hidden_token",
     token_count: int = 256,
     token_dim: int = 4096,
 ) -> None:
@@ -187,7 +187,7 @@ def test_ray_launcher_plan_wires_coldstart_outputs_into_cotrain_warmup(tmp_path)
 
     assert plan.mode == "ray"
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.input_token_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.hidden_token_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
@@ -310,7 +310,7 @@ def test_noray_launcher_plan_uses_pure_hydra_collector(tmp_path) -> None:
     assert plan.mode == "noray"
     assert "experiment=collect_rollouts_ray" not in plan.collect_cmd
     assert f"task.openvla_oft.hdf5_reward_dir={plan.reward_dir}" in plan.collect_cmd
-    assert f"task.openvla_oft.input_token_dir={plan.hidden_dir}" in plan.collect_cmd
+    assert f"task.openvla_oft.hidden_token_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"++collect.hidden_dir={plan.hidden_dir}" in plan.collect_cmd
     assert f"offline_warmup.data_dir={plan.reward_dir}" in plan.cotrain_cmd
     assert f"offline_warmup.hidden_dir={plan.hidden_dir}" in plan.cotrain_cmd
@@ -923,7 +923,7 @@ def test_collect_resume_function_handles_skip_and_manifest(tmp_path, monkeypatch
         json.dumps(
             {
                 "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "input_token_embedding",
+                "obs_hidden_source": "hidden_token",
                 "hidden_key": "obs_embedding",
                 "token_count": 256,
                 "token_dim": 4096,
@@ -1070,7 +1070,7 @@ def test_reused_coldstart_output_validation_rejects_56_token_sidecar(tmp_path) -
 
     errors = validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir)
 
-    assert any("obs_hidden_source" in error for error in errors)
+    assert not any("obs_hidden_source" in error for error in errors)
     assert any("token_count" in error for error in errors)
     assert any("obs_embedding_shape" in error for error in errors)
 
@@ -1098,7 +1098,7 @@ def test_collect_resume_rejects_count_complete_56_token_collection(
         token_count=56,
     )
 
-    with pytest.raises(ValueError, match="input-token schema"):
+    with pytest.raises(ValueError, match="hidden-token schema"):
         mod.collect_resume(
             plan,
             target_episodes=2,

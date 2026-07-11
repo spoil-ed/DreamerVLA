@@ -22,9 +22,8 @@ imagination rollout trains the actor and value head:
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -36,7 +35,8 @@ from torch.distributions import Normal
 
 from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 from dreamervla.utils.polyak import soft_update
-from dreamervla.utils.torch_utils import move_mapping_to_device
+from dreamervla.utils.torch_utils import autocast_context, move_mapping_to_device
+from dreamervla.utils.update_timing import GradientUpdateTimer
 
 
 @contextmanager
@@ -56,27 +56,14 @@ def _manual_autocast_context(
     optim_cfg: Mapping[str, Any],
     device: torch.device,
 ):
-    raw = str(optim_cfg.get("precision", optim_cfg.get("dtype", "fp32"))).strip().lower()
-    aliases = {
-        "": "fp32",
-        "none": "fp32",
-        "float32": "fp32",
-        "fp32": "fp32",
-        "bfloat16": "bf16",
-        "bf16": "bf16",
-        "float16": "fp16",
-        "fp16": "fp16",
-    }
-    if raw not in aliases:
+    precision = str(optim_cfg.get("precision", optim_cfg.get("dtype", "fp32")))
+    try:
+        return autocast_context(device, precision)
+    except ValueError as exc:
         raise ValueError(
             "optim.precision must be one of fp32, bf16, or fp16; "
-            f"got {optim_cfg.get('precision', optim_cfg.get('dtype'))!r}"
-        )
-    precision = aliases[raw]
-    if precision == "fp32":
-        return nullcontext()
-    dtype = torch.bfloat16 if precision == "bf16" else torch.float16
-    return torch.amp.autocast(device_type=device.type, dtype=dtype)
+            f"got {precision!r}"
+        ) from exc
 
 
 def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
@@ -142,7 +129,8 @@ def world_model_pretrain_step(
     device: torch.device,
     optim_cfg: DictConfig,
     profile_timings: dict[str, float] | None = None,
-) -> dict[str, float]:
+    metrics_mode: str = "full",
+) -> dict[str, Any]:
     """Phase-1 WM update: dispatch through ``world_model(batch)`` (forward).
 
     Retained WM implementations accept either embedding batches or DreamerV3
@@ -151,70 +139,68 @@ def world_model_pretrain_step(
     """
     del policy  # batch is already encoded by the workspace; nothing to do here.
 
-    def _sync_for_profile() -> None:
-        if profile_timings is not None and device.type == "cuda":
-            torch.cuda.synchronize(device)
-
-    def _record_profile_stage(name: str, start: float) -> float:
-        _sync_for_profile()
-        now = time.perf_counter()
-        if profile_timings is not None:
-            profile_timings[name] = now - start
-        return now
-
-    profile_stage_start = time.perf_counter()
+    resolved_metrics_mode = str(metrics_mode).lower()
+    if resolved_metrics_mode not in {"full", "loss_only", "loss_tensor"}:
+        raise ValueError(
+            "metrics_mode must be one of: full, loss_only, loss_tensor"
+        )
+    timer = GradientUpdateTimer(device, enabled=profile_timings is not None)
     flat_batch: dict[str, Any] = {}
-    for key in (
-        "obs_embedding",
-        "next_obs_embedding",
-        "action",
-        "action_mask",
-        "reward",
-        "done",
-        "next_obs_image_hiddens",
-        "next_obs_image_token_ids",
-        # DreamerV3 sequence WM batches.
-        "images",
-        "tokens",
-        "actions",
-        "current_actions",
-        "proprio",
-        "lang_emb",
-        "rewards",
-        "dones",
-        "is_first",
-        "is_terminal",
-        "is_last",
-        "success_to_go",
-        "return_to_go",
-        "return_targets",
-        "task_ids",
-    ):
-        value = batch.get(key)
-        if isinstance(value, torch.Tensor):
-            flat_batch[key] = value.to(device)
-        elif value is not None:
-            flat_batch[key] = value
-    profile_stage_start = _record_profile_stage("h2d", profile_stage_start)
+    with timer.device_stage("h2d"):
+        for key in (
+            "obs_embedding",
+            "next_obs_embedding",
+            "action",
+            "action_mask",
+            "reward",
+            "done",
+            "next_obs_image_hiddens",
+            "next_obs_image_token_ids",
+            # DreamerV3 sequence WM batches.
+            "images",
+            "tokens",
+            "actions",
+            "current_actions",
+            "proprio",
+            "lang_emb",
+            "rewards",
+            "dones",
+            "is_first",
+            "is_terminal",
+            "is_last",
+            "success_to_go",
+            "return_to_go",
+            "return_targets",
+            "task_ids",
+        ):
+            value = batch.get(key)
+            if isinstance(value, torch.Tensor):
+                flat_batch[key] = value.to(device, non_blocking=True)
+            elif value is not None:
+                flat_batch[key] = value
 
     world_model.train()
-    with _manual_autocast_context(optim_cfg, device):
-        losses = world_model(flat_batch)
-    profile_stage_start = _record_profile_stage("forward", profile_stage_start)
+    optimizer.zero_grad(set_to_none=bool(optim_cfg.get("zero_grad_set_to_none", True)))
+    with timer.device_stage("forward"):
+        with _manual_autocast_context(optim_cfg, device):
+            losses = world_model(flat_batch)
     loss_tensor = losses.get("_loss", losses.get("loss"))
     if not isinstance(loss_tensor, torch.Tensor):
         raise KeyError("world_model output must contain Tensor key 'loss' or '_loss'")
 
-    optimizer.zero_grad(set_to_none=bool(optim_cfg.get("zero_grad_set_to_none", True)))
-    loss_tensor.backward()
-    profile_stage_start = _record_profile_stage("backward", profile_stage_start)
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        world_model.parameters(),
-        max_norm=float(optim_cfg.get("grad_clip_norm", 1.0)),
-    )
-    profile_stage_start = _record_profile_stage("grad_clip", profile_stage_start)
-    optimizer.step()
-    profile_stage_start = _record_profile_stage("optimizer", profile_stage_start)
+    with timer.device_stage("backward"):
+        loss_tensor.backward()
+    with timer.device_stage("grad_clip"):
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            world_model.parameters(),
+            max_norm=float(optim_cfg.get("grad_clip_norm", 1.0)),
+        )
+    with timer.device_stage("optimizer"):
+        optimizer.step()
+
+    # CUDA events let all kernels run asynchronously. One synchronization here
+    # resolves every profiled device stage without forcing a sync per boundary.
+    timer.synchronize_device()
 
     def _f(key: str, default: float = 0.0) -> float:
         v = losses.get(key)
@@ -222,56 +208,68 @@ def world_model_pretrain_step(
             float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(default)
         )
 
-    hidden_mse = _f("hidden_mse", _f("next_latent_mse"))
-    next_latent_mse = _f("next_latent_mse", hidden_mse)
-    hidden_rec_loss = _f("hidden_rec_loss", hidden_mse)
-
-    metrics = {
-        "loss": float(loss_tensor.detach().cpu()),
-        "kl_loss": _f("kl_loss"),
-        "dyn_kl": _f("dyn_kl"),
-        "rep_kl": _f("rep_kl"),
-        "transition_loss": _f("transition_loss"),
-        "reward_loss": _f("reward_loss"),
-        "reward_pred_mean": _f("reward_pred_mean"),
-        "reward_target_mean": _f("reward_target_mean"),
-        "reward_binary_acc": _f("reward_binary_acc"),
-        "success_return_loss": _f("success_return_loss"),
-        "success_return_pred_mean": _f("success_return_pred_mean"),
-        "success_return_target_mean": _f("success_return_target_mean"),
-        "success_return_mse": _f("success_return_mse"),
-        "delta_latent_loss": _f("delta_latent_loss"),
-        "action_margin_loss": _f("action_margin_loss"),
-        "image_recon_ce_loss": _f("image_recon_ce_loss"),
-        "image_static_ce_loss": _f("image_static_ce_loss"),
-        "image_dynamic_ce_loss": _f("image_dynamic_ce_loss"),
-        "image_recon_mse_loss": _f("image_recon_mse_loss"),
-        "image_decoder_loss": _f("image_decoder_loss"),
-        "image_recon_accuracy": _f("image_recon_accuracy"),
-        "hidden_rec_loss": hidden_rec_loss,
-        "hidden_mse": hidden_mse,
-        "next_latent_mse": next_latent_mse,
-        "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
-        "hidden_cosine_loss": _f("hidden_cosine_loss"),
-        "full_hidden_rec_loss": _f("full_hidden_rec_loss"),
-        "full_hidden_rec_scaled_loss": _f("full_hidden_rec_scaled_loss"),
-        "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),
-        "hidden_pred_norm": _f("hidden_pred_norm"),
-        "hidden_target_norm": _f("hidden_target_norm"),
-        "proprio_reconstruction_loss": _f("proprio_reconstruction_loss"),
-        "proprio_pred_norm": _f("proprio_pred_norm"),
-        "proprio_target_norm": _f("proprio_target_norm"),
-        "image_static_accuracy": _f("image_static_accuracy"),
-        "image_dynamic_accuracy": _f("image_dynamic_accuracy"),
-        "image_dynamic_fraction": _f("image_dynamic_fraction"),
-        "pred_entropy": _f("pred_entropy"),
-        "pred_unique_tokens": _f("pred_unique_tokens"),
-        "gt_unique_tokens": _f("gt_unique_tokens"),
-        "predicted_reward_mean": _f("predicted_reward_mean"),
-        "latent_norm": _f("latent_norm"),
-        "grad_norm": float(torch.as_tensor(grad_norm).detach().cpu()),
-    }
-    _record_profile_stage("metrics", profile_stage_start)
+    with timer.wall_stage("metrics"):
+        if resolved_metrics_mode == "loss_tensor":
+            metrics = {
+                "loss": loss_tensor.detach(),
+                "grad_norm": torch.as_tensor(grad_norm).detach(),
+            }
+        else:
+            loss_value = float(loss_tensor.detach().cpu())
+            grad_norm_value = float(torch.as_tensor(grad_norm).detach().cpu())
+        if resolved_metrics_mode == "loss_only":
+            metrics = {"loss": loss_value, "grad_norm": grad_norm_value}
+        elif resolved_metrics_mode == "full":
+            hidden_mse = _f("hidden_mse", _f("next_latent_mse"))
+            next_latent_mse = _f("next_latent_mse", hidden_mse)
+            hidden_rec_loss = _f("hidden_rec_loss", hidden_mse)
+            metrics = {
+                "loss": loss_value,
+                "kl_loss": _f("kl_loss"),
+                "dyn_kl": _f("dyn_kl"),
+                "rep_kl": _f("rep_kl"),
+                "transition_loss": _f("transition_loss"),
+                "reward_loss": _f("reward_loss"),
+                "reward_pred_mean": _f("reward_pred_mean"),
+                "reward_target_mean": _f("reward_target_mean"),
+                "reward_binary_acc": _f("reward_binary_acc"),
+                "success_return_loss": _f("success_return_loss"),
+                "success_return_pred_mean": _f("success_return_pred_mean"),
+                "success_return_target_mean": _f("success_return_target_mean"),
+                "success_return_mse": _f("success_return_mse"),
+                "delta_latent_loss": _f("delta_latent_loss"),
+                "action_margin_loss": _f("action_margin_loss"),
+                "image_recon_ce_loss": _f("image_recon_ce_loss"),
+                "image_static_ce_loss": _f("image_static_ce_loss"),
+                "image_dynamic_ce_loss": _f("image_dynamic_ce_loss"),
+                "image_recon_mse_loss": _f("image_recon_mse_loss"),
+                "image_decoder_loss": _f("image_decoder_loss"),
+                "image_recon_accuracy": _f("image_recon_accuracy"),
+                "hidden_rec_loss": hidden_rec_loss,
+                "hidden_mse": hidden_mse,
+                "next_latent_mse": next_latent_mse,
+                "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
+                "hidden_cosine_loss": _f("hidden_cosine_loss"),
+                "full_hidden_rec_loss": _f("full_hidden_rec_loss"),
+                "full_hidden_rec_scaled_loss": _f("full_hidden_rec_scaled_loss"),
+                "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),
+                "hidden_pred_norm": _f("hidden_pred_norm"),
+                "hidden_target_norm": _f("hidden_target_norm"),
+                "proprio_reconstruction_loss": _f("proprio_reconstruction_loss"),
+                "proprio_pred_norm": _f("proprio_pred_norm"),
+                "proprio_target_norm": _f("proprio_target_norm"),
+                "image_static_accuracy": _f("image_static_accuracy"),
+                "image_dynamic_accuracy": _f("image_dynamic_accuracy"),
+                "image_dynamic_fraction": _f("image_dynamic_fraction"),
+                "pred_entropy": _f("pred_entropy"),
+                "pred_unique_tokens": _f("pred_unique_tokens"),
+                "gt_unique_tokens": _f("gt_unique_tokens"),
+                "predicted_reward_mean": _f("predicted_reward_mean"),
+                "latent_norm": _f("latent_norm"),
+                "grad_norm": grad_norm_value,
+            }
+    if profile_timings is not None:
+        profile_timings.update(timer.finish())
     return metrics
 
 

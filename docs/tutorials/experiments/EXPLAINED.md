@@ -27,14 +27,14 @@ snake_case `task=` token with the CamelCase artifact directory.
 | Recipe | Scheme | What it builds |
 | --- | --- | --- |
 | `openvla_onetraj_libero` | discrete-token route | OpenVLA-OFT one-trajectory baseline |
-| `openvla_onetraj_libero` input-token WM | query_before | OFT projected vision-token WM (offline + online cotrain) |
+| `openvla_onetraj_libero` hidden-token WM | query_before | OFT projected vision-token WM (offline + online cotrain) |
 | `openvla_onetraj_coldstart_libero` | cold-start | fresh rollout collection (+ warmup + cotrain) |
 
 ## Observation contract
 
 The OpenVLA-OFT mainline persists projected current-frame vision embeddings before
 the language-model action positions. With one image, the sidecar is `[T,256,4096]`
-and declares `obs_hidden_source=input_token_embedding`. The actor bridges those 256
+and declares `obs_hidden_source=hidden_token`. The actor bridges those 256
 source tokens to the discrete action decoder; its internal action slots are not a WM
 observation and are never written as a sidecar.
 - **Discrete-token route:** the OpenVLA-OFT one action-probability route used by the
@@ -47,7 +47,7 @@ The world model is the WM paradigm migrated onto **discrete** OpenVLA-OFT latent
 `predict_next_chunk` rolls K env-steps autoregressively. Training uses `num_hist=3`
 autoregressive recursion (a 3-term window, free-running).
 
-The input-token route uses `token_count=256`, `token_dim=4096`, and
+The hidden-token route uses `token_count=256`, `token_dim=4096`, and
 `wm_obs_dim=1048576`. Proprio, language, and action conditioning widths are separate
 from this external observation shape and are derived from Hydra metadata.
 The rollout length is a hyperparameter: with horizon H, chunk K, N chunks,
@@ -88,7 +88,7 @@ B_eff = dataloader.batch_size × algorithm.imag_last × algorithm.ppo_rollouts_p
    strided selection)
 3. cap `algorithm.lumos.episode_max_steps` / `algorithm.ppo_rollouts_per_start`
 
-With `batch_size=12, imag_last=4` the input-token route fits an 80GB GPU at ~66.7 GB.
+With `batch_size=12, imag_last=4` the hidden-token route fits an 80GB GPU at ~66.7 GB.
 The OFT latent is large; shrink `B_eff` first (chunk-granular video, sliced `lm_head`).
 `training.debug=true` (or `debug=true` to the e2e scripts) runs a tiny smoke instead of
 the full pipeline.

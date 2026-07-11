@@ -10,7 +10,7 @@ name: OpenVLA_Onetraj_ColdStart_LIBERO
 # Used by experiment=collect_rollouts_onetraj (write) and warmup/cotrain
 # recipes (read) via task=...
 # ckpt_path / dataset_statistics_key and the remaining expected_*
-# (obs_hidden_source=input_token_embedding, prompt_style=vla_policy,
+# (obs_hidden_source=hidden_token, prompt_style=vla_policy,
 # rotate_images_180=true)
 # are inherited from OpenVLA_Onetraj_LIBERO -> libero_goal.
 #

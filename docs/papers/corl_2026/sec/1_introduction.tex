@@ -14,7 +14,7 @@ success classifiers, actors, and evaluation workers must agree on shape and
 semantics.  A tensor that is convenient for decoding actions is not necessarily
 a valid observation of the environment.
 
-DreamerVLA uses the projected visual input tokens of a one-trajectory
+DreamerVLA uses the projected visual hidden tokens of a one-trajectory
 OpenVLA-OFT checkpoint as its sole external observation representation.  The
 policy consumes one current agent-view image and produces a $256\times4096$
 token grid before its internal action positions.  Reward and token sidecars are

@@ -842,11 +842,11 @@ def _compose_cfg(args: argparse.Namespace, overrides: list[str]) -> DictConfig:
 
 def _resolve_dims(args: argparse.Namespace, cfg: DictConfig | None) -> dict[str, int]:
     return {
-        "chunk_size": int(_select(cfg, "task.openvla_oft.input_tokens.chunk_size", args.chunk_size)),
+        "chunk_size": int(_select(cfg, "task.openvla_oft.hidden_token.chunk_size", args.chunk_size)),
         "action_dim": int(_select(cfg, "task.action_dim", args.action_dim)),
-        "latent_dim": int(_select(cfg, "task.openvla_oft.input_tokens.wm_obs_dim", args.latent_dim)),
-        "lang_dim": int(_select(cfg, "task.openvla_oft.input_tokens.lang_dim", args.lang_dim)),
-        "proprio_dim": int(_select(cfg, "task.openvla_oft.input_tokens.proprio_dim", args.proprio_dim)),
+        "latent_dim": int(_select(cfg, "task.openvla_oft.hidden_token.wm_obs_dim", args.latent_dim)),
+        "lang_dim": int(_select(cfg, "task.openvla_oft.hidden_token.lang_dim", args.lang_dim)),
+        "proprio_dim": int(_select(cfg, "task.openvla_oft.hidden_token.proprio_dim", args.proprio_dim)),
     }
 
 

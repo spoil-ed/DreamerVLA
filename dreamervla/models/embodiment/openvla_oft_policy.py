@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from dreamervla.preprocess.sidecar_schema import INPUT_TOKEN_COUNT, INPUT_TOKEN_DIM
+from dreamervla.preprocess.sidecar_schema import HIDDEN_TOKEN_COUNT, HIDDEN_TOKEN_DIM
 from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
 
 
@@ -42,7 +42,7 @@ def _resolve_loaded_token_dim(vla: Any) -> int:
     raise ValueError("could not derive token_dim from loaded OpenVLA-OFT policy")
 
 
-def _validate_loaded_input_token_geometry(vla: Any) -> int:
+def _validate_loaded_hidden_token_geometry(vla: Any) -> int:
     """Validate the actual loaded backbone at the policy construction boundary."""
 
     try:
@@ -54,17 +54,17 @@ def _validate_loaded_input_token_geometry(vla: Any) -> int:
         ) from exc
     token_dim = _resolve_loaded_token_dim(vla)
     if (
-        patches != INPUT_TOKEN_COUNT
-        or token_dim != INPUT_TOKEN_DIM
+        patches != HIDDEN_TOKEN_COUNT
+        or token_dim != HIDDEN_TOKEN_DIM
         or num_images != 1
     ):
         raise ValueError(
-            "loaded OpenVLA-OFT policy violates the input-token contract: "
+            "loaded OpenVLA-OFT policy violates the hidden-token contract: "
             f"patches={patches}, token_dim={token_dim}, "
             f"num_images_in_input={num_images}; expected "
-            f"{INPUT_TOKEN_COUNT}x{INPUT_TOKEN_DIM} from one image"
+            f"{HIDDEN_TOKEN_COUNT}x{HIDDEN_TOKEN_DIM} from one image"
         )
-    return INPUT_TOKEN_COUNT
+    return HIDDEN_TOKEN_COUNT
 
 
 class OpenVLAOFTPolicy(nn.Module):
@@ -90,16 +90,16 @@ class OpenVLAOFTPolicy(nn.Module):
         if bool(use_l1_regression):
             raise ValueError("L1/action-query checkpoints are closed")
         if bool(use_proprio):
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         if bool(use_film):
-            raise ValueError("OpenVLA-OFT input-token mainline does not use FiLM")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not use FiLM")
         if int(num_images_in_input) != 1:
-            raise ValueError("OpenVLA-OFT input-token mainline requires num_images_in_input=1")
+            raise ValueError("OpenVLA-OFT hidden-token mainline requires num_images_in_input=1")
         if use_diffusion:
             raise NotImplementedError(
                 "DreamerVLA OpenVLA-OFT workspace currently does not implement diffusion training."
             )
-        from dreamervla.preprocess.preprocess_oft_input_tokens import (
+        from dreamervla.preprocess.preprocess_oft_hidden_token import (
             resolve_oft_policy_mode,
         )
 
@@ -148,7 +148,7 @@ class OpenVLAOFTPolicy(nn.Module):
             trust_remote_code=trust_remote_code,
         )
         vla.vision_backbone.set_num_images_in_input(self.num_images_in_input)
-        num_patches = _validate_loaded_input_token_geometry(vla)
+        num_patches = _validate_loaded_hidden_token_geometry(vla)
         if freeze_vla_backbone:
             for parameter in vla.parameters():
                 parameter.requires_grad = False
@@ -186,17 +186,17 @@ class OpenVLAOFTPolicy(nn.Module):
         if bool(use_l1_regression) or action_head is not None:
             raise ValueError("L1/action-query checkpoints are closed")
         if bool(use_proprio) or proprio_projector is not None:
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         if bool(use_diffusion):
             raise ValueError("diffusion checkpoints are outside the discrete mainline")
         if bool(use_film):
-            raise ValueError("OpenVLA-OFT input-token mainline does not use FiLM")
-        if int(num_patches) != INPUT_TOKEN_COUNT:
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not use FiLM")
+        if int(num_patches) != HIDDEN_TOKEN_COUNT:
             raise ValueError(
-                f"OpenVLA-OFT input-token mainline requires num_patches={INPUT_TOKEN_COUNT}, "
+                f"OpenVLA-OFT hidden-token mainline requires num_patches={HIDDEN_TOKEN_COUNT}, "
                 f"got {int(num_patches)}"
             )
-        _validate_loaded_input_token_geometry(vla)
+        _validate_loaded_hidden_token_geometry(vla)
         self = cls.__new__(cls)
         nn.Module.__init__(self)
         self.vla = vla

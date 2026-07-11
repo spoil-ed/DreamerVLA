@@ -21,7 +21,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.dataset.collection_manifest import summarize_collection, write_manifest
-from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.utils.paths import PROJECT_ROOT, data_path
 
 DEFAULT_COLLECT_EXPERIMENT = "collect_rollouts_ray"
@@ -269,7 +269,7 @@ def collect_run(args: argparse.Namespace) -> int:
         f"task={args.task}",
         "logger=tensorboard",
         f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
-        f"task.openvla_oft.input_token_dir={hidden_dir}",
+        f"task.openvla_oft.hidden_token_dir={hidden_dir}",
         f"++collect.hdf5_reward_dir={reward_dir}",
         f"++collect.hidden_dir={hidden_dir}",
         f"training.out_dir={out_dir}",
@@ -352,10 +352,10 @@ def _original_paths(
 ) -> dict[str, Path | None]:
     oft = cfg.task.openvla_oft
     failure_raw = OmegaConf.select(oft, "failure_hdf5_dir", default=None)
-    failure_hidden = OmegaConf.select(oft, "failure_input_token_dir", default=None)
+    failure_hidden = OmegaConf.select(oft, "failure_hidden_token_dir", default=None)
     collected_reward = Path(str(cfg.task.collected_reward_dir)).expanduser()
     resolved_hidden = (
-        hidden_dir if hidden_dir else str(cfg.task.collected_input_token_dir)
+        hidden_dir if hidden_dir else str(cfg.task.collected_hidden_token_dir)
     )
     return {
         "checkpoint": Path(str(oft.ckpt_path)).expanduser(),
@@ -370,8 +370,8 @@ def _original_paths(
 
 def _original_hidden_candidates(cfg: DictConfig) -> dict[str, Path]:
     return {
-        "input_token_embedding": Path(
-            str(cfg.task.collected_input_token_dir)
+        "hidden_token": Path(
+            str(cfg.task.collected_hidden_token_dir)
         ).expanduser(),
     }
 
@@ -396,12 +396,12 @@ def libero_original_check(args: argparse.Namespace) -> int:
     ]
     if empty:
         raise FileNotFoundError(f"original LIBERO data directories contain no HDF5 files: {empty}")
-    validate_input_token_sidecar_dir(
+    validate_hidden_token_sidecar_dir(
         paths["hidden"],
         reference_dir=paths["demo_raw"],
     )
     if paths["failure_hidden"] is not None:
-        validate_input_token_sidecar_dir(
+        validate_hidden_token_sidecar_dir(
             paths["failure_hidden"],
             reference_dir=paths["failure_raw"],
         )
@@ -618,7 +618,7 @@ def cls_check(args: argparse.Namespace) -> int:
     ]
     if missing:
         raise FileNotFoundError(f"classifier data directories contain no HDF5 files: {missing}")
-    validate_input_token_sidecar_dir(
+    validate_hidden_token_sidecar_dir(
         required_directories["success_dir_hidden"],
         reference_dir=required_directories["success_dir_raw"],
     )
@@ -629,7 +629,7 @@ def cls_check(args: argparse.Namespace) -> int:
             raise FileNotFoundError(
                 "failure_dir_hidden requires an existing failure_dir_raw"
             )
-        validate_input_token_sidecar_dir(
+        validate_hidden_token_sidecar_dir(
             failure_hidden,
             reference_dir=failure_raw,
         )

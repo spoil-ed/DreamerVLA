@@ -95,11 +95,11 @@ Offline preprocessing writes under `${DVLA_DATA_ROOT}/processed_data/<artifact>`
 processed_data/<artifact>/marked_t_256/
 processed_data/<artifact>/no_noops_t_256/
 processed_data/<artifact>/no_noops_t_256_remaining_reward/
-processed_data/<artifact>/no_noops_t_256_oft_input_token_embedding_vla_policy_h1/
+processed_data/<artifact>/no_noops_t_256_oft_hidden_token_vla_policy_h1/
 processed_data/<artifact>/metainfo.json
 ```
 
-The input-token directory contains `preprocess_config.json` and HDF5
+The hidden-token directory contains `preprocess_config.json` and HDF5
 `obs_embedding` datasets with the fixed shape `[T,256,4096]`. No alternate
 56-token observation sidecar is accepted.
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_input_token_pipeline_uses_traj1_proprio_language_wm_profile():
+def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -16,14 +16,15 @@ def test_input_token_pipeline_uses_traj1_proprio_language_wm_profile():
     wm = cfg.world_model
     classifier = cfg.classifier
     assert "latent_type" not in cfg
-    assert cfg.env.obs_hidden_source == "input_token_embedding"
+    assert cfg.env.obs_hidden_source == "hidden_token"
     assert wm.token_count == 256
     assert wm.token_dim == 4096
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every == 500
     assert cfg.training.warmup_topk_k == 3
-    assert cfg.training.wm_profile_steps == -1
+    assert cfg.training.wm_profile_steps == 8
+    assert cfg.training.wm_prefetch_workers == 1
     assert cfg.dataloader.batch_size == 16
     assert cfg.optim.world_model.lr == 3.0e-5
     assert cfg.online_rollout.sequence_length == 36
@@ -71,7 +72,8 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every == 500
     assert cfg.training.warmup_topk_k == 3
-    assert cfg.training.wm_profile_steps == -1
+    assert cfg.training.wm_profile_steps == 8
+    assert cfg.training.wm_prefetch_workers == 1
     assert cfg.dataloader.batch_size == 16
     assert cfg.optim.world_model.lr == 3.0e-5
     assert cfg.online_rollout.buffer_size == 160000

@@ -17,7 +17,7 @@ trainer:
 
 offline_warmup:
   data_dir: ${task.collected_reward_dir}
-  hidden_dir: ${task.collected_input_token_dir}
+  hidden_dir: ${task.collected_hidden_token_dir}
   task_id: null
   infer_task_id_from_shard: true
   max_episodes_per_task: null
@@ -41,8 +41,12 @@ training:
   checkpoint_every: 2000
   wm_warmup_steps: 20000
   classifier_warmup_steps: 1200
-  replay_warmup_log_every: 1
-  wm_profile_steps: -1
+  replay_warmup_log_every: 10
+  # Profile only the first updates. Profiling every step inserts a device sync
+  # and can itself make H100 utilization look artificially low.
+  wm_profile_steps: 8
+  # Build the next replay batch while the current GPU update is running.
+  wm_prefetch_workers: 1
   warmup_replay_epochs: 10
   warmup_replay_max_steps: 0
   warmup_checkpoint_every: 500
@@ -126,35 +130,35 @@ env:
   task_suite_name: ${task.suite}
   task_ids: [0]
   episode_horizon: 200
-  history_length: ${task.openvla_oft.input_tokens.expected_history}
-  include_state: ${task.openvla_oft.input_tokens.expected_include_state}
-  vla_rotate_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
-  obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
-  action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
+  history_length: ${task.openvla_oft.hidden_token.expected_history}
+  include_state: ${task.openvla_oft.hidden_token.expected_include_state}
+  vla_rotate_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
+  obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
+  action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
   image_keys: [agentview_rgb]
   target_token_id: 10004
 
 world_model:
   _target_: ${task.openvla_oft.wm_target}
-  chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
-  obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+  chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
+  obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
   action_dim: ${task.action_dim}
-  token_count: ${task.openvla_oft.input_tokens.token_count}
-  token_dim: ${task.openvla_oft.input_tokens.token_dim}
-  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
-  latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
-  latent_source: ${task.openvla_oft.input_tokens.latent_source}
-  action_emb_dim: ${task.openvla_oft.input_tokens.action_emb_dim}
-  num_action_repeat: ${task.openvla_oft.input_tokens.num_action_repeat}
-  proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
-  proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
-  num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+  token_count: ${task.openvla_oft.hidden_token.token_count}
+  token_dim: ${task.openvla_oft.hidden_token.token_dim}
+  time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+  latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
+  latent_source: ${task.openvla_oft.hidden_token.latent_source}
+  action_emb_dim: ${task.openvla_oft.hidden_token.action_emb_dim}
+  num_action_repeat: ${task.openvla_oft.hidden_token.num_action_repeat}
+  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
   proprio_reconstruction_loss_scale: 0.0
-  lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
-  lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
-  num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+  lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
   grad_checkpoint: true
-  model_dim: ${task.openvla_oft.input_tokens.model_dim}
+  model_dim: ${task.openvla_oft.hidden_token.model_dim}
   num_hist: 3
   depth: 6
   heads: 16
@@ -179,11 +183,11 @@ world_model:
 policy:
   _target_: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
   hidden_dim: null
-  source_token_count: ${task.openvla_oft.input_tokens.token_count}
-  source_token_dim: ${task.openvla_oft.input_tokens.token_dim}
-  hidden_state_dim: ${task.openvla_oft.input_tokens.hidden_state_dim}
+  source_token_count: ${task.openvla_oft.hidden_token.token_count}
+  source_token_dim: ${task.openvla_oft.hidden_token.token_dim}
+  hidden_state_dim: ${task.openvla_oft.hidden_token.hidden_state_dim}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
+  time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
   head_type: oft_discrete_token
   adapter_type: ${task.openvla_oft.actor_adapter_type}
   adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
@@ -200,7 +204,7 @@ policy:
 
 critic:
   _target_: ${task.openvla_oft.critic_target}
-  hidden_dim: ${task.openvla_oft.input_tokens.token_dim}
+  hidden_dim: ${task.openvla_oft.hidden_token.token_dim}
   critic_hidden_dim: 1024
   critic_layers: 3
   activation: silu
@@ -212,18 +216,18 @@ critic:
 
 classifier:
   _target_: ${task.openvla_oft.classifier_target}
-  latent_dim: ${task.openvla_oft.input_tokens.classifier_latent_dim}
+  latent_dim: ${task.openvla_oft.hidden_token.classifier_latent_dim}
   action_dim: ${task.action_dim}
-  time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
-  token_dim: ${task.openvla_oft.input_tokens.token_dim}
-  token_count: ${task.openvla_oft.input_tokens.token_count}
+  time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+  token_dim: ${task.openvla_oft.hidden_token.token_dim}
+  token_count: ${task.openvla_oft.hidden_token.token_count}
   head_type: spatial_tf
-  proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
-  proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
-  num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
-  lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
-  lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
-  num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
+  lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
   window: 8
   hidden_dim: 1024
   num_layers: 12
@@ -232,14 +236,14 @@ classifier:
   dropout: 0.1
   output_dim: 1
   granularity: chunk
-  chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+  chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
   chunk_pool: last
   task_conditioning: ${task_conditioning}
 
 algorithm:
   update_type: LUMOS
   lumos:
-    chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+    chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
     episode_max_steps: 300
     debug_episode_max_steps: 150
     reward_model: probability_outcome

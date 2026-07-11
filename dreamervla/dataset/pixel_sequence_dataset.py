@@ -48,7 +48,7 @@ class PixelSequenceDataset(BaseDataset):
       is_first:  [T], always true at the first item of each sampled window
 
     The default image key is the mainline agent-view camera. Explicit callers
-    may still select another pixel-only dataset layout; OpenVLA input-token
+    may still select another pixel-only dataset layout; OpenVLA hidden-token
     routes impose their stricter one-camera contract in the derived dataset.
     """
 

@@ -17,7 +17,7 @@ def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
             self,
             policy,
             unnorm_key,
-            obs_hidden_source="input_token_embedding",
+            obs_hidden_source="hidden_token",
             image_keys=None,
         ) -> None:
             self.policy = policy
@@ -50,14 +50,14 @@ def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
         unnorm_key="libero_goal_no_noops",
         image_keys=["agentview_rgb"],
         history=1,
-        obs_hidden_source="input_token_embedding",
+        obs_hidden_source="hidden_token",
         device="cpu",
     )
     ex = bundle.make_extractor()
     assert ex.prepare({}, "t") == {"ok": True}
-    assert bundle._decoder.obs_hidden_source == "input_token_embedding"
+    assert bundle._decoder.obs_hidden_source == "hidden_token"
     assert bundle._decoder.image_keys == ["agentview_rgb"]
-    assert ex.kw["obs_hidden_source"] == "input_token_embedding"
+    assert ex.kw["obs_hidden_source"] == "hidden_token"
     out = bundle.predict_batch([{"ok": True}])
     assert out[0][1].shape == (8,)
 
@@ -136,22 +136,22 @@ def test_oft_rollout_bundle_cpu_device_requests_cpu_policy_load(monkeypatch) -> 
             {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 2},
             ["agentview_rgb", "eye_in_hand_rgb"],
             1,
-            "input_token_embedding",
+            "hidden_token",
             "requires num_images_in_input=1",
         ),
         (
             {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 1},
             ["agentview_rgb"],
             2,
-            "input_token_embedding",
+            "hidden_token",
             "history=1",
         ),
         (
             {"model_path": "x", "policy_mode": "discrete", "num_images_in_input": 1},
             ["agentview_rgb"],
             1,
-            "hidden_token",
-            "obs_hidden_source='input_token_embedding'",
+            "input_" + "token_embedding",
+            "obs_hidden_source='hidden_token'",
         ),
     ],
 )

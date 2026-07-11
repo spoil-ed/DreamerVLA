@@ -25,14 +25,14 @@ def test_collect_rollouts_experiment_composes_and_validates():
     assert cfg._target_ == "dreamervla.runners.CollectRolloutsRunner"
     oft = cfg.task.openvla_oft
     assert str(oft.ckpt_path).endswith("Openvla-oft-SFT-libero-goal-traj1")
-    input_tokens = oft.input_tokens
-    assert input_tokens.expected_action_head_type == "oft_discrete_token"
-    assert input_tokens.expected_include_state is False
-    assert input_tokens.expected_obs_hidden_source == "input_token_embedding"
-    assert int(input_tokens.expected_history) == 1
+    hidden_token = oft.hidden_token
+    assert hidden_token.expected_action_head_type == "oft_discrete_token"
+    assert hidden_token.expected_include_state is False
+    assert hidden_token.expected_obs_hidden_source == "hidden_token"
+    assert int(hidden_token.expected_history) == 1
     assert int(oft.time_horizon) == 8
-    assert str(oft.input_token_dir).endswith(
-        "_oft_input_token_embedding_vla_policy_h1"
+    assert str(oft.hidden_token_dir).endswith(
+        "_oft_hidden_token_vla_policy_h1"
     )
     assert "OpenVLA_Onetraj_LIBERO_libero_goal" in str(oft.hdf5_reward_dir)
     assert cfg.collect.envs_per_gpu == 1
@@ -51,11 +51,11 @@ def _fake_cfg():
                     "ckpt_path": "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1",
                     "dataset_statistics_key": "libero_goal_no_noops",
                     "hdf5_reward_dir": "data/processed_data/X/no_noops_t_256_remaining_reward",
-                    "input_token_dir": "data/processed_data/X/no_noops_t_256_oft_input_token_embedding_vla_policy_h1",
-                    "input_tokens": {
+                    "hidden_token_dir": "data/processed_data/X/no_noops_t_256_oft_hidden_token_vla_policy_h1",
+                    "hidden_token": {
                         "expected_action_head_type": "oft_discrete_token",
                         "expected_include_state": False,
-                        "expected_obs_hidden_source": "input_token_embedding",
+                        "expected_obs_hidden_source": "hidden_token",
                         "expected_prompt_style": "vla_policy",
                         "expected_rotate_images_180": True,
                         "expected_history": 1,
@@ -90,9 +90,9 @@ def test_build_collect_cfg_maps_task_and_collect():
     assert cc["unnorm_key"] == "libero_goal_no_noops"
     assert cc["reward_dir"].endswith("no_noops_t_256_remaining_reward")
     assert cc["hidden_dir"].endswith(
-        "_oft_input_token_embedding_vla_policy_h1"
+        "_oft_hidden_token_vla_policy_h1"
     )
-    assert cc["expected_obs_hidden_source"] == "input_token_embedding"
+    assert cc["expected_obs_hidden_source"] == "hidden_token"
     assert cc["token_count"] == 256
     assert cc["hidden_dim"] == 1_048_576
     assert cc["patches_per_image"] == 256

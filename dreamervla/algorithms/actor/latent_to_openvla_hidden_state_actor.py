@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class LatentToOpenVLAHiddenStateActor(BaseActor):
-    """Bridge ``[B,256,4096]`` input tokens to internal action slots."""
+    """Bridge ``[B,256,4096]`` hidden tokens to internal action slots."""
 
     def __init__(
         self,
@@ -49,7 +49,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         if hidden_dim is not None:
             raise TypeError(
                 "flat hidden_dim observations are removed; pass tokenized "
-                "input_token_embedding [B,256,4096]"
+                "hidden_token [B,256,4096]"
             )
         super().__init__()
         self.source_token_count = int(source_token_count or 256)
@@ -239,7 +239,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 )
             return hidden
         raise ValueError(
-            "hidden must be tokenized input_token_embedding [B,256,4096]; "
+            "hidden must be tokenized hidden_token [B,256,4096]; "
             f"flat observations are closed, got {tuple(hidden.shape)}"
         )
 

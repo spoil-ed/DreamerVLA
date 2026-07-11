@@ -341,11 +341,11 @@ def test_requirements_keep_runtime_dependency_set_curated() -> None:
     assert {"pytest", "ruff", "pre-commit"}.issubset(dev_deps)
 
 
-def test_libero_data_script_uses_only_input_token_mainline_and_filters_noops() -> None:
+def test_libero_data_script_uses_only_hidden_token_mainline_and_filters_noops() -> None:
     root = _project_root()
     process_all = root / "scripts" / "preprocess" / "process_all_libero_data.sh"
     prepare = root / "scripts" / "preprocess" / "prepare_libero_data.sh"
-    input_tokens = root / "scripts" / "preprocess" / "35_oft_input_tokens.sh"
+    hidden_token = root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
     reward = root / "scripts" / "preprocess" / "10_hdf5_reward.sh"
     preprocess_cfg = (root / "configs" / "scripts" / "preprocess_suite.yaml").read_text(
         encoding="utf-8"
@@ -354,13 +354,13 @@ def test_libero_data_script_uses_only_input_token_mainline_and_filters_noops() -
     assert prepare.is_file()
     process_text = process_all.read_text(encoding="utf-8")
     prepare_text = prepare.read_text(encoding="utf-8")
-    input_token_text = input_tokens.read_text(encoding="utf-8")
+    hidden_token_text = hidden_token.read_text(encoding="utf-8")
     reward_text = reward.read_text(encoding="utf-8")
 
-    assert 'OFT_HISTORY="${OFT_HISTORY:-1}"' in input_token_text
-    assert "obs_hidden_source=input_token_embedding" in input_token_text
-    assert "time_horizon=8" in input_token_text
-    assert "patches_per_image=256" in input_token_text
+    assert 'OFT_HISTORY="${OFT_HISTORY:-1}"' in hidden_token_text
+    assert "obs_hidden_source=hidden_token" in hidden_token_text
+    assert "time_horizon=8" in hidden_token_text
+    assert "patches_per_image=256" in hidden_token_text
     assert "GPUS=4,5" not in process_text
     assert 'TASK="${TASK:-libero_goal}"' in reward_text
     assert 'RAW_LIBERO_DIR="${DVLA_DATA_ROOT}/datasets/libero/${LIBERO_SUITE}"' in reward_text
@@ -373,12 +373,12 @@ def test_libero_data_script_uses_only_input_token_mainline_and_filters_noops() -
     assert "--config-name preprocess_all" in process_text
     assert "OFT_HISTORY: null" in preprocess_cfg
     assert "OFT_IMAGE_KEYS: null" in preprocess_cfg
-    assert "OFT_INPUT_TOKEN_GPUS: ${ngpu}" in preprocess_cfg
+    assert "OFT_HIDDEN_TOKEN_GPUS: ${ngpu}" in preprocess_cfg
     assert "10_hdf5_reward.sh" in preprocess_cfg
-    assert "35_oft_input_tokens.sh" in preprocess_cfg
+    assert "35_oft_hidden_token.sh" in preprocess_cfg
     assert "40_validate.sh" in preprocess_cfg
     assert "20_pretokenize_dataset" not in preprocess_cfg
-    assert "HIDDEN_TOKEN_GPUS" not in preprocess_cfg
+    assert ("OFT_INPUT_" + "TOKEN_GPUS") not in preprocess_cfg
 
 
 def test_preprocess_steps_are_numbered_registered_and_individually_runnable() -> None:
@@ -391,7 +391,7 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
 
     expected_steps = (
         "10_hdf5_reward.sh",
-        "35_oft_input_tokens.sh",
+        "35_oft_hidden_token.sh",
         "40_validate.sh",
     )
     assert "PREPROCESS_ONLY" not in (preprocess_dir / "prepare_libero_data.sh").read_text(
@@ -416,7 +416,7 @@ def test_preprocess_scripts_are_direct_copyable_commands() -> None:
     preprocess_dir = root / "scripts" / "preprocess"
     scripts = [
         preprocess_dir / "10_hdf5_reward.sh",
-        preprocess_dir / "35_oft_input_tokens.sh",
+        preprocess_dir / "35_oft_hidden_token.sh",
         preprocess_dir / "40_validate.sh",
     ]
 
@@ -495,7 +495,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
             "gpus=4,5",
             "num_procs=3",
             "overwrite=true",
-            "only=[35_oft_input_tokens]",
+            "only=[35_oft_hidden_token]",
         ],
         cwd=root,
         env=env,
@@ -509,7 +509,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     log_text = log_path.read_text(encoding="utf-8")
     assert "[workflow:preprocess_suite]" in workflow_output
     assert "config=preprocess_suite" in workflow_output
-    assert "run 35_oft_input_tokens" in workflow_output
+    assert "run 35_oft_hidden_token" in workflow_output
 
     dreamervla_calls = [
         line
@@ -517,7 +517,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
         if line.startswith("-m dreamervla.preprocess.")
     ]
     assert dreamervla_calls
-    assert "dreamervla.preprocess.preprocess_oft_input_tokens" in log_text
+    assert "dreamervla.preprocess.preprocess_oft_hidden_token" in log_text
     assert not any(
         re.search(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", line) for line in dreamervla_calls
     )
@@ -853,6 +853,8 @@ def test_release_scripts_tree_is_curated() -> None:
         "download_assets.sh",
         "e2e_coldstart_warmup_cotrain_noray.sh",
         "e2e_coldstart_warmup_cotrain_ray.sh",
+        "e2e_frozen_model_cotrain.sh",
+        "e2e_frozen_model_pre_mainline.sh",
         "e2e_manual_cotrain_async.sh",
         "eval_libero_vla.sh",
         "install_env.sh",

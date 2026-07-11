@@ -1,4 +1,4 @@
-"""OpenVLA input-token and Dreamer latent evaluation helpers."""
+"""OpenVLA hidden-token and Dreamer latent evaluation helpers."""
 
 from __future__ import annotations
 
@@ -272,8 +272,8 @@ class EmbodiedEvalLatentMixin:
             context=getattr(self, "_libero_current_eval_context", None),
             source="online_latent",
         )
-        live_trace_hidden = self._input_token_grid_for_trace(live_hidden_tensor)
-        recon_trace_hidden = self._input_token_grid_for_trace(
+        live_trace_hidden = self._hidden_token_grid_for_trace(live_hidden_tensor)
+        recon_trace_hidden = self._hidden_token_grid_for_trace(
             feat if "feat" in locals() else None
         )
         self._write_policy_trace(
@@ -284,8 +284,8 @@ class EmbodiedEvalLatentMixin:
             ),
             action_chunk_raw=action_chunk_np[:max_actions],
             action_chunk_env=np.stack(env_actions, axis=0),
-            live_input_token_grid=live_trace_hidden,
-            recon_input_token_grid=recon_trace_hidden,
+            live_hidden_token_grid=live_trace_hidden,
+            recon_hidden_token_grid=recon_trace_hidden,
             obs_embedding=live_hidden,
             actor_input=feat if "feat" in locals() else None,
             latent=latent,

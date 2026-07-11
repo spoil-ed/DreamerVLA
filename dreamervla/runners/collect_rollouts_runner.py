@@ -40,10 +40,10 @@ class CollectRolloutsRunner(BaseRunner):
         cfg = self.cfg
         oft = cfg.task.openvla_oft
         latent_spec = OmegaConf.select(cfg, "collect.oft_latent_spec", default=None)
-        input_tokens = OmegaConf.select(cfg, "task.openvla_oft.input_tokens", default=None)
-        if input_tokens is None:
-            raise ValueError("task.openvla_oft.input_tokens is required for collection")
-        latent = latent_spec if latent_spec is not None else input_tokens
+        hidden_token = OmegaConf.select(cfg, "task.openvla_oft.hidden_token", default=None)
+        if hidden_token is None:
+            raise ValueError("task.openvla_oft.hidden_token is required for collection")
+        latent = latent_spec if latent_spec is not None else hidden_token
         expected_history = int(latent.expected_history)
         num_images_in_input = resolve_num_images_in_input(cfg.collect)
         image_keys = select_vla_image_keys(
@@ -55,7 +55,7 @@ class CollectRolloutsRunner(BaseRunner):
         if OmegaConf.is_config(task_ids):
             task_ids = OmegaConf.to_container(task_ids, resolve=True)
         reward_dir = OmegaConf.select(cfg, "collect.hdf5_reward_dir", default=oft.hdf5_reward_dir)
-        hidden_default = oft.input_token_dir
+        hidden_default = oft.hidden_token_dir
         hidden_dir = OmegaConf.select(cfg, "collect.hidden_dir", default=hidden_default)
         render_devices = OmegaConf.select(cfg, "collect.render_devices", default=[])
         if OmegaConf.is_config(render_devices):

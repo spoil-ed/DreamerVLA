@@ -1151,7 +1151,7 @@ def test_ray_lumos_configs_expose_rlinf_rollout_scale(path: str) -> None:
     [
         (
             "configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml",
-            "online_cotrain_input_token_embedding",
+            "online_cotrain_hidden_token",
         ),
     ],
 )
@@ -1191,7 +1191,7 @@ def test_rollout_dump_cfg_rejects_incomplete_explicit_sidecar_metadata() -> None
                     "enabled": True,
                     "preprocess_config": {
                         "action_head_type": "oft_discrete_token",
-                        "obs_hidden_source": "input_token_embedding",
+                        "obs_hidden_source": "hidden_token",
                     },
                 }
             }

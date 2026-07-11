@@ -11,7 +11,7 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_validation_workflow_registers_only_exact_input_token_check() -> None:
+def test_validation_workflow_registers_only_exact_hidden_token_check() -> None:
     root = _root()
     with initialize_config_dir(config_dir=str(root / "configs" / "scripts"), version_base=None):
         cfg = compose(config_name="validate_libero_data")

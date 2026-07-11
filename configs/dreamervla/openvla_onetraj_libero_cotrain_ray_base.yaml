@@ -1,9 +1,9 @@
 # @package _global_
-# Single-node Ray async online cotrain route for OpenVLA-OFT input tokens.
+# Single-node Ray async online cotrain route for OpenVLA-OFT hidden tokens.
 #
-# This is the WM-style OpenVLA-OFT input-token route: the WM consumes
+# This is the WM-style OpenVLA-OFT hidden-token route: the WM consumes
 # current-frame projected vision patch tokens from
-# task.openvla_oft.input_tokens, and the actor bridges those predicted latents
+# task.openvla_oft.hidden_token, and the actor bridges those predicted latents
 # back to discrete OpenVLA action-token slots.
 defaults:
   - _self_
@@ -43,31 +43,31 @@ algorithm:
   rollout_epoch: 16
 
 # OFT query-before structural components. These shapes do not match the old
-# input-token warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
+# hidden-token warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
 # the checkpoint was trained with this route.
 ray_components:
   world_model:
     target: ${task.openvla_oft.wm_target}
     kwargs:
-      chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
-      obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+      chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
+      obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
       action_dim: ${task.action_dim}
-      token_count: ${task.openvla_oft.input_tokens.token_count}
-      token_dim: ${task.openvla_oft.input_tokens.token_dim}
-      time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
-      latent_stage: ${task.openvla_oft.input_tokens.latent_stage}
-      latent_source: ${task.openvla_oft.input_tokens.latent_source}
-      action_emb_dim: ${task.openvla_oft.input_tokens.action_emb_dim}
-      num_action_repeat: ${task.openvla_oft.input_tokens.num_action_repeat}
-      proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
-      proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
-      num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
+      token_count: ${task.openvla_oft.hidden_token.token_count}
+      token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+      latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
+      latent_source: ${task.openvla_oft.hidden_token.latent_source}
+      action_emb_dim: ${task.openvla_oft.hidden_token.action_emb_dim}
+      num_action_repeat: ${task.openvla_oft.hidden_token.num_action_repeat}
+      proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+      proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
+      num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
       proprio_reconstruction_loss_scale: 0.0
-      lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
-      lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
-      num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+      lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+      lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
+      num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
       grad_checkpoint: true
-      model_dim: ${task.openvla_oft.input_tokens.model_dim}
+      model_dim: ${task.openvla_oft.hidden_token.model_dim}
       num_hist: 3
       depth: 6
       heads: 16
@@ -92,11 +92,11 @@ ray_components:
     target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
     kwargs:
       hidden_dim: null
-      source_token_count: ${task.openvla_oft.input_tokens.token_count}
-      source_token_dim: ${task.openvla_oft.input_tokens.token_dim}
-      hidden_state_dim: ${task.openvla_oft.input_tokens.hidden_state_dim}
+      source_token_count: ${task.openvla_oft.hidden_token.token_count}
+      source_token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      hidden_state_dim: ${task.openvla_oft.hidden_token.hidden_state_dim}
       action_dim: ${task.action_dim}
-      time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
+      time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
       head_type: oft_discrete_token
       adapter_type: ${task.openvla_oft.actor_adapter_type}
       adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
@@ -113,18 +113,18 @@ ray_components:
   classifier:
     target: dreamervla.algorithms.critic.latent_success_classifier.LatentSuccessClassifier
     kwargs:
-      latent_dim: ${task.openvla_oft.input_tokens.classifier_latent_dim}
+      latent_dim: ${task.openvla_oft.hidden_token.classifier_latent_dim}
       action_dim: ${task.action_dim}
-      time_horizon: ${task.openvla_oft.input_tokens.chunk_size}
-      token_dim: ${task.openvla_oft.input_tokens.token_dim}
-      token_count: ${task.openvla_oft.input_tokens.token_count}
+      time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+      token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      token_count: ${task.openvla_oft.hidden_token.token_count}
       head_type: spatial_tf
-      proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
-      proprio_emb_dim: ${task.openvla_oft.input_tokens.proprio_emb_dim}
-      num_proprio_repeat: ${task.openvla_oft.input_tokens.num_proprio_repeat}
-      lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
-      lang_emb_dim: ${task.openvla_oft.input_tokens.lang_emb_dim}
-      num_lang_repeat: ${task.openvla_oft.input_tokens.num_lang_repeat}
+      proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+      proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
+      num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
+      lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+      lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
+      num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
       window: 8
       hidden_dim: 1024
       num_layers: 12
@@ -133,31 +133,31 @@ ray_components:
       dropout: 0.1
       output_dim: 1
       granularity: chunk
-      chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+      chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
       chunk_pool: last
 
 # Inputs build_oft_worker_plan / _build_collect_cfg read to derive the OFT
 # inference (OFTRolloutBundle) cfg programmatically.
 collect:
   oft_latent_spec:
-    expected_action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
-    expected_obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
-    expected_prompt_style: ${task.openvla_oft.input_tokens.expected_prompt_style}
-    expected_history: ${task.openvla_oft.input_tokens.expected_history}
-    expected_include_state: ${task.openvla_oft.input_tokens.expected_include_state}
-    expected_rotate_images_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
-    token_dim: ${task.openvla_oft.input_tokens.token_dim}
-    token_count: ${task.openvla_oft.input_tokens.token_count}
-    wm_obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
-    chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+    expected_action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
+    expected_obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
+    expected_prompt_style: ${task.openvla_oft.hidden_token.expected_prompt_style}
+    expected_history: ${task.openvla_oft.hidden_token.expected_history}
+    expected_include_state: ${task.openvla_oft.hidden_token.expected_include_state}
+    expected_rotate_images_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
+    token_dim: ${task.openvla_oft.hidden_token.token_dim}
+    token_count: ${task.openvla_oft.hidden_token.token_count}
+    wm_obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+    chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
   task_ids: all
   episodes_per_task: 2
   episode_horizon: 300
   envs_per_gpu: 1
   memory_fraction: 0.9
   gpu_id: 0
-  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_input_token_embedding/reward
-  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_input_token_embedding/hidden
+  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_hidden_token/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.suite}_ray_async_hidden_token/hidden
 
 env:
   num_workers: 1
@@ -179,11 +179,11 @@ env:
       task_ids: ${ray_data.task_ids}
       resolution: ${task.image_resolution}
       image_size: ${task.image_size}
-      history_length: ${task.openvla_oft.input_tokens.expected_history}
-      include_state: ${task.openvla_oft.input_tokens.expected_include_state}
-      obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
-      action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
-      vla_rotate_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
+      history_length: ${task.openvla_oft.hidden_token.expected_history}
+      include_state: ${task.openvla_oft.hidden_token.expected_include_state}
+      obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
+      action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
+      vla_rotate_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
       action_input: raw
       max_steps: 300
 
@@ -194,31 +194,31 @@ rollout:
   require_classifier_evidence: true
   dump:
     enabled: true
-    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding
+    manifest_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_hidden_token
     keep_last_global_steps: 8
-    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding/reward
-    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_input_token_embedding/hidden
+    reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_hidden_token/reward
+    hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/OpenVLA_Onetraj_LIBERO_${task.suite}/online_cotrain_hidden_token/hidden
     shard_prefix: cotrain_episode
     demos_per_shard: 1
     preprocess_config:
-      action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
-      history: ${task.openvla_oft.input_tokens.expected_history}
-      include_state: ${task.openvla_oft.input_tokens.expected_include_state}
+      action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
+      history: ${task.openvla_oft.hidden_token.expected_history}
+      include_state: ${task.openvla_oft.hidden_token.expected_include_state}
       hidden_key: obs_embedding
-      obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
-      token_count: ${task.openvla_oft.input_tokens.token_count}
-      token_dim: ${task.openvla_oft.input_tokens.token_dim}
-      hidden_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+      obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
+      token_count: ${task.openvla_oft.hidden_token.token_count}
+      token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      hidden_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
       obs_embedding_shape:
-        - ${task.openvla_oft.input_tokens.token_count}
-        - ${task.openvla_oft.input_tokens.token_dim}
+        - ${task.openvla_oft.hidden_token.token_count}
+        - ${task.openvla_oft.hidden_token.token_dim}
       hidden_storage_format: tokenized
-      num_images_in_input: ${task.openvla_oft.input_tokens.num_images_in_input}
-      patches_per_image: ${task.openvla_oft.input_tokens.patches_per_image}
+      num_images_in_input: ${task.openvla_oft.hidden_token.num_images_in_input}
+      patches_per_image: ${task.openvla_oft.hidden_token.patches_per_image}
       sidecar_schema_version: 1
       required_demo_datasets: [obs_embedding]
-      wm_obs_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
-      chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+      wm_obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+      chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
     data_attrs:
       task_suite_name: ${task.suite}
       env_name: libero
@@ -293,7 +293,7 @@ learner:
       clip_ratio_high: 0.28
       clip_ratio_c: 3.0
       lumos:
-        chunk_size: ${task.openvla_oft.input_tokens.chunk_size}
+        chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
         episode_max_steps: ${env.train.max_episode_steps}
         classifier_min_steps: 4
         ppo_rollouts_per_start_min: ${algorithm.group_size}
@@ -314,7 +314,7 @@ learner:
         lr: 1.0e-4
         weight_decay: 0.0
     syncer:
-      store_name: ray_cotrain_oft_input_token_embedding_weight_store
+      store_name: ray_cotrain_oft_hidden_token_weight_store
 
 sync:
   weight_sync_every: 1
@@ -326,7 +326,7 @@ checkpoint:
   latest_name: latest.ckpt
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_input_token_embedding/${task.name}/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/ray_cotrain_oft_hidden_token/${task.name}/${now:%Y%m%d_%H%M%S}}
   max_steps: 1000
   distributed_strategy: single
   data_parallel: false

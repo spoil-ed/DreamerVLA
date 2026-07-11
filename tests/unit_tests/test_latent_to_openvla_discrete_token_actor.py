@@ -26,11 +26,11 @@ def _tiny_mainline_actor() -> LatentToOpenVLAHiddenStateActor:
     )
 
 
-def _input_tokens(batch_size: int = 2) -> torch.Tensor:
+def _hidden_token(batch_size: int = 2) -> torch.Tensor:
     return torch.zeros(batch_size, 256, 4096)
 
 
-def test_hidden_state_actor_uses_canonical_input_token_boundary() -> None:
+def test_hidden_state_actor_uses_canonical_hidden_token_boundary() -> None:
     actor = _tiny_mainline_actor()
 
     assert actor.source_token_count == 256
@@ -73,7 +73,7 @@ def test_hidden_state_actor_rejects_flat_observation() -> None:
 def test_hidden_state_actor_decodes_internal_action_slots() -> None:
     torch.manual_seed(0)
     actor = _tiny_mainline_actor()
-    hidden = _input_tokens()
+    hidden = _hidden_token()
 
     action_chunk, log_prob, extra = actor(
         {"mode": "sample", "hidden": hidden, "return_chunk": True}
@@ -88,7 +88,7 @@ def test_hidden_state_actor_decodes_internal_action_slots() -> None:
 def test_hidden_state_actor_token_level_logprobs_round_trip() -> None:
     torch.manual_seed(0)
     actor = _tiny_mainline_actor().eval()
-    hidden = _input_tokens()
+    hidden = _hidden_token()
 
     action_chunk, sampled_log_prob, extra = actor(
         {

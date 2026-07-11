@@ -559,7 +559,7 @@ class DreamerVLAOnlineTrainEnvConfig:
     vla_rotate_180: bool = True
     prompt_style: Literal["vla_policy"] = "vla_policy"
     include_state: bool = False
-    obs_hidden_source: Literal["input_token_embedding"] = "input_token_embedding"
+    obs_hidden_source: Literal["hidden_token"] = "hidden_token"
     action_head_type: Literal["oft_discrete_token"] = "oft_discrete_token"
     target_token_id: int = DEFAULT_ACTION_TOKEN_ID
     full_record: bool = False
@@ -925,10 +925,10 @@ class DreamerVLAOnlineTrainEnv:
             )
         if not bool(self.cfg.vla_rotate_180):
             errors.append("vla_rotate_180=False, expected True")
-        if str(self.cfg.obs_hidden_source) != "input_token_embedding":
+        if str(self.cfg.obs_hidden_source) != "hidden_token":
             errors.append(
                 f"obs_hidden_source={self.cfg.obs_hidden_source!r}, expected "
-                "'input_token_embedding'"
+                "'hidden_token'"
             )
         if str(self.cfg.action_head_type) != "oft_discrete_token":
             errors.append(

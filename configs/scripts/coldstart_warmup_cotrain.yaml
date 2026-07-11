@@ -146,16 +146,16 @@ modes:
       - env.cfg.render_backend={render_backend}
       - collect.task_ids=all
       - collect.episodes_per_task=50
-      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.input_tokens.expected_action_head_type}}
-      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.input_tokens.expected_obs_hidden_source}}
-      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.input_tokens.expected_prompt_style}}
-      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.input_tokens.expected_history}}
-      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.input_tokens.expected_include_state}}
-      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.input_tokens.expected_rotate_images_180}}
-      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.input_tokens.token_dim}}
-      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.input_tokens.token_count}}
-      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.input_tokens.wm_obs_dim}}
-      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.input_tokens.chunk_size}}
+      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.hidden_token.expected_action_head_type}}
+      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.hidden_token.expected_obs_hidden_source}}
+      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.hidden_token.expected_prompt_style}}
+      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.hidden_token.expected_history}}
+      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.hidden_token.expected_include_state}}
+      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.hidden_token.expected_rotate_images_180}}
+      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.hidden_token.token_dim}}
+      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.hidden_token.token_count}}
+      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.hidden_token.wm_obs_dim}}
+      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.hidden_token.chunk_size}}
   noray:
     collect:
       - experiment=collect_rollouts_onetraj
@@ -165,16 +165,16 @@ modes:
       - collect.task_ids=all
       - collect.episodes_per_task=50
       - collect.gpu_id=0
-      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.input_tokens.expected_action_head_type}}
-      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.input_tokens.expected_obs_hidden_source}}
-      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.input_tokens.expected_prompt_style}}
-      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.input_tokens.expected_history}}
-      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.input_tokens.expected_include_state}}
-      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.input_tokens.expected_rotate_images_180}}
-      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.input_tokens.token_dim}}
-      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.input_tokens.token_count}}
-      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.input_tokens.wm_obs_dim}}
-      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.input_tokens.chunk_size}}
+      - ++collect.oft_latent_spec.expected_action_head_type=\${{task.openvla_oft.hidden_token.expected_action_head_type}}
+      - ++collect.oft_latent_spec.expected_obs_hidden_source=\${{task.openvla_oft.hidden_token.expected_obs_hidden_source}}
+      - ++collect.oft_latent_spec.expected_prompt_style=\${{task.openvla_oft.hidden_token.expected_prompt_style}}
+      - ++collect.oft_latent_spec.expected_history=\${{task.openvla_oft.hidden_token.expected_history}}
+      - ++collect.oft_latent_spec.expected_include_state=\${{task.openvla_oft.hidden_token.expected_include_state}}
+      - ++collect.oft_latent_spec.expected_rotate_images_180=\${{task.openvla_oft.hidden_token.expected_rotate_images_180}}
+      - ++collect.oft_latent_spec.token_dim=\${{task.openvla_oft.hidden_token.token_dim}}
+      - ++collect.oft_latent_spec.token_count=\${{task.openvla_oft.hidden_token.token_count}}
+      - ++collect.oft_latent_spec.wm_obs_dim=\${{task.openvla_oft.hidden_token.wm_obs_dim}}
+      - ++collect.oft_latent_spec.chunk_size=\${{task.openvla_oft.hidden_token.chunk_size}}
 
 cotrain:
   base:

@@ -13,13 +13,13 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.preprocess.sidecar_schema import (
-    INPUT_TOKEN_COUNT,
-    INPUT_TOKEN_DIM,
-    INPUT_TOKEN_HIDDEN_DIM,
-    INPUT_TOKEN_SHAPE,
+    HIDDEN_TOKEN_COUNT,
+    HIDDEN_TOKEN_DIM,
+    HIDDEN_TOKEN_HIDDEN_DIM,
+    HIDDEN_TOKEN_SHAPE,
     SIDECAR_SCHEMA_VERSION,
     required_demo_datasets,
-    validate_input_token_preprocess_config,
+    validate_hidden_token_preprocess_config,
 )
 
 
@@ -150,8 +150,8 @@ def _resolve_token_dim(vla: Any) -> int:
     raise ValueError("Could not derive token_dim from loaded VLA")
 
 
-def vla_input_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
-    """Validate the loaded VLA against the exact input-token contract."""
+def vla_hidden_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
+    """Validate the loaded VLA against the exact hidden-token contract."""
 
     token_dim = _resolve_token_dim(vla)
     patches_per_image = int(vla.vision_backbone.get_num_patches())
@@ -159,27 +159,27 @@ def vla_input_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     keys = list(image_keys)
     if keys != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb'], "
+            "OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb'], "
             f"got {keys!r}"
         )
     if (
-        patches_per_image != INPUT_TOKEN_COUNT
-        or token_dim != INPUT_TOKEN_DIM
+        patches_per_image != HIDDEN_TOKEN_COUNT
+        or token_dim != HIDDEN_TOKEN_DIM
         or num_images_in_input != 1
     ):
         raise ValueError(
-            "loaded VLA does not satisfy input-token contract: "
+            "loaded VLA does not satisfy hidden-token contract: "
             f"patches={patches_per_image}, token_dim={token_dim}, "
             f"num_images_in_input={num_images_in_input}"
         )
     return {
-        "per_image": INPUT_TOKEN_COUNT,
-        "patches_per_image": INPUT_TOKEN_COUNT,
+        "per_image": HIDDEN_TOKEN_COUNT,
+        "patches_per_image": HIDDEN_TOKEN_COUNT,
         "views": 1,
         "num_images_in_input": 1,
-        "token_dim": INPUT_TOKEN_DIM,
-        "token_count": INPUT_TOKEN_COUNT,
-        "flat_dim": INPUT_TOKEN_HIDDEN_DIM,
+        "token_dim": HIDDEN_TOKEN_DIM,
+        "token_count": HIDDEN_TOKEN_COUNT,
+        "flat_dim": HIDDEN_TOKEN_HIDDEN_DIM,
     }
 
 
@@ -216,7 +216,7 @@ def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
     device = _policy_device_from_id(gpu_id)
 
     # Validate the only supported checkpoint mode before constructing the policy.
-    from dreamervla.preprocess.preprocess_oft_input_tokens import resolve_oft_policy_mode
+    from dreamervla.preprocess.preprocess_oft_hidden_token import resolve_oft_policy_mode
 
     mode = resolve_oft_policy_mode(model_path, str(cfg["policy_mode"]))
     use_proprio = False
@@ -309,16 +309,16 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     config["hidden_storage_format"] = "tokenized"
     config["sidecar_schema_version"] = SIDECAR_SCHEMA_VERSION
     config["required_demo_datasets"] = required_demo_datasets()
-    if token_count != INPUT_TOKEN_COUNT or int(cfg["token_dim"]) != INPUT_TOKEN_DIM:
+    if token_count != HIDDEN_TOKEN_COUNT or int(cfg["token_dim"]) != HIDDEN_TOKEN_DIM:
         raise ValueError(
-            "OpenVLA-OFT collection requires input_token_embedding shape "
-            f"{INPUT_TOKEN_SHAPE}; got ({token_count}, {int(cfg['token_dim'])})"
+            "OpenVLA-OFT collection requires hidden_token shape "
+            f"{HIDDEN_TOKEN_SHAPE}; got ({token_count}, {int(cfg['token_dim'])})"
         )
-    if hidden_dim != INPUT_TOKEN_HIDDEN_DIM:
+    if hidden_dim != HIDDEN_TOKEN_HIDDEN_DIM:
         raise ValueError(
-            f"hidden_dim must be {INPUT_TOKEN_HIDDEN_DIM}, got {hidden_dim}"
+            f"hidden_dim must be {HIDDEN_TOKEN_HIDDEN_DIM}, got {hidden_dim}"
         )
-    validate_input_token_preprocess_config(
+    validate_hidden_token_preprocess_config(
         config,
         context="OpenVLA-OFT collection preprocess config",
     )
@@ -349,7 +349,7 @@ def resolve_num_images_in_input(collect_cfg: Any) -> int:
     count = int(val) if val is not None else 1
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
             f"got {count}"
         )
     return count
@@ -365,17 +365,17 @@ def select_vla_image_keys(
     keys = list(image_keys)
     if int(history) != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires expected_history=1, "
+            "OpenVLA-OFT hidden-token mainline requires expected_history=1, "
             f"got {int(history)}"
         )
     if int(num_images_in_input) != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
             f"got {int(num_images_in_input)}"
         )
     if keys != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires exactly one primary camera "
+            "OpenVLA-OFT hidden-token mainline requires exactly one primary camera "
             f"'agentview_rgb', got {keys!r}"
         )
     return ["agentview_rgb"]

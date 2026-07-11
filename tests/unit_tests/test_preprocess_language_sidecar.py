@@ -7,13 +7,13 @@ import h5py
 import numpy as np
 import torch
 
-from dreamervla.preprocess.preprocess_oft_input_tokens import (
+from dreamervla.preprocess.preprocess_oft_hidden_token import (
     _load_oft_components,
-    _write_source_input_tokens,
+    _write_source_hidden_token,
 )
 
 
-def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
+def test_oft_hidden_token_preprocess_writes_per_demo_language_sidecar(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "put_the_bowl_on_the_plate_demo.hdf5"
@@ -58,19 +58,19 @@ def test_oft_input_token_preprocess_writes_per_demo_language_sidecar(
         max_demos_per_file=None,
     )
     components = _load_oft_components(args, torch.device("cpu"))
-    out_input = tmp_path / "input" / source.name
-    out_input.parent.mkdir()
+    out_hidden = tmp_path / "hidden" / source.name
+    out_hidden.parent.mkdir()
 
-    stats = _write_source_input_tokens(
+    stats = _write_source_hidden_token(
         source_path=source,
-        out_input_token_path=out_input,
+        out_hidden_token_path=out_hidden,
         components=components,
         args=args,
         rank=0,
     )
 
     assert stats == {"demos": 1, "frames": length}
-    with h5py.File(out_input, "r") as handle:
+    with h5py.File(out_hidden, "r") as handle:
         assert bool(handle.attrs["complete"])
         demo = handle["data"]["demo_0"]
         assert demo["obs_embedding"].shape == (length, 256, 4096)

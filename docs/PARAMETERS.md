@@ -43,7 +43,10 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `training.classifier_warmup_steps` | classifier update budget |
 | `training.warmup_replay_epochs` | replay-pass derived update budget |
 | `training.warmup_checkpoint_every` | warmup checkpoint cadence |
-| `training.wm_profile_steps` | profile print budget; `-1` means all steps |
+| `training.wm_profile_steps` | bounded WM update profile budget; `-1` is diagnostic-only all-step profiling |
+| `training.wm_prefetch_workers` | CPU replay batches built ahead of the current WM update |
+| `training.update_profile_steps` | bounded standalone classifier update profile budget |
+| `training.precision` | standalone classifier autocast precision (`bf16` on H100) |
 | `training.classifier_batch_size` | local classifier batch |
 | `dataloader.batch_size` | local WM replay batch |
 | `online_rollout.sequence_length` | replay window length |
@@ -54,12 +57,12 @@ Shell launchers expose a small set of convenience keys and pass remaining
 ## OpenVLA-OFT Token Contract
 
 The current cotrain path reads token metadata from
-`task.openvla_oft.input_tokens.*`.
+`task.openvla_oft.hidden_token.*`.
 
 | Key | Meaning |
 | --- | --- |
 | `expected_action_head_type` | action-head contract stored in sidecar metadata |
-| `expected_obs_hidden_source` | projected input-token source expected by WM/classifier |
+| `expected_obs_hidden_source` | projected hidden-token source expected by WM/classifier |
 | `expected_prompt_style` | prompt serialization contract |
 | `expected_history` | image/history count encoded by the sidecar |
 | `expected_include_state` | whether VLA-side state was included |

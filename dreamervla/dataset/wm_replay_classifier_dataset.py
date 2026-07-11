@@ -61,7 +61,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import IterableDataset
 
-from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 
 
 def _find_demo_pairs(
@@ -178,18 +178,18 @@ class WMReplayClassifierDataset(IterableDataset):
         self.device = torch.device(device)
         self.include_swap_negatives = bool(include_swap_negatives)
 
-        validate_input_token_sidecar_dir(hidden_dir, reference_dir=raw_dir)
+        validate_hidden_token_sidecar_dir(hidden_dir, reference_dir=raw_dir)
         if failure_hidden_dir is not None:
             if failure_raw_dir is None:
                 raise ValueError("failure_hidden_dir requires failure_raw_dir")
-            validate_input_token_sidecar_dir(
+            validate_hidden_token_sidecar_dir(
                 failure_hidden_dir,
                 reference_dir=failure_raw_dir,
             )
         if rollout_hidden_dir is not None:
             if rollout_raw_dir is None:
                 raise ValueError("rollout_hidden_dir requires rollout_raw_dir")
-            validate_input_token_sidecar_dir(
+            validate_hidden_token_sidecar_dir(
                 rollout_hidden_dir,
                 reference_dir=rollout_raw_dir,
             )

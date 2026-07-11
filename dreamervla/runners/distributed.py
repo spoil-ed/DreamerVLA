@@ -187,13 +187,23 @@ class NopretokenizeSFTDistributedHelper:
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
         return unwrap_module(module)
 
-    def clip_grad_norm(self, module: torch.nn.Module, max_norm: float) -> float:
+    def clip_grad_norm_tensor(
+        self, module: torch.nn.Module, max_norm: float
+    ) -> torch.Tensor:
+        """Clip gradients without forcing a device-to-host synchronization."""
+
         if isinstance(module, FSDP):
             grad_norm = module.clip_grad_norm_(float(max_norm))
-            return float(
-                grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+        else:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                module.parameters(), float(max_norm)
             )
-        grad_norm = torch.nn.utils.clip_grad_norm_(module.parameters(), float(max_norm))
+        if isinstance(grad_norm, torch.Tensor):
+            return grad_norm
+        return torch.tensor(float(grad_norm), device=self._reduce_device())
+
+    def clip_grad_norm(self, module: torch.nn.Module, max_norm: float) -> float:
+        grad_norm = self.clip_grad_norm_tensor(module, max_norm)
         return float(
             grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
         )
@@ -228,17 +238,23 @@ class NopretokenizeSFTDistributedHelper:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
         return float(tensor.item())
 
-    def reduce_mean_dict(self, metrics: dict[str, float | int]) -> dict[str, float]:
+    def reduce_mean_dict(
+        self, metrics: dict[str, float | int | torch.Tensor]
+    ) -> dict[str, float]:
         keys = list(metrics.keys())
         if not keys:
             return {}
         # Stack into one float32 tensor (matching per-key ``reduce_mean``'s
         # float32 round-trip) so a single all_reduce + single D2H replaces one
         # collective + ``.item()`` per key, while staying numerically identical.
-        values = torch.tensor(
-            [float(metrics[key]) for key in keys],
-            device=self._reduce_device(),
-            dtype=torch.float32,
+        device = self._reduce_device()
+        values = torch.stack(
+            [
+                value.detach().to(device=device, dtype=torch.float32).reshape(())
+                if isinstance(value, torch.Tensor)
+                else torch.tensor(float(value), device=device, dtype=torch.float32)
+                for value in (metrics[key] for key in keys)
+            ]
         )
         if self.is_distributed:
             dist.all_reduce(values, op=dist.ReduceOp.SUM)

@@ -1,5 +1,5 @@
 # @package _global_
-# Target manual-cotrain Ray route for OpenVLA-OFT input-token embeddings.
+# Target manual-cotrain Ray route for OpenVLA-OFT hidden-token embeddings.
 #
 # This composes the existing OFT backbone latent component definitions, then
 # switches the runner topology to the manual-notes four-group route.
@@ -36,7 +36,7 @@ manual_cotrain:
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
-  num_action_chunks: ${task.openvla_oft.input_tokens.chunk_size}
+  num_action_chunks: ${task.openvla_oft.hidden_token.chunk_size}
   envs_per_worker: 8
   wm_envs_per_worker: 16
   eval_interval_global_steps: 0
@@ -121,12 +121,12 @@ rollout:
         unnorm_key: ${task.openvla_oft.dataset_statistics_key}
       unnorm_key: ${task.openvla_oft.dataset_statistics_key}
       image_keys: ${task.image_keys}
-      history: ${task.openvla_oft.input_tokens.expected_history}
-      rotate_images_180: ${task.openvla_oft.input_tokens.expected_rotate_images_180}
+      history: ${task.openvla_oft.hidden_token.expected_history}
+      rotate_images_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
       center_crop: true
-      obs_hidden_source: ${task.openvla_oft.input_tokens.expected_obs_hidden_source}
-      expected_action_head_type: ${task.openvla_oft.input_tokens.expected_action_head_type}
-      expected_include_state: ${task.openvla_oft.input_tokens.expected_include_state}
+      obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
+      expected_action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
+      expected_include_state: ${task.openvla_oft.hidden_token.expected_include_state}
       device: cuda
   init_ckpt: {}
   train_cfg:
@@ -174,7 +174,7 @@ learner:
         weight_decay: 0.0
 
 env:
-  # Keep the inherited input-token environment contract.
+  # Keep the inherited hidden-token environment contract.
   cfg:
     action_postprocess: openvla_oft
     render_backend: ${render_backend}
@@ -187,10 +187,10 @@ env:
       kwargs:
         world_model: ${ray_components.world_model}
         classifier: ${ray_components.classifier}
-        latent_dim: ${task.openvla_oft.input_tokens.wm_obs_dim}
+        latent_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
         action_dim: ${task.action_dim}
-        lang_dim: ${task.openvla_oft.input_tokens.lang_dim}
-        proprio_dim: ${task.openvla_oft.input_tokens.proprio_dim}
+        lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+        proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
         success_threshold: 0.5
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
         num_envs: ${manual_cotrain.wm_envs_per_worker}

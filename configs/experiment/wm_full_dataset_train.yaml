@@ -13,12 +13,13 @@ training:
   warmup_replay_epochs: 10
   warmup_checkpoint_every: 500
   warmup_topk_k: 3
-  wm_profile_steps: -1
+  wm_profile_steps: 8
+  wm_prefetch_workers: 1
   classifier_batch_size: 1
 
 offline_warmup:
   data_dir: ${task.collected_reward_dir}
-  hidden_dir: ${task.collected_input_token_dir}
+  hidden_dir: ${task.collected_hidden_token_dir}
   task_id: null
   infer_task_id_from_shard: true
 

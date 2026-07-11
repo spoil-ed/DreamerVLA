@@ -43,7 +43,7 @@ def _write_source_hdf5(path, *, frames: int) -> None:
 def _canonical_config(**overrides) -> dict[str, object]:
     config: dict[str, object] = {
         "action_head_type": "oft_discrete_token",
-        "obs_hidden_source": "input_token_embedding",
+        "obs_hidden_source": "hidden_token",
         "hidden_key": "obs_embedding",
         "token_count": 256,
         "token_dim": 4096,
@@ -61,7 +61,7 @@ def _canonical_config(**overrides) -> dict[str, object]:
     return config
 
 
-def _write_input_token_sidecar(path, *, length: int = 1) -> None:
+def _write_hidden_token_sidecar(path, *, length: int = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as handle:
         handle.attrs["complete"] = True
@@ -168,7 +168,7 @@ def test_validate_hdf5_dir_can_match_reference_demo_lengths(tmp_path) -> None:
 
 def test_validate_hdf5_dir_can_require_preprocess_config(tmp_path) -> None:
     sidecar = tmp_path / "hidden"
-    _write_input_token_sidecar(sidecar / "a.hdf5")
+    _write_hidden_token_sidecar(sidecar / "a.hdf5")
 
     with pytest.raises(RuntimeError, match="preprocess_config"):
         validate_hdf5_dir(sidecar, require_config=True)
@@ -182,7 +182,7 @@ def test_validate_hdf5_dir_can_require_preprocess_config(tmp_path) -> None:
 
 def test_validate_hdf5_dir_rejects_extra_required_dataset_alias(tmp_path) -> None:
     sidecar = tmp_path / "hidden"
-    _write_input_token_sidecar(sidecar / "a.hdf5")
+    _write_hidden_token_sidecar(sidecar / "a.hdf5")
     (sidecar / "preprocess_config.json").write_text(
         json.dumps(
             _canonical_config(
@@ -198,7 +198,7 @@ def test_validate_hdf5_dir_rejects_extra_required_dataset_alias(tmp_path) -> Non
 
 def test_validate_hdf5_dir_rejects_removed_sidecar_flags(tmp_path) -> None:
     sidecar = tmp_path / "hidden"
-    _write_input_token_sidecar(sidecar / "a.hdf5")
+    _write_hidden_token_sidecar(sidecar / "a.hdf5")
     (sidecar / "preprocess_config.json").write_text(
         json.dumps(_canonical_config(save_hidden_token=True)),
         encoding="utf-8",
@@ -210,7 +210,7 @@ def test_validate_hdf5_dir_rejects_removed_sidecar_flags(tmp_path) -> None:
 
 def test_validate_hdf5_dir_rejects_custom_observation_key(tmp_path) -> None:
     sidecar = tmp_path / "hidden"
-    _write_input_token_sidecar(sidecar / "a.hdf5")
+    _write_hidden_token_sidecar(sidecar / "a.hdf5")
     (sidecar / "preprocess_config.json").write_text(
         json.dumps(_canonical_config(hidden_key="latent")),
         encoding="utf-8",
@@ -287,7 +287,7 @@ def test_preprocess_task_plan_uses_fixed_dataset_from_config(tmp_path) -> None:
     source = tmp_path / "source"
     out = tmp_path / "out"
     _write_source_hdf5(source / "a.hdf5", frames=5)
-    _write_input_token_sidecar(out / "a.hdf5", length=5)
+    _write_hidden_token_sidecar(out / "a.hdf5", length=5)
     (out / "preprocess_config.json").write_text(
         json.dumps(_canonical_config()),
         encoding="utf-8",

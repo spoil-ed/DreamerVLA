@@ -14,7 +14,7 @@ from typing import Any
 import h5py
 import numpy as np
 
-from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runners.online_replay import OnlineReplay
 
 _LIBERO_GOAL_TASKS = (
@@ -171,7 +171,7 @@ def seed_replay_from_offline(
     # Warmup is a public training boundary, so validate every paired shard and
     # demo before adding even one transition. This prevents a valid first shard
     # from masking a later 56-token/flat legacy sidecar.
-    validate_input_token_sidecar_dir(
+    validate_hidden_token_sidecar_dir(
         hidden_dir,
         expected_filenames=shards,
         reference_dir=data_dir,

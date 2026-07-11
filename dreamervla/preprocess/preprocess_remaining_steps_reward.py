@@ -194,6 +194,7 @@ def _copy_file_with_remaining_rewards(
             demo.attrs["reward_scheme"] = SCHEME_NAME
             demo.attrs["reward_success"] = bool(info["success"])
             demo.attrs["reward_success_index"] = int(info["success_index"])
+            demo.attrs["complete"] = True
 
             demos += 1
             frames += int(shaped.shape[0])
@@ -208,6 +209,7 @@ def _copy_file_with_remaining_rewards(
         dst.attrs["reward_min_value"] = float(args.min_value)
         dst.attrs["reward_max_value"] = float(args.max_value)
         dst.attrs["reward_failure_value"] = float(args.failure_value)
+        dst.attrs["complete"] = True
 
     tmp_path.replace(output_path)
     return {

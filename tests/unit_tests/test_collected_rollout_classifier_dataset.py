@@ -19,7 +19,7 @@ SEQ_LEN = 4   # positive window at start=(T-SEQ_LEN), negative windows at 0..(T-
 IMAGE_H = 64
 IMAGE_W = 64
 ACTION_DIM = 7
-INPUT_TOKEN_SHAPE = (256, 4096)
+HIDDEN_TOKEN_SHAPE = (256, 4096)
 STATE_DIM = 79
 
 
@@ -43,7 +43,7 @@ def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
             "joint_states": rng.standard_normal(7),
         },
         "obs_embedding": np.broadcast_to(
-            np.asarray(t, dtype=np.float16), INPUT_TOKEN_SHAPE
+            np.asarray(t, dtype=np.float16), HIDDEN_TOKEN_SHAPE
         ),
     }
 
@@ -58,7 +58,7 @@ def _make_episode(success: bool) -> list[dict]:
 
 
 @pytest.fixture()
-def dump(tmp_path: Path, input_token_preprocess_config):
+def dump(tmp_path: Path, hidden_token_preprocess_config):
     """Write a two-demo dump (one success, one failure) and return dirs."""
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 
@@ -74,12 +74,12 @@ def dump(tmp_path: Path, input_token_preprocess_config):
     writer.write_demo(
         index=0,
         steps=_make_episode(success=True),
-        preprocess_config=input_token_preprocess_config,
+        preprocess_config=hidden_token_preprocess_config,
     )
     writer.write_demo(
         index=1,
         steps=_make_episode(success=False),
-        preprocess_config=input_token_preprocess_config,
+        preprocess_config=hidden_token_preprocess_config,
     )
     writer.close()
 
@@ -101,7 +101,7 @@ def dataset(dump):
         expected_model_path=None,
         expected_time_horizon=None,
         expected_action_head_type="oft_discrete_token",
-        expected_obs_hidden_source="input_token_embedding",
+        expected_obs_hidden_source="hidden_token",
         expected_prompt_style=None,
         expected_history=1,
         expected_include_state=False,
@@ -128,7 +128,7 @@ def test_dataset_nonempty(dataset):
 def test_item_has_obs_embedding(dataset):
     item = dataset[0]
     assert "obs_embedding" in item
-    assert item["obs_embedding"].shape == (SEQ_LEN, *INPUT_TOKEN_SHAPE)
+    assert item["obs_embedding"].shape == (SEQ_LEN, *HIDDEN_TOKEN_SHAPE)
 
 
 def test_item_has_success_float(dataset):

@@ -4,7 +4,7 @@ import numpy as np
 
 from dreamervla.workers.rollout.record_adapter import build_dump_step
 
-INPUT_TOKEN_SHAPE = (256, 4096)
+HIDDEN_TOKEN_SHAPE = (256, 4096)
 
 
 def _full_record() -> dict:
@@ -28,7 +28,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
     full_record["gripper_states"] = np.array([7.0, 8.0], dtype=np.float64)
     step = build_dump_step(
         full_record=full_record,
-        obs_embedding=np.zeros(INPUT_TOKEN_SHAPE, np.float16),
+        obs_embedding=np.zeros(HIDDEN_TOKEN_SHAPE, np.float16),
         lang_emb=np.arange(6, dtype=np.float32),
         action=np.ones(7, np.float32),
         reward=0.0,
@@ -36,7 +36,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
         done=True,
     )
     assert step["actions"].shape == (7,)
-    assert step["obs_embedding"].shape == INPUT_TOKEN_SHAPE
+    assert step["obs_embedding"].shape == HIDDEN_TOKEN_SHAPE
     assert step["obs_embedding"].dtype == np.float16
     assert np.array_equal(step["lang_emb"], np.arange(6, dtype=np.float32))
     assert int(step["dones"]) == 1 and int(step["sparse_rewards"]) == 1
@@ -49,7 +49,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
 
 
 def test_step_round_trips_through_rollout_dump_writer(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ) -> None:
     import h5py
 
@@ -58,7 +58,7 @@ def test_step_round_trips_through_rollout_dump_writer(
     steps = [
         build_dump_step(
             full_record=_full_record(),
-            obs_embedding=np.zeros(INPUT_TOKEN_SHAPE, np.float16),
+            obs_embedding=np.zeros(HIDDEN_TOKEN_SHAPE, np.float16),
             lang_emb=np.arange(6, dtype=np.float32),
             action=np.ones(7, np.float32),
             reward=0.0,
@@ -71,7 +71,7 @@ def test_step_round_trips_through_rollout_dump_writer(
     writer.write_demo(
         index=0,
         steps=steps,
-        preprocess_config=input_token_preprocess_config,
+        preprocess_config=hidden_token_preprocess_config,
         task_id=0,
         episode_horizon=3,
         episode_success=True,
@@ -80,7 +80,7 @@ def test_step_round_trips_through_rollout_dump_writer(
     with h5py.File(tmp_path / "hidden" / "shard.hdf5", "r") as handle:
         assert handle["data"]["demo_0"]["obs_embedding"].shape == (
             3,
-            *INPUT_TOKEN_SHAPE,
+            *HIDDEN_TOKEN_SHAPE,
         )
         assert handle["data"]["demo_0"]["lang_emb"].shape == (6,)
     with h5py.File(tmp_path / "reward" / "shard.hdf5", "r") as handle:
@@ -88,14 +88,14 @@ def test_step_round_trips_through_rollout_dump_writer(
         assert int(handle["data"]["demo_0"]["sparse_rewards"][-1]) == 1
 
 
-def test_build_dump_step_preserves_input_token_shape(
-    tmp_path, input_token_preprocess_config
+def test_build_dump_step_preserves_hidden_token_shape(
+    tmp_path, hidden_token_preprocess_config
 ) -> None:
     import h5py
 
     from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 
-    tokenized = np.zeros(INPUT_TOKEN_SHAPE, dtype=np.float16)
+    tokenized = np.zeros(HIDDEN_TOKEN_SHAPE, dtype=np.float16)
     steps = [
         build_dump_step(
             full_record=_full_record(),
@@ -112,7 +112,7 @@ def test_build_dump_step_preserves_input_token_shape(
     writer.write_demo(
         index=0,
         steps=steps,
-        preprocess_config=input_token_preprocess_config,
+        preprocess_config=hidden_token_preprocess_config,
         task_id=0,
         episode_horizon=2,
         episode_success=True,
@@ -122,5 +122,5 @@ def test_build_dump_step_preserves_input_token_shape(
     with h5py.File(tmp_path / "hidden" / "shard.hdf5", "r") as handle:
         assert handle["data"]["demo_0"]["obs_embedding"].shape == (
             2,
-            *INPUT_TOKEN_SHAPE,
+            *HIDDEN_TOKEN_SHAPE,
         )

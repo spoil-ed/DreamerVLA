@@ -14,7 +14,7 @@ The test answers one question:
 > the real-environment success rate of the DreamerVLA policy?
 
 The experiment uses the canonical OpenVLA-OFT observation sidecar
-`input_token_embedding [T,256,4096]`. No alternative observation interface is
+`hidden_token [T,256,4096]`. No alternative observation interface is
 allowed.
 
 ## Hydra Composition Rule
@@ -35,7 +35,7 @@ for the ten required task IDs and ten official reward-shard filenames.
 The complete chain is:
 
 ```text
-official LIBERO reward HDF5 + official input-token sidecars
+official LIBERO reward HDF5 + official hidden-token sidecars
     ├── WM upper-bound training  ──> WM checkpoint
     └── CLS upper-bound training ──> CLS checkpoint + threshold
                                       │
@@ -58,7 +58,7 @@ The experiment name is `wm_official_upper_bound`. It reuses the existing
 WM-only replay warm-up implementation with these non-negotiable overrides:
 
 - `offline_warmup.data_dir == task.hdf5_reward_dir`;
-- `offline_warmup.hidden_dir == task.openvla_oft.input_token_dir`;
+- `offline_warmup.hidden_dir == task.openvla_oft.hidden_token_dir`;
 - `training.classifier_warmup_steps == 0`;
 - `online_rollout.total_env_steps == 0`;
 - the complete official replay is seeded before the first optimizer step.
@@ -76,7 +76,7 @@ The experiment name is `classifier_official_upper_bound`. It reuses
 `LatentClassifierRunner` with:
 
 - `data.success_dir_raw == task.hdf5_reward_dir`;
-- `data.success_dir_hidden == task.openvla_oft.input_token_dir`;
+- `data.success_dir_hidden == task.openvla_oft.hidden_token_dir`;
 - deterministic trajectory-level train/validation splitting;
 - validation threshold sweeping;
 - held-out window-level F1 as the checkpoint selector (official demonstrations

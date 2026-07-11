@@ -144,6 +144,71 @@ def test_runner_dataset_summary_payload_handles_train_and_val() -> None:
     }
 
 
+def test_classifier_run_profiles_full_optimizer_update(tmp_path: Path) -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "training": {
+                "num_epochs": 1,
+                "steps_per_epoch": 1,
+                "eval_every": 100,
+                "ckpt_every": 100,
+                "log_every": 100,
+                "label_smoothing": 0.0,
+                "loss_type": "ce",
+                "class_balanced": False,
+                "precision": "fp32",
+                "update_profile_steps": 1,
+            }
+        }
+    )
+    runner.config = runner.cfg
+    runner._output_dir = str(tmp_path)
+    runner.device = torch.device("cpu")
+    runner.model = torch.nn.Linear(3, 2)
+    runner.optim = torch.optim.SGD(runner.model.parameters(), lr=0.01)
+    runner.train_loader = [
+        (
+            torch.ones(2, 3),
+            torch.tensor([0, 1], dtype=torch.long),
+        )
+    ]
+    runner.val_loader = []
+    runner.train_ds = object()
+    runner.distributed = _FakeDistributed()
+    runner.epoch = 0
+    runner.global_step = 0
+    runner.best_window_f1 = -1.0
+    runner.best_episode_f1 = -1.0
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner._log = lambda _payload: None
+    runner.console_banner = lambda *_args, **_kwargs: None
+    runner.console_progress = lambda *_args, **_kwargs: None
+    runner.console_metrics = lambda *_args, **_kwargs: None
+    runner.save_checkpoint = lambda *_args, **_kwargs: ""
+    runner._finalize_validation_checkpoints = lambda: {}
+    logged: list[dict[str, float]] = []
+    runner.log_metrics = lambda metrics, **_kwargs: logged.append(dict(metrics))
+
+    summary = runner.run()
+
+    profile_keys = {key for metrics in logged for key in metrics}
+    for stage in (
+        "data_wait",
+        "h2d",
+        "forward",
+        "backward",
+        "grad_clip",
+        "optimizer",
+        "metrics",
+        "total",
+    ):
+        assert f"time/classifier_update_{stage}_ms" in profile_keys
+    assert "time/classifier_update_device_active_fraction" in profile_keys
+    assert summary["total_steps"] == 1
+
+
 def test_demo_pair_partition_is_deterministic_disjoint_and_complete() -> None:
     pairs = [
         (Path(f"raw_{index}.hdf5"), Path(f"hidden_{index}.hdf5"), "data/demo_0")

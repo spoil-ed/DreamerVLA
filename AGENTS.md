@@ -130,7 +130,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ```
 
 The WM and classifier stages use official
-`task.hdf5_reward_dir` + `task.openvla_oft.input_token_dir`. The RL stage is
+`task.hdf5_reward_dir` + `task.openvla_oft.hidden_token_dir`. The RL stage is
 single-process, constructs only a policy optimizer, reads official replay for
 initial sequences, and performs no real rollout. WM/CLS state hashes must remain
 unchanged, the policy hash and optimizer-step count must change, and the final
@@ -197,9 +197,9 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
   `chunk_size`, and sidecar keys describe external VLA/sidecar data. `model_dim`,
   RSSM/TSSM width, heads, depth, and MLP sizes describe internal world-model capacity.
 - **Derive downstream shapes from task + sidecar metadata.** For OpenVLA-OFT routes,
-  use `task.openvla_oft.input_tokens.*` and collected HDF5/preprocess metadata. Do not
+  use `task.openvla_oft.hidden_token.*` and collected HDF5/preprocess metadata. Do not
   copy dimensions by hand between world model, classifier, actor, replay, and sidecars.
-  The one-trajectory mainline persists `input_token_embedding [256,4096]`; the
+  The one-trajectory mainline persists `hidden_token [256,4096]`; the
   decoder's internal action slots are not an observation sidecar.
 - **Checkpoint-specific settings follow the checkpoint.** History, image rotation,
   prompt style, proprio/state inclusion, and action-head type are task/checkpoint

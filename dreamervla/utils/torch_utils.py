@@ -1,10 +1,37 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import Any
 
 import torch
 from torch import nn
+
+
+def autocast_context(device: torch.device, precision: str):
+    """Return the Hydra-selected autocast context for a training update."""
+
+    normalized = str(precision).strip().lower()
+    aliases = {
+        "": "fp32",
+        "none": "fp32",
+        "float32": "fp32",
+        "fp32": "fp32",
+        "bfloat16": "bf16",
+        "bf16": "bf16",
+        "float16": "fp16",
+        "fp16": "fp16",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "precision must be one of fp32, bf16, or fp16; "
+            f"got {precision!r}"
+        )
+    resolved = aliases[normalized]
+    if resolved == "fp32":
+        return nullcontext()
+    dtype = torch.bfloat16 if resolved == "bf16" else torch.float16
+    return torch.amp.autocast(device_type=device.type, dtype=dtype)
 
 
 def resolve_device(device: str) -> torch.device:

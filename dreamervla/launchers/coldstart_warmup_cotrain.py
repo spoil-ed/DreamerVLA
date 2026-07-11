@@ -1186,7 +1186,7 @@ def build_pipeline_plan(
     collect_cmd.extend(
         [
             f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
-            f"task.openvla_oft.input_token_dir={hidden_dir}",
+            f"task.openvla_oft.hidden_token_dir={hidden_dir}",
             f"++collect.hdf5_reward_dir={reward_dir}",
             f"++collect.hidden_dir={hidden_dir}",
             f"training.out_dir={collect_out}",
@@ -1360,9 +1360,9 @@ def validate_input_assets(
 
 
 def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
-    """Validate reusable cold-start shards against the OpenVLA input-token schema."""
+    """Validate reusable cold-start shards against the OpenVLA hidden-token schema."""
 
-    from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+    from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 
     reward = Path(reward_dir).expanduser()
     hidden = Path(hidden_dir).expanduser()
@@ -1390,7 +1390,7 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
                     + ", ".join(extras)
                 )
             try:
-                validate_input_token_sidecar_dir(
+                validate_hidden_token_sidecar_dir(
                     hidden,
                     expected_filenames=reward_names,
                     reference_dir=reward,
@@ -1805,7 +1805,7 @@ def collect_resume(
             joined = "\n  - ".join(schema_errors)
             raise ValueError(
                 "cold-start collection does not match the required OpenVLA "
-                f"input-token schema:\n  - {joined}"
+                f"hidden-token schema:\n  - {joined}"
             )
 
     if skip_collect:
@@ -1849,7 +1849,7 @@ def collect_resume(
         joined = "\n  - ".join(schema_errors)
         raise ValueError(
             "cold-start collection does not match the required OpenVLA "
-            f"input-token schema after collection:\n  - {joined}"
+            f"hidden-token schema after collection:\n  - {joined}"
         )
     post = summarize_collection(
         plan.reward_dir,

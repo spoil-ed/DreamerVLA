@@ -5,14 +5,14 @@ model warmup、success classifier warmup 和 OpenVLA-OFT cotrain。
 
 ```text
 LIBERO rollouts
-  -> reward + input-token HDF5 shards
+  -> reward + hidden-token HDF5 shards
   -> world model + success classifier warmup
   -> OpenVLA-OFT cotrain
   -> LIBERO rollout eval
 ```
 
 OpenVLA-OFT 主线的 world-model 观测固定为当前帧 projected
-`input_token_embedding [256,4096]`。动作解码器内部的 action slots 不写入
+`hidden_token [256,4096]`。动作解码器内部的 action slots 不写入
 观测 sidecar。
 
 ## 快速开始
@@ -47,7 +47,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ## 主线前冻结模型可行性测试
 
 这条路线先用官方 LIBERO reward HDF5 和
-`input_token_embedding [256,4096]` sidecar 分别训练 WM 与 classifier 上限，
+`hidden_token [256,4096]` sidecar 分别训练 WM 与 classifier 上限，
 随后彻底冻结两者，只通过想象 rollout 训练 DreamerVLA policy。第一版证明路线
 明确只支持 `libero_goal`：
 

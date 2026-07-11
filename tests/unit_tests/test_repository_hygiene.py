@@ -121,7 +121,7 @@ def test_frozen_model_route_is_documented_as_pre_mainline_only() -> None:
     )
 
 
-def test_openvla_mainline_has_no_56_token_observation_route() -> None:
+def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
     project_root = Path(__file__).resolve().parents[2]
     explicit_paths = [
         project_root / "AGENTS.md",
@@ -139,23 +139,26 @@ def test_openvla_mainline_has_no_56_token_observation_route() -> None:
         project_root / "dreamervla" / "runners" / "collect_parallel_rollouts.py",
         project_root / "dreamervla" / "runners" / "rollout_hidden_extractor.py",
         project_root / "dreamervla" / "runners" / "embodied_eval_runner.py",
-        project_root / "dreamervla" / "preprocess" / "preprocess_oft_input_tokens.py",
+        project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py",
         project_root / "scripts" / "collect_parallel.sh",
-        project_root / "scripts" / "preprocess" / "35_oft_input_tokens.sh",
+        project_root / "scripts" / "preprocess" / "35_oft_hidden_token.sh",
     ]
     globbed_paths = [
         *sorted((project_root / "configs" / "task").glob("openvla_onetraj*.yaml")),
         *sorted((project_root / "configs" / "dreamervla").glob("openvla_onetraj*.yaml")),
         *sorted((project_root / "configs" / "experiment").glob("*openvla_onetraj*.yaml")),
     ]
+    legacy_source = "input_" + "token_embedding"
+    legacy_namespace = "input_" + "tokens"
+    legacy_dir = "input_" + "token_dir"
     forbidden = (
-        "task.openvla_oft." + "hidden_token",
-        "expected_obs_hidden_source: " + "hidden_token",
-        "OpenVLA-OFT discrete " + "hidden_token [56,4096]",
+        legacy_source,
+        f"task.openvla_oft.{legacy_namespace}",
+        f"task.openvla_oft.{legacy_dir}",
         "wm_obs_dim: " + "229376",
-        "_oft_" + "hidden_token_vla_policy_h1",
-        "preprocess_oft_" + "hidden_token",
-        "35_oft_" + "hidden_token",
+        "_oft_" + legacy_source + "_vla_policy_h1",
+        "preprocess_oft_" + legacy_namespace,
+        "35_oft_" + legacy_namespace,
     )
     offenders: dict[str, list[str]] = {}
     for path in [*explicit_paths, *globbed_paths]:
@@ -168,14 +171,45 @@ def test_openvla_mainline_has_no_56_token_observation_route() -> None:
 
     assert offenders == {}
     assert (
-        project_root / "dreamervla" / "preprocess" / "preprocess_oft_input_tokens.py"
+        project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py"
     ).is_file()
     assert (
-        project_root / "configs" / "scripts" / "preprocess_oft_input_tokens.yaml"
+        project_root / "configs" / "scripts" / "preprocess_oft_hidden_token.yaml"
     ).is_file()
     assert (
-        project_root / "scripts" / "preprocess" / "35_oft_input_tokens.sh"
+        project_root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
     ).is_file()
+    assert not (
+        project_root
+        / "dreamervla"
+        / "preprocess"
+        / f"preprocess_oft_{legacy_namespace}.py"
+    ).exists()
+    assert not (
+        project_root / "configs" / "scripts" / f"preprocess_oft_{legacy_namespace}.yaml"
+    ).exists()
+    assert not (
+        project_root / "scripts" / "preprocess" / f"35_oft_{legacy_namespace}.sh"
+    ).exists()
+
+
+def test_legacy_projected_token_source_is_confined_to_migration_adapter() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    legacy_source = "input_" + "token_embedding"
+    allowed = {
+        Path("dreamervla/preprocess/sidecar_schema.py"),
+        Path("tests/unit_tests/test_openvla_oft_hidden_token_shape.py"),
+    }
+    offenders: list[str] = []
+    for root_name in ("dreamervla", "configs", "scripts", "tests", "docs", "spec"):
+        for path in (project_root / root_name).rglob("*"):
+            if not path.is_file() or path.suffix not in {".py", ".yaml", ".yml", ".sh", ".md", ".tex"}:
+                continue
+            relative = path.relative_to(project_root)
+            if legacy_source in path.read_text(encoding="utf-8", errors="ignore") and relative not in allowed:
+                offenders.append(str(relative))
+
+    assert offenders == []
 
 
 def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
@@ -884,7 +918,7 @@ def test_active_files_do_not_pin_machine_local_roots() -> None:
 def test_source_package_data_helpers_are_not_gitignored() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source_files = [
-        "dreamervla/preprocess/preprocess_oft_input_tokens.py",
+        "dreamervla/preprocess/preprocess_oft_hidden_token.py",
         "dreamervla/preprocess/sidecar_schema.py",
     ]
 

@@ -49,7 +49,7 @@ def test_per_trajectory_shard_name():
 
 
 def test_writes_one_identity_named_pair_per_trajectory(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
@@ -57,7 +57,7 @@ def test_writes_one_identity_named_pair_per_trajectory(
             index=0,
             steps=_make_steps(3, success=True),
             preprocess_config={
-                **input_token_preprocess_config,
+                **hidden_token_preprocess_config,
                 "chunk_size": 8,
             },
             data_attrs={"task_suite_name": "libero_goal"},
@@ -105,13 +105,13 @@ def test_writes_one_identity_named_pair_per_trajectory(
     assert lines[1]["file"] == "traj_t01_ep000003.hdf5"
 
 
-def test_rewrite_same_identity_overwrites(tmp_path, input_token_preprocess_config):
+def test_rewrite_same_identity_overwrites(tmp_path, hidden_token_preprocess_config):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
             index=0,
             steps=_make_steps(2, False),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
             task_id=0,
             episode_id=0,
             episode_success=False,
@@ -178,14 +178,14 @@ def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
 
 
 def test_no_tmp_files_left_after_successful_write(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
             index=0,
             steps=_make_steps(2, True),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
             task_id=0,
             episode_id=0,
             episode_success=True,

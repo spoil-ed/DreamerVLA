@@ -15,16 +15,16 @@ from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequence
 from dreamervla.models.embodiment.world_model.wm import WorldModel
 from dreamervla.preprocess.sidecar_schema import (
     SIDECAR_SCHEMA_VERSION,
-    validate_input_token_preprocess_config,
-    validate_input_token_sidecar_dir,
+    validate_hidden_token_preprocess_config,
+    validate_hidden_token_sidecar_dir,
 )
 from dreamervla.runners.oft_collect_common import make_preprocess_config
 from dreamervla.runners.rollout_hidden_extractor import (
-    input_token_embedding_from_projected,
+    hidden_token_from_projected,
 )
 
 
-def test_input_token_preprocess_config_records_dim_decomposition() -> None:
+def test_hidden_token_preprocess_config_records_dim_decomposition() -> None:
     cfg = {
         "_policy_mode": "discrete",
         "_use_proprio": False,
@@ -59,7 +59,7 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
     assert out["hidden_storage_format"] == "tokenized"
 
 
-def test_preprocess_config_rejects_legacy_input_token_embedding_source() -> None:
+def test_preprocess_config_rejects_legacy_projected_token_source() -> None:
     cfg = {
         "_policy_mode": "discrete",
         "_use_proprio": False,
@@ -86,11 +86,11 @@ def test_preprocess_config_rejects_legacy_input_token_embedding_source() -> None
         make_preprocess_config(cfg)
 
 
-def test_input_token_embedding_preserves_canonical_projected_tokens() -> None:
+def test_hidden_token_preserves_canonical_projected_tokens() -> None:
     projected = torch.zeros(2, 256, 4096)
     projected[:, -1, -1] = 3
 
-    actual = input_token_embedding_from_projected(
+    actual = hidden_token_from_projected(
         projected,
         image_keys=["agentview_rgb"],
         patches_per_image=256,
@@ -100,9 +100,9 @@ def test_input_token_embedding_preserves_canonical_projected_tokens() -> None:
     torch.testing.assert_close(actual, projected)
 
 
-def test_input_token_embedding_rejects_insufficient_projected_tokens() -> None:
+def test_hidden_token_rejects_insufficient_projected_tokens() -> None:
     with pytest.raises(ValueError, match=r"\[B,256,4096\]"):
-        input_token_embedding_from_projected(
+        hidden_token_from_projected(
             torch.zeros(2, 255, 4096),
             image_keys=["agentview_rgb"],
             patches_per_image=256,
@@ -138,7 +138,7 @@ def _write_sidecar_fixture(tmp_path: Path, *, flat: bool = False, token_count: i
         demo.create_dataset("obs_embedding", shape=shape, dtype="float16")
 
 
-def test_input_token_sidecar_accepts_only_canonical_tokenized_storage(tmp_path) -> None:
+def test_hidden_token_sidecar_accepts_only_canonical_tokenized_storage(tmp_path) -> None:
     _write_sidecar_fixture(tmp_path)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
@@ -154,7 +154,7 @@ def test_input_token_sidecar_accepts_only_canonical_tokenized_storage(tmp_path) 
     )
 
 
-def test_input_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp_path) -> None:
+def test_hidden_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp_path) -> None:
     _write_sidecar_fixture(tmp_path, flat=True)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
@@ -172,10 +172,10 @@ def test_input_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp
     except ValueError as exc:
         assert "must be [T,256,4096]" in str(exc)
     else:
-        raise AssertionError("flat input-token sidecar storage must be rejected")
+        raise AssertionError("flat hidden-token sidecar storage must be rejected")
 
 
-def test_input_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path) -> None:
+def test_hidden_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path) -> None:
     _write_sidecar_fixture(tmp_path, token_count=255)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
@@ -313,7 +313,7 @@ def test_sidecar_schema_requires_explicit_contract_declarations(field: str) -> N
     metadata.pop(field)
 
     with pytest.raises(ValueError, match=field):
-        validate_input_token_preprocess_config(metadata, context="test sidecar")
+        validate_hidden_token_preprocess_config(metadata, context="test sidecar")
 
 
 @pytest.mark.parametrize("field", ["save_action_hidden", "action_hidden_key"])
@@ -322,7 +322,7 @@ def test_sidecar_schema_rejects_removed_action_hidden_fields(field: str) -> None
     metadata[field] = True if field.startswith("save_") else "action_hidden_states"
 
     with pytest.raises(ValueError, match="removed sidecar fields"):
-        validate_input_token_preprocess_config(metadata, context="test sidecar")
+        validate_hidden_token_preprocess_config(metadata, context="test sidecar")
 
 
 def test_sidecar_hdf5_rejects_removed_action_hidden_attribute(tmp_path) -> None:
@@ -331,7 +331,7 @@ def test_sidecar_hdf5_rejects_removed_action_hidden_attribute(tmp_path) -> None:
         handle.attrs["save_action_hidden"] = False
 
     with pytest.raises(ValueError, match="removed sidecar attributes"):
-        validate_input_token_sidecar_dir(tmp_path)
+        validate_hidden_token_sidecar_dir(tmp_path)
 
 
 def test_sidecar_hdf5_rejects_extra_action_hidden_dataset(tmp_path) -> None:
@@ -344,7 +344,7 @@ def test_sidecar_hdf5_rejects_extra_action_hidden_dataset(tmp_path) -> None:
         )
 
     with pytest.raises(ValueError, match="unexpected datasets"):
-        validate_input_token_sidecar_dir(tmp_path)
+        validate_hidden_token_sidecar_dir(tmp_path)
 
 
 def _write_known_legacy_sidecar(
@@ -445,7 +445,7 @@ def test_sidecar_dir_accepts_known_legacy_manifest_when_hdf5_is_canonical(
     _write_known_legacy_sidecar(hidden_dir)
     _write_reference_shard(reference_dir, marked_complete=False)
 
-    normalized = validate_input_token_sidecar_dir(
+    normalized = validate_hidden_token_sidecar_dir(
         hidden_dir,
         reference_dir=reference_dir,
         require_reference_complete=False,
@@ -462,14 +462,14 @@ def test_legacy_manifest_cannot_enable_removed_action_payload(tmp_path: Path) ->
     _write_known_legacy_sidecar(tmp_path, save_action_hidden=True)
 
     with pytest.raises(ValueError, match="enables removed action/actor"):
-        validate_input_token_sidecar_dir(tmp_path)
+        validate_hidden_token_sidecar_dir(tmp_path)
 
 
 def test_legacy_manifest_does_not_reopen_56_token_sidecars(tmp_path: Path) -> None:
     _write_known_legacy_sidecar(tmp_path, token_count=56)
 
     with pytest.raises(ValueError, match="not a safe legacy projected-token sidecar"):
-        validate_input_token_sidecar_dir(tmp_path)
+        validate_hidden_token_sidecar_dir(tmp_path)
 
 
 def test_world_model_rejects_flat_canonical_observation() -> None:

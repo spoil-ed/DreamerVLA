@@ -43,7 +43,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 
 ## Pre-Mainline Frozen-Model Feasibility Test
 
-Before entering the formal cotrain mainline, the isolated causal test trains WM
+Before entering the main cotrain workflow, the isolated causal test trains WM
 and classifier upper bounds from official LIBERO data, freezes both modules, and
 trains only the DreamerVLA policy through imagined LUMOS rollouts. This first
 proof route is intentionally `libero_goal`-only:
@@ -115,7 +115,7 @@ storage path when that is more convenient.
 
 - `offline_warmup.data_dir`: collected reward-HDF5 replay directory.
 - `offline_warmup.hidden_dir`: collected hidden-sidecar directory.
-- `task.openvla_oft.input_tokens.*`: projected input-token dimensions and sidecar contract.
+- `task.openvla_oft.hidden_token.*`: projected hidden-token dimensions and sidecar contract.
 - `training.wm_warmup_steps`: world-model warmup update budget.
 - `training.classifier_warmup_steps`: success-classifier warmup update budget.
 - `dataloader.batch_size`: per-rank replay batch size.

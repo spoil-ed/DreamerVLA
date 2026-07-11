@@ -7,7 +7,7 @@ from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_replay import OnlineReplay
 
-_INPUT_TOKEN_CONFIG = {
+_HIDDEN_TOKEN_CONFIG = {
     "action_head_type": "oft_discrete_token",
     "obs_hidden_source": "hidden_token",
     "hidden_key": "obs_embedding",
@@ -59,14 +59,14 @@ def _write_fixture(reward_dir, hidden_dir):
         w.write_demo(
             index=0,
             steps=_demo_steps(6, success=True),
-            preprocess_config=_INPUT_TOKEN_CONFIG,
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
             task_id=2,
             episode_id=0,
         )
         w.write_demo(
             index=1,
             steps=_demo_steps(6, success=False),
-            preprocess_config=_INPUT_TOKEN_CONFIG,
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
             task_id=5,
             episode_id=0,
         )
@@ -117,7 +117,7 @@ def test_seed_replay_threads_proprio_and_language_sidecar(tmp_path):
         w.write_demo(
             index=0,
             steps=_demo_steps(6, success=True, include_lang=True),
-            preprocess_config=_INPUT_TOKEN_CONFIG,
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
             task_id=2,
             episode_id=0,
         )
@@ -164,10 +164,10 @@ def test_seed_replay_caps_episodes_per_task(tmp_path):
     # without overflowing. 3 demos for task 2, 1 for task 5; cap=2 -> 2 + 1 = 3 added.
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_INPUT_TOKEN_CONFIG, task_id=2, episode_id=0)
-        w.write_demo(index=1, steps=_demo_steps(6, success=False), preprocess_config=_INPUT_TOKEN_CONFIG, task_id=2, episode_id=1)
-        w.write_demo(index=2, steps=_demo_steps(6, success=True), preprocess_config=_INPUT_TOKEN_CONFIG, task_id=2, episode_id=2)
-        w.write_demo(index=3, steps=_demo_steps(6, success=False), preprocess_config=_INPUT_TOKEN_CONFIG, task_id=5, episode_id=0)
+        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=0)
+        w.write_demo(index=1, steps=_demo_steps(6, success=False), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=1)
+        w.write_demo(index=2, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=2)
+        w.write_demo(index=3, steps=_demo_steps(6, success=False), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=5, episode_id=0)
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
     n = seed_replay_from_offline(
         replay, data_dir=rdir, hidden_dir=hdir, max_episodes_per_task=2
@@ -183,7 +183,7 @@ def test_seeded_replay_is_training_ready(tmp_path):
             w.write_demo(
                 index=index,
                 steps=_demo_steps(4, success=(task_id % 2 == 0)),
-                preprocess_config=_INPUT_TOKEN_CONFIG,
+                preprocess_config=_HIDDEN_TOKEN_CONFIG,
                 task_id=task_id,
                 episode_id=0,
             )
@@ -209,7 +209,7 @@ def test_seed_replay_task_id_fallback(tmp_path):
     # Demo without task_id attr -> use provided default.
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_INPUT_TOKEN_CONFIG)   # no task_id
+        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG)   # no task_id
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(0,), rank=0)
     n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir, default_task_id=0)
     assert n == 1
@@ -220,7 +220,7 @@ def test_seed_replay_task_id_fallback(tmp_path):
 def test_seed_replay_missing_task_id_raises(tmp_path):
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_INPUT_TOKEN_CONFIG)   # no task_id
+        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG)   # no task_id
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(0,), rank=0)
     with pytest.raises(ValueError, match="task_id"):
         seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)  # no default

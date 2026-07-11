@@ -45,7 +45,7 @@ dreamervla/
 │       ├── openvla_oft/  # Vendored OpenVLA-OFT model/runtime components
 │       ├── chameleon_model/ # Chameleon model components
 │       └── world_model/  # BaseWorldModel and retained WM architectures
-├── preprocess/           # Canonical reward and OpenVLA input-token preprocessing
+├── preprocess/           # Canonical reward and OpenVLA hidden-token preprocessing
 ├── scheduler/            # Optional Ray backend scheduling primitives
 ├── workers/              # Optional Ray backend workers
 ├── hybrid_engines/       # Optional Ray backend object-store / weight-sync helpers

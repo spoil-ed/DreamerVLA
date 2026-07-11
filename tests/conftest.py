@@ -13,12 +13,12 @@ def pytest_configure() -> None:
 
 
 @pytest.fixture()
-def input_token_preprocess_config() -> dict[str, object]:
+def hidden_token_preprocess_config() -> dict[str, object]:
     """Canonical sidecar metadata for rollout-writer tests."""
 
     return {
         "action_head_type": "oft_discrete_token",
-        "obs_hidden_source": "input_token_embedding",
+        "obs_hidden_source": "hidden_token",
         "hidden_key": "obs_embedding",
         "token_count": 256,
         "token_dim": 4096,

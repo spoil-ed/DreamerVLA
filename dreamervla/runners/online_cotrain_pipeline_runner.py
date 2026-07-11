@@ -91,14 +91,26 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
     def _record_wm_profile(
         self, timings: dict[str, float], *, step: int, total_steps: int
     ) -> None:
+        device_stages = ("h2d", "forward", "backward", "grad_clip", "optimizer")
+        device_active = sum(float(timings.get(name, 0.0)) for name in device_stages)
+        total = float(timings.get("total", 0.0))
+        enriched = dict(timings)
+        enriched["device_active"] = device_active
+        enriched["host_or_wait"] = max(0.0, total - device_active)
+        enriched["device_active_fraction"] = device_active / max(total, 1.0e-12)
         metrics = {
             f"time/wm_warmup_{name}_ms": float(value) * 1000.0
-            for name, value in timings.items()
+            for name, value in enriched.items()
+            if name != "device_active_fraction"
         }
+        metrics["time/wm_warmup_device_active_fraction"] = enriched[
+            "device_active_fraction"
+        ]
         self._log_replay_warmup_metrics(metrics, step=int(step))
         if not self.is_main_process:
             return
         order = (
+            "data_wait",
             "sample",
             "batch_build",
             "h2d",
@@ -110,10 +122,14 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             "total",
         )
         parts = [
-            f"{name}={float(timings[name]) * 1000.0:.1f}ms"
+            f"{name}={float(enriched[name]) * 1000.0:.1f}ms"
             for name in order
-            if name in timings
+            if name in enriched
         ]
+        parts.append(
+            "device_active="
+            f"{float(enriched['device_active_fraction']) * 100.0:.1f}%"
+        )
         print(
             f"[pipeline][wm-profile] step={int(step)}/{int(total_steps)} "
             + " ".join(parts),
@@ -134,7 +150,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         total: int,
         every: int,
         checkpoint_fn: Callable[..., None] | None,
-        metrics: dict[str, float] | None = None,
+        metrics: dict[str, Any] | None = None,
         label: str,
     ) -> None:
         """Save an optional mid-warmup component checkpoint."""
@@ -144,8 +160,16 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         total_i = int(total)
         if current_i >= total_i or current_i % int(every) != 0:
             return
+        resolved_metrics = {
+            key: (
+                float(value.detach().cpu())
+                if isinstance(value, torch.Tensor)
+                else float(value)
+            )
+            for key, value in (metrics or {}).items()
+        }
         self._invoke_warmup_checkpoint(
-            checkpoint_fn, step=current_i, metrics=metrics or {}
+            checkpoint_fn, step=current_i, metrics=resolved_metrics
         )
         self._print_pipeline_event(
             f"[pipeline][{label}] checkpoint saved step={current_i}/{total_i}"
@@ -199,7 +223,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         *,
         optim_cfg: Any,
         profile_timings: dict[str, float] | None,
-    ) -> float:
+    ) -> Any:
         m = world_model_pretrain_step(
             policy=self.policy,
             world_model=self.world_model,
@@ -208,8 +232,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             device=self.device,
             optim_cfg=optim_cfg,
             profile_timings=profile_timings,
+            metrics_mode="loss_tensor",
         )
-        return float(m.get("loss", 0.0))
+        return m.get("loss", 0.0)
 
     def _offline_warmup_wm(
         self,
@@ -223,7 +248,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         start_step: int = 0,
     ) -> float:
         self.world_model.train()
-        last = 0.0
+        last: Any = 0.0
         profile_steps = self._wm_profile_steps()
         start_i = int(start_step)
         total_steps = int(steps)
@@ -236,9 +261,9 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             i: int,
             wm_batch: Any | None,
             profile_timings: dict[str, float] | None,
+            update_started_at: float,
         ) -> None:
             nonlocal last
-            profile_total_start = time.perf_counter()
             if wm_batch is None:
                 self.console_progress(i + 1, total_steps, "wm-warmup", unit="update")
                 return
@@ -248,19 +273,25 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 profile_timings=profile_timings,
             )
             if profile_timings is not None:
-                profile_timings["total"] = time.perf_counter() - profile_total_start
+                profile_timings["total"] = time.perf_counter() - update_started_at
                 self._record_wm_profile(
                     profile_timings,
                     step=i,
                     total_steps=total_steps,
                 )
             if i % self._replay_warmup_log_every() == 0:
+                last_value = (
+                    float(last.detach().cpu())
+                    if isinstance(last, torch.Tensor)
+                    else float(last)
+                )
                 self._log_replay_warmup_metrics(
-                    {"train/wm_warmup_loss": last},
+                    {"train/wm_warmup_loss": last_value},
                     step=i,
                 )
                 self._print_pipeline_event(
-                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
+                    f"[pipeline][wm-warmup] step={i}/{total_steps} "
+                    f"loss={last_value:.4f}"
                 )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
@@ -281,7 +312,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                     profile=should_profile(start_i),
                 )
                 for i in range(start_i, total_steps):
+                    update_started_at = time.perf_counter()
+                    wait_started_at = time.perf_counter()
                     wm_batch, profile_timings = future.result()
+                    if profile_timings is not None:
+                        profile_timings["data_wait"] = (
+                            time.perf_counter() - wait_started_at
+                        )
                     if i + 1 < total_steps:
                         future = executor.submit(
                             self._sample_wm_pretrain_batch,
@@ -289,17 +326,40 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                             int(batch_size),
                             profile=should_profile(i + 1),
                         )
-                    consume_batch(i, wm_batch, profile_timings)
-            return last
+                    consume_batch(
+                        i,
+                        wm_batch,
+                        profile_timings,
+                        update_started_at,
+                    )
+            return (
+                float(last.detach().cpu())
+                if isinstance(last, torch.Tensor)
+                else float(last)
+            )
 
         for i in range(start_i, total_steps):
+            update_started_at = time.perf_counter()
             wm_batch, profile_timings = self._sample_wm_pretrain_batch(
                 replay,
                 int(batch_size),
                 profile=should_profile(i),
             )
-            consume_batch(i, wm_batch, profile_timings)
-        return last
+            if profile_timings is not None:
+                profile_timings["data_wait"] = (
+                    time.perf_counter() - update_started_at
+                )
+            consume_batch(
+                i,
+                wm_batch,
+                profile_timings,
+                update_started_at,
+            )
+        return (
+            float(last.detach().cpu())
+            if isinstance(last, torch.Tensor)
+            else float(last)
+        )
 
     def _offline_warmup_classifier(
         self,

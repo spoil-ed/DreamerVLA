@@ -52,7 +52,7 @@ class WorldModel(BaseWorldModel):
         freeze_backbone: bool = False,
         freeze_input_embeddings: bool = False,
         latent_stage: str | None = None,
-        latent_source: str = "OpenVLA-OFT input_token_embedding [256,4096]",
+        latent_source: str = "OpenVLA-OFT hidden_token [256,4096]",
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
@@ -74,7 +74,7 @@ class WorldModel(BaseWorldModel):
         ) or self.obs_dim == 56 * 1024:
             raise ValueError(
                 "the removed 56x1024 observation interface is closed; "
-                "use input_token_embedding [256,4096]"
+                "use hidden_token [256,4096]"
             )
         self.model_dim = int(model_dim)
         self.num_hist = int(num_hist)

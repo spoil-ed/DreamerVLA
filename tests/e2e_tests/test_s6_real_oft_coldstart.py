@@ -22,7 +22,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     from hydra import compose, initialize_config_dir
 
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
-    from dreamervla.runners.oft_collect_common import load_policy, vla_input_token_spec
+    from dreamervla.runners.oft_collect_common import load_policy, vla_hidden_token_spec
     from dreamervla.train import run
 
     if ray.is_initialized():
@@ -37,7 +37,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
                 "collect.episodes_per_task=2",
                 "collect.episode_horizon=64",
                 f"task.openvla_oft.hdf5_reward_dir={tmp_path / 'reward'}",
-                f"task.openvla_oft.input_token_dir={tmp_path / 'hidden'}",
+                f"task.openvla_oft.hidden_token_dir={tmp_path / 'hidden'}",
                 f"training.out_dir={tmp_path / 'run'}",
             ],
         )
@@ -47,10 +47,10 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     sidecar = next((tmp_path / "hidden").glob("*.hdf5"))
     with h5py.File(sidecar, "r") as handle:
         demo0 = handle["data"]["demo_0"]["obs_embedding"]
-        assert preprocess_cfg["obs_hidden_source"] == "input_token_embedding"
+        assert preprocess_cfg["obs_hidden_source"] == "hidden_token"
         plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
         policy = load_policy(dict(plan["collect"], _rank=0), 0)
-        spec = vla_input_token_spec(
+        spec = vla_hidden_token_spec(
             policy.vla,
             plan["inference"]["decoder"]["kwargs"]["image_keys"],
         )

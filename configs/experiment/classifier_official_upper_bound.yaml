@@ -13,10 +13,12 @@ training:
   out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/classifier/${now:%Y%m%d_%H%M%S}}
   episode_eval_enabled: false
   final_selection_metric: window_f1
+  precision: bf16
+  update_profile_steps: 8
 
 data:
   success_dir_raw: ${task.hdf5_reward_dir}
-  success_dir_hidden: ${task.openvla_oft.input_token_dir}
+  success_dir_hidden: ${task.openvla_oft.hidden_token_dir}
   failure_dir_raw: null
   failure_dir_hidden: null
   train_split: train

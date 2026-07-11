@@ -39,7 +39,7 @@ def test_script_config_rejects_compat_flags() -> None:
 
 def test_script_namespace_preserves_config_values() -> None:
     args = script_namespace(
-        "preprocess_oft_input_tokens",
+        "preprocess_oft_hidden_token",
         [
             "max_files=3",
             "output_dtype=float32",
@@ -50,13 +50,11 @@ def test_script_namespace_preserves_config_values() -> None:
     assert args.output_dtype == "float32"
 
 
-def test_oft_input_token_preprocess_has_one_public_output() -> None:
-    cfg = script_config("preprocess_oft_input_tokens")
+def test_oft_hidden_token_preprocess_has_one_public_output() -> None:
+    cfg = script_config("preprocess_oft_hidden_token")
 
-    assert cfg["out_input_token_dir"].endswith(
-        "_oft_input_token_embedding_vla_policy_h1"
-    )
-    assert cfg["obs_hidden_source"] == "input_token_embedding"
+    assert cfg["out_hidden_token_dir"].endswith("_oft_hidden_token_vla_policy_h1")
+    assert cfg["obs_hidden_source"] == "hidden_token"
     assert cfg["image_keys"] == ["agentview_rgb"]
     assert cfg["history"] == 1
     assert cfg["patches_per_image"] == 256
@@ -64,7 +62,7 @@ def test_oft_input_token_preprocess_has_one_public_output() -> None:
         "out_c_dir",
         "out_d_dir",
         "out_hidden_token_flat_dir",
-        "out_hidden_token_dir",
+        "out_" + "input_token_dir",
         "skip_cd_sidecars",
         "save_hidden_token",
     ):

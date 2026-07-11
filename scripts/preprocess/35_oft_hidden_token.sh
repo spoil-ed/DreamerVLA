@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Extract the OpenVLA-OFT projected input-token sidecar.
+# Extract the OpenVLA-OFT projected hidden-token sidecar.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -15,13 +15,13 @@ OFT_IMAGE_KEYS="${OFT_IMAGE_KEYS:-agentview_rgb}"
 OFT_IMAGE_KEYS_LIST="[${OFT_IMAGE_KEYS// /,}]"
 OFT_CHUNK_SIZE="${OFT_CHUNK_SIZE:-1}"
 OFT_FAKE_COMPONENTS="${OFT_FAKE_COMPONENTS:-0}"
-OFT_INPUT_TOKEN_GPUS="${OFT_INPUT_TOKEN_GPUS:-${NGPU:-1}}"
+OFT_HIDDEN_TOKEN_GPUS="${OFT_HIDDEN_TOKEN_GPUS:-${NGPU:-1}}"
 OVERWRITE="${OVERWRITE:-0}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${GPUS:-0}}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
 REWARD_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_remaining_reward"
-OFT_INPUT_TOKEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_oft_input_token_embedding_vla_policy_h${OFT_HISTORY}"
+OFT_HIDDEN_TOKEN_DIR="${PROCESSED_DATA_ROOT}/no_noops_t_256_oft_hidden_token_vla_policy_h${OFT_HISTORY}"
 UNNORM_KEY="${UNNORM_KEY:-${LIBERO_SUITE}_no_noops}"
 
 cd "${DVLA_ROOT}"
@@ -31,18 +31,18 @@ if [[ -z "$(find "${REWARD_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit
   exit 5
 fi
 
-if [[ "${OVERWRITE}" != "1" && -d "${OFT_INPUT_TOKEN_DIR}" ]]; then
+if [[ "${OVERWRITE}" != "1" && -d "${OFT_HIDDEN_TOKEN_DIR}" ]]; then
   if python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
-    dir="${OFT_INPUT_TOKEN_DIR}" \
+    dir="${OFT_HIDDEN_TOKEN_DIR}" \
     reference_dir="${REWARD_DIR}" \
     match_reference_demos=true \
     match_reference_lengths=true \
     require_complete_attr=true \
     require_config=true; then
-    echo "[35_oft_input_tokens] skip input-token sidecar: ${OFT_INPUT_TOKEN_DIR}"
+    echo "[35_oft_hidden_token] skip hidden-token sidecar: ${OFT_HIDDEN_TOKEN_DIR}"
     exit 0
   fi
-  echo "[35_oft_input_tokens] repair incomplete input-token sidecar: ${OFT_INPUT_TOKEN_DIR}" >&2
+  echo "[35_oft_hidden_token] repair incomplete hidden-token sidecar: ${OFT_HIDDEN_TOKEN_DIR}" >&2
 fi
 
 if [[ "${OFT_FAKE_COMPONENTS}" != "1" ]]; then
@@ -53,7 +53,7 @@ root = ensure_openvla_oft_on_path()
 from prismatic.vla.constants import ACTION_DIM, NUM_ACTIONS_CHUNK
 
 print(
-    "[35_oft_input_tokens] openvla_oft_root="
+    "[35_oft_hidden_token] openvla_oft_root="
     f"{root} action_dim={ACTION_DIM} num_actions_chunk={NUM_ACTIONS_CHUNK}"
 )
 PY
@@ -69,11 +69,11 @@ if [[ "${OFT_FAKE_COMPONENTS}" == "1" ]]; then
 fi
 
 python -m torch.distributed.run \
-  --standalone --nnodes=1 --nproc-per-node="${OFT_INPUT_TOKEN_GPUS}" \
-  --module dreamervla.preprocess.preprocess_oft_input_tokens \
+  --standalone --nnodes=1 --nproc-per-node="${OFT_HIDDEN_TOKEN_GPUS}" \
+  --module dreamervla.preprocess.preprocess_oft_hidden_token \
   hdf5_dir="${REWARD_DIR}" \
-  out_input_token_dir="${OFT_INPUT_TOKEN_DIR}" \
-  obs_hidden_source=input_token_embedding \
+  out_hidden_token_dir="${OFT_HIDDEN_TOKEN_DIR}" \
+  obs_hidden_source=hidden_token \
   oft_ckpt="${OFT_CKPT}" \
   policy_mode=discrete \
   unnorm_key="${UNNORM_KEY}" \
@@ -86,7 +86,7 @@ python -m torch.distributed.run \
   "${OVERWRITE_ARGS[@]}"
 
 python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
-  dir="${OFT_INPUT_TOKEN_DIR}" \
+  dir="${OFT_HIDDEN_TOKEN_DIR}" \
   reference_dir="${REWARD_DIR}" \
   match_reference_demos=true \
   match_reference_lengths=true \

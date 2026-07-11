@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate canonical OpenVLA input-token artifacts for selected LIBERO suites.
+# Validate canonical OpenVLA hidden-token artifacts for selected LIBERO suites.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

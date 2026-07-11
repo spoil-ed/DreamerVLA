@@ -25,12 +25,12 @@ def _one_step():
     }
 
 
-def test_write_demo_persists_identity_attrs(tmp_path, input_token_preprocess_config):
+def test_write_demo_persists_identity_attrs(tmp_path, hidden_token_preprocess_config):
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "shard_000.hdf5") as w:
         w.write_demo(
             index=0,
             steps=[_one_step(), _one_step()],
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
             task_id=7,
             episode_id=3,
             init_state_index=3,
@@ -76,7 +76,7 @@ def test_write_demo_persists_identity_attrs(tmp_path, input_token_preprocess_con
 
 
 def test_write_demo_persists_data_attrs_on_hidden_sidecar(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     data_attrs = {
         "task_suite_name": "libero_goal",
@@ -87,7 +87,7 @@ def test_write_demo_persists_data_attrs_on_hidden_sidecar(
         w.write_demo(
             index=0,
             steps=[_one_step(), _one_step()],
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
             data_attrs=data_attrs,
         )
 
@@ -101,20 +101,20 @@ def test_write_demo_persists_data_attrs_on_hidden_sidecar(
         assert f["data"].attrs["source"] == "online_cotrain_ray"
 
 
-def test_write_demo_identity_optional(tmp_path, input_token_preprocess_config):
+def test_write_demo_identity_optional(tmp_path, hidden_token_preprocess_config):
     # Identity metadata is optional even though sidecar metadata is mandatory.
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "shard_000.hdf5") as w:
         w.write_demo(
             index=0,
             steps=[_one_step()],
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
     with h5py.File(tmp_path / "r" / "shard_000.hdf5", "r") as f:
         assert "task_id" not in f["data"]["demo_0"].attrs
 
 
 def test_write_demo_persists_demo_language_embedding(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     first = _one_step()
     second = _one_step()
@@ -125,7 +125,7 @@ def test_write_demo_persists_demo_language_embedding(
         w.write_demo(
             index=0,
             steps=[first, second],
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
 
     with h5py.File(tmp_path / "h" / "shard_000.hdf5", "r") as f:

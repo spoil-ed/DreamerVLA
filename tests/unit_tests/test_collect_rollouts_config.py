@@ -47,7 +47,7 @@ def _discrete_cfg() -> dict:
         "num_images_in_input": 1,
         "expected_action_head_type": "oft_discrete_token",
         "expected_include_state": False,
-        "expected_obs_hidden_source": "input_token_embedding",
+        "expected_obs_hidden_source": "hidden_token",
         "expected_prompt_style": "vla_policy",
         "expected_rotate_images_180": True,
         "time_horizon": 8,
@@ -72,7 +72,7 @@ def test_make_preprocess_config_is_config_driven_discrete():
     assert pc["action_head_type"] == "oft_discrete_token"
     assert pc["include_state"] is False
     assert pc["time_horizon"] == 8
-    assert pc["obs_hidden_source"] == "input_token_embedding"
+    assert pc["obs_hidden_source"] == "hidden_token"
     assert pc["prompt_style"] == "vla_policy"
     assert pc["rotate_images_180"] is True
     assert pc["hidden_key"] == "obs_embedding"
@@ -179,7 +179,7 @@ def test_vectorized_path_threads_obs_hidden_source_to_decoder(monkeypatch, tmp_p
             self,
             policy,
             unnorm_key,
-            obs_hidden_source="input_token_embedding",
+            obs_hidden_source="hidden_token",
             image_keys=None,
         ):
             captured["obs_hidden_source"] = obs_hidden_source
@@ -247,10 +247,10 @@ def test_vectorized_path_threads_obs_hidden_source_to_decoder(monkeypatch, tmp_p
         history=1,
         rotate_images_180=True,
         image_keys=["agentview_rgb"],
-        obs_hidden_source="input_token_embedding",
+        obs_hidden_source="hidden_token",
     )
 
-    assert captured["obs_hidden_source"] == "input_token_embedding"
+    assert captured["obs_hidden_source"] == "hidden_token"
     assert captured["image_keys"] == ["agentview_rgb"]
 
 
@@ -323,7 +323,7 @@ def test_vectorized_path_threads_libero_render_regime_to_children(monkeypatch, t
         history=1,
         rotate_images_180=True,
         image_keys=["agentview_rgb"],
-        obs_hidden_source="input_token_embedding",
+        obs_hidden_source="hidden_token",
         render_backend="egl",
         render_gpu_pool=[1, 5],
         render_shard_id=6,

@@ -67,13 +67,13 @@ def _write(
 
 
 def test_rotates_every_n_demos_and_restarts_demo_index(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(
         reward,
         hidden,
-        input_token_preprocess_config,
+        hidden_token_preprocess_config,
         demos_per_shard=2,
         n=5,
     )
@@ -92,13 +92,13 @@ def test_rotates_every_n_demos_and_restarts_demo_index(
 
 
 def test_every_shard_is_independently_readable_with_metadata(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(
         reward,
         hidden,
-        input_token_preprocess_config,
+        hidden_token_preprocess_config,
         demos_per_shard=2,
         n=5,
     )
@@ -119,13 +119,13 @@ def test_every_shard_is_independently_readable_with_metadata(
 
 
 def test_start_index_offsets_shard_names_for_resume(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(
         reward,
         hidden,
-        input_token_preprocess_config,
+        hidden_token_preprocess_config,
         demos_per_shard=2,
         start_index=3,
         n=3,
@@ -138,7 +138,7 @@ def test_start_index_offsets_shard_names_for_resume(
     ]
 
 
-def test_seed_replay_reads_rotated_shards(tmp_path, input_token_preprocess_config):
+def test_seed_replay_reads_rotated_shards(tmp_path, hidden_token_preprocess_config):
     """The warmup loader globs *.hdf5, so sliced shards seed exactly like one shard."""
     from dreamervla.runners.offline_seed import seed_replay_from_offline
     from dreamervla.runners.online_replay import OnlineReplay
@@ -147,7 +147,7 @@ def test_seed_replay_reads_rotated_shards(tmp_path, input_token_preprocess_confi
     _write(
         reward,
         hidden,
-        input_token_preprocess_config,
+        hidden_token_preprocess_config,
         demos_per_shard=2,
         n=5,
     )

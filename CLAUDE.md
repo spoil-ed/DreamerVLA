@@ -19,7 +19,7 @@ from AGENTS.md.
 - Mainline training defaults to `logger=tensorboard_wandb`; add
   `runner.logger.wandb_mode=offline` for offline W&B, or use
   `logger=tensorboard` / `logger=wandb` for a single backend.
-- OpenVLA-OFT sidecars use only `input_token_embedding [T,256,4096]`, one image,
+- OpenVLA-OFT sidecars use only `hidden_token [T,256,4096]`, one image,
   and history one. Every training entry validates this exact contract.
 
 ## RLinf Alignment Snapshot
@@ -29,7 +29,7 @@ from AGENTS.md.
   backend behind explicit Hydra experiments.
 - Prefer early config validation for logger backends, actor-update routes,
   sidecar paths, resume checkpoints, batch/world-size divisibility,
-  horizon/chunk consistency, and input-token dimensions.
+  horizon/chunk consistency, and hidden-token dimensions.
 - Keep run artifacts under one root with stable places for checkpoints, logs,
   TensorBoard/W&B files, videos, diagnostics, JSONL records,
   `resolved_config.yaml`, and `run_manifest.json`.

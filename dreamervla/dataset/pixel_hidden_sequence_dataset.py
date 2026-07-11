@@ -14,19 +14,19 @@ from dreamervla.dataset.pixel_sequence_dataset import (
 )
 from dreamervla.preprocess.sidecar_schema import (
     DEFAULT_HIDDEN_KEY,
-    validate_input_token_preprocess_config,
-    validate_input_token_sidecar_dir,
+    validate_hidden_token_preprocess_config,
+    validate_hidden_token_sidecar_dir,
 )
 
 
 class PixelHiddenSequenceDataset(PixelSequenceDataset):
-    """LIBERO pixel windows plus canonical OpenVLA input-token observations.
+    """LIBERO pixel windows plus canonical OpenVLA hidden-token observations.
 
     The original pixel HDF5 files remain the image source. This dataset reads a
     shape-aligned sidecar directory whose only supported payload is:
 
       images:        [T, C, H, W], uint8-range float tensor from the source HDF5
-      obs_embedding: [T, 256, 4096] projected vision input tokens
+      obs_embedding: [T, 256, 4096] projected vision hidden tokens
     """
 
     def __init__(
@@ -76,7 +76,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
                 f"hidden_key is fixed to {DEFAULT_HIDDEN_KEY!r}, got {hidden_key!r}"
             )
         if not bool(require_preprocess_config):
-            raise ValueError("canonical input-token sidecars always require metadata")
+            raise ValueError("canonical hidden-token sidecars always require metadata")
         self.hidden_key = DEFAULT_HIDDEN_KEY
         self.lang_emb_dir = (
             self.resolve_project_path(lang_emb_dir) if lang_emb_dir is not None else None
@@ -101,7 +101,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             require_preprocess_config=bool(require_preprocess_config),
         )
         if sidecar_config.get("hidden_key") != DEFAULT_HIDDEN_KEY:
-            raise AssertionError("validated input-token sidecar changed hidden_key")
+            raise AssertionError("validated hidden-token sidecar changed hidden_key")
 
     @staticmethod
     def _canonical_path(value: str) -> str:
@@ -138,14 +138,14 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         config_path = self.hidden_dir / "preprocess_config.json"
         if not config_path.is_file():
             raise FileNotFoundError(
-                f"input-token sidecar is missing preprocess_config.json: {config_path}"
+                f"hidden-token sidecar is missing preprocess_config.json: {config_path}"
             )
         if not bool(require_preprocess_config):
-            raise ValueError("canonical input-token sidecars always require metadata")
+            raise ValueError("canonical hidden-token sidecars always require metadata")
         with config_path.open("r", encoding="utf-8") as handle:
             config = json.load(handle)
-        validate_input_token_preprocess_config(config, context=str(config_path))
-        validate_input_token_sidecar_dir(
+        validate_hidden_token_preprocess_config(config, context=str(config_path))
+        validate_hidden_token_sidecar_dir(
             self.hidden_dir,
             reference_dir=getattr(self, "hdf5_dir", None),
             require_reference_complete=True,

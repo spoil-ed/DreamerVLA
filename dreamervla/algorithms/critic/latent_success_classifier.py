@@ -1,4 +1,4 @@
-"""Success classifier over OpenVLA-OFT input-token windows.
+"""Success classifier over OpenVLA-OFT hidden-token windows.
 
 Mirrors the VideoMAE classifier in upstream reward_model/videomae.py at the
 interface level — sliding W-frame window over a [T, latent_dim] sequence,
@@ -86,7 +86,7 @@ class LatentSuccessClassifier(nn.Module):
         ):
             raise ValueError(
                 "the removed 56x1024 observation interface is closed; "
-                "use input_token_embedding [256,4096]"
+                "use hidden_token [256,4096]"
             )
         self.proprio_dim = int(getattr(cfg, "proprio_dim", 0) or 0)
         self.proprio_emb_dim = int(getattr(cfg, "proprio_emb_dim", 0) or 0)
@@ -125,7 +125,7 @@ class LatentSuccessClassifier(nn.Module):
         if int(cfg.latent_dim) == 56 * 1024:
             raise ValueError(
                 "the removed 56x1024 observation interface is closed; "
-                "use input_token_embedding [256,4096]"
+                "use hidden_token [256,4096]"
             )
         if (
             self.supports_proprio_conditioning or self.supports_language_conditioning

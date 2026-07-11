@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build OpenVLA-OFT projected input-token sidecars for LIBERO HDF5 demos."""
+"""Build OpenVLA-OFT projected hidden-token sidecars for LIBERO HDF5 demos."""
 
 from __future__ import annotations
 
@@ -18,17 +18,17 @@ from PIL import Image
 
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
-    INPUT_TOKEN_COUNT,
-    INPUT_TOKEN_DIM,
+    HIDDEN_TOKEN_COUNT,
+    HIDDEN_TOKEN_DIM,
     SIDECAR_SCHEMA_VERSION,
     required_demo_datasets,
-    validate_input_token_preprocess_config,
+    validate_hidden_token_preprocess_config,
 )
 from dreamervla.utils.hydra_config import script_namespace
 from dreamervla.utils.progress import ProgressReporter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-OBS_HIDDEN_SOURCE = "input_token_embedding"
+OBS_HIDDEN_SOURCE = "hidden_token"
 
 
 def _project_path(path: str | Path) -> Path:
@@ -170,7 +170,7 @@ def resolve_oft_policy_mode(checkpoint: str | Path, policy_mode: str = "discrete
         sorted(checkpoint.glob("proprio_projector--*.pt"))
     )
     if has_proprio_projector:
-        raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+        raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
     return "discrete"
 
 
@@ -183,18 +183,18 @@ def _action_head_type_for_mode(mode: str) -> str:
 def _resolve_num_images_in_input(args: SimpleNamespace) -> int:
     if int(args.history) != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires history=1, "
+            "OpenVLA-OFT hidden-token mainline requires history=1, "
             f"got {int(args.history)}"
         )
     if list(args.image_keys) != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb'], "
+            "OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb'], "
             f"got {list(args.image_keys)!r}"
         )
     count = 1 if args.num_images_in_input is None else int(args.num_images_in_input)
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
             f"got {count}"
         )
     return count
@@ -279,7 +279,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
     }
 
 
-def _input_token_sidecar_dims(
+def _hidden_token_sidecar_dims(
     vla: Any,
     *,
     image_keys: Sequence[str],
@@ -289,18 +289,18 @@ def _input_token_sidecar_dims(
     keys = tuple(image_keys)
     if keys != ("agentview_rgb",):
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires one agentview image, "
+            "OpenVLA-OFT hidden-token mainline requires one agentview image, "
             f"got {keys!r}"
         )
-    if per_image_patches != INPUT_TOKEN_COUNT or int(token_dim) != INPUT_TOKEN_DIM:
+    if per_image_patches != HIDDEN_TOKEN_COUNT or int(token_dim) != HIDDEN_TOKEN_DIM:
         raise ValueError(
-            "OpenVLA-OFT input-token sidecars require 256 patches with token_dim=4096, "
+            "OpenVLA-OFT hidden-token sidecars require 256 patches with token_dim=4096, "
             f"got patches={per_image_patches}, token_dim={int(token_dim)}"
         )
-    return INPUT_TOKEN_COUNT, INPUT_TOKEN_COUNT * INPUT_TOKEN_DIM
+    return HIDDEN_TOKEN_COUNT, HIDDEN_TOKEN_COUNT * HIDDEN_TOKEN_DIM
 
 
-def _predict_input_token_chunk(
+def _predict_hidden_token_chunk(
     *,
     components: dict[str, Any],
     args: SimpleNamespace,
@@ -310,12 +310,12 @@ def _predict_input_token_chunk(
     start: int,
     end: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Project a frame chunk to current-frame input tokens and language embeddings."""
+    """Project a frame chunk to current-frame hidden tokens and language embeddings."""
 
     cfg = components["cfg"]
     vla = components["vla"]
     batch = int(end - start)
-    token_count, _ = _input_token_sidecar_dims(
+    token_count, _ = _hidden_token_sidecar_dims(
         vla,
         image_keys=image_keys,
         token_dim=int(args.token_dim),
@@ -418,7 +418,7 @@ def _predict_input_token_chunk(
         int(args.token_dim),
     ):
         raise RuntimeError(
-            "OpenVLA-OFT projected input-token shape mismatch: "
+            "OpenVLA-OFT projected hidden-token shape mismatch: "
             f"got {tuple(current_tokens.shape)}, expected "
             f"[B, {token_count}, {int(args.token_dim)}]"
         )
@@ -463,23 +463,23 @@ def _write_attrs(
     handle.attrs["chunk_size"] = int(args.chunk_size)
 
 
-def _write_source_input_tokens(
+def _write_source_hidden_token(
     *,
     source_path: Path,
-    out_input_token_path: Path,
+    out_hidden_token_path: Path,
     components: dict[str, Any],
     args: SimpleNamespace,
     rank: int,
 ) -> dict[str, int]:
-    """Atomically write one input-token HDF5 sidecar for one reward shard."""
+    """Atomically write one hidden-token HDF5 sidecar for one reward shard."""
 
-    tmp_path = out_input_token_path.with_name(
-        f"{out_input_token_path.name}.rank{rank}.tmp"
+    tmp_path = out_hidden_token_path.with_name(
+        f"{out_hidden_token_path.name}.rank{rank}.tmp"
     )
     if tmp_path.exists():
         tmp_path.unlink()
     image_keys = tuple(args.image_keys)
-    token_count, flat_dim = _input_token_sidecar_dims(
+    token_count, flat_dim = _hidden_token_sidecar_dims(
         components["vla"],
         image_keys=image_keys,
         token_dim=int(args.token_dim),
@@ -517,18 +517,18 @@ def _write_source_input_tokens(
             demo_out = output_data.create_group(demo_key)
             demo_out.attrs["length"] = length
             demo_out.attrs["task_prompt"] = prompt
-            input_dset = demo_out.create_dataset(
+            hidden_dset = demo_out.create_dataset(
                 str(args.hidden_key),
                 shape=(length, token_count, int(args.token_dim)),
                 dtype=dtype,
                 chunks=(1, token_count, int(args.token_dim)),
                 compression=None,
             )
-            input_dset.attrs["hidden_dim"] = flat_dim
-            input_dset.attrs["source_dtype"] = "float32"
-            input_dset.attrs["token_count"] = token_count
-            input_dset.attrs["token_dim"] = int(args.token_dim)
-            input_dset.attrs["hidden_storage_format"] = "tokenized"
+            hidden_dset.attrs["hidden_dim"] = flat_dim
+            hidden_dset.attrs["source_dtype"] = "float32"
+            hidden_dset.attrs["token_count"] = token_count
+            hidden_dset.attrs["token_dim"] = int(args.token_dim)
+            hidden_dset.attrs["hidden_storage_format"] = "tokenized"
             lang_emb_dset = demo_out.create_dataset(
                 "lang_emb",
                 shape=(int(args.token_dim),),
@@ -540,7 +540,7 @@ def _write_source_input_tokens(
 
             for start in range(0, length, int(args.chunk_size)):
                 end = min(start + int(args.chunk_size), length)
-                input_tokens, lang_emb = _predict_input_token_chunk(
+                hidden_token, lang_emb = _predict_hidden_token_chunk(
                     components=components,
                     args=args,
                     obs_group=obs_group,
@@ -549,21 +549,61 @@ def _write_source_input_tokens(
                     start=start,
                     end=end,
                 )
-                input_dset[start:end] = input_tokens.astype(dtype, copy=False)
+                hidden_dset[start:end] = hidden_token.astype(dtype, copy=False)
                 if start == 0:
                     lang_emb_dset[...] = lang_emb[0].astype(dtype, copy=False)
                 frames_written += int(end - start)
+            demo_out.attrs["complete"] = True
             demos_written += 1
             pbar.update()
         pbar.close()
         output.attrs["complete"] = True
 
-    tmp_path.replace(out_input_token_path)
+    tmp_path.replace(out_hidden_token_path)
     return {"demos": demos_written, "frames": frames_written}
 
 
+def build_hidden_token_preprocess_config(
+    args: SimpleNamespace,
+    *,
+    hdf5_dir: Path,
+    out_hidden_token_dir: Path,
+    world_size: int,
+    token_count: int,
+) -> dict[str, Any]:
+    """Build and validate metadata exactly as it will be persisted.
+
+    Keeping this in one function makes the data producer and the training-side
+    validator share a testable boundary instead of duplicating schema fields in
+    the command-line entry point.
+    """
+
+    config = vars(args).copy()
+    config.update(
+        hdf5_dir=str(hdf5_dir),
+        out_hidden_token_dir=str(out_hidden_token_dir),
+        world_size=int(world_size),
+        start_time=time.time(),
+        model_path=str(_project_path(args.oft_ckpt)),
+        encoder_state_ckpt="",
+        action_head_type=_action_head_type_for_mode(args.resolved_policy_mode),
+        obs_hidden_source=OBS_HIDDEN_SOURCE,
+        token_count=int(token_count),
+        hidden_dim=int(token_count) * int(args.token_dim),
+        obs_embedding_shape=[int(token_count), int(args.token_dim)],
+        hidden_storage_format="tokenized",
+        sidecar_schema_version=SIDECAR_SCHEMA_VERSION,
+        required_demo_datasets=required_demo_datasets(),
+    )
+    validate_hidden_token_preprocess_config(
+        config,
+        context="OpenVLA-OFT offline preprocess config",
+    )
+    return config
+
+
 def parse_args() -> SimpleNamespace:
-    return script_namespace("preprocess_oft_input_tokens")
+    return script_namespace("preprocess_oft_hidden_token")
 
 
 def main() -> None:
@@ -571,7 +611,7 @@ def main() -> None:
     if str(args.obs_hidden_source) != OBS_HIDDEN_SOURCE:
         raise SystemExit(
             "OpenVLA-OFT preprocessing only supports "
-            "obs_hidden_source=input_token_embedding"
+            "obs_hidden_source=hidden_token"
         )
     if bool(args.fake_oft_components):
         args.resolved_policy_mode = "discrete"
@@ -590,18 +630,18 @@ def main() -> None:
             "OpenVLA-OFT preprocessing requires history=1 and "
             "num_images_in_input=1"
         )
-    if int(args.patches_per_image) != INPUT_TOKEN_COUNT:
+    if int(args.patches_per_image) != HIDDEN_TOKEN_COUNT:
         raise SystemExit(
-            f"OpenVLA-OFT preprocessing requires patches_per_image={INPUT_TOKEN_COUNT}"
+            f"OpenVLA-OFT preprocessing requires patches_per_image={HIDDEN_TOKEN_COUNT}"
         )
-    if int(args.token_dim) != INPUT_TOKEN_DIM:
+    if int(args.token_dim) != HIDDEN_TOKEN_DIM:
         raise SystemExit(
-            f"OpenVLA-OFT preprocessing requires token_dim={INPUT_TOKEN_DIM}"
+            f"OpenVLA-OFT preprocessing requires token_dim={HIDDEN_TOKEN_DIM}"
         )
 
     hdf5_dir = _project_path(args.hdf5_dir)
-    out_input_token_dir = _project_path(args.out_input_token_dir)
-    out_input_token_dir.mkdir(parents=True, exist_ok=True)
+    out_hidden_token_dir = _project_path(args.out_hidden_token_dir)
+    out_hidden_token_dir.mkdir(parents=True, exist_ok=True)
     rank, world_size, device = _init_distributed()
     files = sorted(hdf5_dir.glob("*.hdf5"))
     if args.max_files is not None:
@@ -610,10 +650,10 @@ def main() -> None:
         raise RuntimeError(f"No HDF5 files found under {hdf5_dir}")
 
     def _output_paths(source_path: Path) -> list[Path]:
-        return [out_input_token_dir / source_path.name]
+        return [out_hidden_token_dir / source_path.name]
 
     required = {
-        out_input_token_dir / source_path.name: required_demo_datasets()
+        out_hidden_token_dir / source_path.name: required_demo_datasets()
         for source_path in files
     }
     task_plan = plan_hdf5_preprocess_tasks(
@@ -628,33 +668,19 @@ def main() -> None:
 
     if rank == 0:
         token_count = int(args.patches_per_image) * len(tuple(args.image_keys))
-        config = vars(args).copy()
-        config.update(
-            hdf5_dir=str(hdf5_dir),
-            out_input_token_dir=str(out_input_token_dir),
+        config = build_hidden_token_preprocess_config(
+            args,
+            hdf5_dir=hdf5_dir,
+            out_hidden_token_dir=out_hidden_token_dir,
             world_size=world_size,
-            start_time=time.time(),
-            model_path=str(_project_path(args.oft_ckpt)),
-            encoder_state_ckpt="",
-            action_head_type=_action_head_type_for_mode(args.resolved_policy_mode),
-            obs_hidden_source=OBS_HIDDEN_SOURCE,
             token_count=token_count,
-            hidden_dim=token_count * int(args.token_dim),
-            obs_embedding_shape=[token_count, int(args.token_dim)],
-            hidden_storage_format="tokenized",
         )
-        config["sidecar_schema_version"] = SIDECAR_SCHEMA_VERSION
-        config["required_demo_datasets"] = required_demo_datasets()
-        validate_input_token_preprocess_config(
-            config,
-            context="OpenVLA-OFT offline preprocess config",
-        )
-        (out_input_token_dir / "preprocess_config.json").write_text(
+        (out_hidden_token_dir / "preprocess_config.json").write_text(
             json.dumps(config, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         print(
-            f"[oft-input-tokens] source={hdf5_dir} files={len(files)} "
+            f"[oft-hidden-tokens] source={hdf5_dir} files={len(files)} "
             f"pending={len(task_plan.pending)} skipped={len(task_plan.skipped)} "
             f"repaired={len(task_plan.repaired)} assigned/rank={len(assigned)} "
             f"loads_by_rank={task_plan.loads_by_rank} world_size={world_size} "
@@ -675,12 +701,12 @@ def main() -> None:
     total_demos = 0
     total_frames = 0
     for source_path in assigned:
-        out_path = out_input_token_dir / source_path.name
+        out_path = out_hidden_token_dir / source_path.name
         if bool(args.overwrite) and out_path.exists():
             out_path.unlink()
-        stats = _write_source_input_tokens(
+        stats = _write_source_hidden_token(
             source_path=source_path,
-            out_input_token_path=out_path,
+            out_hidden_token_path=out_path,
             components=components,
             args=args,
             rank=rank,

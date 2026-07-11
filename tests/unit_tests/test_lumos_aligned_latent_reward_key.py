@@ -32,18 +32,18 @@ def _steps(T, success):
 
 
 def test_load_demo_uses_sparse_rewards_for_complete(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "s.hdf5") as w:
         w.write_demo(
             index=0,
             steps=_steps(6, success=True),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
         w.write_demo(
             index=1,
             steps=_steps(6, success=False),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
     raw, hid = tmp_path / "r" / "s.hdf5", tmp_path / "h" / "s.hdf5"
     # demo_key is the full HDF5 path ("data/demo_i"); _load_demo does fr[demo_key].
@@ -92,13 +92,13 @@ def test_load_demo_rejects_raw_hidden_length_mismatch(tmp_path):
 
 
 def test_lumos_aligned_dataset_returns_proprio_and_language_sidecar(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "s.hdf5") as writer:
         writer.write_demo(
             index=0,
             steps=_steps(6, success=True),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
     raw_dir, hid_dir = tmp_path / "r", tmp_path / "h"
     with h5py.File(hid_dir / "s.hdf5", "a") as handle:
@@ -122,19 +122,20 @@ def test_lumos_aligned_dataset_returns_proprio_and_language_sidecar(
     x, y, extra = next(iter(dataset))
 
     assert x.shape == (2, 256, 4096)
+    assert x.dtype == torch.float16
     assert y == 1
     assert extra["proprio"].shape == (2, 8)
     assert torch.allclose(extra["lang_emb"], torch.arange(5, dtype=torch.float32))
 
 
 def test_lumos_aligned_dataset_can_read_language_from_source_hidden(
-    tmp_path, input_token_preprocess_config
+    tmp_path, hidden_token_preprocess_config
 ):
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "s.hdf5") as writer:
         writer.write_demo(
             index=0,
             steps=_steps(6, success=True),
-            preprocess_config=input_token_preprocess_config,
+            preprocess_config=hidden_token_preprocess_config,
         )
     raw_dir, hid_dir = tmp_path / "r", tmp_path / "h"
     with h5py.File(hid_dir / "s.hdf5", "a") as handle:

@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from itertools import islice
 from typing import Any
 
 import hydra
@@ -53,10 +54,12 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
     LumosAlignedLatentValDataset,
 )
-from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
+from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
 from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.torch_utils import autocast_context
+from dreamervla.utils.update_timing import GradientUpdateTimer
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -311,7 +314,7 @@ class LatentClassifierRunner(BaseRunner):
         require_reference_complete = bool(
             OmegaConf.select(d, "require_reference_complete", default=True)
         )
-        validate_input_token_sidecar_dir(
+        validate_hidden_token_sidecar_dir(
             d.success_dir_hidden,
             reference_dir=d.success_dir_raw,
             require_reference_complete=require_reference_complete,
@@ -321,7 +324,7 @@ class LatentClassifierRunner(BaseRunner):
             failure_raw_dir = OmegaConf.select(d, "failure_dir_raw")
             if failure_raw_dir is None:
                 raise ValueError("failure_dir_hidden requires failure_dir_raw")
-            validate_input_token_sidecar_dir(
+            validate_hidden_token_sidecar_dir(
                 failure_hidden_dir,
                 reference_dir=failure_raw_dir,
                 require_reference_complete=require_reference_complete,
@@ -340,7 +343,7 @@ class LatentClassifierRunner(BaseRunner):
                 default=False,
             )
         ):
-            validate_input_token_sidecar_dir(
+            validate_hidden_token_sidecar_dir(
                 d.success_dir_hidden,
                 expected_filenames=OmegaConf.select(
                     d,
@@ -358,7 +361,7 @@ class LatentClassifierRunner(BaseRunner):
                     raise ValueError(
                         "failure sidecar validation requires both raw and hidden dirs"
                     )
-                validate_input_token_sidecar_dir(
+                validate_hidden_token_sidecar_dir(
                     failure_hidden,
                     reference_dir=failure_raw,
                     require_reference_complete=require_reference_complete,
@@ -487,7 +490,7 @@ class LatentClassifierRunner(BaseRunner):
             self.model = LatentSuccessClassifier(cls_cfg).to(self.device)
         self.model = self.distributed.wrap_trainable_module(
             self.model,
-            find_unused_parameters=True,
+            find_unused_parameters=False,
             broadcast_buffers=False,
         )
         n_params = sum(p.numel() for p in self.model.parameters())
@@ -521,6 +524,60 @@ class LatentClassifierRunner(BaseRunner):
         summary_fn = getattr(dataset, "summary", None)
         summary = summary_fn() if callable(summary_fn) else {}
         return {"event": "dataset_summary", "split": str(split), **dict(summary)}
+
+    def _should_profile_update(self) -> bool:
+        profile_steps = int(
+            OmegaConf.select(
+                self.cfg,
+                "training.update_profile_steps",
+                default=0,
+            )
+            or 0
+        )
+        return profile_steps < 0 or int(self.global_step) < profile_steps
+
+    def _record_update_profile(self, timings: dict[str, float]) -> None:
+        device_stages = ("h2d", "forward", "backward", "grad_clip", "optimizer")
+        device_active = sum(float(timings.get(name, 0.0)) for name in device_stages)
+        total = float(timings.get("total", 0.0))
+        enriched = dict(timings)
+        enriched["device_active"] = device_active
+        enriched["host_or_wait"] = max(0.0, total - device_active)
+        enriched["device_active_fraction"] = device_active / max(total, 1.0e-12)
+        metrics = {
+            f"time/classifier_update_{name}_ms": float(value) * 1000.0
+            for name, value in enriched.items()
+            if name != "device_active_fraction"
+        }
+        metrics["time/classifier_update_device_active_fraction"] = enriched[
+            "device_active_fraction"
+        ]
+        self.log_metrics(metrics, step=int(self.global_step))
+        if not self.is_main_process:
+            return
+        order = (
+            "data_wait",
+            "h2d",
+            "forward",
+            "backward",
+            "grad_clip",
+            "optimizer",
+            "metrics",
+            "total",
+        )
+        parts = [
+            f"{name}={float(enriched[name]) * 1000.0:.1f}ms"
+            for name in order
+            if name in enriched
+        ]
+        parts.append(
+            "device_active="
+            f"{float(enriched['device_active_fraction']) * 100.0:.1f}%"
+        )
+        print(
+            f"[classifier-profile] step={int(self.global_step)} " + " ".join(parts),
+            flush=True,
+        )
 
     def _finalize_validation_checkpoints(self) -> dict[str, dict[str, Any]]:
         """Apply the Hydra-selected final checkpoint selection protocol."""
@@ -606,43 +663,72 @@ class LatentClassifierRunner(BaseRunner):
             )
         else:
             cw = None
-        running_loss = 0.0
-        running_correct = 0
+        running_loss = torch.zeros((), device=self.device)
+        running_correct = torch.zeros((), device=self.device)
         running_total = 0
+        precision = str(OmegaConf.select(tr, "precision", default="fp32") or "fp32")
 
         t0 = time.time()
         self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         while self.epoch < num_epochs:
-            for batch_idx, batch in enumerate(self.train_loader):
-                if batch_idx >= steps_per_epoch:
-                    break
-                xs, ys, extra = _unpack_classifier_batch(batch)
-                xs = xs.to(self.device, non_blocking=True)
-                ys = ys.to(self.device, non_blocking=True)
-                forward_kwargs = _classifier_forward_kwargs(
-                    self._classifier_module(), extra, self.device
-                )
+            data_wait_started_at = time.perf_counter()
+            for batch in islice(self.train_loader, steps_per_epoch):
+                update_started_at = data_wait_started_at
+                data_wait_s = time.perf_counter() - data_wait_started_at
+                profile = self._should_profile_update()
+                timer = GradientUpdateTimer(self.device, enabled=profile)
+                profile_timings = {"data_wait": data_wait_s} if profile else {}
 
-                self.model.train()
-                logits = self.model(xs, **forward_kwargs)
-                loss, pred = _classifier_loss_and_predictions(
-                    logits,
-                    ys,
-                    loss_type=loss_type,
-                    label_smoothing=label_smoothing,
-                    class_weight=cw,
-                )
+                with timer.device_stage("h2d"):
+                    xs, ys, extra = _unpack_classifier_batch(batch)
+                    xs = xs.to(self.device, non_blocking=True)
+                    ys = ys.to(self.device, non_blocking=True)
+                    forward_kwargs = _classifier_forward_kwargs(
+                        self._classifier_module(), extra, self.device
+                    )
+
                 self.optim.zero_grad(set_to_none=True)
-                loss.backward()
-                grad_norm = self.distributed.clip_grad_norm(self.model, 5.0)
-                self.optim.step()
+                self.model.train()
+                with timer.device_stage("forward"):
+                    with autocast_context(self.device, precision):
+                        logits = self.model(xs, **forward_kwargs)
+                        loss, pred = _classifier_loss_and_predictions(
+                            logits,
+                            ys,
+                            loss_type=loss_type,
+                            label_smoothing=label_smoothing,
+                            class_weight=cw,
+                        )
+                with timer.device_stage("backward"):
+                    loss.backward()
+                with timer.device_stage("grad_clip"):
+                    clip_tensor = getattr(
+                        self.distributed,
+                        "clip_grad_norm_tensor",
+                        None,
+                    )
+                    if callable(clip_tensor):
+                        grad_norm = clip_tensor(self.model, 5.0)
+                    else:
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), 5.0
+                        )
+                with timer.device_stage("optimizer"):
+                    self.optim.step()
 
-                with torch.no_grad():
-                    running_correct += int((pred == ys).sum().item())
+                timer.synchronize_device()
+                with timer.wall_stage("metrics"), torch.no_grad():
+                    running_correct += (pred.detach() == ys).sum()
                     running_total += int(ys.numel())
-                running_loss += float(loss.item())
+                    running_loss += loss.detach()
 
                 self.global_step += 1
+                if profile:
+                    profile_timings.update(timer.finish())
+                    profile_timings["total"] = (
+                        time.perf_counter() - update_started_at
+                    )
+                    self._record_update_profile(profile_timings)
                 self.console_progress(
                     self.global_step, num_epochs * steps_per_epoch, "train"
                 )
@@ -675,12 +761,14 @@ class LatentClassifierRunner(BaseRunner):
                             "train/acc": float(reduced["acc"]),
                         },
                     )
-                    running_loss = 0.0
-                    running_correct = 0
+                    running_loss = torch.zeros((), device=self.device)
+                    running_correct = torch.zeros((), device=self.device)
                     running_total = 0
 
                 # ---- periodic eval ---------------------------------------
+                maintenance_metrics: dict[str, float] = {}
                 if self.global_step % eval_every == 0:
+                    eval_started_at = time.perf_counter()
                     w_metrics = self._evaluate_window_level()
                     self._log(
                         {"event": "val_window", "step": self.global_step, **w_metrics}
@@ -707,9 +795,19 @@ class LatentClassifierRunner(BaseRunner):
                                 f"best_episode_f1{e_metrics['best_f1']:.4f}_th{e_metrics['best_thresh']:.2f}",
                                 extra={"val_episode": e_metrics},
                             )
+                    maintenance_metrics["time/classifier_eval_s"] = (
+                        time.perf_counter() - eval_started_at
+                    )
 
                 if self.global_step % ckpt_every == 0:
+                    checkpoint_started_at = time.perf_counter()
                     self.save_checkpoint(tag="latest")
+                    maintenance_metrics["time/classifier_checkpoint_s"] = (
+                        time.perf_counter() - checkpoint_started_at
+                    )
+                if maintenance_metrics:
+                    self.log_metrics(maintenance_metrics, step=int(self.global_step))
+                data_wait_started_at = time.perf_counter()
             self.epoch += 1
 
         self.console_banner("TRAINING", done=True)

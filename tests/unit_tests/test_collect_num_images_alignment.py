@@ -21,12 +21,12 @@ def _make_cfg(num_images=None):
         "ckpt_path": "/tmp/ckpt",
         "dataset_statistics_key": "libero_goal_no_noops",
         "hdf5_reward_dir": "/tmp/rw",
-        "input_token_dir": "/tmp/h1",
-        "input_tokens": {
+        "hidden_token_dir": "/tmp/h1",
+        "hidden_token": {
             "expected_history": 1,
             "expected_action_head_type": "oft_discrete_token",
             "expected_include_state": False,
-            "expected_obs_hidden_source": "input_token_embedding",
+            "expected_obs_hidden_source": "hidden_token",
             "expected_prompt_style": "vla_policy",
             "expected_rotate_images_180": True,
             "time_horizon": 8,

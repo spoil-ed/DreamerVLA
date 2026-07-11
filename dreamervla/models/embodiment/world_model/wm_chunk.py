@@ -142,7 +142,7 @@ class _WMStyleTransformer(nn.Module):
 
 
 class ChunkAwareWorldModel(WorldModel):
-    """Chunk WM over OpenVLA-OFT input tokens with WM-style conditioning.
+    """Chunk WM over OpenVLA-OFT hidden tokens with WM-style conditioning.
 
     The transition model keeps each observation token in source token space and
     concatenates an encoded action to every observation token channel, matching

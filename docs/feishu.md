@@ -16,7 +16,7 @@ collect rollouts
 observation。外部数据契约固定为：
 
 ```text
-obs_hidden_source = input_token_embedding
+obs_hidden_source = hidden_token
 obs_embedding     = [T, 256, 4096]
 token_count       = 256
 token_dim         = 4096
@@ -29,7 +29,7 @@ action_chunk      = 8
 OpenVLA decoder 内部会产生离散动作位置，但这些位置只负责 action decoding，
 不会写入 sidecar，也不是 world model 或 classifier 的观测。
 
-## 为什么选择 input token
+## 为什么选择 hidden token
 
 输入 token 保留了 OpenVLA 的空间 token 网格和 4096 维语义通道，同时位于动作
 decoder 之前，因此能作为 world model、classifier 和 actor 共享的状态边界。相比给
@@ -69,7 +69,7 @@ ${DVLA_DATA_ROOT}/collected_rollouts/<suite>/hidden/
 ${DVLA_DATA_ROOT}/collected_rollouts/<suite>/collection_manifest.json
 ```
 
-`hidden/` 是通道角色名；其中的具体内容只能是 input-token sidecar。系统在以下边界
+`hidden/` 是通道角色名；其中的具体内容只能是 hidden-token sidecar。系统在以下边界
 执行严格校验：
 
 - collection resume；

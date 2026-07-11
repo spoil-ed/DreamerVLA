@@ -143,7 +143,7 @@ ${DVLA_DATA_ROOT}/collected_rollouts/<suite>/
 
 OpenVLA one-trajectory h1 主线 classifier 使用 token-WMPO 口径：
 
-- 观测 token 来自 `*_oft_input_token_embedding_vla_policy_h1`，每帧形状为
+- 观测 token 来自 `*_oft_hidden_token_vla_policy_h1`，每帧形状为
   `[256,4096]`。
 - `classifier.output_dim=1`。
 - loss 是 BCE。
@@ -488,6 +488,7 @@ FSDP，并不使用这条 DDP warmup batch 公式。
 ```text
 time/wm_warmup_sample_ms
 time/wm_warmup_batch_build_ms
+time/wm_warmup_data_wait_ms
 time/wm_warmup_h2d_ms
 time/wm_warmup_forward_ms
 time/wm_warmup_backward_ms
@@ -495,15 +496,46 @@ time/wm_warmup_grad_clip_ms
 time/wm_warmup_optimizer_ms
 time/wm_warmup_metrics_ms
 time/wm_warmup_total_ms
+time/wm_warmup_device_active_fraction
 ```
 
-`wm_full_dataset_train` 默认 `wm_profile_steps=-1`，适合做完整 WM 时耗诊断。8 卡
-cotrain `multi_gpu` profile 默认 `wm_profile_steps=0`，避免正式长跑被 CUDA
-synchronize 拖慢；需要分析 cotrain warmup 时，用 launcher 控制临时打开：
+`wm_full_dataset_train` 默认只 profile 前 8 次 update，并用 CUDA events 在每个
+被 profile 的 update 末尾只同步一次。`training.wm_prefetch_workers=1` 会在当前
+GPU update 期间构造下一批 replay；`sample_ms`/`batch_build_ms` 表示 CPU 工作量，
+`data_wait_ms` 才是这部分工作未被 overlap 后暴露给训练循环的 stall。8 卡 cotrain
+launcher 仍可把 profile 设为 0；需要临时分析更多 warmup update 时使用正整数：
 
 ```bash
-warmup.wm_profile_steps=-1
+warmup.wm_profile_steps=32
 ```
+
+`-1` 会 profile 全部 update，只应用于短诊断，不用于正式长跑。
+WM warmup 只在 `training.replay_warmup_log_every=10` 的边界把 loss 搬回 CPU；
+中间 update 保持 GPU 异步执行，checkpoint 边界再按需同步。
+
+standalone classifier 使用同一分段口径，前 8 步输出：
+
+```text
+time/classifier_update_data_wait_ms
+time/classifier_update_h2d_ms
+time/classifier_update_forward_ms
+time/classifier_update_backward_ms
+time/classifier_update_grad_clip_ms
+time/classifier_update_optimizer_ms
+time/classifier_update_metrics_ms
+time/classifier_update_total_ms
+time/classifier_update_device_active_fraction
+```
+
+另外，周期性验证和保存分别记录
+`time/classifier_eval_s` 与 `time/classifier_checkpoint_s`，避免把正常的维护暂停
+误判为训练 kernel 利用率问题。读数优先级如下：
+
+- `data_wait` 高：CPU 窗口组装、replay sample、pin memory 或存储/NUMA 是瓶颈；
+- `h2d` 高：检查 pinned memory、PCIe/NUMA locality；
+- `backward` 相对 `forward` 异常高：重点查 DDP all-reduce 与慢 rank；
+- `optimizer` 高：AdamW 状态更新受显存带宽限制；
+- `device_active_fraction` 低且 eval/checkpoint 不高：仍有未归因 host stall。
 
 `[pipeline][wm-warmup] step=... loss=...` 现在走 rank-0 event printer，8 卡 DDP
 不会再由每个 rank 重复打印同一条 loss；profile/progress 也按 rank-0 口径读。

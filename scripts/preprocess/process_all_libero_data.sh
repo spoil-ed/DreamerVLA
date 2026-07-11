@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hydra entrypoint: multi-suite OpenVLA input-token preprocessing workflow.
+# Hydra entrypoint: multi-suite OpenVLA hidden-token preprocessing workflow.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

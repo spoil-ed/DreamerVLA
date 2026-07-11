@@ -188,12 +188,12 @@ class EmbodiedEvalRunner(
             ),
             "expected_action_head_type": OmegaConf.select(
                 cfg,
-                "task.openvla_oft.input_tokens.expected_action_head_type",
+                "task.openvla_oft.hidden_token.expected_action_head_type",
                 default=None,
             ),
             "expected_include_state": OmegaConf.select(
                 cfg,
-                "task.openvla_oft.input_tokens.expected_include_state",
+                "task.openvla_oft.hidden_token.expected_include_state",
                 default=None,
             ),
             "_rank": 0,
@@ -255,13 +255,13 @@ class EmbodiedEvalRunner(
             image_keys=image_keys,
             history=int(
                 OmegaConf.select(
-                    cfg, "task.openvla_oft.input_tokens.expected_history", default=1
+                    cfg, "task.openvla_oft.hidden_token.expected_history", default=1
                 )
             ),
             rotate_images_180=bool(
                 OmegaConf.select(
                     cfg,
-                    "task.openvla_oft.input_tokens.expected_rotate_images_180",
+                    "task.openvla_oft.hidden_token.expected_rotate_images_180",
                     default=True,
                 )
             ),
@@ -271,8 +271,8 @@ class EmbodiedEvalRunner(
             obs_hidden_source=str(
                 OmegaConf.select(
                     cfg,
-                    "task.openvla_oft.input_tokens.expected_obs_hidden_source",
-                    default="input_token_embedding",
+                    "task.openvla_oft.hidden_token.expected_obs_hidden_source",
+                    default="hidden_token",
                 )
             ),
             expected_action_head_type=policy_cfg.get("expected_action_head_type"),
@@ -833,7 +833,7 @@ class EmbodiedEvalRunner(
                 )
             source = OmegaConf.select(
                 cfg,
-                "task.openvla_oft.input_tokens.expected_obs_hidden_source",
+                "task.openvla_oft.hidden_token.expected_obs_hidden_source",
                 default=None,
             )
             current = str(
@@ -1752,15 +1752,15 @@ class EmbodiedEvalRunner(
         live_hidden = None
         recon_hidden = None
         if actor_input_source == "latent":
-            live_hidden = self._input_token_grid_for_trace(hidden_tensor)
-            recon_hidden = self._input_token_grid_for_trace(feat)
+            live_hidden = self._hidden_token_grid_for_trace(hidden_tensor)
+            recon_hidden = self._hidden_token_grid_for_trace(feat)
         self._write_policy_trace(
             source="dreamer",
             state=state,
             action_chunk_raw=action_chunk_np,
             action_chunk_env=np.stack(env_actions, axis=0),
-            live_input_token_grid=live_hidden,
-            recon_input_token_grid=recon_hidden,
+            live_hidden_token_grid=live_hidden,
+            recon_hidden_token_grid=recon_hidden,
             obs_embedding=obs_embedding,
             actor_input=feat,
             latent=latent if "latent" in locals() else None,

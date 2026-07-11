@@ -5,7 +5,7 @@
 DreamerVLA couples a one-trajectory OpenVLA-OFT policy with a token-space
 world model and a success classifier.  The system uses one external observation
 representation throughout collection, replay, warm-up, and online cotraining:
-the projected visual input tokens produced before the language-model action
+the projected visual hidden tokens produced before the language-model action
 positions.  For each environment step $t$,
 \[
 E_t = f_{\mathrm{OFT}}^{\mathrm{vision}}(I_t,\ell)
@@ -17,9 +17,9 @@ The 256 visual tokens are persisted under the HDF5 key
 observations.
 
 The trainable system contains three components: (i) a chunk-aware Transformer
-world model that predicts future input-token grids, (ii) a spatial success
+world model that predicts future hidden-token grids, (ii) a spatial success
 classifier trained on windows of the same token grids, and (iii) an actor bridge
-that maps predicted input tokens to OpenVLA-OFT's internal discrete action
+that maps predicted hidden tokens to OpenVLA-OFT's internal discrete action
 positions.  The bridge creates action positions only inside the decoder; they
 are not stored in replay and do not define a second observation interface.
 
@@ -27,7 +27,7 @@ are not stored in replay and do not define a second observation interface.
 
 Training follows four stages.  First, the one-trajectory OpenVLA-OFT checkpoint
 collects real LIBERO rollouts.  Each rollout produces a reward shard and a
-shape-aligned input-token sidecar.  Before reuse, the loader verifies the source
+shape-aligned hidden-token sidecar.  Before reuse, the loader verifies the source
 name, token count, token width, storage format, and every per-demo tensor shape.
 
 Second, collected episodes seed a shared online replay.  Third, the world model
@@ -38,7 +38,7 @@ asynchronous route, the actor group owns FSDP policy updates, the rollout group
 owns no-gradient policy inference, the environment group owns real and imagined
 stepping, and the learner group owns world-model and classifier updates.
 
-\subsection{Input-Token Observation Contract}
+\subsection{Hidden-Token Observation Contract}
 
 For an episode of length $T$, the sidecar stores
 \[

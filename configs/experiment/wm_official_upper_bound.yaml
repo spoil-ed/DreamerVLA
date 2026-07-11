@@ -14,7 +14,7 @@ training:
 
 offline_warmup:
   data_dir: ${task.hdf5_reward_dir}
-  hidden_dir: ${task.openvla_oft.input_token_dir}
+  hidden_dir: ${task.openvla_oft.hidden_token_dir}
   required_task_ids: ${pre_mainline.official_task_ids}
   require_reference_complete: false
 

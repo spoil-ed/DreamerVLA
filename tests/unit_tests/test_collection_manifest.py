@@ -136,7 +136,7 @@ def test_next_shard_index_respects_prefix(tmp_path):
 
 
 def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
-    root = tmp_path / "online_cotrain_input_token_embedding"
+    root = tmp_path / "online_cotrain_hidden_token"
     for episode_id, global_step, success in (
         (1, 120, True),
         (2, 121, False),
@@ -195,7 +195,7 @@ def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
 
 
 def test_load_online_rollout_episodes_rebuilds_eight_dim_proprio(tmp_path):
-    root = tmp_path / "online_cotrain_input_token_embedding"
+    root = tmp_path / "online_cotrain_hidden_token"
     reward = root / "reward" / "ep.hdf5"
     hidden = root / "hidden" / "ep.hdf5"
     _write_reward_hidden_pair(
@@ -286,7 +286,7 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
                 "chunk_size": 8,
                 "token_count": 256,
                 "token_dim": 4096,
-                "obs_hidden_source": "input_token_embedding",
+                "obs_hidden_source": "hidden_token",
                 "obs_embedding_shape": [256, 4096],
                 "hidden_storage_format": "tokenized",
                 "output_dtype": "float16",
@@ -330,7 +330,7 @@ def test_write_collection_manifest_records_hidden_schema(tmp_path, monkeypatch):
     assert manifest["hidden_schema"]["chunk_size"] == 8
     assert manifest["hidden_schema"]["token_count"] == 256
     assert manifest["hidden_schema"]["token_dim"] == 4096
-    assert manifest["hidden_schema"]["obs_hidden_source"] == "input_token_embedding"
+    assert manifest["hidden_schema"]["obs_hidden_source"] == "hidden_token"
     assert manifest["hidden_schema"]["obs_embedding_shape"] == [256, 4096]
     assert manifest["hidden_schema"]["hidden_storage_format"] == "tokenized"
     assert manifest["backend"] in {"unknown", "egl", "osmesa"}

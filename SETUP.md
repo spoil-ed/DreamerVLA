@@ -73,7 +73,7 @@ bash scripts/download_assets.sh download.libero=false download.calvin=true \
 ## Canonical LIBERO Preprocessing
 
 The offline route has one observation contract:
-`input_token_embedding [T,256,4096]`. For one suite, run:
+`hidden_token [T,256,4096]`. For one suite, run:
 
 ```bash
 bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1
@@ -87,7 +87,7 @@ The workflow executes these stages in order:
    intermediate paths are
    `${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256` and
    `${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256`.
-2. `35_oft_input_tokens`: write the exact projected OpenVLA input-token
+2. `35_oft_hidden_token`: write the exact projected OpenVLA hidden-token
    sidecar.
 3. `40_validate`: verify metadata plus every `obs_embedding` dataset before the
    artifact can be used for training.

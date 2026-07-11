@@ -97,7 +97,7 @@ Cold-start configs reroot HDF5 paths under collected rollout directories. The
 OpenVLA-OFT block carries checkpoint paths, sidecar expectations, token
 dimensions, proprio dimensions, model dimensions, actor/classifier targets, and
 world-model sequence length. The one-trajectory mainline contract is
-`task.openvla_oft.input_tokens` with `input_token_embedding [256,4096]` and
+`task.openvla_oft.hidden_token` with `hidden_token [256,4096]` and
 `wm_obs_dim=1048576`.
 
 ## Runtime Artifacts

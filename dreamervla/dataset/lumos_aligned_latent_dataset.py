@@ -1,7 +1,7 @@
-"""LUMOS-aligned input-token W-frame classifier dataset.
+"""LUMOS-aligned hidden-token W-frame classifier dataset.
 
 Mirrors ``upstream reward_model/videomae.py::SuccessWindowDataset`` exactly,
-but operates on canonical OpenVLA-OFT input-token sidecar HDF5 instead of raw
+but operates on canonical OpenVLA-OFT hidden-token sidecar HDF5 instead of raw
 video frames. The positive/negative protocol is intentionally
 identical so that downstream eval thresholds (``upstream reward_model/find_thre.py``,
 ``LUMOS/verl/.../robwm_rollout.py::predict_success``) transfer 1:1.
@@ -56,7 +56,7 @@ from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 class _DemoRecord:
     """One episode's frozen latent + label metadata."""
 
-    obs: np.ndarray  # [T, 256, 4096] float16 input_token_embedding
+    obs: np.ndarray  # [T, 256, 4096] float16 hidden_token
     proprio: np.ndarray | None  # [T, P] float32 raw proprio, optional
     lang_emb: np.ndarray | None  # [D] float32 episode-level language embedding, optional
     finish_step: int  # 1-based step where dones first fires (clamped to T)
@@ -530,8 +530,10 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
                         yield self._window_item(rec, end=end, label=0)
 
     def _to_tensor(self, win: np.ndarray) -> torch.Tensor:
-        # fp16 → fp32 here so the model sees a consistent dtype.
-        return torch.from_numpy(np.ascontiguousarray(win)).float()
+        # Sidecars are stored as fp16. Preserve that dtype through pinned host
+        # memory so H2D moves half as many bytes; the classifier casts on GPU at
+        # its projection boundary, producing the same fp32 values as a CPU cast.
+        return torch.from_numpy(np.ascontiguousarray(win))
 
     def _pool_window(self, env_window: np.ndarray) -> np.ndarray:
         """Aggregate ``[W*K,...]`` env steps while preserving token-grid axes.

@@ -152,8 +152,8 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
             "eval": {},
             "task": {
                 "openvla_oft": {
-                    "input_tokens": {
-                        "expected_obs_hidden_source": "input_token_embedding"
+                    "hidden_token": {
+                        "expected_obs_hidden_source": "hidden_token"
                     }
                 }
             },
@@ -164,7 +164,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
 
     assert OmegaConf.select(cfg, "eval.dreamer_rollout_mode") == "stateless"
     assert OmegaConf.select(cfg, "eval.dreamer_actor_input_source") == "latent"
-    assert OmegaConf.select(cfg, "eval.obs_hidden_source") == "input_token_embedding"
+    assert OmegaConf.select(cfg, "eval.obs_hidden_source") == "hidden_token"
 
 
 def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:

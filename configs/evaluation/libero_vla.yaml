@@ -81,7 +81,7 @@ eval:
   dreamer_wm_rotate_images: true
   dreamer_wm_prompt_style: vla_policy
   dreamer_wm_include_state: false
-  obs_hidden_source: input_token_embedding
+  obs_hidden_source: hidden_token
   target_token_id: 10004
   dreamer_which_image_block: -2
   dreamer_which_image_blocks: [-2, -1]

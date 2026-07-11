@@ -1,4 +1,4 @@
-"""OpenVLA-OFT input-token extractor for online rollout collection.
+"""OpenVLA-OFT hidden-token extractor for online rollout collection.
 
 Each frame emits the one-image projected current-frame vision patch grid as
 ``obs_embedding [256,4096]``. Persisted sidecars are
@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 
-def input_token_embedding_from_projected(
+def hidden_token_from_projected(
     projected: torch.Tensor,
     *,
     image_keys: Sequence[str],
@@ -33,12 +33,12 @@ def input_token_embedding_from_projected(
     keys = tuple(image_keys)
     if len(keys) != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires one image; "
+            "OpenVLA-OFT hidden-token mainline requires one image; "
             f"got image_keys={keys!r}"
         )
     if int(patches_per_image) != 256:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires patches_per_image=256, "
+            "OpenVLA-OFT hidden-token mainline requires patches_per_image=256, "
             f"got {int(patches_per_image)}"
         )
     if projected.ndim != 3 or tuple(projected.shape[1:]) != (256, 4096):
@@ -69,7 +69,7 @@ class OFTDecodeOutput:
 
 
 class OFTRolloutHiddenExtractor:
-    """Wrap an ``OpenVLAOFTPolicy`` and capture projected input-token embeddings.
+    """Wrap an ``OpenVLAOFTPolicy`` and capture projected hidden-token embeddings.
 
     Each call to ``step`` produces the canonical one-image, history-one
     ``obs_embedding`` used by the offline sidecar protocol.
@@ -112,7 +112,7 @@ class OFTRolloutHiddenExtractor:
         rotate_images_180: bool = True,
         center_crop: bool = True,
         unnorm_key: str = "libero_goal_no_noops",
-        obs_hidden_source: str = "input_token_embedding",
+        obs_hidden_source: str = "hidden_token",
     ) -> None:
         self._policy = policy
         self._image_keys: list[str] = (
@@ -121,18 +121,18 @@ class OFTRolloutHiddenExtractor:
         self._history = int(history)
         if len(self._image_keys) != 1 or self._history != 1:
             raise ValueError(
-                "OpenVLA-OFT input-token mainline requires one image and history=1"
+                "OpenVLA-OFT hidden-token mainline requires one image and history=1"
             )
         if bool(getattr(policy, "use_proprio", False)):
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         self._rotate_images_180 = bool(rotate_images_180)
         self._center_crop = bool(center_crop)
         self._unnorm_key = unnorm_key
         self._obs_hidden_source = str(obs_hidden_source)
-        if self._obs_hidden_source != "input_token_embedding":
+        if self._obs_hidden_source != "hidden_token":
             raise ValueError(
                 "OpenVLA-OFT rollout observations must use "
-                "obs_hidden_source='input_token_embedding'; "
+                "obs_hidden_source='hidden_token'; "
                 f"got {self._obs_hidden_source!r}"
             )
         # Per-view deque of (H, W, 3) uint8 numpy arrays (already rotated).
@@ -385,7 +385,7 @@ class OFTBatchedDecoder:
         self,
         policy: Any,
         unnorm_key: str,
-        obs_hidden_source: str = "input_token_embedding",
+        obs_hidden_source: str = "hidden_token",
         image_keys: list[str] | None = None,
     ) -> None:
         from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
@@ -397,22 +397,22 @@ class OFTBatchedDecoder:
         if policy.action_head is not None:
             raise ValueError("L1/action-query checkpoints are closed")
         if getattr(policy, "proprio_projector", None) is not None:
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         if bool(getattr(policy, "use_proprio", False)):
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         self._proprio_projector = None
         self._unnorm_key = unnorm_key
         self._obs_hidden_source = str(obs_hidden_source)
-        if self._obs_hidden_source != "input_token_embedding":
+        if self._obs_hidden_source != "hidden_token":
             raise ValueError(
                 "OpenVLA-OFT rollout observations must use "
-                "obs_hidden_source='input_token_embedding'; "
+                "obs_hidden_source='hidden_token'; "
                 f"got {self._obs_hidden_source!r}"
             )
         self._image_keys = list(image_keys) if image_keys is not None else ["agentview_rgb"]
         if self._image_keys != ["agentview_rgb"]:
             raise ValueError(
-                "OpenVLA-OFT input-token mainline requires image_keys=['agentview_rgb']"
+                "OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb']"
             )
         self._action_dim = int(ACTION_DIM)
         self._num_chunks = int(NUM_ACTIONS_CHUNK)
@@ -443,7 +443,7 @@ class OFTBatchedDecoder:
 
         Returns, per env, a list of NUM_ACTIONS_CHUNK ``np.ndarray`` actions, a
         CPU float16 ``obs_embedding`` tensor, and a CPU float16 demo-level
-        ``lang_emb`` sidecar. Input-token sidecars are tokenized
+        ``lang_emb`` sidecar. Hidden-token sidecars are tokenized
         ``[N, token_dim]``.
         Raises if ``preps`` is empty.
         """
@@ -457,7 +457,7 @@ class OFTBatchedDecoder:
         )
         pixel_values = torch.cat([p["pixel_values"] for p in preps], dim=0)
         if any(p["proprio"] is not None for p in preps):
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         actions, hidden, lang_emb = self._forward(
             input_ids, attention_mask, pixel_values, None
         )
@@ -479,7 +479,7 @@ class OFTBatchedDecoder:
         """Batched replica of ``predict_action`` + ``_regression_or_discrete_prediction``."""
         model = self._model
         if proprio is not None:
-            raise ValueError("OpenVLA-OFT input-token mainline does not include proprio")
+            raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
 
         # FIX1: batched trailing-29871 ('') append (upstream cats a [1,1] token -> B==1 only)
         if not torch.all(input_ids[:, -1] == 29871):
@@ -512,7 +512,7 @@ class OFTBatchedDecoder:
             projected = model._process_vision_features(
                 pixel_values, language_embeddings, use_film=False
             )
-            input_token_embedding = input_token_embedding_from_projected(
+            hidden_token = hidden_token_from_projected(
                 projected,
                 image_keys=self._image_keys,
                 patches_per_image=int(model.vision_backbone.get_num_patches()),
@@ -550,7 +550,7 @@ class OFTBatchedDecoder:
             start = num_patches + num_prompt_tokens
             normalized = self._decode(lm_out, start, input_ids.shape[0])
         actions = model._unnormalize_actions(normalized, self._unnorm_key)
-        return actions, input_token_embedding, lang_emb
+        return actions, hidden_token, lang_emb
 
     def _decode(
         self,

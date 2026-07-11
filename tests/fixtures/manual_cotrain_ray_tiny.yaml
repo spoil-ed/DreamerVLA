@@ -1,5 +1,5 @@
 # Test-only ManualCotrainRayRunner fixture. Production experiments must use
-# the canonical OpenVLA-OFT input-token recipes under configs/experiment/.
+# the canonical OpenVLA-OFT hidden-token recipes under configs/experiment/.
 _target_: dreamervla.runners.ManualCotrainRayRunner
 seed: 7
 render_backend: osmesa

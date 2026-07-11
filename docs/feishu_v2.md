@@ -10,7 +10,7 @@ success-classifier training、imagined rollout 和 actor bridge。
 
 ```text
 one-trajectory OpenVLA collection
-  -> canonical reward/input-token shards
+  -> canonical reward/hidden-token shards
   -> replay seed
   -> WM + classifier warm-up
   -> sync or Ray manual cotrain

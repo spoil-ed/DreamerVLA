@@ -99,7 +99,7 @@ def test_validate_rollout_cfg_rejects_bad_backend():
         validate_rollout_cfg(num_envs=4, render_backend="vulkan")
 
 
-def test_validate_rollout_cfg_accepts_multienv_input_tokens():
+def test_validate_rollout_cfg_accepts_multienv_hidden_token():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
     validate_rollout_cfg(
@@ -110,7 +110,7 @@ def test_validate_rollout_cfg_accepts_multienv_input_tokens():
     )
 
 
-def test_validate_rollout_cfg_accepts_singleenv_input_tokens():
+def test_validate_rollout_cfg_accepts_singleenv_hidden_token():
     from dreamervla.runners.online_cotrain_runner import validate_rollout_cfg
 
     validate_rollout_cfg(num_envs=1, render_backend="osmesa")
@@ -267,7 +267,7 @@ class _FakeExtractor:
 
 
 class _FakeWorldModel:
-    """Minimal WM stub carrying input-token observations through rollout."""
+    """Minimal WM stub carrying hidden-token observations through rollout."""
 
     def __call__(self, batch):
         import torch

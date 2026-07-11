@@ -739,7 +739,7 @@ def _default_inference_cfg(policy_cfg: dict[str, Any]) -> dict[str, Any]:
 def _default_preprocess_config() -> dict[str, Any]:
     return {
         "action_head_type": "oft_discrete_token",
-        "obs_hidden_source": "input_token_embedding",
+        "obs_hidden_source": "hidden_token",
         "history": 1,
         "include_state": False,
         "hidden_key": "obs_embedding",

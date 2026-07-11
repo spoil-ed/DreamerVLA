@@ -14,7 +14,7 @@ def test_online_cotrain_runner_has_extracted_methods():
     assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
 
 
-def test_wm_pretrain_batch_omits_images_when_input_tokens_exist():
+def test_wm_pretrain_batch_omits_images_when_hidden_token_exist():
     from dreamervla.runners.online_cotrain_pipeline_runner import (
         OnlineCotrainPipelineRunner,
     )
@@ -38,7 +38,7 @@ def test_wm_pretrain_batch_omits_images_when_input_tokens_exist():
     assert "images" not in wm_batch
 
 
-def test_wm_pretrain_batch_accepts_input_tokens_without_images():
+def test_wm_pretrain_batch_accepts_hidden_token_without_images():
     from dreamervla.runners.online_cotrain_pipeline_runner import (
         OnlineCotrainPipelineRunner,
     )
@@ -212,6 +212,72 @@ def test_world_model_pretrain_step_populates_optional_profile_timings():
         "metrics",
     }.issubset(timings)
     assert all(timings[key] >= 0.0 for key in timings)
+
+
+def test_world_model_warmup_can_skip_unused_per_loss_metric_transfers():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class MetricHeavyWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {
+                "_loss": loss,
+                "loss": loss.detach(),
+                "transition_loss": loss.detach() + 1.0,
+                "reward_loss": loss.detach() + 2.0,
+            }
+
+    wm = MetricHeavyWM()
+    optimizer = torch.optim.SGD(wm.parameters(), lr=0.01)
+
+    metrics = world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=optimizer,
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+        metrics_mode="loss_only",
+    )
+
+    assert set(metrics) == {"loss", "grad_norm"}
+
+
+def test_world_model_warmup_can_defer_loss_device_to_host_transfer():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class TinyWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {"_loss": loss, "loss": loss.detach()}
+
+    wm = TinyWM()
+    metrics = world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=torch.optim.SGD(wm.parameters(), lr=0.01),
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+        metrics_mode="loss_tensor",
+    )
+
+    assert isinstance(metrics["loss"], torch.Tensor)
+    assert isinstance(metrics["grad_norm"], torch.Tensor)
 
 
 def test_online_cotrain_actor_update_uses_registry():
@@ -572,9 +638,9 @@ def test_classifier_warmup_hf_sidecar_uses_config_target(tmp_path, monkeypatch):
 # tests.runners.test_offline_seed — that path is fragile / wrong). The shape
 # below mirrors what the collector / RolloutDumpWriter writes.
 # --------------------------------------------------------------------------
-_INPUT_TOKEN_PREPROCESS_CONFIG = {
+_HIDDEN_TOKEN_PREPROCESS_CONFIG = {
     "action_head_type": "oft_discrete_token",
-    "obs_hidden_source": "input_token_embedding",
+    "obs_hidden_source": "hidden_token",
     "hidden_key": "obs_embedding",
     "token_count": 256,
     "token_dim": 4096,
@@ -625,7 +691,7 @@ def _seeded_replay(tmp_path, seq_len=4):
             w.write_demo(
                 index=i,
                 steps=_demo_steps(8, success=(i % 2 == 0)),
-                preprocess_config=_INPUT_TOKEN_PREPROCESS_CONFIG,
+                preprocess_config=_HIDDEN_TOKEN_PREPROCESS_CONFIG,
                 task_id=0,
                 episode_id=i,
             )
@@ -815,6 +881,7 @@ def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
 
     assert profile_keys_by_step == [
         {
+            "data_wait",
             "sample",
             "batch_build",
             "h2d",
@@ -1798,7 +1865,7 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     assert calls == ["world_model", "policy", "critic"]
 
 
-def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch):
+def test_online_cotrain_env_preserves_hidden_token_discrete_contract(monkeypatch):
     from omegaconf import OmegaConf
 
     import dreamervla.runners.online_cotrain_runner as mod
@@ -1824,7 +1891,7 @@ def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch)
                 "history_length": 1,
                 "include_state": False,
                 "vla_rotate_180": True,
-                "obs_hidden_source": "input_token_embedding",
+                "obs_hidden_source": "hidden_token",
                 "action_head_type": "oft_discrete_token",
             },
         }
@@ -1833,13 +1900,13 @@ def test_online_cotrain_env_preserves_input_token_discrete_contract(monkeypatch)
     runner._build_env(cfg)
 
     assert captured["_target_"] == "tests.fake.Env"
-    assert captured["obs_hidden_source"] == "input_token_embedding"
+    assert captured["obs_hidden_source"] == "hidden_token"
     assert captured["action_head_type"] == "oft_discrete_token"
     assert captured["history_length"] == 1
     assert captured["include_state"] is False
 
 
-def test_online_env_validation_accepts_oft_discrete_input_token_contract():
+def test_online_env_validation_accepts_oft_discrete_hidden_token_contract():
     from dreamervla.envs.libero.libero_env import (
         DreamerVLAOnlineTrainEnv,
         DreamerVLAOnlineTrainEnvConfig,
@@ -1849,14 +1916,14 @@ def test_online_env_validation_accepts_oft_discrete_input_token_contract():
     env.cfg = DreamerVLAOnlineTrainEnvConfig(
         history_length=1,
         include_state=False,
-        obs_hidden_source="input_token_embedding",
+        obs_hidden_source="hidden_token",
         action_head_type="oft_discrete_token",
     )
 
     env._validate_canonical_config()
 
 
-def test_online_rollout_uses_only_oft_input_token_extractor():
+def test_online_rollout_uses_only_oft_hidden_token_extractor():
     import dreamervla.runners.online_cotrain_runner as mod
 
     runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
@@ -1893,7 +1960,7 @@ def test_online_rollout_uses_only_oft_input_token_extractor():
             calls.append(f"policy:{tuple(batch['hidden'].shape)}")
             return torch.zeros(1, 2, 7), torch.zeros(1), {}
 
-    runner._oft_input_token_extractor = FakeExtractor()
+    runner._oft_hidden_token_extractor = FakeExtractor()
 
     action, obs_embedding, latent = runner._rollout_action(
         FakeWorldModel(),
@@ -1991,7 +2058,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
     runner.processor = None
     runner.world_model = FakeWorldModel()
     runner.policy = FakePolicy()
-    runner._oft_input_token_extractor = FakeExtractor()
+    runner._oft_hidden_token_extractor = FakeExtractor()
     runner._build_env = lambda _cfg: fake_env
     runner.resume = lambda: None
     runner.console_progress = lambda *_args, **_kwargs: None

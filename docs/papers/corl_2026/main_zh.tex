@@ -72,7 +72,7 @@ $\mathcal{E}\in\mathbb{R}^{T\times256\times4096}$。HDF5 数据集键固定为 \
 
 \subsection{冷启动与在线协同训练}
 
-主线依次执行：真实 LIBERO rollout 采集、回放初始化、世界模型与分类器 warm-up、在线协同训练和真实环境评估。reward shard 与 input-token sidecar 必须具有相同的文件集合、demo 集合和帧长度。系统在续采、回放初始化以及两个独立训练入口之前验证所有 demo 的形状。
+主线依次执行：真实 LIBERO rollout 采集、回放初始化、世界模型与分类器 warm-up、在线协同训练和真实环境评估。reward shard 与 hidden-token sidecar 必须具有相同的文件集合、demo 集合和帧长度。系统在续采、回放初始化以及两个独立训练入口之前验证所有 demo 的形状。
 
 同步路线由一个 pipeline runner 管理更新。异步路线显式拆分 ActorGroup、RolloutGroup、EnvGroup 和 LearnerGroup：ActorGroup 负责 FSDP 策略训练；RolloutGroup 使用策略副本进行无梯度推理；EnvGroup 执行真实与想象环境；LearnerGroup 更新世界模型和成功分类器。权重按照组件所有权定期同步。
 

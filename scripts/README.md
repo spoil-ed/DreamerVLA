@@ -62,10 +62,10 @@ append the script to `configs/scripts/download.yaml`.
 | --- | --- |
 | `preprocess_libero.sh` | Top-level wrapper around one-suite preprocessing |
 | `preprocess/prepare_libero_data.sh` | One-suite preprocessing workflow |
-| `preprocess/process_all_libero_data.sh` | Multi-suite OpenVLA input-token preprocessing wrapper |
+| `preprocess/process_all_libero_data.sh` | Multi-suite OpenVLA hidden-token preprocessing wrapper |
 | `preprocess/10_hdf5_reward.sh` | Write LIBERO config, mark/filter HDF5 files, and add reward labels |
-| `preprocess/35_oft_input_tokens.sh` | Extract canonical OpenVLA-OFT input-token sidecars `[T,256,4096]` |
-| `preprocess/40_validate.sh` | Validate the exact input-token metadata and every HDF5 demo |
+| `preprocess/35_oft_hidden_token.sh` | Extract canonical OpenVLA-OFT hidden-token sidecars `[T,256,4096]` |
+| `preprocess/40_validate.sh` | Validate the exact hidden-token metadata and every HDF5 demo |
 | `preprocess/validate_libero_data.sh` | Validate canonical preprocessing outputs for selected suites |
 
 Common launcher flags:
@@ -84,7 +84,7 @@ bash scripts/preprocess/prepare_libero_data.sh task=libero_goal \
 ```
 
 The workflow has exactly three stages: reward HDF5 preparation,
-`input_token_embedding` extraction, and strict sidecar validation. The persisted
+`hidden_token` extraction, and strict sidecar validation. The persisted
 observation shape is always `[T,256,4096]`.
 
 Cold-start warmup launchers run a two-stage flow: collect generated rollouts,

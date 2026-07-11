@@ -1230,7 +1230,7 @@ def _default_factory(cfg_kwargs: dict[str, Any]) -> Any:
 class OnlineEglVecEnv(BaseVectorEnv):
     """K no-Ray online-rollout envs in K spawn subprocesses.
 
-    Drop-in for ``VecRolloutEnv`` on the OpenVLA input-token EGL path: identical public API
+    Drop-in for ``VecRolloutEnv`` on the OpenVLA hidden-token EGL path: identical public API
     (``num_envs``, ``reset`` / ``step`` / ``set_task`` / ``close``, context manager),
     but each env runs through RLinf's vendored ``BaseVectorEnv`` + spawn
     ``SubprocEnvWorker`` with the per-child egl device pool.

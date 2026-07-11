@@ -1,7 +1,7 @@
 openvla_oft_dir: ${oc.env:DVLA_ROOT,.}/dreamervla/models/embodiment/openvla_oft
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward
-out_input_token_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_input_token_embedding_vla_policy_h1
-obs_hidden_source: input_token_embedding
+out_hidden_token_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_hidden_token_vla_policy_h1
+obs_hidden_source: hidden_token
 oft_ckpt: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
 unnorm_key: libero_goal_no_noops
 policy_mode: discrete

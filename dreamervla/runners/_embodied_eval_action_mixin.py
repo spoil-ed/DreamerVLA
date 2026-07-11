@@ -361,7 +361,7 @@ class EmbodiedEvalActionMixin:
                 )
 
     @staticmethod
-    def _input_token_grid_for_trace(
+    def _hidden_token_grid_for_trace(
         hidden: torch.Tensor | None,
     ) -> torch.Tensor | None:
         if hidden is None:

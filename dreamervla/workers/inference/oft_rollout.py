@@ -16,7 +16,7 @@ class OFTRolloutBundle:
         history: int,
         rotate_images_180: bool = True,
         center_crop: bool = True,
-        obs_hidden_source: str = "input_token_embedding",
+        obs_hidden_source: str = "hidden_token",
         expected_action_head_type: str | None = None,
         expected_include_state: bool | None = None,
         device: str = "cuda",
@@ -33,11 +33,11 @@ class OFTRolloutBundle:
             cfg.get("num_images_in_input", 1),
         )
         if int(history) != 1:
-            raise ValueError("OpenVLA-OFT input-token mainline requires history=1")
-        if str(obs_hidden_source) != "input_token_embedding":
+            raise ValueError("OpenVLA-OFT hidden-token mainline requires history=1")
+        if str(obs_hidden_source) != "hidden_token":
             raise ValueError(
                 "OpenVLA-OFT rollout observations require "
-                "obs_hidden_source='input_token_embedding'"
+                "obs_hidden_source='hidden_token'"
             )
         self._policy = oft_collect_common.load_policy(cfg, device_ref)
         if expected_action_head_type is not None:
@@ -102,12 +102,12 @@ def _select_image_keys_for_policy(
     count = int(num_images_in_input)
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires num_images_in_input=1, "
+            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
             f"got {count}"
         )
     if keys != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT input-token mainline requires exactly one image key "
+            "OpenVLA-OFT hidden-token mainline requires exactly one image key "
             f"'agentview_rgb', got {keys!r}"
         )
     return keys
