@@ -23,10 +23,10 @@ openvla_oft:
   use_l1_regression: false
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  input_token_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
+  input_token_dir: ${task.hdf5_dir}_oft_hidden_token_vla_policy_h1
   failure_input_token_dir: null
   expected_action_head_type: oft_discrete_token
-  expected_obs_hidden_source: input_token_embedding
+  expected_obs_hidden_source: hidden_token
   expected_prompt_style: vla_policy
   expected_history: 1
   expected_include_state: false
@@ -34,7 +34,7 @@ openvla_oft:
   chunk_size: ${task.openvla_oft.time_horizon}
   input_tokens:
     expected_action_head_type: ${task.openvla_oft.expected_action_head_type}
-    expected_obs_hidden_source: input_token_embedding
+    expected_obs_hidden_source: hidden_token
     expected_prompt_style: ${task.openvla_oft.expected_prompt_style}
     expected_history: ${task.openvla_oft.expected_history}
     expected_include_state: ${task.openvla_oft.expected_include_state}

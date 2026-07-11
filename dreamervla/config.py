@@ -169,7 +169,7 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
     )
     for key in source_paths:
         value = _select_str(cfg, key)
-        if value in {"action_query", "hidden_token"}:
+        if value == "action_query":
             raise ValueError(
                 f"{key}={value!r} is removed; use {INPUT_TOKEN_SOURCE!r}"
             )
@@ -267,10 +267,10 @@ def _validate_mainline_input_token_contract(cfg: DictConfig) -> None:
             raise ValueError(f"{key} must be {expected!r}, got {got!r}")
 
     input_token_dir = _select_str(cfg, "task.openvla_oft.input_token_dir")
-    if input_token_dir is None or "input_token_embedding" not in input_token_dir:
+    if input_token_dir is None or "hidden_token" not in input_token_dir:
         raise ValueError(
             "task.openvla_oft.input_token_dir must name the "
-            "input_token_embedding sidecar"
+            "hidden_token sidecar"
         )
 
     component_specs = (
@@ -406,7 +406,7 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
         "task.hdf5_reward_dir": canonical_processed_root
         / "no_noops_t_256_remaining_reward",
         "task.openvla_oft.input_token_dir": canonical_processed_root
-        / "no_noops_t_256_oft_input_token_embedding_vla_policy_h1",
+        / "no_noops_t_256_oft_hidden_token_vla_policy_h1",
     }
     for key, expected_path in canonical_paths.items():
         actual = _select_str(cfg, key)

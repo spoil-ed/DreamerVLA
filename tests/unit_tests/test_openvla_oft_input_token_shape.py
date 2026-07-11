@@ -29,7 +29,7 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
         "_policy_mode": "discrete",
         "_use_proprio": False,
         "expected_action_head_type": "oft_discrete_token",
-        "expected_obs_hidden_source": "input_token_embedding",
+        "expected_obs_hidden_source": "hidden_token",
         "expected_prompt_style": "vla_policy",
         "expected_history": 1,
         "expected_rotate_images_180": True,
@@ -49,7 +49,7 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
 
     out = make_preprocess_config(cfg)
 
-    assert out["obs_hidden_source"] == "input_token_embedding"
+    assert out["obs_hidden_source"] == "hidden_token"
     assert out["num_images_in_input"] == 1
     assert out["patches_per_image"] == 256
     assert out["token_count"] == 256
@@ -59,12 +59,12 @@ def test_input_token_preprocess_config_records_dim_decomposition() -> None:
     assert out["hidden_storage_format"] == "tokenized"
 
 
-def test_preprocess_config_rejects_hidden_token_semantic_alias() -> None:
+def test_preprocess_config_rejects_legacy_input_token_embedding_source() -> None:
     cfg = {
         "_policy_mode": "discrete",
         "_use_proprio": False,
         "expected_action_head_type": "oft_discrete_token",
-        "expected_obs_hidden_source": "hidden_token",
+        "expected_obs_hidden_source": "input_token_embedding",
         "expected_prompt_style": "vla_policy",
         "expected_history": 1,
         "expected_rotate_images_180": True,
@@ -82,7 +82,7 @@ def test_preprocess_config_rejects_hidden_token_semantic_alias() -> None:
         "task_suite_name": "libero_goal",
     }
 
-    with pytest.raises(ValueError, match="input_token_embedding"):
+    with pytest.raises(ValueError, match="hidden_token"):
         make_preprocess_config(cfg)
 
 
@@ -114,7 +114,7 @@ def _write_sidecar_fixture(tmp_path: Path, *, flat: bool = False, token_count: i
         json.dumps(
             {
                 "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "input_token_embedding",
+                "obs_hidden_source": "hidden_token",
                 "hidden_key": "obs_embedding",
                 "token_count": token_count,
                 "token_dim": 4096,
@@ -149,7 +149,7 @@ def test_input_token_sidecar_accepts_only_canonical_tokenized_storage(tmp_path) 
         expected_encoder_state_ckpt=None,
         expected_time_horizon=None,
         expected_action_head_type="oft_discrete_token",
-        expected_obs_hidden_source="input_token_embedding",
+        expected_obs_hidden_source="hidden_token",
         require_preprocess_config=True,
     )
 
@@ -166,7 +166,7 @@ def test_input_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tmp
             expected_encoder_state_ckpt=None,
             expected_time_horizon=None,
             expected_action_head_type="oft_discrete_token",
-            expected_obs_hidden_source="input_token_embedding",
+            expected_obs_hidden_source="hidden_token",
             require_preprocess_config=True,
         )
     except ValueError as exc:
@@ -187,7 +187,7 @@ def test_input_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path
             expected_encoder_state_ckpt=None,
             expected_time_horizon=None,
             expected_action_head_type="oft_discrete_token",
-            expected_obs_hidden_source="input_token_embedding",
+            expected_obs_hidden_source="hidden_token",
             require_preprocess_config=True,
         )
     except ValueError as exc:
@@ -291,7 +291,7 @@ def test_classifier_does_not_infer_removed_57344_flat_width() -> None:
 def _canonical_sidecar_metadata() -> dict[str, object]:
     return {
         "action_head_type": "oft_discrete_token",
-        "obs_hidden_source": "input_token_embedding",
+        "obs_hidden_source": "hidden_token",
         "hidden_key": "obs_embedding",
         "token_count": 256,
         "token_dim": 4096,

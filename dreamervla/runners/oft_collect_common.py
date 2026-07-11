@@ -269,10 +269,10 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     assert_policy_mode_matches); the remaining fields come straight from cfg.
     """
     obs_hidden_source = str(cfg["expected_obs_hidden_source"])
-    if obs_hidden_source != "input_token_embedding":
+    if obs_hidden_source != "hidden_token":
         raise ValueError(
             "OpenVLA-OFT collection only supports "
-            "expected_obs_hidden_source='input_token_embedding'; "
+            "expected_obs_hidden_source='hidden_token'; "
             f"got {obs_hidden_source!r}"
         )
 

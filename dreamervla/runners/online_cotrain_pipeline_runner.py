@@ -937,7 +937,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         if removed_latent_type is not None:
             raise ValueError(
                 "latent_type route selection has been removed; the pipeline only "
-                "supports input_token_embedding [256,4096]"
+                "supports hidden_token [256,4096]"
             )
         env_image_keys = OmegaConf.select(
             cfg, "env.image_keys", default=["agentview_rgb"]
@@ -946,7 +946,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         OmegaConf.update(
             cfg,
             "env.obs_hidden_source",
-            "input_token_embedding",
+            "hidden_token",
             force_add=True,
         )
 

@@ -231,6 +231,14 @@ def test_pre_mainline_experiments_use_canonical_goal_sidecars(
 ) -> None:
     cfg = _compose_with_task(experiment, "openvla_onetraj_libero")
 
+    assert Path(str(cfg.task.openvla_oft.input_token_dir)).name == (
+        "no_noops_t_256_oft_hidden_token_vla_policy_h1"
+    )
+    assert cfg.task.openvla_oft.expected_obs_hidden_source == "hidden_token"
+    assert (
+        cfg.task.openvla_oft.input_tokens.expected_obs_hidden_source
+        == "hidden_token"
+    )
     assert cfg.task.openvla_oft.input_tokens.token_count == 256
     assert cfg.task.openvla_oft.input_tokens.token_dim == 4096
 
@@ -282,7 +290,7 @@ def test_pre_mainline_rejects_joint_task_path_override(
 ) -> None:
     cfg = _compose(experiment)
     fake_reward = tmp_path / "libero_goal_failures"
-    fake_hidden = tmp_path / "libero_goal_input_token_embedding_failures"
+    fake_hidden = tmp_path / "libero_goal_hidden_token_failures"
     OmegaConf.update(cfg, "task.hdf5_reward_dir", str(fake_reward))
     OmegaConf.update(cfg, "task.openvla_oft.input_token_dir", str(fake_hidden))
     if experiment == "wm_official_upper_bound":
