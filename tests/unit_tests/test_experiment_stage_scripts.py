@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import h5py
@@ -47,9 +48,8 @@ def test_experiment_train_scripts_are_hydra_centered_and_include_checks() -> Non
             "++training.distributed_strategy=ddp",
         ),
         "world_model_training/train.sh": (
-            "experiment_stage_checks libero-original-check",
             "dreamervla.train",
-            "experiment=wm_full_dataset_train",
+            "experiment=${WORLD_MODEL_EXPERIMENT}",
             "torch.distributed.run",
             '--nproc-per-node="${GPU_COUNT}"',
         ),
@@ -76,6 +76,52 @@ def test_experiment_train_scripts_are_hydra_centered_and_include_checks() -> Non
         "WORLD_MODEL_CHUNK_ROLLOUT_CHUNKS",
     ):
         assert config_owned_name not in full_world_model
+
+
+def test_component_training_scripts_default_to_official_hydra_experiments() -> None:
+    root = Path(__file__).resolve().parents[2]
+    experiments_dir = root / "scripts" / "experiments"
+    classifier = (experiments_dir / "classifier_training" / "train.sh").read_text(
+        encoding="utf-8"
+    )
+    world_model = (experiments_dir / "world_model_training" / "train.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'CLASSIFIER_EXPERIMENT="${CLASSIFIER_EXPERIMENT:-classifier_official_upper_bound}"'
+        in classifier
+    )
+    assert (
+        'WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound}"'
+        in world_model
+    )
+    assert 'training.out_dir="${CLASSIFIER_RUN_ROOT}"' in classifier
+    assert 'training.out_dir="${WORLD_MODEL_RUN_ROOT}"' in world_model
+    assert "training.batch_size=" not in classifier
+    assert "training.lr=" not in classifier
+    assert "dataloader.batch_size=" not in world_model
+    assert "optim.world_model.lr=" not in world_model
+
+
+def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "e2e_frozen_model_cotrain.sh"
+
+    assert script.is_file()
+    assert os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    for marker in (
+        'WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-}"',
+        'CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-}"',
+        "experiment=dreamervla_frozen_models_rl",
+        'init.world_model_state_ckpt="${WORLD_MODEL_CKPT}"',
+        'init.classifier_state_ckpt="${CLASSIFIER_CKPT}"',
+        'training.out_dir="${COTRAIN_RUN_ROOT}"',
+        'training.resume="${COTRAIN_RESUME}"',
+        'training.resume_dir="${COTRAIN_RUN_ROOT}"',
+    ):
+        assert marker in text
 
 
 def test_eight_card_training_scripts_embed_h100_runtime_defaults() -> None:

@@ -47,29 +47,27 @@ the requested run has no compatible progress/latest checkpoint.
 
 ## Frozen-Policy RL Handoff
 
-The pre-mainline launcher accepts two optional Hydra script-config values:
-`wm_run_root` and `classifier_run_root`. They default to the existing integrated
-layout (`${run_root}/wm` and `${run_root}/classifier`) so `stage=all` remains
-backward compatible. Independent component jobs are consumed with:
+A thin handoff script accepts the two selected component checkpoint paths. It
+starts the existing `dreamervla_frozen_models_rl` Hydra experiment without
+adding another Runner or orchestration layer:
 
 ```bash
-bash scripts/e2e_frozen_model_pre_mainline.sh \
-  stage=rl \
-  wm_run_root=/path/to/wm/run \
-  classifier_run_root=/path/to/classifier/run
+WORLD_MODEL_CKPT=/path/to/wm.ckpt \
+CLASSIFIER_CKPT=/path/to/classifier.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
-The launcher reuses the existing fail-closed selectors. It requires a completed
-WM run before selecting its lowest-loss valid checkpoint and reads the
-classifier run's `summary.json` before selecting the held-out-window-F1
-checkpoint. It then materializes the usual selection links under the new RL run
-root and starts policy-only RL with immutable WM/CLS.
+The selected paths normally come from the completed WM run's loss-ranked
+checkpoints and the classifier run's `summary.json`. Component schema,
+construction config, classifier threshold, and frozen hashes remain validated
+by `FrozenModelPolicyRunner`. The cotrain output directory is automatic for a
+fresh run; only resume additionally requires `COTRAIN_RUN_ROOT`.
 
 ## Scope and Verification
 
 No Runner, model, dataset, optimizer, or distributed-training implementation is
-added. The change is limited to the two existing shell entrypoints, launcher
-path composition, Hydra script config, documentation, and contract tests.
+added. The change is limited to three thin shell entrypoints, documentation,
+and contract tests.
 `third_party/` remains ignored and untouched.
 
 Verification is static and lightweight: Hydra composition, generated command

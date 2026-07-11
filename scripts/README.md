@@ -17,11 +17,12 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Sync collection followed by WM/classifier warmup and optional cotrain |
 | `e2e_manual_cotrain_async.sh` | Manual async OpenVLA-OFT cotrain resume launcher |
 | `e2e_frozen_model_pre_mainline.sh` | Pre-mainline official-data WM/CLS, frozen policy RL, and matched real-eval proof |
+| `e2e_frozen_model_cotrain.sh` | Frozen WM/CLS policy training from two explicit component checkpoints |
 | `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
 | `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
-| `experiments/classifier_training/train.sh` | Full classifier training recipe |
+| `experiments/classifier_training/train.sh` | One-click official-data classifier upper-bound training |
 | `experiments/classifier_training/eval.sh` | Full classifier eval summary |
-| `experiments/world_model_training/train.sh` | Full-replay world-model training recipe |
+| `experiments/world_model_training/train.sh` | One-click official-data world-model upper-bound training |
 | `experiments/world_model_training/eval.sh` | Full-replay world-model eval diagnostic |
 | `eval_libero_vla.sh` | LIBERO rollout eval |
 | `eval/launch_openvla_oft_official_libero_eval.sh` | Official OpenVLA-OFT LIBERO eval wrapper |
@@ -98,6 +99,26 @@ Dry-run the launcher command assembly with:
 bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
 bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true
 bash scripts/e2e_frozen_model_pre_mainline.sh task=goal dry_run=true
+```
+
+The official-data WM and classifier jobs are independent one-click launches;
+their batch sizes and learning rates come from Hydra:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/experiments/world_model_training/train.sh
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/experiments/classifier_training/train.sh
+```
+
+After selecting the completed component checkpoints, start policy-only frozen
+cotrain by providing only those two paths:
+
+```bash
+WORLD_MODEL_CKPT=/path/to/wm.ckpt \
+CLASSIFIER_CKPT=/path/to/classifier.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
 Check collection completeness before a long run:

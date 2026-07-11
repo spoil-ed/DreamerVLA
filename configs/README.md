@@ -45,7 +45,9 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | Ray cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_ray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
 | Sync cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_noray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
 | Manual async cotrain | `scripts/e2e_manual_cotrain_async.sh` | `openvla_onetraj_libero_cotrain_ray` |
-| Full-dataset WM warmup | `scripts/experiments/world_model_training/train.sh` | `wm_full_dataset_train` |
+| Official-data WM upper bound | `scripts/experiments/world_model_training/train.sh` | `wm_official_upper_bound` |
+| Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
+| Frozen WM/CLS policy training | `scripts/e2e_frozen_model_cotrain.sh` | `dreamervla_frozen_models_rl` |
 | Pre-mainline frozen-model proof | `scripts/e2e_frozen_model_pre_mainline.sh` | `configs/scripts/frozen_model_pre_mainline.yaml` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 

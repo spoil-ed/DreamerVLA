@@ -30,13 +30,18 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
 ```
 
-全量 replay 的 world-model warmup 入口：
+两个独立的官方数据上限训练入口：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   GPU_COUNT=8 \
   DVLA_DATA_ROOT=/path/to/data \
   bash scripts/experiments/world_model_training/train.sh
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  GPU_COUNT=8 \
+  DVLA_DATA_ROOT=/path/to/data \
+  bash scripts/experiments/classifier_training/train.sh
 ```
 
 ## 主线前冻结模型可行性测试

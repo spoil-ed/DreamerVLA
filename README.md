@@ -27,13 +27,18 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
 ```
 
-For the full-replay world-model warmup recipe:
+For the independent official-data upper-bound jobs:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   GPU_COUNT=8 \
   DVLA_DATA_ROOT=/path/to/data \
   bash scripts/experiments/world_model_training/train.sh
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  GPU_COUNT=8 \
+  DVLA_DATA_ROOT=/path/to/data \
+  bash scripts/experiments/classifier_training/train.sh
 ```
 
 ## Pre-Mainline Frozen-Model Feasibility Test

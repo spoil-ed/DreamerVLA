@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check data and train the WMPO token success classifier with Hydra.
+# One-click official-data success-classifier training through Hydra.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -33,7 +33,7 @@ fi
 PYTHON_EXECUTABLE="${PYTHON:-python}"
 GPU_COUNT="${GPU_COUNT:-${NGPU:-8}}"
 MASTER_PORT="${MASTER_PORT:-29501}"
-CLASSIFIER_EXPERIMENT="${CLASSIFIER_EXPERIMENT:-wmpo_token_classifier_openvla_onetraj_libero_goal_h1}"
+CLASSIFIER_EXPERIMENT="${CLASSIFIER_EXPERIMENT:-classifier_official_upper_bound}"
 CLASSIFIER_RESUME="${CLASSIFIER_RESUME:-${RESUME:-false}}"
 if [[ "${CLASSIFIER_RESUME}" == "true" && -z "${CLASSIFIER_RUN_ROOT:-}" && -z "${CLASSIFIER_RESUME_DIR:-}" ]]; then
   echo "[classifier-training] CLASSIFIER_RESUME=true requires CLASSIFIER_RUN_ROOT or CLASSIFIER_RESUME_DIR" >&2
@@ -42,7 +42,7 @@ fi
 if [[ -n "${CLASSIFIER_RESUME_DIR:-}" ]]; then
   export CLASSIFIER_RUN_ROOT="${CLASSIFIER_RUN_ROOT:-${CLASSIFIER_RESUME_DIR}}"
 else
-  export CLASSIFIER_RUN_ROOT="${CLASSIFIER_RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/classifier/wmpo_token_classifier_openvla_onetraj_libero_goal_h1/$(date +%Y%m%d_%H%M%S)}"
+  export CLASSIFIER_RUN_ROOT="${CLASSIFIER_RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/pre_mainline/classifier/$(date +%Y%m%d_%H%M%S)}"
 fi
 CLASSIFIER_RESUME_DIR="${CLASSIFIER_RESUME_DIR:-${CLASSIFIER_RUN_ROOT}}"
 CLASSIFIER_CHECKPOINT_EVERY="${CLASSIFIER_CHECKPOINT_EVERY:-250}"

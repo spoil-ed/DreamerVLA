@@ -40,6 +40,8 @@ def test_wm_upper_bound_reads_only_official_data() -> None:
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.online_rollout.total_env_steps == 0
     assert list(cfg.offline_warmup.required_task_ids) == list(range(10))
+    assert cfg.dataloader.batch_size == 16
+    assert cfg.optim.world_model.lr == 3.0e-5
 
 
 def test_classifier_upper_bound_reads_only_official_data() -> None:
@@ -56,6 +58,8 @@ def test_classifier_upper_bound_reads_only_official_data() -> None:
     assert cfg.data.require_sidecar_contract is True
     assert len(cfg.data.required_filenames) == 10
     assert cfg.training.episode_eval_enabled is False
+    assert cfg.training.batch_size == 4
+    assert cfg.training.lr == 3.0e-5
 
 
 def test_frozen_models_rl_is_policy_only_and_reads_official_replay() -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check data and train the full-dataset Chunk world model with Hydra.
+# One-click official-data Chunk world-model training through Hydra.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -33,38 +33,33 @@ fi
 PYTHON_EXECUTABLE="${PYTHON:-python}"
 GPU_COUNT="${GPU_COUNT:-${NGPU:-8}}"
 MASTER_PORT="${MASTER_PORT:-29500}"
+WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound}"
 WORLD_MODEL_RESUME="${WORLD_MODEL_RESUME:-${RESUME:-false}}"
-if [[ -n "${WORLD_MODEL_RUN_ROOT:-}" ]]; then
-  export RUN_ROOT="${RUN_ROOT:-${WORLD_MODEL_RUN_ROOT}}"
-fi
-if [[ "${WORLD_MODEL_RESUME}" == "true" && -z "${RUN_ROOT:-}" ]]; then
+if [[ "${WORLD_MODEL_RESUME}" == "true" && -z "${WORLD_MODEL_RUN_ROOT:-}" && -z "${RUN_ROOT:-}" ]]; then
   echo "[world-model-training] WORLD_MODEL_RESUME=true requires WORLD_MODEL_RUN_ROOT or RUN_ROOT" >&2
   exit 2
 fi
-export RUN_ROOT="${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/world_model_full_dataset/$(date +%Y%m%d_%H%M%S)}"
-export WORLD_MODEL_RUN_ROOT="${WORLD_MODEL_RUN_ROOT:-${RUN_ROOT}}"
+export WORLD_MODEL_RUN_ROOT="${WORLD_MODEL_RUN_ROOT:-${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs/pre_mainline/world_model/$(date +%Y%m%d_%H%M%S)}}"
+export RUN_ROOT="${WORLD_MODEL_RUN_ROOT}"
 WORLD_MODEL_CHECKPOINT_EVERY="${WORLD_MODEL_CHECKPOINT_EVERY:-500}"
 WORLD_MODEL_TOPK_K="${WORLD_MODEL_TOPK_K:-3}"
 if [[ "${WORLD_MODEL_RESUME}" == "true" ]]; then
-  WORLD_MODEL_COTRAIN_DIR="${RUN_ROOT}/cotrain"
-  WORLD_MODEL_PROGRESS_GLOB="${WORLD_MODEL_COTRAIN_DIR}/ckpt/warmup_progress/wm_step_*.ckpt"
-  if [[ ! -f "${WORLD_MODEL_COTRAIN_DIR}/ckpt/wm_warmup.ckpt" \
-    && ! -d "${WORLD_MODEL_COTRAIN_DIR}/ckpt/wm_warmup_hf" \
+  WORLD_MODEL_PROGRESS_GLOB="${WORLD_MODEL_RUN_ROOT}/ckpt/warmup_progress/wm_step_*.ckpt"
+  if [[ ! -f "${WORLD_MODEL_RUN_ROOT}/ckpt/wm_warmup.ckpt" \
+    && ! -d "${WORLD_MODEL_RUN_ROOT}/ckpt/wm_warmup_hf" \
     && -z "$(compgen -G "${WORLD_MODEL_PROGRESS_GLOB}")" ]]; then
-    echo "[world-model-training] no world model warmup checkpoint/progress under ${WORLD_MODEL_COTRAIN_DIR}/ckpt" >&2
+    echo "[world-model-training] no world model warmup checkpoint/progress under ${WORLD_MODEL_RUN_ROOT}/ckpt" >&2
     exit 2
   fi
 fi
 
 echo "[world-model-training] GPUS       = ${CUDA_VISIBLE_DEVICES:-all}" >&2
 echo "[world-model-training] GPU_COUNT  = ${GPU_COUNT}" >&2
-echo "[world-model-training] EXPERIMENT = wm_full_dataset_train" >&2
-echo "[world-model-training] RUN_ROOT   = ${RUN_ROOT}" >&2
+echo "[world-model-training] EXPERIMENT = ${WORLD_MODEL_EXPERIMENT}" >&2
+echo "[world-model-training] RUN_ROOT   = ${WORLD_MODEL_RUN_ROOT}" >&2
 echo "[world-model-training] RESUME     = ${WORLD_MODEL_RESUME}" >&2
 echo "[world-model-training] CHECKPOINT_EVERY = ${WORLD_MODEL_CHECKPOINT_EVERY}" >&2
 echo "[world-model-training] TOPK_K     = ${WORLD_MODEL_TOPK_K}" >&2
-
-"${PYTHON_EXECUTABLE}" -m dreamervla.diagnostics.experiment_stage_checks libero-original-check "$@"
 
 "${PYTHON_EXECUTABLE}" -m torch.distributed.run \
   --standalone \
@@ -72,7 +67,8 @@ echo "[world-model-training] TOPK_K     = ${WORLD_MODEL_TOPK_K}" >&2
   --nproc-per-node="${GPU_COUNT}" \
   --master_port="${MASTER_PORT}" \
   -m dreamervla.train \
-  experiment=wm_full_dataset_train \
+  experiment=${WORLD_MODEL_EXPERIMENT} \
+  training.out_dir="${WORLD_MODEL_RUN_ROOT}" \
   training.resume="${WORLD_MODEL_RESUME}" \
   training.warmup_checkpoint_every="${WORLD_MODEL_CHECKPOINT_EVERY}" \
   training.warmup_topk_k="${WORLD_MODEL_TOPK_K}" \

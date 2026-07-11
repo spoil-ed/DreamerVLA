@@ -182,6 +182,23 @@ paper claim still requires multiple seeds and confidence intervals.
 
 ## Launcher
 
+For independent component training, the normal entrypoints are one-command
+Hydra launchers:
+
+```bash
+bash scripts/experiments/world_model_training/train.sh
+bash scripts/experiments/classifier_training/train.sh
+```
+
+They create separate timestamped run directories. Once checkpoints are chosen,
+policy-only frozen cotrain takes the two explicit paths:
+
+```bash
+WORLD_MODEL_CKPT=/path/to/wm.ckpt \
+CLASSIFIER_CKPT=/path/to/classifier.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
+```
+
 `python -m dreamervla.launchers.frozen_model_pre_mainline` composes
 `configs/scripts/frozen_model_pre_mainline.yaml`. It owns one run root with
 subdirectories `wm/`, `classifier/`, `rl/`, `eval_baseline/`, `eval_rl/`, and
