@@ -33,7 +33,7 @@ fi
 "${PYTHON_EXECUTABLE}" -m dreamervla.diagnostics.eval_chunkwm_closeloop \
   --ckpt "${WORLD_MODEL_CHECKPOINT}" \
   --config "${WORLD_MODEL_CONFIG}" \
-  --success-dir-raw "${SUCCESS_DIR_RAW:-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256}" \
+  --success-dir-raw "${SUCCESS_DIR_RAW:-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_remaining_reward}" \
   --success-dir-hidden "${SUCCESS_DIR_HIDDEN:-${DVLA_DATA_ROOT}/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_input_token_embedding_vla_policy_h1}" \
   --out "${WORLD_MODEL_EVAL_OUTPUT:-${DVLA_DATA_ROOT}/outputs/world_model_probe/world_model_eval_summary.json}" \
   "$@"

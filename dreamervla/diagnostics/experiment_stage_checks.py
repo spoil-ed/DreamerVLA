@@ -47,6 +47,25 @@ def _count_hdf5(path: Path) -> int:
     return sum(1 for item in path.glob("*.hdf5") if item.is_file())
 
 
+def _is_nullish_path(value: object) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text == "" or text.lower() in {"none", "null"}
+
+
+def _optional_hdf5_count(value: object) -> tuple[Path | None, int, str]:
+    if _is_nullish_path(value):
+        return None, 0, "disabled"
+    path = Path(str(value)).expanduser()
+    if not path.exists():
+        return path, 0, "missing"
+    if not path.is_dir():
+        raise NotADirectoryError(path)
+    count = sum(1 for item in path.glob("*.hdf5") if item.is_file())
+    return path, count, "ok" if count > 0 else "empty"
+
+
 def _compose_train_config(experiment: str, overrides: list[str]) -> DictConfig:
     register_dreamervla_resolvers()
     config_dir = PROJECT_ROOT / "configs"
@@ -249,7 +268,7 @@ def collect_run(args: argparse.Namespace) -> int:
         f"task={args.task}",
         "logger=tensorboard",
         f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
-        f"task.openvla_oft.input_token_hidden_dir={hidden_dir}",
+        f"task.openvla_oft.hidden_token_dir={hidden_dir}",
         f"++collect.hdf5_reward_dir={reward_dir}",
         f"++collect.hidden_dir={hidden_dir}",
         f"training.out_dir={out_dir}",
@@ -332,8 +351,8 @@ def _original_paths(
 ) -> dict[str, Path | None]:
     oft = cfg.task.openvla_oft
     failure_raw = OmegaConf.select(oft, "failure_hdf5_dir", default=None)
-    failure_hidden = OmegaConf.select(oft, "failure_input_token_hidden_dir", default=None)
-    resolved_hidden = hidden_dir if hidden_dir else str(oft.input_token_hidden_dir)
+    failure_hidden = OmegaConf.select(oft, "failure_hidden_token_dir", default=None)
+    resolved_hidden = hidden_dir if hidden_dir else str(oft.hidden_token_dir)
     return {
         "checkpoint": Path(str(oft.ckpt_path)).expanduser(),
         "dataset_statistics": Path(str(oft.dataset_statistics_path)).expanduser(),
@@ -348,8 +367,7 @@ def _original_paths(
 def _original_hidden_candidates(cfg: DictConfig) -> dict[str, Path]:
     oft = cfg.task.openvla_oft
     return {
-        "action_hidden": Path(str(oft.action_hidden_dir)).expanduser(),
-        "input_token_hidden": Path(str(oft.input_token_hidden_dir)).expanduser(),
+        "hidden_token": Path(str(oft.hidden_token_dir)).expanduser(),
     }
 
 
@@ -563,14 +581,27 @@ def libero_original_rl_run(args: argparse.Namespace) -> int:
 def cls_check(args: argparse.Namespace) -> int:
     cfg = _compose_train_config(args.experiment, list(args.overrides))
     data_cfg = cfg.data
-    directories = {
+    required_directories = {
         "success_dir_raw": Path(str(data_cfg.success_dir_raw)).expanduser(),
         "success_dir_hidden": Path(str(data_cfg.success_dir_hidden)).expanduser(),
-        "failure_dir_raw": Path(str(data_cfg.failure_dir_raw)).expanduser(),
-        "failure_dir_hidden": Path(str(data_cfg.failure_dir_hidden)).expanduser(),
     }
-    counts = {name: _count_hdf5(path) for name, path in directories.items()}
-    missing = [name for name, count in counts.items() if count <= 0]
+    optional_specs = {
+        "failure_dir_raw": OmegaConf.select(data_cfg, "failure_dir_raw", default=None),
+        "failure_dir_hidden": OmegaConf.select(data_cfg, "failure_dir_hidden", default=None),
+    }
+    counts = {name: _count_hdf5(path) for name, path in required_directories.items()}
+    directories: dict[str, Path | None] = dict(required_directories)
+    optional_directories: dict[str, str] = {}
+    for name, value in optional_specs.items():
+        path, count, status = _optional_hdf5_count(value)
+        directories[name] = path
+        counts[name] = count
+        optional_directories[name] = status
+
+    missing = [
+        name for name in required_directories
+        if counts[name] <= 0
+    ]
     if missing:
         raise FileNotFoundError(f"classifier data directories contain no HDF5 files: {missing}")
 
@@ -580,8 +611,12 @@ def cls_check(args: argparse.Namespace) -> int:
             "stage": "cls-check",
             "experiment": args.experiment,
             "training_out_dir": str(cfg.training.out_dir),
-            "directories": {name: str(path) for name, path in directories.items()},
+            "directories": {
+                name: str(path) if path is not None else None
+                for name, path in directories.items()
+            },
             "hdf5_counts": counts,
+            "optional_directories": optional_directories,
             "window": int(data_cfg.window),
             "sampling_protocol": str(OmegaConf.select(data_cfg, "sampling_protocol")),
             "classifier_target": str(OmegaConf.select(cfg, "classifier._target_")),

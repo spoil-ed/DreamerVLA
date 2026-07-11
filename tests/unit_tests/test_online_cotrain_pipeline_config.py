@@ -102,9 +102,9 @@ def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(
 
     assert cls_cfg.task.name == wm_cfg.task.name == "OpenVLA_Onetraj_LIBERO"
     assert cls_cfg.data.success_dir_hidden == wm_cfg.offline_warmup.hidden_dir
-    assert cls_cfg.data.success_dir_raw == cls_cfg.task.openvla_oft.hdf5_dir
+    assert cls_cfg.data.success_dir_raw == cls_cfg.task.openvla_oft.hdf5_reward_dir
     assert wm_cfg.offline_warmup.data_dir == cls_cfg.task.openvla_oft.hdf5_reward_dir
-    assert wm_cfg.offline_warmup.data_dir == f"{cls_cfg.data.success_dir_raw}_remaining_reward"
+    assert wm_cfg.offline_warmup.data_dir == cls_cfg.data.success_dir_raw
 
 
 def test_validate_cfg_warmup(tmp_path):

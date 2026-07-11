@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
+
+from omegaconf import OmegaConf
+
+from dreamervla.diagnostics import experiment_stage_checks
 
 
 def test_experiment_directory_contains_only_three_experiment_folders() -> None:
@@ -164,3 +170,50 @@ def test_experiment_stage_check_module_exposes_required_commands() -> None:
         "libero-original-rl-run",
     ):
         assert command in source
+
+
+def test_classifier_check_treats_missing_failure_dirs_as_optional(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    success_raw = tmp_path / "success_raw"
+    success_hidden = tmp_path / "success_hidden"
+    success_raw.mkdir()
+    success_hidden.mkdir()
+    (success_raw / "demo.hdf5").write_bytes(b"stub")
+    (success_hidden / "demo.hdf5").write_bytes(b"stub")
+    failure_raw = tmp_path / "missing_failures"
+    failure_hidden = tmp_path / "missing_failure_hidden"
+    cfg = OmegaConf.create(
+        {
+            "data": {
+                "success_dir_raw": str(success_raw),
+                "success_dir_hidden": str(success_hidden),
+                "failure_dir_raw": str(failure_raw),
+                "failure_dir_hidden": str(failure_hidden),
+                "window": 8,
+                "sampling_protocol": "wmpo",
+            },
+            "training": {"out_dir": str(tmp_path / "out")},
+            "classifier": {"_target_": "classifier.Target"},
+        }
+    )
+    monkeypatch.setattr(
+        experiment_stage_checks,
+        "_compose_train_config",
+        lambda _experiment, _overrides: cfg,
+    )
+
+    exit_code = experiment_stage_checks.cls_check(
+        argparse.Namespace(experiment="classifier_exp", overrides=[])
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["hdf5_counts"]["success_dir_raw"] == 1
+    assert payload["hdf5_counts"]["success_dir_hidden"] == 1
+    assert payload["hdf5_counts"]["failure_dir_raw"] == 0
+    assert payload["hdf5_counts"]["failure_dir_hidden"] == 0
+    assert payload["optional_directories"]["failure_dir_raw"] == "missing"
+    assert payload["optional_directories"]["failure_dir_hidden"] == "missing"

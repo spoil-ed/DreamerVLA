@@ -17,8 +17,7 @@ pretokenize_val_ood_config_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/d
 
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
-rynnvla_action_hidden_dir: ${task.hdf5_dir}_legacy_action_hidden_vla_policy_h1
-rynnvla_input_token_hidden_dir: ${task.hdf5_dir}_input_token_embedding_vla_policy_h1
+hidden_token_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
 
 openvla_oft:
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
@@ -37,13 +36,11 @@ openvla_oft:
   use_l1_regression: false
   hdf5_dir: ${task.hdf5_dir}
   hdf5_reward_dir: ${task.hdf5_reward_dir}
-  action_hidden_dir: ${task.hdf5_dir}_oft_legacy_action_hidden_vla_policy_h1
-  input_token_hidden_dir: ${task.hdf5_dir}_oft_input_token_embedding_vla_policy_h1
-  failure_hdf5_dir: ${task.hdf5_dir}_failures
-  failure_action_hidden_dir: null
-  failure_input_token_hidden_dir: ${task.openvla_oft.failure_hdf5_dir}_oft_input_token_embedding_vla_policy_h1
+  hidden_token_dir: ${task.hidden_token_dir}
+  failure_hdf5_dir: null
+  failure_hidden_token_dir: null
   expected_action_head_type: oft_discrete_token
-  expected_obs_hidden_source: action_query
+  expected_obs_hidden_source: hidden_token
   expected_prompt_style: vla_policy
   expected_history: 1
   expected_include_state: false
@@ -54,7 +51,7 @@ openvla_oft:
   chunk_size: 8
   wm_sequence_length: 36
   latent_stage: query_after
-  latent_source: OpenVLA-OFT discrete action-query hidden [56,4096]
+  latent_source: OpenVLA-OFT discrete hidden_token [56,4096]
   sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
   sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
@@ -69,7 +66,7 @@ openvla_oft:
   action_token_bins: 256
   min_action: -1.0
   max_action: 1.0
-  input_tokens:
+  hidden_token:
     proprio_keys: [ee_pos, ee_ori, gripper_states]
     proprio_dim: 8
     proprio_emb_dim: 10
