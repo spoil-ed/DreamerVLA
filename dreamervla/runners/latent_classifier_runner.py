@@ -41,16 +41,18 @@ from typing import Any
 import hydra
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, IterableDataset
 
+from dreamervla.algorithms.critic import (
+    LatentSuccessClassifier,
+    LatentSuccessClassifierConfig,
+)
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
     LumosAlignedLatentValDataset,
 )
-from dreamervla.algorithms.critic import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamervla.preprocess.sidecar_schema import validate_input_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
@@ -251,8 +253,8 @@ class LatentClassifierRunner(BaseRunner):
     def _prepare_train_dataset_for_distributed(self, dataset: object) -> None:
         if not isinstance(dataset, IterableDataset):
             return
-        setattr(dataset, "distributed_rank", int(self.distributed.rank))
-        setattr(dataset, "distributed_world_size", int(self.distributed.world_size))
+        dataset.distributed_rank = int(self.distributed.rank)
+        dataset.distributed_world_size = int(self.distributed.world_size)
 
     def _classifier_module(self) -> LatentSuccessClassifier:
         assert self.model is not None
@@ -328,6 +330,45 @@ class LatentClassifierRunner(BaseRunner):
         chunk_pool = str(OmegaConf.select(d, "chunk_pool") or "last")
         sampling_protocol = str(OmegaConf.select(d, "sampling_protocol") or "lumos")
         balance_batches = bool(OmegaConf.select(d, "balance_batches") or False)
+        if bool(
+            OmegaConf.select(
+                d,
+                "require_sidecar_contract",
+                default=False,
+            )
+        ):
+            validate_input_token_sidecar_dir(
+                d.success_dir_hidden,
+                expected_filenames=OmegaConf.select(
+                    d,
+                    "required_filenames",
+                    default=None,
+                ),
+                reference_dir=d.success_dir_raw,
+                require_reference_complete=True,
+                require_sparse_rewards=True,
+            )
+            failure_raw = OmegaConf.select(d, "failure_dir_raw", default=None)
+            failure_hidden = OmegaConf.select(d, "failure_dir_hidden", default=None)
+            if failure_raw is not None or failure_hidden is not None:
+                if failure_raw is None or failure_hidden is None:
+                    raise ValueError(
+                        "failure sidecar validation requires both raw and hidden dirs"
+                    )
+                validate_input_token_sidecar_dir(
+                    failure_hidden,
+                    reference_dir=failure_raw,
+                    require_reference_complete=True,
+                    require_sparse_rewards=True,
+                )
+        val_fraction = float(OmegaConf.select(d, "val_fraction", default=0.2))
+        split_seed = int(
+            OmegaConf.select(
+                d,
+                "split_seed",
+                default=OmegaConf.select(self.cfg, "training.seed", default=0),
+            )
+        )
         self.train_ds = LumosAlignedLatentTrainDataset(
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
@@ -343,6 +384,9 @@ class LatentClassifierRunner(BaseRunner):
             lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
             sampling_protocol=sampling_protocol,
             balance_batches=balance_batches,
+            demo_split=str(OmegaConf.select(d, "train_split", default="all")),
+            val_fraction=val_fraction,
+            split_seed=split_seed,
         )
         self.val_ds = LumosAlignedLatentValDataset(
             success_dir_raw=d.success_dir_raw,
@@ -357,6 +401,9 @@ class LatentClassifierRunner(BaseRunner):
             lang_emb_dir=OmegaConf.select(d, "lang_emb_dir", default=None),
             lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
             sampling_protocol=sampling_protocol,
+            demo_split=str(OmegaConf.select(d, "val_split", default="all")),
+            val_fraction=val_fraction,
+            split_seed=split_seed,
         )
         self._prepare_train_dataset_for_distributed(self.train_ds)
         self._log(self._dataset_summary_payload("train", self.train_ds))
@@ -471,6 +518,56 @@ class LatentClassifierRunner(BaseRunner):
         summary_fn = getattr(dataset, "summary", None)
         summary = summary_fn() if callable(summary_fn) else {}
         return {"event": "dataset_summary", "split": str(split), **dict(summary)}
+
+    def _finalize_validation_checkpoints(self) -> dict[str, dict[str, Any]]:
+        """Apply the Hydra-selected final checkpoint selection protocol."""
+
+        selection = str(
+            OmegaConf.select(
+                self.cfg,
+                "training.final_selection_metric",
+                default="none",
+            )
+        ).lower()
+        if selection == "none":
+            return {}
+        if selection == "window_f1":
+            metrics = self._evaluate_window_level()
+            if float(metrics["best_f1"]) > float(self.best_window_f1):
+                self.best_window_f1 = float(metrics["best_f1"])
+                self._save_named(
+                    "best_window_"
+                    f"f1{float(metrics['best_f1']):.4f}_"
+                    f"th{float(metrics['best_thresh']):.2f}",
+                    extra={"val_window": metrics},
+                )
+            return {"window": metrics}
+        if selection == "episode_f1":
+            if not bool(
+                OmegaConf.select(
+                    self.cfg,
+                    "training.episode_eval_enabled",
+                    default=False,
+                )
+            ):
+                raise ValueError(
+                    "final_selection_metric=episode_f1 requires "
+                    "training.episode_eval_enabled=true"
+                )
+            metrics = self._evaluate_episode_level()
+            if float(metrics["best_f1"]) > float(self.best_episode_f1):
+                self.best_episode_f1 = float(metrics["best_f1"])
+                self._save_named(
+                    "best_episode_"
+                    f"f1{float(metrics['best_f1']):.4f}_"
+                    f"th{float(metrics['best_thresh']):.2f}",
+                    extra={"val_episode": metrics},
+                )
+            return {"episode": metrics}
+        raise ValueError(
+            "training.final_selection_metric must be one of: "
+            "none, window_f1, episode_f1"
+        )
 
     def run(self) -> dict[str, float]:
         assert self.model is not None and self.optim is not None
@@ -613,6 +710,15 @@ class LatentClassifierRunner(BaseRunner):
             self.epoch += 1
 
         self.console_banner("TRAINING", done=True)
+        final_validation = self._finalize_validation_checkpoints()
+        if final_validation:
+            self._log(
+                {
+                    "event": "val_final",
+                    "step": self.global_step,
+                    "metrics": final_validation,
+                }
+            )
         # ---- final ckpt + summary ------------------------------------
         self.save_checkpoint(tag="final")
         summary = {

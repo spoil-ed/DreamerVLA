@@ -1339,6 +1339,12 @@ def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
         },
         # run() reads optim.grad_clip_norm; the real config always supplies optim.
         "optim": {"grad_clip_norm": 1.0},
+        # Warmup checkpoints persist the Hydra construction contract.
+        "world_model": {
+            "_target_": "torch.nn.Linear",
+            "in_features": 2,
+            "out_features": 2,
+        },
     })
     if total_env_steps is not None:
         OmegaConf.update(cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True)
@@ -1509,9 +1515,9 @@ def _make_orchestration_runner(
     real_save_wm = mod.OnlineCotrainPipelineRunner._save_wm_warmup
     real_save_cls = mod.OnlineCotrainPipelineRunner._save_cls_warmup
 
-    def save_wm(self):
+    def save_wm(self, *, completed_steps):
         calls.append("save_wm")
-        real_save_wm(self)
+        real_save_wm(self, completed_steps=completed_steps)
 
     def save_cls(self):
         calls.append("save_cls")
@@ -1541,6 +1547,13 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, c
     ]
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+    wm_payload = torch.load(
+        tmp_path / "ckpt" / "wm_warmup.ckpt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert wm_payload["warmup_step"] == 2
+    assert wm_payload["warmup_total_steps"] == 2
 
 
 def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monkeypatch):
@@ -1616,6 +1629,27 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
 
 
+def test_offline_warmup_requires_every_hydra_declared_task(
+    tmp_path,
+    monkeypatch,
+):
+    import pytest
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        total_env_steps=0,
+        cfg_updates={"offline_warmup.required_task_ids": [0, 1]},
+    )
+
+    with pytest.raises(RuntimeError, match=r"required task IDs \[1\]"):
+        runner.run()
+
+    assert calls == ["build", "seed"]
+
+
 def test_wm_only_run_never_calibrates_or_checkpoints_classifier(
     tmp_path, monkeypatch
 ):
@@ -1641,11 +1675,22 @@ def test_wm_only_run_never_calibrates_or_checkpoints_classifier(
 
 
 def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
+    from omegaconf import OmegaConf
+
     from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
 
     runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
     runner._output_dir = str(tmp_path)
     runner.global_step = 0
+    runner.cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "_target_": "torch.nn.Linear",
+                "in_features": 2,
+                "out_features": 2,
+            }
+        }
+    )
     runner.world_model = torch.nn.Linear(2, 2)
     runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
 

@@ -93,6 +93,26 @@ def test_online_replay_balances_available_tasks() -> None:
     assert batch["task_ids"].tolist().count(9) == 3
 
 
+def test_online_replay_rotates_balanced_tasks_across_small_batches() -> None:
+    replay = OnlineReplay(
+        capacity=1_000,
+        sequence_length=3,
+        task_ids=tuple(range(10)),
+        task_balanced=True,
+    )
+    for task_id in range(10):
+        replay.add_episode(_episode(task_id=task_id, length=5, success=True))
+
+    sampled_task_ids = [
+        task_id
+        for _ in range(5)
+        for task_id in replay.sample(2, include_images=False)["task_ids"].tolist()
+    ]
+
+    assert sampled_task_ids == list(range(10))
+    assert replay.task_sample_cursor == 10
+
+
 def test_online_replay_can_sample_without_images() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
     replay.add_episode(_episode(task_id=2, length=5, success=True))
@@ -126,6 +146,7 @@ def test_online_replay_state_dict_round_trips_records_and_cursors() -> None:
         replay_sampling={"latest_online_required": True},
     )
     replay.set_policy_version(7)
+    replay.set_task_sample_cursor(11)
     online = replay.add_episode(_episode(task_id=2, length=5, success=True), source="online")
     replay.add_episode(_episode(task_id=9, length=6, success=False), source="coldstart")
 
@@ -146,6 +167,7 @@ def test_online_replay_state_dict_round_trips_records_and_cursors() -> None:
     assert restored._next_collection_index == replay._next_collection_index
     assert restored._next_task_episode_index == replay._next_task_episode_index
     assert restored._pending_latest_online_episode_ids == {int(online["episode_id"])}
+    assert restored.task_sample_cursor == 11
 
     next_record = restored.add_episode(
         _episode(task_id=2, length=5, success=False),

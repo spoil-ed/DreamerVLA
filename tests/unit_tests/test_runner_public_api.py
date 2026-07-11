@@ -59,6 +59,7 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "OnlineCotrainRayRunner",
         "ManualCotrainRayRunner",
         "ColdStartRayCollectRunner",
+        "FrozenModelPolicyRunner",
     }
 
     assert expected == set(runners.PUBLIC_RUNNERS)

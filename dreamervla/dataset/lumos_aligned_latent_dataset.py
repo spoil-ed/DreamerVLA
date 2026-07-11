@@ -34,6 +34,7 @@ the hidden path for ``obs_embedding``.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,41 @@ class _DemoRecord:
     finish_step: int  # 1-based step where dones first fires (clamped to T)
     complete: bool  # rewards.sum() > 0
     eid: str  # stable episode id like "<file>/<demo_key>"
+
+
+def _partition_demo_pairs(
+    pairs: Sequence[tuple[Path, Path, str]],
+    *,
+    split: str,
+    val_fraction: float,
+    split_seed: int,
+) -> list[tuple[Path, Path, str]]:
+    """Return a stable trajectory-level train/validation partition."""
+
+    split = str(split).lower()
+    values = [(Path(raw), Path(hidden), str(key)) for raw, hidden, key in pairs]
+    if split == "all":
+        return values
+    if split not in {"train", "val"}:
+        raise ValueError(f"demo split must be all|train|val, got {split!r}")
+    fraction = float(val_fraction)
+    if not 0.0 < fraction < 1.0:
+        raise ValueError(f"val_fraction must be within (0,1), got {fraction}")
+    if len(values) < 2:
+        raise ValueError(
+            f"trajectory-level {split} split requires at least two demos, "
+            f"got {len(values)}"
+        )
+
+    def rank(pair: tuple[Path, Path, str]) -> tuple[str, str, str]:
+        raw, hidden, demo_key = pair
+        identity = f"{int(split_seed)}:{raw.name}:{hidden.name}:{demo_key}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        return digest, raw.name, demo_key
+
+    ranked = sorted(values, key=rank)
+    num_val = max(1, min(len(ranked) - 1, int(round(len(ranked) * fraction))))
+    return ranked[num_val:] if split == "train" else ranked[:num_val]
 
 
 def _read_proprio(
@@ -233,6 +269,9 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         lang_emb_key: str = "lang_emb",
         sampling_protocol: str = "lumos",
         balance_batches: bool = False,
+        demo_split: str = "all",
+        val_fraction: float = 0.2,
+        split_seed: int = 0,
     ) -> None:
         super().__init__()
         if window < 1:
@@ -263,11 +302,24 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         self.proprio_keys = tuple(str(key) for key in (proprio_keys or ()))
         self.lang_emb_dir = Path(lang_emb_dir) if lang_emb_dir is not None else None
         self.lang_emb_key = str(lang_emb_key)
+        self.demo_split = str(demo_split).lower()
+        self.val_fraction = float(val_fraction)
+        self.split_seed = int(split_seed)
 
-        succ_pairs = _find_demo_pairs(success_dir_raw, success_dir_hidden)
+        succ_pairs = _partition_demo_pairs(
+            _find_demo_pairs(success_dir_raw, success_dir_hidden),
+            split=self.demo_split,
+            val_fraction=self.val_fraction,
+            split_seed=self.split_seed,
+        )
         fail_pairs: list[tuple[Path, Path, str]] = []
         if failure_dir_raw is not None and failure_dir_hidden is not None:
-            fail_pairs = _find_demo_pairs(failure_dir_raw, failure_dir_hidden)
+            fail_pairs = _partition_demo_pairs(
+                _find_demo_pairs(failure_dir_raw, failure_dir_hidden),
+                split=self.demo_split,
+                val_fraction=self.val_fraction,
+                split_seed=self.split_seed,
+            )
 
         if verbose:
             print(
@@ -348,6 +400,7 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
             "stride": int(self.S),
             "chunk_subsample": int(self.K),
             "chunk_pool": str(self.chunk_pool),
+            "demo_split": str(self.demo_split),
         }
 
     def _ensure_wmpo_pools(self) -> None:
@@ -569,6 +622,9 @@ class LumosAlignedLatentValDataset(Dataset):
         lang_emb_dir: str | Path | None = None,
         lang_emb_key: str = "lang_emb",
         sampling_protocol: str = "lumos",
+        demo_split: str = "all",
+        val_fraction: float = 0.2,
+        split_seed: int = 0,
     ) -> None:
         super().__init__()
         if chunk_subsample < 1:
@@ -589,11 +645,24 @@ class LumosAlignedLatentValDataset(Dataset):
         self.proprio_keys = tuple(str(key) for key in (proprio_keys or ()))
         self.lang_emb_dir = Path(lang_emb_dir) if lang_emb_dir is not None else None
         self.lang_emb_key = str(lang_emb_key)
+        self.demo_split = str(demo_split).lower()
+        self.val_fraction = float(val_fraction)
+        self.split_seed = int(split_seed)
 
-        succ_pairs = _find_demo_pairs(success_dir_raw, success_dir_hidden)
+        succ_pairs = _partition_demo_pairs(
+            _find_demo_pairs(success_dir_raw, success_dir_hidden),
+            split=self.demo_split,
+            val_fraction=self.val_fraction,
+            split_seed=self.split_seed,
+        )
         fail_pairs: list[tuple[Path, Path, str]] = []
         if failure_dir_raw is not None and failure_dir_hidden is not None:
-            fail_pairs = _find_demo_pairs(failure_dir_raw, failure_dir_hidden)
+            fail_pairs = _partition_demo_pairs(
+                _find_demo_pairs(failure_dir_raw, failure_dir_hidden),
+                split=self.demo_split,
+                val_fraction=self.val_fraction,
+                split_seed=self.split_seed,
+            )
         if verbose:
             print(
                 f"[lumos-latent:val] success pairs={len(succ_pairs)} "
@@ -666,6 +735,7 @@ class LumosAlignedLatentValDataset(Dataset):
             "chunk_subsample": int(self.K),
             "chunk_pool": str(self.chunk_pool),
             "sampling_protocol": str(getattr(self, "sampling_protocol", "lumos")),
+            "demo_split": str(self.demo_split),
         }
 
     def _wmpo_success_negative_ends(self, *, finish_step: int) -> list[int]:
@@ -755,4 +825,5 @@ class LumosAlignedLatentValDataset(Dataset):
 __all__ = [
     "LumosAlignedLatentTrainDataset",
     "LumosAlignedLatentValDataset",
+    "_partition_demo_pairs",
 ]

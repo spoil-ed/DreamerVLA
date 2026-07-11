@@ -17,6 +17,14 @@ Architecture source documents live under [spec/](spec/), with
 [spec/99_manual_notes.md](spec/99_manual_notes.md) as the highest-priority user
 guidance. Keep this file as the repository brief.
 
+The separate **pre-mainline feasibility test** is
+`scripts/e2e_frozen_model_pre_mainline.sh`: train WM and classifier from official
+LIBERO data, freeze both, run policy-only imagined RL with
+`dreamervla_frozen_models_rl`, then compare the base VLA and learned policy with a
+matched real-LIBERO protocol. Its first route is canonical `libero_goal` only. It
+is a gate before the mainline, not a replacement for the
+collect/warmup/online-cotrain flow.
+
 ---
 
 ## Code Structure
@@ -27,7 +35,8 @@ guidance. Keep this file as the repository brief.
   - `config.py` - early validation for logger backends, actor-update routes, batch
     shape, resume paths, sidecar contracts, latent dimensions, Ray resources, and FSDP.
   - `launchers/` - Python launchers. The main pipeline launcher is
-    `coldstart_warmup_cotrain.py`.
+    `coldstart_warmup_cotrain.py`; `frozen_model_pre_mainline.py` owns the isolated
+    official-data/frozen-model feasibility test.
   - `runners/` - `BaseRunner` plus public runner targets. Current mainline runners are
     `CollectRolloutsRunner`, `ColdStartRayCollectRunner`,
     `OnlineCotrainPipelineRunner`, `OnlineCotrainRunner`, `ManualCotrainRayRunner`,
@@ -60,7 +69,8 @@ guidance. Keep this file as the repository brief.
   subprocess, Ray, GPU, or real-environment coverage.
 - **`data/`** - runtime data root when `DVLA_DATA_ROOT` is not set:
   datasets, checkpoints, collected rollouts, processed data, and outputs.
-- **`third_party/`** - vendored LIBERO/OpenVLA/robosuite-style dependencies.
+- **`third_party/`** - ignored, read-only upstream runtime dependencies. Inspect
+  them when needed, but never edit or stage them from this repository.
 
 ---
 
@@ -108,6 +118,25 @@ Ray async cotrain is explicit and single-node. The target route is manual-notes 
 `LearnerGroup` owns world-model/classifier updates, `ActorGroup` owns VLA FSDP
 training, `RolloutGroup` owns no-grad policy inference, and `EnvGroup` owns real/WM
 environment interaction.
+
+## Pre-Mainline Frozen-Model Test
+
+Run the complete causal test with:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/e2e_frozen_model_pre_mainline.sh \
+  task=goal ngpu=8
+```
+
+The WM and classifier stages use official
+`task.hdf5_reward_dir` + `task.openvla_oft.input_token_dir`. The RL stage is
+single-process, constructs only a policy optimizer, reads official replay for
+initial sequences, and performs no real rollout. WM/CLS state hashes must remain
+unchanged, the policy hash and optimizer-step count must change, and the final
+real-LIBERO success rate must strictly exceed the unmodified one-trajectory
+OpenVLA-OFT baseline under identical evaluation metadata. See
+[spec/09_frozen_model_pre_mainline.md](spec/09_frozen_model_pre_mainline.md).
 
 ## 参考实现与学习要求
 

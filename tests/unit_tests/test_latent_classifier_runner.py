@@ -7,14 +7,15 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import IterableDataset, SequentialSampler
 
+from dreamervla.algorithms.critic.latent_success_classifier import (
+    LatentSuccessClassifier,
+    LatentSuccessClassifierConfig,
+)
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
     LumosAlignedLatentValDataset,
     _DemoRecord,
-)
-from dreamervla.algorithms.critic.latent_success_classifier import (
-    LatentSuccessClassifier,
-    LatentSuccessClassifierConfig,
+    _partition_demo_pairs,
 )
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runners.latent_classifier_runner import (
@@ -141,6 +142,37 @@ def test_runner_dataset_summary_payload_handles_train_and_val() -> None:
         "num_success_demos": 2,
         "num_failure_demos": 1,
     }
+
+
+def test_demo_pair_partition_is_deterministic_disjoint_and_complete() -> None:
+    pairs = [
+        (Path(f"raw_{index}.hdf5"), Path(f"hidden_{index}.hdf5"), "data/demo_0")
+        for index in range(10)
+    ]
+
+    train = _partition_demo_pairs(
+        pairs,
+        split="train",
+        val_fraction=0.2,
+        split_seed=7,
+    )
+    val = _partition_demo_pairs(
+        pairs,
+        split="val",
+        val_fraction=0.2,
+        split_seed=7,
+    )
+
+    assert len(train) == 8
+    assert len(val) == 2
+    assert set(train).isdisjoint(set(val))
+    assert set(train) | set(val) == set(pairs)
+    assert train == _partition_demo_pairs(
+        pairs,
+        split="train",
+        val_fraction=0.2,
+        split_seed=7,
+    )
 
 
 class _TinyMapDataset(torch.utils.data.Dataset):
@@ -289,6 +321,31 @@ def test_named_classifier_checkpoint_is_rank_zero_only(tmp_path: Path) -> None:
     runner._save_named("not_rank_zero")
 
     assert not (tmp_path / "checkpoints" / "not_rank_zero.ckpt").exists()
+
+
+def test_configured_final_selection_materializes_window_best_checkpoint() -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "training": {
+                "episode_eval_enabled": False,
+                "final_selection_metric": "window_f1",
+            }
+        }
+    )
+    runner.best_window_f1 = -1.0
+    runner.best_episode_f1 = -1.0
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner._evaluate_window_level = lambda: {"best_f1": 0.4, "best_thresh": 0.3}
+    saved: list[tuple[str, dict]] = []
+    runner._save_named = lambda name, extra=None: saved.append((name, extra))
+
+    metrics = runner._finalize_validation_checkpoints()
+
+    assert metrics["window"]["best_f1"] == 0.4
+    assert runner.best_window_f1 == 0.4
+    assert saved[-1][0] == "best_window_f10.4000_th0.30"
 
 
 class _StreamingEpisodeDataset:

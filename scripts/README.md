@@ -16,6 +16,7 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `e2e_coldstart_warmup_cotrain_ray.sh` | Ray collection followed by WM/classifier warmup and optional cotrain |
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Sync collection followed by WM/classifier warmup and optional cotrain |
 | `e2e_manual_cotrain_async.sh` | Manual async OpenVLA-OFT cotrain resume launcher |
+| `e2e_frozen_model_pre_mainline.sh` | Pre-mainline official-data WM/CLS, frozen policy RL, and matched real-eval proof |
 | `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
 | `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
 | `experiments/classifier_training/train.sh` | Full classifier training recipe |
@@ -96,6 +97,7 @@ Dry-run the launcher command assembly with:
 ```bash
 bash scripts/e2e_coldstart_warmup_cotrain_ray.sh dry_run=true
 bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=spatial dry_run=true
+bash scripts/e2e_frozen_model_pre_mainline.sh task=goal dry_run=true
 ```
 
 Check collection completeness before a long run:

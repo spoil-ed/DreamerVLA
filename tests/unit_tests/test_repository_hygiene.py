@@ -94,6 +94,33 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "dreamervla.launchers.train" in eval_script
 
 
+def test_frozen_model_route_is_documented_as_pre_mainline_only() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    agents = (project_root / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (project_root / "README.md").read_text(encoding="utf-8")
+    readme_zh = (project_root / "README.zh-CN.md").read_text(encoding="utf-8")
+    config_registry = (project_root / "configs" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    routes = (project_root / "spec" / "06_routes.md").read_text(encoding="utf-8")
+    scripts = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
+
+    command = "scripts/e2e_frozen_model_pre_mainline.sh"
+    experiment = "dreamervla_frozen_models_rl"
+    for text in (agents, readme, readme_zh, config_registry, routes, scripts):
+        assert command in text
+    for text in (agents, config_registry, routes):
+        assert experiment in text
+    assert "pre-mainline" in agents.lower()
+    assert "pre-mainline" in readme.lower()
+    assert "主线前" in readme_zh
+    assert "预主线" in routes
+    assert (
+        "collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain"
+        in agents
+    )
+
+
 def test_openvla_mainline_has_no_56_token_observation_route() -> None:
     project_root = Path(__file__).resolve().parents[2]
     explicit_paths = [

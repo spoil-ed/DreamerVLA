@@ -11,8 +11,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from pathlib import Path
 from typing import Any
@@ -24,11 +24,11 @@ from omegaconf import OmegaConf
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.runners.base_runner import _atomic_torch_save
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics
-from dreamervla.runners.offline_seed import seed_replay_from_offline
-from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.runners.classifier_update import online_classifier_update_step
 from dreamervla.runners.distributed import unwrap_module as _unwrap
 from dreamervla.runners.latent_classifier_runner import _success_probabilities_from_logits
+from dreamervla.runners.offline_seed import seed_replay_from_offline
+from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
@@ -751,6 +751,12 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
             "warmup_total_steps": int(total),
             "complete": False,
             "metrics": {key: float(value) for key, value in metrics.items()},
+            "config": {
+                "world_model": OmegaConf.to_container(
+                    self.cfg.world_model,
+                    resolve=True,
+                )
+            },
             "world_model": _unwrap(self.world_model).state_dict(),
             "world_model_optimizer": self.world_model_optimizer.state_dict(),
         }
@@ -813,13 +819,27 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
         )
         return step
 
-    def _save_wm_warmup(self) -> None:
+    def _save_wm_warmup(self, *, completed_steps: int) -> None:
+        completed_steps = int(completed_steps)
+        if completed_steps <= 0:
+            raise ValueError(
+                f"completed WM warmup steps must be positive, got {completed_steps}"
+            )
         if self.checkpoint_save_torch():
             _atomic_torch_save(
                 {
                     "global_step": int(self.global_step),
                     "world_model": _unwrap(self.world_model).state_dict(),
+                    "warmup_component": "wm",
+                    "warmup_step": completed_steps,
+                    "warmup_total_steps": completed_steps,
                     "complete": True,
+                    "config": {
+                        "world_model": OmegaConf.to_container(
+                            self.cfg.world_model,
+                            resolve=True,
+                        )
+                    },
                 },
                 Path(self._wm_warmup_ckpt()),
             )
@@ -1063,6 +1083,25 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 )
             if n == 0 or warmup_replay.num_transitions == 0:
                 raise RuntimeError("offline seeding produced an empty replay buffer")
+            required_task_ids_raw = OmegaConf.select(
+                cfg,
+                "offline_warmup.required_task_ids",
+                default=None,
+            )
+            if required_task_ids_raw is not None:
+                required_task_ids = tuple(
+                    int(task_id) for task_id in required_task_ids_raw
+                )
+                missing_task_ids = sorted(
+                    set(required_task_ids).difference(
+                        warmup_replay.task_episode_counts()
+                    )
+                )
+                if missing_task_ids:
+                    raise RuntimeError(
+                        "offline warmup replay has no sampleable sequence for "
+                        f"required task IDs {missing_task_ids}"
+                    )
             classifier_cfg = getattr(_unwrap(self.classifier), "cfg", None)
             default_cls_window = int(
                 getattr(
@@ -1160,7 +1199,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 start_step=wm_start_step,
             )
             if self.distributed.is_main_process:
-                self._save_wm_warmup()
+                self._save_wm_warmup(completed_steps=wm_steps)
             cls_last = self._offline_warmup_classifier(
                 warmup_replay,
                 steps=cls_steps,
@@ -1217,7 +1256,7 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 start_step=wm_start_step,
             )
             if self.distributed.is_main_process:
-                self._save_wm_warmup()
+                self._save_wm_warmup(completed_steps=wm_steps)
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
         if not need_wm:
             if os.path.exists(self._wm_warmup_ckpt()):

@@ -14,6 +14,7 @@ Hydra 配置。
 | [`04_complete_loop.md`](04_complete_loop.md) | 主线 `collect -> warmup -> cotrain -> eval` 数据流。 |
 | [`05_ray_runtime.md`](05_ray_runtime.md) | Ray/manual cotrain 的 group、worker、placement 和同步边界。 |
 | [`06_routes.md`](06_routes.md) | 当前 release route 清单。 |
+| [`09_frozen_model_pre_mainline.md`](09_frozen_model_pre_mainline.md) | 主线前冻结 WM/CLS、只训练 policy 的因果测试。 |
 | [`99_manual_notes.md`](99_manual_notes.md) | 用户第一性指导，保留原文；扩写架构时再参考。 |
 
 ## Source Rule

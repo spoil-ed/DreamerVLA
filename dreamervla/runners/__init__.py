@@ -80,6 +80,13 @@ _RUNNER_SPECS: dict[str, _RunnerSpec] = {
         runner_status="optional",
         runner_family="rollout",
     ),
+    "FrozenModelPolicyRunner": _RunnerSpec(
+        "dreamervla.runners.frozen_model_policy_runner",
+        "FrozenModelPolicyRunner",
+        runner_name="frozen_model_policy",
+        runner_status="pre_mainline",
+        runner_family="actor",
+    ),
 }
 
 

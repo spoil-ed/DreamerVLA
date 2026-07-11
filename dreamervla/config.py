@@ -18,6 +18,20 @@ from dreamervla.preprocess.sidecar_schema import (
     INPUT_TOKEN_SOURCE,
 )
 from dreamervla.utils.metric_logger import MetricLogger
+from dreamervla.utils.paths import data_root
+
+_LIBERO_GOAL_OFFICIAL_SHARDS = (
+    "open_the_middle_drawer_of_the_cabinet_demo.hdf5",
+    "put_the_bowl_on_the_stove_demo.hdf5",
+    "put_the_wine_bottle_on_top_of_the_cabinet_demo.hdf5",
+    "open_the_top_drawer_and_put_the_bowl_inside_demo.hdf5",
+    "put_the_bowl_on_top_of_the_cabinet_demo.hdf5",
+    "push_the_plate_to_the_front_of_the_stove_demo.hdf5",
+    "put_the_cream_cheese_in_the_bowl_demo.hdf5",
+    "turn_on_the_stove_demo.hdf5",
+    "put_the_bowl_on_the_plate_demo.hdf5",
+    "put_the_wine_bottle_on_the_rack_demo.hdf5",
+)
 
 
 def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfig:
@@ -34,6 +48,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_resume_paths(cfg)
     _validate_removed_observation_routes(cfg)
     _validate_mainline_input_token_contract(cfg)
+    _validate_pre_mainline_routes(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
     _validate_latent_dimension_contracts(cfg)
@@ -327,6 +342,336 @@ def _validate_sidecar_routes(cfg: DictConfig) -> None:
             f"for OpenVLA-OFT input-token routes: {dataset_hidden!r} != "
             f"{oft_input_tokens!r}"
         )
+
+
+def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
+    """Keep pre-mainline feasibility stages on official data and isolated."""
+
+    stage = _select_str(cfg, "pre_mainline.stage")
+    target = _select_str(cfg, "_target_")
+    if (
+        target == "dreamervla.runners.FrozenModelPolicyRunner"
+        and stage != "frozen_models_rl"
+    ):
+        raise ValueError(
+            "FrozenModelPolicyRunner requires pre_mainline.stage=frozen_models_rl"
+        )
+    if stage is None:
+        return
+    if _select_str(cfg, "task.suite") != "libero_goal":
+        raise ValueError(
+            "the frozen-model pre-mainline feasibility route currently supports "
+            "only task.suite=libero_goal"
+        )
+    if _select_str(cfg, "pre_mainline.suite") != "libero_goal":
+        raise ValueError(
+            "the frozen-model pre-mainline route requires "
+            "pre_mainline=libero_goal_official"
+        )
+    artifact_name = _select_str(cfg, "task.artifact_name")
+    if artifact_name != "OpenVLA_Onetraj_LIBERO_libero_goal":
+        raise ValueError(
+            "the pre-mainline route requires the canonical official LIBERO goal artifact"
+        )
+    official_task_ids = [
+        int(value)
+        for value in (
+            OmegaConf.select(
+                cfg,
+                "pre_mainline.official_task_ids",
+                default=[],
+            )
+            or []
+        )
+    ]
+    official_filenames = tuple(
+        str(value)
+        for value in (
+            OmegaConf.select(
+                cfg,
+                "pre_mainline.official_reward_filenames",
+                default=[],
+            )
+            or []
+        )
+    )
+    if official_task_ids != list(range(10)):
+        raise ValueError("canonical official LIBERO metadata requires task IDs [0..9]")
+    if official_filenames != _LIBERO_GOAL_OFFICIAL_SHARDS:
+        raise ValueError("canonical official LIBERO metadata requires all ten reward shards")
+    canonical_processed_root = (
+        data_root().expanduser().resolve() / "processed_data" / artifact_name
+    )
+    canonical_paths = {
+        "task.hdf5_reward_dir": canonical_processed_root
+        / "no_noops_t_256_remaining_reward",
+        "task.openvla_oft.input_token_dir": canonical_processed_root
+        / "no_noops_t_256_oft_input_token_embedding_vla_policy_h1",
+    }
+    for key, expected_path in canonical_paths.items():
+        actual = _select_str(cfg, key)
+        if (
+            actual is None
+            or Path(actual).expanduser().resolve() != expected_path.resolve()
+        ):
+            raise ValueError(
+                f"{key} must use the canonical official LIBERO path: "
+                f"{actual!r} != {str(expected_path.resolve())!r}"
+            )
+    if stage == "wm_upper_bound":
+        path_pairs = (
+            ("offline_warmup.data_dir", "task.hdf5_reward_dir"),
+            ("offline_warmup.hidden_dir", "task.openvla_oft.input_token_dir"),
+        )
+        if _select_str(cfg, "_target_") != (
+            "dreamervla.runners.OnlineCotrainPipelineRunner"
+        ):
+            raise ValueError(
+                "pre-mainline WM upper bound must use OnlineCotrainPipelineRunner"
+            )
+        if int(_select_int(cfg, "training.wm_warmup_steps") or 0) <= 0:
+            raise ValueError(
+                "pre-mainline WM upper bound requires wm_warmup_steps > 0"
+            )
+        if bool(OmegaConf.select(cfg, "training.debug", default=False)):
+            raise ValueError(
+                "pre-mainline WM upper bound forbids training.debug because it "
+                "rewrites classifier and online rollout budgets at runtime"
+            )
+        if _select_int(cfg, "training.classifier_warmup_steps") != 0:
+            raise ValueError(
+                "pre-mainline WM upper bound requires classifier_warmup_steps=0"
+            )
+        if _select_int(cfg, "online_rollout.total_env_steps") != 0:
+            raise ValueError(
+                "pre-mainline WM upper bound cannot run online environment steps"
+            )
+        required_task_ids = [
+            int(value)
+            for value in (
+                OmegaConf.select(
+                    cfg,
+                    "offline_warmup.required_task_ids",
+                    default=[],
+                )
+                or []
+            )
+        ]
+        if required_task_ids != official_task_ids:
+            raise ValueError(
+                "pre-mainline WM upper bound must require all ten official task IDs"
+            )
+    elif stage == "classifier_upper_bound":
+        path_pairs = (
+            ("data.success_dir_raw", "task.hdf5_reward_dir"),
+            ("data.success_dir_hidden", "task.openvla_oft.input_token_dir"),
+        )
+        if _select_str(cfg, "_target_") != "dreamervla.runners.LatentClassifierRunner":
+            raise ValueError(
+                "pre-mainline classifier upper bound must use LatentClassifierRunner"
+            )
+        if int(_select_int(cfg, "training.num_epochs") or 0) <= 0:
+            raise ValueError(
+                "pre-mainline classifier upper bound requires num_epochs > 0"
+            )
+        if bool(
+            OmegaConf.select(
+                cfg,
+                "training.episode_eval_enabled",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "pre-mainline classifier upper bound uses held-out window F1; "
+                "episode evaluation is invalid without failure trajectories"
+            )
+        if _select_str(cfg, "data.train_split") != "train" or _select_str(
+            cfg, "data.val_split"
+        ) != "val":
+            raise ValueError(
+                "pre-mainline classifier upper bound requires disjoint train/val splits"
+            )
+        val_fraction = float(
+            OmegaConf.select(cfg, "data.val_fraction", default=0.0) or 0.0
+        )
+        if not 0.0 < val_fraction < 1.0:
+            raise ValueError(
+                "pre-mainline classifier data.val_fraction must be within (0,1)"
+            )
+        if _select_str(cfg, "training.final_selection_metric") != "window_f1":
+            raise ValueError(
+                "pre-mainline classifier upper bound must select held-out window F1"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "data.require_sidecar_contract",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "pre-mainline classifier requires complete official sidecar validation"
+            )
+        required_filenames = tuple(
+            str(value)
+            for value in (
+                OmegaConf.select(
+                    cfg,
+                    "data.required_filenames",
+                    default=[],
+                )
+                or []
+            )
+        )
+        if required_filenames != official_filenames:
+            raise ValueError(
+                "pre-mainline classifier must require all ten official reward shards"
+            )
+        if any(
+            OmegaConf.select(cfg, key, default=None) is not None
+            for key in ("data.failure_dir_raw", "data.failure_dir_hidden")
+        ):
+            raise ValueError(
+                "pre-mainline classifier upper bound cannot add failure datasets"
+            )
+    elif stage == "frozen_models_rl":
+        path_pairs = (
+            ("official_replay.data_dir", "task.hdf5_reward_dir"),
+            (
+                "official_replay.hidden_dir",
+                "task.openvla_oft.input_token_dir",
+            ),
+        )
+        target = _select_str(cfg, "_target_")
+        if target != "dreamervla.runners.FrozenModelPolicyRunner":
+            raise ValueError(
+                "pre-mainline frozen-model RL must use "
+                "dreamervla.runners.FrozenModelPolicyRunner"
+            )
+        for key in (
+            "init.world_model_state_ckpt",
+            "init.classifier_state_ckpt",
+        ):
+            if _select_str(cfg, key) in (None, ""):
+                raise ValueError(
+                    f"{key} requires an explicit frozen checkpoint"
+                )
+        if bool(OmegaConf.select(cfg, "training.resume", default=False)) and _select_str(
+            cfg, "training.resume_dir"
+        ) in (None, ""):
+            raise ValueError(
+                "frozen-model RL resume requires an explicit training.resume_dir"
+            )
+        forbidden_optimizers = (
+            "optim.world_model",
+            "optim.classifier",
+            "optim.critic",
+        )
+        missing = object()
+        for key in forbidden_optimizers:
+            if OmegaConf.select(cfg, key, default=missing) is not missing:
+                raise ValueError(
+                    f"{key} optimizer is forbidden in policy-only frozen-model RL"
+                )
+        if OmegaConf.select(cfg, "optim.policy", default=None) is None:
+            raise ValueError("frozen-model RL requires exactly one policy optimizer")
+        if OmegaConf.select(cfg, "env", default=missing) is not missing:
+            raise ValueError(
+                "frozen-model RL cannot construct a real environment"
+            )
+        if OmegaConf.select(cfg, "online_rollout", default=missing) is not missing:
+            raise ValueError(
+                "frozen-model RL cannot configure a real rollout"
+            )
+        if _select_int(cfg, "training.num_updates") is None or int(
+            _select_int(cfg, "training.num_updates") or 0
+        ) <= 0:
+            raise ValueError("frozen-model RL requires training.num_updates > 0")
+        if _select_int(cfg, "dataloader.batch_size") is None or int(
+            _select_int(cfg, "dataloader.batch_size") or 0
+        ) <= 0:
+            raise ValueError("frozen-model RL requires dataloader.batch_size > 0")
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "training.require_policy_update",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model RL requires training.require_policy_update=true"
+            )
+        raw_task_ids = OmegaConf.select(cfg, "official_replay.task_ids", default=[])
+        task_ids = [int(value) for value in (raw_task_ids or [])]
+        if task_ids != list(range(10)):
+            raise ValueError(
+                "frozen-model RL official replay requires all ten task IDs [0..9]"
+            )
+        if OmegaConf.select(cfg, "official_replay.task_id", default=None) is not None:
+            raise ValueError(
+                "frozen-model RL official replay cannot force one task_id"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "official_replay.infer_task_id_from_shard",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model RL official replay must infer task IDs from shards"
+            )
+        if (
+            OmegaConf.select(
+                cfg,
+                "official_replay.max_episodes_per_task",
+                default=None,
+            )
+            is not None
+        ):
+            raise ValueError(
+                "frozen-model RL must seed every official replay episode"
+            )
+        _require_equal_if_present(
+            cfg,
+            "official_replay.sequence_length",
+            "task.openvla_oft.wm_sequence_length",
+            message="Frozen-model RL replay length must match task WM metadata.",
+        )
+        if int(_select_int(cfg, "official_replay.capacity") or 0) <= 0:
+            raise ValueError("frozen-model RL requires official_replay.capacity > 0")
+        replay_contract = {
+            "official_replay.capacity_mode": "total_sharded",
+            "official_replay.task_balanced": True,
+            "official_replay.rank": 0,
+            "official_replay.replay_sampling.enabled": False,
+        }
+        for key, expected in replay_contract.items():
+            actual = OmegaConf.select(cfg, key, default=None)
+            if actual != expected:
+                raise ValueError(
+                    f"frozen-model RL official replay requires {key}={expected!r}, "
+                    f"got {actual!r}"
+                )
+        route = get_actor_update_route(
+            str(OmegaConf.select(cfg, "algorithm.update_type"))
+        )
+        if route.world_model_arg != "chunk_world_model" or not route.requires_classifier:
+            raise ValueError(
+                "frozen-model RL actor route requires classifier-backed "
+                "chunk-world-model imagination"
+            )
+    else:
+        raise ValueError(f"unknown pre_mainline.stage: {stage!r}")
+
+    for active_key, official_key in path_pairs:
+        active = _select_str(cfg, active_key)
+        official = _select_str(cfg, official_key)
+        if active is None or official is None or active != official:
+            raise ValueError(
+                f"{active_key} must use official LIBERO data from {official_key}: "
+                f"{active!r} != {official!r}"
+            )
 
 
 def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:

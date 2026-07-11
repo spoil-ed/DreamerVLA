@@ -63,6 +63,7 @@ class OnlineReplay:
         self._next_episode_id = 0
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
+        self._task_sample_cursor = 0
         self._pending_latest_online_episode_ids: set[int] = set()
         self._classifier_pending_windows: deque[
             tuple[Mapping[str, Any], int, int, bool]
@@ -104,6 +105,7 @@ class OnlineReplay:
                 int(task_id): int(count)
                 for task_id, count in self._next_task_episode_index.items()
             },
+            "task_sample_cursor": int(self._task_sample_cursor),
             "pending_latest_online_episode_ids": sorted(
                 int(episode_id)
                 for episode_id in self._pending_latest_online_episode_ids
@@ -168,6 +170,8 @@ class OnlineReplay:
                 if next_idx > 0:
                     self._next_task_episode_index[int(task_id)] = int(next_idx)
 
+        self.set_task_sample_cursor(int(state.get("task_sample_cursor", 0)))
+
         pending = state.get("pending_latest_online_episode_ids", ())
         self._pending_latest_online_episode_ids = {
             int(episode_id) for episode_id in pending
@@ -198,6 +202,20 @@ class OnlineReplay:
     def set_policy_version(self, version: int) -> None:
         """Set the rollout policy version stamped onto subsequently added episodes."""
         self._current_policy_version = int(version)
+
+    @property
+    def task_sample_cursor(self) -> int:
+        """Return the cross-batch cursor used by task-balanced sampling."""
+
+        return int(self._task_sample_cursor)
+
+    def set_task_sample_cursor(self, cursor: int) -> None:
+        """Restore the task-balanced sampling cursor from checkpoint state."""
+
+        resolved = int(cursor)
+        if resolved < 0:
+            raise ValueError("task sample cursor must be non-negative")
+        self._task_sample_cursor = resolved
 
     def _capacity_for_task(self, task_id: int) -> int:
         del task_id
@@ -524,16 +542,28 @@ class OnlineReplay:
         pending = self._pop_pending_latest_online(valid)
         if pending is not None:
             chosen.append(pending)
+        balanced_count = 0
+
+        def choose_balanced(records: list[dict[str, Any]]) -> dict[str, Any]:
+            nonlocal balanced_count
+            record = self._choose_one_task_balanced(
+                records,
+                self._task_sample_cursor + balanced_count,
+            )
+            if self.task_balanced:
+                balanced_count += 1
+            return record
+
         if self.replay_sampling_enabled:
             pools = self._records_by_sampling_pool(valid)
             while len(chosen) < int(batch_size):
                 pool_name = self._choose_pool_name(pools)
-                chosen.append(
-                    self._choose_one_task_balanced(pools[pool_name], len(chosen))
-                )
+                chosen.append(choose_balanced(pools[pool_name]))
+            self._task_sample_cursor += balanced_count
             return chosen
         while len(chosen) < int(batch_size):
-            chosen.append(self._choose_one_task_balanced(valid, len(chosen)))
+            chosen.append(choose_balanced(valid))
+        self._task_sample_cursor += balanced_count
         return chosen
 
     def sample(

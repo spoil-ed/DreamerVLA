@@ -1,0 +1,27 @@
+# @package _global_
+# Pre-mainline CLS capacity test trained only from official LIBERO data.
+defaults:
+  - latent_classifier_openvla_onetraj_libero_goal_h1
+  - override /classifier: openvla_oft_spatial
+  - override /pre_mainline: libero_goal_official
+  - _self_
+
+pre_mainline:
+  stage: classifier_upper_bound
+
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/classifier/${now:%Y%m%d_%H%M%S}}
+  episode_eval_enabled: false
+  final_selection_metric: window_f1
+
+data:
+  success_dir_raw: ${task.hdf5_reward_dir}
+  success_dir_hidden: ${task.openvla_oft.input_token_dir}
+  failure_dir_raw: null
+  failure_dir_hidden: null
+  train_split: train
+  val_split: val
+  val_fraction: 0.2
+  split_seed: ${training.seed}
+  require_sidecar_contract: true
+  required_filenames: ${pre_mainline.official_reward_filenames}

@@ -9,6 +9,8 @@ configs/
 ├── train.yaml
 ├── experiment/
 ├── dreamervla/
+├── classifier/
+├── pre_mainline/
 ├── evaluation/
 ├── task/
 ├── logger/
@@ -27,6 +29,8 @@ and smoke-run limits.
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_noray task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_ray task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
+python -m dreamervla.train experiment=dreamervla_frozen_models_rl task=openvla_onetraj_libero \
+  init.world_model_state_ckpt=<wm.ckpt> init.classifier_state_ckpt=<classifier.ckpt>
 python -m dreamervla.train experiment=eval_libero_vla task=openvla_onetraj_libero
 ```
 
@@ -42,6 +46,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | Sync cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_noray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
 | Manual async cotrain | `scripts/e2e_manual_cotrain_async.sh` | `openvla_onetraj_libero_cotrain_ray` |
 | Full-dataset WM warmup | `scripts/experiments/world_model_training/train.sh` | `wm_full_dataset_train` |
+| Pre-mainline frozen-model proof | `scripts/e2e_frozen_model_pre_mainline.sh` | `configs/scripts/frozen_model_pre_mainline.yaml` |
 | LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
 
 ## Experiments
@@ -53,11 +58,22 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | `openvla_onetraj_libero_cotrain_noray` | sync warmup + cotrain |
 | `openvla_onetraj_libero_cotrain_ray` | Ray manual cotrain |
 | `wm_full_dataset_train` | full-replay WM warmup |
+| `wm_official_upper_bound` | pre-mainline WM training from official data |
+| `classifier_official_upper_bound` | pre-mainline classifier training from official data |
+| `dreamervla_frozen_models_rl` | policy-only imagined RL with immutable WM/CLS |
 | `latent_classifier_openvla_onetraj_libero_goal_h1` | classifier warmup |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
 | `eval_libero_vla` | LIBERO rollout eval |
 
 The release training path is OpenVLA-OFT one-trajectory cold-start cotrain.
+The three `*_official_upper_bound` / `frozen_models_rl` entries form an isolated
+`libero_goal`-only pre-mainline feasibility gate and are not release-mainline
+aliases.
+The official classifier stage and frozen-RL stage both select
+`classifier=openvla_oft_spatial`; construction is shared as one Hydra component
+instead of being copied into experiment-specific Python classes.
+All three stages select `pre_mainline=libero_goal_official` for the immutable
+ten-task/ten-shard official-data manifest.
 
 ## Task Configs
 

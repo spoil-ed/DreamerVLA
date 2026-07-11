@@ -36,6 +36,26 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/world_model_training/train.sh
 ```
 
+## Pre-Mainline Frozen-Model Feasibility Test
+
+Before entering the formal cotrain mainline, the isolated causal test trains WM
+and classifier upper bounds from official LIBERO data, freezes both modules, and
+trains only the DreamerVLA policy through imagined LUMOS rollouts. This first
+proof route is intentionally `libero_goal`-only:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/e2e_frozen_model_pre_mainline.sh task=goal ngpu=8
+```
+
+It then evaluates the unmodified one-trajectory OpenVLA-OFT checkpoint and the
+learned policy with identical real-LIBERO metadata. The gate passes only for a
+strict success-rate improvement, an updated policy hash, at least one applied
+policy step, unchanged WM/CLS hashes, and exact evaluated-checkpoint hash
+binding. Use `stage=wm|classifier|rl|eval` to resume by stage or `dry_run=true`
+to inspect commands. This test does not replace the
+`collect -> warmup -> online cotrain` mainline.
+
 ## Reproduction Route
 
 1. Install the environment with `scripts/install_env.sh`.
@@ -55,7 +75,7 @@ dreamervla/        Python package: runners, models, datasets, algorithms, envs
 configs/            Hydra recipes and LIBERO task configs
 scripts/            shell launchers for install, download, preprocess, train, eval
 tests/              unit and smoke tests
-third_party/        editable upstream dependencies
+third_party/        ignored, read-only upstream runtime dependencies
 data/               relative default runtime data root
 docs/               documentation index, references, tutorials, reports, papers
 ```
@@ -70,6 +90,7 @@ docs/               documentation index, references, tutorials, reports, papers
 | Ray cold-start cotrain | `bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=8 profile=multi_gpu render_backend=osmesa` |
 | Sync cold-start cotrain | `bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=8 profile=multi_gpu render_backend=osmesa` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
+| Pre-mainline frozen WM/CLS policy test | `bash scripts/e2e_frozen_model_pre_mainline.sh task=goal ngpu=8` |
 | Eval | `bash scripts/eval_libero_vla.sh gpus=0 eval.ckpt_path=<ckpt> eval.ckpt_kind=auto` |
 
 Common overrides:

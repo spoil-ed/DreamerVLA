@@ -4,6 +4,7 @@ defaults:
   - VLA: null
   - worldmodel: null
   - classifier: null
+  - pre_mainline: null
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb

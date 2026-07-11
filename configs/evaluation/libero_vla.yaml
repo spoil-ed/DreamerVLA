@@ -35,6 +35,9 @@ init:
 eval:
   ckpt_path: ${task.openvla_oft.ckpt_path}
   ckpt_kind: vla
+  # Optional generic fail-closed load contract. The pre-mainline proof enables
+  # this for both sides; existing evaluation recipes retain permissive loading.
+  require_strict_component_load: false
   seed: ${seed}
   task_suite_name: libero_goal
   num_episodes_per_task: 3

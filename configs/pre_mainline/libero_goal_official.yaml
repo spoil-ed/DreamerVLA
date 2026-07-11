@@ -1,0 +1,13 @@
+suite: libero_goal
+official_task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+official_reward_filenames:
+  - open_the_middle_drawer_of_the_cabinet_demo.hdf5
+  - put_the_bowl_on_the_stove_demo.hdf5
+  - put_the_wine_bottle_on_top_of_the_cabinet_demo.hdf5
+  - open_the_top_drawer_and_put_the_bowl_inside_demo.hdf5
+  - put_the_bowl_on_top_of_the_cabinet_demo.hdf5
+  - push_the_plate_to_the_front_of_the_stove_demo.hdf5
+  - put_the_cream_cheese_in_the_bowl_demo.hdf5
+  - turn_on_the_stove_demo.hdf5
+  - put_the_bowl_on_the_plate_demo.hdf5
+  - put_the_wine_bottle_on_the_rack_demo.hdf5

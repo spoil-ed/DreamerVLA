@@ -26,6 +26,22 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 `openvla_onetraj_libero_cotrain_ray_base`（`OnlineCotrainRayRunner` target）——基座只是
 共享实现，不是单独的主线入口。
 
+## 预主线因果测试（不是主线）
+
+`scripts/e2e_frozen_model_pre_mainline.sh` 执行一条独立门禁：
+
+```
+official LIBERO -> WM upper bound + classifier upper bound
+                -> freeze WM/CLS -> policy-only imagined RL -> matched real eval
+```
+
+对应 experiments 是 `wm_official_upper_bound`、
+`classifier_official_upper_bound` 和 `dreamervla_frozen_models_rl`；最后仍由
+`eval_libero_vla` 对原始 VLA 与 RL checkpoint 做相同协议的真实环境评估。只有
+success rate 严格提升、policy 确实更新且 WM/CLS 完全不变时通过。该测试用于证明
+冻结上限模型提供的 imagined-RL 信号有效，不改变上面的唯一正式主线。完整契约见
+[`09_frozen_model_pre_mainline.md`](09_frozen_model_pre_mainline.md)。
+
 ## 支线（非主线，config 保留为可选项 / 工具，勿当主线）
 
 这些 config 仍可用，但**不在主线数据流里**：

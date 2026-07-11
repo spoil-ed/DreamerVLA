@@ -25,6 +25,7 @@ import json
 import os
 import pathlib
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import hydra
@@ -45,6 +46,7 @@ from dreamervla.runners.pretokenize_vla_runner import (
     PretokenizeVLARunner,
     _eval_render_regime_params,
 )
+from dreamervla.utils.frozen_components import state_dict_sha256
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
@@ -77,6 +79,65 @@ def normalize_dreamer_rollout_mode(mode: Any) -> str:
             "eval.dreamer_rollout_mode must be one of: stateless, online_latent"
         )
     return value
+
+
+def evaluation_protocol_metadata(cfg: DictConfig) -> dict[str, Any]:
+    """Serialize the real-LIBERO protocol fields used for matched A/B checks."""
+
+    raw_task_ids = OmegaConf.select(cfg, "eval.task_ids", default=None)
+    task_ids = (
+        None
+        if raw_task_ids is None
+        else [int(task_id) for task_id in raw_task_ids]
+    )
+    raw_max_tasks = OmegaConf.select(cfg, "eval.max_tasks", default=None)
+    raw_max_steps = OmegaConf.select(cfg, "eval.max_steps", default=None)
+    return {
+        "task_suite": str(
+            OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
+        ),
+        "num_episodes_per_task": int(
+            OmegaConf.select(cfg, "eval.num_episodes_per_task", default=3)
+        ),
+        "num_envs": int(OmegaConf.select(cfg, "eval.num_envs", default=1)),
+        "seed": int(
+            OmegaConf.select(
+                cfg,
+                "eval.seed",
+                default=OmegaConf.select(cfg, "seed", default=0),
+            )
+        ),
+        "num_steps_wait": int(
+            OmegaConf.select(cfg, "eval.num_steps_wait", default=10)
+        ),
+        "action_steps": int(
+            OmegaConf.select(cfg, "eval.action_steps", default=10)
+        ),
+        "task_ids": task_ids,
+        "task_start": int(OmegaConf.select(cfg, "eval.task_start", default=0)),
+        "max_tasks": None if raw_max_tasks is None else int(raw_max_tasks),
+        "max_steps": None if raw_max_steps is None else int(raw_max_steps),
+        "enumerate_all_init_states": bool(
+            OmegaConf.select(
+                cfg,
+                "eval.enumerate_all_init_states",
+                default=False,
+            )
+        ),
+        "scheme": str(OmegaConf.select(cfg, "eval.scheme", default="sequential")),
+        "reconfigure_per_episode": bool(
+            OmegaConf.select(cfg, "eval.reconfigure_per_episode", default=False)
+        ),
+        "history_length": int(
+            OmegaConf.select(cfg, "eval.history_length", default=1)
+        ),
+        "action_postprocess": str(
+            OmegaConf.select(cfg, "eval.action_postprocess", default="none")
+        ),
+        "render_backend": str(
+            OmegaConf.select(cfg, "eval.render_backend", default="osmesa")
+        ),
+    }
 
 
 class _OFTBaseEvalAdapter:
@@ -371,23 +432,8 @@ class EmbodiedEvalRunner(
         if self.distributed.is_main_process:
             metrics_out = {
                 "ckpt_path": ckpt_path,
-                "task_suite": task_suite_name,
-                "num_episodes_per_task": int(
-                    OmegaConf.select(cfg, "eval.num_episodes_per_task", default=3)
-                ),
-                "seed": int(
-                    OmegaConf.select(
-                        cfg,
-                        "eval.seed",
-                        default=OmegaConf.select(cfg, "seed", default=0),
-                    )
-                ),
-                "num_steps_wait": int(
-                    OmegaConf.select(cfg, "eval.num_steps_wait", default=10)
-                ),
-                "action_steps": int(
-                    OmegaConf.select(cfg, "eval.action_steps", default=10)
-                ),
+                "ckpt_kind": "vla",
+                **evaluation_protocol_metadata(cfg),
                 **metrics,
             }
             out_path = os.path.join(self.output_dir, "eval_libero_metrics.json")
@@ -420,6 +466,31 @@ class EmbodiedEvalRunner(
             print(
                 "  [Eval] detected Dreamer checkpoint; using world_model + policy rollout."
             )
+
+        state_dicts = payload.get("state_dicts", {})
+        if not isinstance(state_dicts, Mapping):
+            raise RuntimeError(f"{ckpt_path} has no state_dicts mapping")
+        strict_component_load = bool(
+            OmegaConf.select(
+                eval_cfg_root,
+                "eval.require_strict_component_load",
+                default=False,
+            )
+        )
+        required_hash_components = ("world_model", "classifier", "policy")
+        if strict_component_load:
+            missing = [
+                name for name in required_hash_components if name not in state_dicts
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"strict Dreamer checkpoint load is missing components: {missing}"
+                )
+        checkpoint_state_hashes = {
+            name: state_dict_sha256(state)
+            for name in required_hash_components
+            if isinstance((state := state_dicts.get(name)), Mapping)
+        }
 
         try:
             train_cfg = self._checkpoint_cfg_from_payload(payload)
@@ -640,29 +711,8 @@ class EmbodiedEvalRunner(
             metrics_out = {
                 "ckpt_path": ckpt_path,
                 "ckpt_kind": "dreamer",
-                "task_suite": str(
-                    OmegaConf.select(
-                        train_cfg, "eval.task_suite_name", default="libero_goal"
-                    )
-                ),
-                "num_episodes_per_task": int(
-                    OmegaConf.select(
-                        train_cfg, "eval.num_episodes_per_task", default=3
-                    )
-                ),
-                "seed": int(
-                    OmegaConf.select(
-                        train_cfg,
-                        "eval.seed",
-                        default=OmegaConf.select(train_cfg, "seed", default=0),
-                    )
-                ),
-                "num_steps_wait": int(
-                    OmegaConf.select(train_cfg, "eval.num_steps_wait", default=10)
-                ),
-                "action_steps": int(
-                    OmegaConf.select(train_cfg, "eval.action_steps", default=10)
-                ),
+                "checkpoint_state_hashes": checkpoint_state_hashes,
+                **evaluation_protocol_metadata(train_cfg),
                 "dreamer_action_repeat": int(self._dreamer_action_repeat),
                 "dreamer_deterministic": bool(self._dreamer_deterministic),
                 "dreamer_clip_actions": bool(self._dreamer_clip_actions),
@@ -1046,6 +1096,17 @@ class EmbodiedEvalRunner(
                 remapped[key] = value
             converted = remapped
         missing, unexpected = module.load_state_dict(converted, strict=False)
+        if bool(
+            OmegaConf.select(
+                self.cfg,
+                "eval.require_strict_component_load",
+                default=False,
+            )
+        ) and (missing or unexpected):
+            raise RuntimeError(
+                f"strict component load failed for {name}: "
+                f"missing={list(missing)} unexpected={list(unexpected)}"
+            )
         if self.distributed.is_main_process:
             print(
                 f"  [Eval] loaded {name}: tensors={len(converted)} "
