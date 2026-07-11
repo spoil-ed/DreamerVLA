@@ -7,11 +7,11 @@ import h5py
 import pytest
 import torch
 
-from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
 from dreamervla.algorithms.critic.latent_success_classifier import (
     LatentSuccessClassifier,
     LatentSuccessClassifierConfig,
 )
+from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
 from dreamervla.models.embodiment.world_model.wm import WorldModel
 from dreamervla.preprocess.sidecar_schema import (
     SIDECAR_SCHEMA_VERSION,
@@ -344,6 +344,126 @@ def test_sidecar_hdf5_rejects_extra_action_hidden_dataset(tmp_path) -> None:
         )
 
     with pytest.raises(ValueError, match="unexpected datasets"):
+        validate_input_token_sidecar_dir(tmp_path)
+
+
+def _write_known_legacy_sidecar(
+    tmp_path: Path,
+    *,
+    token_count: int = 256,
+    save_action_hidden: bool = False,
+) -> None:
+    _write_sidecar_fixture(tmp_path, token_count=token_count)
+    metadata = _canonical_sidecar_metadata()
+    metadata["obs_hidden_source"] = "input_token_embedding"
+    for field in (
+        "token_count",
+        "hidden_dim",
+        "patches_per_image",
+        "obs_embedding_shape",
+    ):
+        metadata.pop(field)
+    metadata.update(
+        {
+            "save_action_hidden": save_action_hidden,
+            "action_hidden_key": "action_hidden_states",
+            "actor_sequence_keys": {
+                "hidden": "actor_hidden_states",
+                "input_ids": "actor_input_ids",
+                "attention_mask": "actor_attention_mask",
+                "seq_lens": "actor_seq_lens",
+            },
+        }
+    )
+    (tmp_path / "preprocess_config.json").write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+    with h5py.File(tmp_path / "shard.hdf5", "a") as handle:
+        handle.attrs.update(
+            {
+                "obs_hidden_source": "input_token_embedding",
+                "hidden_key": "obs_embedding",
+                "hidden_dim": token_count * 4096,
+                "token_count": token_count,
+                "token_dim": 4096,
+                "hidden_storage_format": "tokenized",
+                "history": 1,
+                "include_state": False,
+                "action_head_type": "oft_discrete_token",
+                "save_action_hidden": False,
+                "save_actor_sequence": False,
+                "action_hidden_sequence_dim": 0,
+                "action_hidden_dim": 0,
+                "action_trigger_token_id": -1,
+                "actor_hidden_dim": 0,
+                "actor_sequence_dim": 0,
+            }
+        )
+
+
+def _write_complete_reference_shard(reference_dir: Path) -> None:
+    reference_dir.mkdir(parents=True)
+    with h5py.File(reference_dir / "shard.hdf5", "w") as handle:
+        handle.attrs["complete"] = True
+        demo = handle.create_group("data/demo_0")
+        for key in (
+            "rewards",
+            "dones",
+            "robot_states",
+            "states",
+            "sparse_rewards",
+        ):
+            demo.create_dataset(key, shape=(2, 1), dtype="float32")
+        demo.create_dataset("actions", shape=(2, 7), dtype="float32")
+        obs = demo.create_group("obs")
+        for key in (
+            "agentview_rgb",
+            "eye_in_hand_rgb",
+            "ee_pos",
+            "ee_ori",
+            "ee_states",
+            "gripper_states",
+            "joint_states",
+        ):
+            obs.create_dataset(key, shape=(2, 1), dtype="float32")
+
+
+def test_sidecar_dir_accepts_known_legacy_manifest_when_hdf5_is_canonical(
+    tmp_path: Path,
+) -> None:
+    """Old preprocessing kept shape facts in HDF5 attrs, not the JSON manifest."""
+
+    hidden_dir = tmp_path / "hidden"
+    hidden_dir.mkdir()
+    reference_dir = tmp_path / "reward"
+    _write_known_legacy_sidecar(hidden_dir)
+    _write_complete_reference_shard(reference_dir)
+
+    normalized = validate_input_token_sidecar_dir(
+        hidden_dir,
+        reference_dir=reference_dir,
+        require_reference_complete=True,
+        require_sparse_rewards=True,
+    )
+
+    assert normalized["obs_hidden_source"] == "hidden_token"
+    assert normalized["token_count"] == 256
+    assert normalized["token_dim"] == 4096
+    assert normalized["obs_embedding_shape"] == [256, 4096]
+
+
+def test_legacy_manifest_cannot_enable_removed_action_payload(tmp_path: Path) -> None:
+    _write_known_legacy_sidecar(tmp_path, save_action_hidden=True)
+
+    with pytest.raises(ValueError, match="enables removed action/actor"):
+        validate_input_token_sidecar_dir(tmp_path)
+
+
+def test_legacy_manifest_does_not_reopen_56_token_sidecars(tmp_path: Path) -> None:
+    _write_known_legacy_sidecar(tmp_path, token_count=56)
+
+    with pytest.raises(ValueError, match="not a safe legacy projected-token sidecar"):
         validate_input_token_sidecar_dir(tmp_path)
 
 
