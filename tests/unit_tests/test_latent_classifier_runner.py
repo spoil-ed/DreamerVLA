@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from torch.utils.data import IterableDataset, SequentialSampler
 
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
@@ -140,6 +143,154 @@ def test_runner_dataset_summary_payload_handles_train_and_val() -> None:
     }
 
 
+class _TinyMapDataset(torch.utils.data.Dataset):
+    def __len__(self) -> int:
+        return 4
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        return torch.tensor([float(idx)]), int(idx % 2)
+
+    @staticmethod
+    def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
+        xs = torch.stack([item[0] for item in batch])
+        ys = torch.tensor([item[1] for item in batch])
+        return xs, ys
+
+
+class _TinyIterableDataset(IterableDataset):
+    def __iter__(self):
+        yield torch.tensor([1.0]), 1
+
+    @staticmethod
+    def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
+        xs = torch.stack([item[0] for item in batch])
+        ys = torch.tensor([item[1] for item in batch])
+        return xs, ys
+
+
+class _FakeDistributed:
+    rank = 1
+    local_rank = 1
+    world_size = 2
+    is_distributed = True
+    is_main_process = True
+    requires_collective_checkpointing = False
+
+    def __init__(self) -> None:
+        self.sampler_calls: list[tuple[object, bool, bool]] = []
+
+    def maybe_make_sampler(self, dataset: object, shuffle: bool, drop_last: bool):
+        self.sampler_calls.append((dataset, shuffle, drop_last))
+        return SequentialSampler(dataset)
+
+    def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
+        return module.module if hasattr(module, "module") else module
+
+    def clip_grad_norm(self, module: torch.nn.Module, max_norm: float) -> float:
+        return float(torch.nn.utils.clip_grad_norm_(module.parameters(), max_norm))
+
+    def reduce_mean_dict(self, metrics: dict[str, float | int]) -> dict[str, float]:
+        return {key: float(value) for key, value in metrics.items()}
+
+    def barrier(self) -> None:
+        return None
+
+    def cleanup(self) -> None:
+        return None
+
+
+def test_classifier_loader_uses_distributed_sampler_for_map_style_dataset() -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    distributed = _FakeDistributed()
+    runner.distributed = distributed
+
+    dataset = _TinyMapDataset()
+    loader = runner._make_classifier_loader(
+        dataset,
+        batch_size=2,
+        num_workers=0,
+        shuffle=True,
+        drop_last=True,
+        use_distributed_sampler=True,
+    )
+
+    assert distributed.sampler_calls == [(dataset, True, True)]
+    assert isinstance(loader.sampler, SequentialSampler)
+
+
+def test_classifier_loader_does_not_attach_sampler_to_iterable_dataset() -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    distributed = _FakeDistributed()
+    runner.distributed = distributed
+
+    loader = runner._make_classifier_loader(
+        _TinyIterableDataset(),
+        batch_size=2,
+        num_workers=0,
+        shuffle=False,
+        drop_last=True,
+        use_distributed_sampler=True,
+    )
+
+    assert distributed.sampler_calls == []
+    assert loader.batch_size == 2
+
+
+def test_classifier_runner_marks_iterable_train_dataset_for_rank_sharding() -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    distributed = _FakeDistributed()
+    runner.distributed = distributed
+    dataset = _TinyIterableDataset()
+
+    runner._prepare_train_dataset_for_distributed(dataset)
+
+    assert dataset.distributed_rank == 1
+    assert dataset.distributed_world_size == 2
+
+
+def test_named_classifier_checkpoint_saves_unwrapped_model_state_dict(tmp_path: Path) -> None:
+    inner = torch.nn.Linear(2, 1)
+    wrapper = torch.nn.Module()
+    wrapper.module = inner
+    runner = object.__new__(LatentClassifierRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({"classifier": {"latent_dim": 2}})
+    runner.config = runner.cfg
+    runner.model = wrapper
+    runner.distributed = _FakeDistributed()
+    runner.global_step = 12
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner._log = lambda _payload: None
+
+    runner._save_named("best_window_f10.5000_th0.50", extra={"val_window": {"best_f1": 0.5}})
+
+    payload = torch.load(
+        tmp_path / "checkpoints" / "best_window_f10.5000_th0.50.ckpt",
+        map_location="cpu",
+    )
+    assert sorted(payload["model"].keys()) == ["bias", "weight"]
+
+
+def test_named_classifier_checkpoint_is_rank_zero_only(tmp_path: Path) -> None:
+    runner = object.__new__(LatentClassifierRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({"classifier": {"latent_dim": 1}})
+    runner.config = runner.cfg
+    runner.model = torch.nn.Linear(1, 1)
+    runner.global_step = 0
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner._log = lambda _payload: None
+    distributed = _FakeDistributed()
+    distributed.is_main_process = False
+    runner.distributed = distributed
+
+    runner._save_named("not_rank_zero")
+
+    assert not (tmp_path / "checkpoints" / "not_rank_zero.ckpt").exists()
+
+
 class _StreamingEpisodeDataset:
     K = 1
     chunk_pool = "last"
@@ -258,6 +409,32 @@ def test_wmpo_train_stream_balances_positive_and_negative_pairs() -> None:
     labels = [int(next(stream)[1]) for _ in range(4)]
 
     assert labels == [1, 0, 1, 0]
+
+
+def test_train_stream_can_shard_demo_ids_by_distributed_rank() -> None:
+    dataset = object.__new__(LumosAlignedLatentTrainDataset)
+    dataset._demos = [
+        _demo(complete=True, value=1.0),
+        _demo(complete=True, value=2.0),
+        _demo(complete=True, value=3.0),
+        _demo(complete=True, value=4.0),
+    ]
+    dataset.W = 2
+    dataset.K = 1
+    dataset.S = 1
+    dataset.window_env = 2
+    dataset.seed = 0
+    dataset.chunk_pool = "last"
+    dataset.sampling_protocol = "lumos"
+    dataset.balance_batches = False
+    dataset.distributed_rank = 1
+    dataset.distributed_world_size = 2
+
+    stream = iter(dataset)
+    values = {float(next(stream)[0][0, 0].item()) for _ in range(4)}
+
+    assert values <= {2.0, 4.0}
+    assert values
 
 
 def test_wmpo_success_negative_range_excludes_terminal_overlap() -> None:

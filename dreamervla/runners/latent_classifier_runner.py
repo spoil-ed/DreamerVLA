@@ -43,7 +43,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
@@ -52,6 +52,7 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
 from dreamervla.algorithms.critic import LatentSuccessClassifier, LatentSuccessClassifierConfig
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
+from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -148,7 +149,7 @@ def _classifier_loss_and_predictions(
 
 
 class LatentClassifierRunner(BaseRunner):
-    """Single-GPU epoch-based trainer for LatentSuccessClassifier.
+    """Epoch-based trainer for LatentSuccessClassifier.
 
     Lifecycle: setup() → run() → teardown() (via BaseRunner.execute).
     """
@@ -160,7 +161,43 @@ class LatentClassifierRunner(BaseRunner):
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
-        self.device = torch.device(
+        strategy = str(
+            OmegaConf.select(
+                config,
+                "training.distributed_strategy",
+                default="ddp",
+            )
+            or "ddp"
+        ).lower()
+        if strategy == "single":
+            strategy = "ddp"
+        self.distributed = NopretokenizeSFTDistributedHelper.initialize(
+            strategy=strategy,
+            fsdp_mixed_precision=str(
+                OmegaConf.select(
+                    config,
+                    "training.fsdp_mixed_precision",
+                    default="bf16",
+                )
+                or "bf16"
+            ),
+            enable_activation_checkpointing=bool(
+                OmegaConf.select(
+                    config,
+                    "training.activation_checkpointing",
+                    default=True,
+                )
+            ),
+            nccl_timeout_seconds=OmegaConf.select(
+                config,
+                "training.nccl_timeout_seconds",
+                default=None,
+            ),
+        )
+        self.rank = self.distributed.rank
+        self.local_rank = self.distributed.local_rank
+        self.world_size = self.distributed.world_size
+        self.device = self.distributed.resolve_device(
             str(OmegaConf.select(self.cfg, "training.device") or "cuda")
         )
         self.train_ds: LumosAlignedLatentTrainDataset | None = None
@@ -175,6 +212,70 @@ class LatentClassifierRunner(BaseRunner):
         self.best_episode_ckpt_path: str | None = None
         self._log_path: pathlib.Path | None = None
 
+    def _make_classifier_loader(
+        self,
+        dataset: object,
+        *,
+        batch_size: int,
+        num_workers: int,
+        shuffle: bool,
+        drop_last: bool,
+        use_distributed_sampler: bool,
+    ) -> DataLoader:
+        """Build a classifier dataloader without attaching samplers to streams."""
+
+        collate_fn = getattr(dataset, "collate_fn", None)
+        dataloader_kwargs: dict[str, Any] = {
+            "batch_size": int(batch_size),
+            "num_workers": int(num_workers),
+            "pin_memory": True,
+            "drop_last": bool(drop_last),
+        }
+        if callable(collate_fn):
+            dataloader_kwargs["collate_fn"] = collate_fn
+        if not isinstance(dataset, IterableDataset):
+            dataloader_kwargs["shuffle"] = bool(shuffle)
+            if use_distributed_sampler:
+                sampler = self.distributed.maybe_make_sampler(
+                    dataset,
+                    shuffle=bool(shuffle),
+                    drop_last=bool(drop_last),
+                )
+                if sampler is not None:
+                    dataloader_kwargs["shuffle"] = False
+                    dataloader_kwargs["sampler"] = sampler
+        return DataLoader(dataset, **dataloader_kwargs)
+
+    def _prepare_train_dataset_for_distributed(self, dataset: object) -> None:
+        if not isinstance(dataset, IterableDataset):
+            return
+        setattr(dataset, "distributed_rank", int(self.distributed.rank))
+        setattr(dataset, "distributed_world_size", int(self.distributed.world_size))
+
+    def _classifier_module(self) -> LatentSuccessClassifier:
+        assert self.model is not None
+        distributed = getattr(self, "distributed", None)
+        if distributed is None:
+            return self.model
+        return distributed.unwrap_module(self.model)
+
+    def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
+        if key == "model":
+            return self.distributed.unwrap_module(value).state_dict()
+        return super()._state_dict_for_checkpoint(key, value)
+
+    def _load_state_dict_from_checkpoint(
+        self,
+        key: str,
+        value: Any,
+        state_dict: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        if key == "model":
+            self.distributed.unwrap_module(value).load_state_dict(state_dict, **kwargs)
+            return
+        super()._load_state_dict_from_checkpoint(key, value, state_dict, **kwargs)
+
     # --------------------------- setup ---------------------------------
 
     def setup(self) -> None:
@@ -187,8 +288,8 @@ class LatentClassifierRunner(BaseRunner):
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = log_dir / "train_log.jsonl"
-        # truncate at startup so reruns don't pollute the file
-        self._log_path.write_text("")
+        if self.is_main_process:
+            self._log_path.write_text("")
 
         self._log(
             {
@@ -240,6 +341,7 @@ class LatentClassifierRunner(BaseRunner):
             lang_emb_key=str(OmegaConf.select(d, "lang_emb_key", default="lang_emb")),
             sampling_protocol=sampling_protocol,
         )
+        self._prepare_train_dataset_for_distributed(self.train_ds)
         self._log(self._dataset_summary_payload("train", self.train_ds))
         self._log(self._dataset_summary_payload("val", self.val_ds))
 
@@ -258,22 +360,21 @@ class LatentClassifierRunner(BaseRunner):
                 "WMPO batch-balanced sampling requires training.num_workers=0 "
                 "so consecutive positive/negative samples form exact batches"
             )
-        self.train_loader = DataLoader(
+        self.train_loader = self._make_classifier_loader(
             self.train_ds,
             batch_size=int(tr.batch_size),
             num_workers=int(OmegaConf.select(tr, "num_workers") or 0),
-            pin_memory=True,
-            collate_fn=self.train_ds.collate_fn,
+            shuffle=False,
             drop_last=True,
+            use_distributed_sampler=False,
         )
-        self.val_loader = DataLoader(
+        self.val_loader = self._make_classifier_loader(
             self.val_ds,
             batch_size=int(OmegaConf.select(tr, "val_batch_size") or 256),
             num_workers=0,  # val data is in-RAM; workers add overhead
-            pin_memory=True,
-            collate_fn=self.val_ds.collate_fn,
             shuffle=False,
             drop_last=False,
+            use_distributed_sampler=False,
         )
 
         # ----- model -----------------------------------------------------
@@ -317,6 +418,11 @@ class LatentClassifierRunner(BaseRunner):
             self.model = hydra.utils.instantiate(self.cfg.classifier).to(self.device)
         else:
             self.model = LatentSuccessClassifier(cls_cfg).to(self.device)
+        self.model = self.distributed.wrap_trainable_module(
+            self.model,
+            find_unused_parameters=True,
+            broadcast_buffers=False,
+        )
         n_params = sum(p.numel() for p in self.model.parameters())
         n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         self._log(
@@ -337,10 +443,7 @@ class LatentClassifierRunner(BaseRunner):
 
         # ----- resume (BaseRunner.resume) -----------------------------
         if bool(OmegaConf.select(tr, "resume") or False):
-            try:
-                self.resume(self.cfg)
-            except Exception as exc:  # noqa: BLE001
-                self._log({"event": "resume_failed", "error": repr(exc)})
+            self.resume(self.cfg)
 
         self._log({"event": "setup_done"})
 
@@ -400,7 +503,7 @@ class LatentClassifierRunner(BaseRunner):
                 xs = xs.to(self.device, non_blocking=True)
                 ys = ys.to(self.device, non_blocking=True)
                 forward_kwargs = _classifier_forward_kwargs(
-                    self.model, extra, self.device
+                    self._classifier_module(), extra, self.device
                 )
 
                 self.model.train()
@@ -414,9 +517,7 @@ class LatentClassifierRunner(BaseRunner):
                 )
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                grad_norm = float(
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
-                )
+                grad_norm = self.distributed.clip_grad_norm(self.model, 5.0)
                 self.optim.step()
 
                 with torch.no_grad():
@@ -432,20 +533,30 @@ class LatentClassifierRunner(BaseRunner):
                 if self.global_step % log_every == 0:
                     step_loss = running_loss / log_every
                     step_acc = running_correct / max(running_total, 1)
+                    reduced = self.distributed.reduce_mean_dict(
+                        {
+                            "loss": step_loss,
+                            "acc": step_acc,
+                            "grad_norm": grad_norm,
+                        }
+                    )
                     self._log(
                         {
                             "event": "train_step",
                             "step": self.global_step,
                             "epoch": self.epoch,
-                            "loss": step_loss,
-                            "acc": step_acc,
-                            "grad_norm": grad_norm,
+                            "loss": reduced["loss"],
+                            "acc": reduced["acc"],
+                            "grad_norm": reduced["grad_norm"],
                             "wall_s": time.time() - t0,
                         }
                     )
                     self.console_metrics(
                         f"train · epoch {self.epoch}",
-                        {"train/loss": float(step_loss), "train/acc": float(step_acc)},
+                        {
+                            "train/loss": float(reduced["loss"]),
+                            "train/acc": float(reduced["acc"]),
+                        },
                     )
                     running_loss = 0.0
                     running_correct = 0
@@ -497,8 +608,9 @@ class LatentClassifierRunner(BaseRunner):
             "wall_s": time.time() - t0,
         }
         self._log({"event": "done", **summary})
-        with open(pathlib.Path(self.output_dir) / "summary.json", "w") as fh:
-            json.dump(summary, fh, indent=2)
+        if self.is_main_process:
+            with open(pathlib.Path(self.output_dir) / "summary.json", "w") as fh:
+                json.dump(summary, fh, indent=2)
         return summary
 
     # --------------------------- evaluation ----------------------------
@@ -528,7 +640,7 @@ class LatentClassifierRunner(BaseRunner):
                         [meta["lang_emb"] for meta in extra_or_meta]
                     )
             forward_kwargs = _classifier_forward_kwargs(
-                self.model, extra, self.device
+                self._classifier_module(), extra, self.device
             )
             logits = self.model(xs, **forward_kwargs)
             probs = _success_probabilities_from_logits(logits).detach().cpu().numpy()
@@ -596,7 +708,7 @@ class LatentClassifierRunner(BaseRunner):
             if flat_lang:
                 extra["lang_emb"] = torch.from_numpy(np.stack(flat_lang)).float()
             forward_kwargs = _classifier_forward_kwargs(
-                self.model, extra, self.device
+                self._classifier_module(), extra, self.device
             )
             logits = self.model(
                 torch.from_numpy(chunk).float().to(self.device),
@@ -696,6 +808,8 @@ class LatentClassifierRunner(BaseRunner):
             config     : { classifier: {…LatentSuccessClassifierConfig…} }
             extra      : the originating sweep dict (kept for offline analysis)
         """
+        if not self.is_main_process:
+            return
         ckpt_dir = self.get_checkpoint_dir()
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         path = ckpt_dir / f"{name}.ckpt"
@@ -715,7 +829,7 @@ class LatentClassifierRunner(BaseRunner):
                     break
         torch.save(
             {
-                "model": self.model.state_dict(),
+                "model": self._classifier_module().state_dict(),
                 "threshold": threshold,
                 "f1": f1,
                 "step": int(self.global_step),
@@ -733,6 +847,8 @@ class LatentClassifierRunner(BaseRunner):
         )
 
     def _log(self, payload: dict) -> None:
+        if not self.is_main_process:
+            return
         payload = {"ts": time.strftime("%H:%M:%S"), **payload}
         event = str(payload.get("event", ""))
         metric_prefix = "eval" if event.startswith("val_") else None
@@ -744,6 +860,11 @@ class LatentClassifierRunner(BaseRunner):
         if self._log_path is not None:
             with open(self._log_path, "a") as fh:
                 fh.write(json.dumps(payload) + "\n")
+
+    def teardown(self) -> None:
+        super().teardown()
+        self.distributed.barrier()
+        self.distributed.cleanup()
 
     # ----------------------- BaseRunner exclusions ------------------
 

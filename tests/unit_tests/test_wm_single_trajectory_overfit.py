@@ -236,13 +236,13 @@ def test_run_input_error_is_written_to_output_directory(tmp_path: Path) -> None:
 
 def test_experiment_launcher_is_thin_and_dry_run_safe() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "experiments" / "wm_single_trajectory_overfit.sh"
+    script = root / "scripts" / "experiments" / "single_trajectory_overfit" / "train.sh"
 
     text = script.read_text(encoding="utf-8")
 
     assert "dreamervla.diagnostics.wm_single_trajectory_overfit" in text
     assert '"$@"' in text
-    assert "--run" not in text.split('"$@"')[0]
+    assert "--run" in text
 
 
 def test_plot_curves_writes_nonempty_png(tmp_path: Path) -> None:

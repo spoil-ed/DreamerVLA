@@ -433,11 +433,23 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
         info = get_worker_info()
-        if info is None:
-            shard_idx, num_shards = 0, 1
-            base_seed = self.seed
+        distributed_rank = int(getattr(self, "distributed_rank", 0) or 0)
+        distributed_world_size = max(
+            1,
+            int(getattr(self, "distributed_world_size", 1) or 1),
+        )
+        if distributed_world_size == 1:
+            if info is None:
+                shard_idx, num_shards = 0, 1
+                base_seed = self.seed
+            else:
+                shard_idx, num_shards = int(info.id), int(info.num_workers)
+                base_seed = self.seed + 1000 * (shard_idx + 1)
         else:
-            shard_idx, num_shards = int(info.id), int(info.num_workers)
+            worker_id = 0 if info is None else int(info.id)
+            num_workers = 1 if info is None else int(info.num_workers)
+            shard_idx = distributed_rank * num_workers + worker_id
+            num_shards = distributed_world_size * num_workers
             base_seed = self.seed + 1000 * (shard_idx + 1)
         rng = np.random.default_rng(base_seed)
         # round-robin demo shard so each worker covers a disjoint subset

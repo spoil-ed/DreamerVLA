@@ -54,10 +54,3 @@ def test_raw_overfit_converges_on_one_trajectory(tmp_path: Path) -> None:
 
     assert summary["status"] == "converged"
     assert (tmp_path / "raw_wm.ckpt").is_file()
-
-
-def test_raw_overfit_launcher_is_registered() -> None:
-    root = Path(__file__).resolve().parents[2]
-    script = root / "scripts/experiments/wm_single_trajectory_raw_overfit.sh"
-    assert script.is_file()
-    assert "wm_single_trajectory_raw_overfit" in script.read_text(encoding="utf-8")

@@ -20,10 +20,12 @@ lives under the `dreamervla` package and is launched with `python -m`.
 | `run_wandb_relay_sync.sh` | CPU-side W&B offline relay helper for air-gapped GPU runs |
 | `start_ray.sh` | Start a local single-node Ray head for manual backend debugging |
 | `check_ray.sh` | Inspect the active Ray cluster status |
-| `experiments/wm_single_episode_overfit.sh` | Dry-run-by-default WM overfit/action-sensitivity diagnostic |
-| `experiments/wm_single_trajectory_overfit.sh` | Random-init single-trajectory WM learning verification with MSE/cosine convergence |
-| `experiments/wm_single_trajectory_raw_overfit.sh` | Raw-HDF5 single-trajectory state-dynamics overfit; does not require OFT/tokenizer preprocessing |
-| `experiments/wm_single_trajectory_vla_overfit.sh` | Runtime VLA-to-Chunk-WM single-trajectory overfit without writing hidden sidecars |
+| `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
+| `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
+| `experiments/classifier_training/train.sh` | Full classifier training recipe |
+| `experiments/classifier_training/eval.sh` | Full classifier eval summary |
+| `experiments/world_model_training/train.sh` | Full-replay world-model training recipe |
+| `experiments/world_model_training/eval.sh` | Full-replay world-model eval diagnostic |
 
 ## Install Steps
 
