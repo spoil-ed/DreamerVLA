@@ -40,6 +40,7 @@ official_replay:
   infer_task_id_from_shard: true
   task_ids: ${pre_mainline.official_task_ids}
   max_episodes_per_task: null
+  require_reference_complete: false
   capacity: 160000
   sequence_length: ${task.openvla_oft.wm_sequence_length}
   capacity_mode: total_sharded

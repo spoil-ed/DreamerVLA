@@ -402,10 +402,15 @@ def _write_known_legacy_sidecar(
         )
 
 
-def _write_complete_reference_shard(reference_dir: Path) -> None:
+def _write_reference_shard(
+    reference_dir: Path,
+    *,
+    marked_complete: bool,
+) -> None:
     reference_dir.mkdir(parents=True)
     with h5py.File(reference_dir / "shard.hdf5", "w") as handle:
-        handle.attrs["complete"] = True
+        if marked_complete:
+            handle.attrs["complete"] = True
         demo = handle.create_group("data/demo_0")
         for key in (
             "rewards",
@@ -438,12 +443,12 @@ def test_sidecar_dir_accepts_known_legacy_manifest_when_hdf5_is_canonical(
     hidden_dir.mkdir()
     reference_dir = tmp_path / "reward"
     _write_known_legacy_sidecar(hidden_dir)
-    _write_complete_reference_shard(reference_dir)
+    _write_reference_shard(reference_dir, marked_complete=False)
 
     normalized = validate_input_token_sidecar_dir(
         hidden_dir,
         reference_dir=reference_dir,
-        require_reference_complete=True,
+        require_reference_complete=False,
         require_sparse_rewards=True,
     )
 

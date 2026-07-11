@@ -461,6 +461,10 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             raise ValueError(
                 "pre-mainline WM upper bound must require all ten official task IDs"
             )
+        _reject_official_complete_marker_requirement(
+            cfg,
+            "offline_warmup.require_reference_complete",
+        )
     elif stage == "classifier_upper_bound":
         path_pairs = (
             ("data.success_dir_raw", "task.hdf5_reward_dir"),
@@ -512,6 +516,10 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             raise ValueError(
                 "pre-mainline classifier requires complete official sidecar validation"
             )
+        _reject_official_complete_marker_requirement(
+            cfg,
+            "data.require_reference_complete",
+        )
         required_filenames = tuple(
             str(value)
             for value in (
@@ -548,6 +556,10 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 "pre-mainline frozen-model RL must use "
                 "dreamervla.runners.FrozenModelPolicyRunner"
             )
+        _reject_official_complete_marker_requirement(
+            cfg,
+            "official_replay.require_reference_complete",
+        )
         for key in (
             "init.world_model_state_ckpt",
             "init.classifier_state_ckpt",
@@ -672,6 +684,16 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 f"{active_key} must use official LIBERO data from {official_key}: "
                 f"{active!r} != {official!r}"
             )
+
+
+def _reject_official_complete_marker_requirement(
+    cfg: DictConfig,
+    config_path: str,
+) -> None:
+    if bool(OmegaConf.select(cfg, config_path, default=True)):
+        raise ValueError(
+            "official LIBERO reward shards do not use rollout complete markers"
+        )
 
 
 def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:

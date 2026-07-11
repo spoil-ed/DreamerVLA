@@ -148,6 +148,7 @@ def seed_replay_from_offline(
     default_task_id: int | None = None,
     infer_task_id_from_shard: bool = False,
     max_episodes_per_task: int | None = None,
+    require_reference_complete: bool = True,
 ) -> int:
     """Add demos from data_dir's reward shards to ``replay``. Returns the number of
     episodes actually added (demos shorter than sequence_length are skipped by
@@ -157,6 +158,10 @@ def seed_replay_from_offline(
     seeding passes None (add everything); the online-replay seed passes a small cap so the
     bounded online buffer gets just enough per-task coverage to be training-ready (every
     task present) without evicting the room reserved for fresh online experience.
+
+    ``require_reference_complete`` distinguishes collector-written reward shards,
+    which carry per-demo completion markers, from structurally validated official
+    LIBERO shards, which predate those markers.
     """
     data_dir = Path(data_dir).expanduser().resolve()
     hidden_dir = Path(hidden_dir).expanduser().resolve()
@@ -170,7 +175,7 @@ def seed_replay_from_offline(
         hidden_dir,
         expected_filenames=shards,
         reference_dir=data_dir,
-        require_reference_complete=True,
+        require_reference_complete=bool(require_reference_complete),
         require_sparse_rewards=True,
     )
     task_ids = _preflight_task_ids(

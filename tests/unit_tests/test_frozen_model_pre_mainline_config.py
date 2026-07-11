@@ -39,6 +39,7 @@ def test_wm_upper_bound_reads_only_official_data() -> None:
     assert cfg.offline_warmup.hidden_dir == cfg.task.openvla_oft.input_token_dir
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.online_rollout.total_env_steps == 0
+    assert cfg.offline_warmup.require_reference_complete is False
     assert list(cfg.offline_warmup.required_task_ids) == list(range(10))
     assert cfg.dataloader.batch_size == 16
     assert cfg.optim.world_model.lr == 3.0e-5
@@ -56,6 +57,7 @@ def test_classifier_upper_bound_reads_only_official_data() -> None:
     assert cfg.data.val_split == "val"
     assert cfg.data.val_fraction == 0.2
     assert cfg.data.require_sidecar_contract is True
+    assert cfg.data.require_reference_complete is False
     assert len(cfg.data.required_filenames) == 10
     assert cfg.training.episode_eval_enabled is False
     assert cfg.training.batch_size == 4
@@ -74,6 +76,7 @@ def test_frozen_models_rl_is_policy_only_and_reads_official_replay() -> None:
     assert cfg.official_replay.task_balanced is True
     assert cfg.official_replay.rank == 0
     assert cfg.official_replay.replay_sampling.enabled is False
+    assert cfg.official_replay.require_reference_complete is False
     assert cfg.init.world_model_state_ckpt is None
     assert cfg.init.classifier_state_ckpt is None
     assert OmegaConf.select(cfg, "optim.world_model", default=None) is None
@@ -201,6 +204,39 @@ def test_classifier_upper_bound_requires_all_official_shards() -> None:
     OmegaConf.update(cfg, "data.required_filenames", ["one_demo.hdf5"])
 
     with pytest.raises(ValueError, match="all ten official reward shards"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "config_path"),
+    [
+        ("wm_official_upper_bound", "offline_warmup.require_reference_complete"),
+        (
+            "classifier_official_upper_bound",
+            "data.require_reference_complete",
+        ),
+        (
+            "dreamervla_frozen_models_rl",
+            "official_replay.require_reference_complete",
+        ),
+    ],
+)
+def test_official_routes_reject_rollout_completion_marker_requirement(
+    tmp_path: Path,
+    experiment: str,
+    config_path: str,
+) -> None:
+    cfg = _compose(experiment)
+    if experiment == "dreamervla_frozen_models_rl":
+        OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+        OmegaConf.update(
+            cfg,
+            "init.classifier_state_ckpt",
+            str(tmp_path / "classifier.ckpt"),
+        )
+    OmegaConf.update(cfg, config_path, True)
+
+    with pytest.raises(ValueError, match="do not use rollout complete markers"):
         validate_cfg(cfg)
 
 

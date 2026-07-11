@@ -27,22 +27,22 @@ import torch
 import torch.distributed as dist
 from omegaconf import DictConfig, OmegaConf
 
+from dreamervla.algorithms.critic import build_classifier
 from dreamervla.algorithms.dreamervla import (
     namespaced_world_model_metrics,
     world_model_pretrain_step,
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.algorithms.critic import build_classifier
+from dreamervla.preprocess.sidecar_schema import INPUT_TOKEN_SHAPE
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
-from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.classifier_update import online_classifier_update_step
 from dreamervla.runners.distributed import unwrap_module as _unwrap
+from dreamervla.runners.dreamervla_runner import DreamerVLARunner
 from dreamervla.runners.online_replay import (
     OnlineReplay,
     get_replay_task_stats_global,
 )
-from dreamervla.preprocess.sidecar_schema import INPUT_TOKEN_SHAPE
 from dreamervla.runners.render_device_config import (
     cuda_visible_devices_from_env,
     parse_device_ids,
@@ -831,6 +831,13 @@ class OnlineCotrainRunner(DreamerVLARunner):
                     hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
                     default_task_id=(int(seed_task) if seed_task is not None else None),
                     max_episodes_per_task=seed_cap,
+                    require_reference_complete=bool(
+                        OmegaConf.select(
+                            cfg,
+                            "offline_warmup.require_reference_complete",
+                            default=True,
+                        )
+                    ),
                 )
                 if self.distributed.is_main_process:
                     print(

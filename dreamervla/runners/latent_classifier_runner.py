@@ -308,10 +308,13 @@ class LatentClassifierRunner(BaseRunner):
 
         # ----- datasets ---------------------------------------------------
         d = self.cfg.data
+        require_reference_complete = bool(
+            OmegaConf.select(d, "require_reference_complete", default=True)
+        )
         validate_input_token_sidecar_dir(
             d.success_dir_hidden,
             reference_dir=d.success_dir_raw,
-            require_reference_complete=True,
+            require_reference_complete=require_reference_complete,
         )
         failure_hidden_dir = OmegaConf.select(d, "failure_dir_hidden")
         if failure_hidden_dir is not None:
@@ -321,7 +324,7 @@ class LatentClassifierRunner(BaseRunner):
             validate_input_token_sidecar_dir(
                 failure_hidden_dir,
                 reference_dir=failure_raw_dir,
-                require_reference_complete=True,
+                require_reference_complete=require_reference_complete,
             )
         # Chunk-level (Type B) classifier: each window frame is pooled from
         # K = chunk_subsample env-step frames. Defaults reduce to env-step
@@ -345,7 +348,7 @@ class LatentClassifierRunner(BaseRunner):
                     default=None,
                 ),
                 reference_dir=d.success_dir_raw,
-                require_reference_complete=True,
+                require_reference_complete=require_reference_complete,
                 require_sparse_rewards=True,
             )
             failure_raw = OmegaConf.select(d, "failure_dir_raw", default=None)
@@ -358,7 +361,7 @@ class LatentClassifierRunner(BaseRunner):
                 validate_input_token_sidecar_dir(
                     failure_hidden,
                     reference_dir=failure_raw,
-                    require_reference_complete=True,
+                    require_reference_complete=require_reference_complete,
                     require_sparse_rewards=True,
                 )
         val_fraction = float(OmegaConf.select(d, "val_fraction", default=0.2))

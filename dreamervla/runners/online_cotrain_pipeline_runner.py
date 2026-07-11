@@ -1060,6 +1060,13 @@ class OnlineCotrainPipelineRunner(OnlineCotrainRunner):
                 max_episodes_per_task=(
                     int(max_seed_eps) if max_seed_eps is not None else None
                 ),
+                require_reference_complete=bool(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.require_reference_complete",
+                        default=True,
+                    )
+                ),
             )
             replay_load_s = time.perf_counter() - replay_load_start
             sampleable_windows = int(warmup_replay.sampleable_window_count())

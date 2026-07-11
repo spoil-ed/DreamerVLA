@@ -24,4 +24,5 @@ data:
   val_fraction: 0.2
   split_seed: ${training.seed}
   require_sidecar_contract: true
+  require_reference_complete: false
   required_filenames: ${pre_mainline.official_reward_filenames}

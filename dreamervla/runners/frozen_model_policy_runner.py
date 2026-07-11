@@ -408,6 +408,13 @@ class FrozenModelPolicyRunner(BaseRunner):
                 "max_episodes_per_task",
                 default=None,
             ),
+            require_reference_complete=bool(
+                OmegaConf.select(
+                    replay_cfg,
+                    "require_reference_complete",
+                    default=True,
+                )
+            ),
         )
         if added <= 0 or replay.sampleable_window_count() <= 0:
             raise RuntimeError("official replay has no sampleable sequences for frozen-model RL")

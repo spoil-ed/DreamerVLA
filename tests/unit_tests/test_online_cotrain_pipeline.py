@@ -1459,8 +1459,15 @@ def _make_orchestration_runner(
         default_task_id=None,
         infer_task_id_from_shard=False,
         max_episodes_per_task=None,
+        require_reference_complete=True,
     ):
-        del data_dir, hidden_dir, default_task_id, infer_task_id_from_shard
+        del (
+            data_dir,
+            hidden_dir,
+            default_task_id,
+            infer_task_id_from_shard,
+            require_reference_complete,
+        )
         calls.append("seed")
         if seed_capture is not None:
             seed_capture["capacity_mode"] = replay.capacity_mode

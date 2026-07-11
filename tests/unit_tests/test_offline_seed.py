@@ -7,10 +7,9 @@ from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.runners.online_replay import OnlineReplay
 
-
 _INPUT_TOKEN_CONFIG = {
     "action_head_type": "oft_discrete_token",
-    "obs_hidden_source": "input_token_embedding",
+    "obs_hidden_source": "hidden_token",
     "hidden_key": "obs_embedding",
     "token_count": 256,
     "token_dim": 4096,
@@ -87,6 +86,29 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     assert batch["obs_embedding"].shape[-2:] == (256, 4096)
     assert replay.episodes[0]["episode"][0]["obs_embedding"].dtype == np.float16
     assert batch["obs_embedding"].dtype == torch.float16
+
+
+def test_seed_replay_accepts_structurally_complete_official_reference(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    _write_fixture(rdir, hdir)
+    with h5py.File(rdir / "r0_shard.hdf5", "a") as handle:
+        for demo in handle["data"].values():
+            del demo.attrs["complete"]
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
+
+    with pytest.raises(ValueError, match="reward demo is not marked complete"):
+        seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)
+    assert replay.num_transitions == 0
+
+    n = seed_replay_from_offline(
+        replay,
+        data_dir=rdir,
+        hidden_dir=hdir,
+        require_reference_complete=False,
+    )
+
+    assert n == 2
+    assert replay.num_transitions == 12
 
 
 def test_seed_replay_threads_proprio_and_language_sidecar(tmp_path):
