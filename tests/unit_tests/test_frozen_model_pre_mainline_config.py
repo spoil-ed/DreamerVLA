@@ -86,10 +86,211 @@ def test_frozen_models_rl_is_policy_only_and_reads_official_replay() -> None:
     assert OmegaConf.select(cfg, "online_rollout", default=None) is None
 
 
+def test_frozen_models_rl_ray_is_eight_gpu_policy_only_and_uses_official_replay() -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+
+    assert cfg.pre_mainline.stage == "frozen_models_rl_ray"
+    assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+    assert cfg.manual_cotrain.ngpu == 8
+    assert cfg.cluster.num_nodes == 1
+    assert cfg.cluster.num_gpus == 8
+    assert cfg.manual_cotrain.real_env_enabled is False
+    assert cfg.manual_cotrain.learner_updates_enabled is False
+    assert cfg.manual_cotrain.real_env_workers == 0
+    assert cfg.manual_cotrain.refresh_wm_initial_conditions_per_lease is True
+    assert cfg.env.real is None
+    assert cfg.learner is None
+    assert list(cfg.replay.seed.task_ids) == list(range(10))
+    assert list(cfg.replay.cfg.task_ids) == list(range(10))
+    assert list(cfg.env.wm.cfg.bootstrap_task_ids) == list(range(10))
+    assert cfg.env.wm.cfg.require_balanced_initial_conditions is True
+    assert cfg.replay.seed.data_dir == cfg.task.hdf5_reward_dir
+    assert cfg.replay.seed.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
+    assert cfg.replay.seed.max_episodes_per_task is None
+    assert cfg.replay.seed.require_reference_complete is False
+    assert set(cfg.actor.train_cfg.optimizers) == {"policy"}
+    assert OmegaConf.to_container(
+        cfg.actor.train_cfg.optimizers.policy,
+        resolve=True,
+    ) == {
+        "name": cfg.optim.policy.name,
+        "lr": cfg.optim.policy.lr,
+        "betas": list(cfg.optim.policy.betas),
+        "eps": cfg.optim.policy.eps,
+        "weight_decay": cfg.optim.policy.weight_decay,
+        "grad_clip_norm": cfg.optim.grad_clip_norm,
+        "zero_grad_set_to_none": cfg.optim.zero_grad_set_to_none,
+    }
+    assert cfg.actor.train_cfg.fsdp.sync_module_states is True
+    assert cfg.actor.train_cfg.fsdp.strategy == "fsdp"
+    assert cfg.actor.train_cfg.fsdp.cpu_offload is False
+    assert (
+        cfg.actor.train_cfg.algorithm_cfg.update_micro_batch_starts
+        == cfg.algorithm.lumos.update_micro_batch_starts
+    )
+    assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio == cfg.algorithm.clip_log_ratio
+    assert cfg.env.wm.cfg.bootstrap_group_size == cfg.manual_cotrain.wm_envs_per_worker
+    assert cfg.env.wm.cfg.defer_initial_condition_bootstrap is True
+    assert cfg.env.wm.cfg.bootstrap_group_size % cfg.algorithm.group_size == 0
+    assert OmegaConf.to_container(
+        cfg.env.wm.cfg.kwargs.world_model,
+        resolve=True,
+    ) == OmegaConf.to_container(cfg.world_model, resolve=True)
+    assert OmegaConf.to_container(
+        cfg.env.wm.cfg.kwargs.classifier,
+        resolve=True,
+    ) == OmegaConf.to_container(cfg.classifier, resolve=True)
+
+
+def test_frozen_models_rl_ray_validates_with_explicit_component_checkpoints(
+    tmp_path: Path,
+) -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+    OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+    OmegaConf.update(
+        cfg,
+        "init.classifier_state_ckpt",
+        str(tmp_path / "classifier.ckpt"),
+    )
+
+    validate_cfg(cfg)
+
+
+def test_frozen_models_rl_ray_geometry_counts_all_eight_wm_workers(
+    tmp_path: Path,
+) -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+    OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+    OmegaConf.update(
+        cfg,
+        "init.classifier_state_ckpt",
+        str(tmp_path / "classifier.ckpt"),
+    )
+    OmegaConf.update(cfg, "manual_cotrain.wm_rollout_target_trajectories", 112)
+
+    with pytest.raises(ValueError, match="each WM worker"):
+        validate_cfg(cfg)
+
+
+def test_frozen_models_rl_ray_resume_requires_policy_checkpoint(tmp_path: Path) -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+    OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+    OmegaConf.update(
+        cfg,
+        "init.classifier_state_ckpt",
+        str(tmp_path / "classifier.ckpt"),
+    )
+    OmegaConf.update(cfg, "training.resume", True)
+    resume_dir = tmp_path / "run"
+    resume_dir.mkdir()
+    OmegaConf.update(cfg, "training.resume_dir", str(resume_dir))
+
+    with pytest.raises(ValueError, match="resume.*policy checkpoint"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "match"),
+    [
+        ("manual_cotrain.real_env_enabled", True, "real environment"),
+        ("manual_cotrain.learner_updates_enabled", True, "learner"),
+        ("env.real", {"cfg": {"target": "forbidden.RealEnv"}}, "real environment"),
+        ("learner", {"train_cfg": {"optimizers": {}}}, "learner"),
+        (
+            "cluster.component_placement",
+            {"env": "0", "rollout": "0", "actor": "1-7"},
+            "eight-GPU topology",
+        ),
+        (
+            "actor.train_cfg.optimizers.world_model",
+            {"lr": 1.0e-4},
+            "policy optimizer",
+        ),
+        (
+            "env.wm.cfg.bootstrap_group_size",
+            8,
+            "complete policy groups",
+        ),
+        (
+            "manual_cotrain.refresh_wm_initial_conditions_per_lease",
+            False,
+            "refresh",
+        ),
+        (
+            "env.wm.cfg.defer_initial_condition_bootstrap",
+            False,
+            "defer",
+        ),
+        (
+            "actor.train_cfg.fsdp.sync_module_states",
+            False,
+            "sync_module_states",
+        ),
+        (
+            "actor.train_cfg.fsdp.strategy",
+            "none",
+            "FSDP strategy",
+        ),
+        (
+            "actor.train_cfg.fsdp.cpu_offload",
+            True,
+            "CPU offload",
+        ),
+        (
+            "actor.train_cfg.algorithm_cfg.update_micro_batch_starts",
+            1,
+            "policy-update settings",
+        ),
+        (
+            "env.wm.cfg.bootstrap_task_ids",
+            [0],
+            "all ten task IDs",
+        ),
+        (
+            "env.wm.cfg.require_balanced_initial_conditions",
+            False,
+            "balanced initial conditions",
+        ),
+    ],
+)
+def test_frozen_models_rl_ray_rejects_trainable_or_real_components(
+    tmp_path: Path,
+    path: str,
+    value: object,
+    match: str,
+) -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+    OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+    OmegaConf.update(
+        cfg,
+        "init.classifier_state_ckpt",
+        str(tmp_path / "classifier.ckpt"),
+    )
+    OmegaConf.update(cfg, path, value, force_add=True)
+
+    with pytest.raises(ValueError, match=match):
+        validate_cfg(cfg)
+
+
 def test_upper_bound_component_configs_match_frozen_rl_exactly() -> None:
     wm_cfg = _compose("wm_official_upper_bound")
     classifier_cfg = _compose("classifier_official_upper_bound")
     rl_cfg = _compose("dreamervla_frozen_models_rl")
+
+    assert OmegaConf.to_container(wm_cfg.world_model, resolve=True) == OmegaConf.to_container(
+        rl_cfg.world_model,
+        resolve=True,
+    )
+    assert OmegaConf.to_container(
+        classifier_cfg.classifier,
+        resolve=True,
+    ) == OmegaConf.to_container(rl_cfg.classifier, resolve=True)
+
+
+def test_upper_bound_component_configs_match_frozen_ray_rl_exactly() -> None:
+    wm_cfg = _compose("wm_official_upper_bound")
+    classifier_cfg = _compose("classifier_official_upper_bound")
+    rl_cfg = _compose("dreamervla_frozen_models_rl_ray")
 
     assert OmegaConf.to_container(wm_cfg.world_model, resolve=True) == OmegaConf.to_container(
         rl_cfg.world_model,

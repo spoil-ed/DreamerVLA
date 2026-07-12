@@ -27,6 +27,7 @@ class FSDPModelManager:
     activation_checkpointing: bool = False
     backend: str | None = None
     use_orig_params: bool = False
+    sync_module_states: bool = False
 
     def __post_init__(self) -> None:
         self.make_strategy()
@@ -53,6 +54,7 @@ class FSDPModelManager:
             activation_checkpointing=self.activation_checkpointing,
             backend=self.backend,
             use_orig_params=self.use_orig_params,
+            sync_module_states=self.sync_module_states,
         )
 
     def prepare_model(self, model: torch.nn.Module) -> torch.nn.Module:

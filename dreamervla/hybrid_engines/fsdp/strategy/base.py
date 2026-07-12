@@ -47,12 +47,14 @@ class FSDPStrategyBase(ABC):
         activation_checkpointing: bool = False,
         backend: str | None = None,
         use_orig_params: bool = False,
+        sync_module_states: bool = False,
     ) -> None:
         self.precision = precision
         self.cpu_offload = bool(cpu_offload)
         self.activation_checkpointing = bool(activation_checkpointing)
         self.backend = backend
         self.use_orig_params = bool(use_orig_params)
+        self.sync_module_states = bool(sync_module_states)
         dtype_from_precision(precision)  # validate eagerly
 
     @property

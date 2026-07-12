@@ -1,6 +1,7 @@
+from types import SimpleNamespace
+
 import numpy as np
 import torch
-from types import SimpleNamespace
 
 from dreamervla.envs.world_model.base_world_model_env import WorldModelEnvProtocol
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
@@ -31,6 +32,40 @@ class _StubWorldEnv:
 
 def test_world_model_env_protocol_runtime_checkable():
     assert isinstance(_StubWorldEnv(), WorldModelEnvProtocol)
+
+
+def test_latent_world_model_env_builds_flat_hydra_configs_and_freezes_components():
+    env = LatentWorldModelEnv(
+        world_model={
+            "_target_": (
+                "dreamervla.workers.actor._test_models.TinyLumosWorldModel"
+            ),
+            "hidden_dim": 2,
+            "action_dim": 1,
+        },
+        classifier={
+            "_target_": (
+                "dreamervla.workers.actor._test_models.TinySuccessClassifier"
+            ),
+            "hidden_dim": 2,
+        },
+        latent_dim=2,
+        action_dim=1,
+        freeze_components=True,
+    )
+
+    assert env.world_model.training is False
+    assert env.classifier is not None
+    assert env.classifier.training is False
+    assert all(not parameter.requires_grad for parameter in env.world_model.parameters())
+    assert all(not parameter.requires_grad for parameter in env.classifier.parameters())
+
+    before = env.component_state_hashes()
+    env.reset_slot(0)
+    env.step_slot(0, [0.0])
+    after = env.component_state_hashes()
+
+    assert after == before
 
 
 def test_latent_world_model_env_uses_predict_next_mode_for_wm_step():

@@ -58,7 +58,7 @@ def test_manager_delegates_to_strategy_and_supports_fsdp2() -> None:
     assert int(model.checkpoint_flag.item()) == 1
 
 
-def test_fsdp_manager_passes_use_orig_params_to_fsdp1(monkeypatch) -> None:
+def test_fsdp_manager_passes_init_consistency_options_to_fsdp1(monkeypatch) -> None:
     import torch.distributed as dist
     import torch.distributed.fsdp as fsdp_mod
 
@@ -74,8 +74,13 @@ def test_fsdp_manager_passes_use_orig_params_to_fsdp1(monkeypatch) -> None:
     monkeypatch.setattr(dist, "is_initialized", lambda: True)
     monkeypatch.setattr(fsdp_mod, "FullyShardedDataParallel", _FakeFSDP)
 
-    manager = FSDPModelManager(strategy="fsdp", use_orig_params=True)
+    manager = FSDPModelManager(
+        strategy="fsdp",
+        use_orig_params=True,
+        sync_module_states=True,
+    )
     wrapped = manager.prepare_model(TinyCheckpointPolicy())
 
     assert isinstance(wrapped, _FakeFSDP)
     assert captured["use_orig_params"] is True
+    assert captured["sync_module_states"] is True

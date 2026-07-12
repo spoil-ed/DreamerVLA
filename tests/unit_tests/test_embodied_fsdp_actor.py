@@ -203,6 +203,52 @@ def test_actor_group_computes_group_advantages_from_trajectory_rewards() -> None
     assert metrics["actor/advantage_std"] > 0.0
 
 
+def test_actor_checkpoint_round_trips_policy_optimizer_state() -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    actor.compute_advantages_and_returns()
+    actor.run_training()
+
+    cfg = _actor_cfg()
+    cfg["init_ckpt"] = {
+        "policy": actor.state_dict(),
+        "policy_optimizer": actor.optimizer_state_dict(),
+    }
+    restored = EmbodiedFSDPActor(**cfg)
+    restored.init()
+
+    source_state = actor._optimizer().state_dict()
+    restored_state = restored._optimizer().state_dict()
+    assert restored_state["param_groups"] == source_state["param_groups"]
+    assert restored_state["state"].keys() == source_state["state"].keys()
+    assert all(
+        torch.equal(restored_state["state"][key]["step"], value["step"])
+        for key, value in source_state["state"].items()
+    )
+
+
+def test_actor_optimizer_uses_complete_hydra_adam_contract() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["optimizers"] = {
+        "policy": {
+            "name": "adam",
+            "lr": 2.0e-4,
+            "betas": [0.8, 0.91],
+            "eps": 3.0e-7,
+            "weight_decay": 0.04,
+        }
+    }
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+
+    group = actor._optimizer().param_groups[0]
+    assert group["lr"] == 2.0e-4
+    assert group["betas"] == (0.8, 0.91)
+    assert group["eps"] == 3.0e-7
+    assert group["weight_decay"] == 0.04
+
+
 def test_actor_recv_rollout_trajectories_gets_shards_incrementally_and_reports_timings(
     monkeypatch,
 ) -> None:

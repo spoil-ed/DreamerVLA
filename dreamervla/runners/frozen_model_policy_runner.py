@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 import numbers
 import os
 from collections.abc import Mapping
@@ -24,6 +23,8 @@ from dreamervla.utils.frozen_components import (
     assert_module_frozen,
     load_frozen_component,
     module_state_sha256,
+    require_component_config_match,
+    resolve_classifier_threshold,
 )
 from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.optim import build_optimizer
@@ -221,18 +222,11 @@ class FrozenModelPolicyRunner(BaseRunner):
         component: str,
         active_cfg: Any,
     ) -> None:
-        raw_config = metadata.get("config")
-        config = cls._resolved_container(raw_config)
-        if not isinstance(config, Mapping) or component not in config:
-            raise ValueError(
-                f"{component} checkpoint must contain config.{component} metadata"
-            )
-        checkpoint_cfg = cls._resolved_container(config[component])
-        resolved_active = cls._resolved_container(active_cfg)
-        if checkpoint_cfg != resolved_active:
-            raise ValueError(
-                f"{component} checkpoint config does not match the active Hydra config"
-            )
+        require_component_config_match(
+            metadata,
+            component=component,
+            active_cfg=active_cfg,
+        )
 
     def _current_resume_contract_hash(self) -> str:
         payload = {
@@ -327,28 +321,15 @@ class FrozenModelPolicyRunner(BaseRunner):
             )
 
     def _resolve_classifier_threshold(self, metadata: dict[str, Any]) -> float:
-        checkpoint_value = metadata.get("threshold")
         configured = OmegaConf.select(
             self.cfg,
             "algorithm.lumos.classifier_threshold",
             default=None,
         )
-        if configured is None:
-            if checkpoint_value is None:
-                raise ValueError("classifier checkpoint must provide a validation threshold")
-            resolved = float(checkpoint_value)
-        else:
-            if checkpoint_value is not None and float(configured) != float(checkpoint_value):
-                raise ValueError(
-                    "configured classifier threshold must equal the selected checkpoint "
-                    f"threshold ({float(configured)} != {float(checkpoint_value)})"
-                )
-            resolved = float(configured)
-        if not math.isfinite(resolved) or not 0.0 <= resolved <= 1.0:
-            raise ValueError(
-                f"classifier threshold must be finite and within [0,1], got {resolved}"
-            )
-        return resolved
+        return resolve_classifier_threshold(
+            metadata,
+            configured=(None if configured is None else float(configured)),
+        )
 
     def _build_reference_policy(self) -> torch.nn.Module | None:
         assert self.policy is not None

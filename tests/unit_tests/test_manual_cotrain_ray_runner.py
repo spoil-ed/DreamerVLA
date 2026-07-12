@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -47,6 +48,8 @@ def _cfg(
     wm_envs_per_worker: int | None = None,
     wm_rollout_multiplier: int | None = None,
     wm_rollout_target_trajectories: int | None = None,
+    real_env_enabled: bool = True,
+    learner_updates_enabled: bool = True,
 ):
     manual_cotrain = {
         "ngpu": ngpu,
@@ -60,6 +63,8 @@ def _cfg(
         "envs_per_worker": 1,
         "sync_every": 1,
         "publish_learner_weights": publish_learner_weights,
+        "real_env_enabled": bool(real_env_enabled),
+        "learner_updates_enabled": bool(learner_updates_enabled),
     }
     if real_env_workers is not None:
         manual_cotrain["real_env_workers"] = int(real_env_workers)
@@ -188,6 +193,24 @@ def test_runner_resource_map_preserves_shared_component_workers() -> None:
     ]
 
 
+def test_frozen_runner_plan_omits_real_env_and_learner_and_uses_all_actor_gpus() -> None:
+    cfg = _cfg(
+        ngpu=8,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    plan = runner._placement_plan()
+
+    assert plan.real_env_ranks == []
+    assert plan.wm_env_ranks == list(range(8))
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [[gpu] for gpu in range(8)]
+    assert plan.learner_spec is None
+    assert runner._target_group_names() == ["ActorGroup", "RolloutGroup", "WMEnvGroup"]
+
+
 def test_runner_loop_order_names_actor_before_learner_update() -> None:
     runner = runners.ManualCotrainRayRunner(_cfg(ngpu=2))
     order = runner._global_step_operation_names()
@@ -272,6 +295,226 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
         ("LearnerWorker", "LearnerWorker"),
     ]
     assert all(name is None or not name.startswith("Manual") for _, name in launched)
+
+
+def test_frozen_runner_launches_no_real_env_or_learner(monkeypatch) -> None:
+    launched: list[tuple[str, str | None]] = []
+    sequence: list[str] = []
+    seed_calls: list[dict] = []
+    component_loads: list[tuple[str, dict, int]] = []
+
+    class _CaptureWorkerGroup:
+        def __init__(self, worker_cls, *args, **kwargs):
+            del args, kwargs
+            self.worker_cls = worker_cls
+            self.workers = [object()]
+
+        def launch(self, cluster, placement, name=None, env_vars=None):
+            del cluster, placement, env_vars
+            launched.append((self.worker_cls.__name__, name))
+            sequence.append(f"launch:{self.worker_cls.__name__}")
+            return self
+
+        def execute_on(self, *ranks):
+            del ranks
+            return self
+
+        def configure_rollout_epoch(self, rollout_epoch):
+            return _Ready({"env/rollout_epoch": float(rollout_epoch)})
+
+        def seed_from_offline(self, seed_cfg):
+            seed_calls.append(dict(seed_cfg))
+            sequence.append("seed:ReplayWorker")
+            return _Ready(
+                [
+                    {
+                        "replay_buffer/seeded_episodes": 430.0,
+                        "replay_buffer/seeded_task_count": 10.0,
+                    }
+                ]
+            )
+
+        def load_component_states(self, states, version):
+            component_loads.append(
+                (self.worker_cls.__name__, dict(states), int(version))
+            )
+            sequence.append(f"load:{self.worker_cls.__name__}")
+            return _Ready([{"sync/load_component_states_s": 0.1}])
+
+        def component_state_hashes(self):
+            sequence.append(f"hash:{self.worker_cls.__name__}")
+            return _Ready(
+                [
+                    {
+                        "world_model": "wm-hash",
+                        "classifier": "cls-hash",
+                    }
+                ]
+            )
+
+        def state_dict(self):
+            sequence.append(f"state:{self.worker_cls.__name__}")
+            return _Ready([{"policy.weight": torch.ones(1)}])
+
+    class _FakeChannel:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    monkeypatch.setattr(manual_runner, "WorkerGroup", _CaptureWorkerGroup)
+    monkeypatch.setattr(
+        manual_runner.Channel,
+        "create",
+        staticmethod(lambda name: _FakeChannel(str(name))),
+    )
+    cfg = _cfg(
+        ngpu=8,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    cfg.replay = {
+        "cfg": {"target": "test:Replay"},
+        "seed": {
+            "data_dir": "/official/reward",
+            "hidden_dir": "/official/hidden",
+            "task_ids": list(range(10)),
+        },
+    }
+    cfg.env = {"wm": {"cfg": {"target": "test:WMEnv"}}}
+    cfg.rollout = {
+        "policy_cfg": {"target": "test:Policy"},
+        "train_cfg": {"device": "cpu"},
+    }
+    cfg.actor.policy_cfg = {"target": "test:Policy"}
+    cfg.actor.train_cfg.device = "cpu"
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+    monkeypatch.setattr(
+        runner,
+        "_load_frozen_component_states",
+        lambda: {
+            "component_states": {
+                "world_model": {"weight": torch.tensor([1.0])},
+                "classifier": {"weight": torch.tensor([2.0])},
+                "classifier_threshold": 0.6,
+            },
+            "frozen_state_hashes": {"world_model": "wm-hash", "classifier": "cls-hash"},
+            "source_checkpoints": {"world_model": "/wm.ckpt", "classifier": "/cls.ckpt"},
+        },
+        raising=False,
+    )
+
+    groups = runner._build_groups(cluster=object())
+
+    assert launched == [
+        ("ReplayWorker", "ReplayWorker"),
+        ("WMEnvWorker", "WMEnvWorker"),
+        ("MultiStepRolloutWorker", "MultiStepRolloutWorker"),
+        ("EmbodiedFSDPActor", "EmbodiedFSDPActor"),
+    ]
+    assert groups["RealEnvGroup"] is None
+    assert groups["LearnerGroup"] is None
+    assert seed_calls == [
+        {
+            "data_dir": "/official/reward",
+            "hidden_dir": "/official/hidden",
+            "task_ids": list(range(10)),
+        }
+    ]
+    assert sequence.index("seed:ReplayWorker") < sequence.index("launch:WMEnvWorker")
+    assert sequence.index("launch:WMEnvWorker") < sequence.index("load:WMEnvWorker")
+    assert sequence.index("load:WMEnvWorker") < sequence.index("hash:WMEnvWorker")
+    assert sequence.index("load:WMEnvWorker") < sequence.index(
+        "launch:MultiStepRolloutWorker"
+    )
+    assert len(component_loads) == 1
+    assert component_loads[0][0] == "WMEnvWorker"
+    assert component_loads[0][1]["classifier_threshold"] == 0.6
+    assert component_loads[0][2] == 0
+    assert groups["replay_seed_metrics"] == {
+        "replay_buffer/seeded_episodes": 430.0,
+        "replay_buffer/seeded_task_count": 10.0,
+    }
+
+    assert groups["frozen_state_hashes"] == {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+    assert groups["frozen_hashes_verified"] is True
+
+
+def test_frozen_runner_loads_strict_component_checkpoints(tmp_path) -> None:
+    world_model_cfg = {"_target_": "test.WorldModel", "hidden_dim": 4}
+    classifier_cfg = {"_target_": "test.Classifier", "hidden_dim": 4}
+    wm_path = tmp_path / "wm.ckpt"
+    classifier_path = tmp_path / "classifier.ckpt"
+    torch.save(
+        {
+            "world_model": {"weight": torch.tensor([1.0])},
+            "config": {"world_model": world_model_cfg},
+        },
+        wm_path,
+    )
+    torch.save(
+        {
+            "model": {"weight": torch.tensor([2.0])},
+            "config": {"classifier": classifier_cfg},
+            "threshold": 0.65,
+        },
+        classifier_path,
+    )
+    cfg = _cfg(
+        ngpu=8,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    cfg.init = {
+        "world_model_state_ckpt": str(wm_path),
+        "classifier_state_ckpt": str(classifier_path),
+    }
+    cfg.world_model = world_model_cfg
+    cfg.classifier = classifier_cfg
+    cfg.algorithm = {"lumos": {"classifier_threshold": None}}
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+
+    loaded = runner._load_frozen_component_states()
+
+    assert loaded["component_states"]["classifier_threshold"] == 0.65
+    assert loaded["component_states"]["world_model"]["weight"].item() == 1.0
+    assert loaded["component_states"]["classifier"]["weight"].item() == 2.0
+    assert set(loaded["frozen_state_hashes"]) == {"world_model", "classifier"}
+    assert loaded["source_checkpoints"] == {
+        "world_model": str(wm_path.resolve()),
+        "classifier": str(classifier_path.resolve()),
+    }
+
+
+def test_frozen_runner_rejects_wm_env_component_hash_drift() -> None:
+    class _HashGroup:
+        @staticmethod
+        def component_state_hashes():
+            return _Ready(
+                [
+                    {"world_model": "wm-hash", "classifier": "changed"},
+                    {"world_model": "wm-hash", "classifier": "cls-hash"},
+                ]
+            )
+
+    runner = manual_runner.ManualCotrainRayRunner(
+        _cfg(
+            ngpu=2,
+            real_env_workers=0,
+            real_env_enabled=False,
+            learner_updates_enabled=False,
+        )
+    )
+    runner._frozen_state_hashes = {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+
+    with pytest.raises(RuntimeError, match="frozen WM/classifier state drift"):
+        runner._assert_frozen_component_hashes({"WMEnvGroup": _HashGroup()})
 
 
 def test_runner_launches_zero_gpu_tiny_groups_on_node_placement(monkeypatch) -> None:
@@ -1075,6 +1318,16 @@ class _FakeActorGroup:
         self.selected = None
         return _Ready([{"policy.weight": torch.ones(1)}])
 
+    def optimizer_state_dict(self):
+        return _Ready(
+            [
+                {
+                    "state": {0: {"step": torch.tensor(1.0)}},
+                    "param_groups": [{"params": [0]}],
+                }
+            ]
+        )
+
 
 class _FakeRolloutGroup:
     def __init__(self, events: list[str] | None = None) -> None:
@@ -1269,7 +1522,9 @@ class _FakeReplayGroup:
     def __init__(self) -> None:
         self.policy_versions: list[int] = []
         self.loaded_state: dict | None = None
+        self.loaded_sampling_state: dict | None = None
         self.state_dict_calls = 0
+        self.sampling_state_dict_calls = 0
 
     def set_policy_version(self, version: int):
         self.policy_versions.append(int(version))
@@ -1285,8 +1540,18 @@ class _FakeReplayGroup:
         self.state_dict_calls += 1
         return _Ready([{"episodes": ["current"], "num_transitions": 7}])
 
+    def sampling_state_dict(self):
+        self.sampling_state_dict_calls += 1
+        return _Ready(
+            [{"task_sample_cursor": 11, "initial_condition_cursor": 13}]
+        )
+
     def load_state_dict(self, state):
         self.loaded_state = dict(state)
+        return _Ready([None])
+
+    def load_sampling_state_dict(self, state):
+        self.loaded_sampling_state = dict(state)
         return _Ready([None])
 
 
@@ -1358,6 +1623,7 @@ class _DynamicFakeWMEnvGroup:
         self.workers = [object() for _ in range(worker_count)]
         self.selected: tuple[int, ...] | None = None
         self.configure_calls: list[tuple[int, int]] = []
+        self.refresh_calls: list[int] = []
         self.interact_calls: list[int] = []
         self.slow_rank = int(slow_rank)
 
@@ -1370,6 +1636,12 @@ class _DynamicFakeWMEnvGroup:
             raise AssertionError("configure_rollout_epoch must target one rank")
         self.configure_calls.append((int(self.selected[0]), int(rollout_epoch)))
         return _Ready([{"env/rollout_epoch": float(rollout_epoch)}])
+
+    def refresh_wm_initial_conditions(self):
+        if self.selected is None or len(self.selected) != 1:
+            raise AssertionError("refresh must target one rank")
+        self.refresh_calls.append(int(self.selected[0]))
+        return _Ready([{"env/wm_env/initial_conditions_refreshed": 1.0}])
 
     def interact(
         self,
@@ -1419,6 +1691,28 @@ def test_dynamic_wm_leases_let_fast_worker_consume_more_imagine_budget() -> None
     assert all(epoch == 1 for _rank, epoch in wm_env.configure_calls)
     assert metrics["env/trajectory_shards"] == 13.0
     assert metrics["env/steps"] == 26.0
+
+
+def test_dynamic_wm_leases_refresh_grouped_initial_condition_before_every_lease() -> None:
+    cfg = _cfg(ngpu=3, wm_envs_per_worker=2, wm_rollout_target_trajectories=12)
+    cfg.manual_cotrain.wm_rollout_lease_epochs = 1
+    cfg.manual_cotrain.refresh_wm_initial_conditions_per_lease = True
+    runner = runners.ManualCotrainRayRunner(cfg)
+    wm_env = _DynamicFakeWMEnvGroup(worker_count=2, slow_rank=1)
+
+    runner._wait_env_metrics_with_dynamic_wm_leases(
+        real_env_results=[],
+        wm_env=wm_env,
+        rollout_result=_RunningRollout(),
+        env_channel_name="env",
+        rollout_channel_name="rollout",
+        actor_channel_name="actor",
+        timeout_s=10.0,
+        poll_s=0.0,
+        progress=None,
+    )
+
+    assert wm_env.refresh_calls == wm_env.interact_calls
 
 
 def test_dynamic_wm_progress_is_reported_from_central_pool() -> None:
@@ -1822,6 +2116,53 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert "time/manual_cotrain/actor_run_training_s" in metrics
     assert "time/manual_cotrain/learner_update_wm_classifier_s" in metrics
     assert "time/manual_cotrain/learner_to_wm_env_sync_s" in metrics
+
+
+def test_frozen_run_global_step_trains_policy_without_real_or_learner_calls() -> None:
+    cfg = _cfg(
+        ngpu=2,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    cfg.actor.train_cfg.algorithm_cfg.group_size = 1
+    cfg.manual_cotrain.wm_rollout_epoch = 1
+    runner = runners.ManualCotrainRayRunner(cfg)
+    actor = _FakeActorGroup()
+    rollout = _FakeRolloutGroup()
+    wm_env = _FakeEnvGroup(
+        [
+            {
+                "env/trajectory_shards": 2.0,
+                "env/wm_env/trajectory_shards": 2.0,
+                "env/steps": 4.0,
+            }
+        ]
+    )
+    groups = {
+        "ActorGroup": actor,
+        "RolloutGroup": rollout,
+        "LearnerGroup": None,
+        "RealEnvGroup": None,
+        "WMEnvGroup": wm_env,
+        "ReplayGroup": _FakeReplayGroup(),
+        "env_channel": _FakeChannel(),
+        "actor_channel": _FakeChannel(["wm0", "wm1"]),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+    }
+
+    metrics = runner._run_global_step(groups, global_step=1)
+
+    assert actor.sync_calls == [(None, "policy", 1)]
+    assert rollout.pulled == [("policy", None)]
+    assert wm_env.global_steps == [1]
+    assert wm_env.component_state_versions == []
+    assert "learner/updates" not in metrics
+    assert metrics["rollout/episodes"] == 0.0
+    assert metrics["env/wm_env/trajectory_shards"] == 2.0
+    assert metrics["actor/ppo_updates"] > 0.0
 
 
 def test_run_global_step_can_update_only_world_model_for_fixed_classifier() -> None:
@@ -2327,7 +2668,12 @@ def test_manual_checkpoint_skips_replay_state_by_default(tmp_path) -> None:
         (ckpt.parent / "manual_cotrain_manifest.json").read_text(encoding="utf-8")
     )
     assert replay.state_dict_calls == 0
+    assert replay.sampling_state_dict_calls == 1
     assert payload["replay"] is None
+    assert payload["replay_sampling_state"] == {
+        "task_sample_cursor": 11,
+        "initial_condition_cursor": 13,
+    }
     assert manifest["replay"]["present"] is False
 
 
@@ -2368,6 +2714,175 @@ def test_manual_checkpoint_can_include_replay_state_when_configured(tmp_path) ->
     assert manifest["replay"]["present"] is True
 
 
+def test_frozen_checkpoint_contains_policy_and_source_hashes_without_model_copies(
+    tmp_path,
+) -> None:
+    class _StableHashGroup:
+        @staticmethod
+        def component_state_hashes():
+            return _Ready(
+                [{"world_model": "wm-hash", "classifier": "cls-hash"}]
+            )
+
+    cfg = _cfg(
+        ngpu=8,
+        out_dir=str(tmp_path),
+        checkpoint_every=1,
+        save_replay_state=True,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+    runner._frozen_state_hashes = {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+    runner._frozen_source_checkpoints = {
+        "world_model": "/wm.ckpt",
+        "classifier": "/classifier.ckpt",
+    }
+    runner._frozen_classifier_threshold = 0.65
+
+    runner._maybe_save_manual_checkpoint(
+        {
+            "ActorGroup": _FakeActorGroup(),
+            "LearnerGroup": None,
+            "ReplayGroup": _FakeReplayGroup(),
+            "WMEnvGroup": _StableHashGroup(),
+        },
+        global_step=1,
+        metrics={"global_step": 1.0, "actor/ppo_updates": 1.0},
+    )
+
+    ckpt = (
+        tmp_path
+        / "checkpoints"
+        / "manual_cotrain_step_1"
+        / "manual_cotrain.ckpt"
+    )
+    payload = torch.load(ckpt, map_location="cpu", weights_only=False)
+    manifest = json.loads(
+        (ckpt.parent / "manual_cotrain_manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert set(payload["state_dicts"]) == {"policy", "policy_optimizer"}
+    assert payload["frozen_state_hashes"] == runner._frozen_state_hashes
+    assert payload["source_checkpoints"] == runner._frozen_source_checkpoints
+    assert payload["classifier_threshold"] == 0.65
+    assert set(manifest["components"]) == {"policy"}
+
+
+def test_frozen_finalize_writes_causal_summary_and_rechecks_hashes(tmp_path) -> None:
+    class _StableHashGroup:
+        @staticmethod
+        def component_state_hashes():
+            return _Ready(
+                [{"world_model": "wm-hash", "classifier": "cls-hash"}]
+            )
+
+    cfg = _cfg(
+        ngpu=8,
+        out_dir=str(tmp_path),
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    cfg.training.require_policy_update = True
+    cfg.replay = {
+        "seed": {
+            "data_dir": "/official/reward",
+            "hidden_dir": "/official/hidden",
+        }
+    }
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+    runner._frozen_state_hashes = {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+    runner._frozen_source_checkpoints = {
+        "world_model": "/wm.ckpt",
+        "classifier": "/classifier.ckpt",
+    }
+    runner._frozen_classifier_threshold = 0.65
+    runner._policy_initial_hash = "initial-policy-hash"
+    runner._applied_policy_steps = 3
+
+    runner._finalize_frozen_policy_run(
+        {
+            "ActorGroup": _FakeActorGroup(),
+            "ReplayGroup": None,
+            "LearnerGroup": None,
+            "WMEnvGroup": _StableHashGroup(),
+        },
+        global_step=3,
+        metrics={"global_step": 3, "actor/ppo_updates": 1.0},
+    )
+
+    summary = json.loads(
+        (tmp_path / "frozen_rl_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["execution"] == "ray_manual_policy_only"
+    assert summary["ngpu"] == 8
+    assert summary["frozen_hashes_before"] == summary["frozen_hashes_after"]
+    assert summary["policy_hash_before"] == "initial-policy-hash"
+    assert summary["policy_changed"] is True
+    assert summary["applied_policy_steps"] == 3
+    assert Path(summary["final_checkpoint"]).is_file()
+
+
+def test_frozen_finalize_reuses_checkpoint_already_written_at_final_step(
+    tmp_path,
+) -> None:
+    class _StableHashGroup:
+        @staticmethod
+        def component_state_hashes():
+            return _Ready(
+                [{"world_model": "wm-hash", "classifier": "cls-hash"}]
+            )
+
+    cfg = _cfg(
+        ngpu=8,
+        out_dir=str(tmp_path),
+        checkpoint_every=1,
+        real_env_workers=0,
+        real_env_enabled=False,
+        learner_updates_enabled=False,
+    )
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+    runner._frozen_state_hashes = {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+    runner._frozen_source_checkpoints = {
+        "world_model": "/wm.ckpt",
+        "classifier": "/classifier.ckpt",
+    }
+    runner._frozen_classifier_threshold = 0.65
+    runner._policy_initial_hash = "different-initial-hash"
+    runner._applied_policy_steps = 1
+    actor = _FakeActorGroup()
+    groups = {
+        "ActorGroup": actor,
+        "ReplayGroup": None,
+        "LearnerGroup": None,
+        "WMEnvGroup": _StableHashGroup(),
+    }
+    runner._maybe_save_manual_checkpoint(
+        groups,
+        global_step=1,
+        metrics={"global_step": 1.0},
+    )
+
+    runner._finalize_frozen_policy_run(
+        groups,
+        global_step=1,
+        metrics={"global_step": 1},
+    )
+
+    assert actor.state_dict_calls == [None]
+
+
 def test_manual_runner_resume_restores_replay_and_continues_after_checkpoint_step(
     tmp_path,
     monkeypatch,
@@ -2376,6 +2891,10 @@ def test_manual_runner_resume_restores_replay_and_continues_after_checkpoint_ste
 
     ckpt = tmp_path / "manual_cotrain.ckpt"
     replay_state = {"episodes": ["saved"], "num_transitions": 5}
+    replay_sampling_state = {
+        "task_sample_cursor": 17,
+        "initial_condition_cursor": 19,
+    }
     torch.save(
         {
             "global_step": 2,
@@ -2385,6 +2904,7 @@ def test_manual_runner_resume_restores_replay_and_continues_after_checkpoint_ste
                 "classifier": {"cls": torch.ones(1)},
             },
             "replay": replay_state,
+            "replay_sampling_state": replay_sampling_state,
         },
         ckpt,
     )
@@ -2419,6 +2939,7 @@ def test_manual_runner_resume_restores_replay_and_continues_after_checkpoint_ste
 
     assert seen_steps == [3, 4]
     assert replay.loaded_state == replay_state
+    assert replay.loaded_sampling_state == replay_sampling_state
     assert history["global_step"] == 4
 
 
@@ -2441,3 +2962,54 @@ def test_manual_runner_resume_loads_checkpoint_components_into_wm_env() -> None:
     assert wm_env.component_state_keys == [["classifier", "world_model"]]
     assert "wm" in wm_env.world_model_states[0]
     assert "cls" in wm_env.classifier_states[0]
+
+
+def test_frozen_runner_resume_restores_policy_optimizer_and_binds_sources() -> None:
+    class _StableHashGroup:
+        @staticmethod
+        def component_state_hashes():
+            return _Ready(
+                [{"world_model": "wm-hash", "classifier": "cls-hash"}]
+            )
+
+    runner = manual_runner.ManualCotrainRayRunner(
+        _cfg(
+            ngpu=8,
+            real_env_workers=0,
+            real_env_enabled=False,
+            learner_updates_enabled=False,
+        )
+    )
+    runner._frozen_state_hashes = {
+        "world_model": "wm-hash",
+        "classifier": "cls-hash",
+    }
+    runner._frozen_source_checkpoints = {
+        "world_model": "/wm.ckpt",
+        "classifier": "/classifier.ckpt",
+    }
+    runner._frozen_classifier_threshold = 0.65
+    payload = {
+        "global_step": 500,
+        "state_dicts": {
+            "policy": {"policy.weight": torch.ones(1)},
+            "policy_optimizer": {
+                "state": {0: {"step": torch.tensor(500.0)}},
+                "param_groups": [{"params": [0]}],
+            },
+        },
+        "replay": None,
+        "frozen_state_hashes": dict(runner._frozen_state_hashes),
+        "source_checkpoints": dict(runner._frozen_source_checkpoints),
+        "classifier_threshold": 0.65,
+    }
+    runner._pending_manual_resume_payload = payload
+
+    init_state = runner._actor_init_checkpoint()
+    runner._restore_manual_resume_state(
+        {"WMEnvGroup": _StableHashGroup()},
+        payload,
+    )
+
+    assert set(init_state) == {"policy", "policy_optimizer"}
+    assert init_state["policy_optimizer"]["state"][0]["step"].item() == 500.0

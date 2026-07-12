@@ -64,6 +64,7 @@ class OnlineReplay:
         self._next_collection_index = 0
         self._next_task_episode_index: Counter[int] = Counter()
         self._task_sample_cursor = 0
+        self._initial_condition_cursor = 0
         self._pending_latest_online_episode_ids: set[int] = set()
         self._classifier_pending_windows: deque[
             tuple[Mapping[str, Any], int, int, bool]
@@ -106,6 +107,7 @@ class OnlineReplay:
                 for task_id, count in self._next_task_episode_index.items()
             },
             "task_sample_cursor": int(self._task_sample_cursor),
+            "initial_condition_cursor": int(self._initial_condition_cursor),
             "pending_latest_online_episode_ids": sorted(
                 int(episode_id)
                 for episode_id in self._pending_latest_online_episode_ids
@@ -171,6 +173,9 @@ class OnlineReplay:
                     self._next_task_episode_index[int(task_id)] = int(next_idx)
 
         self.set_task_sample_cursor(int(state.get("task_sample_cursor", 0)))
+        self._initial_condition_cursor = int(
+            state.get("initial_condition_cursor", 0)
+        )
 
         pending = state.get("pending_latest_online_episode_ids", ())
         self._pending_latest_online_episode_ids = {
@@ -216,6 +221,24 @@ class OnlineReplay:
         if resolved < 0:
             raise ValueError("task sample cursor must be non-negative")
         self._task_sample_cursor = resolved
+
+    def sampling_state_dict(self) -> dict[str, int]:
+        """Return only deterministic replay-sampler cursors, without episodes."""
+
+        return {
+            "task_sample_cursor": int(self._task_sample_cursor),
+            "initial_condition_cursor": int(self._initial_condition_cursor),
+        }
+
+    def load_sampling_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore lightweight sampler cursors after deterministic replay seeding."""
+
+        task_cursor = int(state.get("task_sample_cursor", 0))
+        initial_cursor = int(state.get("initial_condition_cursor", 0))
+        if task_cursor < 0 or initial_cursor < 0:
+            raise ValueError("replay sampling cursors must be nonnegative")
+        self.set_task_sample_cursor(task_cursor)
+        self._initial_condition_cursor = initial_cursor
 
     def _capacity_for_task(self, task_id: int) -> int:
         del task_id
@@ -295,6 +318,73 @@ class OnlineReplay:
                 raise KeyError(f"replay bootstrap step missing {key!r}")
             latents.append(np.asarray(first[key], dtype=np.float32))
         return np.stack(latents, axis=0)
+
+    def sample_initial_conditions(
+        self,
+        batch_size: int,
+        *,
+        task_ids: tuple[int, ...] | None = None,
+        keys: tuple[str, ...] = ("obs_embedding", "lang_emb", "proprio"),
+    ) -> dict[str, np.ndarray]:
+        """Return aligned first-step WM conditions with balanced task coverage."""
+
+        count = int(batch_size)
+        if count <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size!r}")
+        requested_keys = tuple(str(key) for key in keys)
+        if not requested_keys:
+            raise ValueError("initial-condition keys must not be empty")
+
+        records_by_task: dict[int, list[dict[str, Any]]] = {}
+        for record in self._valid_records():
+            records_by_task.setdefault(int(record["task_id"]), []).append(record)
+        selected_tasks = tuple(
+            int(task_id)
+            for task_id in (
+                task_ids
+                if task_ids is not None
+                else (self.task_ids or tuple(sorted(records_by_task)))
+            )
+        )
+        if not selected_tasks:
+            raise RuntimeError("online replay has no records for WMEnv bootstrap")
+        missing_tasks = [
+            task_id for task_id in selected_tasks if not records_by_task.get(task_id)
+        ]
+        if missing_tasks:
+            raise RuntimeError(
+                "online replay has no WMEnv bootstrap records for task IDs "
+                f"{missing_tasks}"
+            )
+
+        cursor = int(self._initial_condition_cursor)
+        task_count = len(selected_tasks)
+        selected_records: list[dict[str, Any]] = []
+        sampled_task_ids: list[int] = []
+        for offset in range(count):
+            absolute_index = cursor + offset
+            task_id = selected_tasks[absolute_index % task_count]
+            task_records = records_by_task[task_id]
+            task_cycle = absolute_index // task_count
+            selected_records.append(task_records[task_cycle % len(task_records)])
+            sampled_task_ids.append(int(task_id))
+        self._initial_condition_cursor = cursor + count
+
+        output: dict[str, np.ndarray] = {
+            "task_ids": np.asarray(sampled_task_ids, dtype=np.int64)
+        }
+        for key in requested_keys:
+            values: list[np.ndarray] = []
+            for record in selected_records:
+                episode = record["episode"]
+                if not episode:
+                    raise RuntimeError("online replay record has an empty episode")
+                first = episode[0]
+                if key not in first:
+                    raise KeyError(f"replay bootstrap step missing {key!r}")
+                values.append(np.asarray(first[key], dtype=np.float32))
+            output[key] = np.stack(values, axis=0)
+        return output
 
     @staticmethod
     def _source_id(source: str) -> int:

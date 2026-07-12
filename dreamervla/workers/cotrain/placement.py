@@ -30,7 +30,7 @@ class ManualCotrainPlacementPlan:
     env_specs: list[RolePlacement]
     rollout_specs: list[RolePlacement]
     actor_specs: list[RolePlacement]
-    learner_spec: RolePlacement
+    learner_spec: RolePlacement | None
     actor_fsdp_strategy: str
 
     @property
@@ -48,6 +48,7 @@ def build_manual_cotrain_placement(
     ngpu: int,
     *,
     real_env_workers: int = 1,
+    include_learner: bool = True,
     component_gpu_groups: Mapping[str, Sequence[Any]] | None = None,
 ) -> ManualCotrainPlacementPlan:
     """Build the manual-notes placement plan for a local GPU count."""
@@ -55,18 +56,31 @@ def build_manual_cotrain_placement(
     if count < 0:
         raise ValueError(f"ngpu must be >= 0, got {ngpu!r}")
     real_workers = int(real_env_workers)
-    if real_workers <= 0:
-        raise ValueError(f"real_env_workers must be positive, got {real_env_workers!r}")
+    if real_workers < 0:
+        raise ValueError(
+            f"real_env_workers must be nonnegative, got {real_env_workers!r}"
+        )
 
     if count == 0:
         if component_gpu_groups:
             raise ValueError("component_gpu_groups require ngpu > 0")
         return ManualCotrainPlacementPlan(
             ngpu=0,
-            env_specs=[RolePlacement(kind="env", role="real_env", rank=0, gpu_ids=[])],
+            env_specs=[
+                RolePlacement(
+                    kind="env",
+                    role="real_env" if real_workers else "wm_env",
+                    rank=0,
+                    gpu_ids=[],
+                )
+            ],
             rollout_specs=[RolePlacement(kind="rollout", role="rollout", rank=0, gpu_ids=[])],
             actor_specs=[RolePlacement(kind="actor", role="actor", rank=0, gpu_ids=[])],
-            learner_spec=RolePlacement(kind="learner", role="learner", rank=0, gpu_ids=[]),
+            learner_spec=(
+                RolePlacement(kind="learner", role="learner", rank=0, gpu_ids=[])
+                if include_learner
+                else None
+            ),
             actor_fsdp_strategy="none",
         )
 
@@ -75,6 +89,7 @@ def build_manual_cotrain_placement(
         return _build_component_placement_plan(
             count,
             real_workers=real_workers,
+            include_learner=bool(include_learner),
             component_groups=component_groups,
         )
 
@@ -92,7 +107,11 @@ def build_manual_cotrain_placement(
         RolePlacement(kind="rollout", role="rollout", rank=gpu, gpu_ids=[gpu])
         for gpu in range(count)
     ]
-    actor_gpus = list(range(1, count)) or [0]
+    actor_gpus = (
+        (list(range(1, count)) or [0])
+        if include_learner
+        else list(range(count))
+    )
     actor_specs = [
         RolePlacement(kind="actor", role="actor", rank=rank, gpu_ids=[gpu])
         for rank, gpu in enumerate(actor_gpus)
@@ -103,7 +122,11 @@ def build_manual_cotrain_placement(
         env_specs=env_specs,
         rollout_specs=rollout_specs,
         actor_specs=actor_specs,
-        learner_spec=RolePlacement(kind="learner", role="learner", rank=0, gpu_ids=[0]),
+        learner_spec=(
+            RolePlacement(kind="learner", role="learner", rank=0, gpu_ids=[0])
+            if include_learner
+            else None
+        ),
         actor_fsdp_strategy="fsdp",
     )
 
@@ -112,6 +135,7 @@ def _build_component_placement_plan(
     count: int,
     *,
     real_workers: int,
+    include_learner: bool,
     component_groups: Mapping[str, list[list[int]]],
 ) -> ManualCotrainPlacementPlan:
     env_specs = _component_env_specs(component_groups, real_workers=real_workers)
@@ -125,16 +149,27 @@ def _build_component_placement_plan(
             "manual cotrain rollout component placement must cover every env rank: "
             f"got {len(rollout_specs)} rollout worker(s) for {len(env_specs)} env worker(s)"
         )
-    actor_groups = component_groups.get("actor") or _default_actor_groups(count)
+    actor_groups = component_groups.get("actor") or _default_actor_groups(
+        count,
+        include_learner=include_learner,
+    )
     actor_specs = _component_role_specs(
         kind="actor",
         role="actor",
         groups=actor_groups,
     )
-    learner_groups = component_groups.get("learner") or actor_groups[:1]
-    if len(learner_groups) != 1:
-        raise ValueError(
-            "manual cotrain learner component placement must produce exactly one worker"
+    learner_spec = None
+    if include_learner:
+        learner_groups = component_groups.get("learner") or actor_groups[:1]
+        if len(learner_groups) != 1:
+            raise ValueError(
+                "manual cotrain learner component placement must produce exactly one worker"
+            )
+        learner_spec = RolePlacement(
+            kind="learner",
+            role="learner",
+            rank=0,
+            gpu_ids=list(learner_groups[0]),
         )
 
     return ManualCotrainPlacementPlan(
@@ -142,12 +177,7 @@ def _build_component_placement_plan(
         env_specs=env_specs,
         rollout_specs=rollout_specs,
         actor_specs=actor_specs,
-        learner_spec=RolePlacement(
-            kind="learner",
-            role="learner",
-            rank=0,
-            gpu_ids=list(learner_groups[0]),
-        ),
+        learner_spec=learner_spec,
         actor_fsdp_strategy="fsdp",
     )
 
@@ -209,8 +239,17 @@ def _default_rollout_groups(count: int) -> list[list[int]]:
     return [[gpu] for gpu in range(count)]
 
 
-def _default_actor_groups(count: int) -> list[list[int]]:
-    return [[gpu] for gpu in (list(range(1, count)) or [0])]
+def _default_actor_groups(
+    count: int,
+    *,
+    include_learner: bool = True,
+) -> list[list[int]]:
+    actor_gpus = (
+        (list(range(1, count)) or [0])
+        if include_learner
+        else list(range(count))
+    )
+    return [[gpu] for gpu in actor_gpus]
 
 
 def _normalize_component_gpu_groups(

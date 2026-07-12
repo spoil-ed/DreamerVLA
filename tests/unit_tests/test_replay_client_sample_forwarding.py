@@ -14,6 +14,7 @@ test doubles) that don't know about staleness still work.
 
 from __future__ import annotations
 
+import dreamervla.workers.replay.replay_worker as replay_worker_module
 from dreamervla.workers.actor.learner_worker import ReplayClient
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 
@@ -43,6 +44,27 @@ class _ClassifierSpyReplay:
     def sample_classifier_windows(self, batch_size, **kwargs):
         self.calls.append((int(batch_size), dict(kwargs)))
         return {"batch_size": int(batch_size)}
+
+
+class _InitialConditionSpyReplay:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict]] = []
+
+    def sample_initial_conditions(self, batch_size, **kwargs):
+        self.calls.append((int(batch_size), dict(kwargs)))
+        return {"task_ids": [0] * int(batch_size)}
+
+
+class _SeedSpyReplay:
+    episodes = [object(), object()]
+    num_transitions = 72
+
+    @staticmethod
+    def task_stats(task_ids=None):
+        return {
+            str(task_id): {"episodes": 1, "transitions": 36}
+            for task_id in (task_ids or ())
+        }
 
 
 def test_default_path_sends_no_staleness_kwarg():
@@ -131,3 +153,65 @@ def test_classifier_options_reach_replay_through_ray_worker_facade():
             },
         )
     ]
+
+
+def test_initial_condition_options_reach_replay_through_ray_worker_facade():
+    spy = _InitialConditionSpyReplay()
+    worker = ReplayWorker.__new__(ReplayWorker)
+    worker.replay = spy
+
+    worker.sample_initial_conditions(
+        16,
+        task_ids=tuple(range(10)),
+        keys=("obs_embedding", "lang_emb", "proprio"),
+    )
+
+    assert spy.calls == [
+        (
+            16,
+            {
+                "task_ids": tuple(range(10)),
+                "keys": ("obs_embedding", "lang_emb", "proprio"),
+            },
+        )
+    ]
+
+
+def test_ray_replay_worker_seeds_official_data_through_shared_loader(monkeypatch):
+    calls: list[dict] = []
+
+    def _seed(replay, **kwargs):
+        calls.append({"replay": replay, **kwargs})
+        return 2
+
+    monkeypatch.setattr(replay_worker_module, "seed_replay_from_offline", _seed)
+    replay = _SeedSpyReplay()
+    worker = ReplayWorker.__new__(ReplayWorker)
+    worker.replay = replay
+
+    metrics = worker.seed_from_offline(
+        {
+            "data_dir": "/official/reward",
+            "hidden_dir": "/official/hidden",
+            "task_id": None,
+            "infer_task_id_from_shard": True,
+            "task_ids": [0, 1],
+            "max_episodes_per_task": None,
+            "require_reference_complete": False,
+        }
+    )
+
+    assert calls == [
+        {
+            "replay": replay,
+            "data_dir": "/official/reward",
+            "hidden_dir": "/official/hidden",
+            "default_task_id": None,
+            "infer_task_id_from_shard": True,
+            "max_episodes_per_task": None,
+            "require_reference_complete": False,
+        }
+    ]
+    assert metrics["replay_buffer/seeded_episodes"] == 2.0
+    assert metrics["replay_buffer/seeded_transitions"] == 72.0
+    assert metrics["replay_buffer/seeded_task_count"] == 2.0

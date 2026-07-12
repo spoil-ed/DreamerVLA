@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import ray
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
@@ -34,6 +35,12 @@ from dreamervla.scheduler.placement import (
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
+from dreamervla.utils.frozen_components import (
+    load_frozen_component,
+    require_component_config_match,
+    resolve_classifier_threshold,
+    state_dict_sha256,
+)
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
@@ -61,6 +68,13 @@ class ManualCotrainRayRunner(BaseRunner):
         self._real_rollout_episodes = 0
         self._real_rollout_successes = 0
         self._overlap_bootstrap_offload_warned = False
+        self._frozen_state_hashes: dict[str, str] = {}
+        self._frozen_source_checkpoints: dict[str, str] = {}
+        self._frozen_classifier_threshold: float | None = None
+        self._pending_manual_resume_payload: dict[str, Any] | None = None
+        self._policy_initial_hash = ""
+        self._policy_final_hash = ""
+        self._applied_policy_steps = 0
 
     def setup(self) -> None:
         super().setup()
@@ -77,9 +91,10 @@ class ManualCotrainRayRunner(BaseRunner):
         cluster = Cluster(cluster_cfg)
         try:
             cluster.require_single_node()
-            groups = self._build_groups(cluster)
             _hs_trace("[manual-cotrain] resume payload load start")
             resume_payload = self._manual_resume_payload()
+            self._pending_manual_resume_payload = resume_payload
+            groups = self._build_groups(cluster)
             resume_step = 0
             if resume_payload is not None:
                 resume_step = int(resume_payload.get("global_step", 0))
@@ -104,14 +119,24 @@ class ManualCotrainRayRunner(BaseRunner):
                 self.log_metrics(step_metrics, step=global_step)
                 last_step = int(global_step)
             metrics["global_step"] = int(last_step)
+            if not self._learner_updates_enabled():
+                self._finalize_frozen_policy_run(
+                    groups,
+                    global_step=int(last_step),
+                    metrics=metrics,
+                )
             return metrics
         finally:
+            self._pending_manual_resume_payload = None
             cluster.shutdown()
 
     def _placement_plan(self) -> ManualCotrainPlacementPlan:
         return build_manual_cotrain_placement(
             self._ngpu(),
-            real_env_workers=self._real_env_workers(),
+            real_env_workers=(
+                self._real_env_workers() if self._real_env_enabled() else 0
+            ),
+            include_learner=self._learner_updates_enabled(),
             component_gpu_groups=self._component_gpu_groups(),
         )
 
@@ -137,7 +162,16 @@ class ManualCotrainRayRunner(BaseRunner):
         return groups or None
 
     def _target_group_names(self) -> list[str]:
-        return ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
+        if self._learner_updates_enabled() and self._real_env_enabled():
+            return ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
+        names: list[str] = []
+        if self._learner_updates_enabled():
+            names.append("LearnerGroup")
+        names.extend(["ActorGroup", "RolloutGroup"])
+        if self._real_env_enabled():
+            names.append("RealEnvGroup")
+        names.append("WMEnvGroup")
+        return names
 
     def _global_step_operation_names(self) -> list[str]:
         return [
@@ -193,6 +227,8 @@ class ManualCotrainRayRunner(BaseRunner):
         actor_channel = Channel.create(actor_channel_name)
         replay_group = None
         replay = None
+        replay_seed_metrics: dict[str, float] = {}
+        replay_resume_restored = False
         replay_cfg = OmegaConf.select(self.cfg, "replay.cfg", default=None)
         if replay_cfg is not None:
             _hs_trace("[build_groups] launch ReplayWorker start")
@@ -202,35 +238,77 @@ class ManualCotrainRayRunner(BaseRunner):
             ).launch(cluster, NodePlacementStrategy(1), name="ReplayWorker")
             replay = replay_group.workers[0]
             _hs_trace("[build_groups] launch ReplayWorker done")
+            replay_seed_cfg = OmegaConf.select(
+                self.cfg,
+                "replay.seed",
+                default=None,
+            )
+            resume_replay_state = (
+                self._pending_manual_resume_payload.get("replay")
+                if self._pending_manual_resume_payload is not None
+                else None
+            )
+            if resume_replay_state is not None:
+                replay_group.load_state_dict(dict(resume_replay_state)).wait()
+                replay_resume_restored = True
+            elif replay_seed_cfg is not None:
+                _hs_trace("[build_groups] seed ReplayWorker start")
+                replay_seed_metrics = _merge_metric_lists(
+                    [
+                        replay_group.seed_from_offline(
+                            self._cfg_dict("replay.seed")
+                        ).wait()
+                    ]
+                )
+                _hs_trace("[build_groups] seed ReplayWorker done")
+            resume_sampling_state = (
+                self._pending_manual_resume_payload.get("replay_sampling_state")
+                if self._pending_manual_resume_payload is not None
+                else None
+            )
+            if resume_sampling_state is not None:
+                replay_group.load_sampling_state_dict(
+                    dict(resume_sampling_state)
+                ).wait()
+                replay_resume_restored = True
 
         real_specs = [spec for spec in plan.env_specs if spec.role == "real_env"]
-        if not real_specs:
-            raise ValueError("manual cotrain placement must include a real_env worker")
-        real_rollout_epochs = self._real_rollout_epochs_by_worker(len(real_specs))
-        initial_real_rollout_epoch = real_rollout_epochs[0]
-        _hs_trace("[build_groups] launch RealEnvWorker start")
-        real_env_group = WorkerGroup(
-            RealEnvWorker,
-            self._real_env_cfg(),
-            self._envs_per_worker(),
-            initial_real_rollout_epoch,
-            self._max_steps_per_rollout_epoch(),
-            self._num_action_chunks(),
-            task_id=self._task_id(),
-            replay=replay,
-            dump=None,
-            rank_offset=0,
-            request_final_bootstrap=self._requires_bootstrap_value(),
-        ).launch(
-            cluster,
-            self._resource_map_for_specs(real_specs),
-            name="RealEnvWorker",
-        )
-        for rank, rollout_epoch in enumerate(real_rollout_epochs):
-            real_env_group.execute_on(rank).configure_rollout_epoch(rollout_epoch).wait()
-        _hs_trace("[build_groups] launch RealEnvWorker done")
+        real_env_group = None
+        if self._real_env_enabled():
+            if not real_specs:
+                raise ValueError(
+                    "manual cotrain placement must include a real_env worker when "
+                    "manual_cotrain.real_env_enabled=true"
+                )
+            real_rollout_epochs = self._real_rollout_epochs_by_worker(len(real_specs))
+            initial_real_rollout_epoch = real_rollout_epochs[0]
+            _hs_trace("[build_groups] launch RealEnvWorker start")
+            real_env_group = WorkerGroup(
+                RealEnvWorker,
+                self._real_env_cfg(),
+                self._envs_per_worker(),
+                initial_real_rollout_epoch,
+                self._max_steps_per_rollout_epoch(),
+                self._num_action_chunks(),
+                task_id=self._task_id(),
+                replay=replay,
+                dump=None,
+                rank_offset=0,
+                request_final_bootstrap=self._requires_bootstrap_value(),
+            ).launch(
+                cluster,
+                self._resource_map_for_specs(real_specs),
+                name="RealEnvWorker",
+            )
+            for rank, rollout_epoch in enumerate(real_rollout_epochs):
+                real_env_group.execute_on(rank).configure_rollout_epoch(
+                    rollout_epoch
+                ).wait()
+            _hs_trace("[build_groups] launch RealEnvWorker done")
         wm_specs = [spec for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
+        frozen_component_load_metrics: dict[str, float] = {}
+        frozen_hashes_verified = False
         if wm_specs:
             wm_rollout_epochs = self._wm_rollout_epochs_by_worker(len(wm_specs))
             initial_wm_rollout_epoch = wm_rollout_epochs[0]
@@ -256,6 +334,33 @@ class ManualCotrainRayRunner(BaseRunner):
             for rank, rollout_epoch in enumerate(wm_rollout_epochs):
                 wm_env_group.execute_on(rank).configure_rollout_epoch(rollout_epoch).wait()
             _hs_trace("[build_groups] launch WMEnvWorker done")
+            if not self._learner_updates_enabled():
+                frozen = self._load_frozen_component_states()
+                shared_component_states = _share_ray_value(
+                    frozen["component_states"],
+                    cluster=cluster,
+                )
+                frozen_component_load_metrics = _merge_metric_lists(
+                    [
+                        wm_env_group.load_component_states(
+                            shared_component_states,
+                            0,
+                        ).wait()
+                    ]
+                )
+                self._frozen_state_hashes = dict(frozen["frozen_state_hashes"])
+                self._frozen_source_checkpoints = dict(
+                    frozen["source_checkpoints"]
+                )
+                self._frozen_classifier_threshold = float(
+                    frozen["component_states"]["classifier_threshold"]
+                )
+                self._assert_frozen_component_hashes(
+                    {"WMEnvGroup": wm_env_group}
+                )
+                frozen_hashes_verified = True
+        elif not self._real_env_enabled():
+            raise ValueError("frozen manual cotrain requires at least one WMEnvWorker")
 
         _hs_trace("[build_groups] launch MultiStepRolloutWorker start")
         rollout_group = WorkerGroup(
@@ -272,10 +377,14 @@ class ManualCotrainRayRunner(BaseRunner):
         _hs_trace("[build_groups] launch MultiStepRolloutWorker done")
 
         _hs_trace("[build_groups] launch EmbodiedFSDPActor start")
+        actor_init_checkpoint = _share_ray_value(
+            self._actor_init_checkpoint(),
+            cluster=cluster,
+        )
         actor_group = WorkerGroup(
             EmbodiedFSDPActor,
             self._cfg_dict("actor.policy_cfg"),
-            self._load_init_ckpt("actor.init_ckpt"),
+            actor_init_checkpoint,
             self._cfg_dict("actor.train_cfg"),
         ).launch(
             cluster,
@@ -283,20 +392,28 @@ class ManualCotrainRayRunner(BaseRunner):
             name="EmbodiedFSDPActor",
         )
         _hs_trace("[build_groups] launch EmbodiedFSDPActor done")
+        if not self._learner_updates_enabled():
+            self._initialize_policy_hashes(actor_group)
 
-        _hs_trace("[build_groups] launch LearnerWorker start")
-        learner_group = WorkerGroup(
-            LearnerWorker,
-            self._cfg_dict("learner.model_cfg"),
-            self._load_init_ckpt("learner.init_ckpt"),
-            self._cfg_dict("learner.train_cfg"),
-            replay,
-        ).launch(
-            cluster,
-            self._placement_for(plan.learner_spec.gpu_ids),
-            name="LearnerWorker",
-        )
-        _hs_trace("[build_groups] launch LearnerWorker done")
+        learner_group = None
+        if self._learner_updates_enabled():
+            if plan.learner_spec is None:
+                raise ValueError(
+                    "manual cotrain learner updates require a learner placement"
+                )
+            _hs_trace("[build_groups] launch LearnerWorker start")
+            learner_group = WorkerGroup(
+                LearnerWorker,
+                self._cfg_dict("learner.model_cfg"),
+                self._load_init_ckpt("learner.init_ckpt"),
+                self._cfg_dict("learner.train_cfg"),
+                replay,
+            ).launch(
+                cluster,
+                self._placement_for(plan.learner_spec.gpu_ids),
+                name="LearnerWorker",
+            )
+            _hs_trace("[build_groups] launch LearnerWorker done")
         _hs_trace("[build_groups] all groups launched")
 
         return {
@@ -304,6 +421,12 @@ class ManualCotrainRayRunner(BaseRunner):
             "ActorGroup": actor_group,
             "RolloutGroup": rollout_group,
             "ReplayGroup": replay_group,
+            "replay_resume_restored": bool(replay_resume_restored),
+            "replay_seed_metrics": replay_seed_metrics,
+            "frozen_component_load_metrics": frozen_component_load_metrics,
+            "frozen_state_hashes": dict(self._frozen_state_hashes),
+            "frozen_source_checkpoints": dict(self._frozen_source_checkpoints),
+            "frozen_hashes_verified": bool(frozen_hashes_verified),
             "replay": replay,
             "RealEnvGroup": real_env_group,
             "WMEnvGroup": wm_env_group,
@@ -316,11 +439,123 @@ class ManualCotrainRayRunner(BaseRunner):
             "placement": plan,
         }
 
+    def _load_frozen_component_states(self) -> dict[str, Any]:
+        """Load and validate immutable WM/CLS sources for the policy-only route."""
+
+        wm_path = self._init_ckpt_path("init.world_model_state_ckpt")
+        classifier_path = self._init_ckpt_path("init.classifier_state_ckpt")
+        if wm_path is None or classifier_path is None:
+            raise ValueError(
+                "frozen manual cotrain requires explicit world-model and classifier "
+                "checkpoints"
+            )
+        loaded_wm = load_frozen_component(wm_path, "world_model")
+        loaded_classifier = load_frozen_component(classifier_path, "classifier")
+        require_component_config_match(
+            loaded_wm.metadata,
+            component="world_model",
+            active_cfg=OmegaConf.select(self.cfg, "world_model"),
+        )
+        require_component_config_match(
+            loaded_classifier.metadata,
+            component="classifier",
+            active_cfg=OmegaConf.select(self.cfg, "classifier"),
+        )
+        configured_threshold = OmegaConf.select(
+            self.cfg,
+            "algorithm.lumos.classifier_threshold",
+            default=None,
+        )
+        threshold = resolve_classifier_threshold(
+            loaded_classifier.metadata,
+            configured=(
+                None
+                if configured_threshold is None
+                else float(configured_threshold)
+            ),
+        )
+        return {
+            "component_states": {
+                "world_model": loaded_wm.state_dict,
+                "classifier": loaded_classifier.state_dict,
+                "classifier_threshold": float(threshold),
+            },
+            "frozen_state_hashes": {
+                "world_model": state_dict_sha256(loaded_wm.state_dict),
+                "classifier": state_dict_sha256(loaded_classifier.state_dict),
+            },
+            "source_checkpoints": {
+                "world_model": str(Path(wm_path).expanduser().resolve()),
+                "classifier": str(Path(classifier_path).expanduser().resolve()),
+            },
+        }
+
+    def _actor_init_checkpoint(self) -> dict[str, Any]:
+        payload = self._pending_manual_resume_payload
+        if payload is not None:
+            state_dicts = payload.get("state_dicts", {})
+            policy_state = (
+                state_dicts.get("policy")
+                if isinstance(state_dicts, dict)
+                else None
+            )
+            if not isinstance(policy_state, dict) or not policy_state:
+                raise RuntimeError(
+                    "manual cotrain resume checkpoint has no non-empty policy state"
+                )
+            init_state = {"policy": dict(policy_state)}
+            optimizer_state = state_dicts.get("policy_optimizer")
+            if isinstance(optimizer_state, dict) and optimizer_state:
+                init_state["policy_optimizer"] = dict(optimizer_state)
+            return init_state
+        return self._load_init_ckpt("actor.init_ckpt")
+
+    def _initialize_policy_hashes(self, actor_group: Any) -> None:
+        actor_state = _first_nonempty_mapping(actor_group.state_dict().wait())
+        current_hash = state_dict_sha256(actor_state)
+        payload = self._pending_manual_resume_payload
+        if payload is None:
+            self._policy_initial_hash = current_hash
+            self._policy_final_hash = current_hash
+            self._applied_policy_steps = 0
+            return
+        expected_current = str(payload.get("policy_final_hash", "") or "")
+        if expected_current and expected_current != current_hash:
+            raise RuntimeError(
+                "resume policy state hash differs from checkpoint metadata"
+            )
+        self._policy_initial_hash = str(
+            payload.get("policy_initial_hash", current_hash) or current_hash
+        )
+        self._policy_final_hash = current_hash
+        self._applied_policy_steps = int(
+            payload.get("applied_policy_steps", 0) or 0
+        )
+
+    def _assert_frozen_component_hashes(self, groups: dict[str, Any]) -> None:
+        expected = dict(self._frozen_state_hashes)
+        if not expected:
+            raise RuntimeError("frozen WM/classifier source hashes are missing")
+        wm_env = groups.get("WMEnvGroup")
+        if wm_env is None:
+            raise RuntimeError("frozen WM/classifier audit requires WMEnvGroup")
+        raw_results = wm_env.component_state_hashes().wait()
+        results = raw_results if isinstance(raw_results, list) else [raw_results]
+        if not results:
+            raise RuntimeError("WMEnvGroup returned no frozen component hashes")
+        for rank, raw_hashes in enumerate(results):
+            hashes = dict(raw_hashes or {})
+            if hashes != expected:
+                raise RuntimeError(
+                    "frozen WM/classifier state drift detected on WMEnv rank "
+                    f"{rank}: {hashes!r} != {expected!r}"
+                )
+
     def _run_global_step(self, groups: dict[str, Any], global_step: int) -> dict[str, float]:
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
-        learner = groups["LearnerGroup"]
-        real_env = groups["RealEnvGroup"]
+        learner = groups.get("LearnerGroup")
+        real_env = groups.get("RealEnvGroup")
         wm_env = groups.get("WMEnvGroup")
         env_channel_name = str(groups["env_channel_name"])
         rollout_channel_name = str(groups["rollout_channel_name"])
@@ -338,7 +573,8 @@ class ManualCotrainRayRunner(BaseRunner):
         stage_start = time.perf_counter()
         actor.set_global_step(global_step).wait()
         rollout.set_global_step(global_step).wait()
-        real_env.set_global_step(global_step).wait()
+        if real_env is not None:
+            real_env.set_global_step(global_step).wait()
         if wm_env is not None:
             wm_env.set_global_step(global_step).wait()
         progress_dir = self._manual_cotrain_progress_dir(global_step)
@@ -367,9 +603,15 @@ class ManualCotrainRayRunner(BaseRunner):
         stage_start = mark_stage("actor_to_rollout_sync", stage_start)
 
         _hs_trace(f"[global_step={global_step}] EnvGroup.interact start")
-        real_env_results = [
-            real_env.interact(env_channel_name, rollout_channel_name, actor_channel_name)
-        ]
+        real_env_results = []
+        if real_env is not None:
+            real_env_results.append(
+                real_env.interact(
+                    env_channel_name,
+                    rollout_channel_name,
+                    actor_channel_name,
+                )
+            )
         env_results = list(real_env_results)
         if wm_env is not None and not dynamic_wm_leases:
             env_results.append(
@@ -441,12 +683,23 @@ class ManualCotrainRayRunner(BaseRunner):
         train_handle = actor.run_training()
         prefetch_handle = self._maybe_prefetch_env_bootstrap(real_env)
         train_metrics = _aggregate_actor_metric_lists([train_handle.wait()])
+        if not self._learner_updates_enabled():
+            self._applied_policy_steps += int(
+                max(0.0, float(train_metrics.get("actor/ppo_updates", 0.0)))
+            )
         if prefetch_handle is not None:
             prefetch_handle.wait()
         stage_start = mark_stage("actor_run_training", stage_start)
 
         learner_metrics: dict[str, float] = {}
-        if global_step % self._learner_update_step() == 0:
+        if self._learner_updates_enabled() and learner is None:
+            raise ValueError(
+                "manual cotrain learner updates are enabled but LearnerGroup is absent"
+            )
+        if (
+            self._learner_updates_enabled()
+            and global_step % self._learner_update_step() == 0
+        ):
             learner_metrics = _with_train_learner_aliases(
                 _merge_metric_lists([learner.update(self._learner_update_phase(), 1).wait()])
             )
@@ -529,6 +782,9 @@ class ManualCotrainRayRunner(BaseRunner):
             **sync_metrics,
             **stage_times,
         }
+        if global_step == 1:
+            metrics.update(groups.get("replay_seed_metrics", {}))
+            metrics.update(groups.get("frozen_component_load_metrics", {}))
         metrics = _with_train_learner_aliases(metrics)
         checkpoint_start = time.perf_counter()
         self._maybe_save_manual_checkpoint(groups, global_step, metrics)
@@ -648,7 +904,39 @@ class ManualCotrainRayRunner(BaseRunner):
         )
 
     def _real_env_workers(self) -> int:
-        return self._positive_manual_int("real_env_workers", default=1)
+        value = int(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.real_env_workers",
+                default=1,
+            )
+        )
+        minimum = 1 if self._real_env_enabled() else 0
+        if value < minimum:
+            relation = "positive" if minimum == 1 else "nonnegative"
+            raise ValueError(
+                "manual_cotrain.real_env_workers must be "
+                f"{relation}, got {value}"
+            )
+        return value
+
+    def _real_env_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.real_env_enabled",
+                default=True,
+            )
+        )
+
+    def _learner_updates_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.learner_updates_enabled",
+                default=True,
+            )
+        )
 
     def _real_rollout_target_trajectories(self) -> int | None:
         value = OmegaConf.select(
@@ -667,6 +955,8 @@ class ManualCotrainRayRunner(BaseRunner):
         return target
 
     def _real_rollout_epochs_by_worker(self, worker_count: int) -> list[int]:
+        if int(worker_count) <= 0:
+            return []
         return self._rollout_epochs_by_worker(
             worker_count,
             target_trajectories=self._real_rollout_target_trajectories(),
@@ -685,6 +975,15 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _wm_rollout_lease_epochs(self) -> int:
         return self._positive_manual_int("wm_rollout_lease_epochs", default=1)
+
+    def _refresh_wm_initial_conditions_per_lease(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.refresh_wm_initial_conditions_per_lease",
+                default=False,
+            )
+        )
 
     def _wm_rollout_target_trajectories(self) -> int | None:
         value = OmegaConf.select(
@@ -843,7 +1142,7 @@ class ManualCotrainRayRunner(BaseRunner):
         that force-disables bootstrap overlap while the actor is offloaded.
         """
 
-        if not self._overlap_env_bootstrap_enabled():
+        if real_env is None or not self._overlap_env_bootstrap_enabled():
             return None
         if self._actor_cpu_offload_enabled():
             if not self._overlap_bootstrap_offload_warned:
@@ -914,10 +1213,12 @@ class ManualCotrainRayRunner(BaseRunner):
         completed_metrics: list[Any] = []
         start = time.monotonic()
         configured_real_workers = (
-            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
+            min(self._real_env_workers(), self._ngpu())
+            if self._real_env_enabled() and self._ngpu() > 0
+            else (1 if self._real_env_enabled() else 0)
         )
         real_worker_epochs = self._real_rollout_epochs_by_worker(
-            max(1, int(configured_real_workers))
+            int(configured_real_workers)
         )
         real_total_chunks = (
             sum(real_worker_epochs)
@@ -932,7 +1233,7 @@ class ManualCotrainRayRunner(BaseRunner):
             self._num_action_chunks(),
         )
         wm_total_chunks = int(total_wm_epochs) * int(wm_chunks_per_epoch)
-        real_completed = False
+        real_completed = not pending_real
 
         def check_rollout_failure() -> None:
             ready = rollout_result.ready()
@@ -952,6 +1253,8 @@ class ManualCotrainRayRunner(BaseRunner):
                 f"[wm env rank={int(rank)}] start dynamic imagine lease "
                 f"rollout_epoch={int(lease)} remaining_before={int(remaining_wm_epochs)}"
             )
+            if self._refresh_wm_initial_conditions_per_lease():
+                wm_env.execute_on(int(rank)).refresh_wm_initial_conditions().wait()
             wm_env.execute_on(int(rank)).configure_rollout_epoch(int(lease)).wait()
             active_wm[int(rank)] = (
                 wm_env.execute_on(int(rank)).interact(
@@ -1039,12 +1342,16 @@ class ManualCotrainRayRunner(BaseRunner):
                     metrics=_sum_metric_lists(completed_metrics),
                 )
             )
-            finished = int(real_done >= real_total_chunks) + int(wm_done >= wm_total_chunks)
+            has_real_role = real_total_chunks > 0
+            finished = (
+                int(has_real_role and real_done >= real_total_chunks)
+                + int(wm_done >= wm_total_chunks)
+            )
             return _ManualCotrainProgressSnapshot(
                 done=done,
                 total=total,
                 status=" ".join(parts),
-                worker_count=2,
+                worker_count=int(has_real_role) + 1,
                 finished_count=finished,
             )
 
@@ -1502,17 +1809,53 @@ class ManualCotrainRayRunner(BaseRunner):
     ) -> None:
         resume_step = int(payload.get("global_step", 0) or 0)
         replay_state = payload.get("replay")
-        if replay_state is not None:
+        replay_sampling_state = payload.get("replay_sampling_state")
+        if (replay_state is not None or replay_sampling_state is not None) and not bool(
+            groups.get("replay_resume_restored", False)
+        ):
             replay_group = groups.get("ReplayGroup")
             if replay_group is None:
                 raise ValueError(
-                    "manual checkpoint contains replay state but active config has no ReplayGroup"
+                    "manual checkpoint contains replay state but active config has no "
+                    "ReplayGroup"
                 )
-            replay_group.load_state_dict(dict(replay_state)).wait()
+            if replay_state is not None:
+                replay_group.load_state_dict(dict(replay_state)).wait()
+            if replay_sampling_state is not None:
+                replay_group.load_sampling_state_dict(
+                    dict(replay_sampling_state)
+                ).wait()
 
         wm_env = groups.get("WMEnvGroup")
         state_dicts = payload.get("state_dicts", {})
-        if wm_env is not None and isinstance(state_dicts, dict):
+        if not self._learner_updates_enabled():
+            payload_hashes = dict(payload.get("frozen_state_hashes", {}) or {})
+            if payload_hashes != self._frozen_state_hashes:
+                raise RuntimeError(
+                    "resume frozen hashes differ from the explicit WM/CLS checkpoints"
+                )
+            payload_sources = dict(payload.get("source_checkpoints", {}) or {})
+            if payload_sources != self._frozen_source_checkpoints:
+                raise RuntimeError(
+                    "resume frozen sources differ from the explicit WM/CLS checkpoints"
+                )
+            payload_threshold = payload.get("classifier_threshold")
+            if (
+                payload_threshold is None
+                or self._frozen_classifier_threshold is None
+                or float(payload_threshold) != float(self._frozen_classifier_threshold)
+            ):
+                raise RuntimeError(
+                    "resume classifier threshold differs from the explicit checkpoint"
+                )
+            if isinstance(state_dicts, dict) and any(
+                name in state_dicts for name in ("world_model", "classifier")
+            ):
+                raise RuntimeError(
+                    "frozen Ray resume checkpoint must not embed WM/classifier states"
+                )
+            self._assert_frozen_component_hashes(groups)
+        elif wm_env is not None and isinstance(state_dicts, dict):
             component_states = {
                 name: dict(state_dicts.get(name, {}))
                 for name in ("world_model", "classifier")
@@ -1533,7 +1876,9 @@ class ManualCotrainRayRunner(BaseRunner):
         groups: dict[str, Any],
         global_step: int,
         metrics: dict[str, float],
-    ) -> None:
+        *,
+        force: bool = False,
+    ) -> Path | None:
         interval = int(
             OmegaConf.select(
                 self.cfg,
@@ -1542,30 +1887,61 @@ class ManualCotrainRayRunner(BaseRunner):
             )
             or 0
         )
-        if interval <= 0 or int(global_step) % interval != 0:
-            return
+        if not force and (interval <= 0 or int(global_step) % interval != 0):
+            return None
+        if not self._learner_updates_enabled():
+            self._assert_frozen_component_hashes(groups)
         ckpt_dir = (
             self.get_checkpoint_dir() / f"manual_cotrain_step_{int(global_step)}"
         )
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         actor_state = _first_nonempty_mapping(groups["ActorGroup"].state_dict().wait())
-        learner_states = groups["LearnerGroup"].state_dicts().wait()[0]
-        if not isinstance(learner_states, dict):
-            raise TypeError("LearnerGroup.state_dicts() must return a mapping")
+        if not self._learner_updates_enabled():
+            self._policy_final_hash = state_dict_sha256(actor_state)
+            if not self._policy_initial_hash:
+                self._policy_initial_hash = self._policy_final_hash
+        learner_group = groups.get("LearnerGroup")
+        learner_states: dict[str, Any] = {}
+        if learner_group is not None:
+            raw_learner_states = learner_group.state_dicts().wait()[0]
+            if not isinstance(raw_learner_states, dict):
+                raise TypeError("LearnerGroup.state_dicts() must return a mapping")
+            learner_states = raw_learner_states
         replay_group = groups.get("ReplayGroup")
         replay_state = None
+        replay_sampling_state = None
+        if replay_group is not None:
+            replay_sampling_state = _first_result(
+                replay_group.sampling_state_dict().wait()
+            )
+            if not isinstance(replay_sampling_state, dict):
+                raise TypeError(
+                    "ReplayGroup.sampling_state_dict() must return a mapping"
+                )
         if replay_group is not None and self._save_replay_state():
             replay_state = replay_group.state_dict().wait()[0]
         ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
-        state_dicts = {
-            "policy": dict(actor_state),
-            "world_model": dict(learner_states.get("world_model", {})),
-            "classifier": dict(learner_states.get("classifier", {})),
-        }
+        state_dicts = {"policy": dict(actor_state)}
+        if not self._learner_updates_enabled():
+            optimizer_state = _first_nonempty_mapping(
+                groups["ActorGroup"].optimizer_state_dict().wait()
+            )
+            if not optimizer_state:
+                raise RuntimeError(
+                    "frozen policy checkpoint has no optimizer state"
+                )
+            state_dicts["policy_optimizer"] = optimizer_state
+        if learner_group is not None:
+            state_dicts.update(
+                {
+                    "world_model": dict(learner_states.get("world_model", {})),
+                    "classifier": dict(learner_states.get("classifier", {})),
+                }
+            )
         classifier_threshold = (
             float(learner_states["classifier_threshold"])
             if "classifier_threshold" in learner_states
-            else None
+            else self._frozen_classifier_threshold
         )
         payload = {
             "global_step": int(global_step),
@@ -1573,7 +1949,16 @@ class ManualCotrainRayRunner(BaseRunner):
             "metrics": dict(metrics),
             "state_dicts": state_dicts,
             "replay": replay_state,
+            "replay_sampling_state": replay_sampling_state,
         }
+        if not self._learner_updates_enabled():
+            payload["frozen_state_hashes"] = dict(self._frozen_state_hashes)
+            payload["source_checkpoints"] = dict(
+                self._frozen_source_checkpoints
+            )
+            payload["policy_initial_hash"] = str(self._policy_initial_hash)
+            payload["policy_final_hash"] = str(self._policy_final_hash)
+            payload["applied_policy_steps"] = int(self._applied_policy_steps)
         if classifier_threshold is not None:
             payload["classifier_threshold"] = classifier_threshold
         torch.save(
@@ -1585,7 +1970,11 @@ class ManualCotrainRayRunner(BaseRunner):
             global_step=int(global_step),
             metrics=metrics,
             ckpt_name=ckpt_path.name,
-            state_dicts=state_dicts,
+            state_dicts={
+                name: state
+                for name, state in state_dicts.items()
+                if name != "policy_optimizer"
+            },
             has_replay=replay_state is not None,
             run=run_metadata,
         )
@@ -1598,7 +1987,11 @@ class ManualCotrainRayRunner(BaseRunner):
                 global_step=int(global_step),
                 metrics=metrics,
                 ckpt_name=alias_payload,
-                state_dicts=state_dicts,
+                state_dicts={
+                    name: state
+                    for name, state in state_dicts.items()
+                    if name != "policy_optimizer"
+                },
                 has_replay=replay_state is not None,
                 run=self._manual_checkpoint_run_metadata(canonical_dir),
             )
@@ -1606,6 +1999,67 @@ class ManualCotrainRayRunner(BaseRunner):
                 canonical_dir / "manual_cotrain_manifest.json",
                 alias_manifest,
             )
+        return ckpt_path
+
+    def _finalize_frozen_policy_run(
+        self,
+        groups: dict[str, Any],
+        *,
+        global_step: int,
+        metrics: dict[str, float | int],
+    ) -> None:
+        checkpoint = (
+            self.get_checkpoint_dir()
+            / f"manual_cotrain_step_{int(global_step)}"
+            / "manual_cotrain.ckpt"
+        )
+        if checkpoint.is_file():
+            self._assert_frozen_component_hashes(groups)
+        else:
+            checkpoint = self._maybe_save_manual_checkpoint(
+                groups,
+                int(global_step),
+                {str(key): float(value) for key, value in metrics.items()},
+                force=True,
+            )
+        require_update = bool(
+            OmegaConf.select(
+                self.cfg,
+                "training.require_policy_update",
+                default=True,
+            )
+        )
+        policy_changed = self._policy_final_hash != self._policy_initial_hash
+        if require_update and self._applied_policy_steps <= 0:
+            raise RuntimeError("no policy optimizer step was applied")
+        if require_update and not policy_changed:
+            raise RuntimeError("policy state did not change during frozen Ray RL")
+
+        summary = {
+            "schema_version": 1,
+            "execution": "ray_manual_policy_only",
+            "ngpu": int(self._ngpu()),
+            "official_data_dir": _select_plain_str(self.cfg, "replay.seed.data_dir"),
+            "official_hidden_dir": _select_plain_str(
+                self.cfg,
+                "replay.seed.hidden_dir",
+            ),
+            "source_checkpoints": dict(self._frozen_source_checkpoints),
+            "frozen_hashes_before": dict(self._frozen_state_hashes),
+            "frozen_hashes_after": dict(self._frozen_state_hashes),
+            "policy_hash_before": str(self._policy_initial_hash),
+            "policy_hash_after": str(self._policy_final_hash),
+            "policy_changed": bool(policy_changed),
+            "applied_policy_steps": int(self._applied_policy_steps),
+            "total_updates": int(global_step),
+            "classifier_threshold": self._frozen_classifier_threshold,
+            "final_checkpoint": str(checkpoint) if checkpoint is not None else None,
+            "last_metrics": dict(metrics),
+        }
+        _atomic_write_json(
+            self.get_run_dir() / "frozen_rl_summary.json",
+            summary,
+        )
 
     def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
         return {
@@ -2204,6 +2658,21 @@ def _plain(value: Any) -> Any:
         return tuple(_plain(item) for item in value)
     if isinstance(value, list):
         return [_plain(item) for item in value]
+    return value
+
+
+def _select_plain_str(cfg: DictConfig, path: str) -> str | None:
+    value = OmegaConf.select(cfg, path, default=None)
+    if value in (None, ""):
+        return None
+    return str(_plain(value))
+
+
+def _share_ray_value(value: Any, *, cluster: Any) -> Any:
+    """Put a large broadcast payload in Ray's object store exactly once."""
+
+    if ray.is_initialized() and callable(getattr(cluster, "find_free_port", None)):
+        return ray.put(value)
     return value
 
 

@@ -83,6 +83,9 @@ class EmbodiedFSDPActor(Worker):
 
         self.policy = policy
         self.optimizer = self._build_optimizer()
+        optimizer_state = self.init_ckpt.get("policy_optimizer")
+        if isinstance(optimizer_state, dict) and optimizer_state:
+            self._load_optimizer_state_dict(optimizer_state)
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible global progress used by weight-sync versions."""
@@ -515,15 +518,68 @@ class EmbodiedFSDPActor(Worker):
             for name, value in state.items()
         }
 
+    def optimizer_state_dict(self) -> dict[str, Any]:
+        """Export the full policy optimizer state on actor rank zero."""
+
+        policy = self._policy()
+        optimizer = self._optimizer()
+        if _is_fsdp_module(policy):
+            from torch.distributed.fsdp import FullyShardedDataParallel
+
+            state = FullyShardedDataParallel.full_optim_state_dict(
+                policy,
+                optimizer,
+                rank0_only=True,
+            )
+        else:
+            state = optimizer.state_dict()
+        return _to_cpu_tree(state)
+
+    def _load_optimizer_state_dict(self, state: dict[str, Any]) -> None:
+        policy = self._policy()
+        optimizer = self._optimizer()
+        if _is_fsdp_module(policy):
+            from torch.distributed.fsdp import FullyShardedDataParallel
+
+            full_state = state if int(self.rank) == 0 else None
+            sharded = FullyShardedDataParallel.scatter_full_optim_state_dict(
+                full_state,
+                policy,
+            )
+            optimizer.load_state_dict(sharded)
+            return
+        optimizer.load_state_dict(state)
+
     def _build_optimizer(self) -> torch.optim.Optimizer:
         optimizer_cfgs = _as_plain_dict(self.train_cfg.get("optimizers", {}))
         policy_optim_cfg = _as_plain_dict(optimizer_cfgs.get("policy", {}))
+        optimizer_name = str(policy_optim_cfg.get("name", "adam")).strip().lower()
+        optimizer_cls = {
+            "adam": torch.optim.Adam,
+            "adamw": torch.optim.AdamW,
+        }.get(optimizer_name)
+        if optimizer_cls is None:
+            raise ValueError(
+                "EmbodiedFSDPActor policy optimizer must be adam or adamw, "
+                f"got {optimizer_name!r}"
+            )
         lr = float(policy_optim_cfg.get("lr", self.train_cfg.get("lr", 1e-4)))
+        raw_betas = policy_optim_cfg.get("betas", (0.9, 0.999))
+        if not isinstance(raw_betas, (list, tuple)) or len(raw_betas) != 2:
+            raise ValueError("policy optimizer betas must contain exactly two values")
+        betas = (float(raw_betas[0]), float(raw_betas[1]))
+        eps = float(policy_optim_cfg.get("eps", 1e-8))
         weight_decay = float(policy_optim_cfg.get("weight_decay", 0.0))
         params = [param for param in self._policy().parameters() if param.requires_grad]
         if not params:
             raise ValueError("EmbodiedFSDPActor policy has no trainable parameters")
-        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+        return optimizer_cls(
+            params,
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
 
     def _eval_inputs_for_step(
         self,
@@ -632,6 +688,18 @@ def _to_device_state(value: Any, device: torch.device) -> dict[str, torch.Tensor
         str(name): torch.as_tensor(tensor).to(device)
         for name, tensor in dict(value).items()
     }
+
+
+def _to_cpu_tree(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().clone()
+    if isinstance(value, dict):
+        return {key: _to_cpu_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_cpu_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_to_cpu_tree(item) for item in value)
+    return value
 
 
 def _as_vector(value: Any) -> torch.Tensor:

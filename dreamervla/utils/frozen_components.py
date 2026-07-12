@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
+from omegaconf import OmegaConf
 from torch import nn
 
 
@@ -91,10 +93,65 @@ def assert_module_frozen(module: nn.Module, *, name: str) -> None:
         raise RuntimeError(f"{name} exposes trainable parameters")
 
 
+def _resolved_container(value: Any) -> Any:
+    if OmegaConf.is_config(value):
+        return OmegaConf.to_container(value, resolve=True)
+    return value
+
+
+def require_component_config_match(
+    metadata: Mapping[str, Any],
+    *,
+    component: str,
+    active_cfg: Any,
+) -> None:
+    """Require checkpoint construction metadata to equal active Hydra config."""
+
+    config = _resolved_container(metadata.get("config"))
+    if not isinstance(config, Mapping) or component not in config:
+        raise ValueError(
+            f"{component} checkpoint must contain config.{component} metadata"
+        )
+    checkpoint_cfg = _resolved_container(config[component])
+    resolved_active = _resolved_container(active_cfg)
+    if checkpoint_cfg != resolved_active:
+        raise ValueError(
+            f"{component} checkpoint config does not match the active Hydra config"
+        )
+
+
+def resolve_classifier_threshold(
+    metadata: Mapping[str, Any],
+    *,
+    configured: float | None = None,
+) -> float:
+    """Resolve the selected classifier threshold without silent drift."""
+
+    checkpoint_value = metadata.get("threshold")
+    if configured is None:
+        if checkpoint_value is None:
+            raise ValueError("classifier checkpoint must provide a validation threshold")
+        resolved = float(checkpoint_value)
+    else:
+        if checkpoint_value is not None and float(configured) != float(checkpoint_value):
+            raise ValueError(
+                "configured classifier threshold must equal the selected checkpoint "
+                f"threshold ({float(configured)} != {float(checkpoint_value)})"
+            )
+        resolved = float(configured)
+    if not math.isfinite(resolved) or not 0.0 <= resolved <= 1.0:
+        raise ValueError(
+            f"classifier threshold must be finite and within [0,1], got {resolved}"
+        )
+    return resolved
+
+
 __all__ = [
     "LoadedFrozenComponent",
     "assert_module_frozen",
     "load_frozen_component",
     "module_state_sha256",
+    "require_component_config_match",
+    "resolve_classifier_threshold",
     "state_dict_sha256",
 ]

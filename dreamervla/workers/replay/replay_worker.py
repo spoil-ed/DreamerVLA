@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.scheduler.worker import Worker
 
 
@@ -62,6 +63,92 @@ class ReplayWorker(Worker):
             task_id=task_id,
             key=str(key),
         )
+
+    def sample_initial_conditions(
+        self,
+        batch_size: int,
+        *,
+        task_ids: tuple[int, ...] | None = None,
+        keys: tuple[str, ...] = ("obs_embedding", "lang_emb", "proprio"),
+    ) -> Any:
+        return self._replay().sample_initial_conditions(
+            int(batch_size),
+            task_ids=(
+                tuple(int(task_id) for task_id in task_ids)
+                if task_ids is not None
+                else None
+            ),
+            keys=tuple(str(key) for key in keys),
+        )
+
+    def sampling_state_dict(self) -> dict[str, int]:
+        """Return cursor-only replay state suitable for small checkpoints."""
+
+        return self._replay().sampling_state_dict()
+
+    def load_sampling_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore cursor-only replay state after deterministic offline seeding."""
+
+        self._replay().load_sampling_state_dict(state)
+
+    def seed_from_offline(self, seed_cfg: dict[str, Any]) -> dict[str, float]:
+        """Seed official/collected HDF5 through the shared replay loader."""
+
+        cfg = dict(seed_cfg)
+        allowed = {
+            "data_dir",
+            "hidden_dir",
+            "task_id",
+            "default_task_id",
+            "infer_task_id_from_shard",
+            "task_ids",
+            "max_episodes_per_task",
+            "require_reference_complete",
+        }
+        unsupported = sorted(set(cfg) - allowed)
+        if unsupported:
+            raise ValueError(
+                "unsupported replay seed options: " + ", ".join(unsupported)
+            )
+        task_ids = tuple(int(task_id) for task_id in cfg.pop("task_ids", ()) or ())
+        default_task_id = cfg.pop("task_id", cfg.pop("default_task_id", None))
+        added = seed_replay_from_offline(
+            self._replay(),
+            data_dir=cfg.pop("data_dir"),
+            hidden_dir=cfg.pop("hidden_dir"),
+            default_task_id=(
+                None if default_task_id is None else int(default_task_id)
+            ),
+            infer_task_id_from_shard=bool(
+                cfg.pop("infer_task_id_from_shard", False)
+            ),
+            max_episodes_per_task=cfg.pop("max_episodes_per_task", None),
+            require_reference_complete=bool(
+                cfg.pop("require_reference_complete", True)
+            ),
+        )
+        stats = self._replay().task_stats(task_ids or None)
+        if task_ids:
+            missing = [
+                task_id
+                for task_id in task_ids
+                if int(stats.get(str(task_id), {}).get("episodes", 0)) <= 0
+            ]
+            if missing:
+                raise RuntimeError(
+                    "offline replay seed did not retain episodes for task IDs "
+                    f"{missing}"
+                )
+        return {
+            "replay_buffer/seeded_episodes": float(added),
+            "replay_buffer/seeded_transitions": float(self._replay().num_transitions),
+            "replay_buffer/seeded_task_count": float(
+                sum(
+                    int(item.get("episodes", 0)) > 0
+                    for item in stats.values()
+                )
+            ),
+        }
 
     def sample_classifier_windows(
         self,

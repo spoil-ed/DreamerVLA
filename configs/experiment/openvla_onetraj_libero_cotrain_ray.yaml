@@ -1,5 +1,6 @@
 # @package _global_
 defaults:
+  - /task: openvla_onetraj_coldstart_libero
   - override /dreamervla: openvla_onetraj_libero_cotrain_ray
   - _self_
 

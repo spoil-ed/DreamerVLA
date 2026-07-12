@@ -41,6 +41,23 @@ def test_one_gpu_placement_keeps_actor_spec_on_gpu_zero() -> None:
     assert [spec.gpu_ids for spec in plan.actor_specs] == [[0]]
 
 
+def test_frozen_policy_placement_uses_all_eight_gpus_without_real_or_learner() -> None:
+    plan = build_manual_cotrain_placement(
+        8,
+        real_env_workers=0,
+        include_learner=False,
+    )
+
+    assert plan.real_env_ranks == []
+    assert plan.wm_env_ranks == list(range(8))
+    assert [spec.gpu_ids for spec in plan.env_specs] == [[gpu] for gpu in range(8)]
+    assert [spec.gpu_ids for spec in plan.rollout_specs] == [
+        [gpu] for gpu in range(8)
+    ]
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [[gpu] for gpu in range(8)]
+    assert plan.learner_spec is None
+
+
 def test_manual_cotrain_placement_honors_component_gpu_groups() -> None:
     plan = build_manual_cotrain_placement(
         7,

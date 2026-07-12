@@ -1,0 +1,127 @@
+# @package _global_
+# Eight-GPU Ray realization of the pre-mainline frozen-model causal test.
+defaults:
+  - openvla_onetraj_libero_cotrain_ray
+  - frozen_models_rl
+  - _self_
+
+_target_: dreamervla.runners.ManualCotrainRayRunner
+
+pre_mainline:
+  stage: frozen_models_rl_ray
+
+cluster:
+  num_nodes: 1
+  num_gpus: 8
+  component_placement: null
+
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/frozen_cotrain_ray/${now:%Y%m%d_%H%M%S}}
+  device: cuda
+  distributed_strategy: single
+  resume: false
+  resume_dir: null
+  require_policy_update: true
+
+manual_cotrain:
+  ngpu: 8
+  global_steps: 20000
+  learner_update_step: null
+  learner_update_phase: null
+  checkpoint_every: 500
+  resume_ckpt: null
+  save_replay_state: false
+  sync_every: 1
+  requires_bootstrap_value: false
+  wm_env_write_replay: false
+  rollout_epoch: 2
+  real_env_enabled: false
+  learner_updates_enabled: false
+  real_env_workers: 0
+  real_rollout_epoch: null
+  real_rollout_target_trajectories: null
+  real_render_backend: null
+  wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
+  wm_rollout_target_trajectories: 256
+  wm_rollout_lease_epochs: 1
+  refresh_wm_initial_conditions_per_lease: true
+  max_steps_per_rollout_epoch: 40
+  wm_rollout_multiplier: 1
+  num_action_chunks: ${task.openvla_oft.hidden_token.chunk_size}
+  envs_per_worker: 1
+  wm_envs_per_worker: 16
+  eval_interval_global_steps: 0
+  debug_eval_interval_global_steps: 0
+  task_id: 0
+
+# Frozen mode deliberately has no trainable learner or real environment group.
+learner: null
+
+env:
+  real: null
+  wm:
+    cfg:
+      target: dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv
+      action_postprocess: openvla_oft
+      bootstrap_task_ids: ${official_replay.task_ids}
+      # One shard is one causal start repeated across all 16 slots.  The actor
+      # therefore receives two contiguous group_size=8 comparison groups.
+      bootstrap_group_size: ${manual_cotrain.wm_envs_per_worker}
+      # The lease scheduler restores the replay cursor before workers launch,
+      # then performs the first sample immediately before the first rollout.
+      defer_initial_condition_bootstrap: true
+      require_balanced_initial_conditions: true
+      kwargs:
+        world_model: ${world_model}
+        classifier: ${classifier}
+        latent_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+        action_dim: ${task.action_dim}
+        lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+        proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+        success_threshold: 0.5
+        max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
+        num_envs: ${manual_cotrain.wm_envs_per_worker}
+        device: cuda
+        inference_dtype: bf16
+        observation_format: tensor
+        freeze_components: true
+
+rollout:
+  policy_cfg: ${ray_components.policy}
+  encoder_cfg: null
+
+actor:
+  policy_cfg: ${ray_components.policy}
+  train_cfg:
+    fsdp:
+      sync_module_states: true
+    algorithm_cfg:
+      clip_log_ratio: ${algorithm.clip_log_ratio}
+      update_micro_batch_starts: ${algorithm.lumos.update_micro_batch_starts}
+    optimizers:
+      policy:
+        name: ${optim.policy.name}
+        lr: ${optim.policy.lr}
+        betas: ${optim.policy.betas}
+        eps: ${optim.policy.eps}
+        weight_decay: ${optim.policy.weight_decay}
+        grad_clip_norm: ${optim.grad_clip_norm}
+        zero_grad_set_to_none: ${optim.zero_grad_set_to_none}
+
+replay:
+  cfg:
+    capacity: ${official_replay.capacity}
+    sequence_length: ${official_replay.sequence_length}
+    task_ids: ${official_replay.task_ids}
+    rank: ${official_replay.rank}
+    capacity_mode: ${official_replay.capacity_mode}
+    task_balanced: ${official_replay.task_balanced}
+    replay_sampling: ${official_replay.replay_sampling}
+  seed:
+    data_dir: ${official_replay.data_dir}
+    hidden_dir: ${official_replay.hidden_dir}
+    task_id: ${official_replay.task_id}
+    infer_task_id_from_shard: ${official_replay.infer_task_id_from_shard}
+    task_ids: ${official_replay.task_ids}
+    max_episodes_per_task: ${official_replay.max_episodes_per_task}
+    require_reference_complete: ${official_replay.require_reference_complete}

@@ -17,7 +17,7 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `e2e_coldstart_warmup_cotrain_noray.sh` | Sync collection followed by WM/classifier warmup and optional cotrain |
 | `e2e_manual_cotrain_async.sh` | Manual async OpenVLA-OFT cotrain resume launcher |
 | `e2e_frozen_model_pre_mainline.sh` | Pre-mainline official-data WM/CLS, frozen policy RL, and matched real-eval proof |
-| `e2e_frozen_model_cotrain.sh` | Frozen WM/CLS policy training from two explicit component checkpoints |
+| `e2e_frozen_model_cotrain.sh` | Eight-GPU Ray policy training with frozen WM/CLS checkpoints |
 | `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
 | `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
 | `experiments/classifier_training/train.sh` | One-click official-data classifier upper-bound training |
@@ -112,14 +112,27 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/classifier_training/train.sh
 ```
 
-After selecting the completed component checkpoints, start policy-only frozen
-cotrain by providing only those two paths:
+After both component jobs finish, start policy-only frozen Ray cotrain by
+providing either their completed run directories or selected checkpoint files:
 
 ```bash
 bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/wm.ckpt \
-  /path/to/classifier.ckpt
+  /path/to/world_model/run \
+  /path/to/classifier/run
 ```
+
+Resume the same run with its policy checkpoint; WM/CLS are still loaded from
+the two explicit immutable sources:
+
+```bash
+bash scripts/e2e_frozen_model_cotrain.sh \
+  /path/to/world_model/run \
+  /path/to/classifier/run \
+  --resume-ckpt /path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt
+```
+
+The resume run root is inferred from the checkpoint. Use `--run-root` only to
+override it explicitly.
 
 Check collection completeness before a long run:
 

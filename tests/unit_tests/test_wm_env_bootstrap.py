@@ -54,6 +54,38 @@ class _ReplayWithInitialEmbeddings:
         return np.stack(values, axis=0)
 
 
+class _ReplayWithInitialConditions(_ReplayWithInitialEmbeddings):
+    def sample_initial_conditions(self, batch_size: int, *, task_ids=None, keys=()):
+        del task_ids
+        assert int(batch_size) == 2
+        assert tuple(keys) == ("obs_embedding", "lang_emb", "proprio")
+        return {
+            "task_ids": np.array([3, 7], dtype=np.int64),
+            "obs_embedding": self.latents,
+            "lang_emb": self.lang_embs,
+            "proprio": self.proprios,
+        }
+
+
+class _CyclingGroupedInitialConditions(_ReplayWithInitialEmbeddings):
+    def __init__(self) -> None:
+        super().__init__(np.array([[0.0, 0.0]], dtype=np.float32))
+        self.calls = 0
+
+    def sample_initial_conditions(self, batch_size: int, *, task_ids=None, keys=()):
+        del task_ids
+        assert int(batch_size) == 1
+        assert tuple(keys) == ("obs_embedding", "lang_emb", "proprio")
+        value = 3 if self.calls == 0 else 7
+        self.calls += 1
+        return {
+            "task_ids": np.array([value], dtype=np.int64),
+            "obs_embedding": np.array([[float(value), float(value)]], dtype=np.float32),
+            "lang_emb": np.array([[100.0 + value] * 3], dtype=np.float32),
+            "proprio": np.array([[200.0 + value] * 2], dtype=np.float32),
+        }
+
+
 def test_online_replay_samples_initial_obs_embeddings() -> None:
     replay = OnlineReplay(capacity=10, sequence_length=1, task_ids=(0,))
     replay.add_episode(
@@ -131,6 +163,113 @@ def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
 
         assert messages[0].obs["latent"].tolist() == [5.0, 6.0]
         assert messages[1].obs["latent"].tolist() == [7.0, 8.0]
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_bootstraps_aligned_multi_task_conditions() -> None:
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "lang_dim": 3,
+                "proprio_dim": 2,
+                "num_envs": 2,
+                "device": "cpu",
+            },
+        },
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+        replay=_ReplayWithInitialConditions(
+            np.array([[3.0, 3.0], [7.0, 7.0]], dtype=np.float32),
+            lang_embs=np.array([[103.0] * 3, [107.0] * 3], dtype=np.float32),
+            proprios=np.array([[203.0] * 2, [207.0] * 2], dtype=np.float32),
+        ),
+    )
+    try:
+        worker.init()
+        messages = worker.bootstrap_obs()
+
+        assert [message.task_id for message in messages] == [3, 7]
+        assert [message.obs["latent"][0].item() for message in messages] == [3.0, 7.0]
+        assert [message.obs["lang_emb"][0].item() for message in messages] == [
+            103.0,
+            107.0,
+        ]
+        assert [message.obs["proprio"][0].item() for message in messages] == [
+            203.0,
+            207.0,
+        ]
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_repeats_one_aligned_condition_for_each_policy_group() -> None:
+    replay = _CyclingGroupedInitialConditions()
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "bootstrap_group_size": 4,
+            "defer_initial_condition_bootstrap": True,
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "lang_dim": 3,
+                "proprio_dim": 2,
+                "num_envs": 4,
+                "device": "cpu",
+            },
+        },
+        num_slots=4,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+        replay=replay,
+    )
+    try:
+        worker.init()
+        assert replay.calls == 0
+        worker.refresh_wm_initial_conditions()
+        first = worker.bootstrap_obs()
+
+        assert [message.task_id for message in first] == [3, 3, 3, 3]
+        assert [message.obs["latent"][0].item() for message in first] == [3.0] * 4
+        assert [message.obs["lang_emb"][0].item() for message in first] == [103.0] * 4
+        assert [message.obs["proprio"][0].item() for message in first] == [203.0] * 4
+
+        worker.refresh_wm_initial_conditions()
+        refreshed = worker.bootstrap_obs()
+
+        assert [message.task_id for message in refreshed] == [7, 7, 7, 7]
+        assert [message.obs["latent"][0].item() for message in refreshed] == [7.0] * 4
     finally:
         worker.close()
 
@@ -217,5 +356,44 @@ def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
 
         assert messages[0].obs["proprio"].tolist() == [1.0, 2.0]
         assert messages[1].obs["proprio"].tolist() == [3.0, 4.0]
+    finally:
+        worker.close()
+
+
+def test_wm_env_worker_exposes_frozen_component_hashes() -> None:
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "num_envs": 1,
+                "device": "cpu",
+                "freeze_components": True,
+            },
+        },
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+    )
+    try:
+        worker.init()
+
+        hashes = worker.component_state_hashes()
+
+        assert set(hashes) == {"world_model"}
+        assert len(hashes["world_model"]) == 64
     finally:
         worker.close()

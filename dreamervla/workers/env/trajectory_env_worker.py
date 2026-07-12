@@ -807,6 +807,30 @@ def _call_maybe_remote(method: Any, *args: Any, **kwargs: Any) -> Any:
     return method(*args, **kwargs)
 
 
+def _repeat_initial_condition_groups(
+    conditions: Any,
+    *,
+    sampled_condition_count: int,
+    group_size: int,
+) -> dict[str, np.ndarray]:
+    """Repeat each aligned replay row into one contiguous policy group."""
+
+    if not isinstance(conditions, Mapping):
+        raise TypeError("replay initial conditions must be a mapping")
+    count = int(sampled_condition_count)
+    repeats = int(group_size)
+    expanded: dict[str, np.ndarray] = {}
+    for key, value in conditions.items():
+        array = np.asarray(value)
+        if array.ndim < 1 or int(array.shape[0]) != count:
+            raise ValueError(
+                f"replay initial-condition {key!r} must have leading size "
+                f"{count}, got {tuple(int(dim) for dim in array.shape)}"
+            )
+        expanded[str(key)] = np.repeat(array, repeats, axis=0)
+    return expanded
+
+
 def _make_env_transition(
     env: Any,
     obs: dict[str, Any],
@@ -2554,6 +2578,39 @@ class BaseTrajectoryEnvWorker(Worker):
                     "or success_threshold"
                 )
 
+    def component_state_hashes(self) -> dict[str, str]:
+        """Return matching WM/classifier hashes across local inference envs."""
+
+        if self.role != "wm_env":
+            raise RuntimeError("component state hashes are only defined for WMEnvWorker")
+        if not self.envs:
+            raise RuntimeError("WMEnvWorker.init() has not been called")
+        hashes_by_env: list[dict[str, str]] = []
+        for env in self.envs:
+            hasher = getattr(env, "component_state_hashes", None)
+            if not callable(hasher):
+                raise TypeError(
+                    f"WMEnvWorker env {type(env).__name__} must expose "
+                    "component_state_hashes()"
+                )
+            hashes_by_env.append(dict(hasher()))
+        expected = hashes_by_env[0]
+        if any(item != expected for item in hashes_by_env[1:]):
+            raise RuntimeError("WMEnvWorker local component hashes diverged")
+        return expected
+
+    def refresh_wm_initial_conditions(self) -> dict[str, float]:
+        """Resample the next WM rollout group's aligned replay condition."""
+
+        if self.role != "wm_env":
+            raise RuntimeError(
+                "initial-condition refresh is only defined for WMEnvWorker"
+            )
+        self._ensure_initialized()
+        self._prefetched_bootstrap = None
+        self._bootstrap_wm_initial_latents_from_replay(force=True)
+        return {"env/wm_env/initial_conditions_refreshed": 1.0}
+
     def close(self) -> None:
         """Close all env slots."""
 
@@ -2879,14 +2936,66 @@ class BaseTrajectoryEnvWorker(Worker):
             return bool(override)
         return self.role == "wm_env"
 
-    def _bootstrap_wm_initial_latents_from_replay(self) -> None:
+    def _bootstrap_wm_initial_latents_from_replay(
+        self,
+        *,
+        force: bool = False,
+    ) -> None:
         if self.role != "wm_env" or self.replay is None:
+            return
+        if (
+            not force
+            and bool(self.env_cfg.get("defer_initial_condition_bootstrap", False))
+        ):
             return
         size_method = getattr(self.replay, "size", None)
         if size_method is not None:
             size = _call_maybe_remote(size_method)
             if int(size) <= 0:
                 return
+        aligned_sampler = getattr(self.replay, "sample_initial_conditions", None)
+        if aligned_sampler is not None:
+            group_size = int(self.env_cfg.get("bootstrap_group_size", 1) or 1)
+            if group_size <= 0 or self.num_slots % group_size != 0:
+                raise ValueError(
+                    "env.wm.cfg.bootstrap_group_size must be positive and divide "
+                    f"the WMEnv slot count; got {group_size} and {self.num_slots}"
+                )
+            sampled_condition_count = self.num_slots // group_size
+            keys = ["obs_embedding"]
+            if any(int(getattr(env, "lang_dim", 0) or 0) > 0 for env in self.envs):
+                keys.append("lang_emb")
+            if any(
+                int(getattr(env, "proprio_dim", 0) or 0) > 0
+                for env in self.envs
+            ):
+                keys.append("proprio")
+            raw_task_ids = self.env_cfg.get("bootstrap_task_ids")
+            task_ids = (
+                tuple(int(task_id) for task_id in raw_task_ids)
+                if raw_task_ids is not None
+                else None
+            )
+            try:
+                conditions = _call_maybe_remote(
+                    aligned_sampler,
+                    sampled_condition_count,
+                    task_ids=task_ids,
+                    keys=tuple(keys),
+                )
+                if group_size > 1:
+                    conditions = _repeat_initial_condition_groups(
+                        conditions,
+                        sampled_condition_count=sampled_condition_count,
+                        group_size=group_size,
+                    )
+                self._apply_wm_initial_conditions(conditions)
+                return
+            except (KeyError, RuntimeError):
+                if bool(
+                    self.env_cfg.get("require_balanced_initial_conditions", False)
+                ):
+                    raise
         sampler = getattr(self.replay, "sample_initial_obs_embeddings", None)
         if sampler is None:
             return
@@ -2906,6 +3015,31 @@ class BaseTrajectoryEnvWorker(Worker):
                 setter(latents)
         self._bootstrap_wm_initial_lang_embs_from_replay(sampler)
         self._bootstrap_wm_initial_proprios_from_replay(sampler)
+
+    def _apply_wm_initial_conditions(self, conditions: Any) -> None:
+        if not isinstance(conditions, Mapping):
+            raise TypeError("replay initial conditions must be a mapping")
+        task_ids = np.asarray(conditions.get("task_ids"), dtype=np.int64).reshape(-1)
+        if task_ids.shape[0] != self.num_slots:
+            raise ValueError(
+                "replay initial-condition task_ids must match WMEnv slots: "
+                f"{task_ids.shape[0]} != {self.num_slots}"
+            )
+        self._task_ids_by_slot = [int(task_id) for task_id in task_ids.tolist()]
+
+        setter_by_key = {
+            "obs_embedding": "set_initial_latents",
+            "lang_emb": "set_initial_lang_embs",
+            "proprio": "set_initial_proprios",
+        }
+        for key, setter_name in setter_by_key.items():
+            if key not in conditions:
+                continue
+            values = np.asarray(conditions[key], dtype=np.float32)
+            for env in self.envs:
+                setter = getattr(env, setter_name, None)
+                if setter is not None:
+                    setter(values)
 
     def _bootstrap_wm_initial_lang_embs_from_replay(self, sampler: Any) -> None:
         try:

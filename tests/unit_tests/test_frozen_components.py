@@ -10,6 +10,8 @@ from dreamervla.utils.frozen_components import (
     assert_module_frozen,
     load_frozen_component,
     module_state_sha256,
+    require_component_config_match,
+    resolve_classifier_threshold,
     state_dict_sha256,
 )
 
@@ -84,3 +86,29 @@ def test_assert_module_frozen_requires_eval_and_no_trainable_parameters() -> Non
     for parameter in model.parameters():
         parameter.requires_grad_(False)
     assert_module_frozen(model, name="world_model")
+
+
+def test_component_checkpoint_config_match_is_shared_and_strict() -> None:
+    active = {"_target_": "test.WorldModel", "hidden_dim": 4}
+    metadata = {"config": {"world_model": dict(active)}}
+
+    require_component_config_match(
+        metadata,
+        component="world_model",
+        active_cfg=active,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        require_component_config_match(
+            metadata,
+            component="world_model",
+            active_cfg={**active, "hidden_dim": 8},
+        )
+
+
+def test_classifier_threshold_prefers_checkpoint_and_rejects_drift() -> None:
+    assert resolve_classifier_threshold({"threshold": 0.6}) == 0.6
+    assert resolve_classifier_threshold({"threshold": 0.6}, configured=0.6) == 0.6
+
+    with pytest.raises(ValueError, match="must equal"):
+        resolve_classifier_threshold({"threshold": 0.6}, configured=0.7)

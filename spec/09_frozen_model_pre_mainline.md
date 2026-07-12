@@ -92,6 +92,20 @@ construction config; the summary F1/path/step must bind the same artifact.
 The experiment name is `dreamervla_frozen_models_rl`; its public runner is
 `FrozenModelPolicyRunner`.
 
+For the standalone eight-GPU handoff after independently training WM and CLS,
+`dreamervla_frozen_models_rl_ray` reuses `ManualCotrainRayRunner`. It creates
+eight WMEnv workers, eight no-grad Rollout workers, and an eight-rank FSDP
+ActorGroup. RealEnv and LearnerGroup are absent, so the only optimizer is the
+ActorGroup policy optimizer. The single-process experiment remains the
+reference implementation used by the complete proof launcher.
+
+Each WM lease samples one aligned official replay condition (hidden token,
+language embedding, proprioception, and task identity), repeats it across the
+worker's 16 slots, and produces two contiguous `group_size=8` comparison
+groups. The replay cursor rotates across all ten `libero_goal` tasks and is
+stored as lightweight resume state. Actor FSDP synchronizes initial module
+state across all eight ranks before the first update.
+
 ### Construction
 
 The runner:
@@ -152,6 +166,12 @@ requires all component/optimizer states, binds the objective and construction
 through a resume-contract hash, verifies the reconstructed reference-policy
 hash, and restores the captured Python/Torch RNG state.
 
+The standalone Ray realization uses its manual-cotrain checkpoint layout:
+policy + policy-optimizer state, frozen source paths/hashes, threshold, and
+causal counters. It deliberately does not duplicate the frozen WM/CLS tensors
+into every policy checkpoint; resume reloads those two
+explicit immutable source checkpoints and verifies their hashes again.
+
 ## Stage D: Real-LIBERO Proof
 
 Training and evaluation are deliberately separated. The launcher evaluates:
@@ -190,14 +210,27 @@ bash scripts/experiments/world_model_training/train.sh
 bash scripts/experiments/classifier_training/train.sh
 ```
 
-They create separate timestamped run directories. Once checkpoints are chosen,
-policy-only frozen cotrain takes the two explicit paths:
+They create separate timestamped run directories. Once both runs complete,
+policy-only frozen Ray cotrain takes those two run directories (or selected
+checkpoint files) and resolves the validated WM/CLS selections:
 
 ```bash
 bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/wm.ckpt \
-  /path/to/classifier.ckpt
+  /path/to/world_model/run \
+  /path/to/classifier/run
 ```
+
+Resume requires the same two immutable sources plus the Ray policy checkpoint:
+
+```bash
+bash scripts/e2e_frozen_model_cotrain.sh \
+  /path/to/world_model/run \
+  /path/to/classifier/run \
+  --resume-ckpt /path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt
+```
+
+The launcher infers the original run root from the checkpoint path; an explicit
+`--run-root` remains available when the checkpoint was relocated.
 
 `python -m dreamervla.launchers.frozen_model_pre_mainline` composes
 `configs/scripts/frozen_model_pre_mainline.yaml`. It owns one run root with

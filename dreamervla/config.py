@@ -671,6 +671,357 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 "frozen-model RL actor route requires classifier-backed "
                 "chunk-world-model imagination"
             )
+    elif stage == "frozen_models_rl_ray":
+        path_pairs = (
+            ("replay.seed.data_dir", "task.hdf5_reward_dir"),
+            ("replay.seed.hidden_dir", "task.openvla_oft.hidden_token_dir"),
+        )
+        if _select_str(cfg, "_target_") != (
+            "dreamervla.runners.ManualCotrainRayRunner"
+        ):
+            raise ValueError(
+                "pre-mainline frozen-model Ray RL must use "
+                "dreamervla.runners.ManualCotrainRayRunner"
+            )
+        for key in (
+            "init.world_model_state_ckpt",
+            "init.classifier_state_ckpt",
+        ):
+            if _select_str(cfg, key) in (None, ""):
+                raise ValueError(f"{key} requires an explicit frozen checkpoint")
+        if bool(OmegaConf.select(cfg, "training.resume", default=False)) and _select_str(
+            cfg,
+            "manual_cotrain.resume_ckpt",
+        ) in (None, ""):
+            raise ValueError(
+                "frozen-model Ray RL resume requires an explicit policy checkpoint"
+            )
+        if bool(OmegaConf.select(cfg, "manual_cotrain.real_env_enabled", default=True)):
+            raise ValueError(
+                "frozen-model Ray RL cannot construct or use a real environment"
+            )
+        if int(
+            OmegaConf.select(cfg, "manual_cotrain.real_env_workers", default=1)
+        ) != 0:
+            raise ValueError(
+                "frozen-model Ray RL requires manual_cotrain.real_env_workers=0"
+            )
+        if OmegaConf.select(cfg, "env.real", default=None) is not None:
+            raise ValueError(
+                "frozen-model Ray RL cannot construct a real environment"
+            )
+        if bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.learner_updates_enabled",
+                default=True,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL cannot construct or update a learner"
+            )
+        if OmegaConf.select(cfg, "learner", default=None) is not None:
+            raise ValueError(
+                "frozen-model Ray RL cannot construct a trainable learner"
+            )
+        actor_optimizers = OmegaConf.select(
+            cfg,
+            "actor.train_cfg.optimizers",
+            default=None,
+        )
+        optimizer_names = (
+            set(str(key) for key in actor_optimizers.keys())
+            if actor_optimizers is not None
+            else set()
+        )
+        if optimizer_names != {"policy"}:
+            raise ValueError(
+                "frozen-model Ray RL requires exactly one policy optimizer; "
+                f"got {sorted(optimizer_names)}"
+            )
+        actor_policy_optimizer = OmegaConf.to_container(
+            actor_optimizers["policy"],
+            resolve=True,
+        )
+        expected_policy_optimizer = {
+            "name": _select_str(cfg, "optim.policy.name"),
+            "lr": OmegaConf.select(cfg, "optim.policy.lr"),
+            "betas": list(OmegaConf.select(cfg, "optim.policy.betas") or []),
+            "eps": OmegaConf.select(cfg, "optim.policy.eps"),
+            "weight_decay": OmegaConf.select(cfg, "optim.policy.weight_decay"),
+            "grad_clip_norm": OmegaConf.select(cfg, "optim.grad_clip_norm"),
+            "zero_grad_set_to_none": OmegaConf.select(
+                cfg,
+                "optim.zero_grad_set_to_none",
+            ),
+        }
+        if actor_policy_optimizer != expected_policy_optimizer:
+            raise ValueError(
+                "frozen-model Ray RL Actor optimizer must exactly match the "
+                "policy-only Hydra optimizer contract"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "actor.train_cfg.fsdp.sync_module_states",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL requires actor FSDP sync_module_states=true"
+            )
+        actor_fsdp_strategy = str(
+            OmegaConf.select(
+                cfg,
+                "actor.train_cfg.fsdp.strategy",
+                default="",
+            )
+        ).strip().lower()
+        if actor_fsdp_strategy not in {"fsdp", "fsdp1"}:
+            raise ValueError(
+                "frozen-model Ray RL requires the FSDP strategy across all eight "
+                "Actor ranks"
+            )
+        if bool(
+            OmegaConf.select(
+                cfg,
+                "actor.train_cfg.fsdp.cpu_offload",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL does not permit Actor CPU offload"
+            )
+        actor_update_contract = {
+            "actor.train_cfg.algorithm_cfg.update_micro_batch_starts": (
+                "algorithm.lumos.update_micro_batch_starts"
+            ),
+            "actor.train_cfg.algorithm_cfg.clip_log_ratio": (
+                "algorithm.clip_log_ratio"
+            ),
+        }
+        for actor_path, canonical_path in actor_update_contract.items():
+            if OmegaConf.select(cfg, actor_path) != OmegaConf.select(
+                cfg,
+                canonical_path,
+            ):
+                raise ValueError(
+                    "frozen-model Ray RL Actor policy-update settings must match "
+                    "the canonical frozen-policy Hydra config"
+                )
+        if int(_select_int(cfg, "cluster.num_nodes") or 0) != 1:
+            raise ValueError("frozen-model Ray RL is single-node only")
+        ngpu = int(_select_int(cfg, "manual_cotrain.ngpu") or 0)
+        cluster_gpus = int(_select_int(cfg, "cluster.num_gpus") or 0)
+        if ngpu != 8 or cluster_gpus != 8:
+            raise ValueError(
+                "frozen-model Ray RL requires exactly eight visible GPUs"
+            )
+        if OmegaConf.select(
+            cfg,
+            "cluster.component_placement",
+            default=None,
+        ) is not None:
+            raise ValueError(
+                "frozen-model Ray RL fixes the eight-GPU topology and forbids "
+                "cluster.component_placement overrides"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "env.wm.cfg.kwargs.freeze_components",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL requires frozen WM/classifier components"
+            )
+        if OmegaConf.select(cfg, "rollout.encoder_cfg", default=None) is not None:
+            raise ValueError(
+                "frozen-model Ray RL consumes WM latents and cannot build a real-image encoder"
+            )
+        for component in ("world_model", "classifier"):
+            canonical = OmegaConf.select(cfg, component, default=None)
+            wm_env_component = OmegaConf.select(
+                cfg,
+                f"env.wm.cfg.kwargs.{component}",
+                default=None,
+            )
+            if canonical is None or wm_env_component is None or OmegaConf.to_container(
+                canonical,
+                resolve=True,
+            ) != OmegaConf.to_container(wm_env_component, resolve=True):
+                raise ValueError(
+                    f"frozen-model Ray RL {component} config must match the "
+                    "official upper-bound component exactly"
+                )
+        _reject_official_complete_marker_requirement(
+            cfg,
+            "replay.seed.require_reference_complete",
+        )
+        task_ids = [
+            int(value)
+            for value in (
+                OmegaConf.select(cfg, "replay.seed.task_ids", default=[]) or []
+            )
+        ]
+        if task_ids != official_task_ids:
+            raise ValueError(
+                "frozen-model Ray RL replay seed requires all ten task IDs [0..9]"
+            )
+        replay_task_ids = [
+            int(value)
+            for value in (
+                OmegaConf.select(cfg, "replay.cfg.task_ids", default=[]) or []
+            )
+        ]
+        bootstrap_task_ids = [
+            int(value)
+            for value in (
+                OmegaConf.select(
+                    cfg,
+                    "env.wm.cfg.bootstrap_task_ids",
+                    default=[],
+                )
+                or []
+            )
+        ]
+        if replay_task_ids != official_task_ids or bootstrap_task_ids != official_task_ids:
+            raise ValueError(
+                "frozen-model Ray RL replay and WM bootstrap require all ten task IDs"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "env.wm.cfg.require_balanced_initial_conditions",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL requires balanced initial conditions"
+            )
+        if OmegaConf.select(cfg, "replay.seed.task_id", default=None) is not None:
+            raise ValueError(
+                "frozen-model Ray RL replay seed cannot force one task_id"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "replay.seed.infer_task_id_from_shard",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL replay must infer task IDs from shards"
+            )
+        if OmegaConf.select(
+            cfg,
+            "replay.seed.max_episodes_per_task",
+            default=None,
+        ) is not None:
+            raise ValueError(
+                "frozen-model Ray RL must seed every official replay episode"
+            )
+        replay_contract = {
+            "replay.cfg.capacity_mode": "total_sharded",
+            "replay.cfg.task_balanced": True,
+            "replay.cfg.rank": 0,
+            "replay.cfg.replay_sampling.enabled": False,
+        }
+        for key, expected in replay_contract.items():
+            actual = OmegaConf.select(cfg, key, default=None)
+            if actual != expected:
+                raise ValueError(
+                    f"frozen-model Ray RL replay requires {key}={expected!r}, "
+                    f"got {actual!r}"
+                )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "training.require_policy_update",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL requires training.require_policy_update=true"
+            )
+        wm_envs_per_worker = int(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.wm_envs_per_worker",
+                default=0,
+            )
+        )
+        bootstrap_group_size = int(
+            OmegaConf.select(
+                cfg,
+                "env.wm.cfg.bootstrap_group_size",
+                default=0,
+            )
+        )
+        actor_group_size = int(
+            OmegaConf.select(cfg, "algorithm.group_size", default=0)
+        )
+        if (
+            bootstrap_group_size != wm_envs_per_worker
+            or actor_group_size <= 0
+            or bootstrap_group_size % actor_group_size != 0
+        ):
+            raise ValueError(
+                "frozen-model Ray RL requires every WM worker shard to repeat "
+                "one replay condition in complete policy groups"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.refresh_wm_initial_conditions_per_lease",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL must refresh its grouped replay condition "
+                "before every WM lease"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "env.wm.cfg.defer_initial_condition_bootstrap",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "frozen-model Ray RL must defer initial replay sampling until "
+                "after the resume cursor is restored"
+            )
+        lease_epochs = int(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.wm_rollout_lease_epochs",
+                default=0,
+            )
+        )
+        target_trajectories = int(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.wm_rollout_target_trajectories",
+                default=0,
+            )
+        )
+        total_leases = (
+            target_trajectories // wm_envs_per_worker
+            if wm_envs_per_worker > 0
+            else 0
+        )
+        if total_leases < ngpu:
+            raise ValueError(
+                "manual_cotrain.wm_rollout_target_trajectories is too small to "
+                "give each WM worker one grouped replay condition"
+            )
+        if lease_epochs != 1 or total_leases < len(official_task_ids):
+            raise ValueError(
+                "frozen-model Ray RL needs one replay condition per WM lease and "
+                "at least ten leases to cover all official tasks"
+            )
     else:
         raise ValueError(f"unknown pre_mainline.stage: {stage!r}")
 
@@ -1139,6 +1490,8 @@ def _warn_manual_cotrain_baseline_overrides(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
     if not target.endswith("ManualCotrainRayRunner"):
         return
+    if _select_str(cfg, "pre_mainline.stage") == "frozen_models_rl_ray":
+        return
 
     baselines = {
         "real_rollout_target_trajectories": 32,
@@ -1180,8 +1533,26 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
         return
 
     ngpu = int(OmegaConf.select(cfg, "manual_cotrain.ngpu", default=1))
-    real_workers = 1
-    wm_workers = max(0, ngpu - 1)
+    real_enabled = bool(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.real_env_enabled",
+            default=True,
+        )
+    )
+    configured_real_workers = int(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.real_env_workers",
+            default=1,
+        )
+    )
+    real_workers = (
+        min(max(0, configured_real_workers), max(1, ngpu))
+        if real_enabled
+        else 0
+    )
+    wm_workers = max(0, (max(1, ngpu) if ngpu == 0 else ngpu) - real_workers)
     envs_per_worker = int(envs_per_worker_raw)
     wm_envs_per_worker = int(
         OmegaConf.select(
@@ -1193,11 +1564,18 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     rollout_epoch = int(
         OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1)
     )
-    real_rollout_epoch = int(
-        OmegaConf.select(
-            cfg,
-            "manual_cotrain.real_rollout_epoch",
-            default=rollout_epoch,
+    real_rollout_epoch_raw = OmegaConf.select(
+        cfg,
+        "manual_cotrain.real_rollout_epoch",
+        default=rollout_epoch,
+    )
+    real_rollout_epoch = (
+        0
+        if real_workers <= 0
+        else int(
+            rollout_epoch
+            if real_rollout_epoch_raw is None
+            else real_rollout_epoch_raw
         )
     )
     wm_rollout_epoch = int(

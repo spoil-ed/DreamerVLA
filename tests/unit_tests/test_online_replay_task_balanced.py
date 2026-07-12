@@ -124,6 +124,71 @@ def test_online_replay_can_sample_without_images() -> None:
     assert batch["obs_embedding"].shape == (2, 3, 2)
 
 
+def test_initial_conditions_cover_tasks_and_keep_sidecars_aligned() -> None:
+    replay = OnlineReplay(
+        capacity=1_000,
+        sequence_length=3,
+        task_ids=tuple(range(10)),
+        task_balanced=True,
+    )
+    for task_id in range(10):
+        episode = _episode(task_id=task_id, length=3, success=True)
+        for step in episode:
+            step["obs_embedding"] = np.full((2,), task_id, dtype=np.float32)
+            step["lang_emb"] = np.full((3,), task_id + 100, dtype=np.float32)
+            step["proprio"] = np.full((4,), task_id + 200, dtype=np.float32)
+        replay.add_episode(episode)
+
+    batch = replay.sample_initial_conditions(
+        12,
+        task_ids=tuple(range(10)),
+        keys=("obs_embedding", "lang_emb", "proprio"),
+    )
+
+    assert batch["task_ids"].tolist() == list(range(10)) + [0, 1]
+    np.testing.assert_array_equal(batch["obs_embedding"][:, 0], batch["task_ids"])
+    np.testing.assert_array_equal(
+        batch["lang_emb"][:, 0],
+        batch["task_ids"] + 100,
+    )
+    np.testing.assert_array_equal(
+        batch["proprio"][:, 0],
+        batch["task_ids"] + 200,
+    )
+
+
+def test_online_replay_lightweight_sampling_state_restores_initial_condition_cursor() -> None:
+    replay = OnlineReplay(
+        capacity=100,
+        sequence_length=1,
+        task_ids=(0, 1),
+        task_balanced=True,
+    )
+    for task_id in (0, 1):
+        replay.add_episode(_episode(task_id=task_id, length=2, success=True))
+    replay.sample_initial_conditions(3, task_ids=(0, 1), keys=("obs_embedding",))
+    replay.set_task_sample_cursor(9)
+
+    state = replay.sampling_state_dict()
+    restored = OnlineReplay(
+        capacity=100,
+        sequence_length=1,
+        task_ids=(0, 1),
+        task_balanced=True,
+    )
+    for task_id in (0, 1):
+        restored.add_episode(_episode(task_id=task_id, length=2, success=True))
+    restored.load_sampling_state_dict(state)
+
+    assert restored.task_sample_cursor == 9
+    batch = restored.sample_initial_conditions(
+        1,
+        task_ids=(0, 1),
+        keys=("obs_embedding",),
+    )
+    assert batch["task_ids"].tolist() == [1]
+
+
 def test_online_replay_samples_collect_schema_steps_without_reward_aliases() -> None:
     random.seed(0)
     replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
