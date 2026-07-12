@@ -340,6 +340,13 @@ warmup 与已验证的
   长跑默认只保存最终 warmup ckpt，避免 rank0 在中间 checkpoint 反复 CPU clone
   大模型造成内存峰值。
 - `training.wm_profile_steps=0`：长跑默认关闭逐 update CUDA synchronize profile。
+- 独立的 `wm_full_dataset_train` / `wm_official_upper_bound` 离线 WM recipe
+  还设置 `training.world_model_ddp={find_unused_parameters: false,
+  broadcast_buffers: false, static_graph: true, gradient_as_bucket_view: true}`。
+  该 recipe 每次只执行同一个 chunk-loss 图：保留但 loss scale 为 0 的 reward
+  head 构成固定 unused 集合。static graph 保留这个语义，同时去掉每步 autograd
+  图搜索；bucket view 去掉 gradient 到 NCCL bucket 的额外复制。同步 online route
+  会穿插 WM 的多种 forward mode，因此不继承这个离线专用开关。
 - `online_rollout.buffer_size=160000`。
 - `online_rollout.sequence_length=36`。
 - `world_model.chunk_rollout_chunks=4`，`chunk_rollout_loss_scale=0.2`。
@@ -681,11 +688,16 @@ sync/policy_export_s
 sync/policy_push_s
 sync/rollout_policy_pull_s
 sync/learner_state_dicts_s
+sync/learner_state_share_s
 sync/wm_env_load_component_states_s
 ```
 
 `actor_run_training_s` 当前覆盖 Actor forward、backward、FSDP 通信和 optimizer
 总时耗；Rollout、WMEnv WM forward 和 classifier forward 有独立计时。
+trainable WM/CLS 同步时，`learner_state_dicts_s` 是 learner 生成 CPU snapshot 的
+时间，`learner_state_share_s` 是把同一 snapshot 放入 Ray object store 一次的时间，
+`wm_env_load_component_states_s` 是所有 WMEnv worker 完成加载的端到端等待时间。
+三者分开后，不再把 8 worker 广播序列化误判成模型更新时间。
 
 ## 14. Metrics 判读
 

@@ -15,6 +15,15 @@ training:
   warmup_topk_k: 3
   wm_profile_steps: 8
   wm_prefetch_workers: 1
+  # This offline recipe always executes the same chunk-loss graph. The binary
+  # reward head is retained but has zero loss weight, so its unused-parameter
+  # set is fixed. Static DDP removes the per-update autograd graph search while
+  # preserving those unused parameters and activation checkpointing semantics.
+  world_model_ddp:
+    find_unused_parameters: false
+    broadcast_buffers: false
+    static_graph: true
+    gradient_as_bucket_view: true
   classifier_batch_size: 1
 
 offline_warmup:

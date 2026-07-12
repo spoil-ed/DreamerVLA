@@ -73,6 +73,63 @@ def test_chunk_rollout_grad_checkpoint_is_numerically_equivalent() -> None:
         assert torch.allclose(grads_plain[key], grads_ckpt[key], atol=1e-6), key
 
 
+def test_official_wm_objective_has_a_static_parameter_and_buffer_graph() -> None:
+    """The reward-disabled tutorial objective is safe for DDP static_graph.
+
+    The configured binary reward head is intentionally retained for later online
+    use but has zero loss weight during official-data WM training. Its parameters
+    are therefore unused, and that unused set must not vary by batch. Likewise,
+    forward must not mutate buffers when per-forward DDP buffer broadcast is off.
+    """
+
+    wm = _tiny_chunk_wm(
+        reward_head_type="binary",
+        reward_loss_scale=0.0,
+        chunk_rollout_chunks=4,
+        chunk_rollout_loss_scale=0.2,
+        grad_checkpoint=True,
+        attn_impl="sdpa",
+        dropout=0.1,
+    ).train()
+    before = {name: value.detach().clone() for name, value in wm.named_buffers()}
+    unused_by_batch: list[tuple[str, ...]] = []
+
+    for seed in (11, 12):
+        torch.manual_seed(seed)
+        time_steps = wm.num_hist + wm.chunk_rollout_chunks * wm.chunk_size
+        batch = {
+            "mode": "chunk_loss",
+            "obs_embedding": torch.randn(
+                2, time_steps, wm.token_count, wm.token_dim
+            ),
+            "actions": torch.randn(2, time_steps, wm.action_dim),
+            "current_actions": torch.randn(2, time_steps, wm.action_dim),
+        }
+        wm.zero_grad(set_to_none=True)
+        wm(batch)["_loss"].backward()
+        unused_by_batch.append(
+            tuple(
+                name
+                for name, parameter in wm.named_parameters()
+                if parameter.requires_grad and parameter.grad is None
+            )
+        )
+
+    expected_unused = (
+        "reward_norm.weight",
+        "reward_norm.bias",
+        "reward_head.0.weight",
+        "reward_head.0.bias",
+        "reward_head.2.weight",
+        "reward_head.2.bias",
+    )
+    assert unused_by_batch == [expected_unused, expected_unused]
+    assert all(
+        torch.equal(before[name], value)
+        for name, value in wm.named_buffers()
+    )
+
+
 def test_chunk_wm_requires_wm_concat_model_dim() -> None:
     with pytest.raises(ValueError, match="model_dim.*token_dim.*action_emb_dim"):
         _tiny_chunk_wm(model_dim=4)

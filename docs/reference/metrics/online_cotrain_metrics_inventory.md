@@ -126,6 +126,18 @@ muddy the cumulative/recent semantics.
    Source: real eval windows when present. Keep; eval success must come from completed
    real episodes.
 
+## sync（manual Ray）
+
+1. `sync/learner_state_dicts_s`
+   Source: LearnerWorker materializing the CPU WM/classifier snapshot after an update.
+2. `sync/learner_state_share_s`
+   Source: the driver placing that snapshot in Ray's object store exactly once. This is
+   serialization/share cost, not model compute.
+3. `sync/wm_env_load_component_states_s`
+   Source: end-to-end wait until all WMEnv workers have loaded the shared snapshot.
+4. `sync/world_model_load_s`, `sync/classifier_load_s`
+   Source: worker-side component load timings. Keep as state-distribution diagnostics.
+
 ## Screened Set
 
 The main online cotrain dashboard should prioritize:

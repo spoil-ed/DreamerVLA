@@ -2107,7 +2107,15 @@ def test_prepare_manual_cotrain_progress_dir_clears_stale_json(tmp_path) -> None
 
 def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> None:
     traces: list[str] = []
+    shared_component_payloads: list[dict] = []
     monkeypatch.setattr(manual_runner, "_hs_trace", traces.append)
+    monkeypatch.setattr(
+        manual_runner,
+        "_share_ray_value",
+        lambda value, *, cluster: (
+            shared_component_payloads.append(dict(value)) or value
+        ),
+    )
     cfg = _cfg(ngpu=2)
     cfg.actor.train_cfg.algorithm_cfg.group_size = 1
     cfg.manual_cotrain.wm_rollout_epoch = 2
@@ -2136,6 +2144,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
         ),
         "WMEnvGroup": wm_env,
         "ReplayGroup": _FakeReplayGroup(),
+        "cluster": object(),
         "env_channel": _FakeChannel(),
         "actor_channel": _FakeChannel(["wm0", "wm1"]),
         "env_channel_name": "env",
@@ -2182,6 +2191,13 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert wm_env.world_model_states == [{"wm": 1}]
     assert wm_env.classifier_states == [{"cls": 2}]
     assert wm_env.classifier_thresholds == [0.95]
+    assert shared_component_payloads == [
+        {
+            "classifier": {"cls": 2},
+            "classifier_threshold": 0.95,
+            "world_model": {"wm": 1},
+        }
+    ]
     assert metrics["env/trajectory_shards"] == 3.0
     assert metrics["env/steps"] == 6.0
     assert metrics["actor/received_shards"] == 2.0
@@ -2191,6 +2207,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert metrics["sync/policy_push_s"] == 0.2
     assert metrics["sync/rollout_policy_pull_s"] == 0.4
     assert metrics["sync/learner_state_dicts_s"] >= 0.0
+    assert metrics["sync/learner_state_share_s"] >= 0.0
     assert metrics["sync/wm_env_load_component_states_s"] >= 0.0
     assert metrics["sync/load_component_states_s"] == 0.5
     assert metrics["replay_buffer/size"] == 3.0

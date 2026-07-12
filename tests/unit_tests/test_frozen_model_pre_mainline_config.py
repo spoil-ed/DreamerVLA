@@ -43,6 +43,10 @@ def test_wm_upper_bound_reads_only_official_data() -> None:
     assert list(cfg.offline_warmup.required_task_ids) == list(range(10))
     assert cfg.dataloader.batch_size == 16
     assert cfg.optim.world_model.lr == 3.0e-5
+    assert cfg.training.world_model_ddp.find_unused_parameters is False
+    assert cfg.training.world_model_ddp.broadcast_buffers is False
+    assert cfg.training.world_model_ddp.static_graph is True
+    assert cfg.training.world_model_ddp.gradient_as_bucket_view is True
 
 
 def test_wm_upper_bound_profile_is_bounded_and_keeps_training_hyperparameters() -> None:

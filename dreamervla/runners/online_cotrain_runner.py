@@ -59,6 +59,47 @@ from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretr
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.torch_utils import freeze_module
 
+_WORLD_MODEL_DDP_DEFAULTS: dict[str, bool] = {
+    "find_unused_parameters": True,
+    "broadcast_buffers": True,
+}
+_WORLD_MODEL_DDP_OPTION_KEYS = frozenset(
+    {
+        "find_unused_parameters",
+        "broadcast_buffers",
+        "static_graph",
+        "gradient_as_bucket_view",
+    }
+)
+
+
+def _world_model_ddp_wrap_kwargs(cfg: DictConfig) -> dict[str, bool]:
+    """Resolve optional WM-only DDP knobs without changing other components.
+
+    The legacy online route keeps its two historical defaults. Offline replay
+    recipes can opt into a static graph through Hydra after proving their
+    forward/backward graph is invariant across updates.
+    """
+
+    raw = OmegaConf.select(cfg, "training.world_model_ddp", default=None)
+    if raw is None:
+        return dict(_WORLD_MODEL_DDP_DEFAULTS)
+    plain = OmegaConf.to_container(raw, resolve=True)
+    if not isinstance(plain, dict):
+        raise TypeError("training.world_model_ddp must be a mapping")
+    unknown = sorted(set(plain) - _WORLD_MODEL_DDP_OPTION_KEYS)
+    if unknown:
+        raise ValueError(
+            "training.world_model_ddp contains unknown option(s): "
+            + ", ".join(str(item) for item in unknown)
+        )
+    resolved = dict(_WORLD_MODEL_DDP_DEFAULTS)
+    for key, value in plain.items():
+        if not isinstance(value, bool):
+            raise TypeError(f"training.world_model_ddp.{key} must be boolean")
+        resolved[str(key)] = value
+    return resolved
+
 
 def build_cotrain_replay_transition(
     rec: dict[str, Any],
@@ -631,8 +672,7 @@ class OnlineCotrainRunner(DreamerVLARunner):
             self._load_world_model_init_ckpt(str(wm_ckpt))
         self.world_model = self.distributed.wrap_trainable_module(
             self.world_model,
-            find_unused_parameters=True,
-            broadcast_buffers=True,
+            **_world_model_ddp_wrap_kwargs(cfg),
         )
         self.world_model_optimizer = build_optimizer(
             self.world_model, OmegaConf.select(cfg, "optim.world_model")

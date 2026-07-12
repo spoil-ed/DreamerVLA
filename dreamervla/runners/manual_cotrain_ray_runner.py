@@ -431,8 +431,12 @@ class ManualCotrainRayRunner(BaseRunner):
                         initial_states["classifier_threshold"]
                     )
                 if component_states:
-                    wm_env_group.load_component_states(
+                    shared_component_states = _share_ray_value(
                         component_states,
+                        cluster=cluster,
+                    )
+                    wm_env_group.load_component_states(
+                        shared_component_states,
                         0,
                     ).wait()
         _hs_trace("[build_groups] all groups launched")
@@ -448,6 +452,7 @@ class ManualCotrainRayRunner(BaseRunner):
             "frozen_state_hashes": dict(self._frozen_state_hashes),
             "frozen_source_checkpoints": dict(self._frozen_source_checkpoints),
             "frozen_hashes_verified": bool(frozen_hashes_verified),
+            "cluster": cluster,
             "replay": replay,
             "RealEnvGroup": real_env_group,
             "WMEnvGroup": wm_env_group,
@@ -853,9 +858,17 @@ class ManualCotrainRayRunner(BaseRunner):
                     sync_metrics[
                         "sync/wm_env_world_model_skipped_classifier_not_updated"
                     ] = 1.0
+                share_start = time.perf_counter()
+                shared_component_states = _share_ray_value(
+                    component_states,
+                    cluster=groups.get("cluster"),
+                )
+                sync_metrics["sync/learner_state_share_s"] = float(
+                    time.perf_counter() - share_start
+                )
                 load_start = time.perf_counter()
                 load_metrics = wm_env.load_component_states(
-                    component_states,
+                    shared_component_states,
                     global_step,
                 ).wait()
                 sync_metrics["sync/wm_env_load_component_states_s"] = float(
@@ -2040,8 +2053,12 @@ class ManualCotrainRayRunner(BaseRunner):
                     payload["classifier_threshold"]
                 )
             if component_states:
-                wm_env.load_component_states(
+                shared_component_states = _share_ray_value(
                     component_states,
+                    cluster=groups.get("cluster"),
+                )
+                wm_env.load_component_states(
+                    shared_component_states,
                     resume_step,
                 ).wait()
 

@@ -106,6 +106,29 @@ def test_wrap_trainable_module_both_opt_ins_match_online_wm_contract(monkeypatch
     }
 
 
+def test_wrap_trainable_module_static_graph_optimizations_are_opt_in(monkeypatch):
+    """Static-graph/bucket-view flags must reach DDP only when Hydra selects them."""
+    _patch_ddp(monkeypatch)
+    helper = _make_helper(world_size=2)
+
+    wrapped = helper.wrap_trainable_module(
+        torch.nn.Linear(2, 2),
+        find_unused_parameters=False,
+        broadcast_buffers=False,
+        static_graph=True,
+        gradient_as_bucket_view=True,
+    )
+
+    assert wrapped.kwargs == {
+        "device_ids": [0],
+        "output_device": 0,
+        "broadcast_buffers": False,
+        "find_unused_parameters": False,
+        "static_graph": True,
+        "gradient_as_bucket_view": True,
+    }
+
+
 # ── wrap_world_model: untouched, must keep the hardcoded OFT defaults ─────────
 
 

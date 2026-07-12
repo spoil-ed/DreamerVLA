@@ -74,6 +74,10 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.warmup_topk_k == 3
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
+    assert cfg.training.world_model_ddp.find_unused_parameters is False
+    assert cfg.training.world_model_ddp.broadcast_buffers is False
+    assert cfg.training.world_model_ddp.static_graph is True
+    assert cfg.training.world_model_ddp.gradient_as_bucket_view is True
     assert cfg.dataloader.batch_size == 16
     assert cfg.optim.world_model.lr == 3.0e-5
     assert cfg.online_rollout.buffer_size == 160000

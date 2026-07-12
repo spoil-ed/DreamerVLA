@@ -171,6 +171,8 @@ class NopretokenizeSFTDistributedHelper:
         *,
         find_unused_parameters: bool | None = None,
         broadcast_buffers: bool | None = None,
+        static_graph: bool | None = None,
+        gradient_as_bucket_view: bool | None = None,
     ) -> Any:
         if not self.is_distributed or module is None:
             return module
@@ -182,6 +184,8 @@ class NopretokenizeSFTDistributedHelper:
             module,
             find_unused_parameters=find_unused_parameters,
             broadcast_buffers=broadcast_buffers,
+            static_graph=static_graph,
+            gradient_as_bucket_view=gradient_as_bucket_view,
         )
 
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
@@ -322,20 +326,29 @@ class NopretokenizeSFTDistributedHelper:
         *,
         find_unused_parameters: bool | None = None,
         broadcast_buffers: bool | None = None,
+        static_graph: bool | None = None,
+        gradient_as_bucket_view: bool | None = None,
     ) -> DDP:
-        return DDP(
-            module,
-            device_ids=[self.local_rank],
-            output_device=self.local_rank,
-            broadcast_buffers=(
+        kwargs: dict[str, Any] = {
+            "device_ids": [self.local_rank],
+            "output_device": self.local_rank,
+            "broadcast_buffers": (
                 False if broadcast_buffers is None else bool(broadcast_buffers)
             ),
-            find_unused_parameters=(
+            "find_unused_parameters": (
                 False
                 if find_unused_parameters is None
                 else bool(find_unused_parameters)
             ),
-        )
+        }
+        # Keep the legacy DDP constructor byte-identical unless a recipe opts in.
+        # This lets offline WM training select a static graph without silently
+        # changing policy/classifier/online routes that share this helper.
+        if static_graph is not None:
+            kwargs["static_graph"] = bool(static_graph)
+        if gradient_as_bucket_view is not None:
+            kwargs["gradient_as_bucket_view"] = bool(gradient_as_bucket_view)
+        return DDP(module, **kwargs)
 
     def _wrap_with_fsdp(self, module: torch.nn.Module) -> FSDP:
         wrap_modules = []
