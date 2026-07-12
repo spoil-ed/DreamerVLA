@@ -41,6 +41,11 @@ algorithm:
   group_size: 8
   rollout_epoch: 16
 
+task_conditioning:
+  enabled: false
+  num_tasks: 10
+  embedding_dim: 64
+
 # OFT query-before structural components. These shapes do not match the old
 # hidden-token warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
 # the checkpoint was trained with this route.
@@ -87,6 +92,7 @@ ray_components:
       reward_pos_weight: 1.0
       return_predictions: false
       freeze_backbone: true
+      task_conditioning: ${task_conditioning}
   policy:
     target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
     kwargs:

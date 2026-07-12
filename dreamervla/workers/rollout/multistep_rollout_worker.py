@@ -11,6 +11,7 @@ import torch
 from omegaconf import OmegaConf
 from torch import nn
 
+from dreamervla.hybrid_engines.fsdp.strategy import dtype_from_precision
 from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
@@ -52,6 +53,9 @@ class MultiStepRolloutWorker(Worker):
         if configured_device == "auto":
             configured_device = self.device
         self.torch_device = torch.device(configured_device)
+        self.policy_dtype = dtype_from_precision(
+            self.train_cfg.get("precision", "fp32")
+        )
         self.encoder: Any | None = None
         self.policy: nn.Module | None = None
         self.syncer: PatchWeightSyncer | None = None
@@ -72,7 +76,7 @@ class MultiStepRolloutWorker(Worker):
         policy = _build_from_cfg(self.policy_cfg)
         if not isinstance(policy, nn.Module):
             raise TypeError("MultiStepRolloutWorker policy must be a torch.nn.Module")
-        policy.to(self.torch_device)
+        policy.to(device=self.torch_device, dtype=self.policy_dtype)
         if "policy" in self.init_ckpt:
             policy.load_state_dict(
                 _to_device_state(self.init_ckpt["policy"], self.torch_device)

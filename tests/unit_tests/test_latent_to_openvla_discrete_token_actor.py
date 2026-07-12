@@ -38,6 +38,25 @@ def test_hidden_state_actor_uses_canonical_hidden_token_boundary() -> None:
     assert actor.action_token_count == 56
     assert actor.hidden_state_dim == 4096
     assert isinstance(actor.lm_head, nn.Linear)
+    assert actor.lm_head.out_features == actor.action_token_bins
+
+
+def test_hidden_state_actor_loads_legacy_full_vocabulary_lm_head() -> None:
+    actor = _tiny_mainline_actor()
+    state = actor.state_dict()
+    full_weight = torch.arange(
+        actor.vocab_size * actor.hidden_state_dim,
+        dtype=torch.float32,
+    ).reshape(actor.vocab_size, actor.hidden_state_dim)
+    state["lm_head.weight"] = full_weight
+
+    restored = _tiny_mainline_actor()
+    restored.load_state_dict(state)
+
+    torch.testing.assert_close(
+        restored.lm_head.weight,
+        full_weight[-actor.action_token_bins :],
+    )
 
 
 def test_hidden_state_actor_rejects_removed_hidden_token_alias() -> None:

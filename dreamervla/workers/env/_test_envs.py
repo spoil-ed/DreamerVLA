@@ -195,6 +195,7 @@ class BatchedCounterEnv:
         self.task_ids = [0 for _ in range(self.num_envs)]
         self.episode_ids = [0 for _ in range(self.num_envs)]
         self.step_i = [0 for _ in range(self.num_envs)]
+        self.reset_batch_calls = 0
         self.wm_loaded_version: int | None = None
         self.classifier_loaded_version: int | None = None
 
@@ -212,6 +213,24 @@ class BatchedCounterEnv:
         return self._obs(slot_id, is_first=True), {
             "episode_id": self.episode_ids[slot_id]
         }
+
+    def reset_batch(
+        self,
+        task_ids: list[int],
+        episode_ids: list[int],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        self.reset_batch_calls += 1
+        outputs = [
+            self.reset_slot(
+                slot_id,
+                task_id=int(task_id),
+                episode_id=int(episode_id),
+            )
+            for slot_id, (task_id, episode_id) in enumerate(
+                zip(task_ids, episode_ids, strict=True)
+            )
+        ]
+        return [obs for obs, _info in outputs], [info for _obs, info in outputs]
 
     def step_slot(
         self,

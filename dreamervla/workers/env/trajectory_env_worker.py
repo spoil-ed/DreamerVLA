@@ -383,6 +383,9 @@ def _batch_same_shape_obs_values(values: list[Any]) -> Any | None:
         return None
     shape = shapes[0]
     if all(isinstance(value, torch.Tensor) for value in values):
+        shared_view = _shared_contiguous_batch_view(values, shape)
+        if shared_view is not None:
+            return shared_view
         return torch.cat(
             [value.detach().cpu().reshape(1, *shape) for value in values],
             dim=0,
@@ -393,6 +396,37 @@ def _batch_same_shape_obs_values(values: list[Any]) -> Any | None:
             for value in values
         ],
         axis=0,
+    )
+
+
+def _shared_contiguous_batch_view(
+    values: list[Any],
+    shape: tuple[int, ...],
+) -> torch.Tensor | None:
+    rows = [value.detach().cpu() for value in values]
+    if not rows:
+        return None
+    first = rows[0]
+    row_numel = int(first.numel())
+    if row_numel <= 0 or not first.is_contiguous():
+        return None
+    storage_ptr = first.untyped_storage().data_ptr()
+    storage_offset = int(first.storage_offset())
+    stride = tuple(int(value) for value in first.stride())
+    for index, row in enumerate(rows):
+        if (
+            row.dtype != first.dtype
+            or tuple(int(dim) for dim in row.shape) != shape
+            or not row.is_contiguous()
+            or row.untyped_storage().data_ptr() != storage_ptr
+            or int(row.storage_offset()) != storage_offset + index * row_numel
+            or tuple(int(value) for value in row.stride()) != stride
+        ):
+            return None
+    return first.as_strided(
+        size=(len(rows), *shape),
+        stride=(row_numel, *stride),
+        storage_offset=storage_offset,
     )
 
 
@@ -1158,6 +1192,31 @@ class BaseTrajectoryEnvWorker(Worker):
         """Reset each slot and emit the first observation for rollout inference."""
 
         self._ensure_initialized()
+        if self._batched_env:
+            env = self.envs[0]
+            reset_batch = getattr(env, "reset_batch", None)
+            if callable(reset_batch):
+                task_ids = [int(value) for value in self._task_ids_by_slot]
+                episode_ids = [int(value) for value in self._episode_ids_by_slot]
+                output = reset_batch(task_ids, episode_ids)
+                if not isinstance(output, tuple) or len(output) != 2:
+                    raise ValueError(
+                        "batched env reset_batch(task_ids, episode_ids) must "
+                        "return (observations, infos)"
+                    )
+                observations, _infos = output
+                if len(observations) != self.num_slots:
+                    raise ValueError(
+                        "batched env reset_batch returned "
+                        f"{len(observations)} observations; expected {self.num_slots}"
+                    )
+                messages: list[ObservationMsg] = []
+                for slot_id, obs in enumerate(observations):
+                    self._obs_by_slot[slot_id] = dict(obs)
+                    self._episodes_by_slot[slot_id] = []
+                    messages.append(self._observation_msg(slot_id, dict(obs)))
+                return messages
+
         messages: list[ObservationMsg] = []
         for slot_id in range(self.num_slots):
             obs = self._reset_slot(slot_id)
@@ -1566,10 +1625,39 @@ class BaseTrajectoryEnvWorker(Worker):
             *,
             dtype: torch.dtype | None = None,
         ) -> torch.Tensor:
-            values = [
-                _chunk_value_array(getter(chunks[step].result), dtype=dtype)
+            raw_values = [
+                getter(chunks[step].result)
                 for step in range(chunk_count)
                 for chunks in slot_chunks
+            ]
+            if all(isinstance(value, torch.Tensor) for value in raw_values):
+                tensors: list[torch.Tensor] = []
+                for value in raw_values:
+                    tensor = value.detach().cpu()
+                    if dtype is not None:
+                        tensor = tensor.to(dtype=dtype)
+                    if tensor.ndim > 0 and int(tensor.shape[0]) == 1:
+                        tensor = tensor.squeeze(0)
+                    tensors.append(tensor)
+                value_shape = tuple(tensors[0].shape)
+                if any(tuple(tensor.shape) != value_shape for tensor in tensors):
+                    raise ValueError(
+                        "worker trajectory values must share one tensor shape"
+                    )
+                output_dtype = tensors[0].dtype
+                for tensor in tensors[1:]:
+                    output_dtype = torch.promote_types(output_dtype, tensor.dtype)
+                tensor = torch.empty(
+                    (chunk_count, batch_size, *value_shape),
+                    dtype=output_dtype,
+                )
+                rows = tensor.reshape(len(tensors), *value_shape)
+                for index, value in enumerate(tensors):
+                    rows[index].copy_(value)
+                return tensor
+
+            values = [
+                _chunk_value_array(value, dtype=dtype) for value in raw_values
             ]
             value_shape = values[0].shape
             if value_shape:
@@ -2454,9 +2542,22 @@ class BaseTrajectoryEnvWorker(Worker):
                 successful = bool(info.get("success", False)) or bool(
                     terminations_arr[batch_index, -1]
                 )
-            classifier_total_chunks = int(physical_steps)
-            classifier_success_chunks = int(
-                classifier_success_mask[:classifier_total_chunks].sum()
+            classifier_total_chunks = max(
+                0,
+                int(info.get("classifier_evaluations", physical_steps)),
+            )
+            classifier_success_chunks = max(
+                0,
+                int(
+                    info.get(
+                        "classifier_success_evaluations",
+                        classifier_success_mask[:physical_steps].sum(),
+                    )
+                ),
+            )
+            classifier_success_chunks = min(
+                classifier_success_chunks,
+                classifier_total_chunks,
             )
             if completed:
                 self._episodes_by_slot[slot_id] = []
@@ -3279,9 +3380,9 @@ class BaseTrajectoryEnvWorker(Worker):
                 if obs_key in obs:
                     value = obs[obs_key]
                     if isinstance(value, torch.Tensor):
-                        hidden = value.detach().to(dtype=torch.float32, device="cpu")
+                        hidden = value.detach().to(device="cpu")
                     else:
-                        hidden = torch.as_tensor(np.asarray(value, dtype=np.float32))
+                        hidden = torch.as_tensor(np.asarray(value))
                     result.forward_inputs["hidden"] = hidden.unsqueeze(0)
                     break
         keys_csv = ",".join(result.key for result in results)

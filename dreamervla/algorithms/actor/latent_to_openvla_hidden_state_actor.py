@@ -104,8 +104,19 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             else {}
         )
         weight = lm_head_state.get("weight")
+        action_weight = None
         if weight is not None:
-            vocab_size = int(weight.shape[0])
+            loaded_rows = int(weight.shape[0])
+            if loaded_rows > self.action_token_bins:
+                vocab_size = loaded_rows
+                action_weight = weight[-self.action_token_bins :].contiguous()
+            elif loaded_rows == self.action_token_bins:
+                action_weight = weight.contiguous()
+            else:
+                raise ValueError(
+                    "OpenVLA LM head must contain at least action_token_bins rows: "
+                    f"checkpoint={tuple(weight.shape)}, bins={self.action_token_bins}"
+                )
             if int(weight.shape[1]) != self.hidden_state_dim:
                 raise ValueError(
                     "OpenVLA LM head hidden-state dim mismatch: "
@@ -160,11 +171,21 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                     nn.init.zeros_(final_linear.weight)
                     nn.init.zeros_(final_linear.bias)
 
-        self.lm_head = nn.Linear(self.hidden_state_dim, self.vocab_size, bias=False)
-        if lm_head_state:
-            missing, unexpected = self.lm_head.load_state_dict(lm_head_state, strict=False)
+        # Only these rows can contribute to the categorical action logits. Keeping
+        # the full frozen vocabulary head would inflate FSDP, checkpoints, and
+        # Actor->Rollout synchronization without changing any policy output.
+        self.lm_head = nn.Linear(
+            self.hidden_state_dim,
+            self.action_token_bins,
+            bias=False,
+        )
+        if action_weight is not None:
+            missing, unexpected = self.lm_head.load_state_dict(
+                {"weight": action_weight}, strict=False
+            )
             logger.info(
-                "Loaded OpenVLA LM head from %s; missing=%d unexpected=%d",
+                "Loaded OpenVLA action-token LM-head rows from %s; "
+                "missing=%d unexpected=%d",
                 init_lm_head_ckpt,
                 len(missing),
                 len(unexpected),
@@ -224,6 +245,34 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         strip_prefixes = ("module.", "backbone.", *prefixes)
         return extract_state_dict(candidates, strip_prefixes, {"weight"})
 
+    def _load_from_state_dict(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        prefix: str,
+        local_metadata: dict[str, Any],
+        strict: bool,
+        missing_keys: list[str],
+        unexpected_keys: list[str],
+        error_msgs: list[str],
+    ) -> None:
+        """Accept legacy policy checkpoints that stored the full vocabulary head."""
+
+        key = f"{prefix}lm_head.weight"
+        value = state_dict.get(key)
+        if isinstance(value, torch.Tensor) and value.ndim == 2:
+            rows = int(value.shape[0])
+            if rows > self.action_token_bins:
+                state_dict[key] = value[-self.action_token_bins :].contiguous()
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     def _source_tokens(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim == 3:
             if int(hidden.shape[-1]) != self.source_token_dim:
@@ -258,8 +307,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
     def _action_token_logits(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         hidden_state = self._hidden_state_slots(hidden)
-        ids = self._action_token_ids.to(device=hidden_state.device)
-        action_weight = self.lm_head.weight.index_select(0, ids)
+        action_weight = self.lm_head.weight
         action_logits = torch.nn.functional.linear(
             hidden_state.to(dtype=action_weight.dtype), action_weight
         )

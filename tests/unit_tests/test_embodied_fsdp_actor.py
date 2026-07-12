@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
@@ -175,6 +176,43 @@ class _GraphProbePolicy(nn.Module):
         return logprob, entropy, None
 
 
+class _NoSyncProbePolicy(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.offset = nn.Parameter(torch.tensor(0.0))
+        self.no_sync_calls = 0
+        self.no_sync_active = False
+        self.forward_sync_states: list[bool] = []
+
+    @contextmanager
+    def no_sync(self):
+        self.no_sync_calls += 1
+        self.no_sync_active = True
+        try:
+            yield
+        finally:
+            self.no_sync_active = False
+
+    def forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, None]:
+        self.forward_sync_states.append(not self.no_sync_active)
+        batch_size = int(batch["hidden"].shape[0])
+        logprob = self.offset.expand(batch_size)
+        return logprob, torch.zeros_like(logprob), None
+
+    def clip_grad_norm_(self, max_norm: float) -> torch.Tensor:
+        return torch.nn.utils.clip_grad_norm_(self.parameters(), float(max_norm))
+
+
+class _FSDPGradNormProbePolicy(_NoSyncProbePolicy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.clip_max_norms: list[float] = []
+
+    def clip_grad_norm_(self, max_norm: float) -> torch.Tensor:
+        self.clip_max_norms.append(float(max_norm))
+        return torch.tensor(3.5)
+
+
 class _TokenLevelPolicy(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -317,6 +355,18 @@ def test_collate_trajectory_shards_pads_variable_length_with_loss_mask() -> None
     assert batch.actions.shape == (3, 2, 2, 3)
     assert batch.loss_mask.tolist() == [[1.0, 1.0], [0.0, 1.0], [0.0, 1.0]]
     assert batch.dones[1:, 0].all()
+
+
+def test_single_shard_collate_reuses_hidden_storage() -> None:
+    shard = _shard(0.0, 1.0)
+    source_hidden = shard.forward_inputs["hidden"]
+
+    batch = collate_trajectory_shards([shard])
+
+    assert (
+        batch.forward_inputs["hidden"].untyped_storage().data_ptr()
+        == source_hidden.untyped_storage().data_ptr()
+    )
 
 
 def test_buffered_slot_shard_keeps_loss_mask_after_episode_reset() -> None:
@@ -482,6 +532,105 @@ def test_actor_microbatch_matches_full_batch_update() -> None:
         assert torch.allclose(full[key], micro[key], atol=1e-5), key
 
 
+def test_actor_microbatch_slices_hidden_before_device_transfer(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+    actor.compute_advantages_and_returns()
+    assert actor.batch is not None
+    hidden = actor.batch.forward_inputs["hidden"]
+    hidden_storage = hidden.untyped_storage().data_ptr()
+    transferred_batch_sizes: list[int] = []
+    original_to = torch.Tensor.to
+
+    def tracked_to(tensor, *args, **kwargs):
+        if (
+            tensor.ndim == 2
+            and tensor.untyped_storage().data_ptr() == hidden_storage
+        ):
+            transferred_batch_sizes.append(int(tensor.shape[0]))
+        return original_to(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "to", tracked_to)
+
+    actor.run_training()
+
+    assert transferred_batch_sizes == [2, 2, 2, 2]
+
+
+def test_actor_hidden_transfer_uses_configured_fsdp_precision() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["fsdp"]["precision"] = "bf16"
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    assert actor.batch is not None
+
+    eval_batch = actor._eval_inputs_for_step(
+        actor.batch,
+        0,
+        batch_slice=slice(0, 1),
+    )
+
+    assert eval_batch["hidden"].dtype == torch.bfloat16
+
+
+def test_actor_fsdp_no_syncs_all_but_final_accumulated_backward(
+    monkeypatch,
+) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    policy = _NoSyncProbePolicy()
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=1e-3)
+    actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+    actor.compute_advantages_and_returns()
+    monkeypatch.setattr(embodied_fsdp_actor, "_is_fsdp_module", lambda _policy: True)
+
+    actor.run_training()
+
+    assert policy.no_sync_calls == 3
+    assert policy.forward_sync_states == [False, False, False, True]
+
+
+def test_actor_training_avoids_per_microbatch_scalar_device_sync(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+    actor.compute_advantages_and_returns()
+    item_calls = 0
+    original_item = torch.Tensor.item
+
+    def tracked_item(tensor, *args, **kwargs):
+        nonlocal item_calls
+        item_calls += 1
+        return original_item(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "item", tracked_item)
+
+    actor.run_training()
+
+    assert item_calls <= 8
+
+
+def test_actor_uses_fsdp_global_grad_norm_clipping(monkeypatch) -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    policy = _FSDPGradNormProbePolicy()
+    actor.policy = policy
+    monkeypatch.setattr(embodied_fsdp_actor, "_is_fsdp_module", lambda _policy: True)
+
+    grad_norm = actor._clip_or_measure_grad_norm({"grad_clip_norm": 1.25})
+
+    assert grad_norm == 3.5
+    assert policy.clip_max_norms == [1.25]
+
+
 def test_actor_run_training_rejects_step_action_tensors_for_manual_cotrain() -> None:
     actor = EmbodiedFSDPActor(**_actor_cfg())
     actor.init()
@@ -550,6 +699,34 @@ def test_sync_model_to_rollout_nonzero_rank_participates_without_pushing_patch()
     assert metrics["sync/policy_export_s"] >= 0.0
     assert metrics["sync/policy_push_s"] == 0.0
     assert metrics["sync/policy_tensors"] > 0.0
+
+
+def test_sync_model_to_rollout_casts_snapshot_to_configured_bfloat16() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["syncer"] = {"precision": "bf16"}
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    pushed: dict[str, torch.Tensor] = {}
+
+    class _FakeSyncer:
+        last_push_metrics: dict[str, float] = {}
+
+        def push(self, key: str, state_dict: dict, version: int) -> None:
+            del key, version
+            pushed.update(state_dict)
+
+    actor.syncer = _FakeSyncer()  # type: ignore[assignment]
+
+    metrics = actor.sync_model_to_rollout("policy", version=3)
+
+    floating_dtypes = {
+        value.dtype for value in pushed.values() if value.is_floating_point()
+    }
+    expected_bytes = sum(
+        value.numel() * value.element_size() for value in pushed.values()
+    )
+    assert floating_dtypes == {torch.bfloat16}
+    assert metrics["sync/policy_bytes"] == float(expected_bytes)
 
 
 def _filter_rewards_cfg() -> dict:

@@ -318,6 +318,8 @@ def _cat_step_batch(
             raise ValueError(
                 f"{name} tensors must share non-batch dimensions; got {shapes}"
             )
+    if len(normalized) == 1:
+        return normalized[0]
     return torch.cat(normalized, dim=1)
 
 

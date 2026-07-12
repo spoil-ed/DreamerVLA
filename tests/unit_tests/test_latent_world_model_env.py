@@ -104,6 +104,22 @@ class _WindowCaptureClassifier(torch.nn.Module):
         return torch.zeros(latent_window.shape[0], 1, device=latent_window.device)
 
 
+class _ChunkWindowCaptureClassifier(torch.nn.Module):
+    def __init__(self, window: int) -> None:
+        super().__init__()
+        self.cfg = SimpleNamespace(
+            window=int(window),
+            granularity="chunk",
+            chunk_pool="last",
+        )
+        self.windows: list[torch.Tensor] = []
+
+    def forward(self, latent_window, *, task_ids=None, proprio=None, lang_emb=None):
+        del task_ids, proprio, lang_emb
+        self.windows.append(latent_window.detach().cpu().clone())
+        return {"score": latent_window[:, -1].sum(dim=-1, keepdim=True)}
+
+
 def test_latent_world_model_env_step_returns_env_tuple():
     env = LatentWorldModelEnv(
         world_model=_TinyWM(),
@@ -295,6 +311,83 @@ def test_latent_world_model_env_chunk_classifier_uses_rolling_history() -> None:
         [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0]],
         [[1.0, 0.0], [1.0, 2.0], [4.0, 2.0]],
     ]
+
+
+def test_chunk_granularity_classifier_scores_once_per_policy_chunk() -> None:
+    classifier = _ChunkWindowCaptureClassifier(window=3)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    _observations, rewards, _terminations, _truncations, infos = (
+        env.chunk_step_batch(
+            np.array(
+                [[[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]]],
+                dtype=np.float32,
+            ),
+            env_ids=[0],
+        )
+    )
+
+    assert len(classifier.windows) == 1
+    assert classifier.windows[0].tolist() == [
+        [[0.0, 0.0], [0.0, 0.0], [4.0, 2.0]],
+    ]
+    assert rewards.tolist() == [[0.0, 0.0, 6.0]]
+    assert infos[0]["classifier_evaluations"] == 1
+    assert infos[0]["classifier_success_evaluations"] == 0
+    assert env.get_metrics()["score_count"] == 1.0
+
+
+def test_classifier_temporal_windows_do_not_cat_or_stack_slot_histories(
+    monkeypatch,
+) -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_WindowCaptureClassifier(window=3),
+        latent_dim=2,
+        action_dim=2,
+        num_envs=2,
+    )
+    cat_calls = 0
+    stack_calls = 0
+    original_cat = torch.cat
+    original_stack = torch.stack
+
+    def tracked_cat(*args, **kwargs):
+        nonlocal cat_calls
+        cat_calls += 1
+        return original_cat(*args, **kwargs)
+
+    def tracked_stack(*args, **kwargs):
+        nonlocal stack_calls
+        stack_calls += 1
+        return original_stack(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "cat", tracked_cat)
+    monkeypatch.setattr(torch, "stack", tracked_stack)
+
+    windows, _proprio, updates, _proprio_updates = (
+        env._classifier_temporal_windows(
+            torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            window=3,
+            slots=[0, 1],
+        )
+    )
+
+    assert windows.tolist() == [
+        [[0.0, 0.0], [0.0, 0.0], [1.0, 2.0]],
+        [[0.0, 0.0], [0.0, 0.0], [3.0, 4.0]],
+    ]
+    assert set(updates) == {0, 1}
+    assert cat_calls == 0
+    assert stack_calls == 0
 
 
 def test_latent_world_model_env_reports_classifier_score_distribution() -> None:
@@ -560,6 +653,85 @@ def test_latent_world_model_env_tensor_observation_uses_inference_dtype() -> Non
 
     assert observations[0]["latent"].dtype == torch.bfloat16
     assert observations[0]["lang_emb"].dtype == torch.bfloat16
+
+
+def test_classifier_history_uses_world_model_inference_dtype() -> None:
+    classifier = _ChunkWindowCaptureClassifier(window=3)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        num_envs=2,
+        inference_dtype="bf16",
+    )
+
+    env.reset_batch([0, 1], [0, 1])
+    env.chunk_step_batch(
+        np.ones((2, 2, 2), dtype=np.float32),
+        env_ids=[0, 1],
+    )
+
+    assert env._classifier_latent_history.dtype == torch.bfloat16
+    assert classifier.windows[0].dtype == torch.bfloat16
+
+
+def test_latent_world_model_env_batches_observation_device_to_host_copy(
+    monkeypatch,
+) -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        num_envs=3,
+        observation_format="tensor",
+    )
+    original = latent_world_model_env._cpu_tensor_snapshot
+    copied_shapes: list[tuple[int, ...]] = []
+
+    def tracked_snapshot(value, *, dtype=torch.float32):
+        copied_shapes.append(tuple(value.shape))
+        return original(value, dtype=dtype)
+
+    monkeypatch.setattr(
+        latent_world_model_env,
+        "_cpu_tensor_snapshot",
+        tracked_snapshot,
+    )
+
+    observations = env._obs_batch([0, 1, 2])
+
+    assert len(observations) == 3
+    assert copied_shapes == [(3, 2)]
+
+
+def test_latent_world_model_env_batches_reset_observation_copy(monkeypatch) -> None:
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=_TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        num_envs=3,
+        observation_format="tensor",
+    )
+    original = latent_world_model_env._cpu_tensor_snapshot
+    copied_shapes: list[tuple[int, ...]] = []
+
+    def tracked_snapshot(value, *, dtype=torch.float32):
+        copied_shapes.append(tuple(value.shape))
+        return original(value, dtype=dtype)
+
+    monkeypatch.setattr(
+        latent_world_model_env,
+        "_cpu_tensor_snapshot",
+        tracked_snapshot,
+    )
+
+    observations, infos = env.reset_batch([0, 1, 2], [10, 11, 12])
+
+    assert len(observations) == len(infos) == 3
+    assert copied_shapes == [(3, 2)]
 
 
 def test_latent_world_model_env_config_modules_make_replay_transition():

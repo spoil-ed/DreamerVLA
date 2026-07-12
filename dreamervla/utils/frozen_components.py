@@ -125,12 +125,36 @@ def require_component_config_match(
         raise ValueError(
             f"{component} checkpoint must contain config.{component} metadata"
         )
-    checkpoint_cfg = _resolved_container(config[component])
-    resolved_active = _resolved_container(active_cfg)
+    checkpoint_cfg = _canonical_component_config(config[component], component)
+    resolved_active = _canonical_component_config(active_cfg, component)
     if checkpoint_cfg != resolved_active:
         raise ValueError(
             f"{component} checkpoint config does not match the active Hydra config"
         )
+
+
+def _canonical_component_config(value: Any, component: str) -> Any:
+    """Normalize Hydra and Ray builders while ignoring state-free backends."""
+
+    resolved = _resolved_container(value)
+    if not isinstance(resolved, Mapping):
+        return resolved
+    normalized = {str(key): item for key, item in resolved.items()}
+    if "target" in normalized and "_target_" not in normalized:
+        target = normalized.pop("target")
+        kwargs = normalized.pop("kwargs", {})
+        if not isinstance(kwargs, Mapping):
+            raise TypeError("component kwargs must be a mapping")
+        normalized = {
+            "_target_": target,
+            **{str(key): item for key, item in kwargs.items()},
+            **normalized,
+        }
+    if str(component) == "world_model":
+        # SDPA/manual select a mathematically equivalent attention kernel and
+        # do not alter checkpoint tensors or model topology.
+        normalized.pop("attn_impl", None)
+    return normalized
 
 
 def resolve_classifier_threshold(

@@ -128,6 +128,23 @@ def test_component_checkpoint_config_match_is_shared_and_strict() -> None:
         )
 
 
+def test_world_model_checkpoint_accepts_state_free_attention_backend() -> None:
+    checkpoint = {
+        "_target_": "test.WorldModel",
+        "hidden_dim": 4,
+    }
+    metadata = {"config": {"world_model": checkpoint}}
+
+    require_component_config_match(
+        metadata,
+        component="world_model",
+        active_cfg={
+            "target": "test.WorldModel",
+            "kwargs": {"hidden_dim": 4, "attn_impl": "sdpa"},
+        },
+    )
+
+
 def test_classifier_threshold_prefers_checkpoint_and_rejects_drift() -> None:
     assert resolve_classifier_threshold({"threshold": 0.6}) == 0.6
     assert resolve_classifier_threshold({"threshold": 0.6}, configured=0.6) == 0.6

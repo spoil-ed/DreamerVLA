@@ -142,6 +142,8 @@ def test_frozen_models_rl_ray_is_eight_gpu_policy_only_and_uses_official_replay(
     assert cfg.actor.train_cfg.fsdp.sync_module_states is True
     assert cfg.actor.train_cfg.fsdp.strategy == "fsdp"
     assert cfg.actor.train_cfg.fsdp.cpu_offload is False
+    assert cfg.actor.train_cfg.syncer.precision == "bf16"
+    assert cfg.rollout.train_cfg.precision == "bf16"
     assert (
         cfg.actor.train_cfg.algorithm_cfg.update_micro_batch_starts
         == cfg.algorithm.lumos.update_micro_batch_starts
@@ -158,6 +160,39 @@ def test_frozen_models_rl_ray_is_eight_gpu_policy_only_and_uses_official_replay(
         cfg.env.wm.cfg.kwargs.classifier,
         resolve=True,
     ) == OmegaConf.to_container(cfg.classifier, resolve=True)
+
+
+def test_wm_classifier_configs_are_shared_across_training_and_cotrain() -> None:
+    wm_train = _compose("wm_official_upper_bound")
+    cls_train = _compose("classifier_official_upper_bound")
+    cotrain = _compose("openvla_onetraj_libero_cotrain_ray")
+    frozen = _compose("dreamervla_frozen_models_rl_ray")
+
+    cotrain_wm = {
+        "_target_": cotrain.ray_components.world_model.target,
+        **OmegaConf.to_container(
+            cotrain.ray_components.world_model.kwargs,
+            resolve=True,
+        ),
+    }
+    cotrain_classifier = {
+        "_target_": cotrain.ray_components.classifier.target,
+        **OmegaConf.to_container(
+            cotrain.ray_components.classifier.kwargs,
+            resolve=True,
+        ),
+    }
+
+    assert cotrain_wm == OmegaConf.to_container(wm_train.world_model, resolve=True)
+    assert cotrain_wm == OmegaConf.to_container(frozen.world_model, resolve=True)
+    assert cotrain_classifier == OmegaConf.to_container(
+        cls_train.classifier,
+        resolve=True,
+    )
+    assert cotrain_classifier == OmegaConf.to_container(
+        frozen.classifier,
+        resolve=True,
+    )
 
 
 def test_frozen_models_rl_ray_validates_with_explicit_component_checkpoints(

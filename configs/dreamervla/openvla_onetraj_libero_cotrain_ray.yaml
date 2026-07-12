@@ -74,6 +74,7 @@ actor:
     lr: 5.0e-7
     syncer:
       store_name: DreamerVLAActorRolloutPatchStore
+      precision: bf16
     fsdp:
       strategy: fsdp
       precision: bf16
@@ -131,6 +132,7 @@ rollout:
   init_ckpt: {}
   train_cfg:
     device: auto
+    precision: bf16
     deterministic: false
     logprob_type: ${algorithm.logprob_type}
     syncer:

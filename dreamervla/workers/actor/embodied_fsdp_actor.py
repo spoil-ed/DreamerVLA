@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from dreamervla.hybrid_engines.fsdp import FSDPModelManager
+from dreamervla.hybrid_engines.fsdp.strategy import dtype_from_precision
 from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
@@ -50,6 +52,13 @@ class EmbodiedFSDPActor(Worker):
         if configured_device == "auto":
             configured_device = self.device
         self.torch_device = torch.device(configured_device)
+        fsdp_cfg = _as_plain_dict(self.train_cfg.get("fsdp", {}))
+        self.policy_input_dtype = dtype_from_precision(
+            fsdp_cfg.get(
+                "precision",
+                self.train_cfg.get("precision", "fp32"),
+            )
+        )
 
         self.global_step = 0
         self.policy: nn.Module | None = None
@@ -193,10 +202,13 @@ class EmbodiedFSDPActor(Worker):
                 "[time, batch, chunk, action_dim]"
             )
         advantages = self._advantages()
-        loss_mask = batch.loss_mask.to(self.torch_device, dtype=torch.bool)
+        loss_mask_cpu = batch.loss_mask.to(device="cpu", dtype=torch.bool)
         if self.rollout_filter_mask is not None:
-            keep = self.rollout_filter_mask.to(loss_mask.device) > 0.0
-            loss_mask = loss_mask & keep.reshape((1, -1) + (1,) * (loss_mask.ndim - 2))
+            keep = self.rollout_filter_mask.detach().to(device="cpu") > 0.0
+            loss_mask_cpu = loss_mask_cpu & keep.reshape(
+                (1, -1) + (1,) * (loss_mask_cpu.ndim - 2)
+            )
+        loss_mask = loss_mask_cpu.to(self.torch_device)
         policy = self._policy()
         optimizer = self._optimizer()
         algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
@@ -226,9 +238,9 @@ class EmbodiedFSDPActor(Worker):
         loss_norm = str(algorithm_cfg.get("loss_normalization", "global_valid_count"))
 
         policy.train()
-        losses: list[float] = []
-        ratio_means: list[float] = []
-        entropy_means: list[float] = []
+        losses: list[torch.Tensor] = []
+        ratio_means: list[torch.Tensor] = []
+        entropy_means: list[torch.Tensor] = []
         grad_norms: list[float] = []
         ppo_updates = 0
         local_time_steps = int(batch.rewards.shape[0])
@@ -277,11 +289,13 @@ class EmbodiedFSDPActor(Worker):
             .sum(dim=(0, 2))
             .clamp(min=1.0)
         )
+        inverse_per_rollout_count = per_rollout_count.reciprocal()
+        advantage_vector = _as_vector(advantages).to(self.torch_device)
         num_rollouts = _distributed_sum_int(
             int(loss_mask.shape[1]), self.torch_device
         )
         zero_loss_steps = 0
-        behavior_kl_sum = 0.0
+        behavior_kl_sum = torch.zeros((), device=self.torch_device)
         behavior_kl_count = 0
         # ─── group-aligned micro-batch slices (MEM-RL-01 / A3) ───────────────
         # Bound the update's peak activation memory to ONE contiguous block of
@@ -306,138 +320,161 @@ class EmbodiedFSDPActor(Worker):
             (lo * group_size, min(lo + mb_starts, n_starts) * group_size)
             for lo in range(0, n_starts, mb_starts)
         ]
+        fsdp_policy = _is_fsdp_module(policy)
         for _ in range(update_epochs):
             optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
-            epoch_loss = 0.0
-            ratio_sum = 0.0
-            entropy_sum = 0.0
-            for b_lo, b_hi in slice_bounds:
+            epoch_loss = torch.zeros((), device=self.torch_device)
+            ratio_sum = torch.zeros((), device=self.torch_device)
+            entropy_sum = torch.zeros((), device=self.torch_device)
+            for slice_index, (b_lo, b_hi) in enumerate(slice_bounds):
                 for step in range(global_time_steps):
                     has_local_step = step < local_time_steps
                     if has_local_step:
-                        step_mask = _as_vector(loss_mask[step])[b_lo:b_hi].to(
+                        step_mask_cpu = _as_vector(loss_mask_cpu[step])[b_lo:b_hi]
+                        has_valid_step = bool(step_mask_cpu.any())
+                        step_mask = step_mask_cpu.to(
                             self.torch_device,
                             dtype=torch.bool,
                         )
-                        eval_batch = self._eval_inputs_for_step(batch, step)
+                        eval_batch = self._eval_inputs_for_step(
+                            batch,
+                            step,
+                            batch_slice=slice(b_lo, b_hi),
+                        )
                     else:
+                        has_valid_step = False
                         step_mask = torch.zeros(
                             b_hi - b_lo,
                             device=self.torch_device,
                             dtype=torch.bool,
                         )
-                        eval_batch = self._eval_inputs_for_step(batch, 0)
-                    eval_batch = {
-                        key: (
-                            value[b_lo:b_hi]
-                            if isinstance(value, torch.Tensor)
-                            else value
+                        eval_batch = self._eval_inputs_for_step(
+                            batch,
+                            0,
+                            batch_slice=slice(b_lo, b_hi),
                         )
-                        for key, value in eval_batch.items()
-                    }
                     if logprob_type:
                         eval_batch["logprob_type"] = logprob_type
 
-                    new_logprob, entropy, _ = policy(eval_batch)
-                    if token_level_logprob:
-                        new_logprob = _as_tensor(new_logprob).to(
+                    is_last_backward = (
+                        slice_index == len(slice_bounds) - 1
+                        and step == global_time_steps - 1
+                    )
+                    backward_context = (
+                        policy.no_sync()
+                        if fsdp_policy and not is_last_backward
+                        else nullcontext()
+                    )
+                    with backward_context:
+                        new_logprob, entropy, _ = policy(eval_batch)
+                        if token_level_logprob:
+                            new_logprob = _as_tensor(new_logprob).to(
+                                self.torch_device,
+                                dtype=torch.float32,
+                            )
+                            entropy = _match_logprob_shape(
+                                _as_tensor(entropy).to(
+                                    self.torch_device, dtype=torch.float32
+                                ),
+                                new_logprob,
+                                name="entropy",
+                            )
+                        else:
+                            new_logprob = _as_vector(new_logprob)
+                            entropy = _as_vector(entropy)
+                        if not has_local_step:
+                            loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                            loss.backward()
+                            zero_loss_steps += 1
+                            continue
+
+                        old_logprob_raw = batch.prev_logprobs[step][b_lo:b_hi].to(
                             self.torch_device,
                             dtype=torch.float32,
                         )
-                        entropy = _match_logprob_shape(
-                            _as_tensor(entropy).to(
-                                self.torch_device, dtype=torch.float32
-                            ),
-                            new_logprob,
-                            name="entropy",
+                        old_logprob = (
+                            old_logprob_raw
+                            if token_level_logprob
+                            else _as_vector(old_logprob_raw)
                         )
-                    else:
-                        new_logprob = _as_vector(new_logprob)
-                        entropy = _as_vector(entropy)
-                    if not has_local_step:
-                        loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
-                        loss.backward()
-                        zero_loss_steps += 1
-                        continue
-
-                    old_logprob_raw = batch.prev_logprobs[step][b_lo:b_hi].to(
-                        self.torch_device,
-                        dtype=torch.float32,
-                    )
-                    old_logprob = (
-                        old_logprob_raw
-                        if token_level_logprob
-                        else _as_vector(old_logprob_raw)
-                    )
-                    advantage = _as_vector(advantages).to(self.torch_device)[
-                        b_lo:b_hi
-                    ]
-                    if new_logprob.shape != old_logprob.shape:
-                        raise ValueError(
-                            "policy evaluate log_prob shape must match prev_logprobs; "
-                            f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
-                        )
-                    if token_level_logprob:
-                        if advantage.shape[:1] != old_logprob.shape[:1]:
+                        advantage = advantage_vector[b_lo:b_hi]
+                        if new_logprob.shape != old_logprob.shape:
                             raise ValueError(
-                                "advantage batch size must match prev_logprobs; "
-                                f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                                "policy evaluate log_prob shape must match prev_logprobs; "
+                                f"got {tuple(new_logprob.shape)} and "
+                                f"{tuple(old_logprob.shape)}"
                             )
-                    elif advantage.shape != old_logprob.shape:
-                        raise ValueError(
-                            "advantage shape must match prev_logprobs; "
-                            f"got {tuple(advantage.shape)} and {tuple(old_logprob.shape)}"
+                        if token_level_logprob:
+                            if advantage.shape[:1] != old_logprob.shape[:1]:
+                                raise ValueError(
+                                    "advantage batch size must match prev_logprobs; "
+                                    f"got {tuple(advantage.shape)} and "
+                                    f"{tuple(old_logprob.shape)}"
+                                )
+                        elif advantage.shape != old_logprob.shape:
+                            raise ValueError(
+                                "advantage shape must match prev_logprobs; "
+                                f"got {tuple(advantage.shape)} and "
+                                f"{tuple(old_logprob.shape)}"
+                            )
+                        if not has_valid_step:
+                            loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                            loss.backward()
+                            zero_loss_steps += 1
+                            continue
+                        old_logprob = old_logprob[step_mask]
+                        advantage = advantage[step_mask]
+                        new_logprob = new_logprob[step_mask]
+                        entropy = entropy[step_mask]
+                        if token_level_logprob:
+                            advantage = _expand_batch_vector_as(
+                                advantage, new_logprob
+                            )
+
+                        ratio = _ppo_ratio(
+                            new_logprob,
+                            old_logprob,
+                            clip_log_ratio=clip_log_ratio,
                         )
-                    if not bool(step_mask.any().item()):
-                        loss = _zero_loss_from_policy_outputs(new_logprob, entropy)
+                        behavior_kl = _approx_behavior_kl(
+                            new_logprob,
+                            old_logprob,
+                            clip_log_ratio=clip_log_ratio,
+                        )
+                        ppo_clip = _ppo_clip_term(
+                            ratio,
+                            advantage,
+                            clip_low,
+                            clip_high,
+                            clip_ratio_c=clip_ratio_c,
+                        )
+                        if loss_norm == "per_rollout" and not token_level_logprob:
+                            step_weight = inverse_per_rollout_count[b_lo:b_hi][
+                                step_mask
+                            ]
+                            loss = (
+                                (
+                                    (ppo_clip + kl_coef * behavior_kl)
+                                    * step_weight
+                                ).sum()
+                                - float(entropy_coef)
+                                * (entropy * step_weight).sum()
+                            ) / float(num_rollouts)
+                        else:
+                            loss = (
+                                ppo_clip.sum()
+                                + kl_coef * behavior_kl.sum()
+                                - float(entropy_coef) * entropy.sum()
+                            ) / float(loss_reduction_count)
                         loss.backward()
-                        zero_loss_steps += 1
-                        continue
-                    old_logprob = old_logprob[step_mask]
-                    advantage = advantage[step_mask]
-                    new_logprob = new_logprob[step_mask]
-                    entropy = entropy[step_mask]
-                    if token_level_logprob:
-                        advantage = _expand_batch_vector_as(advantage, new_logprob)
 
-                    ratio = _ppo_ratio(
-                        new_logprob,
-                        old_logprob,
-                        clip_log_ratio=clip_log_ratio,
-                    )
-                    behavior_kl = _approx_behavior_kl(
-                        new_logprob,
-                        old_logprob,
-                        clip_log_ratio=clip_log_ratio,
-                    )
-                    ppo_clip = _ppo_clip_term(
-                        ratio,
-                        advantage,
-                        clip_low,
-                        clip_high,
-                        clip_ratio_c=clip_ratio_c,
-                    )
-                    if loss_norm == "per_rollout" and not token_level_logprob:
-                        step_weight = (
-                            1.0 / per_rollout_count.to(self.torch_device)
-                        )[b_lo:b_hi][step_mask]
-                        loss = (
-                            ((ppo_clip + kl_coef * behavior_kl) * step_weight).sum()
-                            - float(entropy_coef) * (entropy * step_weight).sum()
-                        ) / float(num_rollouts)
-                    else:
-                        loss = (
-                            ppo_clip.sum()
-                            + kl_coef * behavior_kl.sum()
-                            - float(entropy_coef) * entropy.sum()
-                        ) / float(loss_reduction_count)
-                    loss.backward()
-
-                    epoch_loss += float(loss.detach().cpu().item())
-                    ratio_sum += float(ratio.detach().sum().cpu().item())
-                    entropy_sum += float(entropy.detach().sum().cpu().item())
-                    behavior_kl_sum += float(behavior_kl.detach().sum().cpu().item())
-                    behavior_kl_count += int(behavior_kl.numel())
+                        epoch_loss = epoch_loss + loss.detach()
+                        ratio_sum = ratio_sum + ratio.detach().sum()
+                        entropy_sum = entropy_sum + entropy.detach().sum()
+                        behavior_kl_sum = (
+                            behavior_kl_sum + behavior_kl.detach().sum()
+                        )
+                        behavior_kl_count += int(behavior_kl.numel())
             grad_norm = self._clip_or_measure_grad_norm(optim_cfg)
             optimizer.step()
 
@@ -448,13 +485,20 @@ class EmbodiedFSDPActor(Worker):
             grad_norms.append(float(grad_norm))
 
         policy.train(False)
+        actor_scalars = torch.stack(
+            (
+                torch.stack(losses).mean(),
+                torch.stack(ratio_means).mean(),
+                torch.stack(entropy_means).mean(),
+                behavior_kl_sum / float(max(1, behavior_kl_count)),
+            )
+        ).detach().float().cpu().tolist()
         return {
             "actor/ppo_updates": float(ppo_updates),
-            "actor/loss": _mean(losses),
-            "actor/ratio_mean": _mean(ratio_means),
-            "actor/entropy_mean": _mean(entropy_means),
-            "actor/behavior_kl_mean": behavior_kl_sum
-            / float(max(1, behavior_kl_count)),
+            "actor/loss": float(actor_scalars[0]),
+            "actor/ratio_mean": float(actor_scalars[1]),
+            "actor/entropy_mean": float(actor_scalars[2]),
+            "actor/behavior_kl_mean": float(actor_scalars[3]),
             "actor/kl_coef": float(kl_coef),
             "actor/policy_grad_norm": _mean(grad_norms),
             "actor/local_time_steps": float(local_time_steps),
@@ -482,6 +526,17 @@ class EmbodiedFSDPActor(Worker):
         export_start = time.perf_counter()
         state = self.state_dict()
         export_s = float(time.perf_counter() - export_start)
+        syncer_cfg = _as_plain_dict(self.train_cfg.get("syncer", {}))
+        sync_dtype = dtype_from_precision(syncer_cfg.get("precision", "fp32"))
+        if sync_dtype is not torch.float32:
+            state = {
+                name: (
+                    value.to(dtype=sync_dtype)
+                    if value.is_floating_point()
+                    else value
+                )
+                for name, value in state.items()
+            }
         push_s = 0.0
         if int(self.rank) == 0 and state:
             push_start = time.perf_counter()
@@ -585,29 +640,38 @@ class EmbodiedFSDPActor(Worker):
         self,
         batch: TrajectoryBatch,
         step: int,
+        *,
+        batch_slice: slice | None = None,
     ) -> dict[str, torch.Tensor | str]:
         forward_inputs = batch.forward_inputs
         if "hidden" not in forward_inputs:
             raise ValueError("trajectory forward_inputs must include 'hidden'")
+        selected = slice(None) if batch_slice is None else batch_slice
         eval_batch: dict[str, torch.Tensor | str] = {
             "mode": "evaluate",
-            "hidden": forward_inputs["hidden"][step].to(
+            "hidden": forward_inputs["hidden"][step][selected].to(
                 self.torch_device,
-                dtype=torch.float32,
+                dtype=self.policy_input_dtype,
             ),
-            "action": batch.actions[step].to(
+            "action": batch.actions[step][selected].to(
                 self.torch_device,
                 dtype=torch.float32,
             ),
         }
         for key in _EXTRA_FORWARD_KEYS:
             if key in forward_inputs:
-                eval_batch[key] = forward_inputs[key][step].to(self.torch_device)
+                eval_batch[key] = forward_inputs[key][step][selected].to(
+                    self.torch_device
+                )
         return eval_batch
 
     def _clip_or_measure_grad_norm(self, optim_cfg: dict[str, Any]) -> float:
-        params = [param for param in self._policy().parameters() if param.requires_grad]
+        policy = self._policy()
         grad_clip_norm = optim_cfg.get("grad_clip_norm", None)
+        if _is_fsdp_module(policy):
+            max_norm = float("inf") if grad_clip_norm is None else float(grad_clip_norm)
+            return float(_to_float(policy.clip_grad_norm_(max_norm)))
+        params = [param for param in policy.parameters() if param.requires_grad]
         if grad_clip_norm is not None:
             norm = torch.nn.utils.clip_grad_norm_(params, float(grad_clip_norm))
             return float(_to_float(norm))

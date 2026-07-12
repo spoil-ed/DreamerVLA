@@ -603,6 +603,7 @@ def test_trajectory_env_worker_uses_single_batched_env_when_available() -> None:
         assert len(worker.envs) == 1
         messages = worker.bootstrap_obs()
         assert [msg.slot_id for msg in messages] == [0, 1, 2]
+        assert worker.envs[0].reset_batch_calls == 1
     finally:
         worker.close()
 
@@ -753,6 +754,18 @@ def test_observation_batch_msg_preserves_bfloat16_tensor_payload() -> None:
     assert isinstance(batch.batched_obs["obs_embedding"], torch.Tensor)
     assert batch.batched_obs["obs_embedding"].dtype == torch.bfloat16
     assert batch.batched_obs["obs_embedding"].shape == (2, 4)
+
+
+def test_same_storage_observation_rows_reuse_batched_tensor_view() -> None:
+    source = torch.arange(12, dtype=torch.bfloat16).reshape(2, 2, 3)
+
+    batched = trajectory_env_worker._batch_same_shape_obs_values(
+        [source[0], source[1]]
+    )
+
+    assert isinstance(batched, torch.Tensor)
+    assert batched.untyped_storage().data_ptr() == source.untyped_storage().data_ptr()
+    torch.testing.assert_close(batched, source)
 
 
 def test_real_env_interact_routes_observations_and_replay_without_actor_trajectory(
@@ -1384,6 +1397,10 @@ def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> N
                 infos.append(
                     {
                         "success": bool(rewards[batch_index].max() >= self.success_threshold),
+                        "classifier_evaluations": 1,
+                        "classifier_success_evaluations": int(
+                            rewards[batch_index].max() >= self.success_threshold
+                        ),
                         "wm_action": action_arr[batch_index, -1],
                     }
                 )
@@ -1495,8 +1512,8 @@ def test_wm_env_worker_prefers_chunk_step_batch_when_available(monkeypatch) -> N
         assert env.chunk_calls == [([0, 1], (2, 2, 3)), ([0, 1], (2, 2, 3))]
         assert metrics["env/wm_env/model_forwards"] == 2.0
         assert metrics["env/wm_env/classifier_success_chunks"] == 2.0
-        assert metrics["env/wm_env/classifier_total_chunks"] == 8.0
-        assert metrics["env/wm_env/classifier_success_rate"] == 0.25
+        assert metrics["env/wm_env/classifier_total_chunks"] == 4.0
+        assert metrics["env/wm_env/classifier_success_rate"] == 0.5
         assert metrics["env/wm_env/classifier_success_trajectories"] == 2.0
         assert metrics["env/wm_env/classifier_total_trajectories"] == 4.0
         assert metrics["env/wm_env/classifier_trajectory_success_rate"] == 0.5
@@ -1800,10 +1817,45 @@ def test_get_rollout_result_batch_injects_bf16_tensor_hidden() -> None:
         results = worker._get_rollout_result_batch(channel, [0], metrics)
 
         hidden = torch.as_tensor(results[0].forward_inputs["hidden"])
-        assert hidden.dtype == torch.float32
+        assert hidden.dtype == torch.bfloat16
         assert hidden.tolist() == [[2.0, 2.0, 2.0, 2.0]]
     finally:
         worker.close()
+
+
+def test_worker_batched_trajectory_keeps_bf16_hidden_payload() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="wm_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+
+    def chunk(slot_id: int):
+        result = _rollout_result_for_slot(slot_id)
+        result.forward_inputs["hidden"] = torch.full(
+            (1, 2, 3),
+            float(slot_id + 1),
+            dtype=torch.bfloat16,
+        )
+        return trajectory_env_worker._TrajectoryChunk(
+            result=result,
+            slot_id=slot_id,
+            actions_np=np.zeros((2, 3), dtype=np.float32),
+            rewards=np.zeros((2,), dtype=np.float32),
+            dones=np.zeros((2,), dtype=np.bool_),
+            action_dim=3,
+        )
+
+    shard = worker._build_worker_trajectory_shard_from_slot_chunks(
+        [[chunk(0)], [chunk(1)]]
+    )
+
+    assert shard.forward_inputs["hidden"].shape == (1, 2, 2, 3)
+    assert shard.forward_inputs["hidden"].dtype == torch.bfloat16
 
 
 class _SplitCounterSlot(CounterEnv):

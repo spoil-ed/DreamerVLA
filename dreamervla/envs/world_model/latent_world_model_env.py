@@ -166,14 +166,15 @@ class LatentWorldModelEnv:
             if self.classifier is not None:
                 self.classifier.requires_grad_(False)
         classifier_window = self._classifier_window_size()
+        classifier_history_dtype = self._observation_tensor_dtype()
         self._classifier_latent_history = torch.zeros(
             (self.num_envs, classifier_window, self.latent_dim),
-            dtype=torch.float32,
+            dtype=classifier_history_dtype,
             device=self.device,
         )
         self._classifier_proprio_history = torch.zeros(
             (self.num_envs, classifier_window, self.proprio_dim),
-            dtype=torch.float32,
+            dtype=classifier_history_dtype,
             device=self.device,
         )
 
@@ -222,6 +223,20 @@ class LatentWorldModelEnv:
         task_id: int = 0,
         episode_id: int = 0,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        info = self._reset_slot_state(
+            slot_id,
+            task_id=int(task_id),
+            episode_id=int(episode_id),
+        )
+        return self._obs(int(slot_id)), info
+
+    def _reset_slot_state(
+        self,
+        slot_id: int,
+        *,
+        task_id: int,
+        episode_id: int,
+    ) -> dict[str, Any]:
         self._validate_slot(slot_id)
         slot = int(slot_id)
         self._task_ids[slot] = int(task_id)
@@ -233,7 +248,7 @@ class LatentWorldModelEnv:
         if self.proprio_dim > 0:
             self._proprio[slot] = self._initial_proprio_for_slot(slot).detach()
         self._reset_classifier_history(slot)
-        return self._obs(slot), {
+        return {
             "slot_id": slot,
             "task_id": int(self._task_ids[slot]),
             "episode_id": int(self._episode_ids[slot]),
@@ -267,19 +282,17 @@ class LatentWorldModelEnv:
                 "reset_batch task_ids and episode_ids must match num_envs "
                 f"({self.num_envs})"
             )
-        observations: list[dict[str, Any]] = []
         infos: list[dict[str, Any]] = []
         for slot_id, (task_id, episode_id) in enumerate(
             zip(task_ids, episode_ids, strict=True)
         ):
-            obs, info = self.reset_slot(
+            info = self._reset_slot_state(
                 slot_id,
                 task_id=int(task_id),
                 episode_id=int(episode_id),
             )
-            observations.append(obs)
             infos.append(info)
-        return observations, infos
+        return self._obs_batch(list(range(self.num_envs))), infos
 
     def set_initial_latents(self, latents: Any) -> None:
         """Set the latent state used by future slot resets."""
@@ -424,15 +437,17 @@ class LatentWorldModelEnv:
         if self.classifier is not None:
             self._classifier_forward_calls += 1
             self._classifier_forward_time_s += float(time.perf_counter() - score_start)
-            self._record_scores(scores)
+        scores_cpu = scores.detach().float().cpu().numpy()
+        if self.classifier is not None:
+            self._record_scores(scores_cpu)
 
-        observations: list[dict[str, Any]] = []
+        observations = self._obs_batch(slots)
         rewards: list[float] = []
         terminations: list[bool] = []
         truncations: list[bool] = []
         infos: list[dict[str, Any]] = []
         for index, slot_id in enumerate(slots):
-            score = float(scores[index])
+            score = float(scores_cpu[index])
             terminated = bool(score >= self.success_threshold)
             truncated = bool(
                 self._elapsed_steps[slot_id] >= self.max_episode_steps and not terminated
@@ -446,7 +461,6 @@ class LatentWorldModelEnv:
                 "wm_version": self.wm_version,
                 "classifier_version": self.classifier_version,
             }
-            observations.append(self._obs(slot_id))
             rewards.append(score)
             terminations.append(terminated)
             truncations.append(truncated)
@@ -585,32 +599,75 @@ class LatentWorldModelEnv:
         )
 
         score_start = time.perf_counter()
-        repeated_slots = [slot_id for slot_id in slots for _ in range(chunk_len)]
-        with self._world_model_autocast():
-            scores = self._score_batch(
-                flat_latents,
-                slots=repeated_slots,
-                proprio=(
-                    proprio_seq.reshape(batch_size * chunk_len, self.proprio_dim)
-                    if proprio_seq is not None
-                    else None
-                ),
-                lang_emb=(
-                    lang_seq.reshape(batch_size * chunk_len, self.lang_dim)
-                    if lang_seq is not None
-                    else None
-                ),
+        recorded_scores: np.ndarray | None = None
+        classifier_granularity = (
+            self._classifier_granularity()
+            if self.classifier is not None
+            else None
+        )
+        if self.classifier is None:
+            rewards = np.zeros((batch_size, chunk_len), dtype=np.float32)
+        elif classifier_granularity == "chunk":
+            classifier_latent = self._pool_classifier_chunk_sequence(latent_seq)
+            classifier_proprio = (
+                self._pool_classifier_chunk_sequence(proprio_seq)
+                if proprio_seq is not None
+                else None
             )
+            classifier_lang = lang_seq[:, -1] if lang_seq is not None else None
+            with self._world_model_autocast():
+                scores = self._score_batch(
+                    classifier_latent,
+                    slots=slots,
+                    proprio=classifier_proprio,
+                    lang_emb=classifier_lang,
+                )
+            recorded_scores = scores.detach().float().cpu().numpy()
+            rewards = np.zeros((batch_size, chunk_len), dtype=np.float32)
+            rewards[:, -1] = recorded_scores
+        else:
+            repeated_slots = [slot_id for slot_id in slots for _ in range(chunk_len)]
+            with self._world_model_autocast():
+                scores = self._score_batch(
+                    flat_latents,
+                    slots=repeated_slots,
+                    proprio=(
+                        proprio_seq.reshape(batch_size * chunk_len, self.proprio_dim)
+                        if proprio_seq is not None
+                        else None
+                    ),
+                    lang_emb=(
+                        lang_seq.reshape(batch_size * chunk_len, self.lang_dim)
+                        if lang_seq is not None
+                        else None
+                    ),
+                )
+            rewards = scores.reshape(batch_size, chunk_len).detach().cpu().numpy()
+            rewards = rewards.astype(np.float32, copy=False)
+            recorded_scores = rewards
         if self.classifier is not None:
             self._classifier_forward_calls += 1
             self._classifier_forward_time_s += float(time.perf_counter() - score_start)
-            self._record_scores(scores)
-
-        rewards = scores.reshape(batch_size, chunk_len).detach().cpu().numpy()
-        rewards = rewards.astype(np.float32, copy=False)
+            if recorded_scores is not None:
+                self._record_scores(recorded_scores)
         slot_index = np.asarray(slots, dtype=np.int64)
         old_elapsed = self._elapsed_steps[slot_index].copy()
         success_by_slot = (rewards >= self.success_threshold).any(axis=1)
+        if self.classifier is None:
+            classifier_evaluations = np.zeros((batch_size,), dtype=np.int64)
+            classifier_success_evaluations = np.zeros(
+                (batch_size,), dtype=np.int64
+            )
+        elif classifier_granularity == "chunk":
+            classifier_evaluations = np.ones((batch_size,), dtype=np.int64)
+            classifier_success_evaluations = success_by_slot.astype(np.int64)
+        else:
+            classifier_evaluations = np.full(
+                (batch_size,), chunk_len, dtype=np.int64
+            )
+            classifier_success_evaluations = (
+                rewards >= self.success_threshold
+            ).sum(axis=1, dtype=np.int64)
         terminations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
         terminations[:, -1] = success_by_slot
         timeout_by_slot = old_elapsed + chunk_len >= self.max_episode_steps
@@ -618,7 +675,7 @@ class LatentWorldModelEnv:
         truncations[:, -1] = timeout_by_slot
         self._elapsed_steps[slot_index] = old_elapsed + chunk_len
 
-        observations: list[dict[str, Any]] = []
+        observations = self._obs_batch(slots)
         infos: list[dict[str, Any]] = []
         for index, slot_id in enumerate(slots):
             info = {
@@ -628,6 +685,10 @@ class LatentWorldModelEnv:
                 "elapsed_steps": int(self._elapsed_steps[slot_id]),
                 "success": bool(success_by_slot[index]),
                 "success_score": float(rewards[index, -1]),
+                "classifier_evaluations": int(classifier_evaluations[index]),
+                "classifier_success_evaluations": int(
+                    classifier_success_evaluations[index]
+                ),
                 "wm_action": np.asarray(
                     action_arr[index, -1],
                     dtype=np.float32,
@@ -635,7 +696,6 @@ class LatentWorldModelEnv:
                 "wm_version": self.wm_version,
                 "classifier_version": self.classifier_version,
             }
-            observations.append(self._obs(slot_id))
             infos.append(info)
         return observations, rewards, terminations, truncations, infos
 
@@ -668,7 +728,7 @@ class LatentWorldModelEnv:
         rewards = np.zeros((batch_size, chunk_len), dtype=np.float32)
         terminations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
         truncations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
-        observations = [self._obs(slot_id) for slot_id in slots]
+        observations = self._obs_batch(slots)
         infos: list[dict[str, Any]] = [
             {
                 "slot_id": int(slot_id),
@@ -750,8 +810,12 @@ class LatentWorldModelEnv:
             self._score_samples.clear()
         return metrics
 
-    def _record_scores(self, scores: torch.Tensor) -> None:
-        values = scores.detach().float().reshape(-1).cpu().numpy()
+    def _record_scores(self, scores: torch.Tensor | np.ndarray) -> None:
+        values = (
+            scores.detach().float().reshape(-1).cpu().numpy()
+            if isinstance(scores, torch.Tensor)
+            else np.asarray(scores, dtype=np.float32).reshape(-1)
+        )
         if values.size:
             self._score_samples.append(values.astype(np.float32, copy=True))
 
@@ -853,61 +917,80 @@ class LatentWorldModelEnv:
         return transition
 
     def _obs(self, slot_id: int = 0) -> dict[str, Any]:
-        self._validate_slot(slot_id)
+        return self._obs_batch([int(slot_id)])[0]
+
+    def _obs_batch(self, slot_ids: Sequence[int]) -> list[dict[str, Any]]:
+        slots = [int(slot_id) for slot_id in slot_ids]
+        if not slots:
+            return []
+        for slot_id in slots:
+            self._validate_slot(slot_id)
         if self.observation_format == "tensor":
             obs_dtype = self._observation_tensor_dtype()
-            latent: Any = _cpu_tensor_snapshot(
-                self._latent[slot_id],
+            latent_batch: Any = _cpu_tensor_snapshot(
+                self._latent[slots],
                 dtype=obs_dtype,
             )
         else:
-            latent = (
-                self._latent[slot_id]
+            latent_batch = (
+                self._latent[slots]
                 .detach()
                 .cpu()
                 .numpy()
                 .astype(np.float32, copy=True)
             )
-        latent = self._token_grid(latent)
-        obs = {
-            "latent": latent,
-            "task_id": int(self._task_ids[slot_id]),
-            "episode_id": int(self._episode_ids[slot_id]),
-            "step": int(self._elapsed_steps[slot_id]),
-            "task_description": f"task {self._task_ids[slot_id]}",
-            "is_first": bool(self._elapsed_steps[slot_id] == 0),
-        }
+        latent_batch = self._token_grid(latent_batch)
+
+        lang_batch: Any | None = None
         if self.lang_dim > 0:
             if self.observation_format == "tensor":
-                obs["lang_emb"] = _cpu_tensor_snapshot(
-                    self._lang_emb[slot_id],
+                lang_batch = _cpu_tensor_snapshot(
+                    self._lang_emb[slots],
                     dtype=self._observation_tensor_dtype(),
                 )
             else:
-                obs["lang_emb"] = (
-                    self._lang_emb[slot_id]
+                lang_batch = (
+                    self._lang_emb[slots]
                     .detach()
                     .cpu()
                     .numpy()
                     .astype(np.float32, copy=True)
                 )
+
+        proprio_batch: Any | None = None
         if self.proprio_dim > 0:
             if self.observation_format == "tensor":
-                proprio = _cpu_tensor_snapshot(
-                    self._proprio[slot_id],
+                proprio_batch = _cpu_tensor_snapshot(
+                    self._proprio[slots],
                     dtype=self._observation_tensor_dtype(),
                 )
             else:
-                proprio = (
-                    self._proprio[slot_id]
+                proprio_batch = (
+                    self._proprio[slots]
                     .detach()
                     .cpu()
                     .numpy()
                     .astype(np.float32, copy=True)
                 )
-            obs["proprio"] = proprio
-            obs["state"] = proprio
-        return obs
+
+        observations: list[dict[str, Any]] = []
+        for index, slot_id in enumerate(slots):
+            obs = {
+                "latent": latent_batch[index],
+                "task_id": int(self._task_ids[slot_id]),
+                "episode_id": int(self._episode_ids[slot_id]),
+                "step": int(self._elapsed_steps[slot_id]),
+                "task_description": f"task {self._task_ids[slot_id]}",
+                "is_first": bool(self._elapsed_steps[slot_id] == 0),
+            }
+            if lang_batch is not None:
+                obs["lang_emb"] = lang_batch[index]
+            if proprio_batch is not None:
+                proprio = proprio_batch[index]
+                obs["proprio"] = proprio
+                obs["state"] = proprio
+            observations.append(obs)
+        return observations
 
     def _score(self, latent: torch.Tensor) -> float:
         return float(self._score_batch(latent.reshape(1, self.latent_dim))[0])
@@ -1008,6 +1091,30 @@ class LatentWorldModelEnv:
         window = getattr(classifier_cfg, "window", 1)
         return max(1, int(window or 1))
 
+    def _classifier_granularity(self) -> str:
+        classifier_cfg = getattr(self.classifier, "cfg", None)
+        granularity = str(getattr(classifier_cfg, "granularity", "action"))
+        if granularity not in {"action", "chunk"}:
+            raise ValueError(
+                "classifier granularity must be 'action' or 'chunk', got "
+                f"{granularity!r}"
+            )
+        return granularity
+
+    def _pool_classifier_chunk_sequence(self, sequence: torch.Tensor) -> torch.Tensor:
+        classifier_cfg = getattr(self.classifier, "cfg", None)
+        pool = str(getattr(classifier_cfg, "chunk_pool", "last"))
+        if pool == "last":
+            return sequence[:, -1]
+        if pool == "first":
+            return sequence[:, 0]
+        if pool == "mean":
+            return sequence.mean(dim=1)
+        raise ValueError(
+            "chunk classifier pool must be 'last', 'first', or 'mean', got "
+            f"{pool!r}"
+        )
+
     def _ensure_classifier_history_window(self, window: int) -> None:
         window = max(1, int(window))
         if int(self._classifier_latent_history.shape[1]) == window:
@@ -1015,14 +1122,14 @@ class LatentWorldModelEnv:
         self._classifier_latent_history = (
             self._latent[:, None, :]
             .expand(self.num_envs, window, self.latent_dim)
+            .to(dtype=self._observation_tensor_dtype())
             .contiguous()
-            .clone()
         )
         self._classifier_proprio_history = (
             self._proprio[:, None, :]
             .expand(self.num_envs, window, self.proprio_dim)
+            .to(dtype=self._observation_tensor_dtype())
             .contiguous()
-            .clone()
         )
 
     def _reset_classifier_history(self, slot_id: int) -> None:
@@ -1059,51 +1166,59 @@ class LatentWorldModelEnv:
         self._ensure_classifier_history_window(int(window))
         batch_size = int(latent.shape[0])
         slot_ids = self._slot_ids_for_classifier_batch(batch_size, slots)
-        latent_rows = latent.reshape(batch_size, self.latent_dim)
+        latent_rows = latent.reshape(batch_size, self.latent_dim).to(
+            dtype=self._classifier_latent_history.dtype
+        )
         proprio_rows = None
         if self.proprio_dim > 0:
             proprio_rows = (
                 torch.as_tensor(proprio, dtype=torch.float32, device=self.device)
                 if proprio is not None
                 else self._proprio[slot_ids]
-            ).reshape(batch_size, self.proprio_dim)
+            ).reshape(batch_size, self.proprio_dim).to(
+                dtype=self._classifier_proprio_history.dtype
+            )
 
         local_latent: dict[int, torch.Tensor] = {}
         local_proprio: dict[int, torch.Tensor] = {}
-        latent_windows: list[torch.Tensor] = []
-        proprio_windows: list[torch.Tensor] = []
+        latent_windows = torch.empty(
+            (batch_size, int(window), self.latent_dim),
+            dtype=self._classifier_latent_history.dtype,
+            device=self.device,
+        )
+        proprio_windows = (
+            torch.empty(
+                (batch_size, int(window), self.proprio_dim),
+                dtype=self._classifier_proprio_history.dtype,
+                device=self.device,
+            )
+            if proprio_rows is not None
+            else None
+        )
         for index, slot_id in enumerate(slot_ids):
             slot = int(slot_id)
             hist = local_latent.get(slot)
             if hist is None:
-                hist = self._classifier_latent_history[slot].clone()
-            new_latent = latent_rows[index].reshape(1, self.latent_dim)
-            hist = (
-                torch.cat([hist[1:], new_latent], dim=0)
-                if int(window) > 1
-                else new_latent
-            )
-            local_latent[slot] = hist
-            latent_windows.append(hist)
+                hist = self._classifier_latent_history[slot]
+            next_hist = latent_windows[index]
+            if int(window) > 1:
+                next_hist[:-1].copy_(hist[1:])
+            next_hist[-1].copy_(latent_rows[index])
+            local_latent[slot] = next_hist
 
-            if proprio_rows is not None:
+            if proprio_rows is not None and proprio_windows is not None:
                 phist = local_proprio.get(slot)
                 if phist is None:
-                    phist = self._classifier_proprio_history[slot].clone()
-                new_proprio = proprio_rows[index].reshape(1, self.proprio_dim)
-                phist = (
-                    torch.cat([phist[1:], new_proprio], dim=0)
-                    if int(window) > 1
-                    else new_proprio
-                )
-                local_proprio[slot] = phist
-                proprio_windows.append(phist)
+                    phist = self._classifier_proprio_history[slot]
+                next_phist = proprio_windows[index]
+                if int(window) > 1:
+                    next_phist[:-1].copy_(phist[1:])
+                next_phist[-1].copy_(proprio_rows[index])
+                local_proprio[slot] = next_phist
 
         return (
-            torch.stack(latent_windows, dim=0).contiguous(),
-            torch.stack(proprio_windows, dim=0).contiguous()
-            if proprio_windows
-            else None,
+            latent_windows,
+            proprio_windows,
             local_latent,
             local_proprio,
         )

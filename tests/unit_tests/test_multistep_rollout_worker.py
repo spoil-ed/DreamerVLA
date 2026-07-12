@@ -459,6 +459,22 @@ def test_empty_encoder_cfg_is_treated_as_no_encoder() -> None:
     assert worker.encoder is None
 
 
+def test_rollout_worker_uses_configured_bfloat16_policy_dtype() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu", "precision": "bf16"},
+    )
+
+    worker.init()
+
+    assert worker.policy_dtype == torch.bfloat16
+    assert {parameter.dtype for parameter in worker._policy().parameters()} == {
+        torch.bfloat16
+    }
+
+
 def test_sync_model_from_actor_applies_patch_syncer() -> None:
     if ray.is_initialized():
         ray.shutdown()
