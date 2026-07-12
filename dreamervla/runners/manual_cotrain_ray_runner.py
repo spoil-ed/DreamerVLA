@@ -410,7 +410,7 @@ class ManualCotrainRayRunner(BaseRunner):
             learner_group = WorkerGroup(
                 LearnerWorker,
                 self._cfg_dict("learner.model_cfg"),
-                self._load_init_ckpt("learner.init_ckpt"),
+                self._learner_init_checkpoint(),
                 self._cfg_dict("learner.train_cfg"),
                 replay,
             ).launch(
@@ -419,6 +419,22 @@ class ManualCotrainRayRunner(BaseRunner):
                 name="LearnerWorker",
             )
             _hs_trace("[build_groups] launch LearnerWorker done")
+            if wm_env_group is not None:
+                initial_states = learner_group.state_dicts().wait()[0]
+                component_states = {
+                    name: dict(initial_states[name])
+                    for name in ("world_model", "classifier")
+                    if isinstance(initial_states.get(name), dict)
+                }
+                if "classifier_threshold" in initial_states:
+                    component_states["classifier_threshold"] = float(
+                        initial_states["classifier_threshold"]
+                    )
+                if component_states:
+                    wm_env_group.load_component_states(
+                        component_states,
+                        0,
+                    ).wait()
         _hs_trace("[build_groups] all groups launched")
 
         return {
@@ -459,17 +475,35 @@ class ManualCotrainRayRunner(BaseRunner):
         require_component_config_match(
             loaded_wm.metadata,
             component="world_model",
-            active_cfg=OmegaConf.select(self.cfg, "world_model"),
+            active_cfg=OmegaConf.select(
+                self.cfg,
+                "world_model",
+                default=OmegaConf.select(
+                    self.cfg,
+                    "learner.model_cfg.world_model",
+                ),
+            ),
         )
         require_component_config_match(
             loaded_classifier.metadata,
             component="classifier",
-            active_cfg=OmegaConf.select(self.cfg, "classifier"),
+            active_cfg=OmegaConf.select(
+                self.cfg,
+                "classifier",
+                default=OmegaConf.select(
+                    self.cfg,
+                    "learner.model_cfg.classifier",
+                ),
+            ),
         )
         configured_threshold = OmegaConf.select(
             self.cfg,
             "algorithm.lumos.classifier_threshold",
-            default=None,
+            default=OmegaConf.select(
+                self.cfg,
+                "learner.train_cfg.classifier_threshold",
+                default=None,
+            ),
         )
         threshold = resolve_classifier_threshold(
             loaded_classifier.metadata,
@@ -493,6 +527,74 @@ class ManualCotrainRayRunner(BaseRunner):
                 "world_model": str(Path(wm_path).expanduser().resolve()),
                 "classifier": str(Path(classifier_path).expanduser().resolve()),
             },
+        }
+
+    def _learner_init_checkpoint(self) -> dict[str, Any]:
+        """Resolve either a consolidated checkpoint or independent WM/CLS sources.
+
+        Independent component files are shared by frozen and trainable recipes;
+        trainability is owned solely by ``manual_cotrain.learner_updates_enabled``.
+        """
+
+        consolidated = self._load_init_ckpt("learner.init_ckpt")
+        if consolidated:
+            return consolidated
+        wm_path = self._init_ckpt_path("init.world_model_state_ckpt")
+        classifier_path = self._init_ckpt_path("init.classifier_state_ckpt")
+        if wm_path is None and classifier_path is None:
+            return {}
+        if wm_path is None or classifier_path is None:
+            raise ValueError(
+                "trainable LearnerGroup requires both init.world_model_state_ckpt "
+                "and init.classifier_state_ckpt when either is set"
+            )
+        loaded_wm = load_frozen_component(wm_path, "world_model")
+        loaded_classifier = load_frozen_component(classifier_path, "classifier")
+        require_component_config_match(
+            loaded_wm.metadata,
+            component="world_model",
+            active_cfg=OmegaConf.select(
+                self.cfg,
+                "world_model",
+                default=OmegaConf.select(
+                    self.cfg,
+                    "learner.model_cfg.world_model",
+                ),
+            ),
+        )
+        require_component_config_match(
+            loaded_classifier.metadata,
+            component="classifier",
+            active_cfg=OmegaConf.select(
+                self.cfg,
+                "classifier",
+                default=OmegaConf.select(
+                    self.cfg,
+                    "learner.model_cfg.classifier",
+                ),
+            ),
+        )
+        configured_threshold = OmegaConf.select(
+            self.cfg,
+            "algorithm.lumos.classifier_threshold",
+            default=OmegaConf.select(
+                self.cfg,
+                "learner.train_cfg.classifier_threshold",
+                default=None,
+            ),
+        )
+        threshold = resolve_classifier_threshold(
+            loaded_classifier.metadata,
+            configured=(
+                None
+                if configured_threshold is None
+                else float(configured_threshold)
+            ),
+        )
+        return {
+            "world_model": loaded_wm.state_dict,
+            "classifier": loaded_classifier.state_dict,
+            "classifier_threshold": float(threshold),
         }
 
     def _actor_init_checkpoint(self) -> dict[str, Any]:
@@ -1396,13 +1498,16 @@ class ManualCotrainRayRunner(BaseRunner):
             ):
                 raise RuntimeError("dynamic WM lease accounting is not conserved")
             if real_total_chunks > 0:
-                parts.append(f"real_env={int(real_done)}/{int(real_total_chunks)}")
+                parts.append(
+                    f"real_chunks={int(real_done)}/{int(real_total_chunks)}"
+                )
             parts.extend(
                 [
-                    f"wm={int(wm_done)}/{int(wm_total_chunks)}",
-                    "leases(d/r/q/t)="
-                    f"{int(completed_wm_epochs)}/{int(running_wm_epochs)}/"
-                    f"{int(remaining_wm_epochs)}/{int(total_wm_epochs)}",
+                    f"wm_chunks={int(wm_done)}/{int(wm_total_chunks)}",
+                    f"wm_leases_done={int(completed_wm_epochs)}",
+                    f"wm_leases_running={int(running_wm_epochs)}",
+                    f"wm_leases_queued={int(remaining_wm_epochs)}",
+                    f"wm_leases_total={int(total_wm_epochs)}",
                 ]
             )
             parts.extend(
@@ -1972,7 +2077,7 @@ class ManualCotrainRayRunner(BaseRunner):
         learner_group = groups.get("LearnerGroup")
         learner_states: dict[str, Any] = {}
         if learner_group is not None:
-            raw_learner_states = learner_group.state_dicts().wait()[0]
+            raw_learner_states = learner_group.state_dicts(True).wait()[0]
             if not isinstance(raw_learner_states, dict):
                 raise TypeError("LearnerGroup.state_dicts() must return a mapping")
             learner_states = raw_learner_states
@@ -1991,22 +2096,22 @@ class ManualCotrainRayRunner(BaseRunner):
             replay_state = replay_group.state_dict().wait()[0]
         ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
         state_dicts = {"policy": dict(actor_state)}
-        if not self._learner_updates_enabled():
-            optimizer_state = _first_nonempty_mapping(
-                groups["ActorGroup"].optimizer_state_dict().wait()
-            )
-            if not optimizer_state:
-                raise RuntimeError(
-                    "frozen policy checkpoint has no optimizer state"
-                )
-            state_dicts["policy_optimizer"] = optimizer_state
+        optimizer_state = _first_nonempty_mapping(
+            groups["ActorGroup"].optimizer_state_dict().wait()
+        )
+        if not optimizer_state:
+            raise RuntimeError("manual cotrain policy checkpoint has no optimizer state")
+        state_dicts["policy_optimizer"] = optimizer_state
         if learner_group is not None:
-            state_dicts.update(
-                {
-                    "world_model": dict(learner_states.get("world_model", {})),
-                    "classifier": dict(learner_states.get("classifier", {})),
-                }
-            )
+            for name in (
+                "world_model",
+                "classifier",
+                "world_model_optimizer",
+                "classifier_optimizer",
+            ):
+                state = learner_states.get(name)
+                if isinstance(state, dict) and state:
+                    state_dicts[name] = dict(state)
         classifier_threshold = (
             float(learner_states["classifier_threshold"])
             if "classifier_threshold" in learner_states
@@ -2042,7 +2147,7 @@ class ManualCotrainRayRunner(BaseRunner):
             state_dicts={
                 name: state
                 for name, state in state_dicts.items()
-                if name != "policy_optimizer"
+                if not name.endswith("_optimizer")
             },
             has_replay=replay_state is not None,
             run=run_metadata,
@@ -2059,7 +2164,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 state_dicts={
                     name: state
                     for name, state in state_dicts.items()
-                    if name != "policy_optimizer"
+                    if not name.endswith("_optimizer")
                 },
                 has_replay=replay_state is not None,
                 run=self._manual_checkpoint_run_metadata(canonical_dir),
@@ -2664,10 +2769,13 @@ def _classifier_progress_status_parts(
     ) + metric_counter("classifier_total_trajectories")
     parts: list[str] = []
     if total_chunks > 0:
-        parts.append(f"cls_sr={float(success_chunks) / float(total_chunks):.3f}")
+        parts.append(
+            "wm_cls_chunk_positive_rate="
+            f"{float(success_chunks) / float(total_chunks):.3f}"
+        )
     if total_trajectories > 0:
         parts.append(
-            "cls_traj_sr="
+            "wm_cls_trajectory_positive_rate="
             f"{float(success_trajectories) / float(total_trajectories):.3f}"
         )
     return parts
@@ -2887,11 +2995,15 @@ def _load_runner_state_dicts(
         raise RuntimeError(f"{path} has no runner-format state_dicts mapping")
     names = list(state_dicts) if components is None else list(components)
     missing = [name for name in names if name not in state_dicts]
-    if missing:
+    missing_required = [
+        name for name in missing if not str(name).endswith("_optimizer")
+    ]
+    if missing_required:
         raise RuntimeError(
-            f"{path} missing state_dicts for requested component(s): {missing}"
+            f"{path} missing state_dicts for requested component(s): "
+            f"{missing_required}"
         )
-    loaded = {name: state_dicts[name] for name in names}
+    loaded = {name: state_dicts[name] for name in names if name in state_dicts}
     if (
         isinstance(payload, dict)
         and "classifier_threshold" in payload

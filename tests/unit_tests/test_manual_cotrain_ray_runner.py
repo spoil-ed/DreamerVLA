@@ -253,6 +253,21 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
         def configure_rollout_epoch(self, rollout_epoch):
             return _Ready({"env/rollout_epoch": float(rollout_epoch)})
 
+        def state_dicts(self):
+            return _Ready(
+                [
+                    {
+                        "world_model": {"weight": torch.ones(1)},
+                        "classifier": {"weight": torch.ones(1)},
+                        "classifier_threshold": 0.5,
+                    }
+                ]
+            )
+
+        def load_component_states(self, states, version):
+            del states, version
+            return _Ready({"sync/loaded": 1.0})
+
     class _FakeChannel:
         def __init__(self, name: str) -> None:
             self.name = name
@@ -487,6 +502,48 @@ def test_frozen_runner_loads_strict_component_checkpoints(tmp_path) -> None:
         "world_model": str(wm_path.resolve()),
         "classifier": str(classifier_path.resolve()),
     }
+
+
+def test_trainable_learner_loads_same_independent_component_checkpoints(tmp_path) -> None:
+    world_model_cfg = {"_target_": "test.WorldModel", "hidden_dim": 4}
+    classifier_cfg = {"_target_": "test.Classifier", "hidden_dim": 4}
+    wm_path = tmp_path / "wm.ckpt"
+    classifier_path = tmp_path / "classifier.ckpt"
+    torch.save(
+        {
+            "world_model": {"weight": torch.tensor([1.0])},
+            "config": {"world_model": world_model_cfg},
+        },
+        wm_path,
+    )
+    torch.save(
+        {
+            "model": {"weight": torch.tensor([2.0])},
+            "config": {"classifier": classifier_cfg},
+            "threshold": 0.65,
+        },
+        classifier_path,
+    )
+    cfg = _cfg(ngpu=8, learner_updates_enabled=True)
+    cfg.init = {
+        "world_model_state_ckpt": str(wm_path),
+        "classifier_state_ckpt": str(classifier_path),
+    }
+    cfg.learner = {
+        "init_ckpt": {},
+        "model_cfg": {
+            "world_model": world_model_cfg,
+            "classifier": classifier_cfg,
+        },
+        "train_cfg": {"classifier_threshold": None},
+    }
+    runner = manual_runner.ManualCotrainRayRunner(cfg)
+
+    loaded = runner._learner_init_checkpoint()
+
+    assert loaded["classifier_threshold"] == 0.65
+    assert loaded["world_model"]["weight"].item() == 1.0
+    assert loaded["classifier"]["weight"].item() == 2.0
 
 
 def test_frozen_runner_rejects_wm_env_component_hash_drift() -> None:
@@ -1457,18 +1514,28 @@ class _FakeLearnerGroup:
         self.synced.append((str(what), int(version)))
         return _Ready([None])
 
-    def state_dicts(self):
-        return _Ready(
-            [
+    def state_dicts(self, include_optimizers: bool = False):
+        payload = {
+            "world_model": {"wm": 1},
+            "classifier": {"cls": 2},
+            "classifier_threshold": 0.95,
+            "policy": {"unused": 3},
+            "sync/state_dicts_s": 0.6,
+        }
+        if include_optimizers:
+            payload.update(
                 {
-                    "world_model": {"wm": 1},
-                    "classifier": {"cls": 2},
-                    "classifier_threshold": 0.95,
-                    "policy": {"unused": 3},
-                    "sync/state_dicts_s": 0.6,
+                    "world_model_optimizer": {
+                        "state": {},
+                        "param_groups": [{"lr": 1.0e-4}],
+                    },
+                    "classifier_optimizer": {
+                        "state": {},
+                        "param_groups": [{"lr": 1.0e-4}],
+                    },
                 }
-            ]
-        )
+            )
+        return _Ready([payload])
 
 
 class _FakeChannel:
@@ -1741,10 +1808,13 @@ def test_dynamic_wm_progress_is_reported_from_central_pool() -> None:
     dones = [snapshot.done for snapshot in reported]
     assert dones == sorted(dones)
     assert reported[-1].done == reported[-1].total
-    assert any(snapshot.status and "wm=" in snapshot.status for snapshot in reported)
+    assert any(
+        snapshot.status and "wm_chunks=" in snapshot.status
+        for snapshot in reported
+    )
     assert all(
         snapshot.status is None
-        or "leases(d/r/q/t)=" in snapshot.status
+        or "wm_leases_done=" in snapshot.status
         for snapshot in reported
     )
     assert all(
@@ -1817,7 +1887,7 @@ def test_dynamic_wm_progress_sums_multiple_real_workers() -> None:
 
     reported = [snapshot for snapshot in progress.snapshots if snapshot.status]
     assert reported
-    assert "real_env=5/8" in str(reported[-1].status)
+    assert "real_chunks=5/8" in str(reported[-1].status)
     assert reported[-1].done >= 5
 
 
@@ -1877,8 +1947,14 @@ def test_dynamic_wm_progress_keeps_classifier_rate_after_lease_file_reset() -> N
 
     reported = [snapshot for snapshot in progress.snapshots if snapshot.status]
     assert reported
-    assert any("cls_sr=0.500" in str(snapshot.status) for snapshot in reported)
-    assert any("cls_traj_sr=0.500" in str(snapshot.status) for snapshot in reported)
+    assert any(
+        "wm_cls_chunk_positive_rate=0.500" in str(snapshot.status)
+        for snapshot in reported
+    )
+    assert any(
+        "wm_cls_trajectory_positive_rate=0.500" in str(snapshot.status)
+        for snapshot in reported
+    )
 
 
 def test_wait_env_metrics_surfaces_rollout_failure_before_env_wait() -> None:
@@ -1969,8 +2045,8 @@ def test_manual_cotrain_progress_snapshot_reports_classifier_success_rate(tmp_pa
     snapshot = _read_manual_cotrain_progress_snapshot(progress_dir)
 
     assert snapshot.status is not None
-    assert "cls_sr=0.500" in snapshot.status
-    assert "cls_traj_sr=0.500" in snapshot.status
+    assert "wm_cls_chunk_positive_rate=0.500" in snapshot.status
+    assert "wm_cls_trajectory_positive_rate=0.500" in snapshot.status
 
 
 def test_wait_env_metrics_timeout_includes_manual_progress(tmp_path) -> None:
@@ -2676,7 +2752,14 @@ def test_run_global_step_writes_manual_checkpoint_when_enabled(tmp_path) -> None
     assert payload["global_step"] == 1
     assert payload["cfg"]["_target_"] == "dreamervla.runners.ManualCotrainRayRunner"
     assert payload["cfg"]["manual_cotrain"]["checkpoint_every"] == 1
-    assert sorted(payload["state_dicts"]) == ["classifier", "policy", "world_model"]
+    assert sorted(payload["state_dicts"]) == [
+        "classifier",
+        "classifier_optimizer",
+        "policy",
+        "policy_optimizer",
+        "world_model",
+        "world_model_optimizer",
+    ]
     assert manifest["schema_version"] == 1
     assert manifest["global_step"] == 1
     assert manifest["components"]["policy"]["path"] == "manual_cotrain.ckpt"
@@ -3098,3 +3181,28 @@ def test_frozen_runner_resume_restores_policy_optimizer_and_binds_sources() -> N
 
     assert set(init_state) == {"policy", "policy_optimizer"}
     assert init_state["policy_optimizer"]["state"][0]["step"].item() == 500.0
+
+
+def test_legacy_manual_checkpoint_can_resume_without_optimizer_states(tmp_path) -> None:
+    checkpoint = tmp_path / "manual_cotrain.ckpt"
+    torch.save(
+        {
+            "state_dicts": {
+                "world_model": {"wm": torch.ones(1)},
+                "classifier": {"cls": torch.ones(1)},
+            }
+        },
+        checkpoint,
+    )
+
+    loaded = manual_runner._load_runner_state_dicts(
+        str(checkpoint),
+        components=[
+            "world_model",
+            "classifier",
+            "world_model_optimizer",
+            "classifier_optimizer",
+        ],
+    )
+
+    assert set(loaded) == {"world_model", "classifier"}

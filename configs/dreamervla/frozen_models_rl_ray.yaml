@@ -57,6 +57,7 @@ manual_cotrain:
   wm_envs_per_worker: 16
   eval_interval_global_steps: 0
   debug_eval_interval_global_steps: 0
+  eval_initial_global_step: false
   task_id: 0
 
 # Frozen mode deliberately has no trainable learner or real environment group.

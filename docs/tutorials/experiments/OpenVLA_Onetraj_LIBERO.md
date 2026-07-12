@@ -25,10 +25,20 @@ WORLD_MODEL_RESUME=true \
 WORLD_MODEL_RUN_ROOT=/path/to/world_model/run \
   bash scripts/experiments/world_model_training/train.sh
 
-# 冻结任意选定的兼容 WM/CLS checkpoint，启动 8 卡 Ray policy-only cotrain
+# 1) 冻结 WM/CLS，不做真实环境 eval
 WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
 CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
   bash scripts/e2e_frozen_model_cotrain.sh
+
+# 2) 冻结 WM/CLS；step 0 评测基础 VLA，之后每 10 global_step 评测 PPO-VLA
+WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
+CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
+  bash scripts/e2e_frozen_model_cotrain_eval.sh
+
+# 3) WM/CLS 继续训练；使用相同 PPO 与相同周期 VLA eval
+WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
+CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
+  bash scripts/e2e_wmcls_cotrain_eval.sh
 
 # 恢复冻结 cotrain
 WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
@@ -50,6 +60,18 @@ window-F1、`final.ckpt`、`latest.ckpt`。通用 final/latest checkpoint 的模
 从 `state_dicts.model` 读取，阈值优先沿用同目录最高-F1 checkpoint；尚无校准
 checkpoint 时显式采用 `0.5`，也可用
 `algorithm.lumos.classifier_threshold=<value>` 覆盖。
+
+两个带 eval 的 recipe 固定采用 `libero_goal` 的 task `0..9`，每个 task
+依次评测 init state `0..9`，因此一次 eval 恰好是 100 个真实 episode。
+`global_step=0` 直接评测
+`${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1`；
+后续 checkpoint 使用同一个 OpenVLA-OFT 图像、prompt、hidden-token 和 action-chunk
+路径，仅将 action policy 替换为当前 ActorGroup 的 PPO 权重。评测不写 replay，也不
+进入 PPO batch。每个训练 global step 的正式超时为 5400 秒；旧的 600 秒会在
+`1024 x 512` rollout 仍正常前进时误报超时。
+训练进度里的 `wm_cls_chunk_positive_rate` 与
+`wm_cls_trajectory_positive_rate` 只是 imagined rollout 上 classifier 超阈值的
+比例，不是真实环境 SR；真实 SR 只看周期 eval 的 `eval_success_rate` 和逐 task 指标。
 
 ## 1. 主线路由
 
@@ -91,6 +113,8 @@ checkpoint 和评估都由 Hydra 配置决定。
 | [openvla_onetraj_libero_cotrain_ray_base.yaml](../../../configs/dreamervla/openvla_onetraj_libero_cotrain_ray_base.yaml) | OFT policy、WM、classifier、replay 和数据 contract |
 | [experiment/openvla_onetraj_libero_cotrain_ray.yaml](../../../configs/experiment/openvla_onetraj_libero_cotrain_ray.yaml) | public experiment 和 logger |
 | [experiment/dreamervla_frozen_models_rl_ray.yaml](../../../configs/experiment/dreamervla_frozen_models_rl_ray.yaml) | 冻结 WM/CLS 的 8 卡 policy-only 测试 experiment |
+| [experiment/dreamervla_frozen_models_rl_ray_eval.yaml](../../../configs/experiment/dreamervla_frozen_models_rl_ray_eval.yaml) | 冻结 WM/CLS、step 0/每 10 step 真实 VLA eval |
+| [experiment/dreamervla_wmcls_cotrain_ray_eval.yaml](../../../configs/experiment/dreamervla_wmcls_cotrain_ray_eval.yaml) | WM/CLS 可训练、step 0/每 10 step 真实 VLA eval |
 | [task/](../../../configs/task) | suite、checkpoint、token/hidden/action metadata |
 
 配置覆盖顺序是：基础 config < experiment < launcher profile < launcher direct

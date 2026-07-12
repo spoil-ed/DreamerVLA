@@ -1934,7 +1934,7 @@ def test_multi_gpu_profile_limits_rollout_pressure_on_actor_gpu(tmp_path) -> Non
     assert "manual_cotrain.max_steps_per_rollout_epoch=512" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_stagger_s=2.0" not in plan.cotrain_online_cmd
     assert "++env.cfg.egl_spawn_init_timeout_s=900" not in plan.cotrain_online_cmd
-    assert "+manual_cotrain.env_rollout_timeout_s=5400" in plan.cotrain_online_cmd
+    assert "manual_cotrain.env_rollout_timeout_s=5400" in plan.cotrain_online_cmd
     assert "++env.cfg.egl_max_respawns=5" not in plan.cotrain_online_cmd
 
 

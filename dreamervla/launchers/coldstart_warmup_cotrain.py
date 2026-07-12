@@ -942,7 +942,7 @@ def _manual_cotrain_online_overrides(
         defaults.append(f"manual_cotrain.global_steps={global_steps}")
     rollout_timeout_s = _manual_cotrain_env_rollout_timeout_s(profile_cfg)
     if rollout_timeout_s is not None:
-        defaults.append(f"+manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
+        defaults.append(f"manual_cotrain.env_rollout_timeout_s={rollout_timeout_s}")
     if _requested_gpu_count(ngpu) == 0:
         defaults.extend(
             [
@@ -1589,7 +1589,10 @@ def _manual_cotrain_segment_cmd(
                 "+actor.init_ckpt.path": ckpt,
                 "+actor.init_ckpt.components": "[policy]",
                 "learner.init_ckpt.path": ckpt,
-                "learner.init_ckpt.components": "[world_model,classifier]",
+                "learner.init_ckpt.components": (
+                    "[world_model,classifier,world_model_optimizer,"
+                    "classifier_optimizer]"
+                ),
             }
         )
     return _replace_overrides(cmd, values)

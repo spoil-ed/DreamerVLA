@@ -1,0 +1,83 @@
+# @package _global_
+# Official-data policy RL with trainable WM/CLS. This is intentionally the same
+# Actor/Rollout/WMEnv topology and PPO geometry as the frozen route; only the
+# LearnerGroup and its WM/CLS optimizers are enabled.
+defaults:
+  - openvla_onetraj_libero_cotrain_ray
+  - _self_
+
+_target_: dreamervla.runners.ManualCotrainRayRunner
+
+cluster:
+  num_nodes: 1
+  num_gpus: 8
+  component_placement: null
+
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain_ray_eval/${now:%Y%m%d_%H%M%S}}
+  device: cuda
+  distributed_strategy: single
+  resume: false
+  resume_dir: null
+  require_policy_update: true
+
+manual_cotrain:
+  ngpu: 8
+  global_steps: 20000
+  checkpoint_every: 500
+  save_replay_state: false
+  real_env_enabled: false
+  real_env_workers: 0
+  learner_updates_enabled: true
+  refresh_wm_initial_conditions_per_lease: true
+  wm_rollout_target_trajectories: 1024
+  wm_rollout_lease_epochs: 1
+  max_steps_per_rollout_epoch: 512
+  wm_envs_per_worker: 16
+  eval_interval_global_steps: 10
+  eval_initial_global_step: true
+
+official_replay:
+  data_dir: ${task.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.hidden_token_dir}
+  task_id: null
+  infer_task_id_from_shard: true
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  max_episodes_per_task: null
+  require_reference_complete: false
+  capacity: 160000
+  sequence_length: ${task.openvla_oft.wm_sequence_length}
+  capacity_mode: total_sharded
+  task_balanced: true
+  rank: 0
+  replay_sampling:
+    enabled: false
+
+replay:
+  cfg:
+    capacity: ${official_replay.capacity}
+    sequence_length: ${official_replay.sequence_length}
+    task_ids: ${official_replay.task_ids}
+    rank: ${official_replay.rank}
+    capacity_mode: ${official_replay.capacity_mode}
+    task_balanced: ${official_replay.task_balanced}
+    replay_sampling: ${official_replay.replay_sampling}
+  seed:
+    data_dir: ${official_replay.data_dir}
+    hidden_dir: ${official_replay.hidden_dir}
+    task_id: ${official_replay.task_id}
+    infer_task_id_from_shard: ${official_replay.infer_task_id_from_shard}
+    task_ids: ${official_replay.task_ids}
+    max_episodes_per_task: ${official_replay.max_episodes_per_task}
+    require_reference_complete: ${official_replay.require_reference_complete}
+
+env:
+  real: null
+  wm:
+    cfg:
+      bootstrap_task_ids: ${official_replay.task_ids}
+      bootstrap_group_size: ${manual_cotrain.wm_envs_per_worker}
+      defer_initial_condition_bootstrap: true
+      require_balanced_initial_conditions: true
+      kwargs:
+        freeze_components: false

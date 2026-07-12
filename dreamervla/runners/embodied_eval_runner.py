@@ -342,13 +342,26 @@ class EmbodiedEvalRunner(
         )
         payload = None
         ckpt_kind = str(OmegaConf.select(cfg, "eval.ckpt_kind", default="auto")).lower()
-        if ckpt_kind not in {"auto", "vla", "dreamer"}:
-            raise ValueError("eval.ckpt_kind must be one of: auto, vla, dreamer")
-        ckpt_is_hf_vla = bool(ckpt_path and is_hf_checkpoint(ckpt_path))
-        if ckpt_is_hf_vla and ckpt_kind == "dreamer":
-            raise RuntimeError(
-                f"{ckpt_path} is a Hugging Face VLA checkpoint, not a Dreamer checkpoint."
+        if ckpt_kind not in {"auto", "vla", "vla_policy", "dreamer"}:
+            raise ValueError(
+                "eval.ckpt_kind must be one of: auto, vla, vla_policy, dreamer"
             )
+        ckpt_is_hf_vla = bool(ckpt_path and is_hf_checkpoint(ckpt_path))
+        if ckpt_is_hf_vla and ckpt_kind in {"dreamer", "vla_policy"}:
+            raise RuntimeError(
+                f"{ckpt_path} is a Hugging Face VLA checkpoint, not a "
+                f"{ckpt_kind} runner checkpoint."
+            )
+        if ckpt_kind == "vla_policy":
+            if not ckpt_path:
+                raise ValueError("eval.ckpt_kind=vla_policy requires eval.ckpt_path")
+            payload = self._load_checkpoint_payload(ckpt_path)
+            policy_state = payload.get("state_dicts", {}).get("policy")
+            if not isinstance(policy_state, Mapping) or not policy_state:
+                raise RuntimeError(
+                    f"{ckpt_path} has no non-empty state_dicts.policy"
+                )
+            return self._run_vla_policy_eval(cfg, ckpt_path, payload)
         if ckpt_path and not ckpt_is_hf_vla and ckpt_kind in {"auto", "dreamer"}:
             payload = self._load_checkpoint_payload(ckpt_path)
             state_keys = set(payload.get("state_dicts", {}).keys())
@@ -455,6 +468,140 @@ class EmbodiedEvalRunner(
         _eh.normalize_vla_encoder_state_for_single_process_eval
     )
     _checkpoint_cfg_from_payload = staticmethod(_eh.checkpoint_cfg_from_payload)
+
+    def _run_vla_policy_eval(
+        self,
+        eval_cfg_root: DictConfig,
+        ckpt_path: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Evaluate a saved PPO actor through the canonical OpenVLA-OFT path.
+
+        The base VLA produces the same projected hidden tokens used by manual
+        cotrain's RolloutGroup. Only the small ActorGroup policy is restored
+        from ``state_dicts.policy``; WM and classifier are not constructed.
+        """
+
+        state_dicts = payload.get("state_dicts", {})
+        policy_state = state_dicts.get("policy")
+        if not isinstance(policy_state, Mapping) or not policy_state:
+            raise RuntimeError(f"{ckpt_path} has no non-empty state_dicts.policy")
+        try:
+            train_cfg = self._checkpoint_cfg_from_payload(payload)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{ckpt_path} has no saved cfg; cannot rebuild the VLA policy."
+            ) from exc
+
+        base_vla_ckpt = OmegaConf.select(
+            eval_cfg_root,
+            "init.vla_ckpt_path",
+            default=OmegaConf.select(train_cfg, "init.vla_ckpt_path", default=None),
+        )
+        if base_vla_ckpt in (None, ""):
+            raise ValueError(
+                "VLA-policy eval requires init.vla_ckpt_path for the fixed OFT backbone"
+            )
+        base_vla_ckpt = str(pathlib.Path(str(base_vla_ckpt)).expanduser().resolve())
+        with open_dict(train_cfg):
+            train_cfg.eval = copy.deepcopy(eval_cfg_root.eval)
+            if OmegaConf.select(train_cfg, "init", default=None) is None:
+                train_cfg.init = {}
+            train_cfg.init.vla_ckpt_path = base_vla_ckpt
+            train_cfg.training.out_dir = self.output_dir
+            train_cfg.training.distributed_strategy = "ddp"
+            train_cfg.training.enable_activation_checkpointing = False
+        self.cfg = train_cfg
+        self.config = train_cfg
+
+        self._dreamer_eval = False
+        self._vla_policy_eval_policy = None
+        self.encoder = self._build_oft_base_eval_adapter(train_cfg, base_vla_ckpt)
+
+        raw_policy_cfg = OmegaConf.select(
+            train_cfg,
+            "actor.policy_cfg",
+            default=OmegaConf.select(
+                train_cfg,
+                "policy.cfg",
+                default=OmegaConf.select(train_cfg, "policy", default=None),
+            ),
+        )
+        policy_cfg = self._target_kwargs_to_hydra_cfg(raw_policy_cfg)
+        if policy_cfg is None or OmegaConf.select(
+            policy_cfg, "_target_", default=None
+        ) is None:
+            raise ValueError(
+                "VLA-policy checkpoint cfg must define actor.policy_cfg"
+            )
+        with open_dict(policy_cfg):
+            if OmegaConf.select(policy_cfg, "init_lm_head_ckpt", default=None) is not None:
+                policy_cfg.init_lm_head_ckpt = base_vla_ckpt
+        policy = hydra.utils.instantiate(policy_cfg)
+        if not isinstance(policy, torch.nn.Module):
+            raise TypeError("actor.policy_cfg must instantiate torch.nn.Module")
+        precision = str(
+            OmegaConf.select(
+                train_cfg,
+                "rollout.train_cfg.precision",
+                default="bf16",
+            )
+        ).lower()
+        policy_dtype = {
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "fp32": torch.float32,
+        }.get(precision, torch.bfloat16)
+        policy.to(device=self.device, dtype=policy_dtype)
+        self._load_module_state(policy, dict(policy_state), "policy")
+        policy.eval()
+        self._vla_policy_eval_policy = policy
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        self._init_policy_trace(train_cfg)
+        task_suite_name = str(
+            OmegaConf.select(train_cfg, "eval.task_suite_name", default="libero_goal")
+        )
+        self.console_banner(
+            "EVALUATION",
+            subtitle=f"VLA policy suite={task_suite_name}",
+        )
+        metrics = self.evaluate_libero(epoch=-1)
+        success_rate = float(metrics.get("eval_success_rate", 0.0))
+        self.console_metrics(
+            "eval",
+            {
+                "eval/success_rate": success_rate,
+                "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
+                "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
+                "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
+                "eval/episodes_per_task": float(
+                    metrics.get("eval_episodes_per_task", 0.0)
+                ),
+            },
+            force=True,
+        )
+        self.console_banner(
+            "EVALUATION",
+            done=True,
+            subtitle=f"VLA policy succ {success_rate:.3f}",
+        )
+        if self.distributed.is_main_process:
+            metrics_out = {
+                "ckpt_path": ckpt_path,
+                "ckpt_kind": "vla_policy",
+                "base_vla_ckpt": base_vla_ckpt,
+                "checkpoint_state_hashes": {
+                    "policy": state_dict_sha256(policy_state)
+                },
+                **evaluation_protocol_metadata(train_cfg),
+                **metrics,
+            }
+            out_path = os.path.join(self.output_dir, "eval_libero_metrics.json")
+            with open(out_path, "w") as file:
+                json.dump(metrics_out, file, indent=2)
+            print(f"  [Eval] wrote metrics -> {out_path}")
+        return [metrics]
 
     def _run_dreamer_eval(
         self,
@@ -1626,9 +1773,44 @@ class EmbodiedEvalRunner(
                 oft_extractor.reset()
             obs = self._oft_base_eval_obs_from_libero_raw(raw_obs, state)
             decoded = oft_extractor.step(obs, task_description)
-            action_chunk = (
-                decoded.action_chunk if hasattr(decoded, "action_chunk") else decoded[0]
-            )
+            vla_policy = getattr(self, "_vla_policy_eval_policy", None)
+            if vla_policy is not None:
+                hidden = getattr(decoded, "hidden_state", None)
+                if not isinstance(hidden, torch.Tensor):
+                    try:
+                        hidden = decoded[1]
+                    except (TypeError, IndexError) as exc:
+                        raise ValueError(
+                            "OFT VLA-policy eval requires decoded hidden tokens"
+                        ) from exc
+                if hidden.ndim == 2:
+                    hidden = hidden.unsqueeze(0)
+                try:
+                    policy_dtype = next(vla_policy.parameters()).dtype
+                except (AttributeError, StopIteration):
+                    policy_dtype = torch.float32
+                with torch.no_grad():
+                    policy_chunk, _log_prob, _extra = vla_policy(
+                        {
+                            "mode": "sample",
+                            "hidden": hidden.to(
+                                device=self.device,
+                                dtype=policy_dtype,
+                            ),
+                            "return_chunk": True,
+                            "deterministic": True,
+                            "logprob_type": "token_level",
+                        }
+                    )
+                action_chunk = (
+                    policy_chunk.detach().float().cpu().numpy()[0]
+                )
+            else:
+                action_chunk = (
+                    decoded.action_chunk
+                    if hasattr(decoded, "action_chunk")
+                    else decoded[0]
+                )
             from dreamervla.runners.oft_collect_common import process_action
 
             return [

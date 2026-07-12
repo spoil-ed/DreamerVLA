@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 from hydra.core.override_parser.overrides_parser import OverridesParser
 
 import dreamervla.launchers.frozen_model_cotrain_ray as launcher
+import dreamervla.launchers.manual_cotrain_vla_eval as periodic_eval
 from dreamervla.launchers.frozen_model_cotrain_ray import build_launch
 
 
@@ -59,6 +61,15 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
     assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
     assert launch.command[-1] == "manual_cotrain.global_steps=12"
     assert launch.resume is False
+    assert launch.periodic_eval.interval_global_steps == 0
+    assert launch.periodic_eval.include_initial is False
+    assert launch.periodic_eval.task_ids == tuple(range(10))
+    assert launch.periodic_eval.num_episodes_per_task == 10
+    assert launch.periodic_eval.num_envs == 10
+    assert launch.periodic_eval.base_vla_ckpt == (
+        Path(__file__).resolve().parents[2]
+        / "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
+    ).resolve()
 
 
 def test_frozen_ray_launcher_quotes_hydra_checkpoint_paths_containing_equals(
@@ -271,3 +282,172 @@ def test_frozen_ray_launcher_requires_explicit_checkpoint_assignments(
 
     with pytest.raises(ValueError, match="WORLD_MODEL_CKPT=/path"):
         build_launch([])
+
+
+def test_frozen_ray_periodic_eval_schedule_is_step_zero_then_strict_tens() -> None:
+    assert launcher.periodic_eval_steps(
+        start_step=0,
+        target_step=25,
+        interval=10,
+        include_initial=True,
+    ) == [0, 10, 20]
+    assert launcher.periodic_eval_steps(
+        start_step=10,
+        target_step=25,
+        interval=10,
+        include_initial=True,
+    ) == [10, 20]
+
+
+def test_eval_launcher_materializes_hydra_global_steps_for_segmentation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "run"))
+
+    launch = build_launch(
+        ["experiment=dreamervla_frozen_models_rl_ray_eval"]
+    )
+
+    assert periodic_eval.manual_cotrain_target_step(launch.command) == 20000
+    assert launch.command.count("manual_cotrain.global_steps=20000") == 1
+
+
+def test_frozen_ray_periodic_eval_commands_use_base_vla_then_policy_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    run_root = tmp_path / "run=periodic"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(run_root))
+    launch = build_launch(
+        [
+            "experiment=dreamervla_frozen_models_rl_ray_eval",
+            "manual_cotrain.global_steps=20",
+        ]
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        command = list(command)
+        calls.append(command)
+        if "dreamervla.train" in command:
+            target = int(
+                next(
+                    item.split("=", 1)[1]
+                    for item in command
+                    if item.startswith("manual_cotrain.global_steps=")
+                )
+            )
+            ckpt = (
+                run_root
+                / "checkpoints"
+                / f"manual_cotrain_step_{target}"
+                / "manual_cotrain.ckpt"
+            )
+            ckpt.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({"global_step": target, "state_dicts": {"policy": {}}}, ckpt)
+        else:
+            out_dir = Path(
+                json.loads(
+                    next(
+                        item.split("=", 1)[1]
+                        for item in command
+                        if item.startswith("out_dir=")
+                    )
+                )
+            )
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "eval_libero_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "eval_success_rate": 0.5,
+                        "eval_total_episodes": 100,
+                        "eval_tasks": 10,
+                        **{
+                            f"eval_task_{task_id}_success_rate": 0.5
+                            for task_id in range(10)
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(periodic_eval.subprocess, "run", fake_run)
+
+    assert launcher.execute_launch(launch) == 0
+
+    eval_calls = [call for call in calls if "dreamervla.launchers.train" in call]
+    train_calls = [call for call in calls if "dreamervla.train" in call]
+    assert [
+        next(item for item in call if item.startswith("eval.ckpt_kind="))
+        for call in eval_calls
+    ] == [
+        "eval.ckpt_kind=vla",
+        "eval.ckpt_kind=vla_policy",
+        "eval.ckpt_kind=vla_policy",
+    ]
+    assert [
+        int(
+            next(
+                item.split("=", 1)[1]
+                for item in call
+                if item.startswith("manual_cotrain.global_steps=")
+            )
+        )
+        for call in train_calls
+    ] == [10, 20]
+    assert all("eval.num_episodes_per_task=10" in call for call in eval_calls)
+    assert all("eval.num_envs=10" in call for call in eval_calls)
+    assert all("eval.task_ids=[0,1,2,3,4,5,6,7,8,9]" in call for call in eval_calls)
+    assert any(
+        item.startswith("manual_cotrain.resume_ckpt=")
+        and "manual_cotrain_step_10" in item
+        for item in train_calls[1]
+    )
+    summary = json.loads((run_root / "eval/eval_summary.json").read_text())
+    assert [record["global_step"] for record in summary["records"]] == [0, 10, 20]
+    assert all(record["eval_total_episodes"] == 100 for record in summary["records"])
+
+
+def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "run"))
+
+    launch = build_launch(
+        [
+            "experiment=dreamervla_wmcls_cotrain_ray_eval",
+            "manual_cotrain.global_steps=20",
+        ]
+    )
+    cfg = launcher._compose_training_config(launch.command)
+
+    assert launch.periodic_eval.interval_global_steps == 10
+    assert launch.periodic_eval.include_initial is True
+    assert cfg.manual_cotrain.learner_updates_enabled is True
+    assert cfg.manual_cotrain.real_env_enabled is False
+    assert cfg.manual_cotrain.env_rollout_timeout_s == 5400
+    assert cfg.learner is not None

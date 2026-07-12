@@ -18,6 +18,8 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `e2e_manual_cotrain_async.sh` | Manual async OpenVLA-OFT cotrain resume launcher |
 | `e2e_frozen_model_pre_mainline.sh` | Pre-mainline official-data WM/CLS, frozen policy RL, and matched real-eval proof |
 | `e2e_frozen_model_cotrain.sh` | Eight-GPU Ray policy training with frozen WM/CLS checkpoints |
+| `e2e_frozen_model_cotrain_eval.sh` | Frozen WM/CLS cotrain plus matched step-0/every-10-step VLA eval |
+| `e2e_wmcls_cotrain_eval.sh` | Trainable WM/CLS cotrain plus matched step-0/every-10-step VLA eval |
 | `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
 | `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
 | `experiments/classifier_training/train.sh` | One-click official-data classifier upper-bound training |
@@ -131,6 +133,18 @@ threshold, or an explicit/default `0.5` threshold when no calibration exists:
 WORLD_MODEL_CKPT=/path/to/world_model/run \
 CLASSIFIER_CKPT=/path/to/classifier/run \
   bash scripts/e2e_frozen_model_cotrain.sh
+```
+
+The two matched 100-episode real-LIBERO eval variants are:
+
+```bash
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+  bash scripts/e2e_frozen_model_cotrain_eval.sh
+
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+  bash scripts/e2e_wmcls_cotrain_eval.sh
 ```
 
 Resume the same run with its policy checkpoint; WM/CLS are still loaded from

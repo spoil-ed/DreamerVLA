@@ -1,20 +1,29 @@
-"""Eight-GPU frozen-model Ray launch from explicit checkpoint assignments."""
+"""Eight-GPU pretrained WM/CLS Ray launches from explicit assignments."""
 
 from __future__ import annotations
 
 import json
 import os
 import shlex
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+
+from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.launchers.frozen_model_pre_mainline import (
     resolve_available_classifier_threshold,
     select_available_classifier_checkpoint,
     select_available_world_model_checkpoint,
+)
+from dreamervla.launchers.manual_cotrain_vla_eval import (
+    PeriodicVLAEvalSpec,
+    execute_periodic_vla_eval,
+    periodic_eval_steps,
+    periodic_vla_eval_spec,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -23,13 +32,16 @@ DEFAULT_VISIBLE_GPUS = tuple(str(gpu) for gpu in range(8))
 
 @dataclass(frozen=True)
 class FrozenRayLaunch:
-    """Resolved subprocess launch without any side effects."""
+    """Resolved frozen or trainable-WM/CLS launch without side effects."""
 
     command: list[str]
     env: dict[str, str]
     out_dir: Path
     visible_gpus: tuple[str, ...]
     resume: bool
+    resume_ckpt: Path | None
+    experiment: str
+    periodic_eval: PeriodicVLAEvalSpec
 
 
 def _existing_file(value: str, *, label: str) -> Path:
@@ -72,13 +84,18 @@ def _visible_gpus() -> tuple[str, ...]:
     return gpus
 
 
-def _default_out_dir() -> Path:
+def _default_out_dir(experiment: str) -> Path:
     explicit = os.environ.get("COTRAIN_RUN_ROOT") or os.environ.get("RUN_ROOT")
     if explicit:
         return Path(explicit).expanduser().resolve()
     data_root = Path(os.environ.get("DVLA_DATA_ROOT", PROJECT_ROOT / "data")).expanduser()
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    return (data_root / "outputs" / "pre_mainline" / "frozen_cotrain_ray" / timestamp).resolve()
+    stage = (
+        "wmcls_cotrain_ray_eval"
+        if experiment == "dreamervla_wmcls_cotrain_ray_eval"
+        else "frozen_cotrain_ray"
+    )
+    return (data_root / "outputs" / "pre_mainline" / stage / timestamp).resolve()
 
 
 def _resume_out_dir(resume_ckpt: Path) -> Path:
@@ -126,6 +143,18 @@ def _hydra_overrides(argv: list[str]) -> list[str]:
     return overrides
 
 
+def _take_override(overrides: list[str], key: str, *, default: str) -> str:
+    selected = str(default)
+    kept: list[str] = []
+    for item in overrides:
+        if item.split("=", 1)[0].lstrip("+~") == key:
+            selected = str(item.split("=", 1)[1]).strip("\"'")
+        else:
+            kept.append(item)
+    overrides[:] = kept
+    return selected
+
+
 def _has_hydra_override(overrides: list[str], key: str) -> bool:
     return any(item.split("=", 1)[0].lstrip("+~") == key for item in overrides)
 
@@ -146,10 +175,37 @@ def _environment_bool(name: str, *, default: bool = False) -> bool:
     raise ValueError(f"{name} must be a boolean assignment, got {raw!r}")
 
 
+def _compose_training_config(command: list[str]):
+    register_dreamervla_resolvers()
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs"),
+        job_name="frozen_model_cotrain_ray_launcher",
+        version_base=None,
+    ):
+        cfg = compose(config_name="train", overrides=list(command[3:]))
+    OmegaConf.resolve(cfg)
+    return cfg
+
+
 def build_launch(argv: list[str]) -> FrozenRayLaunch:
     """Resolve checkpoint paths, Hydra overrides, and the exact 8-GPU command."""
 
     hydra_overrides = _hydra_overrides(argv)
+    experiment = _take_override(
+        hydra_overrides,
+        "experiment",
+        default="dreamervla_frozen_models_rl_ray",
+    )
+    supported_experiments = {
+        "dreamervla_frozen_models_rl_ray",
+        "dreamervla_frozen_models_rl_ray_eval",
+        "dreamervla_wmcls_cotrain_ray_eval",
+    }
+    if experiment not in supported_experiments:
+        raise ValueError(
+            "unsupported cotrain experiment; choose one of "
+            + ", ".join(sorted(supported_experiments))
+        )
     wm_ckpt = _component_checkpoint(
         _required_environment_path("WORLD_MODEL_CKPT"),
         component="world_model",
@@ -159,7 +215,8 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         component="classifier",
     )
     classifier_threshold = None
-    if not _has_hydra_override(
+    frozen_components = experiment.startswith("dreamervla_frozen_models_rl_ray")
+    if frozen_components and not _has_hydra_override(
         hydra_overrides,
         "algorithm.lumos.classifier_threshold",
     ):
@@ -177,13 +234,13 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
     elif resume_ckpt is not None:
         out_dir = _resume_out_dir(resume_ckpt)
     else:
-        out_dir = _default_out_dir()
+        out_dir = _default_out_dir(experiment)
     visible_gpus = _visible_gpus()
     command = [
         sys.executable,
         "-m",
         "dreamervla.train",
-        "experiment=dreamervla_frozen_models_rl_ray",
+        f"experiment={experiment}",
         "task=openvla_onetraj_libero",
         f"training.out_dir={_hydra_string(out_dir)}",
         f"init.world_model_state_ckpt={_hydra_string(wm_ckpt)}",
@@ -205,26 +262,61 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
             ]
         )
     command.extend(hydra_overrides)
+    training_cfg = _compose_training_config(command)
+    periodic_eval = periodic_vla_eval_spec(training_cfg)
+    if periodic_eval.enabled and not _has_hydra_override(
+        command,
+        "manual_cotrain.global_steps",
+    ):
+        command.append(
+            "manual_cotrain.global_steps="
+            + str(int(OmegaConf.select(training_cfg, "manual_cotrain.global_steps")))
+        )
     return FrozenRayLaunch(
         command=command,
         env=_launch_env(visible_gpus),
         out_dir=out_dir,
         visible_gpus=visible_gpus,
         resume=resume_ckpt is not None,
+        resume_ckpt=resume_ckpt,
+        experiment=experiment,
+        periodic_eval=periodic_eval,
     )
 
 
 def _print_launch(launch: FrozenRayLaunch) -> None:
+    prefix = (
+        "wmcls-cotrain-ray"
+        if launch.experiment == "dreamervla_wmcls_cotrain_ray_eval"
+        else "frozen-model-ray"
+    )
     print(
-        "[frozen-model-ray] "
+        f"[{prefix}] "
         f"gpus={','.join(launch.visible_gpus)} "
         f"resume={str(launch.resume).lower()} "
+        f"experiment={launch.experiment} "
+        f"eval_interval={launch.periodic_eval.interval_global_steps} "
         f"run_root={launch.out_dir}",
         flush=True,
     )
     print(
-        "[frozen-model-ray] command: " + " ".join(shlex.quote(part) for part in launch.command),
+        f"[{prefix}] command: "
+        + " ".join(shlex.quote(part) for part in launch.command),
         flush=True,
+    )
+
+
+def execute_launch(launch: FrozenRayLaunch) -> int:
+    """Execute one resolved route, with periodic eval when its Hydra config enables it."""
+
+    launch.out_dir.mkdir(parents=True, exist_ok=True)
+    return execute_periodic_vla_eval(
+        training_command=launch.command,
+        training_env=launch.env,
+        run_root=launch.out_dir,
+        resume_ckpt=launch.resume_ckpt,
+        spec=launch.periodic_eval,
+        cwd=PROJECT_ROOT,
     )
 
 
@@ -234,17 +326,17 @@ def main(argv: list[str] | None = None) -> int:
     _print_launch(launch)
     if _environment_bool("COTRAIN_DRY_RUN"):
         return 0
-    launch.out_dir.mkdir(parents=True, exist_ok=True)
-    return subprocess.run(
-        launch.command,
-        cwd=PROJECT_ROOT,
-        env=launch.env,
-        check=False,
-    ).returncode
+    return execute_launch(launch)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["FrozenRayLaunch", "build_launch", "main"]
+__all__ = [
+    "FrozenRayLaunch",
+    "build_launch",
+    "execute_launch",
+    "main",
+    "periodic_eval_steps",
+]

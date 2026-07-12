@@ -47,3 +47,42 @@ def test_learner_worker_syncs_independent_component_versions():
         ("classifier", 4),
         ("policy", 5),
     ]
+
+
+def test_learner_worker_checkpoint_round_trips_component_optimizers() -> None:
+    model_cfg = {
+        "world_model": {
+            "target": "dreamervla.workers.actor._test_models:TinyTrainableWorldModel",
+            "kwargs": {"hidden_dim": 4},
+        },
+        "classifier": {
+            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "kwargs": {"hidden_dim": 4, "window": 3},
+        },
+    }
+    train_cfg = {
+        "mode": "wm_classifier_only",
+        "device": "cpu",
+        "classifier_threshold": 0.5,
+        "syncer": {"store_name": "unused"},
+        "optimizers": {
+            "world_model": {"lr": 1.0e-3},
+            "classifier": {"lr": 2.0e-3},
+        },
+    }
+    first = LearnerWorker(model_cfg, {}, train_cfg, replay=None)
+    first.init()
+    first.optimizers["world_model"].param_groups[0]["lr"] = 0.123
+    first.optimizers["classifier"].param_groups[0]["lr"] = 0.456
+
+    sync_payload = first.state_dicts()
+    payload = first.state_dicts(include_optimizers=True)
+    second = LearnerWorker(model_cfg, payload, train_cfg, replay=None)
+    second.init()
+
+    assert "world_model_optimizer" not in sync_payload
+    assert "classifier_optimizer" not in sync_payload
+    assert "world_model_optimizer" in payload
+    assert "classifier_optimizer" in payload
+    assert second.optimizers["world_model"].param_groups[0]["lr"] == 0.123
+    assert second.optimizers["classifier"].param_groups[0]["lr"] == 0.456

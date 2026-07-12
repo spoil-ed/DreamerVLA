@@ -22,6 +22,9 @@ manual_cotrain:
   learner_update_step: 1
   learner_update_phase: cotrain
   checkpoint_every: 0
+  # One 1024x512 rollout step can exceed ten minutes. 5400s still catches an
+  # actual stuck handshake without killing a progressing production step.
+  env_rollout_timeout_s: 5400
   save_replay_state: false
   sync_every: 1
   requires_bootstrap_value: false
@@ -43,6 +46,22 @@ manual_cotrain:
   wm_envs_per_worker: 16
   eval_interval_global_steps: 0
   debug_eval_interval_global_steps: 0
+  eval_initial_global_step: false
+  eval_protocol:
+    # Standalone real-LIBERO evaluation. It uses the fixed OFT checkpoint as
+    # the visual/language VLA and, after PPO starts, replaces only the policy
+    # head with the saved ActorGroup state.
+    base_vla_ckpt: ${task.openvla_oft.ckpt_path}
+    task_suite_name: ${task.suite}
+    task_ids: ${ray_data.task_ids}
+    num_episodes_per_task: 10
+    num_envs: 10
+    action_steps: ${task.openvla_oft.hidden_token.chunk_size}
+    history_length: ${task.openvla_oft.hidden_token.expected_history}
+    seed: ${seed}
+    gpus: "0"
+    render_backend: osmesa
+    significant_drop_threshold: 0.10
   task_id: 0
 
 algorithm:

@@ -95,6 +95,10 @@ class LearnerWorker(Worker):
         self.critic = self.components.get("critic")
         self.ref_policy = self.components.get("ref_policy")
         self.optimizers = self._build_optimizers()
+        for name, optimizer in self.optimizers.items():
+            optimizer_state = self.init_ckpt.get(f"{name}_optimizer")
+            if isinstance(optimizer_state, dict) and optimizer_state:
+                optimizer.load_state_dict(optimizer_state)
         self.optimizer = self.optimizers.get("policy")
         self.policy_optimizer = self.optimizers.get("policy")
         self.world_model_optimizer = self.optimizers.get("world_model")
@@ -145,12 +149,19 @@ class LearnerWorker(Worker):
             raise ValueError(f"unknown component for weight sync: {name!r}")
         self._syncer().push(name, self.components[name].state_dict(), int(version))
 
-    def state_dicts(self) -> dict[str, Any]:
+    def state_dicts(self, include_optimizers: bool = False) -> dict[str, Any]:
+        """Return model states, adding optimizer states only for checkpoints."""
+
         state_dicts: dict[str, Any] = {
             name: _cpu_state_dict(module)
             for name, module in self.components.items()
         }
         state_dicts["classifier_threshold"] = float(self._classifier_threshold())
+        if include_optimizers:
+            for name, optimizer in self.optimizers.items():
+                state_dicts[f"{name}_optimizer"] = _cpu_tree(
+                    optimizer.state_dict()
+                )
         return state_dicts
 
     def _build_components(self) -> dict[str, nn.Module]:
@@ -1013,6 +1024,18 @@ def dino_lumos_step(**kwargs: Any) -> dict[str, float]:
 
 def _cpu_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     return {key: _independent_cpu(value) for key, value in module.state_dict().items()}
+
+
+def _cpu_tree(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return _independent_cpu(value)
+    if isinstance(value, dict):
+        return {key: _cpu_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cpu_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_cpu_tree(item) for item in value)
+    return value
 
 
 def _to_device_state(state_dict: dict[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
