@@ -112,8 +112,10 @@ def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> Non
     assert os.access(script, os.X_OK)
     text = script.read_text(encoding="utf-8")
     for marker in (
-        'WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-}"',
-        'CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-}"',
+        'WORLD_MODEL_CKPT="${1:-}"',
+        'CLASSIFIER_CKPT="${2:-}"',
+        'shift 2',
+        "<world-model.ckpt> <classifier.ckpt> [hydra overrides...]",
         "experiment=dreamervla_frozen_models_rl",
         'init.world_model_state_ckpt="${WORLD_MODEL_CKPT}"',
         'init.classifier_state_ckpt="${CLASSIFIER_CKPT}"',
@@ -122,6 +124,8 @@ def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> Non
         'training.resume_dir="${COTRAIN_RUN_ROOT}"',
     ):
         assert marker in text
+    assert 'WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-}"' not in text
+    assert 'CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-}"' not in text
 
 
 def test_eight_card_training_scripts_embed_h100_runtime_defaults() -> None:

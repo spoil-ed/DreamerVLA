@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# Policy-only RL with explicit pretrained WM/CLS checkpoints.
+# Policy-only RL with positional pretrained WM/CLS checkpoints.
 set -euo pipefail
+
+if [[ "$#" -lt 2 ]]; then
+  echo "Usage: $0 <world-model.ckpt> <classifier.ckpt> [hydra overrides...]" >&2
+  exit 2
+fi
+
+WORLD_MODEL_CKPT="${1:-}"
+CLASSIFIER_CKPT="${2:-}"
+shift 2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd -P)}"
@@ -16,8 +25,6 @@ if command -v conda >/dev/null 2>&1; then
 fi
 
 PYTHON_EXECUTABLE="${PYTHON:-python}"
-WORLD_MODEL_CKPT="${WORLD_MODEL_CKPT:-}"
-CLASSIFIER_CKPT="${CLASSIFIER_CKPT:-}"
 COTRAIN_RESUME="${COTRAIN_RESUME:-${RESUME:-false}}"
 
 if [[ -z "${WORLD_MODEL_CKPT}" || ! -f "${WORLD_MODEL_CKPT}" ]]; then

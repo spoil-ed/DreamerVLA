@@ -194,9 +194,9 @@ They create separate timestamped run directories. Once checkpoints are chosen,
 policy-only frozen cotrain takes the two explicit paths:
 
 ```bash
-WORLD_MODEL_CKPT=/path/to/wm.ckpt \
-CLASSIFIER_CKPT=/path/to/classifier.ckpt \
-  bash scripts/e2e_frozen_model_cotrain.sh
+bash scripts/e2e_frozen_model_cotrain.sh \
+  /path/to/wm.ckpt \
+  /path/to/classifier.ckpt
 ```
 
 `python -m dreamervla.launchers.frozen_model_pre_mainline` composes

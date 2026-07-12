@@ -116,9 +116,9 @@ After selecting the completed component checkpoints, start policy-only frozen
 cotrain by providing only those two paths:
 
 ```bash
-WORLD_MODEL_CKPT=/path/to/wm.ckpt \
-CLASSIFIER_CKPT=/path/to/classifier.ckpt \
-  bash scripts/e2e_frozen_model_cotrain.sh
+bash scripts/e2e_frozen_model_cotrain.sh \
+  /path/to/wm.ckpt \
+  /path/to/classifier.ckpt
 ```
 
 Check collection completeness before a long run:
