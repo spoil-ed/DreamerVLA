@@ -5,6 +5,47 @@
 [complete loop](../../../spec/04_complete_loop.md) 和
 [route registry](../../../spec/06_routes.md) 为准。
 
+## 关键实验命令速查
+
+以下命令均在 DreamerVLA 根目录执行；8 卡默认使用 GPU `0-7`：
+
+```bash
+export DVLA_DATA_ROOT=/inspire/qb-ilm/project/space-intelligence-multimodality/liuzhenyang-240108540154/spoil/data
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# 官方数据 WM / classifier 上限训练（两个独立实验）
+bash scripts/experiments/world_model_training/train.sh
+bash scripts/experiments/classifier_training/train.sh
+
+# 64-step WM 时耗诊断：前 32 步分段 profile，后 32 步观察实际吞吐
+bash scripts/experiments/world_model_training/profile.sh
+
+# 恢复中断的 WM 训练；脚本自动选择最新 warmup_progress
+WORLD_MODEL_RESUME=true \
+WORLD_MODEL_RUN_ROOT=/path/to/world_model/run \
+  bash scripts/experiments/world_model_training/train.sh
+
+# 冻结已完成的 WM/CLS，启动 8 卡 Ray policy-only cotrain
+WORLD_MODEL_CKPT=/path/to/completed/world_model/run \
+CLASSIFIER_CKPT=/path/to/completed/classifier/run \
+  bash scripts/e2e_frozen_model_cotrain.sh
+
+# 恢复冻结 cotrain
+WORLD_MODEL_CKPT=/path/to/completed/world_model/run \
+CLASSIFIER_CKPT=/path/to/completed/classifier/run \
+COTRAIN_RESUME_CKPT=/path/to/manual_cotrain.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
+
+# 正式主线：collection -> warmup -> 8 卡 Ray async online cotrain
+bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
+  task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+```
+
+冻结 cotrain 的 `WORLD_MODEL_CKPT` 应指向已经生成
+`ckpt/wm_warmup.ckpt` 的完整 WM run 目录；不要传
+`ckpt/warmup_progress/wm_step_*.ckpt`。额外实验参数继续使用 Hydra
+`key=value` override。
+
 ## 1. 主线路由
 
 完整流程是：
