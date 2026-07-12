@@ -221,6 +221,118 @@ def test_classifier_selector_requires_heldout_window_best_checkpoint(
     assert select_classifier_checkpoint(classifier_root) == checkpoint.resolve()
 
 
+def _save_available_classifier_checkpoint(
+    path: Path,
+    *,
+    f1: float,
+    threshold: float,
+    step: int,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model": {"weight": torch.ones(1)},
+            "threshold": threshold,
+            "f1": f1,
+            "step": step,
+            "config": {"classifier": {"hidden_dim": 1}},
+            "extra": {
+                "val_window": {"best_f1": f1, "best_thresh": threshold}
+            },
+        },
+        path,
+    )
+
+
+def test_available_classifier_selector_prefers_highest_window_f1_without_summary(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        select_available_classifier_checkpoint,
+    )
+
+    checkpoints = tmp_path / "classifier" / "checkpoints"
+    lower = checkpoints / "best_window_f10.9524_th0.05.ckpt"
+    higher = checkpoints / "best_window_f10.9711_th0.45.ckpt"
+    _save_available_classifier_checkpoint(lower, f1=0.9524, threshold=0.05, step=250)
+    _save_available_classifier_checkpoint(higher, f1=0.9711, threshold=0.45, step=500)
+
+    assert (
+        select_available_classifier_checkpoint(tmp_path / "classifier")
+        == higher.resolve()
+    )
+
+
+@pytest.mark.parametrize("fallback_name", ["final.ckpt", "latest.ckpt"])
+def test_available_classifier_selector_accepts_runner_checkpoint_fallback(
+    tmp_path: Path,
+    fallback_name: str,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        select_available_classifier_checkpoint,
+    )
+
+    checkpoint = tmp_path / "classifier" / "checkpoints" / fallback_name
+    checkpoint.parent.mkdir(parents=True)
+    torch.save(
+        {
+            "cfg": {"classifier": {"hidden_dim": 1}},
+            "state_dicts": {"model": {"weight": torch.ones(1)}},
+            "pickles": {},
+        },
+        checkpoint,
+    )
+
+    assert (
+        select_available_classifier_checkpoint(tmp_path / "classifier")
+        == checkpoint.resolve()
+    )
+
+
+def test_available_classifier_threshold_uses_best_window_for_runner_checkpoint(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        resolve_available_classifier_threshold,
+    )
+
+    checkpoints = tmp_path / "classifier" / "checkpoints"
+    best = checkpoints / "best_window_f10.9711_th0.45.ckpt"
+    final = checkpoints / "final.ckpt"
+    _save_available_classifier_checkpoint(best, f1=0.9711, threshold=0.45, step=500)
+    torch.save(
+        {
+            "cfg": {"classifier": {"hidden_dim": 1}},
+            "state_dicts": {"model": {"weight": torch.ones(1)}},
+            "pickles": {},
+        },
+        final,
+    )
+
+    assert resolve_available_classifier_threshold(final) == pytest.approx(0.45)
+
+
+def test_available_classifier_threshold_uses_explicit_default_without_calibration(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        resolve_available_classifier_threshold,
+    )
+
+    latest = tmp_path / "classifier" / "checkpoints" / "latest.ckpt"
+    latest.parent.mkdir(parents=True)
+    torch.save(
+        {
+            "cfg": {"classifier": {"hidden_dim": 1}},
+            "state_dicts": {"model": {"weight": torch.ones(1)}},
+            "pickles": {},
+        },
+        latest,
+    )
+
+    assert resolve_available_classifier_threshold(latest, default=0.5) == 0.5
+
+
 def test_classifier_selector_rejects_checkpoint_outside_stage_root(
     tmp_path: Path,
 ) -> None:

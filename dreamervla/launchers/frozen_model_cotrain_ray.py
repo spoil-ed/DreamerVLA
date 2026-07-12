@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dreamervla.launchers.frozen_model_pre_mainline import (
+    resolve_available_classifier_threshold,
+    select_available_classifier_checkpoint,
     select_available_world_model_checkpoint,
-    select_classifier_checkpoint,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +46,7 @@ def _component_checkpoint(value: str, *, component: str) -> Path:
         if component == "world_model":
             return select_available_world_model_checkpoint(path)
         if component == "classifier":
-            return select_classifier_checkpoint(path)
+            return select_available_classifier_checkpoint(path)
         raise ValueError(f"unknown frozen component {component!r}")
     raise FileNotFoundError(f"{component} checkpoint/run does not exist: {path}")
 
@@ -124,6 +125,10 @@ def _hydra_overrides(argv: list[str]) -> list[str]:
     return overrides
 
 
+def _has_hydra_override(overrides: list[str], key: str) -> bool:
+    return any(item.split("=", 1)[0].lstrip("+~") == key for item in overrides)
+
+
 def _environment_bool(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -148,6 +153,15 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         _required_environment_path("CLASSIFIER_CKPT"),
         component="classifier",
     )
+    classifier_threshold = None
+    if not _has_hydra_override(
+        hydra_overrides,
+        "algorithm.lumos.classifier_threshold",
+    ):
+        classifier_threshold = resolve_available_classifier_threshold(
+            classifier_ckpt,
+            default=0.5,
+        )
     resume_value = os.environ.get("COTRAIN_RESUME_CKPT", "").strip()
     resume_ckpt = (
         _existing_file(resume_value, label="policy resume checkpoint") if resume_value else None
@@ -172,6 +186,11 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         "manual_cotrain.ngpu=8",
         "cluster.num_gpus=8",
     ]
+    if classifier_threshold is not None:
+        command.append(
+            "algorithm.lumos.classifier_threshold="
+            f"{float(classifier_threshold)!r}"
+        )
     if resume_ckpt is not None:
         command.extend(
             [

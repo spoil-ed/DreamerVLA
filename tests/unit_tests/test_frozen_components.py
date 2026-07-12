@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 from torch import nn
 
 from dreamervla.utils.frozen_components import (
@@ -52,6 +53,27 @@ def test_load_frozen_component_supports_runner_state_dict_schema(
     loaded = load_frozen_component(path, "world_model")
 
     assert loaded.state_dict.keys() == model.state_dict().keys()
+
+
+def test_load_frozen_component_normalizes_classifier_runner_schema(
+    tmp_path: Path,
+) -> None:
+    model = nn.Linear(2, 1)
+    classifier_cfg = {"_target_": "test.Classifier", "hidden_dim": 4}
+    path = tmp_path / "final.ckpt"
+    torch.save(
+        {
+            "cfg": OmegaConf.create({"classifier": classifier_cfg}),
+            "state_dicts": {"model": model.state_dict()},
+            "pickles": {},
+        },
+        path,
+    )
+
+    loaded = load_frozen_component(path, "classifier")
+
+    assert loaded.state_dict.keys() == model.state_dict().keys()
+    assert loaded.metadata["config"] == {"classifier": classifier_cfg}
 
 
 def test_load_frozen_component_rejects_missing_component(tmp_path: Path) -> None:

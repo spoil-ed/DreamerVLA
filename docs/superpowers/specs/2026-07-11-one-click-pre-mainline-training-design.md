@@ -59,9 +59,14 @@ CLASSIFIER_CKPT=/path/to/classifier.ckpt \
 
 The WM path may be any compatible training checkpoint; when a run directory is
 given, the manual handoff chooses current top-k, final, or latest progress state
-in that order. The classifier can be a compatible checkpoint or completed run
-selection. Component schema, construction config, classifier threshold, and
-frozen hashes remain validated by the active frozen runner.
+in that order. The classifier can be any compatible named-best or BaseRunner
+`final.ckpt`/`latest.ckpt` file, or a run directory. The manual handoff selects the
+highest window-F1 checkpoint first, then final, then latest, without requiring a
+completed summary. BaseRunner classifier state/config are normalized from
+`state_dicts.model` and `cfg.classifier`; final/latest calibration comes from the
+best sibling checkpoint or an explicit `0.5` fallback. Component schema,
+construction config, classifier threshold, and frozen hashes remain validated by
+the active frozen runner.
 
 ## Scope and Verification
 

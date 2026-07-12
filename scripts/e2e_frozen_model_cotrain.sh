@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Eight-GPU Ray policy-only RL with explicit pretrained WM/CLS assignments.
-# WORLD_MODEL_CKPT=/path/to/wm/run CLASSIFIER_CKPT=/path/to/classifier/run \
+# WORLD_MODEL_CKPT=/path/to/wm/run-or-ckpt CLASSIFIER_CKPT=/path/to/cls/run-or-ckpt \
 #   bash scripts/e2e_frozen_model_cotrain.sh
 set -euo pipefail
 

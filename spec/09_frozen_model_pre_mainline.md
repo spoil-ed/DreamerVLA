@@ -214,7 +214,13 @@ They create separate timestamped run directories. The manual policy-only frozen
 Ray cotrain handoff accepts those run directories or explicit compatible
 checkpoint files. Unlike the complete proof-chain selector, its WM handoff does
 not require training completion: a run directory resolves current top-k, final,
-or latest progress state in that order.
+or latest progress state in that order. Its classifier handoff accepts any
+compatible `best_window_*.ckpt`, `final.ckpt`, or `latest.ckpt`; a run directory
+prefers the highest held-out window F1, then final, then latest. BaseRunner
+classifier checkpoints load `state_dicts.model` plus `cfg.classifier`. Because old
+final/latest files do not embed the calibrated threshold, the manual launcher uses
+the highest-F1 sibling threshold when present and otherwise emits an explicit
+Hydra threshold of `0.5`.
 
 ```bash
 WORLD_MODEL_CKPT=/path/to/world_model/run \

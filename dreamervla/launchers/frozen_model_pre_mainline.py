@@ -23,6 +23,9 @@ _WM_LOSS_RE = re.compile(
     r"^wm_step=(?P<step>\d{8})-loss=(?P<loss>[-+0-9.eE]+)\.ckpt$"
 )
 _WM_PROGRESS_RE = re.compile(r"^wm_step_(?P<step>\d{8})\.ckpt$")
+_CLASSIFIER_WINDOW_RE = re.compile(
+    r"^best_window_f1(?P<f1>[-+0-9.eE]+)_th(?P<threshold>[-+0-9.eE]+)\.ckpt$"
+)
 
 
 @dataclass(frozen=True)
@@ -636,6 +639,108 @@ def select_classifier_checkpoint(classifier_root: str | Path) -> Path:
     if not math.isclose(summary_f1, f1) or total_steps < step:
         raise ValueError("classifier summary does not bind the selected checkpoint")
     return selected
+
+
+def _available_classifier_window_checkpoints(
+    checkpoint_dir: Path,
+) -> list[tuple[float, int, float, Path]]:
+    ranked: list[tuple[float, int, float, Path]] = []
+    for path in sorted(checkpoint_dir.glob("best_window_f1*_th*.ckpt")):
+        match = _CLASSIFIER_WINDOW_RE.match(path.name)
+        if match is None:
+            continue
+        loaded = load_frozen_component(path, "classifier")
+        metadata = loaded.metadata
+        config = metadata.get("config")
+        if not isinstance(config, Mapping) or not isinstance(
+            config.get("classifier"), Mapping
+        ):
+            raise ValueError(
+                f"classifier checkpoint has no config.classifier metadata: {path}"
+            )
+        f1 = float(metadata.get("f1", math.nan))
+        threshold = float(metadata.get("threshold", math.nan))
+        step = int(metadata.get("step", 0) or 0)
+        if not math.isfinite(f1) or not 0.0 <= f1 <= 1.0:
+            raise ValueError(f"classifier checkpoint F1 is invalid: {path}")
+        if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+            raise ValueError(f"classifier checkpoint threshold is invalid: {path}")
+        if step <= 0:
+            raise ValueError(f"classifier checkpoint step is invalid: {path}")
+        expected_name = f"best_window_f1{f1:.4f}_th{threshold:.2f}.ckpt"
+        if path.name != expected_name:
+            raise ValueError(
+                "classifier checkpoint filename does not match its validation "
+                f"metadata: {path}"
+            )
+        ranked.append((f1, step, threshold, path.resolve()))
+    return ranked
+
+
+def _validate_available_classifier_checkpoint(path: Path) -> Mapping[str, Any]:
+    loaded = load_frozen_component(path, "classifier")
+    config = loaded.metadata.get("config")
+    if not isinstance(config, Mapping) or not isinstance(
+        config.get("classifier"), Mapping
+    ):
+        raise ValueError(
+            f"classifier checkpoint has no config.classifier metadata: {path}"
+        )
+    return loaded.metadata
+
+
+def select_available_classifier_checkpoint(classifier_root: str | Path) -> Path:
+    """Select the best available compatible classifier without a summary gate."""
+
+    root = Path(classifier_root).expanduser().resolve()
+    checkpoint_dir = root if root.name == "checkpoints" else root / "checkpoints"
+    ranked = _available_classifier_window_checkpoints(checkpoint_dir)
+    if ranked:
+        return max(ranked, key=lambda item: (item[0], item[1], str(item[3])))[3]
+
+    for name in ("final.ckpt", "latest.ckpt"):
+        path = checkpoint_dir / name
+        if path.is_file():
+            _validate_available_classifier_checkpoint(path)
+            return path.resolve()
+
+    raise FileNotFoundError(
+        "no classifier checkpoint found under run directory; expected an existing "
+        f"best_window, final.ckpt, or latest.ckpt under {checkpoint_dir}"
+    )
+
+
+def resolve_available_classifier_threshold(
+    checkpoint: str | Path,
+    *,
+    default: float | None = None,
+) -> float:
+    """Resolve calibration for a manual classifier checkpoint handoff."""
+
+    path = Path(checkpoint).expanduser().resolve()
+    metadata = _validate_available_classifier_checkpoint(path)
+    checkpoint_value = metadata.get("threshold")
+    if checkpoint_value is not None:
+        threshold = float(checkpoint_value)
+    else:
+        ranked = _available_classifier_window_checkpoints(path.parent)
+        if ranked:
+            threshold = max(
+                ranked,
+                key=lambda item: (item[0], item[1], str(item[3])),
+            )[2]
+        elif default is not None:
+            threshold = float(default)
+        else:
+            raise ValueError(
+                "classifier checkpoint has no validation threshold and no "
+                f"best_window companion exists: {path}"
+            )
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError(
+            f"classifier threshold must be finite and within [0,1], got {threshold}"
+        )
+    return threshold
 
 
 def _materialize_selection(source: Path, destination: Path) -> None:

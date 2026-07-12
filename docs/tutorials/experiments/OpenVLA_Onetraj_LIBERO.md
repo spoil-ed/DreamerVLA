@@ -25,7 +25,7 @@ WORLD_MODEL_RESUME=true \
 WORLD_MODEL_RUN_ROOT=/path/to/world_model/run \
   bash scripts/experiments/world_model_training/train.sh
 
-# 冻结任意选定的兼容 WM checkpoint，启动 8 卡 Ray policy-only cotrain
+# 冻结任意选定的兼容 WM/CLS checkpoint，启动 8 卡 Ray policy-only cotrain
 WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
 CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
   bash scripts/e2e_frozen_model_cotrain.sh
@@ -44,7 +44,12 @@ bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
 冻结 cotrain 的 `WORLD_MODEL_CKPT` 可以直接指向任意兼容 WM checkpoint，
 包括 `warmup_topk` 或 `warmup_progress`。传 run 目录时，launcher 依次选择当前
 最低-loss top-k、最终 checkpoint、最新 progress，不要求训练完成。额外实验
-参数继续使用 Hydra `key=value` override。
+参数继续使用 Hydra `key=value` override。`CLASSIFIER_CKPT` 同样可直接指向
+`best_window_*.ckpt`、`final.ckpt` 或 `latest.ckpt`；传 run 目录时依次选择最高
+window-F1、`final.ckpt`、`latest.ckpt`。通用 final/latest checkpoint 的模型状态
+从 `state_dicts.model` 读取，阈值优先沿用同目录最高-F1 checkpoint；尚无校准
+checkpoint 时显式采用 `0.5`，也可用
+`algorithm.lumos.classifier_threshold=<value>` 覆盖。
 
 ## 1. 主线路由
 

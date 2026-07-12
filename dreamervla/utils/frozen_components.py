@@ -43,6 +43,8 @@ def load_frozen_component(
     state = payload.get(component, state_dicts.get(component))
     if component == "classifier" and state is None:
         state = payload.get("model")
+    if component == "classifier" and state is None:
+        state = state_dicts.get("model")
     if not isinstance(state, Mapping) or not state:
         raise ValueError(f"checkpoint {checkpoint_path} has no non-empty {component} state")
     if not all(isinstance(value, torch.Tensor) for value in state.values()):
@@ -53,6 +55,17 @@ def load_frozen_component(
         for key, value in payload.items()
         if key not in {"state_dicts", component, "model"}
     }
+    if "config" not in metadata:
+        runner_cfg = payload.get("cfg")
+        if OmegaConf.is_config(runner_cfg):
+            component_cfg = OmegaConf.select(runner_cfg, component, default=None)
+        elif isinstance(runner_cfg, Mapping):
+            component_cfg = runner_cfg.get(component)
+        else:
+            component_cfg = None
+        component_cfg = _resolved_container(component_cfg)
+        if isinstance(component_cfg, Mapping):
+            metadata["config"] = {component: dict(component_cfg)}
     metadata["checkpoint_path"] = str(checkpoint_path)
     return LoadedFrozenComponent(
         state_dict={str(key): value for key, value in state.items()},

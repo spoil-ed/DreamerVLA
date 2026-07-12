@@ -3,9 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import torch
 
 import dreamervla.launchers.frozen_model_cotrain_ray as launcher
 from dreamervla.launchers.frozen_model_cotrain_ray import build_launch
+
+
+def _save_classifier_checkpoint(path: Path, *, threshold: float = 0.45) -> None:
+    torch.save(
+        {
+            "model": {"weight": torch.ones(1)},
+            "threshold": threshold,
+            "config": {"classifier": {"hidden_dim": 1}},
+        },
+        path,
+    )
 
 
 def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
@@ -17,7 +29,7 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
     classifier = tmp_path / "classifier.ckpt"
     run_root = tmp_path / "run"
     wm.touch()
-    classifier.touch()
+    _save_classifier_checkpoint(classifier)
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
     monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
     monkeypatch.setenv("COTRAIN_RUN_ROOT", str(run_root))
@@ -36,6 +48,7 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
     assert f"training.out_dir={run_root.resolve()}" in launch.command
     assert "manual_cotrain.ngpu=8" in launch.command
     assert "cluster.num_gpus=8" in launch.command
+    assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
     assert launch.command[-1] == "manual_cotrain.global_steps=12"
     assert launch.resume is False
 
@@ -50,7 +63,7 @@ def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
     run_root = tmp_path / "run"
     resume = run_root / "checkpoints" / "manual_cotrain_step_500" / "manual_cotrain.ckpt"
     wm.touch()
-    classifier.touch()
+    _save_classifier_checkpoint(classifier)
     resume.parent.mkdir(parents=True)
     resume.touch()
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
@@ -76,7 +89,7 @@ def test_frozen_ray_launcher_resume_infers_checkpoint_run_even_if_run_root_env_i
     run_root = tmp_path / "frozen-run"
     resume = run_root / "checkpoints" / "manual_cotrain_step_500" / "manual_cotrain.ckpt"
     wm.touch()
-    classifier.touch()
+    _save_classifier_checkpoint(classifier)
     resume.parent.mkdir(parents=True)
     resume.touch()
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
@@ -96,7 +109,7 @@ def test_frozen_ray_launcher_rejects_non_eight_gpu_visibility(
     wm = tmp_path / "wm.ckpt"
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
-    classifier.touch()
+    _save_classifier_checkpoint(classifier)
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
     monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
 
@@ -112,7 +125,7 @@ def test_frozen_ray_launcher_rejects_duplicate_visible_gpu_ids(
     wm = tmp_path / "wm.ckpt"
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
-    classifier.touch()
+    _save_classifier_checkpoint(classifier)
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
     monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
 
@@ -140,8 +153,13 @@ def test_frozen_ray_launcher_resolves_completed_stage_directories(
     )
     monkeypatch.setattr(
         launcher,
-        "select_classifier_checkpoint",
+        "select_available_classifier_checkpoint",
         lambda path: selected_classifier,
+    )
+    monkeypatch.setattr(
+        launcher,
+        "resolve_available_classifier_threshold",
+        lambda path, default=0.5: 0.45,
     )
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm_run))
     monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier_run))
@@ -151,6 +169,45 @@ def test_frozen_ray_launcher_resolves_completed_stage_directories(
 
     assert f"init.world_model_state_ckpt={selected_wm}" in launch.command
     assert f"init.classifier_state_ckpt={selected_classifier}" in launch.command
+
+
+def test_frozen_ray_launcher_loads_classifier_final_with_best_sibling_threshold(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    wm.touch()
+    checkpoints = tmp_path / "classifier-run" / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    final = checkpoints / "final.ckpt"
+    best = checkpoints / "best_window_f10.9711_th0.45.ckpt"
+    torch.save(
+        {
+            "cfg": {"classifier": {"hidden_dim": 1}},
+            "state_dicts": {"model": {"weight": torch.ones(1)}},
+            "pickles": {},
+        },
+        final,
+    )
+    torch.save(
+        {
+            "model": {"weight": torch.ones(1)},
+            "threshold": 0.45,
+            "f1": 0.9711,
+            "step": 500,
+            "config": {"classifier": {"hidden_dim": 1}},
+        },
+        best,
+    )
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(final))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "out"))
+
+    launch = build_launch([])
+
+    assert f"init.classifier_state_ckpt={final.resolve()}" in launch.command
+    assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
 
 
 def test_frozen_ray_launcher_rejects_positional_component_paths(

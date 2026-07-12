@@ -121,7 +121,11 @@ bash scripts/experiments/world_model_training/profile.sh
 
 Start policy-only frozen Ray cotrain by providing a run directory or any
 compatible checkpoint file. A WM run directory resolves the currently available
-lowest-loss top-k, then the final checkpoint, then the latest progress checkpoint:
+lowest-loss top-k, then the final checkpoint, then the latest progress checkpoint.
+A classifier run directory resolves the highest window-F1 checkpoint, then
+`final.ckpt`, then `latest.ckpt`. Explicit classifier files in any of those formats
+are accepted; generic final/latest checkpoints reuse the best sibling calibration
+threshold, or an explicit/default `0.5` threshold when no calibration exists:
 
 ```bash
 WORLD_MODEL_CKPT=/path/to/world_model/run \
