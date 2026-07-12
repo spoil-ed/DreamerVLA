@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 import torch
+from hydra.core.override_parser.overrides_parser import OverridesParser
 
 import dreamervla.launchers.frozen_model_cotrain_ray as launcher
 from dreamervla.launchers.frozen_model_cotrain_ray import build_launch
@@ -43,14 +45,42 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
     assert launch.visible_gpus == tuple(str(gpu) for gpu in range(8))
     assert launch.env["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
     assert "experiment=dreamervla_frozen_models_rl_ray" in launch.command
-    assert f"init.world_model_state_ckpt={wm.resolve()}" in launch.command
-    assert f"init.classifier_state_ckpt={classifier.resolve()}" in launch.command
-    assert f"training.out_dir={run_root.resolve()}" in launch.command
+    assert (
+        f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}"
+        in launch.command
+    )
+    assert (
+        f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}"
+        in launch.command
+    )
+    assert f"training.out_dir={json.dumps(str(run_root.resolve()))}" in launch.command
     assert "manual_cotrain.ngpu=8" in launch.command
     assert "cluster.num_gpus=8" in launch.command
     assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
     assert launch.command[-1] == "manual_cotrain.global_steps=12"
     assert launch.resume is False
+
+
+def test_frozen_ray_launcher_quotes_hydra_checkpoint_paths_containing_equals(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm_step=00004000-loss=0.097758.ckpt"
+    classifier = tmp_path / "best_window_f10.9711_th0.45.ckpt"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "run=quoted"))
+
+    launch = build_launch([])
+
+    parsed = OverridesParser.create().parse_overrides(overrides=launch.command[3:])
+    values = {override.get_key_element(): override.value() for override in parsed}
+
+    assert values["init.world_model_state_ckpt"] == str(wm.resolve())
+    assert values["training.out_dir"] == str((tmp_path / "run=quoted").resolve())
 
 
 def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
@@ -74,7 +104,10 @@ def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
 
     assert launch.resume is True
     assert launch.out_dir == run_root.resolve()
-    assert f"manual_cotrain.resume_ckpt={resume.resolve()}" in launch.command
+    assert (
+        f"manual_cotrain.resume_ckpt={json.dumps(str(resume.resolve()))}"
+        in launch.command
+    )
     assert "training.resume=true" in launch.command
 
 
@@ -167,8 +200,14 @@ def test_frozen_ray_launcher_resolves_completed_stage_directories(
 
     launch = build_launch([])
 
-    assert f"init.world_model_state_ckpt={selected_wm}" in launch.command
-    assert f"init.classifier_state_ckpt={selected_classifier}" in launch.command
+    assert (
+        f"init.world_model_state_ckpt={json.dumps(str(selected_wm))}"
+        in launch.command
+    )
+    assert (
+        f"init.classifier_state_ckpt={json.dumps(str(selected_classifier))}"
+        in launch.command
+    )
 
 
 def test_frozen_ray_launcher_loads_classifier_final_with_best_sibling_threshold(
@@ -206,7 +245,10 @@ def test_frozen_ray_launcher_loads_classifier_final_with_best_sibling_threshold(
 
     launch = build_launch([])
 
-    assert f"init.classifier_state_ckpt={final.resolve()}" in launch.command
+    assert (
+        f"init.classifier_state_ckpt={json.dumps(str(final.resolve()))}"
+        in launch.command
+    )
     assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
 
 

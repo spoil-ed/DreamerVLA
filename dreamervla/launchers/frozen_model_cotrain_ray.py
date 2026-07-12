@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -129,6 +130,10 @@ def _has_hydra_override(overrides: list[str], key: str) -> bool:
     return any(item.split("=", 1)[0].lstrip("+~") == key for item in overrides)
 
 
+def _hydra_string(value: str | Path) -> str:
+    return json.dumps(str(value))
+
+
 def _environment_bool(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -180,9 +185,9 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         "dreamervla.train",
         "experiment=dreamervla_frozen_models_rl_ray",
         "task=openvla_onetraj_libero",
-        f"training.out_dir={out_dir}",
-        f"init.world_model_state_ckpt={wm_ckpt}",
-        f"init.classifier_state_ckpt={classifier_ckpt}",
+        f"training.out_dir={_hydra_string(out_dir)}",
+        f"init.world_model_state_ckpt={_hydra_string(wm_ckpt)}",
+        f"init.classifier_state_ckpt={_hydra_string(classifier_ckpt)}",
         "manual_cotrain.ngpu=8",
         "cluster.num_gpus=8",
     ]
@@ -195,8 +200,8 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         command.extend(
             [
                 "training.resume=true",
-                f"training.resume_dir={out_dir}",
-                f"manual_cotrain.resume_ckpt={resume_ckpt}",
+                f"training.resume_dir={_hydra_string(out_dir)}",
+                f"manual_cotrain.resume_ckpt={_hydra_string(resume_ckpt)}",
             ]
         )
     command.extend(hydra_overrides)
